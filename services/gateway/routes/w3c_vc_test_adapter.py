@@ -9,8 +9,8 @@ credential itself or turn a failed verification into a success.
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import re
 from datetime import datetime
 from typing import Any
@@ -73,7 +73,9 @@ def _issuance_fixture_configuration() -> tuple[str, str]:
     return organization_id, template_id
 
 
-def _claims_from_w3c_credential(credential: dict[str, Any]) -> dict[str, Any]:
+def _claims_from_w3c_credential(
+    credential: dict[str, Any],
+) -> dict[str, Any] | list[dict[str, Any]]:
     """Validate the supported VC-JWT input subset before real issuance.
 
     The W3C suite is broad enough to include JSON-LD-only structures.  This
@@ -81,25 +83,14 @@ def _claims_from_w3c_credential(credential: dict[str, Any]) -> dict[str, Any]:
     it never converts an invalid document into a signed credential.
     """
     _validate_w3c_vcdm_credential(credential)
-    context = credential.get("@context")
-    types = credential.get("type")
     subject = credential.get("credentialSubject")
-    issuer = credential.get("issuer")
-    if isinstance(issuer, dict):
-        issuer = issuer.get("id")
-    if (
-        not isinstance(context, list)
-        or not context
-        or context[0] != "https://www.w3.org/ns/credentials/v2"
-        or not isinstance(types, list)
-        or "VerifiableCredential" not in types
-        or not isinstance(subject, dict)
-        or not subject
-        or not _is_absolute_uri(issuer)
-    ):
+    if isinstance(subject, list):
+        return [dict(item) for item in subject]
+    if not isinstance(subject, dict) or not subject:
         raise HTTPException(status_code=422, detail={"error": "invalid_credential"})
     # The credential template controls issuer identity and credential type.
-    # Only subject claims cross the test adapter boundary.
+    # The exact subject object/set crosses the boundary separately from flat
+    # claims so the production JWT-VC builder cannot collapse a subject set.
     return dict(subject)
 
 
@@ -191,11 +182,16 @@ def _validate_w3c_vcdm_credential(credential: dict[str, Any]) -> None:
     _validate_type(credential.get("type"), terms, "VerifiableCredential")
     if "id" in credential and not _is_absolute_uri(credential["id"]):
         raise HTTPException(status_code=422, detail={"error": "invalid_id"})
-    issuer = credential.get("issuer")
-    if isinstance(issuer, dict):
-        issuer = issuer.get("id")
-    if not _is_absolute_uri(issuer):
-        raise HTTPException(status_code=422, detail={"error": "invalid_issuer"})
+    # An issuer request may omit issuer and let the configured production
+    # issuer inject it (the official suite's baseline fixture does this).
+    # Explicit issuer values still have to be valid even though the fixture
+    # cannot override Marty's configured issuer identity.
+    if "issuer" in credential:
+        issuer = credential.get("issuer")
+        if isinstance(issuer, dict):
+            issuer = issuer.get("id")
+        if not _is_absolute_uri(issuer):
+            raise HTTPException(status_code=422, detail={"error": "invalid_issuer"})
     subjects = credential.get("credentialSubject")
     subject_values = subjects if isinstance(subjects, list) else [subjects]
     if not subject_values or not all(isinstance(subject, dict) and subject for subject in subject_values):
@@ -366,12 +362,13 @@ async def _issue_jwt_vc(credential: dict[str, Any], request: Request) -> str:
     issuer identity, creates a pre-authorized transaction, redeems a token,
     obtains a fresh nonce, and submits a cryptographically valid holder proof.
     """
-    claims = _claims_from_w3c_credential(credential)
+    credential_subject = _claims_from_w3c_credential(credential)
     organization_id, template_id = _issuance_fixture_configuration()
     body = IssuanceCreate(
         organization_id=organization_id,
         credential_template_id=template_id,
-        claims=claims,
+        claims={},
+        credential_subject=credential_subject,
     )
     template = await _load_credential_template(template_id, request)
     if template.get("organization_id") != organization_id:

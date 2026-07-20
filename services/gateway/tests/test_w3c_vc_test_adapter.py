@@ -43,10 +43,49 @@ def _valid_w3c_credential() -> dict:
     }
 
 
+def _official_baseline_credential() -> dict:
+    """Pinned-suite credential-ok.json before its client injects issuer."""
+    return {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "credentialSubject": {"id": "did:example:subject"},
+    }
+
+
 def test_issuer_adapter_keeps_only_supported_subject_claims() -> None:
     assert adapter._claims_from_w3c_credential(_valid_w3c_credential()) == {
         "id": "did:key:z6MkExample", "name": "Ada"
     }
+
+
+def test_issuer_adapter_accepts_official_id_only_baseline_before_issuer_injection() -> None:
+    assert adapter._claims_from_w3c_credential(_official_baseline_credential()) == {
+        "id": "did:example:subject"
+    }
+
+
+def test_issuer_adapter_preserves_multiple_credential_subjects() -> None:
+    credential = _official_baseline_credential()
+    credential["credentialSubject"] = [
+        {"id": "did:example:subject"},
+        {"id": "did:example:other:subject"},
+    ]
+
+    assert adapter._claims_from_w3c_credential(credential) == [
+        {"id": "did:example:subject"},
+        {"id": "did:example:other:subject"},
+    ]
+
+
+def test_issuer_adapter_rejects_scalar_context_as_required_by_vcdm_v2() -> None:
+    credential = _official_baseline_credential()
+    credential["@context"] = "https://www.w3.org/ns/credentials/v2"
+
+    with pytest.raises(HTTPException) as exc_info:
+        adapter._claims_from_w3c_credential(credential)
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["error"] == "invalid_context"
 
 
 def test_issuer_adapter_rejects_non_vcdm_input_before_issuance() -> None:
@@ -134,6 +173,74 @@ def test_issuer_adapter_uses_the_released_oid4vci_proof_binding(monkeypatch: pyt
     proof = adapter._create_oid4vci_proof("https://issuer.example.test/org/fixture", "nonce-1")
     assert proof == "header.payload.signature"
     assert captured == {"issuer_url": "https://issuer.example.test/org/fixture", "nonce": "nonce-1"}
+
+
+@pytest.mark.asyncio
+async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
+    monkeypatch.setenv("W3C_VC_TEST_POLICY_ID", "fixture-policy")
+    monkeypatch.setenv("W3C_VC_TEST_ORGANIZATION_ID", "fixture-org")
+    monkeypatch.setenv("W3C_VC_TEST_TEMPLATE_ID", "fixture-template")
+    credential = _official_baseline_credential()
+    credential["credentialSubject"] = [
+        {"id": "did:example:subject"},
+        {"id": "did:example:other:subject"},
+    ]
+
+    class Response:
+        def __init__(self, body: dict) -> None:
+            self.status_code = 200
+            self._body = body
+            self.text = json.dumps(body)
+
+        def json(self) -> dict:
+            return self._body
+
+    captured: list[tuple[str, dict]] = []
+
+    class Client:
+        async def post(self, url: str, **kwargs):
+            captured.append((url, kwargs))
+            if url.endswith("/initiate"):
+                return Response({"pre_auth_code": "pre-auth"})
+            if url.endswith("/token"):
+                return Response({"access_token": "access-token"})
+            if url.endswith("/nonce"):
+                return Response({"c_nonce": "nonce"})
+            return Response({"credential": "header.payload.signature"})
+
+    class Registry:
+        @staticmethod
+        def get_service_url(name: str) -> str:
+            assert name == "issuance"
+            return "http://issuance"
+
+    async def load_template(template_id: str, request: Request) -> dict:
+        return {
+            "id": template_id,
+            "organization_id": "fixture-org",
+            "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
+            "issuer_profile_id": "issuer-profile",
+        }
+
+    async def resolve_identity(*args, **kwargs) -> dict:
+        return {
+            "signing_service_id": "signing-service",
+            "issuer_did": "did:web:issuer.example",
+        }
+
+    monkeypatch.setattr(adapter, "_load_credential_template", load_template)
+    monkeypatch.setattr(adapter, "_resolve_issuer_identity", resolve_identity)
+    monkeypatch.setattr(adapter, "_create_oid4vci_proof", lambda issuer, nonce: "proof.jwt.value")
+    monkeypatch.setattr(adapter, "get_registry", lambda: Registry())
+    monkeypatch.setattr(adapter, "get_http_client", lambda: Client())
+
+    assert await adapter._issue_jwt_vc(credential, _request()) == "header.payload.signature"
+    initiate_body = captured[0][1]["json"]
+    assert initiate_body["claims"] == {}
+    assert initiate_body["credential_subject"] == credential["credentialSubject"]
 
 
 def test_adapter_extracts_a_w3c_jose_vc_envelope_without_trusting_it() -> None:
