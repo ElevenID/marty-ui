@@ -22,6 +22,7 @@ BASE_FILES = (
     "docker-compose.profile.oidf.yml",
 )
 GHCR_FILE = "docker-compose.profile.ghcr.yml"
+IMMUTABLE_INFRA_FILE = "docker-compose.profile.conformance-images.yml"
 W3C_FILE = "docker-compose.profile.w3c-vc.yml"
 HAIP_FILE = "docker-compose.profile.oidf-haip.yml"
 ISOLATION_FILE = "docker-compose.profile.conformance.yml"
@@ -64,6 +65,7 @@ def compose_command(
     files = [*BASE_FILES]
     if use_ghcr:
         files.insert(1, GHCR_FILE)
+        files.insert(2, IMMUTABLE_INFRA_FILE)
     if include_haip:
         files.append(HAIP_FILE)
     if include_w3c:

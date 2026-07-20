@@ -165,6 +165,29 @@ def test_haip_and_w3c_overlays_are_explicit_and_isolation_is_last() -> None:
     assert files[-1].endswith("docker-compose.profile.conformance.yml")
     assert any(path.endswith("docker-compose.profile.oidf-haip.yml") for path in files)
     assert any(path.endswith("docker-compose.profile.w3c-vc.yml") for path in files)
+    assert any(
+        path.endswith("docker-compose.profile.conformance-images.yml") for path in files
+    )
+
+
+def test_release_profile_removes_builds_and_pins_infrastructure() -> None:
+    ghcr = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
+    infrastructure = (ROOT / "docker-compose.profile.conformance-images.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "build: !reset null" in ghcr
+    assert "marty-envoy:latest" not in infrastructure
+    for service in (
+        "postgres",
+        "redis",
+        "keycloak",
+        "mailpit",
+        "openbao",
+        "envoy",
+    ):
+        section = infrastructure.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
+        assert "@sha256:" in section
 
 
 def test_local_build_requires_digest_pinned_bootstrap_artifacts(
