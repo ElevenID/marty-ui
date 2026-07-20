@@ -1564,6 +1564,60 @@ async def test_submit_verification_response_records_verification_result_message(
 
 
 @pytest.mark.asyncio
+async def test_submit_verification_response_forwards_flow_trust_profile_to_policy(monkeypatch):
+    captured: dict[str, str] = {}
+
+    class FakePresentationPolicyStub:
+        def __init__(self, _channel):
+            pass
+
+        async def EvaluatePresentation(self, request):
+            captured["policy_id"] = request.policy_id
+            captured["trust_profile_id"] = request.trust_profile_id
+            return SimpleNamespace(
+                result="passed",
+                decision="allow",
+                decision_reason="Official signer is trusted",
+                verified_claims_json='{"given_name":"Marty"}',
+            )
+
+    monkeypatch.setattr(
+        "marty_proto.v1.presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub",
+        FakePresentationPolicyStub,
+    )
+    monkeypatch.setattr("flow.main.app.state.pp_grpc_channel", object(), raising=False)
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={
+            "nonce": "nonce-xyz",
+            "presentation_policy_id": "policy-1",
+            "trust_profile_id": "trust-1",
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+
+    header = _jwt_segment({"alg": "none", "typ": "JWT"})
+    payload = _jwt_segment({"nonce": "nonce-xyz", "iss": "issuer.example", "given_name": "Marty"})
+    response = await submit_verification_response(
+        instance.id,
+        f"{header}.{payload}.",
+        None,
+        None,
+        repo,
+    )
+
+    assert response.result == "passed"
+    assert captured == {
+        "policy_id": "policy-1",
+        "trust_profile_id": "trust-1",
+    }
+
+
+@pytest.mark.asyncio
 async def test_submit_verification_response_unwraps_descriptor_map_vp_token():
     repo = InMemoryFlowRepository()
     instance = FlowInstance(

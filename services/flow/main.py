@@ -4377,6 +4377,7 @@ async def _submit_verification_response_internal(
                     vp_token=vp_token,
                     nonce=instance.context.get("nonce", ""),
                     audience=effective_audience,
+                    trust_profile_id=instance.context.get("trust_profile_id") or "",
                 )
             )
             if eval_resp.result:
