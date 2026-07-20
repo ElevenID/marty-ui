@@ -3417,10 +3417,22 @@ async def get_verification_request_object(
             lissi_compat=lissi_compat,
         )
         outer_client_identifier = instance.context.get("oid4vp_client_id")
-        if (
+        if lissi_compat:
+            compatible_outer_identifiers = {
+                verifier_did,
+                f"decentralized_identifier:{verifier_did}",
+            }
+            if outer_client_identifier not in compatible_outer_identifiers:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "LISSI compatibility requires a DID verifier identity; "
+                        "start a standard DID-based OID4VP flow"
+                    ),
+                )
+        elif (
             isinstance(outer_client_identifier, str)
             and outer_client_identifier
-            and not lissi_compat
             and outer_client_identifier != client_identifier
         ):
             raise HTTPException(

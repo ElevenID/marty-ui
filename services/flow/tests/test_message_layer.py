@@ -879,6 +879,7 @@ async def test_get_verification_request_object_records_presentation_request_mess
             "flow_type": "verification",
             "nonce": "nonce-123",
             "presentation_policy_id": "policy-1",
+            "oid4vp_client_id": "decentralized_identifier:did:web:verifier.example:oid4vp",
         },
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
@@ -917,6 +918,42 @@ async def test_get_verification_request_object_records_presentation_request_mess
     assert message["payload"]["presentation_definition"] is None
     assert message["payload"]["dcql_query"] == decoded_payload["dcql_query"]
     assert message["payload"]["client_id"] == decoded_payload["client_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outer_client_id",
+    [
+        None,
+        "https://verifier.example/v1/flows/instances/flow/submit",
+        "x509_hash:certificate-thumbprint",
+    ],
+)
+async def test_lissi_compat_rejects_non_did_outer_client_identity(
+    monkeypatch,
+    outer_client_id: str | None,
+):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={
+            "flow_type": "verification",
+            "nonce": "nonce-123",
+            "presentation_policy_id": "policy-1",
+            "oid4vp_client_id": outer_client_id,
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_verification_request_object(instance.id, repo, compat="lissi")
+
+    assert exc_info.value.status_code == 409
+    assert "requires a DID verifier identity" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -994,6 +1031,7 @@ async def test_get_verification_request_object_supports_lissi_compat_profile(mon
             "flow_type": "verification",
             "nonce": "nonce-123",
             "presentation_policy_id": "policy-1",
+            "oid4vp_client_id": "decentralized_identifier:did:web:verifier.example:oid4vp",
         },
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )

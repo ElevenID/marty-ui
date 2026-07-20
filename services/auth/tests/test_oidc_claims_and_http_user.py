@@ -1,6 +1,6 @@
 import base64
 import json
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import pytest
 from starlette.requests import Request
@@ -458,29 +458,39 @@ def test_build_credential_login_wallet_options_defaults_to_protocol_sprucekit_th
     monkeypatch.delenv("CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_PACKAGE", raising=False)
     monkeypatch.delenv("CREDENTIAL_LOGIN_LUCY_DEEP_LINK_TEMPLATE", raising=False)
 
+    oid4vp_uri = (
+        "openid4vp://authorize?"
+        "client_id=decentralized_identifier%3Adid%3Aweb%3Averifier.example%3Aoid4vp&"
+        "request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1"
+    )
     options = _build_credential_login_wallet_options(
-        oid4vp_uri="openid4vp://authorize?request_uri=https://issuer.example/request/1",
-        request_uri="openid4vp://authorize?request_uri=https://issuer.example/request/1",
+        oid4vp_uri=oid4vp_uri,
+        request_uri=oid4vp_uri,
     )
 
-    assert options == [
-        {
-            "id": "sprucekit",
-            "label": "SpruceKit",
-            "description": "Selected wallet: SpruceKit.",
-            "href": "openid4vp://authorize?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1",
-            "android_href": "intent://authorize?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1#Intent;scheme=openid4vp;package=com.spruceid.mobilesdkexample;end",
-            "ios_href": "openid4vp://authorize?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1",
-        },
-        {
-            "id": "lissi",
-            "label": "LISSI Wallet",
-            "description": "Selected wallet: LISSI Wallet.",
-            "href": "openid4vp://authorize?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1%3Fcompat%3Dlissi",
-            "android_href": "intent://authorize?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1%3Fcompat%3Dlissi#Intent;scheme=openid4vp;end",
-            "ios_href": "openid4vp://authorize?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1%3Fcompat%3Dlissi",
-        },
+    assert [option["id"] for option in options] == ["sprucekit", "lissi"]
+    assert [option["label"] for option in options] == ["SpruceKit", "LISSI Wallet"]
+    expected_client_ids = [
+        "decentralized_identifier:did:web:verifier.example:oid4vp",
+        "did:web:verifier.example:oid4vp",
     ]
+    expected_request_uris = [
+        "https://issuer.example/request/1",
+        "https://issuer.example/request/1?compat=lissi",
+    ]
+    for option, expected_client_id, expected_request_uri in zip(
+        options,
+        expected_client_ids,
+        expected_request_uris,
+        strict=True,
+    ):
+        for link_name in ("href", "android_href", "ios_href"):
+            link_query = parse_qs(urlparse(option[link_name]).query)
+            assert link_query["client_id"] == [expected_client_id]
+            assert link_query["request_uri"] == [expected_request_uri]
+
+    assert "package=com.spruceid.mobilesdkexample" in options[0]["android_href"]
+    assert "package=" not in options[1]["android_href"]
 
 
 def test_lissi_wallet_option_matches_bare_did_request_object_client_id(
@@ -512,6 +522,73 @@ def test_lissi_wallet_option_matches_bare_did_request_object_client_id(
     assert lissi_query["request_uri"] == [
         "https://verifier.example/request/1?compat=lissi",
     ]
+
+
+@pytest.mark.parametrize(
+    "client_id",
+    [
+        "https://verifier.example/v1/flows/instances/flow-1/submit",
+        "x509_hash:certificate-thumbprint",
+    ],
+)
+def test_lissi_wallet_option_is_hidden_for_non_did_client_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    client_id: str,
+):
+    monkeypatch.delenv("CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE", raising=False)
+    monkeypatch.delenv("CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE", raising=False)
+    oid4vp_uri = (
+        "openid4vp://authorize?"
+        f"client_id={quote(client_id, safe='')}&"
+        "request_uri=https%3A%2F%2Fverifier.example%2Frequest%2F1"
+    )
+
+    options = _build_credential_login_wallet_options(
+        oid4vp_uri=oid4vp_uri,
+        request_uri=oid4vp_uri,
+    )
+
+    assert [option["id"] for option in options] == ["sprucekit"]
+    assert parse_qs(urlparse(options[0]["href"]).query)["client_id"] == [client_id]
+
+
+@pytest.mark.parametrize(
+    ("environment_name", "template", "link_name"),
+    [
+        (
+            "CREDENTIAL_LOGIN_SPRUCEKIT_DEEP_LINK_TEMPLATE",
+            "walletapp://authorize?request_uri={request_uri_encoded}",
+            "href",
+        ),
+        (
+            "CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE",
+            "https://wallet.example/openid4vp?request_uri={request_uri_encoded}",
+            "ios_href",
+        ),
+    ],
+)
+def test_legacy_custom_wallet_template_preserves_required_client_id(
+    monkeypatch: pytest.MonkeyPatch,
+    environment_name: str,
+    template: str,
+    link_name: str,
+):
+    monkeypatch.setenv(environment_name, template)
+    client_id = "decentralized_identifier:did:web:verifier.example:oid4vp"
+    oid4vp_uri = (
+        "openid4vp://authorize?"
+        f"client_id={quote(client_id, safe='')}&"
+        "request_uri=https%3A%2F%2Fverifier.example%2Frequest%2F1"
+    )
+
+    options = _build_credential_login_wallet_options(
+        oid4vp_uri=oid4vp_uri,
+        request_uri=oid4vp_uri,
+    )
+    rendered_query = parse_qs(urlparse(options[0][link_name]).query)
+
+    assert rendered_query["client_id"] == [client_id]
+    assert rendered_query["request_uri"] == ["https://verifier.example/request/1"]
 
 
 def test_build_credential_login_wallet_options_honors_sprucekit_template_override(monkeypatch: pytest.MonkeyPatch):
@@ -567,22 +644,44 @@ def test_build_credential_login_wallet_options_honors_ios_universal_link_templat
         "https://spruceid.example/openid4vp?request_uri={request_uri_encoded}",
     )
 
+    oid4vp_uri = (
+        "openid4vp://authorize?"
+        "client_id=decentralized_identifier%3Adid%3Aweb%3Averifier.example%3Aoid4vp&"
+        "request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1"
+    )
     options = _build_credential_login_wallet_options(
-        oid4vp_uri="openid4vp://authorize?request_uri=https://issuer.example/request/1",
-        request_uri="openid4vp://authorize?request_uri=https://issuer.example/request/1",
+        oid4vp_uri=oid4vp_uri,
+        request_uri=oid4vp_uri,
     )
 
-    assert options[0]["ios_href"] == "https://spruceid.example/openid4vp?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1"
-    assert options[1]["ios_href"] == "https://lissi.example/openid4vp?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1%3Fcompat%3Dlissi"
+    sprucekit_query = parse_qs(urlparse(options[0]["ios_href"]).query)
+    lissi_query = parse_qs(urlparse(options[1]["ios_href"]).query)
+    assert sprucekit_query == {
+        "request_uri": ["https://issuer.example/request/1"],
+        "client_id": ["decentralized_identifier:did:web:verifier.example:oid4vp"],
+    }
+    assert lissi_query == {
+        "request_uri": ["https://issuer.example/request/1?compat=lissi"],
+        "client_id": ["did:web:verifier.example:oid4vp"],
+    }
 
 
 def test_render_credential_login_page_includes_wallet_selector():
+    oid4vp_uri = (
+        "openid4vp://authorize?"
+        "client_id=decentralized_identifier%3Adid%3Aweb%3Averifier.example%3Aoid4vp&"
+        "request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1"
+    )
+    wallet_options = _build_credential_login_wallet_options(
+        oid4vp_uri=oid4vp_uri,
+        request_uri=oid4vp_uri,
+    )
     html = _render_credential_login_page(
         nonce="nonce-123",
         flow_instance_id="flow-123",
         qr_encoded="openid4vp%3A%2F%2Fauthorize",
-        oid4vp_uri="openid4vp://authorize?request_uri=https://issuer.example/request/1",
-        request_uri="openid4vp://authorize?request_uri=https://issuer.example/request/1",
+        oid4vp_uri=oid4vp_uri,
+        request_uri=oid4vp_uri,
     )
 
     assert 'Select wallet app' in html
@@ -595,13 +694,11 @@ def test_render_credential_login_page_includes_wallet_selector():
     assert 'value="lissi"' in html
     assert 'value="sprucekit"' in html
     assert html.index('value="sprucekit"') < html.index('value="lissi"')
-    assert 'data-link="openid4vp://authorize?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1"' in html
-    assert 'data-android-link="intent://authorize?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1#Intent;scheme=openid4vp;package=com.spruceid.mobilesdkexample;end"' in html
-    assert 'data-ios-link="openid4vp://authorize?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1"' in html
-    assert 'data-link="openid4vp://authorize?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1%3Fcompat%3Dlissi"' in html
-    assert 'data-android-link="intent://authorize?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1%3Fcompat%3Dlissi#Intent;scheme=openid4vp;end"' in html
-    assert 'data-ios-link="openid4vp://authorize?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1%3Fcompat%3Dlissi"' in html
-    assert 'href="openid4vp://authorize?request_uri=https%3A%2F%2Fissuer.example%2Frequest%2F1"' in html
+    for wallet_option in wallet_options:
+        assert f'data-link="{wallet_option["href"].replace("&", "&amp;")}"' in html
+        assert f'data-android-link="{wallet_option["android_href"].replace("&", "&amp;")}"' in html
+        assert f'data-ios-link="{wallet_option["ios_href"].replace("&", "&amp;")}"' in html
+    assert f'href="{wallet_options[0]["href"].replace("&", "&amp;")}"' in html
     assert 'spruceid://credential-offer' not in html
     assert 'lissi://openid4vp' not in html
     assert 'id="wallet-select"' in html

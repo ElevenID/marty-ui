@@ -184,7 +184,20 @@ def _render_credential_login_wallet_link(
         logger.warning("Invalid credential-login wallet template %r: %s", template, exc)
         return oid4vp_uri
 
-    return rendered or oid4vp_uri
+    if not rendered:
+        return oid4vp_uri
+
+    if (
+        client_id
+        and "{oid4vp_uri" not in template
+        and "{client_id" not in template
+    ):
+        # Legacy operator templates commonly carried only request_uri. OID4VP
+        # 1.0 requires the outer client_id to match the signed Request Object,
+        # so preserve it automatically instead of emitting an invalid link.
+        rendered = _with_query_parameter(rendered, "client_id", client_id)
+
+    return rendered
 
 
 def _build_credential_login_wallet_options(
@@ -205,6 +218,13 @@ def _build_credential_login_wallet_options(
             wallet_request_uri,
             compat,
         )
+        if compat == "lissi":
+            lissi_client_ids = parse_qs(urlparse(wallet_oid4vp_uri).query).get("client_id", [])
+            if not lissi_client_ids or not lissi_client_ids[0].startswith("did:"):
+                logger.info(
+                    "Hiding LISSI compatibility because outer client_id is not DID-based"
+                )
+                continue
         options.append(
             {
                 "id": wallet_choice["id"],

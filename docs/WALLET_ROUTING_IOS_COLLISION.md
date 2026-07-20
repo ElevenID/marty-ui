@@ -48,11 +48,19 @@ publishes an AASA. Empty/unset means "use raw `openid4vp://`".
 | SpruceKit | `CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE` |
 | LISSI     | `CREDENTIAL_LOGIN_LISSI_IOS_UNIVERSAL_LINK_TEMPLATE`     |
 
-The template **must** include `{request_uri_encoded}`. Example:
+The template **must** include `{request_uri_encoded}` and should include
+`{client_id_param}` so the outer OID4VP `client_id` remains bound to the signed
+Request Object. The adapter adds `client_id` to older request-URI-only
+templates at runtime, but new templates should be explicit. Example:
 
 ```bash
-CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE=https://wallet.spruceid.com/openid4vp?request_uri={request_uri_encoded}
+CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE=https://wallet.spruceid.com/openid4vp?{client_id_param}request_uri={request_uri_encoded}
 ```
+
+LISSI's compatibility Request Object uses a bare DID verifier identity. Marty
+only offers the LISSI route when the standard flow was created with a DID-based
+`client_id`; `redirect_uri`, `x509_hash`, and HAIP verifier identities remain on
+their standard wallet routes and are never rewritten silently.
 
 The adapter resolves templates in this order, per platform:
 
@@ -139,7 +147,7 @@ When a wallet vendor publishes their AASA (e.g. `https://wallet.example.com/.wel
 
 1. **Login (OID4VP):** add the env var to `marty-ui/.env.tunnel.beta.local`:
    ```bash
-   CREDENTIAL_LOGIN_<WALLET>_IOS_UNIVERSAL_LINK_TEMPLATE=https://wallet.example.com/openid4vp?request_uri={request_uri_encoded}
+   CREDENTIAL_LOGIN_<WALLET>_IOS_UNIVERSAL_LINK_TEMPLATE=https://wallet.example.com/openid4vp?{client_id_param}request_uri={request_uri_encoded}
    ```
    Bump `_CREDENTIAL_LOGIN_ASSET_VERSION` only if the JS itself changes; env
    changes do not require an asset bump but **do** require an auth restart:
