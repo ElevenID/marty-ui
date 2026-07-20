@@ -58,6 +58,17 @@ def test_stack_release_publishes_signed_evidence() -> None:
     assert "pytest tests/oss_stack" in workflow
 
 
+def test_stack_release_allows_only_successful_one_shot_exits() -> None:
+    workflow = _text(".github/workflows/cd.yml")
+
+    assert (
+        "docker compose --env-file .env.stack ps --status exited --services" in workflow
+    )
+    assert '$0 != "migrations"' in workflow
+    assert '$0 != "issuance-migrations"' in workflow
+    assert "grep -v '^migrations$' || true" not in workflow
+
+
 def test_stack_release_is_tag_only_and_targets_the_validated_tag() -> None:
     workflow = _text(".github/workflows/cd.yml")
 
