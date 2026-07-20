@@ -483,6 +483,37 @@ def test_build_credential_login_wallet_options_defaults_to_protocol_sprucekit_th
     ]
 
 
+def test_lissi_wallet_option_matches_bare_did_request_object_client_id(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE", raising=False)
+    monkeypatch.delenv("CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE", raising=False)
+    oid4vp_uri = (
+        "openid4vp://authorize?"
+        "client_id=decentralized_identifier%3Adid%3Aweb%3Averifier.example%3Aoid4vp&"
+        "request_uri=https%3A%2F%2Fverifier.example%2Frequest%2F1"
+    )
+
+    sprucekit, lissi = _build_credential_login_wallet_options(
+        oid4vp_uri=oid4vp_uri,
+        request_uri=oid4vp_uri,
+    )
+    sprucekit_query = parse_qs(urlparse(sprucekit["href"]).query)
+    lissi_query = parse_qs(urlparse(lissi["href"]).query)
+    sprucekit_android_query = parse_qs(urlparse(sprucekit["android_href"]).query)
+    lissi_android_query = parse_qs(urlparse(lissi["android_href"]).query)
+
+    assert sprucekit_query["client_id"] == [
+        "decentralized_identifier:did:web:verifier.example:oid4vp",
+    ]
+    assert lissi_query["client_id"] == ["did:web:verifier.example:oid4vp"]
+    assert sprucekit_android_query["client_id"] == sprucekit_query["client_id"]
+    assert lissi_android_query["client_id"] == lissi_query["client_id"]
+    assert lissi_query["request_uri"] == [
+        "https://verifier.example/request/1?compat=lissi",
+    ]
+
+
 def test_build_credential_login_wallet_options_honors_sprucekit_template_override(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(
         "CREDENTIAL_LOGIN_SPRUCEKIT_DEEP_LINK_TEMPLATE",

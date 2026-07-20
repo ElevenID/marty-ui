@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import base64
 import json
-from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 from fastapi import HTTPException
@@ -22,6 +22,7 @@ from flow.main import (
     FlowInstance,
     FlowInstanceStatus,
     FlowType,
+    StartVerificationFlowRequest,
     DigitalCredentialSubmissionRequest,
     InMemoryFlowRepository,
     _base58_encode,
@@ -35,6 +36,7 @@ from flow.main import (
     handle_application_approved,
     get_verification_request_object,
     submit_digital_credential_response,
+    start_verification_flow,
     submit_verification_response,
     update_flow_definition,
 )
@@ -807,6 +809,61 @@ async def test_application_approved_webhook_manual_issue_does_not_bootstrap_defa
     assert result["flows_triggered"] == 0
     assert "No active custom OID4VCI extension" in result["reason"]
     assert await repo.list_definitions("org-1") == []
+
+
+@pytest.mark.asyncio
+async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    monkeypatch.setenv("OID4VP_CLIENT_ID_PREFIX", "decentralized_identifier")
+    _install_reference_validation_stubs(
+        monkeypatch,
+        templates={},
+        policies={
+            "policy-1": {
+                "organization_id": "org-1",
+                "status": "active",
+                "credential_requirements_json": "[]",
+            },
+        },
+    )
+    repo = InMemoryFlowRepository()
+
+    started = await start_verification_flow(
+        StartVerificationFlowRequest(presentation_policy_id="policy-1"),
+        user_id="auth-service",
+        repo=repo,
+    )
+    parsed = urlparse(started.request_uri)
+    parameters = parse_qs(parsed.query)
+    client_identifier = "decentralized_identifier:did:web:verifier.example:oid4vp"
+    fetched_request_uri = (
+        f"https://verifier.example/v1/flows/instances/{started.instance_id}/request"
+    )
+
+    assert parsed.scheme == "openid4vp"
+    assert parameters == {
+        "client_id": [client_identifier],
+        "request_uri": [fetched_request_uri],
+    }
+    assert client_identifier not in parsed.query
+    assert fetched_request_uri not in parsed.query
+
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {
+            "id": "pd-1",
+            "input_descriptors": [
+                {"id": "descriptor-1", "constraints": {"fields": []}},
+            ],
+        }
+
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition",
+        _fake_presentation_definition,
+    )
+    signed_request = await get_verification_request_object(started.instance_id, repo)
+    _header, payload, _signature = signed_request.body.decode().split(".", 2)
+
+    assert _decode_jwt_segment(payload)["client_id"] == parameters["client_id"][0]
 
 
 @pytest.mark.asyncio

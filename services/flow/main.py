@@ -2730,6 +2730,39 @@ class VerificationResultResponse(BaseModel):
     evaluation_timestamp: str
 
 
+def _oid4vp_client_identity(
+    base_url: str,
+    response_uri: str,
+    *,
+    lissi_compat: bool = False,
+) -> tuple[str, list[str] | None, str]:
+    """Resolve one verifier identity for both the outer URI and signed JAR."""
+    verifier_did = _derive_verifier_did(base_url)
+    request_x5c: list[str] | None = None
+    client_id_prefix = os.environ.get(
+        "OID4VP_CLIENT_ID_PREFIX",
+        "decentralized_identifier",
+    ).strip().lower()
+
+    if lissi_compat:
+        client_identifier = verifier_did
+    elif client_id_prefix == "redirect_uri":
+        client_identifier = response_uri
+    elif client_id_prefix == "decentralized_identifier":
+        client_identifier = f"decentralized_identifier:{verifier_did}"
+    elif client_id_prefix == "x509_hash":
+        client_identifier, request_x5c = _x509_hash_client_id_and_header()
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "OID4VP_CLIENT_ID_PREFIX must be decentralized_identifier, "
+                "redirect_uri, or x509_hash"
+            ),
+        )
+    return client_identifier, request_x5c, verifier_did
+
+
 @router.post("/verify", response_model=VerificationRequestResponse, response_model_exclude_none=True)
 async def start_verification_flow(
     request: StartVerificationFlowRequest,
@@ -2871,15 +2904,27 @@ async def start_verification_flow(
     # Generate request URI and QR code data
     # Use gateway URL for Docker networking (Walt.ID wallet needs to access this)
     base_url = os.environ.get("PUBLIC_BASE_URL", "http://marty-gateway:8000")
-    # OID4VP: The request_uri points to where the wallet can fetch the signed Request Object
+    # OID4VP: request_uri points to the signed Request Object. OID4VP 1.0
+    # requires client_id alongside a request_uri, and the value must exactly
+    # match the client_id in the signed JAR returned from that location.
     request_uri = f"{base_url}/v1/flows/instances/{instance.id}/request"
-    # The authorization request with request_uri parameter
-    auth_request = f"openid4vp://authorize?request_uri={request_uri}"
+    response_uri = f"{base_url}/v1/flows/instances/{instance.id}/submit"
+    client_identifier, _, _ = _oid4vp_client_identity(base_url, response_uri)
+    authorization_parameters = [
+        ("client_id", client_identifier),
+        ("request_uri", request_uri),
+    ]
     if request.request_uri_method == "post":
-        auth_request += "&request_uri_method=post"
+        authorization_parameters.append(("request_uri_method", "post"))
+    auth_request = "openid4vp://authorize?" + urllib.parse.urlencode(
+        authorization_parameters,
+        quote_via=urllib.parse.quote,
+        safe="",
+    )
     qr_code_data = auth_request
 
     instance.context["request_uri"] = request_uri
+    instance.context["oid4vp_client_id"] = client_identifier
     instance.context["auth_request"] = auth_request
     instance.context["qr_code_data"] = qr_code_data
 
@@ -3365,26 +3410,25 @@ async def get_verification_request_object(
         # client identifier. SpruceID Kit rejects did:key/did:jwk for request
         # object verification, so the default verifier DID is path-scoped did:web.
         # The response_uri is where the wallet POSTs the VP token (the submit endpoint).
-        verifier_did = _derive_verifier_did(base_url)
         lissi_compat = compat_profile == "lissi"
-        client_id_prefix = os.environ.get("OID4VP_CLIENT_ID_PREFIX", "decentralized_identifier").strip().lower()
-        if lissi_compat:
-            client_identifier = verifier_did
-        elif client_id_prefix == "redirect_uri":
-            # OID4VP 1.0 Final §5.9.2: without an explicit client_id_scheme,
-            # the response URI is the verifier client identifier. This is a
-            # normal deployment option used by wallets that support the
-            # redirect_uri prefix; it is not a conformance-only shortcut.
-            client_identifier = response_uri
-        elif client_id_prefix == "decentralized_identifier":
-            client_identifier = f"decentralized_identifier:{verifier_did}"
-        elif client_id_prefix == "x509_hash":
-            client_identifier, request_x5c = _x509_hash_client_id_and_header()
-        else:
+        client_identifier, request_x5c, verifier_did = _oid4vp_client_identity(
+            base_url,
+            response_uri,
+            lissi_compat=lissi_compat,
+        )
+        outer_client_identifier = instance.context.get("oid4vp_client_id")
+        if (
+            isinstance(outer_client_identifier, str)
+            and outer_client_identifier
+            and not lissi_compat
+            and outer_client_identifier != client_identifier
+        ):
             raise HTTPException(
-                status_code=500,
-                detail="OID4VP_CLIENT_ID_PREFIX must be decentralized_identifier, redirect_uri, or x509_hash",
+                status_code=409,
+                detail="OID4VP verifier identity changed after this flow was created",
             )
+        if isinstance(outer_client_identifier, str) and outer_client_identifier and not lissi_compat:
+            client_identifier = outer_client_identifier
         # Build OID4VP Request Object payload
         # This will be signed as a JWT per OID4VP spec section 5
         request_payload = {

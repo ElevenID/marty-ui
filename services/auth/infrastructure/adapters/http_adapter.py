@@ -58,9 +58,9 @@ _CREDENTIAL_LOGIN_WALLET_CHOICES: tuple[dict[str, str], ...] = (
         "ios_template_env": "CREDENTIAL_LOGIN_SPRUCEKIT_IOS_DEEP_LINK_TEMPLATE",
         "ios_universal_template_env": "CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE",
         "android_package_env": "CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_PACKAGE",
-        "default_template": "openid4vp://authorize?request_uri={request_uri_encoded}",
-        "default_android_template": "intent://authorize?request_uri={request_uri_encoded}#Intent;scheme=openid4vp;{android_package_param}end",
-        "default_ios_template": "openid4vp://authorize?request_uri={request_uri_encoded}",
+        "default_template": "{oid4vp_uri}",
+        "default_android_template": "intent://authorize?{client_id_param}request_uri={request_uri_encoded}#Intent;scheme=openid4vp;{android_package_param}end",
+        "default_ios_template": "{oid4vp_uri}",
         "default_android_package": "com.spruceid.mobilesdkexample",
     },
     {
@@ -74,7 +74,7 @@ _CREDENTIAL_LOGIN_WALLET_CHOICES: tuple[dict[str, str], ...] = (
         "android_package_env": "CREDENTIAL_LOGIN_LISSI_ANDROID_PACKAGE",
         "legacy_template_env": "CREDENTIAL_LOGIN_LUCY_DEEP_LINK_TEMPLATE",
         "default_template": "{oid4vp_uri}",
-        "default_android_template": "intent://authorize?request_uri={request_uri_encoded}#Intent;scheme=openid4vp;{android_package_param}end",
+        "default_android_template": "intent://authorize?{client_id_param}request_uri={request_uri_encoded}#Intent;scheme=openid4vp;{android_package_param}end",
         "default_ios_template": "{oid4vp_uri}",
         "default_android_package": "",
         "request_object_compat": "lissi",
@@ -105,11 +105,29 @@ def _wallet_request_uri(wallet_choice: dict[str, str], request_uri: str, oid4vp_
     return normalized_request_uri
 
 
-def _wallet_oid4vp_uri(oid4vp_uri: str, wallet_request_uri: str) -> str:
+def _wallet_oid4vp_uri(
+    oid4vp_uri: str,
+    wallet_request_uri: str,
+    compat: str = "",
+) -> str:
     # Always rebuild the outer openid4vp:// URI via urlencode so that the
     # wallet_request_uri value (which may contain '?' and '=') is properly
     # percent-encoded as a query parameter value.
-    return _with_query_parameter(oid4vp_uri, "request_uri", wallet_request_uri)
+    rebuilt = _with_query_parameter(oid4vp_uri, "request_uri", wallet_request_uri)
+    if compat == "lissi":
+        # LISSI's legacy request-object profile uses client_id_scheme=did and
+        # therefore signs the JAR with the bare DID. Keep the outer client_id
+        # coherent with that signed value when the standard production URI
+        # carries the OID4VP 1.0 decentralized_identifier prefix.
+        parsed = urlparse(rebuilt)
+        client_ids = parse_qs(parsed.query).get("client_id", [])
+        if client_ids and client_ids[0].startswith("decentralized_identifier:did:"):
+            rebuilt = _with_query_parameter(
+                rebuilt,
+                "client_id",
+                client_ids[0].removeprefix("decentralized_identifier:"),
+            )
+    return rebuilt
 
 
 def _credential_login_wallet_template(wallet_choice: dict[str, str], platform: str) -> str:
@@ -145,6 +163,10 @@ def _render_credential_login_wallet_link(
 ) -> str:
     normalized_request_uri = _extract_oid4vp_request_uri(request_uri or oid4vp_uri)
     android_package_param = f"package={android_package};" if android_package else ""
+    client_ids = parse_qs(urlparse(oid4vp_uri).query).get("client_id", [])
+    client_id = client_ids[0] if client_ids else ""
+    client_id_encoded = quote(client_id, safe="")
+    client_id_param = f"client_id={client_id_encoded}&" if client_id else ""
 
     try:
         rendered = template.format(
@@ -152,6 +174,9 @@ def _render_credential_login_wallet_link(
             oid4vp_uri_encoded=quote(oid4vp_uri, safe=""),
             request_uri=normalized_request_uri,
             request_uri_encoded=quote(normalized_request_uri, safe=""),
+            client_id=client_id,
+            client_id_encoded=client_id_encoded,
+            client_id_param=client_id_param,
             android_package=android_package,
             android_package_param=android_package_param,
         )
@@ -173,8 +198,13 @@ def _build_credential_login_wallet_options(
         android_template = _credential_login_wallet_template(wallet_choice, "android")
         ios_template = _credential_login_wallet_template(wallet_choice, "ios")
         android_package = _credential_login_android_package(wallet_choice)
+        compat = wallet_choice.get("request_object_compat", "").strip().lower()
         wallet_request_uri = _wallet_request_uri(wallet_choice, request_uri, oid4vp_uri)
-        wallet_oid4vp_uri = _wallet_oid4vp_uri(oid4vp_uri, wallet_request_uri)
+        wallet_oid4vp_uri = _wallet_oid4vp_uri(
+            oid4vp_uri,
+            wallet_request_uri,
+            compat,
+        )
         options.append(
             {
                 "id": wallet_choice["id"],
