@@ -22,10 +22,8 @@ BASE_FILES = (
 )
 GHCR_FILE = "docker-compose.profile.ghcr.yml"
 W3C_FILE = "docker-compose.profile.w3c-vc.yml"
-EUDI_FILE = "docker-compose.profile.eudi.yml"
 ISOLATION_FILE = "docker-compose.profile.conformance.yml"
-EUDI_ISOLATION_FILE = "docker-compose.profile.conformance-eudi.yml"
-PUBLIC_PORT_SERVICES = {"oidf-tls-proxy", "eudi-wallet-tester-tls", "eudi-verifier-tls"}
+PUBLIC_PORT_SERVICES = {"oidf-tls-proxy"}
 LOCAL_BUILD_ARGS = (
     "MARTY_RS_URI",
     "MARTY_RS_DIGEST",
@@ -42,30 +40,24 @@ def validate_project(project: str) -> str:
     return project
 
 
-def compose_command(project: str, *, include_eudi: bool, include_w3c: bool = False, use_ghcr: bool = True) -> list[str]:
+def compose_command(project: str, *, include_w3c: bool = False, use_ghcr: bool = True) -> list[str]:
     command = ["docker", "compose", "--project-name", validate_project(project)]
     files = [*BASE_FILES]
     if use_ghcr:
         files.insert(1, GHCR_FILE)
     if include_w3c:
         files.append(W3C_FILE)
-    if include_eudi:
-        files.append(EUDI_FILE)
     files.append(ISOLATION_FILE)
-    if include_eudi:
-        files.append(EUDI_ISOLATION_FILE)
     for compose_file in files:
         command.extend(["--file", os.fspath(ROOT / compose_file)])
     command.extend(["--profile", "oidf"])
-    if include_eudi:
-        command.extend(["--profile", "eudi"])
     return command
 
 
-def rendered_config(project: str, *, include_eudi: bool, include_w3c: bool = False, use_ghcr: bool = True) -> dict[str, Any]:
+def rendered_config(project: str, *, include_w3c: bool = False, use_ghcr: bool = True) -> dict[str, Any]:
     completed = subprocess.run(
         [
-            *compose_command(project, include_eudi=include_eudi, include_w3c=include_w3c, use_ghcr=use_ghcr),
+            *compose_command(project, include_w3c=include_w3c, use_ghcr=use_ghcr),
             "config",
             "--format",
             "json",
@@ -201,7 +193,6 @@ def main() -> int:
         default=os.environ.get("MARTY_CONFORMANCE_PROJECT", ""),
         help="unique marty-conformance-<run-id> project name",
     )
-    parser.add_argument("--include-eudi", action="store_true")
     parser.add_argument("--include-w3c", action="store_true")
     parser.add_argument("--local-build", action="store_true", help="build the checked-out source; never certification-grade evidence")
     parser.add_argument(
@@ -218,7 +209,6 @@ def main() -> int:
     configure_oidf_internal_tls_port()
     command = compose_command(
         project,
-        include_eudi=args.include_eudi,
         include_w3c=args.include_w3c,
         use_ghcr=not args.local_build,
     )
@@ -233,7 +223,6 @@ def main() -> int:
 
     config = rendered_config(
         project,
-        include_eudi=args.include_eudi,
         include_w3c=args.include_w3c,
         use_ghcr=not args.local_build,
     )
