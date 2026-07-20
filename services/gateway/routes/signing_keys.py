@@ -838,9 +838,23 @@ def _did_doc_storage_key(organization_id: str) -> str:
     return f"org:{organization_id}:signing-key-did-document"
 
 
+_SLUG_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,128}$")
+
+
 def _did_web_slug_key(slug: str) -> str:
     """Redis key mapping a normalised org slug to its organization ID."""
     return f"did-web-slug:{slug}"
+
+
+def _did_web_org_slug(did_id: Any) -> str | None:
+    """Return the standard path slug from a path-scoped did:web identifier."""
+    if not isinstance(did_id, str) or not did_id.startswith("did:web:"):
+        return None
+    parts = did_id.split(":")
+    if len(parts) < 5 or parts[-2].lower() != "orgs":
+        return None
+    slug = parts[-1].strip().lower()
+    return slug if _SLUG_PATTERN.fullmatch(slug) else None
 
 
 def _issuer_profiles_storage_key(organization_id: str) -> str:
@@ -3298,6 +3312,11 @@ async def publish_service_to_did(
             did_id = f"did:web:{public_domain}:orgs:{org_slug}"
         else:
             did_id = f"did:web:{public_domain}:orgs:{resolved_org_id}"
+    if not org_slug:
+        # An explicit path-scoped issuer DID still needs its public slug mapping.
+        # Otherwise profile creation publishes a key that no standards-compliant
+        # did:web resolver can retrieve from /orgs/{slug}/did.json.
+        org_slug = _did_web_org_slug(did_id)
 
     # Build verification method structure
     vm_id = body.get("fragment") or _did_fragment_for_key_reference(service_id, key_reference)
@@ -4599,6 +4618,7 @@ async def create_issuer_profile(
             service_id=service_id,
             body={
                 "did_id": issuer_did,
+                "org_slug": _did_web_org_slug(issuer_did),
                 "fragment": _did_fragment_for_key_reference(service_id, target_profile.get("signing_key_reference") or None),
                 "key_reference": target_profile.get("signing_key_reference") or None,
             },
@@ -4870,9 +4890,6 @@ async def delete_signing_key(
 # These routes serve DID documents at the standard did:web resolution URLs.
 # did:web:{domain}:orgs:{slug}  →  GET /orgs/{slug}/did.json
 # did:web:{domain}               →  GET /.well-known/did.json  (root org)
-
-_SLUG_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,128}$")
-
 
 @did_web_public_router.get(
     "/orgs/{org_slug}/did.json",

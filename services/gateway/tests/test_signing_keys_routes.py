@@ -2874,9 +2874,13 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
             True,
         )
 
+    published_body = None
+
     async def fake_publish_service_to_did(*args, **kwargs):
+        nonlocal published_body
         from fastapi.responses import JSONResponse
 
+        published_body = kwargs["body"]
         return JSONResponse(content={"ok": True})
 
     monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve_effective_service)
@@ -2908,6 +2912,15 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
 
     # Verify stored in Redis
     assert "org:org_issuer:issuer-profiles" in stored
+    assert published_body["org_slug"] == "acme"
+
+
+def test_did_web_org_slug_accepts_only_standard_path_scoped_identifiers():
+    assert signing_keys._did_web_org_slug("did:web:issuer.example:orgs:Acme-1") == "acme-1"
+    assert signing_keys._did_web_org_slug("did:web:issuer.example%3A8443:orgs:org_123") == "org_123"
+    assert signing_keys._did_web_org_slug("did:web:issuer.example") is None
+    assert signing_keys._did_web_org_slug("did:key:z6Mkh") is None
+    assert signing_keys._did_web_org_slug("did:web:issuer.example:orgs:bad/slug") is None
 
 
 @pytest.mark.asyncio
