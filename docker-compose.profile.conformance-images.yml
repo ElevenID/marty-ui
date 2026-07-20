@@ -1,0 +1,41 @@
+# Immutable third-party infrastructure for release-grade interoperability runs.
+#
+# Development remains free to follow the readable tags in the base file. The
+# official-suite launcher adds this overlay only with released GHCR artifacts,
+# making a clean run reproducible without any local image build.
+
+services:
+  postgres:
+    image: postgres@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
+    pull_policy: always
+  redis:
+    image: redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    pull_policy: always
+  keycloak:
+    image: quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2
+    pull_policy: always
+  keycloak-configurator:
+    image: quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2
+    pull_policy: always
+  mailpit:
+    image: axllent/mailpit@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a
+    pull_policy: always
+  openbao:
+    image: quay.io/openbao/openbao@sha256:900bb64d0671cd1d82b693c56206f7263b582445f3a3bb6ba6e5213f524a6653
+    pull_policy: always
+  openbao-init:
+    image: quay.io/openbao/openbao@sha256:900bb64d0671cd1d82b693c56206f7263b582445f3a3bb6ba6e5213f524a6653
+    pull_policy: always
+  envoy:
+    image: envoyproxy/envoy@sha256:5a292b91adc87aa56146fb9ee52fc85c30570d0f175d95b48cde8035a2e641dd
+    pull_policy: always
+    build: !reset null
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9901 &&
+          printf 'GET /ready HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3 &&
+          grep -q LIVE <&3
