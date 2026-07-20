@@ -373,7 +373,8 @@ jobs:
             if [ "$attempt" = 60 ]; then exit 1; fi
             sleep 2
           done
-          unexpected_exits="$(docker compose --env-file .env.stack ps --status exited --services | grep -v '^migrations$' || true)"
+          exited_services="$(docker compose --env-file .env.stack ps --status exited --services)"
+          unexpected_exits="$(printf '%s\n' "$exited_services" | awk '$0 != "" && $0 != "migrations" && $0 != "issuance-migrations"')"
           if [ -n "$unexpected_exits" ]; then
             echo "Public-stack services exited unexpectedly:"
             echo "$unexpected_exits"
