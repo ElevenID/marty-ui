@@ -1,6 +1,0 @@
-# Additional isolation applied only when the EUDI profile is included.
-services:
-  # The upstream wallet tester is reachable through eudi-wallet-tester-tls;
-  # its raw HTTP port must stay private to this Compose project.
-  eudi-wallet-tester:
-    ports: !reset []
