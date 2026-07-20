@@ -1,8 +1,10 @@
 # Project-scoped official interoperability stack
 
-Official OIDF, W3C, and EUDI runs can share a Docker engine with other Marty
+Official OIDF and W3C runs can share a Docker engine with other Marty
 development stacks. Isolation comes from a unique Compose project, not from a
-second Docker daemon.
+second Docker daemon. EUDI runs use their own Compose project in
+`ElevenID/marty-integration-tests`, attached only to the TLS bridge described
+below.
 
 The conformance overlay removes every fixed container name, removes all base
 host-port publications, and restores Compose's project prefixes for networks
@@ -80,10 +82,11 @@ If `up` is interrupted after Compose creates project containers, rerun it with
 `--resume`. Resume accepts only resources carrying that exact project label;
 it does not adopt containers from another stack.
 
-Add `--include-w3c` after assigning `W3C_VC_TEST_POLICY_ID`. Add
-`--include-eudi` after supplying the pinned EUDI verifier keystore and HTTPS
-endpoint variables. These flags only add services and configuration to the
-same project-scoped network.
+Add `--include-w3c` after assigning `W3C_VC_TEST_POLICY_ID`. For EUDI, start
+the pinned `conformance/eudi-reference.compose.yml` from
+`ElevenID/marty-integration-tests` as its own Compose project. Its wallet
+tester and wallet-kit harness join only `${MARTY_CONFORMANCE_PROJECT}_oidf-runner`;
+they must never join `marty-network`.
 
 Inspect and remove exactly that project with:
 
