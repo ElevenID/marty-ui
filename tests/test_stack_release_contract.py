@@ -29,11 +29,14 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
         assert f'select(.name == "{component}")' in workflow
 
     assert "gh attestation verify" in workflow
-    assert "docker pull \"$uri@$digest\"" in workflow
+    assert 'docker pull "$uri@$digest"' in workflow
     assert "repository: ElevenID/marty-integration-tests" in workflow
     assert "ref: ${{ needs.validate-stack.outputs.integration_commit }}" in workflow
     assert "API_CORE_URI: ${{ needs.validate-stack.outputs.api_core_uri }}" in workflow
-    assert "API_CORE_DIGEST: ${{ needs.validate-stack.outputs.api_core_digest }}" in workflow
+    assert (
+        "API_CORE_DIGEST: ${{ needs.validate-stack.outputs.api_core_digest }}"
+        in workflow
+    )
     assert "npm install --global /tmp/marty-api-core.tgz /tmp/marty-cli.tgz" in workflow
     assert 'any(.assets[]; .name == "stack-manifest.json")' in workflow
     assert "No previous public stack release" in workflow
@@ -53,6 +56,22 @@ def test_stack_release_publishes_signed_evidence() -> None:
     assert "SHA256SUMS" in workflow
     assert "softprops/action-gh-release" in workflow
     assert "pytest tests/oss_stack" in workflow
+
+
+def test_stack_release_is_tag_only_and_targets_the_validated_tag() -> None:
+    workflow = _text(".github/workflows/cd.yml")
+
+    assert "workflow_dispatch:" not in workflow
+    assert 'test "$GITHUB_EVENT_NAME" = "push"' in workflow
+    assert 'test "$GITHUB_REF_NAME" = "v$version"' in workflow
+    assert "tag_name: v${{ needs.validate-stack.outputs.version }}" in workflow
+    assert "Reject any existing release" in workflow
+    assert "python scripts/check_release_absent.py" in workflow
+    assert "draft: true" in workflow
+    assert "overwrite_files: false" in workflow
+    assert 'gh release edit "$RELEASE_TAG"' in workflow
+    assert "--draft=false" in workflow
+    assert "inputs.lock_file" not in workflow
 
 
 def test_stack_release_actions_are_pinned_by_full_commit_sha() -> None:
