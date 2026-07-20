@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any, AsyncGenerator
 
 import httpx
@@ -34,6 +35,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import redis.asyncio as aioredis
 from marty_common import CedarEngine, CedarAuthMiddleware
+from marty_common import cedar_actions as _cedar_actions
 from marty_common.middleware import ETagMiddleware, IdempotencyMiddleware
 
 import gateway.proxy as _proxy_mod
@@ -112,6 +114,63 @@ _DEFAULT_READY_SERVICES = (
     "flows",
     "issuance",
 )
+
+_SIGNING_KEY_ROUTE_PERMISSIONS = {
+    "GET": "signing-key:view",
+    "HEAD": "signing-key:view",
+    "OPTIONS": "signing-key:view",
+    "POST": "signing-key:create",
+    "PUT": "signing-key:create",
+    "PATCH": "signing-key:create",
+    "DELETE": "signing-key:delete",
+}
+
+
+def _register_signing_key_cedar_routes() -> None:
+    """Protect every signing-key management route until marty-common ships the rule."""
+    resolver = getattr(_cedar_actions, "resolve_action_and_resource", None)
+    rules = getattr(_cedar_actions, "SPECIAL_ROUTE_RULES", None)
+    if not callable(resolver) or not isinstance(rules, list):
+        raise RuntimeError("Unsupported marty-common Cedar route registry; refusing to start without signing-key RBAC.")
+
+    try:
+        probes = {
+            method: resolver(method, "/v1/signing-keys/services/example")
+            for method in _SIGNING_KEY_ROUTE_PERMISSIONS
+        }
+    except Exception as exc:
+        raise RuntimeError("Unable to verify signing-key Cedar authorization; refusing to start.") from exc
+    if all(
+        probes[method] == (permission, "signing-key")
+        for method, permission in _SIGNING_KEY_ROUTE_PERMISSIONS.items()
+    ):
+        return
+
+    if any(result is not None for result in probes.values()):
+        raise RuntimeError("Conflicting marty-common signing-key Cedar mapping; refusing to override it.")
+
+    # Prepend the compatibility rule only when the released package has no
+    # signing-key mapping. Once upstream supplies the exact mapping, the probe
+    # above makes this shim a no-op rather than duplicating or overriding it.
+    compatibility_rule = (
+        re.compile(r"^/v1/signing-keys(?:/|$)"),
+        dict(_SIGNING_KEY_ROUTE_PERMISSIONS),
+        "signing-key",
+    )
+    rules.insert(
+        0,
+        compatibility_rule,
+    )
+    try:
+        verified = all(
+            resolver(method, "/v1/signing-keys/services/example") == (permission, "signing-key")
+            for method, permission in _SIGNING_KEY_ROUTE_PERMISSIONS.items()
+        )
+    except Exception:
+        verified = False
+    if not verified:
+        rules.remove(compatibility_rule)
+        raise RuntimeError("Signing-key Cedar compatibility mapping did not activate; refusing to start.")
 
 
 def _required_ready_services() -> tuple[str, ...]:
@@ -442,6 +501,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app() -> FastAPI:
+    _register_signing_key_cedar_routes()
     app = FastAPI(
         title="Marty API Gateway",
         description="""

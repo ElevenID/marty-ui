@@ -11,6 +11,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import unquote
 
 try:
     from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey, SECP256R1, SECP384R1
@@ -839,6 +840,8 @@ def _did_doc_storage_key(organization_id: str) -> str:
 
 
 _SLUG_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,128}$")
+_DID_WEB_DOMAIN_PATTERN = re.compile(r"^[a-zA-Z0-9.-]+(?::[0-9]{1,5})?$")
+_DID_WEB_DOMAIN_LABEL_PATTERN = re.compile(r"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
 
 
 def _did_web_slug_key(slug: str) -> str:
@@ -846,15 +849,96 @@ def _did_web_slug_key(slug: str) -> str:
     return f"did-web-slug:{slug}"
 
 
-def _did_web_org_slug(did_id: Any) -> str | None:
-    """Return the standard path slug from a path-scoped did:web identifier."""
+def _normalize_did_web_domain(value: Any) -> str | None:
+    """Return a comparable did:web domain, rejecting URL and path characters."""
+    if not isinstance(value, str) or not value or value != value.strip():
+        return None
+    try:
+        decoded = unquote(value, errors="strict")
+    except UnicodeDecodeError:
+        return None
+    if not _DID_WEB_DOMAIN_PATTERN.fullmatch(decoded):
+        return None
+    host, separator, port = decoded.rpartition(":")
+    if not separator:
+        host, port = decoded, ""
+    host = host.rstrip(".")
+    if not host or len(host) > 253:
+        return None
+    if any(not _DID_WEB_DOMAIN_LABEL_PATTERN.fullmatch(label) for label in host.split(".")):
+        return None
+    if port and (not port.isdigit() or not 1 <= int(port) <= 65535):
+        return None
+    normalized = host.lower()
+    return f"{normalized}:{port}" if port else normalized
+
+
+def _did_web_domain(did_id: Any) -> str | None:
     if not isinstance(did_id, str) or not did_id.startswith("did:web:"):
         return None
     parts = did_id.split(":")
-    if len(parts) < 5 or parts[-2].lower() != "orgs":
+    return _normalize_did_web_domain(parts[2]) if len(parts) >= 3 else None
+
+
+def _did_web_org_slug(did_id: Any, *, public_domain: str | None = None) -> str | None:
+    """Return the slug only for the exact ``did:web:<domain>:orgs:<slug>`` form."""
+    if not isinstance(did_id, str):
         return None
-    slug = parts[-1].strip().lower()
+    parts = did_id.split(":")
+    if len(parts) != 5 or parts[:2] != ["did", "web"] or parts[3].lower() != "orgs":
+        return None
+    did_domain = _normalize_did_web_domain(parts[2])
+    if not did_domain:
+        return None
+    if public_domain is not None and did_domain != _normalize_did_web_domain(public_domain):
+        return None
+    slug = parts[4].lower()
     return slug if _SLUG_PATTERN.fullmatch(slug) else None
+
+
+async def _claim_did_web_slug(request: Request, slug: str, organization_id: str) -> None:
+    """Atomically claim a public did:web slug without allowing tenant takeover."""
+    redis_client = getattr(request.app.state, "redis_client", None)
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="DID web slug registry is unavailable.")
+
+    storage_key = _did_web_slug_key(slug)
+
+    def stored_organization(value: Any) -> str | None:
+        if isinstance(value, bytes):
+            try:
+                return value.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+        return value if isinstance(value, str) else None
+
+    try:
+        existing_raw = await redis_client.get(storage_key)
+        if existing_raw is not None:
+            existing = stored_organization(existing_raw)
+            if existing == organization_id:
+                return
+            if existing is None:
+                raise HTTPException(status_code=503, detail="DID web slug registry contains invalid data.")
+            raise HTTPException(status_code=409, detail=f"DID web slug '{slug}' is already in use.")
+
+        claimed = await redis_client.set(storage_key, organization_id, nx=True)
+        if claimed:
+            return
+
+        # Another request won the SET NX race. Same-organization retries are
+        # idempotent; a different owner is a deterministic conflict.
+        existing = stored_organization(await redis_client.get(storage_key))
+        if existing == organization_id:
+            return
+        if existing is None:
+            raise HTTPException(status_code=503, detail="DID web slug claim could not be confirmed.")
+        raise HTTPException(status_code=409, detail=f"DID web slug '{slug}' is already in use.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("DID web slug claim failed for %s: %s", slug, exc, exc_info=True)
+        raise HTTPException(status_code=503, detail="DID web slug registry is unavailable.") from exc
 
 
 def _issuer_profiles_storage_key(organization_id: str) -> str:
@@ -3302,21 +3386,49 @@ async def publish_service_to_did(
         raise HTTPException(status_code=503, detail="Provider did not return a usable public key for DID publication.")
 
     # --- Resolve DID identifier ---------------------------------------------------
-    # Priority: explicit did_id > org_slug-derived path-scoped DID > placeholder
-    did_id = body.get("did_id")
-    org_slug = body.get("org_slug")
+    # Only an exact DID on this gateway's configured did:web domain may claim a
+    # local public slug. External and root DIDs remain publishable without a
+    # local mapping for compatibility.
+    configured_public_domain = _normalize_did_web_domain(_domain_config(request).get("public_domain"))
+    if not configured_public_domain:
+        raise HTTPException(status_code=503, detail="PUBLIC_DOMAIN is not a valid did:web domain.")
+
+    raw_did_id = body.get("did_id")
+    if raw_did_id is not None and (
+        not isinstance(raw_did_id, str) or not raw_did_id or raw_did_id != raw_did_id.strip()
+    ):
+        raise HTTPException(status_code=422, detail="did_id must be a non-empty DID without surrounding whitespace.")
+    did_id = raw_did_id
+
+    raw_org_slug = body.get("org_slug")
+    if raw_org_slug is not None and (
+        not isinstance(raw_org_slug, str) or not _SLUG_PATTERN.fullmatch(raw_org_slug)
+    ):
+        raise HTTPException(status_code=422, detail="org_slug must contain only letters, numbers, '.', '_' or '-'.")
+    org_slug = raw_org_slug.lower() if isinstance(raw_org_slug, str) else None
+
     if not did_id:
-        domain_cfg = _domain_config(request)
-        public_domain = domain_cfg.get("public_domain", "")
-        if org_slug:
-            did_id = f"did:web:{public_domain}:orgs:{org_slug}"
-        else:
-            did_id = f"did:web:{public_domain}:orgs:{resolved_org_id}"
-    if not org_slug:
-        # An explicit path-scoped issuer DID still needs its public slug mapping.
-        # Otherwise profile creation publishes a key that no standards-compliant
-        # did:web resolver can retrieve from /orgs/{slug}/did.json.
-        org_slug = _did_web_org_slug(did_id)
+        org_slug = org_slug or resolved_org_id.lower()
+        if not _SLUG_PATTERN.fullmatch(org_slug):
+            raise HTTPException(status_code=422, detail="Organization ID cannot be used as a did:web slug.")
+        did_domain = configured_public_domain.replace(":", "%3A")
+        did_id = f"did:web:{did_domain}:orgs:{org_slug}"
+    elif did_id.startswith("did:web:"):
+        local_slug = _did_web_org_slug(did_id, public_domain=configured_public_domain)
+        did_domain = _did_web_domain(did_id)
+        if did_domain == configured_public_domain and len(did_id.split(":")) != 3 and local_slug is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Local did:web identifiers must use did:web:<PUBLIC_DOMAIN>:orgs:<slug>.",
+            )
+        if org_slug is not None and local_slug != org_slug:
+            raise HTTPException(
+                status_code=422,
+                detail="org_slug must match a path-scoped DID on the configured PUBLIC_DOMAIN.",
+            )
+        org_slug = org_slug or local_slug
+    elif org_slug is not None:
+        raise HTTPException(status_code=422, detail="org_slug is only valid for a local path-scoped did:web identifier.")
 
     # Build verification method structure
     vm_id = body.get("fragment") or _did_fragment_for_key_reference(service_id, key_reference)
@@ -3377,11 +3489,7 @@ async def publish_service_to_did(
 
     # --- Store slug → org_id mapping for public did:web resolution ----------------
     if org_slug:
-        redis_client = getattr(request.app.state, "redis_client", None)
-        if redis_client:
-            safe_slug = re.sub(r"[^a-zA-Z0-9._-]", "", org_slug).lower()
-            if safe_slug:
-                await redis_client.set(_did_web_slug_key(safe_slug), resolved_org_id)
+        await _claim_did_web_slug(request, org_slug, resolved_org_id)
 
     return JSONResponse(
         content={
@@ -4613,12 +4721,23 @@ async def create_issuer_profile(
         if not issuer_did.startswith("did:web:") or target_profile.get("verification_method_id"):
             return target_profile
 
+        configured_public_domain = _normalize_did_web_domain(_domain_config(request).get("public_domain"))
+        org_slug = _did_web_org_slug(issuer_did, public_domain=configured_public_domain)
+        if not configured_public_domain or not org_slug:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "An automatically published did:web issuer must use "
+                    "did:web:<PUBLIC_DOMAIN>:orgs:<slug>."
+                ),
+            )
+
         publication_response = await publish_service_to_did(
             request=request,
             service_id=service_id,
             body={
                 "did_id": issuer_did,
-                "org_slug": _did_web_org_slug(issuer_did),
+                "org_slug": org_slug,
                 "fragment": _did_fragment_for_key_reference(service_id, target_profile.get("signing_key_reference") or None),
                 "key_reference": target_profile.get("signing_key_reference") or None,
             },

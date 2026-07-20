@@ -10,6 +10,8 @@ import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from marty_common import CedarAuthMiddleware
+from marty_common import cedar_actions
 from marty_common.middleware import IdempotencyMiddleware
 
 from gateway import main as gateway_main
@@ -297,6 +299,154 @@ def test_gateway_idempotency_runs_after_current_authorization_checks():
     assert middleware_names.index("CedarAuthMiddleware") < middleware_names.index("IdempotencyMiddleware")
     assert "BillingAuthMiddleware" not in middleware_names
     assert "UsageTrackingMiddleware" not in middleware_names
+
+
+@pytest.mark.parametrize(
+    ("method", "permission"),
+    [
+        ("GET", "signing-key:view"),
+        ("HEAD", "signing-key:view"),
+        ("OPTIONS", "signing-key:view"),
+        ("POST", "signing-key:create"),
+        ("PUT", "signing-key:create"),
+        ("PATCH", "signing-key:create"),
+        ("DELETE", "signing-key:delete"),
+    ],
+)
+def test_signing_key_routes_have_exact_cedar_permissions(method: str, permission: str):
+    assert cedar_actions.resolve_action_and_resource(
+        method,
+        "/v1/signing-keys/services/example",
+    ) == (permission, "signing-key")
+
+
+def test_signing_key_cedar_registration_is_idempotent():
+    before = list(cedar_actions.SPECIAL_ROUTE_RULES)
+
+    gateway_main._register_signing_key_cedar_routes()
+
+    assert cedar_actions.SPECIAL_ROUTE_RULES == before
+
+
+def test_signing_key_cedar_registration_does_not_duplicate_future_upstream_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    upstream_rules: list = []
+    monkeypatch.setattr(gateway_main._cedar_actions, "SPECIAL_ROUTE_RULES", upstream_rules)
+    monkeypatch.setattr(
+        gateway_main._cedar_actions,
+        "resolve_action_and_resource",
+        lambda method, path: (
+            gateway_main._SIGNING_KEY_ROUTE_PERMISSIONS[method],
+            "signing-key",
+        ),
+    )
+
+    gateway_main._register_signing_key_cedar_routes()
+
+    assert upstream_rules == []
+
+
+def test_signing_key_cedar_registration_fails_closed_for_unknown_registry_shape(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(gateway_main._cedar_actions, "SPECIAL_ROUTE_RULES", ())
+
+    with pytest.raises(RuntimeError, match="refusing to start"):
+        gateway_main._register_signing_key_cedar_routes()
+
+
+def test_signing_key_cedar_registration_refuses_conflicting_upstream_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        gateway_main._cedar_actions,
+        "resolve_action_and_resource",
+        lambda method, path: ("signing-key:edit", "signing-key"),
+    )
+
+    with pytest.raises(RuntimeError, match="refusing to override"):
+        gateway_main._register_signing_key_cedar_routes()
+
+
+def test_every_signing_key_management_endpoint_uses_protected_prefix_and_mapping():
+    expected = gateway_main._SIGNING_KEY_ROUTE_PERMISSIONS
+    assert gateway_main.signing_key_router.routes
+
+    for route in gateway_main.signing_key_router.routes:
+        assert route.path.startswith("/v1/signing-keys")
+        for method in route.methods:
+            assert method in expected
+            assert cedar_actions.resolve_action_and_resource(method, route.path) == (
+                expected[method],
+                "signing-key",
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "permission"),
+    [
+        ("GET", "signing-key:view"),
+        ("POST", "signing-key:create"),
+        ("DELETE", "signing-key:delete"),
+    ],
+)
+async def test_signing_key_query_org_cannot_cross_session_membership_boundary(
+    method: str,
+    permission: str,
+):
+    class Membership:
+        status = "active"
+        is_owner = False
+        role_names = {"signing-key-manager"}
+        permissions = {permission}
+
+        def is_active(self) -> bool:
+            return True
+
+        def has_permission(self, requested: str) -> bool:
+            return requested in self.permissions
+
+    membership_requests: list[tuple[str, str]] = []
+
+    async def get_membership(user_id: str, organization_id: str):
+        membership_requests.append((user_id, organization_id))
+        return Membership() if organization_id == "org-session" else None
+
+    app = FastAPI()
+    app.state.org_client = SimpleNamespace(get_membership=get_membership)
+    reached: list[tuple[str, str]] = []
+
+    @app.api_route("/v1/signing-keys/services/example", methods=[method])
+    async def protected_route(request: Request):
+        reached.append((request.state.organization_id, request.state.required_permission))
+        return JSONResponse({"ok": True})
+
+    app.add_middleware(CedarAuthMiddleware)
+
+    @app.middleware("http")
+    async def authenticated_session(request: Request, call_next):
+        request.state.user_id = "user-1"
+        request.state.session_organization_id = "org-session"
+        return await call_next(request)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        denied = await client.request(
+            method,
+            "/v1/signing-keys/services/example?organization_id=org-other",
+        )
+        allowed = await client.request(method, "/v1/signing-keys/services/example")
+
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "Not a member of this organization"
+    assert allowed.status_code == 200
+    assert reached == [("org-session", permission)]
+    assert membership_requests == [
+        ("user-1", "org-other"),
+        ("user-1", "org-session"),
+    ]
 
 
 # ---------------------------------------------------------------------------
