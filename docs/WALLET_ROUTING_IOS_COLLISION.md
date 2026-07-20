@@ -50,13 +50,19 @@ publishes an AASA. Empty/unset means "use raw `openid4vp://`".
 
 The template **must** include `{request_uri_encoded}` and should include
 `{client_id_param}` plus `{request_uri_method_param}` so the outer OID4VP
-identity and POST retrieval mode remain bound to the signed Request Object.
+identity and explicit retrieval mode remain bound to the signed Request Object.
 The adapter adds these parameters to older request-URI-only templates at
 runtime, but new templates should be explicit. Example:
 
 ```bash
 CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE=https://wallet.spruceid.com/openid4vp?{client_id_param}{request_uri_method_param}request_uri={request_uri_encoded}
 ```
+
+`request_uri_method` is preserved exactly: omitted remains omitted, while the
+OID4VP 1.0 values `get` and `post` remain explicit. Duplicate, empty,
+case-variant, and unknown method values are rejected before any wallet link is
+rendered. For `post`, the wallet's `wallet_nonce` is incorporated into the
+signed Request Object by the Flow service rather than appended to the link.
 
 LISSI's compatibility Request Object uses a bare DID verifier identity. Marty
 only offers the LISSI route when the standard flow was created with a DID-based

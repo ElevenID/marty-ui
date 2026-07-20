@@ -95,8 +95,9 @@ def _validated_oid4vp_outer_parameters(
 ) -> tuple[str, str, str]:
     """Return the unambiguous outer request URI, client ID, and method.
 
-    OID4VP GET is represented by omitting ``request_uri_method``. A present
-    method therefore has exactly one supported value: ``post``.
+    OID4VP permits the case-sensitive values ``get`` and ``post``. Omitting
+    the parameter remains distinct from an explicit ``get`` even though both
+    retrieve the Request Object with HTTP GET.
     """
     query_pairs = parse_qsl(
         urlparse(oid4vp_uri).query,
@@ -120,9 +121,9 @@ def _validated_oid4vp_outer_parameters(
             "OID4VP outer request must contain request_uri_method at most once"
         )
     request_uri_method = request_uri_methods[0] if request_uri_methods else ""
-    if request_uri_method and request_uri_method != "post":
+    if request_uri_methods and request_uri_method not in {"get", "post"}:
         raise ValueError(
-            "OID4VP request_uri_method must be omitted for GET or equal 'post'"
+            "OID4VP request_uri_method must equal 'get' or 'post' when present"
         )
 
     return (

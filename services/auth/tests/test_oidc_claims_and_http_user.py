@@ -524,8 +524,10 @@ def test_lissi_wallet_option_matches_bare_did_request_object_client_id(
     ]
 
 
-def test_post_request_uri_method_survives_every_reconstructed_wallet_link(
+@pytest.mark.parametrize("request_uri_method", ["get", "post"])
+def test_explicit_request_uri_method_survives_every_reconstructed_wallet_link(
     monkeypatch: pytest.MonkeyPatch,
+    request_uri_method: str,
 ):
     monkeypatch.setenv(
         "CREDENTIAL_LOGIN_SPRUCEKIT_DEEP_LINK_TEMPLATE",
@@ -545,20 +547,25 @@ def test_post_request_uri_method_survives_every_reconstructed_wallet_link(
         "openid4vp://authorize?"
         f"client_id={quote(client_id, safe='')}&"
         "request_uri=https%3A%2F%2Fverifier.example%2Frequest%2F1&"
-        "request_uri_method=post"
+        f"request_uri_method={request_uri_method}"
     )
 
-    [sprucekit, *_] = _build_credential_login_wallet_options(
+    options = _build_credential_login_wallet_options(
         oid4vp_uri=oid4vp_uri,
         request_uri=oid4vp_uri,
     )
 
+    assert [option["id"] for option in options] == ["sprucekit", "lissi"]
+    for option in options:
+        for link_name in ("href", "android_href", "ios_href"):
+            query_pairs = parse_qs(urlparse(option[link_name]).query)
+            assert query_pairs["request_uri_method"] == [request_uri_method]
     for link_name in ("href", "android_href", "ios_href"):
-        query_pairs = parse_qs(urlparse(sprucekit[link_name]).query)
+        query_pairs = parse_qs(urlparse(options[0][link_name]).query)
         assert query_pairs == {
             "request_uri": ["https://verifier.example/request/1"],
             "client_id": [client_id],
-            "request_uri_method": ["post"],
+            "request_uri_method": [request_uri_method],
         }
 
 
@@ -613,13 +620,18 @@ def test_reconstructed_wallet_link_collapses_stale_protocol_duplicates(
         ),
         (
             "request_uri=https%3A%2F%2Fverifier.example%2Fone&"
-            "request_uri_method=get",
-            "omitted for GET",
+            "request_uri_method=",
+            "must equal 'get' or 'post'",
+        ),
+        (
+            "request_uri=https%3A%2F%2Fverifier.example%2Fone&"
+            "request_uri_method=GET",
+            "must equal 'get' or 'post'",
         ),
         (
             "request_uri=https%3A%2F%2Fverifier.example%2Fone&"
             "request_uri_method=put",
-            "omitted for GET",
+            "must equal 'get' or 'post'",
         ),
     ],
 )
