@@ -55,11 +55,13 @@ class TestStartVerification:
             expires_at="2026-03-15T00:00:00Z",
             status="pending",
         )
-        servicer = _build_servicer(start_verification_fn=AsyncMock(return_value=result))
+        start_verification = AsyncMock(return_value=result)
+        servicer = _build_servicer(start_verification_fn=start_verification)
 
         req = flow_service_pb2.StartVerificationRequest(
             presentation_policy_id="pp-1",
             organization_id="org-1",
+            trust_profile_id="trust-1",
             user_id="user-1",
             callback_url="https://example.com/callback",
         )
@@ -70,6 +72,8 @@ class TestStartVerification:
         assert resp.nonce == "nonce-abc"
         assert resp.status == "pending"
         assert ctx.code is None
+        forwarded = start_verification.call_args.kwargs["request"]
+        assert forwarded.trust_profile_id == "trust-1"
 
     async def test_internal_http_callback_is_allowed_for_grpc(self, ctx):
         result = SimpleNamespace(

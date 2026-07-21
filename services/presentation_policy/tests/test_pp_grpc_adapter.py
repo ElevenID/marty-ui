@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import grpc
 import pytest
+from fastapi import HTTPException
 
 from presentation_policy.infrastructure.adapters.grpc_adapter import (
     PresentationPolicyServiceGrpc,
@@ -252,6 +253,38 @@ class TestEvaluatePresentation:
 
         assert ctx.code == grpc.StatusCode.INTERNAL
         assert "verification engine failed" in ctx.details
+
+    async def test_cross_org_trust_override_fails_closed_for_grpc_caller(self, ctx):
+        policy = SimpleNamespace(
+            id="pol-3",
+            status=_PolicyStatus.ACTIVE,
+        )
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=policy)
+        evaluate_fn = AsyncMock(
+            side_effect=HTTPException(
+                status_code=422,
+                detail=(
+                    "Trust Profile and Presentation Policy must belong to "
+                    "the same organization"
+                ),
+            )
+        )
+        servicer = _build_servicer(repo=repo, evaluate_fn=evaluate_fn)
+
+        req = pp_pb2.EvaluatePresentationRequest(
+            policy_id="pol-3",
+            vp_token="eyJ...",
+            trust_profile_id="trust-from-another-org",
+        )
+        with patch("presentation_policy.main.EvaluatePresentationRequest") as MockEvalReq, \
+             patch("presentation_policy.main.PolicyStatus", _PolicyStatus):
+            MockEvalReq.side_effect = lambda **kwargs: SimpleNamespace(**kwargs)
+            response = await servicer.EvaluatePresentation(req, ctx)
+
+        assert response.policy_id == ""
+        assert ctx.code == grpc.StatusCode.INVALID_ARGUMENT
+        assert "same organization" in ctx.details
 
 
 # ── HealthCheck ──────────────────────────────────────────────────────
