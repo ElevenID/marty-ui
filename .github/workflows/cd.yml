@@ -373,6 +373,11 @@ jobs:
             if [ "$attempt" = 60 ]; then exit 1; fi
             sleep 2
           done
+          # The gateway becomes reachable before every downstream service has
+          # accepted connections. Wait for the same public health contract the
+          # artifact-only suite asserts, rather than racing the first test.
+          python ../marty-ui/scripts/wait_for_public_services.py \
+            --url http://127.0.0.1:28000/health/services --timeout 120
           exited_services="$(docker compose --env-file .env.stack ps --status exited --services)"
           unexpected_exits="$(printf '%s\n' "$exited_services" | awk '$0 != "" && $0 != "migrations" && $0 != "issuance-migrations"')"
           if [ -n "$unexpected_exits" ]; then
