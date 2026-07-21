@@ -874,6 +874,84 @@ async def test_store_service_certificate_saves_and_extracts_expiry(monkeypatch: 
 
 
 @pytest.mark.asyncio
+async def test_store_managed_service_certificate_uses_sidecar_document(monkeypatch: pytest.MonkeyPatch):
+    """Dynamically discovered OpenBao services can retain public DSC material."""
+    normalized_service = {
+        "id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        "service_type": "openbao-transit",
+        "name": "Managed OpenBao",
+        "managed": True,
+        "read_only": True,
+    }
+
+    async def fake_resolve(request, org_id, service_id, **kwargs):
+        assert org_id == "org_123"
+        assert service_id == signing_keys.MANAGED_OPENBAO_SERVICE_ID
+        return {"services": []}, normalized_service, normalized_service, False
+
+    stored_documents = {}
+
+    async def fake_load_document(request, storage_key, default):
+        return stored_documents.get(storage_key, dict(default))
+
+    async def fake_save_document(request, storage_key, document):
+        stored_documents[storage_key] = document
+
+    monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve)
+    monkeypatch.setattr(signing_keys, "_load_json_document", fake_load_document)
+    monkeypatch.setattr(signing_keys, "_save_json_document", fake_save_document)
+    monkeypatch.setattr(signing_keys, "_extract_cert_expiry_date", lambda _: "2026-07-22T12:00:00Z")
+
+    response = await signing_keys.store_service_certificate(
+        request=_build_request("org_123"),
+        service_id=signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        body={"cert_pem": "leaf", "cert_chain_pem": "root"},
+        organization_id=None,
+    )
+
+    assert response.status_code == 200
+    storage_key = signing_keys._service_certificates_storage_key("org_123")
+    attachment = stored_documents[storage_key]["services"][signing_keys.MANAGED_OPENBAO_SERVICE_ID]
+    assert attachment["cert_pem"] == "leaf"
+    assert attachment["cert_chain_pem"] == "root"
+    assert attachment["cert_expires_at"] == "2026-07-22T12:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_managed_service_config_applies_certificate_sidecar(monkeypatch: pytest.MonkeyPatch):
+    """Config refreshes expose the certificate without persisting a managed service copy."""
+
+    async def fake_overrides(request, org_id):
+        assert org_id == "org_123"
+        return {
+            signing_keys.MANAGED_OPENBAO_SERVICE_ID: {
+                "cert_pem": "leaf",
+                "cert_chain_pem": "root",
+                "cert_expires_at": "2026-07-22T12:00:00Z",
+            }
+        }
+
+    monkeypatch.setattr(signing_keys, "_service_certificate_overrides", fake_overrides)
+    config = await signing_keys._build_key_management_config(
+        _build_request("org_123"),
+        "org_123",
+        {
+            "config": {
+                "hsm_enabled": True,
+                "hsm_settings": {"provider": "openbao", "service_url": "http://openbao", "mount": "transit"},
+            },
+            "keys": [{"id": "cred-dsc-marty-primary", "provider_key_name": "cred-dsc-marty-primary", "algorithm": "ES256"}],
+            "provider_metadata": {"status": "configured"},
+        },
+        registry_override={"services": [], "key_reference_purposes": {}},
+    )
+
+    managed = next(service for service in config["services"] if service["id"] == signing_keys.MANAGED_OPENBAO_SERVICE_ID)
+    assert managed["cert_pem"] == "leaf"
+    assert managed["cert_chain_pem"] == "root"
+
+
+@pytest.mark.asyncio
 async def test_get_service_certificate_returns_stored_data(monkeypatch: pytest.MonkeyPatch):
     """Getting a service certificate should return cert, chain, and expiry."""
     test_service = {

@@ -835,6 +835,18 @@ def _jwks_storage_key(organization_id: str) -> str:
     return f"org:{organization_id}:signing-key-jwks"
 
 
+def _service_certificates_storage_key(organization_id: str) -> str:
+    """Store certificate attachments separately from service registrations.
+
+    Managed signing services are derived from the live OpenBao inventory and
+    are intentionally excluded from the writable service registry.  Keeping
+    their public certificate material in a small sidecar document lets the
+    normal certificate API work for both managed and external services without
+    persisting provider credentials or a stale copy of the managed service.
+    """
+    return f"org:{organization_id}:signing-key-service-certificates"
+
+
 def _did_doc_storage_key(organization_id: str) -> str:
     return f"org:{organization_id}:signing-key-did-document"
 
@@ -1166,6 +1178,43 @@ def _service_x5c_chain(service: dict[str, Any]) -> list[str]:
         if encoded:
             x5c.append(encoded)
     return x5c
+
+
+async def _service_certificate_overrides(
+    request: Request,
+    organization_id: str | None,
+) -> dict[str, dict[str, str]]:
+    if not organization_id:
+        return {}
+    document = await _load_json_document(
+        request,
+        _service_certificates_storage_key(organization_id),
+        {"services": {}},
+    )
+    raw_services = document.get("services") if isinstance(document, dict) else None
+    if not isinstance(raw_services, dict):
+        return {}
+    return {
+        service_id: {
+            key: value
+            for key, value in attachment.items()
+            if key in {"cert_pem", "cert_chain_pem", "cert_expires_at", "updated_at"}
+            and isinstance(value, str)
+        }
+        for service_id, attachment in raw_services.items()
+        if isinstance(service_id, str) and isinstance(attachment, dict)
+    }
+
+
+def _apply_service_certificate_override(
+    service: dict[str, Any],
+    overrides: dict[str, dict[str, str]],
+) -> dict[str, Any]:
+    result = dict(service)
+    service_id = result.get("id")
+    if isinstance(service_id, str):
+        result.update(overrides.get(service_id, {}))
+    return result
 
 
 async def _load_json_document(request: Request, storage_key: str, default: dict[str, Any]) -> dict[str, Any]:
@@ -2496,6 +2545,11 @@ async def _build_key_management_config(
         services.append(managed_openbao_service)
         writable_services = [service for service in writable_services if service.get("id") != MANAGED_OPENBAO_SERVICE_ID]
     services.extend(writable_services)
+    certificate_overrides = await _service_certificate_overrides(request, resolved_org_id)
+    services = [
+        _apply_service_certificate_override(service, certificate_overrides)
+        for service in services
+    ]
 
     requested_default = registry.get("default_service_id") if isinstance(registry, dict) else None
     default_service_id = _default_service_id(services, requested_default)
@@ -2545,7 +2599,8 @@ async def _resolve_effective_service(
     if service is None:
         raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found.")
 
-    effective_service = dict(service)
+    certificate_overrides = await _service_certificate_overrides(request, resolved_org_id)
+    effective_service = _apply_service_certificate_override(service, certificate_overrides)
     if effective_service.get("id") == MANAGED_OPENBAO_SERVICE_ID:
         effective_service["endpoint"] = effective_service.get("endpoint") or (_bao_address() or "")
         effective_service["mount"] = effective_service.get("mount") or "transit"
@@ -3125,25 +3180,47 @@ async def store_service_certificate(
     # Extract expiry date from certificate
     cert_expires_at = _extract_cert_expiry_date(cert_pem)
 
-    registry = await _load_registered_service_registry(request, resolved_org_id)
+    registry, _, normalized, from_registry = await _resolve_effective_service(
+        request,
+        resolved_org_id,
+        service_id,
+    )
     services = registry.get("services") if isinstance(registry, dict) else []
     service_idx = next((i for i, s in enumerate(services) if s.get("id") == service_id), None)
-    if service_idx is None:
-        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found.")
 
-    # Update service with certificate
-    services[service_idx]["cert_pem"] = cert_pem
-    if cert_chain_pem:
-        services[service_idx]["cert_chain_pem"] = cert_chain_pem
-    if cert_expires_at:
-        services[service_idx]["cert_expires_at"] = cert_expires_at
-    services[service_idx]["updated_at"] = _utcnow_iso()
+    updated_at = _utcnow_iso()
+    attachment = {
+        "cert_pem": cert_pem,
+        "cert_chain_pem": cert_chain_pem or "",
+        "cert_expires_at": cert_expires_at or "",
+        "updated_at": updated_at,
+    }
+    certificate_document = await _load_json_document(
+        request,
+        _service_certificates_storage_key(resolved_org_id),
+        {"services": {}},
+    )
+    certificate_services = certificate_document.get("services")
+    if not isinstance(certificate_services, dict):
+        certificate_services = {}
+    certificate_services[service_id] = attachment
+    certificate_document["services"] = certificate_services
+    certificate_document["updated_at"] = updated_at
+    await _save_json_document(
+        request,
+        _service_certificates_storage_key(resolved_org_id),
+        certificate_document,
+    )
 
-    # Save updated registry
-    registry["services"] = services
-    await _save_registered_service_registry(request, resolved_org_id, registry)
+    # Preserve the existing registry representation for writable external
+    # services. Managed services have no registry row, so their attachment is
+    # supplied exclusively by the sidecar document above.
+    if from_registry and service_idx is not None:
+        services[service_idx].update(attachment)
+        registry["services"] = services
+        await _save_registered_service_registry(request, resolved_org_id, registry)
 
-    normalized = _normalize_registered_service(services[service_idx])
+    normalized = _apply_service_certificate_override(normalized, {service_id: attachment})
     return JSONResponse(
         content={
             "ok": True,
@@ -3165,13 +3242,11 @@ async def get_service_certificate(
     """Retrieve the stored certificate and chain for a registered signing service."""
     resolved_org_id = _resolve_org_id(request, organization_id)
 
-    registry = await _load_registered_service_registry(request, resolved_org_id)
-    services = registry.get("services") if isinstance(registry, dict) else []
-    service = next((s for s in services if s.get("id") == service_id), None)
-    if service is None:
-        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found.")
-
-    normalized = _normalize_registered_service(service)
+    _, _, normalized, _ = await _resolve_effective_service(
+        request,
+        resolved_org_id,
+        service_id,
+    )
     if not normalized or not normalized.get("cert_pem"):
         raise HTTPException(status_code=404, detail=f"No certificate stored for service '{service_id}'.")
 
@@ -3195,7 +3270,14 @@ async def list_certificate_expiry_alerts(
     resolved_org_id = _resolve_org_id(request, organization_id)
 
     registry = await _load_registered_service_registry(request, resolved_org_id)
-    services = registry.get("services") if isinstance(registry, dict) else []
+    snapshot = await _load_signing_key_snapshot(resolved_org_id)
+    config = await _build_key_management_config(
+        request,
+        resolved_org_id,
+        snapshot,
+        registry_override=registry,
+    )
+    services = config.get("services") if isinstance(config, dict) else []
 
     now = datetime.now(timezone.utc)
     expiry_threshold = now + timedelta(days=days_until_expiry)
