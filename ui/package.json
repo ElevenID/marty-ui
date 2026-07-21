@@ -83,6 +83,7 @@
     "vitest": "^4.1.10"
   },
   "overrides": {
+    "fast-uri": "4.1.1",
     "js-yaml": "4.3.0",
     "ts-deepmerge": "8.0.0"
   },

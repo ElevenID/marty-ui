@@ -355,46 +355,14 @@
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": true,
-      "authorizationServicesEnabled": true,
+      "authorizationServicesEnabled": false,
       "fullScopeAllowed": true,
       "defaultClientScopes": [
         "openid",
         "profile",
         "email",
         "roles"
-      ],
-      "authorizationSettings": {
-        "allowRemoteResourceManagement": false,
-        "policyEnforcementMode": "PERMISSIVE",
-        "resources": [],
-        "policies": [
-          {
-            "name": "allow-token-exchange",
-            "type": "js",
-            "logic": "POSITIVE",
-            "decisionStrategy": "UNANIMOUS",
-            "config": {
-              "code": "// Allow internal service accounts to exchange tokens\n$evaluation.grant();\n"
-            }
-          },
-          {
-            "name": "token-exchange.permission.client.marty-api",
-            "type": "scope",
-            "logic": "POSITIVE",
-            "decisionStrategy": "UNANIMOUS",
-            "config": {
-              "scopes": "[\"token-exchange\"]",
-              "applyPolicies": "[\"allow-token-exchange\"]"
-            }
-          }
-        ],
-        "scopes": [
-          {
-            "name": "token-exchange"
-          }
-        ],
-        "decisionStrategy": "UNANIMOUS"
-      }
+      ]
     }
   ],
   "clientScopes": [
