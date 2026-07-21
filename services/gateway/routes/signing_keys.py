@@ -1500,6 +1500,57 @@ def _resolve_service_for_format(
     return None
 
 
+def _resolve_key_reference_for_purpose(
+    registry: dict[str, Any],
+    service: dict[str, Any],
+    keys: list[dict[str, Any]],
+    *,
+    key_purpose: str | None,
+    algorithm: str | None,
+) -> str | None:
+    """Select a purpose-bound key instead of a service's unrelated default.
+
+    A managed KMS service hosts several protocol keys. Service resolution alone
+    is therefore insufficient: mdoc must use its DSC key, and an ES384 request
+    must not silently receive the service's ES256 default.
+    """
+    current = service.get("key_reference")
+    current_reference = current.strip() if isinstance(current, str) and current.strip() else None
+    if not key_purpose:
+        return current_reference
+
+    service_id = service.get("id")
+    if not isinstance(service_id, str):
+        return current_reference
+    bindings = _normalize_key_reference_purposes(registry.get("key_reference_purposes"))
+    service_bindings = bindings.get(service_id, {})
+    if not service_bindings:
+        return current_reference
+
+    aliases = set(_dedupe_strings(service.get("key_aliases")))
+    if current_reference:
+        aliases.add(current_reference)
+    candidates = [
+        reference
+        for reference, purposes in service_bindings.items()
+        if key_purpose in purposes and (not aliases or reference in aliases)
+    ]
+    if algorithm:
+        algorithm_by_reference = {
+            str(key.get("provider_key_name") or key.get("id")): key.get("algorithm")
+            for key in keys
+            if isinstance(key, dict) and (key.get("provider_key_name") or key.get("id"))
+        }
+        candidates = [
+            reference
+            for reference in candidates
+            if algorithm_by_reference.get(reference) == algorithm
+        ]
+    if current_reference in candidates:
+        return current_reference
+    return sorted(candidates)[0] if candidates else None
+
+
 async def _load_registered_service_registry(request: Request, organization_id: str | None) -> dict[str, Any]:
     empty = {
         "services": [],
@@ -3017,6 +3068,27 @@ async def resolve_signing_service(
                 f" {credential_format!r}, key_purpose {key_purpose!r}, algorithm {algorithm!r}."
             ),
         )
+
+    snapshot = await _load_signing_key_snapshot(resolved_org_id)
+    keys = [key for key in (snapshot.get("keys") or []) if isinstance(key, dict)]
+    resolved_key_reference = _resolve_key_reference_for_purpose(
+        registry,
+        service,
+        keys,
+        key_purpose=key_purpose,
+        algorithm=algorithm,
+    )
+    if key_purpose and not resolved_key_reference:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Signing service '{service.get('id')}' has no key reference bound to "
+                f"purpose {key_purpose!r} and algorithm {algorithm!r}."
+            ),
+        )
+    service = dict(service)
+    if resolved_key_reference:
+        service["key_reference"] = resolved_key_reference
 
     mdoc_hints = None
     if key_purpose in {"mdoc_dsc", "vdsnc_signing", "csca"} or credential_format in {"mso_mdoc", "zk_mdoc"}:

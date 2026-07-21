@@ -575,6 +575,62 @@ def test_resolve_service_returns_none_when_no_services():
     assert result is None
 
 
+def test_resolve_key_reference_selects_mdoc_dsc_in_multi_key_service():
+    service = {
+        "id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        "key_reference": "cred-issuer-marty-es256",
+        "key_aliases": ["cred-issuer-marty-es256", "cred-dsc-marty-primary"],
+    }
+    registry = {
+        "key_reference_purposes": {
+            signing_keys.MANAGED_OPENBAO_SERVICE_ID: {
+                "cred-issuer-marty-es256": ["vc_jwt_issuer"],
+                "cred-dsc-marty-primary": ["mdoc_dsc", "vdsnc_signing"],
+            }
+        }
+    }
+    keys = [
+        {"id": "cred-issuer-marty-es256", "algorithm": "ES256"},
+        {"id": "cred-dsc-marty-primary", "algorithm": "ES256"},
+    ]
+
+    assert signing_keys._resolve_key_reference_for_purpose(
+        registry,
+        service,
+        keys,
+        key_purpose="mdoc_dsc",
+        algorithm="ES256",
+    ) == "cred-dsc-marty-primary"
+
+
+def test_resolve_key_reference_honors_requested_algorithm():
+    service = {
+        "id": "svc",
+        "key_reference": "issuer-es256",
+        "key_aliases": ["issuer-es256", "issuer-es384"],
+    }
+    registry = {
+        "key_reference_purposes": {
+            "svc": {
+                "issuer-es256": ["vc_jwt_issuer"],
+                "issuer-es384": ["vc_jwt_issuer"],
+            }
+        }
+    }
+    keys = [
+        {"provider_key_name": "issuer-es256", "algorithm": "ES256"},
+        {"provider_key_name": "issuer-es384", "algorithm": "ES384"},
+    ]
+
+    assert signing_keys._resolve_key_reference_for_purpose(
+        registry,
+        service,
+        keys,
+        key_purpose="vc_jwt_issuer",
+        algorithm="ES384",
+    ) == "issuer-es384"
+
+
 @pytest.mark.asyncio
 async def test_resolve_endpoint_returns_matching_service(monkeypatch: pytest.MonkeyPatch):
     """POST /v1/signing-keys/config/resolve should return the resolved service."""
@@ -599,7 +655,11 @@ async def test_resolve_endpoint_returns_matching_service(monkeypatch: pytest.Mon
             "type_defaults": {},
         }
 
+    async def fake_snapshot(org_id):
+        return {"keys": [], "provider_metadata": {}, "message": None}
+
     monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_registry)
+    monkeypatch.setattr(signing_keys, "_load_signing_key_snapshot", fake_snapshot)
 
     request = _build_request("org_123")
     response = await signing_keys.resolve_signing_service(
