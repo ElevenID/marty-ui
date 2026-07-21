@@ -13,6 +13,7 @@ import logging
 from typing import Any
 
 import grpc
+from fastapi import HTTPException
 
 from marty_proto.v1 import (
     presentation_policy_service_pb2,
@@ -176,6 +177,19 @@ class PresentationPolicyServiceGrpc(
                 http_request=None,
                 repo=self._repo,
             )
+        except HTTPException as exc:
+            status_mapping = {
+                400: grpc.StatusCode.INVALID_ARGUMENT,
+                401: grpc.StatusCode.UNAUTHENTICATED,
+                403: grpc.StatusCode.PERMISSION_DENIED,
+                404: grpc.StatusCode.NOT_FOUND,
+                409: grpc.StatusCode.ABORTED,
+                422: grpc.StatusCode.INVALID_ARGUMENT,
+                503: grpc.StatusCode.UNAVAILABLE,
+            }
+            context.set_code(status_mapping.get(exc.status_code, grpc.StatusCode.INTERNAL))
+            context.set_details(str(exc.detail))
+            return presentation_policy_service_pb2.PolicyEvaluationResponse()
         except Exception as exc:
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(exc))

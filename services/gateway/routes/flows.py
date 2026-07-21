@@ -12,7 +12,7 @@ from gateway.models import (
     VerificationRequestResponse,
     VerificationResultResponse,
 )
-from gateway.proxy import _resource_exists, get_registry, proxy_request
+from gateway.proxy import _resource_exists, _resource_org_id, get_registry, proxy_request
 from gateway.routes.issuance import _ISSUANCE_HEADERS
 
 flow_router = APIRouter(prefix="/v1/flows", tags=["Flows"])
@@ -180,12 +180,30 @@ async def start_verification_flow(body: StartVerificationFlowRequest, request: R
     Creates a flow instance with a QR code / request_uri for wallet scanning.
     For stateless verification, use POST /v1/presentation-policies/{id}/evaluate instead.
     """
+    policy_organization_id: str | None = None
     if body.presentation_policy_id:
-        if not await _resource_exists("presentation-policies", f"/v1/presentation-policies/{body.presentation_policy_id}", request):
+        policy_organization_id = await _resource_org_id(
+            "presentation-policies",
+            f"/v1/presentation-policies/{body.presentation_policy_id}",
+            request,
+        )
+        if not isinstance(policy_organization_id, str) or not policy_organization_id.strip():
             raise HTTPException(status_code=422, detail=f"Presentation policy not found: {body.presentation_policy_id}")
+        policy_organization_id = policy_organization_id.strip()
     if body.trust_profile_id:
-        if not await _resource_exists("trust-profiles", f"/v1/trust-profiles/{body.trust_profile_id}", request):
+        trust_profile_organization_id = await _resource_org_id(
+            "trust-profiles",
+            f"/v1/trust-profiles/{body.trust_profile_id}",
+            request,
+        )
+        if not isinstance(trust_profile_organization_id, str) or not trust_profile_organization_id.strip():
             raise HTTPException(status_code=422, detail=f"Trust profile not found: {body.trust_profile_id}")
+        trust_profile_organization_id = trust_profile_organization_id.strip()
+        if policy_organization_id and trust_profile_organization_id != policy_organization_id:
+            raise HTTPException(
+                status_code=422,
+                detail="Trust profile and presentation policy must belong to the same organization",
+            )
     registry = get_registry()
     service_url = registry.get_service_url("flows")
     return await proxy_request(request, service_url, "/v1/flows/verify")

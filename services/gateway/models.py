@@ -1320,6 +1320,7 @@ class IssuanceCreate(BaseModel):
     holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
     application_id: str | None = None
     claims: dict = {}
+    credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None
 
 
 class DidcommDeliverRequest(BaseModel):

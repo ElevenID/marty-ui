@@ -11,6 +11,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import unquote
 
 try:
     from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey, SECP256R1, SECP384R1
@@ -834,13 +835,122 @@ def _jwks_storage_key(organization_id: str) -> str:
     return f"org:{organization_id}:signing-key-jwks"
 
 
+def _service_certificates_storage_key(organization_id: str) -> str:
+    """Store certificate attachments separately from service registrations.
+
+    Managed signing services are derived from the live OpenBao inventory and
+    are intentionally excluded from the writable service registry.  Keeping
+    their public certificate material in a small sidecar document lets the
+    normal certificate API work for both managed and external services without
+    persisting provider credentials or a stale copy of the managed service.
+    """
+    return f"org:{organization_id}:signing-key-service-certificates"
+
+
 def _did_doc_storage_key(organization_id: str) -> str:
     return f"org:{organization_id}:signing-key-did-document"
+
+
+_SLUG_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,128}$")
+_DID_WEB_DOMAIN_PATTERN = re.compile(r"^[a-zA-Z0-9.-]+(?::[0-9]{1,5})?$")
+_DID_WEB_DOMAIN_LABEL_PATTERN = re.compile(r"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
 
 
 def _did_web_slug_key(slug: str) -> str:
     """Redis key mapping a normalised org slug to its organization ID."""
     return f"did-web-slug:{slug}"
+
+
+def _normalize_did_web_domain(value: Any) -> str | None:
+    """Return a comparable did:web domain, rejecting URL and path characters."""
+    if not isinstance(value, str) or not value or value != value.strip():
+        return None
+    try:
+        decoded = unquote(value, errors="strict")
+    except UnicodeDecodeError:
+        return None
+    if not _DID_WEB_DOMAIN_PATTERN.fullmatch(decoded):
+        return None
+    host, separator, port = decoded.rpartition(":")
+    if not separator:
+        host, port = decoded, ""
+    host = host.rstrip(".")
+    if not host or len(host) > 253:
+        return None
+    if any(not _DID_WEB_DOMAIN_LABEL_PATTERN.fullmatch(label) for label in host.split(".")):
+        return None
+    if port and (not port.isdigit() or not 1 <= int(port) <= 65535):
+        return None
+    normalized = host.lower()
+    return f"{normalized}:{port}" if port else normalized
+
+
+def _did_web_domain(did_id: Any) -> str | None:
+    if not isinstance(did_id, str) or not did_id.startswith("did:web:"):
+        return None
+    parts = did_id.split(":")
+    return _normalize_did_web_domain(parts[2]) if len(parts) >= 3 else None
+
+
+def _did_web_org_slug(did_id: Any, *, public_domain: str | None = None) -> str | None:
+    """Return the slug only for the exact ``did:web:<domain>:orgs:<slug>`` form."""
+    if not isinstance(did_id, str):
+        return None
+    parts = did_id.split(":")
+    if len(parts) != 5 or parts[:2] != ["did", "web"] or parts[3].lower() != "orgs":
+        return None
+    did_domain = _normalize_did_web_domain(parts[2])
+    if not did_domain:
+        return None
+    if public_domain is not None and did_domain != _normalize_did_web_domain(public_domain):
+        return None
+    slug = parts[4].lower()
+    return slug if _SLUG_PATTERN.fullmatch(slug) else None
+
+
+async def _claim_did_web_slug(request: Request, slug: str, organization_id: str) -> None:
+    """Atomically claim a public did:web slug without allowing tenant takeover."""
+    redis_client = getattr(request.app.state, "redis_client", None)
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="DID web slug registry is unavailable.")
+
+    storage_key = _did_web_slug_key(slug)
+
+    def stored_organization(value: Any) -> str | None:
+        if isinstance(value, bytes):
+            try:
+                return value.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+        return value if isinstance(value, str) else None
+
+    try:
+        existing_raw = await redis_client.get(storage_key)
+        if existing_raw is not None:
+            existing = stored_organization(existing_raw)
+            if existing == organization_id:
+                return
+            if existing is None:
+                raise HTTPException(status_code=503, detail="DID web slug registry contains invalid data.")
+            raise HTTPException(status_code=409, detail=f"DID web slug '{slug}' is already in use.")
+
+        claimed = await redis_client.set(storage_key, organization_id, nx=True)
+        if claimed:
+            return
+
+        # Another request won the SET NX race. Same-organization retries are
+        # idempotent; a different owner is a deterministic conflict.
+        existing = stored_organization(await redis_client.get(storage_key))
+        if existing == organization_id:
+            return
+        if existing is None:
+            raise HTTPException(status_code=503, detail="DID web slug claim could not be confirmed.")
+        raise HTTPException(status_code=409, detail=f"DID web slug '{slug}' is already in use.")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("DID web slug claim failed for %s: %s", slug, exc, exc_info=True)
+        raise HTTPException(status_code=503, detail="DID web slug registry is unavailable.") from exc
 
 
 def _issuer_profiles_storage_key(organization_id: str) -> str:
@@ -1068,6 +1178,43 @@ def _service_x5c_chain(service: dict[str, Any]) -> list[str]:
         if encoded:
             x5c.append(encoded)
     return x5c
+
+
+async def _service_certificate_overrides(
+    request: Request,
+    organization_id: str | None,
+) -> dict[str, dict[str, str]]:
+    if not organization_id:
+        return {}
+    document = await _load_json_document(
+        request,
+        _service_certificates_storage_key(organization_id),
+        {"services": {}},
+    )
+    raw_services = document.get("services") if isinstance(document, dict) else None
+    if not isinstance(raw_services, dict):
+        return {}
+    return {
+        service_id: {
+            key: value
+            for key, value in attachment.items()
+            if key in {"cert_pem", "cert_chain_pem", "cert_expires_at", "updated_at"}
+            and isinstance(value, str)
+        }
+        for service_id, attachment in raw_services.items()
+        if isinstance(service_id, str) and isinstance(attachment, dict)
+    }
+
+
+def _apply_service_certificate_override(
+    service: dict[str, Any],
+    overrides: dict[str, dict[str, str]],
+) -> dict[str, Any]:
+    result = dict(service)
+    service_id = result.get("id")
+    if isinstance(service_id, str):
+        result.update(overrides.get(service_id, {}))
+    return result
 
 
 async def _load_json_document(request: Request, storage_key: str, default: dict[str, Any]) -> dict[str, Any]:
@@ -1351,6 +1498,57 @@ def _resolve_service_for_format(
         return svc
 
     return None
+
+
+def _resolve_key_reference_for_purpose(
+    registry: dict[str, Any],
+    service: dict[str, Any],
+    keys: list[dict[str, Any]],
+    *,
+    key_purpose: str | None,
+    algorithm: str | None,
+) -> str | None:
+    """Select a purpose-bound key instead of a service's unrelated default.
+
+    A managed KMS service hosts several protocol keys. Service resolution alone
+    is therefore insufficient: mdoc must use its DSC key, and an ES384 request
+    must not silently receive the service's ES256 default.
+    """
+    current = service.get("key_reference")
+    current_reference = current.strip() if isinstance(current, str) and current.strip() else None
+    if not key_purpose:
+        return current_reference
+
+    service_id = service.get("id")
+    if not isinstance(service_id, str):
+        return current_reference
+    bindings = _normalize_key_reference_purposes(registry.get("key_reference_purposes"))
+    service_bindings = bindings.get(service_id, {})
+    if not service_bindings:
+        return current_reference
+
+    aliases = set(_dedupe_strings(service.get("key_aliases")))
+    if current_reference:
+        aliases.add(current_reference)
+    candidates = [
+        reference
+        for reference, purposes in service_bindings.items()
+        if key_purpose in purposes and (not aliases or reference in aliases)
+    ]
+    if algorithm:
+        algorithm_by_reference = {
+            str(key.get("provider_key_name") or key.get("id")): key.get("algorithm")
+            for key in keys
+            if isinstance(key, dict) and (key.get("provider_key_name") or key.get("id"))
+        }
+        candidates = [
+            reference
+            for reference in candidates
+            if algorithm_by_reference.get(reference) == algorithm
+        ]
+    if current_reference in candidates:
+        return current_reference
+    return sorted(candidates)[0] if candidates else None
 
 
 async def _load_registered_service_registry(request: Request, organization_id: str | None) -> dict[str, Any]:
@@ -2398,6 +2596,11 @@ async def _build_key_management_config(
         services.append(managed_openbao_service)
         writable_services = [service for service in writable_services if service.get("id") != MANAGED_OPENBAO_SERVICE_ID]
     services.extend(writable_services)
+    certificate_overrides = await _service_certificate_overrides(request, resolved_org_id)
+    services = [
+        _apply_service_certificate_override(service, certificate_overrides)
+        for service in services
+    ]
 
     requested_default = registry.get("default_service_id") if isinstance(registry, dict) else None
     default_service_id = _default_service_id(services, requested_default)
@@ -2447,7 +2650,8 @@ async def _resolve_effective_service(
     if service is None:
         raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found.")
 
-    effective_service = dict(service)
+    certificate_overrides = await _service_certificate_overrides(request, resolved_org_id)
+    effective_service = _apply_service_certificate_override(service, certificate_overrides)
     if effective_service.get("id") == MANAGED_OPENBAO_SERVICE_ID:
         effective_service["endpoint"] = effective_service.get("endpoint") or (_bao_address() or "")
         effective_service["mount"] = effective_service.get("mount") or "transit"
@@ -2865,6 +3069,27 @@ async def resolve_signing_service(
             ),
         )
 
+    snapshot = await _load_signing_key_snapshot(resolved_org_id)
+    keys = [key for key in (snapshot.get("keys") or []) if isinstance(key, dict)]
+    resolved_key_reference = _resolve_key_reference_for_purpose(
+        registry,
+        service,
+        keys,
+        key_purpose=key_purpose,
+        algorithm=algorithm,
+    )
+    if key_purpose and not resolved_key_reference:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Signing service '{service.get('id')}' has no key reference bound to "
+                f"purpose {key_purpose!r} and algorithm {algorithm!r}."
+            ),
+        )
+    service = dict(service)
+    if resolved_key_reference:
+        service["key_reference"] = resolved_key_reference
+
     mdoc_hints = None
     if key_purpose in {"mdoc_dsc", "vdsnc_signing", "csca"} or credential_format in {"mso_mdoc", "zk_mdoc"}:
         x5c = _service_x5c_chain(service)
@@ -3027,25 +3252,47 @@ async def store_service_certificate(
     # Extract expiry date from certificate
     cert_expires_at = _extract_cert_expiry_date(cert_pem)
 
-    registry = await _load_registered_service_registry(request, resolved_org_id)
+    registry, _, normalized, from_registry = await _resolve_effective_service(
+        request,
+        resolved_org_id,
+        service_id,
+    )
     services = registry.get("services") if isinstance(registry, dict) else []
     service_idx = next((i for i, s in enumerate(services) if s.get("id") == service_id), None)
-    if service_idx is None:
-        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found.")
 
-    # Update service with certificate
-    services[service_idx]["cert_pem"] = cert_pem
-    if cert_chain_pem:
-        services[service_idx]["cert_chain_pem"] = cert_chain_pem
-    if cert_expires_at:
-        services[service_idx]["cert_expires_at"] = cert_expires_at
-    services[service_idx]["updated_at"] = _utcnow_iso()
+    updated_at = _utcnow_iso()
+    attachment = {
+        "cert_pem": cert_pem,
+        "cert_chain_pem": cert_chain_pem or "",
+        "cert_expires_at": cert_expires_at or "",
+        "updated_at": updated_at,
+    }
+    certificate_document = await _load_json_document(
+        request,
+        _service_certificates_storage_key(resolved_org_id),
+        {"services": {}},
+    )
+    certificate_services = certificate_document.get("services")
+    if not isinstance(certificate_services, dict):
+        certificate_services = {}
+    certificate_services[service_id] = attachment
+    certificate_document["services"] = certificate_services
+    certificate_document["updated_at"] = updated_at
+    await _save_json_document(
+        request,
+        _service_certificates_storage_key(resolved_org_id),
+        certificate_document,
+    )
 
-    # Save updated registry
-    registry["services"] = services
-    await _save_registered_service_registry(request, resolved_org_id, registry)
+    # Preserve the existing registry representation for writable external
+    # services. Managed services have no registry row, so their attachment is
+    # supplied exclusively by the sidecar document above.
+    if from_registry and service_idx is not None:
+        services[service_idx].update(attachment)
+        registry["services"] = services
+        await _save_registered_service_registry(request, resolved_org_id, registry)
 
-    normalized = _normalize_registered_service(services[service_idx])
+    normalized = _apply_service_certificate_override(normalized, {service_id: attachment})
     return JSONResponse(
         content={
             "ok": True,
@@ -3067,13 +3314,11 @@ async def get_service_certificate(
     """Retrieve the stored certificate and chain for a registered signing service."""
     resolved_org_id = _resolve_org_id(request, organization_id)
 
-    registry = await _load_registered_service_registry(request, resolved_org_id)
-    services = registry.get("services") if isinstance(registry, dict) else []
-    service = next((s for s in services if s.get("id") == service_id), None)
-    if service is None:
-        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found.")
-
-    normalized = _normalize_registered_service(service)
+    _, _, normalized, _ = await _resolve_effective_service(
+        request,
+        resolved_org_id,
+        service_id,
+    )
     if not normalized or not normalized.get("cert_pem"):
         raise HTTPException(status_code=404, detail=f"No certificate stored for service '{service_id}'.")
 
@@ -3097,7 +3342,14 @@ async def list_certificate_expiry_alerts(
     resolved_org_id = _resolve_org_id(request, organization_id)
 
     registry = await _load_registered_service_registry(request, resolved_org_id)
-    services = registry.get("services") if isinstance(registry, dict) else []
+    snapshot = await _load_signing_key_snapshot(resolved_org_id)
+    config = await _build_key_management_config(
+        request,
+        resolved_org_id,
+        snapshot,
+        registry_override=registry,
+    )
+    services = config.get("services") if isinstance(config, dict) else []
 
     now = datetime.now(timezone.utc)
     expiry_threshold = now + timedelta(days=days_until_expiry)
@@ -3288,16 +3540,49 @@ async def publish_service_to_did(
         raise HTTPException(status_code=503, detail="Provider did not return a usable public key for DID publication.")
 
     # --- Resolve DID identifier ---------------------------------------------------
-    # Priority: explicit did_id > org_slug-derived path-scoped DID > placeholder
-    did_id = body.get("did_id")
-    org_slug = body.get("org_slug")
+    # Only an exact DID on this gateway's configured did:web domain may claim a
+    # local public slug. External and root DIDs remain publishable without a
+    # local mapping for compatibility.
+    configured_public_domain = _normalize_did_web_domain(_domain_config(request).get("public_domain"))
+    if not configured_public_domain:
+        raise HTTPException(status_code=503, detail="PUBLIC_DOMAIN is not a valid did:web domain.")
+
+    raw_did_id = body.get("did_id")
+    if raw_did_id is not None and (
+        not isinstance(raw_did_id, str) or not raw_did_id or raw_did_id != raw_did_id.strip()
+    ):
+        raise HTTPException(status_code=422, detail="did_id must be a non-empty DID without surrounding whitespace.")
+    did_id = raw_did_id
+
+    raw_org_slug = body.get("org_slug")
+    if raw_org_slug is not None and (
+        not isinstance(raw_org_slug, str) or not _SLUG_PATTERN.fullmatch(raw_org_slug)
+    ):
+        raise HTTPException(status_code=422, detail="org_slug must contain only letters, numbers, '.', '_' or '-'.")
+    org_slug = raw_org_slug.lower() if isinstance(raw_org_slug, str) else None
+
     if not did_id:
-        domain_cfg = _domain_config(request)
-        public_domain = domain_cfg.get("public_domain", "")
-        if org_slug:
-            did_id = f"did:web:{public_domain}:orgs:{org_slug}"
-        else:
-            did_id = f"did:web:{public_domain}:orgs:{resolved_org_id}"
+        org_slug = org_slug or resolved_org_id.lower()
+        if not _SLUG_PATTERN.fullmatch(org_slug):
+            raise HTTPException(status_code=422, detail="Organization ID cannot be used as a did:web slug.")
+        did_domain = configured_public_domain.replace(":", "%3A")
+        did_id = f"did:web:{did_domain}:orgs:{org_slug}"
+    elif did_id.startswith("did:web:"):
+        local_slug = _did_web_org_slug(did_id, public_domain=configured_public_domain)
+        did_domain = _did_web_domain(did_id)
+        if did_domain == configured_public_domain and len(did_id.split(":")) != 3 and local_slug is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Local did:web identifiers must use did:web:<PUBLIC_DOMAIN>:orgs:<slug>.",
+            )
+        if org_slug is not None and local_slug != org_slug:
+            raise HTTPException(
+                status_code=422,
+                detail="org_slug must match a path-scoped DID on the configured PUBLIC_DOMAIN.",
+            )
+        org_slug = org_slug or local_slug
+    elif org_slug is not None:
+        raise HTTPException(status_code=422, detail="org_slug is only valid for a local path-scoped did:web identifier.")
 
     # Build verification method structure
     vm_id = body.get("fragment") or _did_fragment_for_key_reference(service_id, key_reference)
@@ -3358,11 +3643,7 @@ async def publish_service_to_did(
 
     # --- Store slug → org_id mapping for public did:web resolution ----------------
     if org_slug:
-        redis_client = getattr(request.app.state, "redis_client", None)
-        if redis_client:
-            safe_slug = re.sub(r"[^a-zA-Z0-9._-]", "", org_slug).lower()
-            if safe_slug:
-                await redis_client.set(_did_web_slug_key(safe_slug), resolved_org_id)
+        await _claim_did_web_slug(request, org_slug, resolved_org_id)
 
     return JSONResponse(
         content={
@@ -4594,11 +4875,23 @@ async def create_issuer_profile(
         if not issuer_did.startswith("did:web:") or target_profile.get("verification_method_id"):
             return target_profile
 
+        configured_public_domain = _normalize_did_web_domain(_domain_config(request).get("public_domain"))
+        org_slug = _did_web_org_slug(issuer_did, public_domain=configured_public_domain)
+        if not configured_public_domain or not org_slug:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "An automatically published did:web issuer must use "
+                    "did:web:<PUBLIC_DOMAIN>:orgs:<slug>."
+                ),
+            )
+
         publication_response = await publish_service_to_did(
             request=request,
             service_id=service_id,
             body={
                 "did_id": issuer_did,
+                "org_slug": org_slug,
                 "fragment": _did_fragment_for_key_reference(service_id, target_profile.get("signing_key_reference") or None),
                 "key_reference": target_profile.get("signing_key_reference") or None,
             },
@@ -4870,9 +5163,6 @@ async def delete_signing_key(
 # These routes serve DID documents at the standard did:web resolution URLs.
 # did:web:{domain}:orgs:{slug}  →  GET /orgs/{slug}/did.json
 # did:web:{domain}               →  GET /.well-known/did.json  (root org)
-
-_SLUG_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,128}$")
-
 
 @did_web_public_router.get(
     "/orgs/{org_slug}/did.json",

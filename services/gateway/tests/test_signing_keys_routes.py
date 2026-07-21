@@ -575,6 +575,62 @@ def test_resolve_service_returns_none_when_no_services():
     assert result is None
 
 
+def test_resolve_key_reference_selects_mdoc_dsc_in_multi_key_service():
+    service = {
+        "id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        "key_reference": "cred-issuer-marty-es256",
+        "key_aliases": ["cred-issuer-marty-es256", "cred-dsc-marty-primary"],
+    }
+    registry = {
+        "key_reference_purposes": {
+            signing_keys.MANAGED_OPENBAO_SERVICE_ID: {
+                "cred-issuer-marty-es256": ["vc_jwt_issuer"],
+                "cred-dsc-marty-primary": ["mdoc_dsc", "vdsnc_signing"],
+            }
+        }
+    }
+    keys = [
+        {"id": "cred-issuer-marty-es256", "algorithm": "ES256"},
+        {"id": "cred-dsc-marty-primary", "algorithm": "ES256"},
+    ]
+
+    assert signing_keys._resolve_key_reference_for_purpose(
+        registry,
+        service,
+        keys,
+        key_purpose="mdoc_dsc",
+        algorithm="ES256",
+    ) == "cred-dsc-marty-primary"
+
+
+def test_resolve_key_reference_honors_requested_algorithm():
+    service = {
+        "id": "svc",
+        "key_reference": "issuer-es256",
+        "key_aliases": ["issuer-es256", "issuer-es384"],
+    }
+    registry = {
+        "key_reference_purposes": {
+            "svc": {
+                "issuer-es256": ["vc_jwt_issuer"],
+                "issuer-es384": ["vc_jwt_issuer"],
+            }
+        }
+    }
+    keys = [
+        {"provider_key_name": "issuer-es256", "algorithm": "ES256"},
+        {"provider_key_name": "issuer-es384", "algorithm": "ES384"},
+    ]
+
+    assert signing_keys._resolve_key_reference_for_purpose(
+        registry,
+        service,
+        keys,
+        key_purpose="vc_jwt_issuer",
+        algorithm="ES384",
+    ) == "issuer-es384"
+
+
 @pytest.mark.asyncio
 async def test_resolve_endpoint_returns_matching_service(monkeypatch: pytest.MonkeyPatch):
     """POST /v1/signing-keys/config/resolve should return the resolved service."""
@@ -599,7 +655,11 @@ async def test_resolve_endpoint_returns_matching_service(monkeypatch: pytest.Mon
             "type_defaults": {},
         }
 
+    async def fake_snapshot(org_id):
+        return {"keys": [], "provider_metadata": {}, "message": None}
+
     monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_registry)
+    monkeypatch.setattr(signing_keys, "_load_signing_key_snapshot", fake_snapshot)
 
     request = _build_request("org_123")
     response = await signing_keys.resolve_signing_service(
@@ -871,6 +931,84 @@ async def test_store_service_certificate_saves_and_extracts_expiry(monkeypatch: 
     assert saved_registry["data"]["services"][0]["cert_pem"] == cert_pem
     assert saved_registry["data"]["services"][0]["cert_chain_pem"] == "chain"
     assert saved_registry["data"]["services"][0]["cert_expires_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_store_managed_service_certificate_uses_sidecar_document(monkeypatch: pytest.MonkeyPatch):
+    """Dynamically discovered OpenBao services can retain public DSC material."""
+    normalized_service = {
+        "id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        "service_type": "openbao-transit",
+        "name": "Managed OpenBao",
+        "managed": True,
+        "read_only": True,
+    }
+
+    async def fake_resolve(request, org_id, service_id, **kwargs):
+        assert org_id == "org_123"
+        assert service_id == signing_keys.MANAGED_OPENBAO_SERVICE_ID
+        return {"services": []}, normalized_service, normalized_service, False
+
+    stored_documents = {}
+
+    async def fake_load_document(request, storage_key, default):
+        return stored_documents.get(storage_key, dict(default))
+
+    async def fake_save_document(request, storage_key, document):
+        stored_documents[storage_key] = document
+
+    monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve)
+    monkeypatch.setattr(signing_keys, "_load_json_document", fake_load_document)
+    monkeypatch.setattr(signing_keys, "_save_json_document", fake_save_document)
+    monkeypatch.setattr(signing_keys, "_extract_cert_expiry_date", lambda _: "2026-07-22T12:00:00Z")
+
+    response = await signing_keys.store_service_certificate(
+        request=_build_request("org_123"),
+        service_id=signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        body={"cert_pem": "leaf", "cert_chain_pem": "root"},
+        organization_id=None,
+    )
+
+    assert response.status_code == 200
+    storage_key = signing_keys._service_certificates_storage_key("org_123")
+    attachment = stored_documents[storage_key]["services"][signing_keys.MANAGED_OPENBAO_SERVICE_ID]
+    assert attachment["cert_pem"] == "leaf"
+    assert attachment["cert_chain_pem"] == "root"
+    assert attachment["cert_expires_at"] == "2026-07-22T12:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_managed_service_config_applies_certificate_sidecar(monkeypatch: pytest.MonkeyPatch):
+    """Config refreshes expose the certificate without persisting a managed service copy."""
+
+    async def fake_overrides(request, org_id):
+        assert org_id == "org_123"
+        return {
+            signing_keys.MANAGED_OPENBAO_SERVICE_ID: {
+                "cert_pem": "leaf",
+                "cert_chain_pem": "root",
+                "cert_expires_at": "2026-07-22T12:00:00Z",
+            }
+        }
+
+    monkeypatch.setattr(signing_keys, "_service_certificate_overrides", fake_overrides)
+    config = await signing_keys._build_key_management_config(
+        _build_request("org_123"),
+        "org_123",
+        {
+            "config": {
+                "hsm_enabled": True,
+                "hsm_settings": {"provider": "openbao", "service_url": "http://openbao", "mount": "transit"},
+            },
+            "keys": [{"id": "cred-dsc-marty-primary", "provider_key_name": "cred-dsc-marty-primary", "algorithm": "ES256"}],
+            "provider_metadata": {"status": "configured"},
+        },
+        registry_override={"services": [], "key_reference_purposes": {}},
+    )
+
+    managed = next(service for service in config["services"] if service["id"] == signing_keys.MANAGED_OPENBAO_SERVICE_ID)
+    assert managed["cert_pem"] == "leaf"
+    assert managed["cert_chain_pem"] == "root"
 
 
 @pytest.mark.asyncio
@@ -1421,6 +1559,8 @@ async def test_publish_service_to_jwks_returns_503_when_adapter_raises(monkeypat
 @pytest.mark.asyncio
 async def test_publish_service_to_did_returns_verification_method(monkeypatch: pytest.MonkeyPatch):
     """publish_service_to_did should build and return a verificationMethod from the adapter JWK."""
+    monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
+    monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
     test_service = {
         "id": "svc-bao",
         "service_type": "openbao-transit",
@@ -1439,7 +1579,10 @@ async def test_publish_service_to_did_returns_verification_method(monkeypatch: p
 
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
 
-    request = _build_request("org_123")
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+    redis_mock.set = AsyncMock(return_value=True)
+    request = _build_request("org_123", redis_client=redis_mock)
     response = await signing_keys.publish_service_to_did(
         request=request,
         service_id="svc-bao",
@@ -1459,6 +1602,9 @@ async def test_publish_service_to_did_returns_verification_method(monkeypatch: p
 
 @pytest.mark.asyncio
 async def test_publish_service_to_did_resolves_managed_openbao_service(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
+    monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
+
     async def fake_load_registry(request, org_id):
         return {"services": [], "default_service_id": None}
 
@@ -1501,7 +1647,10 @@ async def test_publish_service_to_did_resolves_managed_openbao_service(monkeypat
     monkeypatch.setattr(signing_keys, "_load_signing_key_snapshot", fake_snapshot)
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
 
-    request = _build_request("org_123")
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+    redis_mock.set = AsyncMock(return_value=True)
+    request = _build_request("org_123", redis_client=redis_mock)
     response = await signing_keys.publish_service_to_did(
         request=request,
         service_id=signing_keys.MANAGED_OPENBAO_SERVICE_ID,
@@ -2813,8 +2962,8 @@ async def test_publish_service_to_did_stores_slug_mapping(monkeypatch: pytest.Mo
         return {"services": [test_service], "default_service_id": None}
 
     monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
-    monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
-    monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
+    monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com:8443")
+    monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com:8443")
 
     class FakeAdapter:
         async def get_public_key_jwk(self, config: dict):
@@ -2824,26 +2973,85 @@ async def test_publish_service_to_did_stores_slug_mapping(monkeypatch: pytest.Mo
 
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(return_value=None)
-    redis_mock.set = AsyncMock()
+    redis_mock.set = AsyncMock(return_value=True)
 
     request = _build_request("org_123", redis_client=redis_mock)
     response = await signing_keys.publish_service_to_did(
         request=request,
         service_id="svc-bao",
-        body={"org_slug": "acme-corp", "fragment": "issuer-key"},
+        body={
+            "did_id": "did:web:beta.elevenidllc.com%3A8443:orgs:acme-corp",
+            "org_slug": "acme-corp",
+            "fragment": "issuer-key",
+        },
         organization_id=None,
     )
 
     assert response.status_code == 200
     data = json.loads(response.body)
     assert data["ok"] is True
-
-    # Verify that the slug mapping was stored via redis_mock.set
-    set_calls = redis_mock.set.call_args_list
-    slug_key_stored = any(
-        "did-web-slug:acme-corp" in str(call) for call in set_calls
+    assert data["verification_method"]["id"].startswith(
+        "did:web:beta.elevenidllc.com%3A8443:orgs:acme-corp#"
     )
-    assert slug_key_stored, f"Expected slug mapping in redis.set calls: {set_calls}"
+
+    redis_mock.set.assert_any_await("did-web-slug:acme-corp", "org_123", nx=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"did_id": "did:web:beta.elevenidllc.com:teams:acme"},
+        {
+            "did_id": "did:web:beta.elevenidllc.com:orgs:acme",
+            "org_slug": "different",
+        },
+        {
+            "did_id": "did:web:external.example:orgs:acme",
+            "org_slug": "acme",
+        },
+        {
+            "did_id": "did:web:beta.elevenidllc.com%2Fevil:orgs:acme",
+            "org_slug": "acme",
+        },
+        {"org_slug": "bad/slug"},
+    ],
+)
+async def test_publish_service_to_did_rejects_malformed_or_mismatched_local_identifier(
+    monkeypatch: pytest.MonkeyPatch,
+    body: dict,
+):
+    monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
+    monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
+
+    async def fake_resolve_effective_service(*args, **kwargs):
+        service = {
+            "id": "svc-bao",
+            "service_type": "openbao-transit",
+            "key_reference": "cred-issuer-es256",
+            "algorithms": ["ES256"],
+        }
+        return ({"services": []}, service, service, False)
+
+    class FakeAdapter:
+        async def get_public_key_jwk(self, config: dict):
+            return {"kty": "EC", "crv": "P-256", "x": "abc", "y": "def"}
+
+    monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve_effective_service)
+    monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
+
+    redis_mock = AsyncMock()
+    request = _build_request("org_123", redis_client=redis_mock)
+    with pytest.raises(signing_keys.HTTPException) as exc_info:
+        await signing_keys.publish_service_to_did(
+            request=request,
+            service_id="svc-bao",
+            body=body,
+            organization_id=None,
+        )
+
+    assert exc_info.value.status_code == 422
+    redis_mock.set.assert_not_awaited()
 
 
 # =============================================================================
@@ -2874,9 +3082,13 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
             True,
         )
 
+    published_body = None
+
     async def fake_publish_service_to_did(*args, **kwargs):
+        nonlocal published_body
         from fastapi.responses import JSONResponse
 
+        published_body = kwargs["body"]
         return JSONResponse(content={"ok": True})
 
     monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve_effective_service)
@@ -2908,6 +3120,168 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
 
     # Verify stored in Redis
     assert "org:org_issuer:issuer-profiles" in stored
+    assert published_body["org_slug"] == "acme"
+
+
+@pytest.mark.asyncio
+async def test_create_issuer_profile_requires_local_path_did_only_for_auto_publication(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
+    monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
+
+    async def fake_resolve_effective_service(*args, **kwargs):
+        return (
+            {"services": []},
+            {"id": "svc-bao"},
+            {"id": "svc-bao", "key_reference": "cred-issuer-test-es256"},
+            True,
+        )
+
+    publish_mock = AsyncMock()
+    monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve_effective_service)
+    monkeypatch.setattr(signing_keys, "publish_service_to_did", publish_mock)
+
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=None)
+    redis_mock.set = AsyncMock(return_value=True)
+    request = _build_request("org_issuer", redis_client=redis_mock)
+    base_body = {
+        "name": "External Issuer",
+        "issuer_did": "did:web:external.example:orgs:acme",
+        "signing_service_id": "svc-bao",
+        "key_purpose": "vc_jwt_issuer",
+        "status": "active",
+    }
+
+    with pytest.raises(signing_keys.HTTPException) as invalid:
+        await signing_keys.create_issuer_profile(
+            request=request,
+            body=base_body,
+            organization_id=None,
+        )
+    assert invalid.value.status_code == 422
+
+    response = await signing_keys.create_issuer_profile(
+        request=request,
+        body={
+            **base_body,
+            "verification_method_id": "did:web:external.example:orgs:acme#issuer-key",
+        },
+        organization_id=None,
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body)["profile"]["verification_method_id"].endswith("#issuer-key")
+    publish_mock.assert_not_awaited()
+
+
+def test_did_web_org_slug_accepts_only_standard_path_scoped_identifiers():
+    assert signing_keys._did_web_org_slug("did:web:issuer.example:orgs:Acme-1") == "acme-1"
+    assert signing_keys._did_web_org_slug("did:web:issuer.example%3A8443:orgs:org_123") == "org_123"
+    assert signing_keys._did_web_org_slug(
+        "did:web:issuer.example%3A8443:orgs:org_123",
+        public_domain="issuer.example:8443",
+    ) == "org_123"
+    assert signing_keys._did_web_org_slug(
+        "did:web:issuer.example:orgs:acme",
+        public_domain="other.example",
+    ) is None
+    assert signing_keys._did_web_org_slug("did:web:issuer.example") is None
+    assert signing_keys._did_web_org_slug("did:key:z6Mkh") is None
+    assert signing_keys._did_web_org_slug("did:web:issuer.example:orgs:bad/slug") is None
+    assert signing_keys._did_web_org_slug("did:web:issuer.example:teams:orgs:acme") is None
+    assert signing_keys._did_web_org_slug("did:web:issuer.example%2Forgs:orgs:acme") is None
+    assert signing_keys._did_web_org_slug("did:web:-issuer.example:orgs:acme") is None
+    assert signing_keys._did_web_org_slug("did:web:issuer..example:orgs:acme") is None
+    assert signing_keys._did_web_org_slug("did:web:issuer.example%3A70000:orgs:acme") is None
+
+
+@pytest.mark.asyncio
+async def test_claim_did_web_slug_same_org_is_idempotent():
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=b"org_123")
+    redis_mock.set = AsyncMock()
+
+    await signing_keys._claim_did_web_slug(
+        _build_request("org_123", redis_client=redis_mock),
+        "acme",
+        "org_123",
+    )
+
+    redis_mock.set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_claim_did_web_slug_rejects_cross_org_collision_without_overwrite():
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(return_value="org_other")
+    redis_mock.set = AsyncMock()
+
+    with pytest.raises(signing_keys.HTTPException) as exc_info:
+        await signing_keys._claim_did_web_slug(
+            _build_request("org_123", redis_client=redis_mock),
+            "acme",
+            "org_123",
+        )
+
+    assert exc_info.value.status_code == 409
+    redis_mock.set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_claim_did_web_slug_set_nx_race_rechecks_owner():
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(side_effect=[None, b"org_other"])
+    redis_mock.set = AsyncMock(return_value=False)
+
+    with pytest.raises(signing_keys.HTTPException) as exc_info:
+        await signing_keys._claim_did_web_slug(
+            _build_request("org_123", redis_client=redis_mock),
+            "acme",
+            "org_123",
+        )
+
+    assert exc_info.value.status_code == 409
+    redis_mock.set.assert_awaited_once_with("did-web-slug:acme", "org_123", nx=True)
+
+
+@pytest.mark.asyncio
+async def test_claim_did_web_slug_set_nx_race_accepts_same_org_winner():
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(side_effect=[None, b"org_123"])
+    redis_mock.set = AsyncMock(return_value=False)
+
+    await signing_keys._claim_did_web_slug(
+        _build_request("org_123", redis_client=redis_mock),
+        "acme",
+        "org_123",
+    )
+
+    redis_mock.set.assert_awaited_once_with("did-web-slug:acme", "org_123", nx=True)
+
+
+@pytest.mark.asyncio
+async def test_claim_did_web_slug_unavailable_or_invalid_storage_fails_closed():
+    with pytest.raises(signing_keys.HTTPException) as unavailable:
+        await signing_keys._claim_did_web_slug(
+            _build_request("org_123", redis_client=None),
+            "acme",
+            "org_123",
+        )
+    assert unavailable.value.status_code == 503
+
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(return_value=b"\xff")
+    redis_mock.set = AsyncMock()
+    with pytest.raises(signing_keys.HTTPException) as invalid:
+        await signing_keys._claim_did_web_slug(
+            _build_request("org_123", redis_client=redis_mock),
+            "acme",
+            "org_123",
+        )
+    assert invalid.value.status_code == 503
+    redis_mock.set.assert_not_awaited()
 
 
 @pytest.mark.asyncio

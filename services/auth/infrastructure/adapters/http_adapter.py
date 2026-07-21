@@ -15,7 +15,7 @@ import logging
 import os
 import secrets
 from typing import Annotated, Any
-from urllib.parse import parse_qs, quote, urlencode, urlparse
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse
 
 import httpx
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
@@ -58,9 +58,9 @@ _CREDENTIAL_LOGIN_WALLET_CHOICES: tuple[dict[str, str], ...] = (
         "ios_template_env": "CREDENTIAL_LOGIN_SPRUCEKIT_IOS_DEEP_LINK_TEMPLATE",
         "ios_universal_template_env": "CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE",
         "android_package_env": "CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_PACKAGE",
-        "default_template": "openid4vp://authorize?request_uri={request_uri_encoded}",
-        "default_android_template": "intent://authorize?request_uri={request_uri_encoded}#Intent;scheme=openid4vp;{android_package_param}end",
-        "default_ios_template": "openid4vp://authorize?request_uri={request_uri_encoded}",
+        "default_template": "{oid4vp_uri}",
+        "default_android_template": "intent://authorize?{client_id_param}{request_uri_method_param}request_uri={request_uri_encoded}#Intent;scheme=openid4vp;{android_package_param}end",
+        "default_ios_template": "{oid4vp_uri}",
         "default_android_package": "com.spruceid.mobilesdkexample",
     },
     {
@@ -74,7 +74,7 @@ _CREDENTIAL_LOGIN_WALLET_CHOICES: tuple[dict[str, str], ...] = (
         "android_package_env": "CREDENTIAL_LOGIN_LISSI_ANDROID_PACKAGE",
         "legacy_template_env": "CREDENTIAL_LOGIN_LUCY_DEEP_LINK_TEMPLATE",
         "default_template": "{oid4vp_uri}",
-        "default_android_template": "intent://authorize?request_uri={request_uri_encoded}#Intent;scheme=openid4vp;{android_package_param}end",
+        "default_android_template": "intent://authorize?{client_id_param}{request_uri_method_param}request_uri={request_uri_encoded}#Intent;scheme=openid4vp;{android_package_param}end",
         "default_ios_template": "{oid4vp_uri}",
         "default_android_package": "",
         "request_object_compat": "lissi",
@@ -90,10 +90,64 @@ def _extract_oid4vp_request_uri(oid4vp_uri: str) -> str:
     return oid4vp_uri
 
 
+def _validated_oid4vp_outer_parameters(
+    oid4vp_uri: str,
+) -> tuple[str, str, str]:
+    """Return the unambiguous outer request URI, client ID, and method.
+
+    OID4VP permits the case-sensitive values ``get`` and ``post``. Omitting
+    the parameter remains distinct from an explicit ``get`` even though both
+    retrieve the Request Object with HTTP GET.
+    """
+    query_pairs = parse_qsl(
+        urlparse(oid4vp_uri).query,
+        keep_blank_values=True,
+    )
+
+    def values(name: str) -> list[str]:
+        return [value for key, value in query_pairs if key == name]
+
+    request_uris = values("request_uri")
+    if len(request_uris) != 1 or not request_uris[0]:
+        raise ValueError("OID4VP outer request must contain request_uri exactly once")
+
+    client_ids = values("client_id")
+    if len(client_ids) > 1 or (client_ids and not client_ids[0]):
+        raise ValueError("OID4VP outer request must contain client_id at most once")
+
+    request_uri_methods = values("request_uri_method")
+    if len(request_uri_methods) > 1:
+        raise ValueError(
+            "OID4VP outer request must contain request_uri_method at most once"
+        )
+    request_uri_method = request_uri_methods[0] if request_uri_methods else ""
+    if request_uri_methods and request_uri_method not in {"get", "post"}:
+        raise ValueError(
+            "OID4VP request_uri_method must equal 'get' or 'post' when present"
+        )
+
+    return (
+        request_uris[0],
+        client_ids[0] if client_ids else "",
+        request_uri_method,
+    )
+
+
 def _with_query_parameter(url: str, key: str, value: str) -> str:
     parsed = urlparse(url)
     query = parse_qs(parsed.query, keep_blank_values=True)
     query[key] = [value]
+    return parsed._replace(query=urlencode(query, doseq=True)).geturl()
+
+
+def _without_query_parameter(url: str, key: str) -> str:
+    """Remove every occurrence of a query key while preserving the fragment."""
+    parsed = urlparse(url)
+    query = [
+        (name, value)
+        for name, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if name != key
+    ]
     return parsed._replace(query=urlencode(query, doseq=True)).geturl()
 
 
@@ -105,11 +159,29 @@ def _wallet_request_uri(wallet_choice: dict[str, str], request_uri: str, oid4vp_
     return normalized_request_uri
 
 
-def _wallet_oid4vp_uri(oid4vp_uri: str, wallet_request_uri: str) -> str:
+def _wallet_oid4vp_uri(
+    oid4vp_uri: str,
+    wallet_request_uri: str,
+    compat: str = "",
+) -> str:
     # Always rebuild the outer openid4vp:// URI via urlencode so that the
     # wallet_request_uri value (which may contain '?' and '=') is properly
     # percent-encoded as a query parameter value.
-    return _with_query_parameter(oid4vp_uri, "request_uri", wallet_request_uri)
+    rebuilt = _with_query_parameter(oid4vp_uri, "request_uri", wallet_request_uri)
+    if compat == "lissi":
+        # LISSI's legacy request-object profile uses client_id_scheme=did and
+        # therefore signs the JAR with the bare DID. Keep the outer client_id
+        # coherent with that signed value when the standard production URI
+        # carries the OID4VP 1.0 decentralized_identifier prefix.
+        parsed = urlparse(rebuilt)
+        client_ids = parse_qs(parsed.query).get("client_id", [])
+        if client_ids and client_ids[0].startswith("decentralized_identifier:did:"):
+            rebuilt = _with_query_parameter(
+                rebuilt,
+                "client_id",
+                client_ids[0].removeprefix("decentralized_identifier:"),
+            )
+    return rebuilt
 
 
 def _credential_login_wallet_template(wallet_choice: dict[str, str], platform: str) -> str:
@@ -145,6 +217,19 @@ def _render_credential_login_wallet_link(
 ) -> str:
     normalized_request_uri = _extract_oid4vp_request_uri(request_uri or oid4vp_uri)
     android_package_param = f"package={android_package};" if android_package else ""
+    outer_request_uri, client_id, request_uri_method = _validated_oid4vp_outer_parameters(
+        oid4vp_uri
+    )
+    if normalized_request_uri != outer_request_uri:
+        raise ValueError("OID4VP request_uri must match the validated outer request")
+    client_id_encoded = quote(client_id, safe="")
+    client_id_param = f"client_id={client_id_encoded}&" if client_id else ""
+    request_uri_method_encoded = quote(request_uri_method, safe="")
+    request_uri_method_param = (
+        f"request_uri_method={request_uri_method_encoded}&"
+        if request_uri_method
+        else ""
+    )
 
     try:
         rendered = template.format(
@@ -152,6 +237,12 @@ def _render_credential_login_wallet_link(
             oid4vp_uri_encoded=quote(oid4vp_uri, safe=""),
             request_uri=normalized_request_uri,
             request_uri_encoded=quote(normalized_request_uri, safe=""),
+            client_id=client_id,
+            client_id_encoded=client_id_encoded,
+            client_id_param=client_id_param,
+            request_uri_method=request_uri_method,
+            request_uri_method_encoded=request_uri_method_encoded,
+            request_uri_method_param=request_uri_method_param,
             android_package=android_package,
             android_package_param=android_package_param,
         )
@@ -159,13 +250,41 @@ def _render_credential_login_wallet_link(
         logger.warning("Invalid credential-login wallet template %r: %s", template, exc)
         return oid4vp_uri
 
-    return rendered or oid4vp_uri
+    if not rendered:
+        return oid4vp_uri
+
+    if "{oid4vp_uri" not in template:
+        # Reconstruct every protocol parameter from the validated outer
+        # request. Setting each key also collapses hard-coded duplicates in
+        # legacy operator templates, including intent:// URLs with fragments.
+        rendered = _with_query_parameter(
+            rendered,
+            "request_uri",
+            normalized_request_uri,
+        )
+        if client_id:
+            rendered = _with_query_parameter(rendered, "client_id", client_id)
+        else:
+            rendered = _without_query_parameter(rendered, "client_id")
+        if request_uri_method:
+            rendered = _with_query_parameter(
+                rendered,
+                "request_uri_method",
+                request_uri_method,
+            )
+        else:
+            rendered = _without_query_parameter(rendered, "request_uri_method")
+
+    return rendered
 
 
 def _build_credential_login_wallet_options(
     oid4vp_uri: str,
     request_uri: str,
 ) -> list[dict[str, str]]:
+    outer_request_uri, _, _ = _validated_oid4vp_outer_parameters(oid4vp_uri)
+    if _extract_oid4vp_request_uri(request_uri or oid4vp_uri) != outer_request_uri:
+        raise ValueError("OID4VP request_uri must match the validated outer request")
     options: list[dict[str, str]] = []
 
     for wallet_choice in _CREDENTIAL_LOGIN_WALLET_CHOICES:
@@ -173,8 +292,20 @@ def _build_credential_login_wallet_options(
         android_template = _credential_login_wallet_template(wallet_choice, "android")
         ios_template = _credential_login_wallet_template(wallet_choice, "ios")
         android_package = _credential_login_android_package(wallet_choice)
+        compat = wallet_choice.get("request_object_compat", "").strip().lower()
         wallet_request_uri = _wallet_request_uri(wallet_choice, request_uri, oid4vp_uri)
-        wallet_oid4vp_uri = _wallet_oid4vp_uri(oid4vp_uri, wallet_request_uri)
+        wallet_oid4vp_uri = _wallet_oid4vp_uri(
+            oid4vp_uri,
+            wallet_request_uri,
+            compat,
+        )
+        if compat == "lissi":
+            lissi_client_ids = parse_qs(urlparse(wallet_oid4vp_uri).query).get("client_id", [])
+            if not lissi_client_ids or not lissi_client_ids[0].startswith("did:"):
+                logger.info(
+                    "Hiding LISSI compatibility because outer client_id is not DID-based"
+                )
+                continue
         options.append(
             {
                 "id": wallet_choice["id"],

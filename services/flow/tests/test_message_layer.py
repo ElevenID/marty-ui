@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import base64
 import json
-from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 from fastapi import HTTPException
@@ -22,6 +22,7 @@ from flow.main import (
     FlowInstance,
     FlowInstanceStatus,
     FlowType,
+    StartVerificationFlowRequest,
     DigitalCredentialSubmissionRequest,
     InMemoryFlowRepository,
     _base58_encode,
@@ -35,6 +36,7 @@ from flow.main import (
     handle_application_approved,
     get_verification_request_object,
     submit_digital_credential_response,
+    start_verification_flow,
     submit_verification_response,
     update_flow_definition,
 )
@@ -810,6 +812,116 @@ async def test_application_approved_webhook_manual_issue_does_not_bootstrap_defa
 
 
 @pytest.mark.asyncio
+async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(monkeypatch):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    monkeypatch.setenv("OID4VP_CLIENT_ID_PREFIX", "decentralized_identifier")
+    _install_reference_validation_stubs(
+        monkeypatch,
+        templates={},
+        policies={
+            "policy-1": {
+                "organization_id": "org-1",
+                "status": "active",
+                "credential_requirements_json": "[]",
+            },
+        },
+    )
+    repo = InMemoryFlowRepository()
+
+    started = await start_verification_flow(
+        StartVerificationFlowRequest(presentation_policy_id="policy-1"),
+        user_id="auth-service",
+        repo=repo,
+    )
+    parsed = urlparse(started.request_uri)
+    parameters = parse_qs(parsed.query)
+    client_identifier = "decentralized_identifier:did:web:verifier.example:oid4vp"
+    fetched_request_uri = (
+        f"https://verifier.example/v1/flows/instances/{started.instance_id}/request"
+    )
+
+    assert parsed.scheme == "openid4vp"
+    assert parameters == {
+        "client_id": [client_identifier],
+        "request_uri": [fetched_request_uri],
+    }
+    assert client_identifier not in parsed.query
+    assert fetched_request_uri not in parsed.query
+
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {
+            "id": "pd-1",
+            "input_descriptors": [
+                {"id": "descriptor-1", "constraints": {"fields": []}},
+            ],
+        }
+
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition",
+        _fake_presentation_definition,
+    )
+    signed_request = await get_verification_request_object(started.instance_id, repo)
+    _header, payload, _signature = signed_request.body.decode().split(".", 2)
+
+    assert _decode_jwt_segment(payload)["client_id"] == parameters["client_id"][0]
+
+
+@pytest.mark.asyncio
+async def test_started_post_request_uri_transports_wallet_nonce_into_signed_request(
+    monkeypatch,
+):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    monkeypatch.setenv("OID4VP_CLIENT_ID_PREFIX", "decentralized_identifier")
+    _install_reference_validation_stubs(
+        monkeypatch,
+        templates={},
+        policies={
+            "policy-1": {
+                "organization_id": "org-1",
+                "status": "active",
+                "credential_requirements_json": "[]",
+            },
+        },
+    )
+    repo = InMemoryFlowRepository()
+    started = await start_verification_flow(
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            request_uri_method="post",
+        ),
+        user_id="auth-service",
+        repo=repo,
+    )
+    parameters = parse_qs(urlparse(started.request_uri).query)
+
+    assert parameters["request_uri_method"] == ["post"]
+    assert len(parameters["request_uri"]) == 1
+
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {
+            "id": "pd-1",
+            "input_descriptors": [
+                {"id": "descriptor-1", "constraints": {"fields": []}},
+            ],
+        }
+
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition",
+        _fake_presentation_definition,
+    )
+    signed_request = await get_verification_request_object(
+        started.instance_id,
+        repo,
+        request=_form_request({"wallet_nonce": "wallet-nonce-from-post"}),
+    )
+    _header, payload, _signature = signed_request.body.decode().split(".", 2)
+    decoded_payload = _decode_jwt_segment(payload)
+
+    assert decoded_payload["client_id"] == parameters["client_id"][0]
+    assert decoded_payload["wallet_nonce"] == "wallet-nonce-from-post"
+
+
+@pytest.mark.asyncio
 async def test_get_verification_request_object_records_presentation_request_message(monkeypatch):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
 
@@ -822,6 +934,7 @@ async def test_get_verification_request_object_records_presentation_request_mess
             "flow_type": "verification",
             "nonce": "nonce-123",
             "presentation_policy_id": "policy-1",
+            "oid4vp_client_id": "decentralized_identifier:did:web:verifier.example:oid4vp",
         },
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
@@ -860,6 +973,42 @@ async def test_get_verification_request_object_records_presentation_request_mess
     assert message["payload"]["presentation_definition"] is None
     assert message["payload"]["dcql_query"] == decoded_payload["dcql_query"]
     assert message["payload"]["client_id"] == decoded_payload["client_id"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outer_client_id",
+    [
+        None,
+        "https://verifier.example/v1/flows/instances/flow/submit",
+        "x509_hash:certificate-thumbprint",
+    ],
+)
+async def test_lissi_compat_rejects_non_did_outer_client_identity(
+    monkeypatch,
+    outer_client_id: str | None,
+):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={
+            "flow_type": "verification",
+            "nonce": "nonce-123",
+            "presentation_policy_id": "policy-1",
+            "oid4vp_client_id": outer_client_id,
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_verification_request_object(instance.id, repo, compat="lissi")
+
+    assert exc_info.value.status_code == 409
+    assert "requires a DID verifier identity" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -937,6 +1086,7 @@ async def test_get_verification_request_object_supports_lissi_compat_profile(mon
             "flow_type": "verification",
             "nonce": "nonce-123",
             "presentation_policy_id": "policy-1",
+            "oid4vp_client_id": "decentralized_identifier:did:web:verifier.example:oid4vp",
         },
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
@@ -1561,6 +1711,107 @@ async def test_submit_verification_response_records_verification_result_message(
     assert message["payload"]["overall_result"] == "PASSED"
     assert message["payload"]["verifier_nonce"] == "nonce-xyz"
     assert message["payload"]["claim_results"][0]["claim_name"] == "given_name"
+
+
+@pytest.mark.asyncio
+async def test_submit_verification_response_forwards_flow_trust_profile_to_policy(monkeypatch):
+    captured: dict[str, str] = {}
+
+    class FakePresentationPolicyStub:
+        def __init__(self, _channel):
+            pass
+
+        async def EvaluatePresentation(self, request):
+            captured["policy_id"] = request.policy_id
+            captured["trust_profile_id"] = request.trust_profile_id
+            return SimpleNamespace(
+                result="passed",
+                decision="allow",
+                decision_reason="Official signer is trusted",
+                verified_claims_json='{"given_name":"Marty"}',
+            )
+
+    monkeypatch.setattr(
+        "marty_proto.v1.presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub",
+        FakePresentationPolicyStub,
+    )
+    monkeypatch.setattr("flow.main.app.state.pp_grpc_channel", object(), raising=False)
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={
+            "nonce": "nonce-xyz",
+            "presentation_policy_id": "policy-1",
+            "trust_profile_id": "trust-1",
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+
+    header = _jwt_segment({"alg": "none", "typ": "JWT"})
+    payload = _jwt_segment({"nonce": "nonce-xyz", "iss": "issuer.example", "given_name": "Marty"})
+    response = await submit_verification_response(
+        instance.id,
+        f"{header}.{payload}.",
+        None,
+        None,
+        repo,
+    )
+
+    assert response.result == "passed"
+    assert captured == {
+        "policy_id": "policy-1",
+        "trust_profile_id": "trust-1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_internal_flow_fails_closed_when_policy_rejects_cross_org_trust(
+    monkeypatch,
+):
+    class RejectingPresentationPolicyStub:
+        def __init__(self, _channel):
+            pass
+
+        async def EvaluatePresentation(self, _request):
+            raise RuntimeError(
+                "Trust Profile and Presentation Policy must belong to the same organization"
+            )
+
+    monkeypatch.setattr(
+        "marty_proto.v1.presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub",
+        RejectingPresentationPolicyStub,
+    )
+    monkeypatch.setattr("flow.main.app.state.pp_grpc_channel", object(), raising=False)
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={
+            "nonce": "nonce-xyz",
+            "presentation_policy_id": "policy-1",
+            "trust_profile_id": "trust-other-org",
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+    header = _jwt_segment({"alg": "none", "typ": "JWT"})
+    payload = _jwt_segment({"nonce": "nonce-xyz", "iss": "issuer.example"})
+
+    response = await submit_verification_response(
+        instance.id,
+        f"{header}.{payload}.",
+        None,
+        None,
+        repo,
+    )
+
+    assert response.result == "failed"
+    assert response.decision == "deny"
+    assert "same organization" in response.decision_reason
 
 
 @pytest.mark.asyncio

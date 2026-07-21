@@ -48,11 +48,26 @@ publishes an AASA. Empty/unset means "use raw `openid4vp://`".
 | SpruceKit | `CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE` |
 | LISSI     | `CREDENTIAL_LOGIN_LISSI_IOS_UNIVERSAL_LINK_TEMPLATE`     |
 
-The template **must** include `{request_uri_encoded}`. Example:
+The template **must** include `{request_uri_encoded}` and should include
+`{client_id_param}` plus `{request_uri_method_param}` so the outer OID4VP
+identity and explicit retrieval mode remain bound to the signed Request Object.
+The adapter adds these parameters to older request-URI-only templates at
+runtime, but new templates should be explicit. Example:
 
 ```bash
-CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE=https://wallet.spruceid.com/openid4vp?request_uri={request_uri_encoded}
+CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE=https://wallet.spruceid.com/openid4vp?{client_id_param}{request_uri_method_param}request_uri={request_uri_encoded}
 ```
+
+`request_uri_method` is preserved exactly: omitted remains omitted, while the
+OID4VP 1.0 values `get` and `post` remain explicit. Duplicate, empty,
+case-variant, and unknown method values are rejected before any wallet link is
+rendered. For `post`, the wallet's `wallet_nonce` is incorporated into the
+signed Request Object by the Flow service rather than appended to the link.
+
+LISSI's compatibility Request Object uses a bare DID verifier identity. Marty
+only offers the LISSI route when the standard flow was created with a DID-based
+`client_id`; `redirect_uri`, `x509_hash`, and HAIP verifier identities remain on
+their standard wallet routes and are never rewritten silently.
 
 The adapter resolves templates in this order, per platform:
 
@@ -139,7 +154,7 @@ When a wallet vendor publishes their AASA (e.g. `https://wallet.example.com/.wel
 
 1. **Login (OID4VP):** add the env var to `marty-ui/.env.tunnel.beta.local`:
    ```bash
-   CREDENTIAL_LOGIN_<WALLET>_IOS_UNIVERSAL_LINK_TEMPLATE=https://wallet.example.com/openid4vp?request_uri={request_uri_encoded}
+   CREDENTIAL_LOGIN_<WALLET>_IOS_UNIVERSAL_LINK_TEMPLATE=https://wallet.example.com/openid4vp?{client_id_param}{request_uri_method_param}request_uri={request_uri_encoded}
    ```
    Bump `_CREDENTIAL_LOGIN_ASSET_VERSION` only if the JS itself changes; env
    changes do not require an asset bump but **do** require an auth restart:
