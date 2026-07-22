@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -1054,6 +1055,27 @@ def test_extract_cert_expiry_date_returns_none_for_invalid_pem():
     """_extract_cert_expiry_date should return None for invalid PEM."""
     result = signing_keys._extract_cert_expiry_date("not a certificate")
     assert result is None
+
+
+def test_same_public_jwk_ignores_only_jose_metadata():
+    did_jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "coordinate-x",
+        "y": "coordinate-y",
+        "kid": "did:web:issuer.example#key-1",
+        "alg": "ES256",
+    }
+    certificate_jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "coordinate-x",
+        "y": "coordinate-y",
+    }
+
+    assert signing_keys._same_public_jwk(certificate_jwk, did_jwk)
+    certificate_jwk["y"] = "other-coordinate"
+    assert not signing_keys._same_public_jwk(certificate_jwk, did_jwk)
 
 
 def test_normalize_service_includes_certificate_fields():
@@ -4348,7 +4370,132 @@ async def test_internal_resolve_issuer_context_uses_explicit_profile(
     assert data["issuer_mode"] == "elevenid_managed"
     assert data["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:elevenid"
     assert data["signing_service_id"] == "svc-selected"
+    assert data["issuer_x5c"] == ["issuer-leaf-x5c", "issuer-intermediate-x5c"]
     assert data["mdoc_x5c"] == ["issuer-leaf-x5c", "issuer-intermediate-x5c"]
+
+
+@pytest.mark.asyncio
+async def test_profile_certificate_management_hides_kms_coordinates(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    profile = {
+        "id": "ip-selected",
+        "issuer_did": "did:web:issuer.example",
+        "signing_service_id": "kms-service-internal",
+        "signing_key_reference": "kms-key-internal",
+        "algorithm": "ES256",
+    }
+    identity = {
+        "issuer_did": profile["issuer_did"],
+        "verification_method_id": f"{profile['issuer_did']}#key-1",
+        "public_jwk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "coordinate-x",
+            "y": "coordinate-y",
+            "kid": f"{profile['issuer_did']}#key-1",
+        },
+    }
+
+    async def resolve_identity(*_args, **_kwargs):
+        return profile, identity
+
+    persisted: dict[str, object] = {}
+
+    async def store_certificate(**kwargs):
+        persisted.update(kwargs)
+        return JSONResponse(content={"ok": True})
+
+    async def resolve_service(*_args, **_kwargs):
+        return (
+            {},
+            {},
+            {
+                "cert_pem": "leaf",
+                "cert_chain_pem": "root",
+                "cert_expires_at": "2026-08-01T00:00:00Z",
+            },
+            False,
+        )
+
+    monkeypatch.setattr(
+        signing_keys, "_resolve_exact_issuer_profile_identity", resolve_identity
+    )
+    monkeypatch.setattr(signing_keys, "store_service_certificate", store_certificate)
+    monkeypatch.setattr(signing_keys, "_resolve_effective_service", resolve_service)
+    monkeypatch.setattr(
+        signing_keys,
+        "_certificate_public_jwk",
+        lambda _pem: {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "coordinate-x",
+            "y": "coordinate-y",
+        },
+    )
+    monkeypatch.setattr(
+        signing_keys, "_service_x5c_chain", lambda _service: ["leaf", "root"]
+    )
+
+    request = _build_request("org_issuer")
+    response = await signing_keys.store_issuer_profile_certificate(
+        request=request,
+        profile_id=profile["id"],
+        body={"cert_pem": "certificate", "cert_chain_pem": "chain"},
+        organization_id=None,
+    )
+    data = json.loads(response.body)
+
+    assert data == {
+        "ok": True,
+        "issuer_profile_id": profile["id"],
+        "issuer_did": profile["issuer_did"],
+        "verification_method_id": identity["verification_method_id"],
+        "certificate_chain_length": 2,
+        "certificate_expires_at": "2026-08-01T00:00:00Z",
+    }
+    assert persisted["service_id"] == "kms-service-internal"
+    assert "signing_service_id" not in data
+    assert "signing_key_reference" not in data
+
+
+@pytest.mark.asyncio
+async def test_profile_certificate_rejects_key_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    profile = {
+        "id": "ip-selected",
+        "issuer_did": "did:web:issuer.example",
+        "signing_service_id": "kms-service-internal",
+        "signing_key_reference": "kms-key-internal",
+    }
+    identity = {
+        "issuer_did": profile["issuer_did"],
+        "verification_method_id": f"{profile['issuer_did']}#key-1",
+        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+    }
+
+    async def resolve_identity(*_args, **_kwargs):
+        return profile, identity
+
+    monkeypatch.setattr(
+        signing_keys, "_resolve_exact_issuer_profile_identity", resolve_identity
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "_certificate_public_jwk",
+        lambda _pem: {"kty": "EC", "crv": "P-256", "x": "x", "y": "other"},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys.store_issuer_profile_certificate(
+            request=_build_request("org_issuer"),
+            profile_id=profile["id"],
+            body={"cert_pem": "certificate"},
+            organization_id=None,
+        )
+
+    assert exc_info.value.status_code == 409
 
 
 @pytest.mark.asyncio
