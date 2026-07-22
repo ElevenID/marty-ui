@@ -262,6 +262,25 @@ services:
     networks:
       - marty-network
 
+  # The issuance service and its Alembic history are released by
+  # marty-credentials, not by the Marty UI migration image. Run that exact
+  # released image as a one-shot migration before starting either issuance
+  # process so the deployed schema cannot drift from the service artifact.
+  issuance-migrations:
+    image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
+    container_name: marty-issuance-migrations
+    command: ["python", "manage_migrations.py", "upgrade"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    restart: "no"
+    networks:
+      - marty-network
+
   # ==========================================================================
   # Application Services
   # ==========================================================================
@@ -778,6 +797,8 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      issuance-migrations:
+        condition: service_completed_successfully
       openbao-init:
         condition: service_completed_successfully
     healthcheck:
@@ -832,6 +853,8 @@ services:
       CANVAS_SYNC_WORKER_POLL_SECONDS: ${CANVAS_SYNC_WORKER_POLL_SECONDS:-5}
     depends_on:
       db-migrate:
+        condition: service_completed_successfully
+      issuance-migrations:
         condition: service_completed_successfully
     # The shared issuance image has an HTTP health check, while this process
     # is deliberately headless. Its database heartbeat is the health signal.
