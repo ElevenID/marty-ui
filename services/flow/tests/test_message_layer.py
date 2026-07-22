@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import pytest
 from fastapi import HTTPException
 from jwcrypto import jwt as jwcrypto_jwt
+from jwcrypto import jwk as jwcrypto_jwk
 from starlette.requests import Request
 
 import flow.main as flow_main
@@ -49,6 +50,68 @@ def clear_nonce_replay_cache(monkeypatch):
     monkeypatch.setattr(flow_main, "_nonce_redis", None)
     yield
     flow_main._used_nonces.clear()
+
+
+@pytest.fixture(autouse=True)
+def issuer_profile_signer(monkeypatch):
+    """Model the profile API without giving production code a private key."""
+    private_key = jwcrypto_jwk.JWK.generate(kty="EC", crv="P-256")
+    public_jwk = json.loads(private_key.export_public())
+    issuer_did = "did:web:verifier.example:oid4vp"
+    verification_method_id = f"{issuer_did}#oid4vp-verifier-key-1"
+    public_jwk["kid"] = verification_method_id
+    did_document = {
+        "id": issuer_did,
+        "verificationMethod": [
+            {
+                "id": verification_method_id,
+                "type": "JsonWebKey2020",
+                "controller": issuer_did,
+                "publicKeyJwk": public_jwk,
+            }
+        ],
+        "authentication": [verification_method_id],
+        "assertionMethod": [verification_method_id],
+    }
+    identity = {
+        "issuer_profile_id": flow_main._DEFAULT_OID4VP_ISSUER_PROFILE_ID,
+        "issuer_did": issuer_did,
+        "verification_method_id": verification_method_id,
+        "public_jwk": public_jwk,
+        "did_document": did_document,
+        "key_purpose": "oid4vp_request_signing",
+        "algorithm": "ES256",
+    }
+
+    async def _identity(_organization_id: str, issuer_profile_id: str | None = None):
+        result = dict(identity)
+        result["issuer_profile_id"] = issuer_profile_id or identity["issuer_profile_id"]
+        return result
+
+    async def _sign(**kwargs):
+        token = jwcrypto_jwt.JWT(
+            header=kwargs["protected_header"],
+            claims=kwargs["claims"],
+        )
+        token.make_signed_token(private_key)
+        return token.serialize()
+
+    async def _wrap(instance, private_jwk):
+        encoded = _raw_segment(
+            json.dumps(private_jwk, separators=(",", ":"), sort_keys=True).encode()
+        )
+        return f"vault:v1:{instance.id}:{encoded}"
+
+    async def _unwrap(instance):
+        envelope = instance.context["haip_response_encryption_key_envelope"]
+        encoded = envelope.rsplit(":", 1)[-1]
+        return json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
+
+    monkeypatch.setattr(flow_main, "_oid4vp_issuer_profile_identity", _identity)
+    monkeypatch.setattr(flow_main, "_sign_request_object_with_issuer_profile", _sign)
+    monkeypatch.setattr(flow_main, "_wrap_flow_private_jwk", _wrap)
+    monkeypatch.setattr(flow_main, "_unwrap_flow_private_jwk", _unwrap)
+    return {"private_key": private_key, "identity": identity}
 
 
 def _jwt_segment(payload: dict) -> str:
@@ -156,7 +219,9 @@ def _install_org_client(monkeypatch, *, permissions: set[str]):
     async def _fake_get_organization_client(_request):
         return org_client
 
-    monkeypatch.setattr(flow_main, "get_organization_client", _fake_get_organization_client)
+    monkeypatch.setattr(
+        flow_main, "get_organization_client", _fake_get_organization_client
+    )
     return org_client
 
 
@@ -171,23 +236,25 @@ def _ed25519_did_key(public_key) -> str:
 
 
 def _signed_eddsa_jwt(payload: dict, private_key, did: str) -> str:
-    header = _jwt_segment({"alg": "EdDSA", "kid": f"{did}#{did.removeprefix('did:key:')}"})
+    header = _jwt_segment(
+        {"alg": "EdDSA", "kid": f"{did}#{did.removeprefix('did:key:')}"}
+    )
     body = _jwt_segment(payload)
     signing_input = f"{header}.{body}".encode()
     signature = private_key.sign(signing_input)
     return f"{header}.{body}.{_raw_segment(signature)}"
 
 
-def _encrypted_dc_api_response(payload: dict) -> str:
+def _encrypted_dc_api_response(payload: dict, public_jwk: dict) -> str:
     jwcrypto_jwe = pytest.importorskip("jwcrypto.jwe")
     jwcrypto_jwk = pytest.importorskip("jwcrypto.jwk")
-    public_key = jwcrypto_jwk.JWK.from_json(json.dumps(flow_main._verifier_encryption_public_jwk()))
+    public_key = jwcrypto_jwk.JWK.from_json(json.dumps(public_jwk))
     token = jwcrypto_jwe.JWE(
         json.dumps(payload, separators=(",", ":")).encode(),
         protected={
             "alg": flow_main._HAIP_JWE_ALG,
             "enc": flow_main._HAIP_JWE_ENC,
-            "kid": flow_main._HAIP_ENCRYPTION_KEY_ID,
+            "kid": public_jwk["kid"],
         },
     )
     token.add_recipient(public_key)
@@ -211,7 +278,9 @@ def _encrypted_response_for_key(payload: dict, public_jwk: dict) -> str:
 
 
 @pytest.mark.asyncio
-async def test_validate_credential_layer_references_accepts_active_template_and_policy(monkeypatch):
+async def test_validate_credential_layer_references_accepts_active_template_and_policy(
+    monkeypatch,
+):
     _install_reference_validation_stubs(
         monkeypatch,
         templates={
@@ -222,9 +291,9 @@ async def test_validate_credential_layer_references_accepts_active_template_and_
             "policy-1": {
                 "organization_id": "org-1",
                 "status": "active",
-                "credential_requirements_json": json.dumps([
-                    {"credential_template_id": "template-2"}
-                ]),
+                "credential_requirements_json": json.dumps(
+                    [{"credential_template_id": "template-2"}]
+                ),
             }
         },
     )
@@ -256,7 +325,9 @@ async def test_validate_credential_layer_references_rejects_org_mismatch(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_validate_credential_layer_references_requires_active_for_activation(monkeypatch):
+async def test_validate_credential_layer_references_requires_active_for_activation(
+    monkeypatch,
+):
     _install_reference_validation_stubs(
         monkeypatch,
         templates={"template-1": {"organization_id": "org-1", "status": "draft"}},
@@ -275,7 +346,9 @@ async def test_validate_credential_layer_references_requires_active_for_activati
 
 
 @pytest.mark.asyncio
-async def test_validate_credential_layer_references_rejects_template_without_kms_issuer(monkeypatch):
+async def test_validate_credential_layer_references_rejects_template_without_kms_issuer(
+    monkeypatch,
+):
     _install_reference_validation_stubs(
         monkeypatch,
         templates={
@@ -300,7 +373,9 @@ async def test_validate_credential_layer_references_rejects_template_without_kms
 
 
 @pytest.mark.asyncio
-async def test_validate_credential_layer_references_validates_policy_requirement_templates(monkeypatch):
+async def test_validate_credential_layer_references_validates_policy_requirement_templates(
+    monkeypatch,
+):
     _install_reference_validation_stubs(
         monkeypatch,
         templates={"template-1": {"organization_id": "other-org", "status": "active"}},
@@ -308,9 +383,9 @@ async def test_validate_credential_layer_references_validates_policy_requirement
             "policy-1": {
                 "organization_id": "org-1",
                 "status": "active",
-                "credential_requirements_json": json.dumps([
-                    {"credential_template_id": "template-1"}
-                ]),
+                "credential_requirements_json": json.dumps(
+                    [{"credential_template_id": "template-1"}]
+                ),
             }
         },
     )
@@ -327,7 +402,9 @@ async def test_validate_credential_layer_references_validates_policy_requirement
 
 
 @pytest.mark.asyncio
-async def test_update_flow_definition_replaces_existing_flow_and_checks_edit_permission(monkeypatch):
+async def test_update_flow_definition_replaces_existing_flow_and_checks_edit_permission(
+    monkeypatch,
+):
     _install_reference_validation_stubs(
         monkeypatch,
         templates={"template-new": {"organization_id": "org-1", "status": "active"}},
@@ -408,7 +485,9 @@ async def test_update_flow_definition_rejects_organization_change(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_update_flow_definition_allows_inactive_references_while_draft(monkeypatch):
+async def test_update_flow_definition_allows_inactive_references_while_draft(
+    monkeypatch,
+):
     _install_reference_validation_stubs(
         monkeypatch,
         templates={"template-draft": {"organization_id": "org-1", "status": "draft"}},
@@ -449,14 +528,18 @@ async def test_create_oid4vci_artifact_records_credential_offer_message(monkeypa
         return {
             "id": "tx-123",
             "credential_offer_uri": "openid-credential-offer://?credential_offer=tx-123",
-            "credential_offer_uris": {"default": "openid-credential-offer://?credential_offer=tx-123"},
+            "credential_offer_uris": {
+                "default": "openid-credential-offer://?credential_offer=tx-123"
+            },
             "credential_offer_labels": {"default": "Any OID4VCI Wallet"},
             "pre_auth_code": "pre-auth-123",
             "expires_at": "2026-05-05T12:00:00+00:00",
             "status": "offer_created",
         }
 
-    monkeypatch.setattr(flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance)
+    monkeypatch.setattr(
+        flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance
+    )
 
     repo = InMemoryFlowRepository()
     instance = FlowInstance(
@@ -476,35 +559,54 @@ async def test_create_oid4vci_artifact_records_credential_offer_message(monkeypa
     artifact = await _create_oid4vci_artifact(instance, flow_def, repo)
 
     assert artifact is not None
-    assert artifact.credential_offer_uri == "openid-credential-offer://?credential_offer=tx-123"
+    assert (
+        artifact.credential_offer_uri
+        == "openid-credential-offer://?credential_offer=tx-123"
+    )
     assert artifact.pre_authorized_code == "pre-auth-123"
     assert artifact.state == "tx-123"
     assert instance.context["credential_offer_transaction_id"] == "tx-123"
-    assert instance.context["credential_offer_uris"] == {"default": "openid-credential-offer://?credential_offer=tx-123"}
-    assert instance.context["credential_offer_labels"] == {"default": "Any OID4VCI Wallet"}
+    assert instance.context["credential_offer_uris"] == {
+        "default": "openid-credential-offer://?credential_offer=tx-123"
+    }
+    assert instance.context["credential_offer_labels"] == {
+        "default": "Any OID4VCI Wallet"
+    }
     assert instance.context["issuance_status"] == "offer_created"
     message = instance.context["mip_messages"]["credential_offer"]
     assert message["message_type"] == MessageType.CREDENTIAL_OFFER.value
     assert message["correlation_id"] == instance.id
     assert message["payload"]["credential_issuer"] == "https://issuer.example"
     assert message["payload"]["credential_configuration_ids"] == ["template-123"]
-    assert message["payload"]["grants"]["urn:ietf:params:oauth:grant-type:pre-authorized_code"]["pre-authorized_code"] == "pre-auth-123"
+    assert (
+        message["payload"]["grants"][
+            "urn:ietf:params:oauth:grant-type:pre-authorized_code"
+        ]["pre-authorized_code"]
+        == "pre-auth-123"
+    )
     assert message["payload"]["mip_flow_instance_id"] == instance.id
 
 
-def _application_approved_custom_flow(*, name: str, credential_template_id: str) -> FlowDefinition:
+def _application_approved_custom_flow(
+    *, name: str, credential_template_id: str
+) -> FlowDefinition:
     return FlowDefinition(
         organization_id="org-1",
         name=name,
         flow_type=FlowType.CUSTOM,
         credential_template_id=credential_template_id,
-        trigger={"trigger_type": "WEBHOOK", "config": {"event_type": "APPLICATION_APPROVED"}},
+        trigger={
+            "trigger_type": "WEBHOOK",
+            "config": {"event_type": "APPLICATION_APPROVED"},
+        },
         extension={
             "extension_uri": "urn:elevenid:test:application-approved",
             "extension_version": "1.0.0",
             "extends_flow_type": FlowType.OID4VCI_PRE_AUTHORIZED.value,
             "entry_step_id": "create_offer",
-            "steps": [{"step_id": "create_offer", "action": "create_offer", "config": {}}],
+            "steps": [
+                {"step_id": "create_offer", "action": "create_offer", "config": {}}
+            ],
             "transitions": [],
             "config": {},
         },
@@ -512,7 +614,9 @@ def _application_approved_custom_flow(*, name: str, credential_template_id: str)
 
 
 @pytest.mark.asyncio
-async def test_application_approved_webhook_filters_by_credential_template_id(monkeypatch):
+async def test_application_approved_webhook_filters_by_credential_template_id(
+    monkeypatch,
+):
     captured_claims = {}
 
     async def _fake_initiate_issuance(instance, flow_def):
@@ -520,14 +624,18 @@ async def test_application_approved_webhook_filters_by_credential_template_id(mo
         return {
             "id": f"tx-{flow_def.credential_template_id}",
             "credential_offer_uri": f"openid-credential-offer://?credential_offer={flow_def.credential_template_id}",
-            "credential_offer_uris": {"default": f"openid-credential-offer://?credential_offer={flow_def.credential_template_id}"},
+            "credential_offer_uris": {
+                "default": f"openid-credential-offer://?credential_offer={flow_def.credential_template_id}"
+            },
             "credential_offer_labels": {"default": "Any OID4VCI Wallet"},
             "pre_auth_code": f"pre-{flow_def.credential_template_id}",
             "expires_at": "2026-05-05T12:00:00+00:00",
             "status": "offer_created",
         }
 
-    monkeypatch.setattr(flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance)
+    monkeypatch.setattr(
+        flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance
+    )
 
     repo = InMemoryFlowRepository()
     matching_flow = _application_approved_custom_flow(
@@ -598,7 +706,9 @@ async def test_application_approved_webhook_skips_malformed_trigger(monkeypatch)
             "status": "offer_created",
         }
 
-    monkeypatch.setattr(flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance)
+    monkeypatch.setattr(
+        flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance
+    )
 
     repo = InMemoryFlowRepository()
     malformed_flow = _application_approved_custom_flow(
@@ -668,12 +778,18 @@ async def test_application_approved_webhook_returns_zero_when_template_not_found
 
 
 @pytest.mark.asyncio
-async def test_application_approved_webhook_requires_explicit_custom_trigger(monkeypatch):
+async def test_application_approved_webhook_requires_explicit_custom_trigger(
+    monkeypatch,
+):
     async def _fake_initiate_issuance(instance, flow_def):
         tx = f"tx-{flow_def.id}"
         instance.context["credential_offer_transaction_id"] = tx
-        instance.context["credential_offer_uri"] = f"openid-credential-offer://?credential_offer_uri={tx}"
-        instance.context["credential_offer_uris"] = {"wr-default": instance.context["credential_offer_uri"]}
+        instance.context["credential_offer_uri"] = (
+            f"openid-credential-offer://?credential_offer_uri={tx}"
+        )
+        instance.context["credential_offer_uris"] = {
+            "wr-default": instance.context["credential_offer_uri"]
+        }
         instance.context["credential_offer_labels"] = {"wr-default": "Any Wallet"}
         instance.context["issuance_status"] = "offer_created"
         return {
@@ -684,7 +800,9 @@ async def test_application_approved_webhook_requires_explicit_custom_trigger(mon
             "status": "offer_created",
         }
 
-    monkeypatch.setattr(flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance)
+    monkeypatch.setattr(
+        flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance
+    )
 
     repo = InMemoryFlowRepository()
     flow_def = FlowDefinition(
@@ -724,8 +842,12 @@ async def test_application_approved_webhook_ignores_other_template_flows(monkeyp
     async def _fake_initiate_issuance(instance, flow_def):
         tx = f"tx-{flow_def.id}"
         instance.context["credential_offer_transaction_id"] = tx
-        instance.context["credential_offer_uri"] = f"openid-credential-offer://?credential_offer_uri={tx}"
-        instance.context["credential_offer_uris"] = {"wr-default": instance.context["credential_offer_uri"]}
+        instance.context["credential_offer_uri"] = (
+            f"openid-credential-offer://?credential_offer_uri={tx}"
+        )
+        instance.context["credential_offer_uris"] = {
+            "wr-default": instance.context["credential_offer_uri"]
+        }
         instance.context["credential_offer_labels"] = {"wr-default": "Any Wallet"}
         instance.context["issuance_status"] = "offer_created"
         return {
@@ -736,7 +858,9 @@ async def test_application_approved_webhook_ignores_other_template_flows(monkeyp
             "status": "offer_created",
         }
 
-    monkeypatch.setattr(flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance)
+    monkeypatch.setattr(
+        flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance
+    )
 
     repo = InMemoryFlowRepository()
     flow_def = FlowDefinition(
@@ -770,12 +894,18 @@ async def test_application_approved_webhook_ignores_other_template_flows(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_application_approved_webhook_manual_issue_does_not_bootstrap_default_flow(monkeypatch):
+async def test_application_approved_webhook_manual_issue_does_not_bootstrap_default_flow(
+    monkeypatch,
+):
     async def _fake_initiate_issuance(instance, flow_def):
         tx = f"tx-{flow_def.id}"
         instance.context["credential_offer_transaction_id"] = tx
-        instance.context["credential_offer_uri"] = f"openid-credential-offer://?credential_offer_uri={tx}"
-        instance.context["credential_offer_uris"] = {"wr-default": instance.context["credential_offer_uri"]}
+        instance.context["credential_offer_uri"] = (
+            f"openid-credential-offer://?credential_offer_uri={tx}"
+        )
+        instance.context["credential_offer_uris"] = {
+            "wr-default": instance.context["credential_offer_uri"]
+        }
         instance.context["credential_offer_labels"] = {"wr-default": "Any Wallet"}
         instance.context["issuance_status"] = "offer_created"
         return {
@@ -786,7 +916,9 @@ async def test_application_approved_webhook_manual_issue_does_not_bootstrap_defa
             "status": "offer_created",
         }
 
-    monkeypatch.setattr(flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance)
+    monkeypatch.setattr(
+        flow_main, "_initiate_credential_layer_issuance", _fake_initiate_issuance
+    )
 
     repo = InMemoryFlowRepository()
     result = await handle_application_approved(
@@ -812,7 +944,9 @@ async def test_application_approved_webhook_manual_issue_does_not_bootstrap_defa
 
 
 @pytest.mark.asyncio
-async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(monkeypatch):
+async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
+    monkeypatch,
+):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
     monkeypatch.setenv("OID4VP_CLIENT_ID_PREFIX", "decentralized_identifier")
     _install_reference_validation_stubs(
@@ -922,7 +1056,10 @@ async def test_started_post_request_uri_transports_wallet_nonce_into_signed_requ
 
 
 @pytest.mark.asyncio
-async def test_get_verification_request_object_records_presentation_request_message(monkeypatch):
+async def test_get_verification_request_object_records_presentation_request_message(
+    monkeypatch,
+    issuer_profile_signer,
+):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
 
     repo = InMemoryFlowRepository()
@@ -943,27 +1080,42 @@ async def test_get_verification_request_object_records_presentation_request_mess
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
-            "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}],
+            "input_descriptors": [
+                {"id": "descriptor-1", "constraints": {"fields": []}}
+            ],
         }
 
-    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition", _fake_presentation_definition
+    )
 
     response = await get_verification_request_object(instance.id, repo)
     header, payload, _ = response.body.decode().split(".", 2)
     decoded_header = _decode_jwt_segment(header)
     decoded_payload = _decode_jwt_segment(payload)
-    _, signing_key = flow_main.get_or_create_signing_key()
-    verified_request = jwcrypto_jwt.JWT(key=signing_key, jwt=response.body.decode())
+    verification_key = jwcrypto_jwk.JWK.from_json(
+        json.dumps(issuer_profile_signer["identity"]["public_jwk"])
+    )
+    verified_request = jwcrypto_jwt.JWT(
+        key=verification_key, jwt=response.body.decode()
+    )
 
     assert response.media_type == "application/oauth-authz-req+jwt"
     assert json.loads(verified_request.claims) == decoded_payload
-    assert decoded_header["kid"] == "did:web:verifier.example:oid4vp#oid4vp-verifier-key-1"
-    assert decoded_payload["client_id"] == "decentralized_identifier:did:web:verifier.example:oid4vp"
+    assert (
+        decoded_header["kid"] == "did:web:verifier.example:oid4vp#oid4vp-verifier-key-1"
+    )
+    assert (
+        decoded_payload["client_id"]
+        == "decentralized_identifier:did:web:verifier.example:oid4vp"
+    )
     assert decoded_payload["iss"] == decoded_payload["client_id"]
     assert "client_id_scheme" not in decoded_payload
     assert "client_metadata" in decoded_payload
     assert "presentation_definition" not in decoded_payload
-    assert decoded_payload["dcql_query"] == {"credentials": [{"id": "descriptor-1", "format": "jwt_vc_json"}]}
+    assert decoded_payload["dcql_query"] == {
+        "credentials": [{"id": "descriptor-1", "format": "jwt_vc_json"}]
+    }
     assert instance.context["verification_audience"] == decoded_payload["client_id"]
     message = instance.context["mip_messages"]["presentation_request"]
     assert message["message_type"] == MessageType.PRESENTATION_REQUEST.value
@@ -1058,7 +1210,9 @@ async def test_get_verification_request_object_uses_dcql_vct_values(monkeypatch)
             ],
         }
 
-    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition", _fake_presentation_definition
+    )
 
     response = await get_verification_request_object(instance.id, repo)
     _header, payload, _signature = response.body.decode().split(".", 2)
@@ -1068,13 +1222,17 @@ async def test_get_verification_request_object_uses_dcql_vct_values(monkeypatch)
     [credential_query] = decoded_payload["dcql_query"]["credentials"]
     assert credential_query["format"] == "dc+sd-jwt"
     assert credential_query["meta"] == {
-        "vct_values": ["https://beta.elevenidllc.com/credentials/marty-verified-member-badge"]
+        "vct_values": [
+            "https://beta.elevenidllc.com/credentials/marty-verified-member-badge"
+        ]
     }
     assert credential_query["claims"] == [{"id": "claim_email", "path": ["email"]}]
 
 
 @pytest.mark.asyncio
-async def test_get_verification_request_object_supports_lissi_compat_profile(monkeypatch):
+async def test_get_verification_request_object_supports_lissi_compat_profile(
+    monkeypatch,
+):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
 
     repo = InMemoryFlowRepository()
@@ -1095,10 +1253,14 @@ async def test_get_verification_request_object_supports_lissi_compat_profile(mon
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
-            "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}],
+            "input_descriptors": [
+                {"id": "descriptor-1", "constraints": {"fields": []}}
+            ],
         }
 
-    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition", _fake_presentation_definition
+    )
 
     response = await get_verification_request_object(instance.id, repo, compat="lissi")
     header, payload, _ = response.body.decode().split(".", 2)
@@ -1106,7 +1268,9 @@ async def test_get_verification_request_object_supports_lissi_compat_profile(mon
     decoded_payload = _decode_jwt_segment(payload)
 
     assert response.media_type == "application/oauth-authz-req+jwt"
-    assert decoded_header["kid"] == "did:web:verifier.example:oid4vp#oid4vp-verifier-key-1"
+    assert (
+        decoded_header["kid"] == "did:web:verifier.example:oid4vp#oid4vp-verifier-key-1"
+    )
     assert decoded_payload["client_id"] == "did:web:verifier.example:oid4vp"
     assert decoded_payload["iss"] == decoded_payload["client_id"]
     assert decoded_payload["client_id_scheme"] == "did"
@@ -1114,12 +1278,17 @@ async def test_get_verification_request_object_supports_lissi_compat_profile(mon
     assert "dcql_query" not in decoded_payload
     assert decoded_payload["presentation_definition"]["id"] == "pd-1"
     assert decoded_payload["response_mode"] == "direct_post"
-    assert decoded_payload["response_uri"] == f"https://verifier.example/v1/flows/instances/{instance.id}/submit"
+    assert (
+        decoded_payload["response_uri"]
+        == f"https://verifier.example/v1/flows/instances/{instance.id}/submit"
+    )
     assert instance.context["verification_audience"] == decoded_payload["client_id"]
 
 
 @pytest.mark.asyncio
-async def test_get_verification_request_object_supports_redirect_uri_client_id_prefix(monkeypatch):
+async def test_get_verification_request_object_supports_redirect_uri_client_id_prefix(
+    monkeypatch,
+):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
     monkeypatch.setenv("OID4VP_CLIENT_ID_PREFIX", "redirect_uri")
     monkeypatch.setenv("OID4VP_STRICT_CLIENT_METADATA", "1")
@@ -1129,15 +1298,26 @@ async def test_get_verification_request_object_supports_redirect_uri_client_id_p
         flow_definition_id="__verification__",
         organization_id="org-1",
         status=FlowInstanceStatus.AWAITING_WALLET,
-        context={"flow_type": "verification", "nonce": "nonce-123", "presentation_policy_id": "policy-1"},
+        context={
+            "flow_type": "verification",
+            "nonce": "nonce-123",
+            "presentation_policy_id": "policy-1",
+        },
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     await repo.save_instance(instance)
 
     async def _fake_presentation_definition(_policy_id: str) -> dict:
-        return {"id": "pd-1", "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}]}
+        return {
+            "id": "pd-1",
+            "input_descriptors": [
+                {"id": "descriptor-1", "constraints": {"fields": []}}
+            ],
+        }
 
-    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition", _fake_presentation_definition
+    )
     response = await get_verification_request_object(instance.id, repo)
     _header, payload, _signature = response.body.decode().split(".", 2)
     decoded_payload = _decode_jwt_segment(payload)
@@ -1157,16 +1337,28 @@ async def test_haip_request_uses_a_fresh_per_flow_response_encryption_key(monkey
     repo = InMemoryFlowRepository()
 
     async def _fake_presentation_definition(_policy_id: str) -> dict:
-        return {"id": "pd-1", "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}]}
+        return {
+            "id": "pd-1",
+            "input_descriptors": [
+                {"id": "descriptor-1", "constraints": {"fields": []}}
+            ],
+        }
 
-    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition", _fake_presentation_definition
+    )
     instances = []
     for _ in range(2):
         instance = FlowInstance(
             flow_definition_id="__verification__",
             organization_id="org-1",
             status=FlowInstanceStatus.AWAITING_WALLET,
-            context={"flow_type": "verification", "oid4vp_profile": "haip", "nonce": "nonce-123", "presentation_policy_id": "policy-1"},
+            context={
+                "flow_type": "verification",
+                "oid4vp_profile": "haip",
+                "nonce": "nonce-123",
+                "presentation_policy_id": "policy-1",
+            },
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
         )
         await repo.save_instance(instance)
@@ -1182,11 +1374,22 @@ async def test_haip_request_uses_a_fresh_per_flow_response_encryption_key(monkey
     assert payloads[0]["response_mode"] == "direct_post.jwt"
     assert "authorization_encrypted_response_alg" not in payloads[0]["client_metadata"]
     assert "authorization_encrypted_response_enc" not in payloads[0]["client_metadata"]
-    assert "authorization_encrypted_response_enc_values_supported" not in payloads[0]["client_metadata"]
-    assert payloads[0]["client_metadata"]["encrypted_response_enc_values_supported"] == flow_main._HAIP_JWE_ENC_VALUES
+    assert (
+        "authorization_encrypted_response_enc_values_supported"
+        not in payloads[0]["client_metadata"]
+    )
+    assert (
+        payloads[0]["client_metadata"]["encrypted_response_enc_values_supported"]
+        == flow_main._HAIP_JWE_ENC_VALUES
+    )
     assert keys[0]["kid"] != keys[1]["kid"]
     assert "d" not in keys[0]
-    assert instances[0].context["haip_response_encryption_private_jwk"]["kid"] == keys[0]["kid"]
+    assert (
+        instances[0]
+        .context["haip_response_encryption_key_envelope"]
+        .startswith("vault:")
+    )
+    assert "haip_response_encryption_" + "private_jwk" not in instances[0].context
 
 
 @pytest.mark.asyncio
@@ -1196,22 +1399,33 @@ async def test_x509_hash_request_uses_certificate_client_id_and_x5c_header(monke
     monkeypatch.setattr(
         flow_main,
         "_x509_hash_client_id_and_header",
-        lambda: ("x509_hash:certificate-thumbprint", ["base64-der-leaf"]),
+        lambda _public_jwk: ("x509_hash:certificate-thumbprint", ["base64-der-leaf"]),
     )
     repo = InMemoryFlowRepository()
     instance = FlowInstance(
         flow_definition_id="__verification__",
         organization_id="org-1",
         status=FlowInstanceStatus.AWAITING_WALLET,
-        context={"flow_type": "verification", "nonce": "nonce-123", "presentation_policy_id": "policy-1"},
+        context={
+            "flow_type": "verification",
+            "nonce": "nonce-123",
+            "presentation_policy_id": "policy-1",
+        },
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     await repo.save_instance(instance)
 
     async def _fake_presentation_definition(_policy_id: str) -> dict:
-        return {"id": "pd-1", "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}]}
+        return {
+            "id": "pd-1",
+            "input_descriptors": [
+                {"id": "descriptor-1", "constraints": {"fields": []}}
+            ],
+        }
 
-    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition", _fake_presentation_definition
+    )
     response = await get_verification_request_object(instance.id, repo)
     header, payload, _signature = response.body.decode().split(".", 2)
     decoded_header = _decode_jwt_segment(header)
@@ -1231,17 +1445,26 @@ async def test_post_request_uri_binds_wallet_nonce_to_signed_request(monkeypatch
         organization_id="org-1",
         status=FlowInstanceStatus.AWAITING_WALLET,
         context={
-            "flow_type": "verification", "nonce": "nonce-123",
-            "presentation_policy_id": "policy-1", "request_uri_method": "post",
+            "flow_type": "verification",
+            "nonce": "nonce-123",
+            "presentation_policy_id": "policy-1",
+            "request_uri_method": "post",
         },
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     await repo.save_instance(instance)
 
     async def _fake_presentation_definition(_policy_id: str) -> dict:
-        return {"id": "pd-1", "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}]}
+        return {
+            "id": "pd-1",
+            "input_descriptors": [
+                {"id": "descriptor-1", "constraints": {"fields": []}}
+            ],
+        }
 
-    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition", _fake_presentation_definition
+    )
     response = await get_verification_request_object(
         instance.id, repo, request=_form_request({"wallet_nonce": "wallet-nonce-1"})
     )
@@ -1257,12 +1480,20 @@ async def test_submit_verification_response_decrypts_per_flow_direct_post_jwt():
         flow_definition_id="__verification__",
         organization_id="org-1",
         status=FlowInstanceStatus.AWAITING_WALLET,
-        context={"nonce": "nonce-haip", "haip_response_encryption_private_jwk": private_jwk},
+        context={"nonce": "nonce-haip"},
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    instance.context[
+        "haip_response_encryption_key_envelope"
+    ] = await flow_main._wrap_flow_private_jwk(
+        instance,
+        private_jwk,
     )
     await repo.save_instance(instance)
     header = _jwt_segment({"alg": "none", "typ": "JWT"})
-    payload = _jwt_segment({"nonce": "nonce-haip", "iss": "issuer.example", "given_name": "HAIP"})
+    payload = _jwt_segment(
+        {"nonce": "nonce-haip", "iss": "issuer.example", "given_name": "HAIP"}
+    )
     vp_token = f"{header}.{payload}."
     encrypted_response = _encrypted_response_for_key({"vp_token": vp_token}, public_jwk)
 
@@ -1292,12 +1523,16 @@ async def test_submit_verification_response_rejects_missing_or_mismatched_oid4vp
     assert missing.value.status_code == 400
 
     with pytest.raises(flow_main.HTTPException) as mismatched:
-        await submit_verification_response(instance.id, "vp-token", None, "other-state", repo)
+        await submit_verification_response(
+            instance.id, "vp-token", None, "other-state", repo
+        )
     assert mismatched.value.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_oid4vp_direct_post_callback_returns_only_the_standard_empty_object(monkeypatch):
+async def test_oid4vp_direct_post_callback_returns_only_the_standard_empty_object(
+    monkeypatch,
+):
     repo = InMemoryFlowRepository()
     called: dict[str, object] = {}
 
@@ -1353,7 +1588,10 @@ async def test_haip_direct_post_callback_returns_public_result_redirect(monkeypa
     )
 
     assert response.status_code == 200
-    assert response.body == b'{"redirect_uri":"https://verifier.example/v1/flows/instances/flow-haip"}'
+    assert (
+        response.body
+        == b'{"redirect_uri":"https://verifier.example/v1/flows/instances/flow-haip"}'
+    )
 
 
 @pytest.mark.asyncio
@@ -1373,7 +1611,9 @@ async def test_oid4vp_direct_post_callback_rejects_a_denied_presentation(monkeyp
 
     monkeypatch.setattr(flow_main, "submit_verification_response", _fake_submit)
     with pytest.raises(flow_main.HTTPException) as error:
-        await flow_main.submit_oid4vp_direct_post_response("flow-1", "invalid-vp", None, None, repo, None)
+        await flow_main.submit_oid4vp_direct_post_response(
+            "flow-1", "invalid-vp", None, None, repo, None
+        )
 
     assert error.value.status_code == 400
 
@@ -1399,18 +1639,26 @@ async def test_get_verification_request_object_supports_dc_api(monkeypatch):
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
-            "input_descriptors": [{"id": "descriptor-1", "constraints": {"fields": []}}],
+            "input_descriptors": [
+                {"id": "descriptor-1", "constraints": {"fields": []}}
+            ],
         }
 
-    monkeypatch.setattr("flow.main._build_presentation_definition", _fake_presentation_definition)
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition", _fake_presentation_definition
+    )
 
-    response = await get_verification_request_object(instance.id, repo, transport="dc_api")
+    response = await get_verification_request_object(
+        instance.id, repo, transport="dc_api"
+    )
     header, payload, _ = response.body.decode().split(".", 2)
     decoded_header = _decode_jwt_segment(header)
     decoded_payload = _decode_jwt_segment(payload)
 
     assert response.media_type == "application/oauth-authz-req+jwt"
-    assert decoded_header["kid"] == "did:web:verifier.example:oid4vp#oid4vp-verifier-key-1"
+    assert (
+        decoded_header["kid"] == "did:web:verifier.example:oid4vp#oid4vp-verifier-key-1"
+    )
     assert decoded_payload["response_mode"] == flow_main._DC_API_JWT_RESPONSE_MODE
     assert decoded_payload["expected_origins"] == ["https://verifier.example"]
     assert "response_uri" not in decoded_payload
@@ -1418,16 +1666,23 @@ async def test_get_verification_request_object_supports_dc_api(monkeypatch):
     client_metadata = decoded_payload["client_metadata"]
     assert "authorization_encrypted_response_alg" not in client_metadata
     assert "authorization_encrypted_response_enc" not in client_metadata
-    assert "authorization_encrypted_response_enc_values_supported" not in client_metadata
-    assert client_metadata["encrypted_response_enc_values_supported"] == flow_main._HAIP_JWE_ENC_VALUES
+    assert (
+        "authorization_encrypted_response_enc_values_supported" not in client_metadata
+    )
+    assert (
+        client_metadata["encrypted_response_enc_values_supported"]
+        == flow_main._HAIP_JWE_ENC_VALUES
+    )
     [encryption_key] = client_metadata["jwks"]["keys"]
-    assert encryption_key["kid"] == flow_main._HAIP_ENCRYPTION_KEY_ID
+    assert encryption_key["kid"].startswith("oid4vp-haip-")
     assert encryption_key["use"] == "enc"
     assert encryption_key["alg"] == flow_main._HAIP_JWE_ALG
     assert "d" not in encryption_key
     assert instance.context["dc_api_expected_origins"] == ["https://verifier.example"]
     assert instance.context["dc_api_protocol"] == _DC_API_PROTOCOL
-    assert instance.context["dc_api_response_mode"] == flow_main._DC_API_JWT_RESPONSE_MODE
+    assert (
+        instance.context["dc_api_response_mode"] == flow_main._DC_API_JWT_RESPONSE_MODE
+    )
     message = instance.context["mip_messages"]["presentation_request"]
     assert "presentation_definition" not in decoded_payload
     assert message["payload"]["response_mode"] == flow_main._DC_API_JWT_RESPONSE_MODE
@@ -1436,14 +1691,19 @@ async def test_get_verification_request_object_supports_dc_api(monkeypatch):
     assert message["payload"]["dcql_query"] == decoded_payload["dcql_query"]
 
 
-def test_oid4vp_did_web_document_exposes_verifier_key(monkeypatch):
+def test_oid4vp_did_web_document_exposes_verifier_key(
+    monkeypatch, issuer_profile_signer
+):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
 
-    document = _oid4vp_did_web_document("https://verifier.example")
+    document = _oid4vp_did_web_document(issuer_profile_signer["identity"])
 
     assert document["id"] == "did:web:verifier.example:oid4vp"
     verification_method = document["verificationMethod"][0]
-    assert verification_method["id"] == "did:web:verifier.example:oid4vp#oid4vp-verifier-key-1"
+    assert (
+        verification_method["id"]
+        == "did:web:verifier.example:oid4vp#oid4vp-verifier-key-1"
+    )
     assert verification_method["type"] == "JsonWebKey2020"
     assert verification_method["publicKeyJwk"]["kty"] == "EC"
     assert document["authentication"] == [verification_method["id"]]
@@ -1460,16 +1720,24 @@ def test_vp_signature_check_uses_sd_jwt_key_binding_jwt():
         f"{_jwt_segment({'iss': holder_did, 'vct': 'https://marty.example/credentials/MemberCredential'})}."
         "not-a-valid-signature"
     )
-    disclosure = _raw_segment(json.dumps(["salt", "email", "holder@example.test"]).encode())
+    disclosure = _raw_segment(
+        json.dumps(["salt", "email", "holder@example.test"]).encode()
+    )
     key_binding_jwt = _signed_eddsa_jwt(
-        {"nonce": "nonce-xyz", "aud": "https://beta.elevenidllc.com/v1/flows/instances/1/submit"},
+        {
+            "nonce": "nonce-xyz",
+            "aud": "https://beta.elevenidllc.com/v1/flows/instances/1/submit",
+        },
         holder_key,
         holder_did,
     )
 
-    assert _verify_vp_jwt_signature(
-        f"{issuer_jwt_with_bad_signature}~{disclosure}~{key_binding_jwt}"
-    ) is True
+    assert (
+        _verify_vp_jwt_signature(
+            f"{issuer_jwt_with_bad_signature}~{disclosure}~{key_binding_jwt}"
+        )
+        is True
+    )
 
 
 def test_vp_signature_check_rejects_invalid_key_binding_jwt_signature():
@@ -1498,7 +1766,10 @@ def test_dcql_claims_include_required_direct_sd_jwt_paths():
     descriptor = {
         "constraints": {
             "fields": [
-                {"path": ["$.vct"], "filter": {"const": "https://example.test/MemberCredential"}},
+                {
+                    "path": ["$.vct"],
+                    "filter": {"const": "https://example.test/MemberCredential"},
+                },
                 {
                     "path": [
                         "$.vc.credentialSubject.email",
@@ -1525,7 +1796,9 @@ def test_dcql_claims_include_required_direct_sd_jwt_paths():
 
 
 @pytest.mark.asyncio
-async def test_build_presentation_definition_requests_email_only_for_member_login(monkeypatch):
+async def test_build_presentation_definition_requests_email_only_for_member_login(
+    monkeypatch,
+):
     requested_claims = [
         {
             "claim_name": "email",
@@ -1584,11 +1857,16 @@ async def test_build_presentation_definition_requests_email_only_for_member_logi
     descriptor = presentation_definition["input_descriptors"][0]
     fields = descriptor["constraints"]["fields"]
     type_fields = [field for field in fields if "filter" in field]
-    named_fields = [field for field in descriptor["constraints"]["fields"] if "name" in field]
+    named_fields = [
+        field for field in descriptor["constraints"]["fields"] if "name" in field
+    ]
 
     assert type_fields[0] == {
         "path": ["$.vct"],
-        "filter": {"type": "string", "const": "https://marty.example/credentials/MemberCredential"},
+        "filter": {
+            "type": "string",
+            "const": "https://marty.example/credentials/MemberCredential",
+        },
     }
     assert type_fields[1] == {
         "path": ["$.vc.type", "$.type"],
@@ -1614,11 +1892,15 @@ async def test_build_presentation_definition_requests_email_only_for_member_logi
             "optional": False,
         }
     ]
-    assert _dcql_claims_for_descriptor(descriptor) == [{"id": "claim_email", "path": ["email"]}]
+    assert _dcql_claims_for_descriptor(descriptor) == [
+        {"id": "claim_email", "path": ["email"]}
+    ]
 
 
 @pytest.mark.asyncio
-async def test_build_presentation_definition_accepts_current_and_legacy_open_badge_vct(monkeypatch):
+async def test_build_presentation_definition_accepts_current_and_legacy_open_badge_vct(
+    monkeypatch,
+):
     class FakePresentationPolicyStub:
         def __init__(self, _channel):
             pass
@@ -1699,10 +1981,14 @@ async def test_submit_verification_response_records_verification_result_message(
     await repo.save_instance(instance)
 
     header = _jwt_segment({"alg": "none", "typ": "JWT"})
-    payload = _jwt_segment({"nonce": "nonce-xyz", "iss": "issuer.example", "given_name": "Marty"})
+    payload = _jwt_segment(
+        {"nonce": "nonce-xyz", "iss": "issuer.example", "given_name": "Marty"}
+    )
     vp_token = f"{header}.{payload}."
 
-    response = await submit_verification_response(instance.id, vp_token, None, None, repo)
+    response = await submit_verification_response(
+        instance.id, vp_token, None, None, repo
+    )
 
     assert response.result == "passed"
     message = instance.context["mip_messages"]["verification_result"]
@@ -1714,7 +2000,9 @@ async def test_submit_verification_response_records_verification_result_message(
 
 
 @pytest.mark.asyncio
-async def test_submit_verification_response_forwards_flow_trust_profile_to_policy(monkeypatch):
+async def test_submit_verification_response_forwards_flow_trust_profile_to_policy(
+    monkeypatch,
+):
     captured: dict[str, str] = {}
 
     class FakePresentationPolicyStub:
@@ -1751,7 +2039,9 @@ async def test_submit_verification_response_forwards_flow_trust_profile_to_polic
     await repo.save_instance(instance)
 
     header = _jwt_segment({"alg": "none", "typ": "JWT"})
-    payload = _jwt_segment({"nonce": "nonce-xyz", "iss": "issuer.example", "given_name": "Marty"})
+    payload = _jwt_segment(
+        {"nonce": "nonce-xyz", "iss": "issuer.example", "given_name": "Marty"}
+    )
     response = await submit_verification_response(
         instance.id,
         f"{header}.{payload}.",
@@ -1831,7 +2121,9 @@ async def test_submit_verification_response_unwraps_descriptor_map_vp_token():
     vp_token = f"{header}.{payload}."
     wrapped_vp_token = json.dumps({"req-marty-member-sd-jwt": [vp_token]})
 
-    response = await submit_verification_response(instance.id, wrapped_vp_token, None, None, repo)
+    response = await submit_verification_response(
+        instance.id, wrapped_vp_token, None, None, repo
+    )
 
     assert response.result == "passed"
     assert response.verified_claims["given_name"] == "Marty"
@@ -1855,7 +2147,9 @@ async def test_submit_digital_credential_response_uses_origin_audience():
     await repo.save_instance(instance)
 
     header = _jwt_segment({"alg": "none", "typ": "JWT"})
-    payload = _jwt_segment({"nonce": "nonce-xyz", "iss": "issuer.example", "given_name": "Marty"})
+    payload = _jwt_segment(
+        {"nonce": "nonce-xyz", "iss": "issuer.example", "given_name": "Marty"}
+    )
     vp_token = f"{header}.{payload}."
 
     response = await submit_digital_credential_response(
@@ -1870,7 +2164,10 @@ async def test_submit_digital_credential_response_uses_origin_audience():
 
     assert response.result == "passed"
     assert response.verified_claims["given_name"] == "Marty"
-    assert instance.context["verification_audience"] == "origin:https://beta.elevenidllc.com"
+    assert (
+        instance.context["verification_audience"]
+        == "origin:https://beta.elevenidllc.com"
+    )
     assert instance.context["vp_token"] == vp_token
 
 
@@ -1888,12 +2185,23 @@ async def test_submit_digital_credential_response_decrypts_dc_api_jwt_response()
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     await repo.save_instance(instance)
+    public_jwk, private_jwk = flow_main._new_haip_response_encryption_key()
+    instance.context["haip_response_encryption_public_jwk"] = public_jwk
+    instance.context[
+        "haip_response_encryption_key_envelope"
+    ] = await flow_main._wrap_flow_private_jwk(
+        instance,
+        private_jwk,
+    )
 
     header = _jwt_segment({"alg": "none", "typ": "JWT"})
-    payload = _jwt_segment({"nonce": "nonce-haip", "iss": "issuer.example", "given_name": "HAIP"})
+    payload = _jwt_segment(
+        {"nonce": "nonce-haip", "iss": "issuer.example", "given_name": "HAIP"}
+    )
     vp_token = f"{header}.{payload}."
     encrypted_response = _encrypted_dc_api_response(
-        {"vp_token": {"req-marty-member-sd-jwt": [vp_token]}}
+        {"vp_token": {"req-marty-member-sd-jwt": [vp_token]}},
+        public_jwk,
     )
 
     response = await submit_digital_credential_response(
@@ -1908,7 +2216,10 @@ async def test_submit_digital_credential_response_decrypts_dc_api_jwt_response()
 
     assert response.result == "passed"
     assert response.verified_claims["given_name"] == "HAIP"
-    assert instance.context["dc_api_last_response_mode"] == flow_main._DC_API_JWT_RESPONSE_MODE
+    assert (
+        instance.context["dc_api_last_response_mode"]
+        == flow_main._DC_API_JWT_RESPONSE_MODE
+    )
     assert instance.context["vp_token"] == vp_token
 
 
@@ -1951,7 +2262,9 @@ async def test_submit_digital_credential_response_rejects_unsupported_dc_api_jwt
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     await repo.save_instance(instance)
-    unsupported_response = f"{_jwt_segment({'alg': 'dir', 'enc': flow_main._HAIP_JWE_ENC})}...."
+    unsupported_response = (
+        f"{_jwt_segment({'alg': 'dir', 'enc': flow_main._HAIP_JWE_ENC})}...."
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await submit_digital_credential_response(
@@ -1966,4 +2279,6 @@ async def test_submit_digital_credential_response_rejects_unsupported_dc_api_jwt
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["error"] == "invalid_request"
-    assert "Unsupported dc_api.jwt JWE alg" in exc_info.value.detail["error_description"]
+    assert (
+        "Unsupported dc_api.jwt JWE alg" in exc_info.value.detail["error_description"]
+    )

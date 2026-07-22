@@ -11,6 +11,7 @@ import types
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
+from starlette.responses import Response
 
 from gateway.routes import w3c_vc_test_adapter as adapter
 
@@ -353,6 +354,18 @@ def test_adapter_extracts_a_w3c_jose_vc_envelope_without_trusting_it() -> None:
     assert token == "header.payload.signature"
 
 
+def test_adapter_preserves_data_integrity_document_for_production_verifier() -> None:
+    document = {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "proof": {
+            "type": "DataIntegrityProof",
+            "cryptosuite": "eddsa-rdfc-2022",
+        },
+    }
+    assert adapter._token_or_unsupported(document, "verifiableCredential") is document
+
+
 @pytest.mark.parametrize(
     "identifier",
     [
@@ -391,7 +404,10 @@ async def test_adapter_forwards_supported_token_to_actual_policy_evaluator(
 
     async def fake_proxy(request, service_url, path, **kwargs):
         captured.update({"service_url": service_url, "path": path, **kwargs})
-        return "actual-policy-response"
+        return Response(
+            content=json.dumps({"result": "passed", "decision": "allow"}),
+            media_type="application/json",
+        )
 
     monkeypatch.setattr(adapter, "get_registry", lambda: Registry())
     monkeypatch.setattr(adapter, "proxy_request", fake_proxy)
@@ -400,7 +416,8 @@ async def test_adapter_forwards_supported_token_to_actual_policy_evaluator(
         "header.payload.signature", {"challenge": "n", "domain": "aud"}, _request()
     )
 
-    assert response == "actual-policy-response"
+    assert response.status_code == 200
+    assert json.loads(response.body)["verified"] is True
     assert captured["path"] == "/v1/presentation-policies/fixture-policy/evaluate"
     assert json.loads(captured["body_override"]) == {
         "vp_token": "header.payload.signature",
@@ -408,3 +425,69 @@ async def test_adapter_forwards_supported_token_to_actual_policy_evaluator(
         "audience": "aud",
     }
     assert captured["inject_headers"] == {"Content-Type": "application/json"}
+
+
+@pytest.mark.asyncio
+async def test_adapter_forwards_data_integrity_document_without_stringifying_it_twice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
+    monkeypatch.setenv("W3C_VC_TEST_POLICY_ID", "fixture-policy")
+    document = {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiablePresentation"],
+        "proof": {"type": "DataIntegrityProof"},
+    }
+
+    class Registry:
+        @staticmethod
+        def get_service_url(name: str) -> str:
+            return "http://presentation-policy"
+
+    captured: dict[str, object] = {}
+
+    async def fake_proxy(request, service_url, path, **kwargs):
+        captured.update(kwargs)
+        return Response(
+            content=json.dumps({"result": "passed", "decision": "allow"}),
+            media_type="application/json",
+        )
+
+    monkeypatch.setattr(adapter, "get_registry", lambda: Registry())
+    monkeypatch.setattr(adapter, "proxy_request", fake_proxy)
+
+    response = await adapter._evaluate(
+        document, {"challenge": "n", "domain": "aud"}, _request()
+    )
+    assert response.status_code == 200
+    assert json.loads(response.body)["verified"] is True
+    assert json.loads(captured["body_override"])["vp_token"] == document
+
+
+@pytest.mark.asyncio
+async def test_adapter_maps_policy_denial_to_vc_api_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
+    monkeypatch.setenv("W3C_VC_TEST_POLICY_ID", "fixture-policy")
+
+    class Registry:
+        @staticmethod
+        def get_service_url(name: str) -> str:
+            return "http://presentation-policy"
+
+    async def fake_proxy(*args, **kwargs):
+        return Response(
+            content=json.dumps({"result": "failed", "decision": "deny"}),
+            media_type="application/json",
+        )
+
+    monkeypatch.setattr(adapter, "get_registry", lambda: Registry())
+    monkeypatch.setattr(adapter, "proxy_request", fake_proxy)
+
+    response = await adapter._evaluate("a.b.c", {}, _request())
+    assert response.status_code == 422
+    assert json.loads(response.body) == {
+        "verified": False,
+        "errors": ["verification_failed"],
+    }

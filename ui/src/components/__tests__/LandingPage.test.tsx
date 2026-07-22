@@ -126,12 +126,17 @@ describe('LandingPage', () => {
       await screen.findByText('See the decision surface without a staged demo.', undefined, { timeout: 10000 }),
     ).toBeInTheDocument();
     expect(screen.getByText('Start from a deployment playbook.')).toBeInTheDocument();
-    expect(await screen.findByText('How ElevenID Deploys')).toBeInTheDocument();
-    expect(await screen.findByText('Deployment Model Diagram')).toBeInTheDocument();
-    expect(await screen.findByText('SaaS Verification')).toBeInTheDocument();
-    expect(screen.getByText('Self-Hosted Infrastructure')).toBeInTheDocument();
-    expect(screen.getByText('Offline Checkpoint Runtime')).toBeInTheDocument();
-    expect(screen.getByText('Example: Airport Boarding Gate')).toBeInTheDocument();
+    await waitFor(
+      () => {
+        expect(screen.getByText('How ElevenID Deploys')).toBeInTheDocument();
+        expect(screen.getByText('Deployment Model Diagram')).toBeInTheDocument();
+        expect(screen.getByText('SaaS Verification')).toBeInTheDocument();
+        expect(screen.getByText('Self-Hosted Infrastructure')).toBeInTheDocument();
+        expect(screen.getByText('Offline Checkpoint Runtime')).toBeInTheDocument();
+        expect(screen.getByText('Example: Airport Boarding Gate')).toBeInTheDocument();
+      },
+      { timeout: 10000 },
+    );
     expect(screen.getByText('Verify a credential in one request.')).toBeInTheDocument();
     expect(screen.getByText('POST /v1/credentials/verify')).toBeInTheDocument();
 

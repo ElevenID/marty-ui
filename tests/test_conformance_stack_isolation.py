@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 from pathlib import Path
 
@@ -17,6 +18,59 @@ if SPEC is None or SPEC.loader is None:
     raise RuntimeError("could not load conformance stack helper")
 stack = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(stack)
+
+
+def test_issuer_profile_identity_returns_only_public_did_material(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "issuer_profile_id": "ip-marty-oid4vp-verifier",
+        "issuer_did": "did:web:marty.example",
+        "verification_method_id": "did:web:marty.example#oid4vp",
+        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+        "key_purpose": "oid4vp_request_signing",
+        "algorithm": "ES256",
+    }
+    captured: list[str] = []
+
+    def fake_run(command: list[str], **_kwargs: object) -> object:
+        captured.extend(command)
+        return type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""},
+        )()
+
+    monkeypatch.setattr(stack.subprocess, "run", fake_run)
+    assert stack.issuer_profile_identity(["docker", "compose"]) == payload
+    rendered = " ".join(captured)
+    assert "exec -T gateway python -c" in rendered
+    assert "SIGNING_KEYS_INTERNAL_API_KEY" in rendered
+    assert "dev-signing-keys-internal-api-key" not in rendered
+
+
+def test_issuer_profile_identity_rejects_private_jwk_material(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "issuer_profile_id": "ip-marty-oid4vp-verifier",
+        "issuer_did": "did:web:marty.example",
+        "verification_method_id": "did:web:marty.example#oid4vp",
+        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "private"},
+        "key_purpose": "oid4vp_request_signing",
+        "algorithm": "ES256",
+    }
+    monkeypatch.setattr(
+        stack.subprocess,
+        "run",
+        lambda *_args, **_kwargs: type(
+            "Result",
+            (),
+            {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""},
+        )(),
+    )
+    with pytest.raises(ValueError, match="public ES256 DID identity"):
+        stack.issuer_profile_identity(["docker", "compose"])
 
 
 def test_project_name_is_narrowly_scoped() -> None:
@@ -411,7 +465,9 @@ def test_oidf_runner_can_join_only_the_project_scoped_tls_proxy_bridge() -> None
 
 
 def test_oidf_tls_proxy_refreshes_compose_upstream_addresses() -> None:
-    config = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(encoding="utf-8")
+    config = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(
+        encoding="utf-8"
+    )
 
     assert "resolver 127.0.0.11 valid=5s ipv6=off;" in config
     assert "set $gateway_upstream http://gateway:8000;" in config

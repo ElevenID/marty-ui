@@ -390,21 +390,29 @@ def _jose_vc_envelope(credential: dict[str, Any], token: str) -> dict[str, Any]:
     }
 
 
-def _token_or_unsupported(value: str | dict[str, Any], field: str) -> str:
+def _token_or_unsupported(
+    value: str | dict[str, Any], field: str
+) -> str | dict[str, Any]:
     if isinstance(value, str) and value.strip():
         return value
     if isinstance(value, dict):
+        proof = value.get("proof")
+        proofs = proof if isinstance(proof, list) else [proof]
+        if any(
+            isinstance(item, dict) and item.get("type") == "DataIntegrityProof"
+            for item in proofs
+        ):
+            # Keep the document structured. The ordinary presentation-policy
+            # service sends it to the released Rust verifier and fails closed.
+            return value
         return _extract_jose_envelope(value, field)
-    # The current Marty production verifier accepts JWT VC/VP, SD-JWT VC, and
-    # mdoc encodings. It does not claim support for JSON-LD Data Integrity
-    # proofs, including the W3C suite's eddsa-rdfc-2022 fixtures.
     raise HTTPException(
         status_code=422,
         detail={
             "error": "unsupported_serialization",
             "error_description": (
-                f"{field} must use a Marty-supported JWT, SD-JWT, or mdoc serialization; "
-                "JSON-LD Data Integrity proof verification is not implemented"
+                f"{field} must use a supported JWT, SD-JWT, mdoc, "
+                "or VCDM Data Integrity serialization"
             ),
         },
     )
@@ -468,7 +476,9 @@ def _extract_jose_envelope(value: dict[str, Any], field: str) -> str:
     return token
 
 
-async def _evaluate(token: str, options: dict[str, Any], request: Request) -> Response:
+async def _evaluate(
+    token: str | dict[str, Any], options: dict[str, Any], request: Request
+) -> Response:
     policy_id = _enabled_policy_id()
     registry = get_registry()
     service_url = registry.get_service_url("presentation-policies")
@@ -476,7 +486,7 @@ async def _evaluate(token: str, options: dict[str, Any], request: Request) -> Re
         raise HTTPException(
             status_code=503, detail="Presentation policy service unavailable"
         )
-    return await proxy_request(
+    response = await proxy_request(
         request,
         service_url,
         f"/v1/presentation-policies/{policy_id}/evaluate",
@@ -488,6 +498,30 @@ async def _evaluate(token: str, options: dict[str, Any], request: Request) -> Re
             }
         ).encode("utf-8"),
         inject_headers={"Content-Type": "application/json"},
+    )
+    if response.status_code >= 400:
+        return response
+    try:
+        evaluation = json.loads(bytes(response.body))
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+        raise HTTPException(
+            status_code=502, detail="Presentation policy returned an invalid response"
+        ) from None
+    if not isinstance(evaluation, dict):
+        raise HTTPException(
+            status_code=502, detail="Presentation policy returned an invalid response"
+        )
+    if evaluation.get("decision") != "allow" or evaluation.get("result") != "passed":
+        return JSONResponse(
+            status_code=422,
+            content={"verified": False, "errors": ["verification_failed"]},
+        )
+    return JSONResponse(
+        {
+            "verified": True,
+            "results": evaluation,
+            "problemDetails": [],
+        }
     )
 
 

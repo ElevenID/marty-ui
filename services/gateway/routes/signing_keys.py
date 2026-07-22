@@ -1,4 +1,5 @@
 """Signing key compatibility routes backed by OpenBao plus a service registry."""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,7 +15,11 @@ from typing import Any
 from urllib.parse import unquote
 
 try:
-    from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey, SECP256R1, SECP384R1
+    from cryptography.hazmat.primitives.asymmetric.ec import (
+        EllipticCurvePublicKey,
+        SECP256R1,
+        SECP384R1,
+    )
     from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from cryptography.hazmat.primitives.serialization import (
@@ -23,6 +28,7 @@ try:
         load_der_public_key,
         load_pem_public_key,
     )
+
     _CRYPTOGRAPHY_AVAILABLE = True
 except ImportError:
     _CRYPTOGRAPHY_AVAILABLE = False
@@ -35,7 +41,9 @@ from gateway.middleware import mip_error_response
 from gateway.proxy import get_registry, proxy_request
 
 signing_key_router = APIRouter(prefix="/v1/signing-keys", tags=["Signing Keys"])
-internal_signing_key_router = APIRouter(prefix="/internal/signing-keys", tags=["Internal Signing Keys"])
+internal_signing_key_router = APIRouter(
+    prefix="/internal/signing-keys", tags=["Internal Signing Keys"]
+)
 
 # Public router for did:web resolution — no auth prefix, bypasses auth middleware
 did_web_public_router = APIRouter(tags=["DID Web Resolution"])
@@ -71,6 +79,7 @@ OPENBAO_TRANSIT_KEY_TYPE_BY_ALGORITHM = {
 
 SUPPORTED_SIGNING_ALGORITHMS = ("ES256", "ES384", "RS256", "EdDSA")
 MANAGED_OPENBAO_SERVICE_ID = "managed-openbao-transit"
+_FLOW_ENVELOPE_KEY_ID = "flow-response-envelope-marty-aes256"
 
 logger = logging.getLogger(__name__)
 
@@ -91,11 +100,16 @@ def _read_secret_value(name: str) -> str:
 
 
 def _require_internal_signing_key_api_key(x_api_key: str | None) -> None:
-    configured = _read_secret_value("SIGNING_KEYS_INTERNAL_API_KEY") or _read_secret_value("ISSUANCE_API_KEY")
+    configured = _read_secret_value(
+        "SIGNING_KEYS_INTERNAL_API_KEY"
+    ) or _read_secret_value("ISSUANCE_API_KEY")
     if not configured:
-        raise HTTPException(status_code=503, detail="Internal signing API key is not configured.")
+        raise HTTPException(
+            status_code=503, detail="Internal signing API key is not configured."
+        )
     if not x_api_key or not hmac.compare_digest(x_api_key, configured):
         raise HTTPException(status_code=401, detail="Invalid internal signing API key.")
+
 
 # ---------------------------------------------------------------------------
 # Key-purpose and format-routing constants (GAP-002 / GAP-007)
@@ -103,112 +117,115 @@ def _require_internal_signing_key_api_key(x_api_key: str | None) -> None:
 
 #: All recognised key purposes. Used in service registration and resolver.
 KEY_PURPOSES = (
-    "vc_jwt_issuer",     # W3C VC-JWT and SD-JWT VC issuance signing
-    "mdoc_dsc",          # ISO 18013-5 mDoc Document Signer Certificate key
-    "x509_doc_signer",   # Generic X.509 document signing
-    "holder_binding",    # Device-bound credential holder key
+    "vc_jwt_issuer",  # W3C VC-JWT and SD-JWT VC issuance signing
+    "mdoc_dsc",  # ISO 18013-5 mDoc Document Signer Certificate key
+    "x509_doc_signer",  # Generic X.509 document signing
+    "holder_binding",  # Device-bound credential holder key
     "presentation_signing",  # Presentation signing (holder-side)
-    "vdsnc_signing",     # VDS-NC signing key
-    "csca",              # Country Signing CA trust anchor key
-    "jwks_signing",      # JWKS endpoint key
+    "oid4vp_request_signing",  # Verifier Request Object signing through an issuer profile
+    "vdsnc_signing",  # VDS-NC signing key
+    "csca",  # Country Signing CA trust anchor key
+    "jwks_signing",  # JWKS endpoint key
     "lti_tool_signing",  # Canvas LTI Advantage client assertions and Deep Links
 )
 
 #: For each key purpose, the set of algorithms that make sense for it.
 #: Mismatches are surfaced as warnings during registration/validation.
 KEY_PURPOSE_ALGORITHM_CONSTRAINTS: dict[str, frozenset[str]] = {
-    "vc_jwt_issuer":        frozenset({"ES256", "ES384", "RS256", "EdDSA"}),
-    "mdoc_dsc":             frozenset({"ES256", "ES384", "EdDSA"}),  # COSE — no RSA
-    "x509_doc_signer":      frozenset({"ES256", "ES384", "RS256", "EdDSA"}),
-    "holder_binding":       frozenset({"ES256", "EdDSA"}),
+    "vc_jwt_issuer": frozenset({"ES256", "ES384", "RS256", "EdDSA"}),
+    "mdoc_dsc": frozenset({"ES256", "ES384", "EdDSA"}),  # COSE — no RSA
+    "x509_doc_signer": frozenset({"ES256", "ES384", "RS256", "EdDSA"}),
+    "holder_binding": frozenset({"ES256", "EdDSA"}),
     "presentation_signing": frozenset({"ES256", "EdDSA"}),
-    "vdsnc_signing":        frozenset({"ES256", "ES384", "EdDSA"}),
-    "csca":                 frozenset({"ES256", "ES384", "RS256", "EdDSA"}),
-    "jwks_signing":         frozenset({"ES256", "ES384", "RS256", "EdDSA"}),
-    "lti_tool_signing":     frozenset({"RS256"}),
+    "oid4vp_request_signing": frozenset({"ES256"}),
+    "vdsnc_signing": frozenset({"ES256", "ES384", "EdDSA"}),
+    "csca": frozenset({"ES256", "ES384", "RS256", "EdDSA"}),
+    "jwks_signing": frozenset({"ES256", "ES384", "RS256", "EdDSA"}),
+    "lti_tool_signing": frozenset({"RS256"}),
 }
 
 #: The credential formats each key purpose maps to naturally.
 KEY_PURPOSE_CREDENTIAL_FORMATS: dict[str, tuple[str, ...]] = {
-    "vc_jwt_issuer":        ("jwt_vc_json", "dc+sd-jwt"),
-    "mdoc_dsc":             ("mso_mdoc", "zk_mdoc"),
-    "x509_doc_signer":      ("mso_mdoc", "zk_mdoc"),
-    "holder_binding":       ("mso_mdoc", "zk_mdoc", "dc+sd-jwt"),
+    "vc_jwt_issuer": ("jwt_vc_json", "dc+sd-jwt"),
+    "mdoc_dsc": ("mso_mdoc", "zk_mdoc"),
+    "x509_doc_signer": ("mso_mdoc", "zk_mdoc"),
+    "holder_binding": ("mso_mdoc", "zk_mdoc", "dc+sd-jwt"),
+    "oid4vp_request_signing": (),
     "presentation_signing": ("jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc"),
-    "vdsnc_signing":        ("mso_mdoc",),
-    "csca":                 ("mso_mdoc", "zk_mdoc"),
-    "jwks_signing":         ("jwt_vc_json", "dc+sd-jwt"),
-    "lti_tool_signing":     (),
+    "vdsnc_signing": ("mso_mdoc",),
+    "csca": ("mso_mdoc", "zk_mdoc"),
+    "jwks_signing": ("jwt_vc_json", "dc+sd-jwt"),
+    "lti_tool_signing": (),
 }
 
 #: Per-service-type static capability metadata (GAP-007-a).
 #: Signature encoding: "raw_ieee_p1363" = raw r||s bytes; "der" = ASN.1 DER.
 KEY_MANAGEMENT_SERVICE_CAPABILITIES: dict[str, dict[str, Any]] = {
     "openbao-transit": {
-        "supported_algorithms":  ["ES256", "ES384", "RS256", "EdDSA"],
-        "signature_encoding":    "der",
-        "public_key_export":     True,
-        "hardware_attestation":  False,
-        "key_import":            False,
-        "key_create":            True,
-        "key_delete":            True,
-        "key_list":              True,
-        "rotation":              True,
+        "supported_algorithms": ["ES256", "ES384", "RS256", "EdDSA"],
+        "signature_encoding": "der",
+        "public_key_export": True,
+        "hardware_attestation": False,
+        "key_import": False,
+        "key_create": True,
+        "key_delete": True,
+        "key_list": True,
+        "rotation": True,
     },
     "hashicorp-vault-transit": {
-        "supported_algorithms":  ["ES256", "ES384", "RS256", "EdDSA"],
-        "signature_encoding":    "der",
-        "public_key_export":     True,
-        "hardware_attestation":  False,
-        "key_import":            False,
-        "key_create":            True,
-        "key_delete":            True,
-        "key_list":              True,
-        "rotation":              True,
+        "supported_algorithms": ["ES256", "ES384", "RS256", "EdDSA"],
+        "signature_encoding": "der",
+        "public_key_export": True,
+        "hardware_attestation": False,
+        "key_import": False,
+        "key_create": True,
+        "key_delete": True,
+        "key_list": True,
+        "rotation": True,
     },
     "aws-kms": {
-        "supported_algorithms":  ["ES256", "ES384", "RS256"],
-        "signature_encoding":    "der",
-        "public_key_export":     True,
-        "hardware_attestation":  True,   # HSM-backed by default
-        "key_import":            True,
-        "key_create":            True,
-        "key_delete":            False,  # Requires scheduled deletion
-        "key_list":              False,  # No native list in transit mode
-        "rotation":              True,   # Auto-rotation supported
+        "supported_algorithms": ["ES256", "ES384", "RS256"],
+        "signature_encoding": "der",
+        "public_key_export": True,
+        "hardware_attestation": True,  # HSM-backed by default
+        "key_import": True,
+        "key_create": True,
+        "key_delete": False,  # Requires scheduled deletion
+        "key_list": False,  # No native list in transit mode
+        "rotation": True,  # Auto-rotation supported
     },
     "azure-key-vault": {
-        "supported_algorithms":  ["ES256", "ES384", "RS256", "EdDSA"],
-        "signature_encoding":    "der",
-        "public_key_export":     True,
-        "hardware_attestation":  True,   # HSM SKU available
-        "key_import":            True,
-        "key_create":            True,
-        "key_delete":            True,
-        "key_list":              True,
-        "rotation":              True,
+        "supported_algorithms": ["ES256", "ES384", "RS256", "EdDSA"],
+        "signature_encoding": "der",
+        "public_key_export": True,
+        "hardware_attestation": True,  # HSM SKU available
+        "key_import": True,
+        "key_create": True,
+        "key_delete": True,
+        "key_list": True,
+        "rotation": True,
     },
     "gcp-cloud-kms": {
-        "supported_algorithms":  ["ES256", "ES384", "RS256", "EdDSA"],
-        "signature_encoding":    "der",
-        "public_key_export":     True,
-        "hardware_attestation":  True,   # HSM protection level available
-        "key_import":            True,
-        "key_create":            True,
-        "key_delete":            False,  # Soft-delete only, then destroy
-        "key_list":              True,
-        "rotation":              True,
+        "supported_algorithms": ["ES256", "ES384", "RS256", "EdDSA"],
+        "signature_encoding": "der",
+        "public_key_export": True,
+        "hardware_attestation": True,  # HSM protection level available
+        "key_import": True,
+        "key_create": True,
+        "key_delete": False,  # Soft-delete only, then destroy
+        "key_list": True,
+        "rotation": True,
     },
     "custom-transit-compatible": {
-        "supported_algorithms":  ["ES256", "ES384", "RS256", "EdDSA"],
-        "signature_encoding":    "raw_ieee_p1363",
-        "public_key_export":     False,
-        "hardware_attestation":  False,
-        "key_import":            False,
-        "key_create":            False,
-        "key_delete":            False,
-        "key_list":              False,
-        "rotation":              False,
+        "supported_algorithms": ["ES256", "ES384", "RS256", "EdDSA"],
+        "signature_encoding": "raw_ieee_p1363",
+        "public_key_export": False,
+        "hardware_attestation": False,
+        "key_import": False,
+        "key_create": False,
+        "key_delete": False,
+        "key_list": False,
+        "rotation": False,
     },
 }
 
@@ -293,7 +310,9 @@ KEY_MANAGEMENT_SERVICE_TYPE_BY_ID = {
 
 
 def _resolve_org_id(request: Request, organization_id: str | None) -> str:
-    resolved = organization_id or getattr(request.state, "session_organization_id", None)
+    resolved = organization_id or getattr(
+        request.state, "session_organization_id", None
+    )
     if not resolved:
         raise HTTPException(status_code=422, detail="organization_id is required")
     return resolved
@@ -304,7 +323,11 @@ def _bao_address() -> str | None:
 
 
 def _bao_token() -> str | None:
-    return _read_secret_value("BAO_TOKEN") or _read_secret_value("OPENBAO_SERVICE_TOKEN") or None
+    return (
+        _read_secret_value("BAO_TOKEN")
+        or _read_secret_value("OPENBAO_SERVICE_TOKEN")
+        or None
+    )
 
 
 def _has_openbao_access() -> bool:
@@ -325,7 +348,9 @@ def _provider_name() -> str:
 def _domain_config(request: Request) -> dict[str, Any]:
     host = request.headers.get("host", "")
     public_domain = os.environ.get("PUBLIC_DOMAIN") or host.split(":")[0]
-    issuer_base_url = os.environ.get("ISSUER_BASE_URL") or f"{request.url.scheme}://{host}"
+    issuer_base_url = (
+        os.environ.get("ISSUER_BASE_URL") or f"{request.url.scheme}://{host}"
+    )
     return {
         "public_domain": public_domain,
         "issuer_base_url": issuer_base_url,
@@ -337,11 +362,15 @@ def _domain_config(request: Request) -> dict[str, Any]:
     }
 
 
-def _provider_metadata(*, status: str, key_count: int, error: str | None = None) -> dict[str, Any]:
+def _provider_metadata(
+    *, status: str, key_count: int, error: str | None = None
+) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "provider": _provider_name(),
         "status": status,
-        "managed_by": "OpenBao transit service" if _has_openbao_access() else "Marty gateway compatibility layer",
+        "managed_by": "OpenBao transit service"
+        if _has_openbao_access()
+        else "Marty gateway compatibility layer",
         "supports_rotation": False,
         "supports_upload": False,
         "supports_delete": False,
@@ -378,7 +407,9 @@ def _openbao_key_prefix_for_purpose(key_purpose: str | None) -> str:
     return "cred-issuer-"
 
 
-def _normalize_requested_openbao_key_name(requested_name: str, key_purpose: str | None, algorithm: str) -> str:
+def _normalize_requested_openbao_key_name(
+    requested_name: str, key_purpose: str | None, algorithm: str
+) -> str:
     raw_name = (requested_name or "").strip().lower()
     safe_name = re.sub(r"[^a-z0-9-]+", "-", raw_name).strip("-")
     if not safe_name:
@@ -396,11 +427,13 @@ def _normalize_requested_openbao_key_name(requested_name: str, key_purpose: str 
     if existing_prefix and existing_prefix != expected_prefix:
         # A caller-supplied credential prefix must never defeat the protocol
         # namespace selected by key_purpose.
-        safe_name = safe_name[len(existing_prefix):].lstrip("-") or "key"
+        safe_name = safe_name[len(existing_prefix) :].lstrip("-") or "key"
     if not safe_name.startswith(expected_prefix):
         safe_name = f"{expected_prefix}{safe_name}"
 
-    algorithm_suffix = re.sub(r"[^a-z0-9]+", "", (algorithm or "ES256").lower()) or "es256"
+    algorithm_suffix = (
+        re.sub(r"[^a-z0-9]+", "", (algorithm or "ES256").lower()) or "es256"
+    )
     if not safe_name.endswith(f"-{algorithm_suffix}"):
         safe_name = f"{safe_name}-{algorithm_suffix}"
 
@@ -469,7 +502,9 @@ async def _openbao_get_json(
         "Accept": "application/json",
     }
 
-    async with httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout, headers=headers) as client:
+    async with httpx.AsyncClient(
+        base_url=base_url.rstrip("/"), timeout=timeout, headers=headers
+    ) as client:
         response = await client.get(path, params=params)
         response.raise_for_status()
         return response.json()
@@ -494,7 +529,9 @@ async def _openbao_post_json(
         "Accept": "application/json",
     }
 
-    async with httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout, headers=headers) as client:
+    async with httpx.AsyncClient(
+        base_url=base_url.rstrip("/"), timeout=timeout, headers=headers
+    ) as client:
         response = await client.post(path, json=payload)
         response.raise_for_status()
         if not response.content:
@@ -505,8 +542,7 @@ async def _openbao_post_json(
 def _is_missing_openbao_route(status_code: int, detail: str) -> bool:
     lowered = detail.lower()
     return status_code == 404 and (
-        "no handler for route" in lowered
-        or "route entry not found" in lowered
+        "no handler for route" in lowered or "route entry not found" in lowered
     )
 
 
@@ -549,7 +585,13 @@ def _b64url_no_pad(raw: bytes) -> str:
 def _public_key_object_to_jwk(public_key: Any) -> dict[str, Any] | None:
     if isinstance(public_key, EllipticCurvePublicKey):
         curve = public_key.curve
-        crv = "P-256" if isinstance(curve, SECP256R1) else "P-384" if isinstance(curve, SECP384R1) else None
+        crv = (
+            "P-256"
+            if isinstance(curve, SECP256R1)
+            else "P-384"
+            if isinstance(curve, SECP384R1)
+            else None
+        )
         if not crv:
             return None
         numbers = public_key.public_numbers()
@@ -593,7 +635,11 @@ def _pem_to_public_jwk(pem: str) -> dict[str, Any] | None:
 
 
 def _der_b64_to_public_jwk(der_b64: str) -> dict[str, Any] | None:
-    if not _CRYPTOGRAPHY_AVAILABLE or not isinstance(der_b64, str) or not der_b64.strip():
+    if (
+        not _CRYPTOGRAPHY_AVAILABLE
+        or not isinstance(der_b64, str)
+        or not der_b64.strip()
+    ):
         return None
     try:
         der_bytes = base64.b64decode(der_b64)
@@ -603,7 +649,9 @@ def _der_b64_to_public_jwk(der_b64: str) -> dict[str, Any] | None:
     return _public_key_object_to_jwk(public_key)
 
 
-def _extract_public_jwk(candidate: Any, *, key_reference_hint: str | None = None) -> dict[str, Any] | None:
+def _extract_public_jwk(
+    candidate: Any, *, key_reference_hint: str | None = None
+) -> dict[str, Any] | None:
     """Normalize provider-specific public key payloads to a canonical public JWK."""
     if not isinstance(candidate, dict):
         return None
@@ -643,7 +691,9 @@ def _extract_public_jwk(candidate: Any, *, key_reference_hint: str | None = None
                 jwk_from_pem["kid"] = key_reference_hint
             return jwk_from_pem
 
-    der_candidate = candidate.get("public_key_der_b64") or candidate.get("publicKeyDerB64")
+    der_candidate = candidate.get("public_key_der_b64") or candidate.get(
+        "publicKeyDerB64"
+    )
     if isinstance(der_candidate, str) and der_candidate.strip():
         jwk_from_der = _der_b64_to_public_jwk(der_candidate)
         if jwk_from_der:
@@ -654,12 +704,18 @@ def _extract_public_jwk(candidate: Any, *, key_reference_hint: str | None = None
     return None
 
 
-def _normalize_openbao_signing_key(key_name: str, key_details: dict[str, Any]) -> dict[str, Any]:
+def _normalize_openbao_signing_key(
+    key_name: str, key_details: dict[str, Any]
+) -> dict[str, Any]:
     key_versions = key_details.get("keys") or {}
     latest_version = str(key_details.get("latest_version") or "")
     latest_key_metadata = key_versions.get(latest_version) or {}
     algorithm = _algorithm_from_openbao_type(key_details.get("type"))
-    status = "active" if key_details.get("supports_signing") and not key_details.get("soft_deleted") else "invalid"
+    status = (
+        "active"
+        if key_details.get("supports_signing") and not key_details.get("soft_deleted")
+        else "invalid"
+    )
 
     public_jwk = _extract_public_jwk(
         {"public_key_pem": latest_key_metadata.get("public_key")},
@@ -716,12 +772,18 @@ async def _load_service_discovered_keys(
         if not public_jwk:
             continue
 
-        algorithms = normalized.get("algorithms") if isinstance(normalized.get("algorithms"), list) else []
+        algorithms = (
+            normalized.get("algorithms")
+            if isinstance(normalized.get("algorithms"), list)
+            else []
+        )
         discovered_keys.append(
             {
                 "id": key_reference,
                 "name": normalized.get("name") or key_reference,
-                "algorithm": algorithms[0] if algorithms else normalized.get("algorithm"),
+                "algorithm": algorithms[0]
+                if algorithms
+                else normalized.get("algorithm"),
                 "status": "active",
                 "expiry_date": None,
                 "created_at": normalized.get("created_at"),
@@ -796,9 +858,7 @@ def _purposes_for_key_reference(
     key_reference: str,
 ) -> list[str]:
     bindings = _normalize_key_reference_purposes(
-        registry.get("key_reference_purposes")
-        if isinstance(registry, dict)
-        else None
+        registry.get("key_reference_purposes") if isinstance(registry, dict) else None
     )
     return list(bindings.get(service_id, {}).get(key_reference, []))
 
@@ -820,7 +880,11 @@ def _validate_lti_key_reference_bindings(value: Any) -> None:
 
 
 def _normalize_algorithm_list(values: Any) -> list[str]:
-    return [algorithm for algorithm in _dedupe_strings(values) if algorithm in SUPPORTED_SIGNING_ALGORITHMS]
+    return [
+        algorithm
+        for algorithm in _dedupe_strings(values)
+        if algorithm in SUPPORTED_SIGNING_ALGORITHMS
+    ]
 
 
 def _utcnow_iso() -> str:
@@ -853,7 +917,9 @@ def _did_doc_storage_key(organization_id: str) -> str:
 
 _SLUG_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,128}$")
 _DID_WEB_DOMAIN_PATTERN = re.compile(r"^[a-zA-Z0-9.-]+(?::[0-9]{1,5})?$")
-_DID_WEB_DOMAIN_LABEL_PATTERN = re.compile(r"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
+_DID_WEB_DOMAIN_LABEL_PATTERN = re.compile(
+    r"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$"
+)
 
 
 def _did_web_slug_key(slug: str) -> str:
@@ -877,7 +943,9 @@ def _normalize_did_web_domain(value: Any) -> str | None:
     host = host.rstrip(".")
     if not host or len(host) > 253:
         return None
-    if any(not _DID_WEB_DOMAIN_LABEL_PATTERN.fullmatch(label) for label in host.split(".")):
+    if any(
+        not _DID_WEB_DOMAIN_LABEL_PATTERN.fullmatch(label) for label in host.split(".")
+    ):
         return None
     if port and (not port.isdigit() or not 1 <= int(port) <= 65535):
         return None
@@ -902,17 +970,23 @@ def _did_web_org_slug(did_id: Any, *, public_domain: str | None = None) -> str |
     did_domain = _normalize_did_web_domain(parts[2])
     if not did_domain:
         return None
-    if public_domain is not None and did_domain != _normalize_did_web_domain(public_domain):
+    if public_domain is not None and did_domain != _normalize_did_web_domain(
+        public_domain
+    ):
         return None
     slug = parts[4].lower()
     return slug if _SLUG_PATTERN.fullmatch(slug) else None
 
 
-async def _claim_did_web_slug(request: Request, slug: str, organization_id: str) -> None:
+async def _claim_did_web_slug(
+    request: Request, slug: str, organization_id: str
+) -> None:
     """Atomically claim a public did:web slug without allowing tenant takeover."""
     redis_client = getattr(request.app.state, "redis_client", None)
     if redis_client is None:
-        raise HTTPException(status_code=503, detail="DID web slug registry is unavailable.")
+        raise HTTPException(
+            status_code=503, detail="DID web slug registry is unavailable."
+        )
 
     storage_key = _did_web_slug_key(slug)
 
@@ -931,8 +1005,13 @@ async def _claim_did_web_slug(request: Request, slug: str, organization_id: str)
             if existing == organization_id:
                 return
             if existing is None:
-                raise HTTPException(status_code=503, detail="DID web slug registry contains invalid data.")
-            raise HTTPException(status_code=409, detail=f"DID web slug '{slug}' is already in use.")
+                raise HTTPException(
+                    status_code=503,
+                    detail="DID web slug registry contains invalid data.",
+                )
+            raise HTTPException(
+                status_code=409, detail=f"DID web slug '{slug}' is already in use."
+            )
 
         claimed = await redis_client.set(storage_key, organization_id, nx=True)
         if claimed:
@@ -944,13 +1023,19 @@ async def _claim_did_web_slug(request: Request, slug: str, organization_id: str)
         if existing == organization_id:
             return
         if existing is None:
-            raise HTTPException(status_code=503, detail="DID web slug claim could not be confirmed.")
-        raise HTTPException(status_code=409, detail=f"DID web slug '{slug}' is already in use.")
+            raise HTTPException(
+                status_code=503, detail="DID web slug claim could not be confirmed."
+            )
+        raise HTTPException(
+            status_code=409, detail=f"DID web slug '{slug}' is already in use."
+        )
     except HTTPException:
         raise
     except Exception as exc:
         logger.error("DID web slug claim failed for %s: %s", slug, exc, exc_info=True)
-        raise HTTPException(status_code=503, detail="DID web slug registry is unavailable.") from exc
+        raise HTTPException(
+            status_code=503, detail="DID web slug registry is unavailable."
+        ) from exc
 
 
 def _issuer_profiles_storage_key(organization_id: str) -> str:
@@ -975,7 +1060,11 @@ def _retarget_did_document(did_doc: dict[str, Any], did_id: str) -> dict[str, An
             return f"{did_id}#{value.split('#', 1)[1]}"
         return value
 
-    methods = did_doc.get("verificationMethod") if isinstance(did_doc.get("verificationMethod"), list) else []
+    methods = (
+        did_doc.get("verificationMethod")
+        if isinstance(did_doc.get("verificationMethod"), list)
+        else []
+    )
     retargeted_methods: list[dict[str, Any]] = []
     for method in methods:
         if not isinstance(method, dict):
@@ -987,7 +1076,12 @@ def _retarget_did_document(did_doc: dict[str, Any], did_id: str) -> dict[str, An
         retargeted_methods.append(rewritten)
     retargeted["verificationMethod"] = retargeted_methods
 
-    for relationship in ("authentication", "assertionMethod", "capabilityInvocation", "capabilityDelegation"):
+    for relationship in (
+        "authentication",
+        "assertionMethod",
+        "capabilityInvocation",
+        "capabilityDelegation",
+    ):
         entries = did_doc.get(relationship)
         if isinstance(entries, list):
             retargeted[relationship] = [rewrite_identifier(entry) for entry in entries]
@@ -995,7 +1089,9 @@ def _retarget_did_document(did_doc: dict[str, Any], did_id: str) -> dict[str, An
     return retargeted
 
 
-def _did_fragment_for_key_reference(service_id: str, key_reference: str | None = None) -> str:
+def _did_fragment_for_key_reference(
+    service_id: str, key_reference: str | None = None
+) -> str:
     fragment = key_reference or f"{service_id}-vm"
     safe_fragment = re.sub(r"[^a-zA-Z0-9._-]", "-", fragment).strip("-")
     return safe_fragment or f"{service_id}-vm"
@@ -1036,7 +1132,9 @@ def _issuer_vm_id_candidates(
     if key_reference:
         raw_candidates.append(key_reference)
     if service_id:
-        raw_candidates.append(_did_fragment_for_key_reference(service_id, key_reference))
+        raw_candidates.append(
+            _did_fragment_for_key_reference(service_id, key_reference)
+        )
 
     deduped: list[str] = []
     for raw in raw_candidates:
@@ -1047,7 +1145,11 @@ def _issuer_vm_id_candidates(
 
 
 def _did_document_assertion_ids(did_doc: dict[str, Any], issuer_did: str) -> set[str]:
-    assertion_entries = did_doc.get("assertionMethod") if isinstance(did_doc.get("assertionMethod"), list) else []
+    assertion_entries = (
+        did_doc.get("assertionMethod")
+        if isinstance(did_doc.get("assertionMethod"), list)
+        else []
+    )
     assertion_ids: set[str] = set()
     for entry in assertion_entries:
         if isinstance(entry, str):
@@ -1055,7 +1157,9 @@ def _did_document_assertion_ids(did_doc: dict[str, Any], issuer_did: str) -> set
             if normalized:
                 assertion_ids.add(normalized)
         elif isinstance(entry, dict):
-            normalized = _normalize_did_verification_method_id(issuer_did, entry.get("id"))
+            normalized = _normalize_did_verification_method_id(
+                issuer_did, entry.get("id")
+            )
             if normalized:
                 assertion_ids.add(normalized)
     return assertion_ids
@@ -1067,7 +1171,11 @@ def _find_did_verification_method(
     candidates: list[str],
 ) -> dict[str, Any] | None:
     """Return the DID verification method matching the requested/profile key, if present."""
-    methods = did_doc.get("verificationMethod") if isinstance(did_doc.get("verificationMethod"), list) else []
+    methods = (
+        did_doc.get("verificationMethod")
+        if isinstance(did_doc.get("verificationMethod"), list)
+        else []
+    )
     assertion_ids = _did_document_assertion_ids(did_doc, issuer_did)
     candidate_set = set(candidates)
 
@@ -1092,12 +1200,18 @@ def _find_did_verification_method(
     return fallback_method if not candidate_set else None
 
 
-def _public_jwk_from_verification_method(method: dict[str, Any] | None) -> dict[str, Any] | None:
+def _public_jwk_from_verification_method(
+    method: dict[str, Any] | None,
+) -> dict[str, Any] | None:
     if not isinstance(method, dict):
         return None
     jwk = method.get("publicKeyJwk")
     if isinstance(jwk, dict) and jwk.get("kty"):
-        sanitized = {k: v for k, v in jwk.items() if k not in {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}}
+        sanitized = {
+            k: v
+            for k, v in jwk.items()
+            if k not in {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+        }
         if method.get("id") and not sanitized.get("kid"):
             sanitized["kid"] = method["id"]
         return sanitized
@@ -1115,8 +1229,12 @@ async def _public_jwk_from_service(
     raw_jwk = await adapter.get_public_key_jwk(service_config)
     public_jwk = _extract_public_jwk(raw_jwk, key_reference_hint=key_reference_hint)
     if not public_jwk and isinstance(raw_jwk, dict):
-        public_jwk = _extract_public_jwk(raw_jwk, key_reference_hint=key_reference_hint) or dict(raw_jwk)
-    return public_jwk if isinstance(public_jwk, dict) and public_jwk.get("kty") else None
+        public_jwk = _extract_public_jwk(
+            raw_jwk, key_reference_hint=key_reference_hint
+        ) or dict(raw_jwk)
+    return (
+        public_jwk if isinstance(public_jwk, dict) and public_jwk.get("kty") else None
+    )
 
 
 def _safe_signing_service_metadata(service: dict[str, Any]) -> dict[str, Any]:
@@ -1161,7 +1279,9 @@ def _split_pem_chain(pem_blob: str | None) -> list[str]:
 
 def _pem_to_x5c_entry(pem_cert: str) -> str | None:
     try:
-        body = re.sub(r"-----BEGIN CERTIFICATE-----|-----END CERTIFICATE-----", "", pem_cert)
+        body = re.sub(
+            r"-----BEGIN CERTIFICATE-----|-----END CERTIFICATE-----", "", pem_cert
+        )
         der = base64.b64decode(re.sub(r"\s+", "", body), validate=True)
         return base64.b64encode(der).decode("ascii")
     except Exception:
@@ -1217,7 +1337,9 @@ def _apply_service_certificate_override(
     return result
 
 
-async def _load_json_document(request: Request, storage_key: str, default: dict[str, Any]) -> dict[str, Any]:
+async def _load_json_document(
+    request: Request, storage_key: str, default: dict[str, Any]
+) -> dict[str, Any]:
     redis_client = getattr(request.app.state, "redis_client", None)
     if redis_client is None:
         return dict(default)
@@ -1291,14 +1413,18 @@ async def _credential_issuer_key_references(
     return references
 
 
-async def _save_json_document(request: Request, storage_key: str, doc: dict[str, Any]) -> None:
+async def _save_json_document(
+    request: Request, storage_key: str, doc: dict[str, Any]
+) -> None:
     redis_client = getattr(request.app.state, "redis_client", None)
     if redis_client is None:
         return
     await redis_client.set(storage_key, json.dumps(doc))
 
 
-def _merge_discovered_capabilities(service: dict[str, Any], discovered: dict[str, Any]) -> dict[str, Any]:
+def _merge_discovered_capabilities(
+    service: dict[str, Any], discovered: dict[str, Any]
+) -> dict[str, Any]:
     existing = service.get("discovered_capabilities")
     merged = existing.copy() if isinstance(existing, dict) else {}
     for key, value in discovered.items():
@@ -1309,7 +1435,10 @@ def _merge_discovered_capabilities(service: dict[str, Any], discovered: dict[str
 
 
 def _service_type_definition(service_type_id: Any) -> dict[str, Any]:
-    if isinstance(service_type_id, str) and service_type_id in KEY_MANAGEMENT_SERVICE_TYPE_BY_ID:
+    if (
+        isinstance(service_type_id, str)
+        and service_type_id in KEY_MANAGEMENT_SERVICE_TYPE_BY_ID
+    ):
         return KEY_MANAGEMENT_SERVICE_TYPE_BY_ID[service_type_id]
     return KEY_MANAGEMENT_SERVICE_TYPE_BY_ID["custom-transit-compatible"]
 
@@ -1340,8 +1469,10 @@ def _normalize_registered_service(service: Any) -> dict[str, Any] | None:
 
     auth_modes = definition.get("auth_modes") or []
     incoming_auth_mode = service.get("auth_mode")
-    auth_mode = incoming_auth_mode if isinstance(incoming_auth_mode, str) and incoming_auth_mode in auth_modes else (
-        auth_modes[0] if auth_modes else "custom"
+    auth_mode = (
+        incoming_auth_mode
+        if isinstance(incoming_auth_mode, str) and incoming_auth_mode in auth_modes
+        else (auth_modes[0] if auth_modes else "custom")
     )
 
     provider = service.get("provider")
@@ -1352,8 +1483,12 @@ def _normalize_registered_service(service: Any) -> dict[str, Any] | None:
     if not isinstance(provider_label, str) or not provider_label.strip():
         provider_label = definition["label"]
 
-    created_at = service.get("created_at") if isinstance(service.get("created_at"), str) else now
-    updated_at = service.get("updated_at") if isinstance(service.get("updated_at"), str) else now
+    created_at = (
+        service.get("created_at") if isinstance(service.get("created_at"), str) else now
+    )
+    updated_at = (
+        service.get("updated_at") if isinstance(service.get("updated_at"), str) else now
+    )
 
     # -- Key purposes and credential-format routing (GAP-002) -----------------
     incoming_purposes = service.get("key_purposes")
@@ -1382,34 +1517,68 @@ def _normalize_registered_service(service: Any) -> dict[str, Any] | None:
     )
     signature_encoding = static_caps.get("signature_encoding", "raw_ieee_p1363")
 
-    rotation_policy = service.get("rotation_policy") if isinstance(service.get("rotation_policy"), dict) else {}
-    discovered_capabilities = service.get("discovered_capabilities") if isinstance(service.get("discovered_capabilities"), dict) else {}
+    rotation_policy = (
+        service.get("rotation_policy")
+        if isinstance(service.get("rotation_policy"), dict)
+        else {}
+    )
+    discovered_capabilities = (
+        service.get("discovered_capabilities")
+        if isinstance(service.get("discovered_capabilities"), dict)
+        else {}
+    )
 
     return {
-        "id": service.get("id") if isinstance(service.get("id"), str) and service["id"].strip() else f"svc-{uuid.uuid4().hex}",
-        "name": service.get("name") if isinstance(service.get("name"), str) and service["name"].strip() else definition["label"],
-        "description": service.get("description") if isinstance(service.get("description"), str) else "",
+        "id": service.get("id")
+        if isinstance(service.get("id"), str) and service["id"].strip()
+        else f"svc-{uuid.uuid4().hex}",
+        "name": service.get("name")
+        if isinstance(service.get("name"), str) and service["name"].strip()
+        else definition["label"],
+        "description": service.get("description")
+        if isinstance(service.get("description"), str)
+        else "",
         "service_type": definition["id"],
         "provider": provider,
         "provider_label": provider_label,
-        "protocol": service.get("protocol") if isinstance(service.get("protocol"), str) and service["protocol"].strip() else definition["protocol"],
+        "protocol": service.get("protocol")
+        if isinstance(service.get("protocol"), str) and service["protocol"].strip()
+        else definition["protocol"],
         "category": definition["category"],
-        "endpoint": service.get("endpoint") if isinstance(service.get("endpoint"), str) else "",
-        "region": service.get("region") if isinstance(service.get("region"), str) else "",
+        "endpoint": service.get("endpoint")
+        if isinstance(service.get("endpoint"), str)
+        else "",
+        "region": service.get("region")
+        if isinstance(service.get("region"), str)
+        else "",
         "mount": service.get("mount") if isinstance(service.get("mount"), str) else "",
-        "namespace": service.get("namespace") if isinstance(service.get("namespace"), str) else "",
+        "namespace": service.get("namespace")
+        if isinstance(service.get("namespace"), str)
+        else "",
         "auth_mode": auth_mode,
-        "auth_reference": service.get("auth_reference") if isinstance(service.get("auth_reference"), str) else "",
-        "key_reference": service.get("key_reference") if isinstance(service.get("key_reference"), str) else "",
-        "country_code": service.get("country_code") if isinstance(service.get("country_code"), str) else "",
-        "authority_name": service.get("authority_name") if isinstance(service.get("authority_name"), str) else "",
+        "auth_reference": service.get("auth_reference")
+        if isinstance(service.get("auth_reference"), str)
+        else "",
+        "key_reference": service.get("key_reference")
+        if isinstance(service.get("key_reference"), str)
+        else "",
+        "country_code": service.get("country_code")
+        if isinstance(service.get("country_code"), str)
+        else "",
+        "authority_name": service.get("authority_name")
+        if isinstance(service.get("authority_name"), str)
+        else "",
         "key_aliases": key_aliases,
         "algorithms": algorithms,
-        "status": service.get("status") if isinstance(service.get("status"), str) else "registered",
+        "status": service.get("status")
+        if isinstance(service.get("status"), str)
+        else "registered",
         "managed": False,
         "read_only": False,
         "managed_by": None,
-        "key_count": len(key_aliases) if key_aliases else (1 if service.get("key_reference") else 0),
+        "key_count": len(key_aliases)
+        if key_aliases
+        else (1 if service.get("key_reference") else 0),
         "capabilities": {
             "discover_keys": bool(definition.get("supports_inventory")),
             "sign": True,
@@ -1419,29 +1588,42 @@ def _normalize_registered_service(service: Any) -> dict[str, Any] | None:
             "multiple_key_references": True,
             "public_key_export": static_caps.get("public_key_export", False),
             "hardware_attestation": static_caps.get("hardware_attestation", False),
-            "supported_algorithms": static_caps.get("supported_algorithms", list(SUPPORTED_SIGNING_ALGORITHMS)),
+            "supported_algorithms": static_caps.get(
+                "supported_algorithms", list(SUPPORTED_SIGNING_ALGORITHMS)
+            ),
         },
         "signature_encoding": signature_encoding,
         "key_purposes": key_purposes,
         "credential_formats": credential_formats,
         "rotation_policy": {
-            "rotation_interval_days": int(rotation_policy.get("rotation_interval_days", 0) or 0),
+            "rotation_interval_days": int(
+                rotation_policy.get("rotation_interval_days", 0) or 0
+            ),
             "overlap_days": int(rotation_policy.get("overlap_days", 0) or 0),
             "auto_publish": bool(rotation_policy.get("auto_publish", False)),
         },
-        "rotation_state": service.get("rotation_state") if isinstance(service.get("rotation_state"), dict) else {},
+        "rotation_state": service.get("rotation_state")
+        if isinstance(service.get("rotation_state"), dict)
+        else {},
         "created_at": created_at,
         "updated_at": updated_at,
         "discovered_capabilities": discovered_capabilities,
-        "cert_pem": service.get("cert_pem") if isinstance(service.get("cert_pem"), str) else None,
-        "cert_chain_pem": service.get("cert_chain_pem") if isinstance(service.get("cert_chain_pem"), str) else None,
-        "cert_expires_at": service.get("cert_expires_at") if isinstance(service.get("cert_expires_at"), str) else None,
+        "cert_pem": service.get("cert_pem")
+        if isinstance(service.get("cert_pem"), str)
+        else None,
+        "cert_chain_pem": service.get("cert_chain_pem")
+        if isinstance(service.get("cert_chain_pem"), str)
+        else None,
+        "cert_expires_at": service.get("cert_expires_at")
+        if isinstance(service.get("cert_expires_at"), str)
+        else None,
     }
 
 
 # ---------------------------------------------------------------------------
 # Format / purpose resolver (GAP-002-c)
 # ---------------------------------------------------------------------------
+
 
 def _resolve_service_for_format(
     registry: dict[str, Any],
@@ -1489,7 +1671,9 @@ def _resolve_service_for_format(
 
     # 4. First service that matches all supplied filters
     for svc in services_by_id.values():
-        if credential_format and credential_format not in (svc.get("credential_formats") or []):
+        if credential_format and credential_format not in (
+            svc.get("credential_formats") or []
+        ):
             continue
         if key_purpose and key_purpose not in (svc.get("key_purposes") or []):
             continue
@@ -1515,7 +1699,9 @@ def _resolve_key_reference_for_purpose(
     must not silently receive the service's ES256 default.
     """
     current = service.get("key_reference")
-    current_reference = current.strip() if isinstance(current, str) and current.strip() else None
+    current_reference = (
+        current.strip() if isinstance(current, str) and current.strip() else None
+    )
     if not key_purpose:
         return current_reference
 
@@ -1551,7 +1737,9 @@ def _resolve_key_reference_for_purpose(
     return sorted(candidates)[0] if candidates else None
 
 
-async def _load_registered_service_registry(request: Request, organization_id: str | None) -> dict[str, Any]:
+async def _load_registered_service_registry(
+    request: Request, organization_id: str | None
+) -> dict[str, Any]:
     empty = {
         "services": [],
         "default_service_id": None,
@@ -1580,23 +1768,51 @@ async def _load_registered_service_registry(request: Request, organization_id: s
     except Exception:
         return dict(empty)
 
-    raw_services = parsed.get("services") if isinstance(parsed, dict) and isinstance(parsed.get("services"), list) else []
+    raw_services = (
+        parsed.get("services")
+        if isinstance(parsed, dict) and isinstance(parsed.get("services"), list)
+        else []
+    )
     services = [
         normalized
-        for normalized in (_normalize_registered_service(service) for service in raw_services)
+        for normalized in (
+            _normalize_registered_service(service) for service in raw_services
+        )
         if normalized
     ]
-    default_service_id = parsed.get("default_service_id") if isinstance(parsed, dict) else None
-    raw_format_defaults = parsed.get("format_defaults") if isinstance(parsed, dict) else {}
-    format_defaults = {k: v for k, v in raw_format_defaults.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(raw_format_defaults, dict) else {}
+    default_service_id = (
+        parsed.get("default_service_id") if isinstance(parsed, dict) else None
+    )
+    raw_format_defaults = (
+        parsed.get("format_defaults") if isinstance(parsed, dict) else {}
+    )
+    format_defaults = (
+        {
+            k: v
+            for k, v in raw_format_defaults.items()
+            if isinstance(k, str) and isinstance(v, str)
+        }
+        if isinstance(raw_format_defaults, dict)
+        else {}
+    )
     raw_type_defaults = parsed.get("type_defaults") if isinstance(parsed, dict) else {}
-    type_defaults = {k: v for k, v in raw_type_defaults.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(raw_type_defaults, dict) else {}
+    type_defaults = (
+        {
+            k: v
+            for k, v in raw_type_defaults.items()
+            if isinstance(k, str) and isinstance(v, str)
+        }
+        if isinstance(raw_type_defaults, dict)
+        else {}
+    )
     key_reference_purposes = _normalize_key_reference_purposes(
         parsed.get("key_reference_purposes") if isinstance(parsed, dict) else None
     )
     return {
         "services": services,
-        "default_service_id": default_service_id if isinstance(default_service_id, str) else None,
+        "default_service_id": default_service_id
+        if isinstance(default_service_id, str)
+        else None,
         "format_defaults": format_defaults,
         "type_defaults": type_defaults,
         "key_reference_purposes": key_reference_purposes,
@@ -1641,11 +1857,7 @@ def _managed_openbao_service(
     bindings = _normalize_key_reference_purposes(key_reference_purposes)
     managed_bindings = bindings.get(MANAGED_OPENBAO_SERVICE_ID, {})
     managed_purposes = sorted(
-        {
-            purpose
-            for purposes in managed_bindings.values()
-            for purpose in purposes
-        }
+        {purpose for purposes in managed_bindings.values() for purpose in purposes}
     )
     return {
         "id": MANAGED_OPENBAO_SERVICE_ID,
@@ -1685,18 +1897,26 @@ def _managed_openbao_service(
     }
 
 
-def _default_service_id(services: list[dict[str, Any]], requested_default: str | None) -> str | None:
-    if requested_default and any(service["id"] == requested_default for service in services):
+def _default_service_id(
+    services: list[dict[str, Any]], requested_default: str | None
+) -> str | None:
+    if requested_default and any(
+        service["id"] == requested_default for service in services
+    ):
         return requested_default
     if any(service["id"] == MANAGED_OPENBAO_SERVICE_ID for service in services):
         return MANAGED_OPENBAO_SERVICE_ID
     return services[0]["id"] if services else None
 
 
-def _default_service(services: list[dict[str, Any]], default_service_id: str | None) -> dict[str, Any] | None:
+def _default_service(
+    services: list[dict[str, Any]], default_service_id: str | None
+) -> dict[str, Any] | None:
     if not default_service_id:
         return None
-    return next((service for service in services if service["id"] == default_service_id), None)
+    return next(
+        (service for service in services if service["id"] == default_service_id), None
+    )
 
 
 def _legacy_hsm_settings_from_default_service(
@@ -1738,13 +1958,16 @@ def _provider_metadata_from_default_service(
     capabilities = default_service.get("capabilities") or {}
     return {
         **snapshot_metadata,
-        "provider": default_service.get("provider") or snapshot_metadata.get("provider"),
+        "provider": default_service.get("provider")
+        or snapshot_metadata.get("provider"),
         "status": default_service.get("status") or snapshot_metadata.get("status"),
         "managed_by": default_service.get("managed_by") or "Registered via console",
         "supports_rotation": bool(capabilities.get("rotate_keys")),
         "supports_upload": bool(capabilities.get("upload_public_keys")),
         "supports_delete": bool(capabilities.get("delete_keys")),
-        "key_count": default_service.get("key_count", snapshot_metadata.get("key_count", 0)),
+        "key_count": default_service.get(
+            "key_count", snapshot_metadata.get("key_count", 0)
+        ),
     }
 
 
@@ -1764,7 +1987,9 @@ def _registry_from_legacy_body(body: dict[str, Any]) -> dict[str, Any] | None:
 
     service = _normalize_registered_service(
         {
-            "name": hsm_settings.get("provider_label") or hsm_settings.get("provider") or "Registered KMS/HSM",
+            "name": hsm_settings.get("provider_label")
+            or hsm_settings.get("provider")
+            or "Registered KMS/HSM",
             "service_type": "custom-transit-compatible",
             "provider": hsm_settings.get("provider") or "custom",
             "protocol": "vault-transit-compatible",
@@ -1799,14 +2024,34 @@ def _normalize_requested_registry(body: dict[str, Any]) -> dict[str, Any] | None
             )
             if normalized
         ]
-        default_service_id = body.get("default_service_id") if isinstance(body.get("default_service_id"), str) else None
+        default_service_id = (
+            body.get("default_service_id")
+            if isinstance(body.get("default_service_id"), str)
+            else None
+        )
 
         # Persist per-format and per-type defaults (GAP-006)
         raw_format_defaults = body.get("format_defaults")
-        format_defaults = {k: v for k, v in raw_format_defaults.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(raw_format_defaults, dict) else {}
+        format_defaults = (
+            {
+                k: v
+                for k, v in raw_format_defaults.items()
+                if isinstance(k, str) and isinstance(v, str)
+            }
+            if isinstance(raw_format_defaults, dict)
+            else {}
+        )
 
         raw_type_defaults = body.get("type_defaults")
-        type_defaults = {k: v for k, v in raw_type_defaults.items() if isinstance(k, str) and isinstance(v, str)} if isinstance(raw_type_defaults, dict) else {}
+        type_defaults = (
+            {
+                k: v
+                for k, v in raw_type_defaults.items()
+                if isinstance(k, str) and isinstance(v, str)
+            }
+            if isinstance(raw_type_defaults, dict)
+            else {}
+        )
 
         return {
             "services": services,
@@ -1828,7 +2073,9 @@ def _non_empty_string(value: Any) -> str:
 
 
 def _normalize_validation_payload(body: dict[str, Any]) -> dict[str, Any]:
-    service_type_id = _non_empty_string(body.get("service_type")) or "custom-transit-compatible"
+    service_type_id = (
+        _non_empty_string(body.get("service_type")) or "custom-transit-compatible"
+    )
     definition = _service_type_definition(service_type_id)
 
     return {
@@ -1849,7 +2096,9 @@ def _normalize_validation_payload(body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _create_check(name: str, status: str, detail: str, source: str = "gateway") -> dict[str, str]:
+def _create_check(
+    name: str, status: str, detail: str, source: str = "gateway"
+) -> dict[str, str]:
     return {
         "name": name,
         "status": status,
@@ -1870,7 +2119,9 @@ def _requires_auth_reference(auth_mode: str) -> bool:
     }
 
 
-def _append_baseline_validation_checks(payload: dict[str, Any], checks: list[dict[str, str]]) -> None:
+def _append_baseline_validation_checks(
+    payload: dict[str, Any], checks: list[dict[str, str]]
+) -> None:
     auth_mode = payload.get("auth_mode") or ""
     auth_reference = payload.get("auth_reference") or ""
     key_reference = payload.get("key_reference") or ""
@@ -1896,9 +2147,20 @@ def _append_baseline_validation_checks(payload: dict[str, Any], checks: list[dic
         )
 
     if not key_reference:
-        checks.append(_create_check("Key reference", "fail", "Key reference is required.", source="baseline"))
+        checks.append(
+            _create_check(
+                "Key reference", "fail", "Key reference is required.", source="baseline"
+            )
+        )
     else:
-        checks.append(_create_check("Key reference", "pass", "Key reference was provided.", source="baseline"))
+        checks.append(
+            _create_check(
+                "Key reference",
+                "pass",
+                "Key reference was provided.",
+                source="baseline",
+            )
+        )
 
     if not algorithms:
         checks.append(
@@ -1950,13 +2212,17 @@ def _append_baseline_validation_checks(payload: dict[str, Any], checks: list[dic
 
 
 AWS_KMS_ARN_RE = re.compile(r"^arn:aws:kms:[a-z0-9-]+:\d{12}:key\/[A-Za-z0-9-]+$")
-AZURE_KEY_ID_RE = re.compile(r"^https:\/\/[a-z0-9-]+\.vault\.azure\.net\/keys\/[A-Za-z0-9-]+(\/[A-Za-z0-9-]+)?$")
+AZURE_KEY_ID_RE = re.compile(
+    r"^https:\/\/[a-z0-9-]+\.vault\.azure\.net\/keys\/[A-Za-z0-9-]+(\/[A-Za-z0-9-]+)?$"
+)
 GCP_KMS_KEY_RE = re.compile(
     r"^projects\/[a-z0-9-]+\/locations\/[a-z0-9-]+\/keyRings\/[A-Za-z0-9_-]+\/cryptoKeys\/[A-Za-z0-9_-]+(\/cryptoKeyVersions\/[0-9]+)?$"
 )
 
 
-def _validate_provider_key_reference(payload: dict[str, Any], checks: list[dict[str, str]]) -> None:
+def _validate_provider_key_reference(
+    payload: dict[str, Any], checks: list[dict[str, str]]
+) -> None:
     provider = payload.get("provider") or ""
     key_reference = payload.get("key_reference") or ""
 
@@ -2022,7 +2288,9 @@ def _validate_provider_key_reference(payload: dict[str, Any], checks: list[dict[
             )
 
 
-def _validate_provider_auth_mode(payload: dict[str, Any], checks: list[dict[str, str]]) -> None:
+def _validate_provider_auth_mode(
+    payload: dict[str, Any], checks: list[dict[str, str]]
+) -> None:
     provider = payload.get("provider") or ""
     auth_mode = payload.get("auth_mode") or ""
     auth_reference = payload.get("auth_reference") or ""
@@ -2113,7 +2381,9 @@ def _validate_provider_auth_mode(payload: dict[str, Any], checks: list[dict[str,
             )
 
 
-def _validate_provider_algorithm_support(payload: dict[str, Any], checks: list[dict[str, str]]) -> None:
+def _validate_provider_algorithm_support(
+    payload: dict[str, Any], checks: list[dict[str, str]]
+) -> None:
     provider = payload.get("provider") or ""
     selected_algorithms = payload.get("algorithms") or []
     if not selected_algorithms:
@@ -2128,7 +2398,11 @@ def _validate_provider_algorithm_support(payload: dict[str, Any], checks: list[d
     if not provider_supported_algorithms:
         return
 
-    unsupported = [algorithm for algorithm in selected_algorithms if algorithm not in provider_supported_algorithms]
+    unsupported = [
+        algorithm
+        for algorithm in selected_algorithms
+        if algorithm not in provider_supported_algorithms
+    ]
     if unsupported:
         checks.append(
             _create_check(
@@ -2157,7 +2431,9 @@ def _cloud_validator_url(provider: str) -> str:
     }.get(provider, "")
 
 
-async def _run_cloud_validator_probe(payload: dict[str, Any], validator_url: str) -> tuple[bool, str | None]:
+async def _run_cloud_validator_probe(
+    payload: dict[str, Any], validator_url: str
+) -> tuple[bool, str | None]:
     auth_reference = payload.get("auth_reference") or ""
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     if auth_reference:
@@ -2174,14 +2450,24 @@ async def _run_cloud_validator_probe(payload: dict[str, Any], validator_url: str
         "algorithms": payload.get("algorithms"),
     }
 
-    async with httpx.AsyncClient(base_url=validator_url.rstrip("/"), timeout=8.0, headers=headers) as client:
+    async with httpx.AsyncClient(
+        base_url=validator_url.rstrip("/"), timeout=8.0, headers=headers
+    ) as client:
         health_response = await client.get("/health")
         if health_response.status_code != 200:
-            return False, f"Validator health probe returned HTTP {health_response.status_code}."
+            return (
+                False,
+                f"Validator health probe returned HTTP {health_response.status_code}.",
+            )
 
-        validation_response = await client.post("/v1/signing/validate", json=validation_payload)
+        validation_response = await client.post(
+            "/v1/signing/validate", json=validation_payload
+        )
         if validation_response.status_code != 200:
-            return False, f"Validator sign-capability probe returned HTTP {validation_response.status_code}."
+            return (
+                False,
+                f"Validator sign-capability probe returned HTTP {validation_response.status_code}.",
+            )
 
         body = validation_response.json() if validation_response.content else {}
         if isinstance(body, dict) and body.get("ok") is True:
@@ -2191,7 +2477,9 @@ async def _run_cloud_validator_probe(payload: dict[str, Any], validator_url: str
         return False, "Validator returned a non-success response payload."
 
 
-async def _validate_transit_provider(payload: dict[str, Any], checks: list[dict[str, str]]) -> None:
+async def _validate_transit_provider(
+    payload: dict[str, Any], checks: list[dict[str, str]]
+) -> None:
     endpoint = payload.get("endpoint") or _bao_address() or ""
     mount = payload.get("mount") or "transit"
     namespace = payload.get("namespace") or ""
@@ -2231,7 +2519,9 @@ async def _validate_transit_provider(payload: dict[str, Any], checks: list[dict[
         headers["X-Vault-Namespace"] = namespace
 
     try:
-        async with httpx.AsyncClient(base_url=endpoint.rstrip("/"), timeout=6.0, headers=headers) as client:
+        async with httpx.AsyncClient(
+            base_url=endpoint.rstrip("/"), timeout=6.0, headers=headers
+        ) as client:
             health = await client.get("/v1/sys/health")
             if health.status_code in {200, 429, 472, 473, 501}:
                 checks.append(
@@ -2298,7 +2588,11 @@ async def _validate_transit_provider(payload: dict[str, Any], checks: list[dict[
                 )
                 if sign_response.status_code == 200:
                     body = sign_response.json()
-                    signature = ((body.get("data") or {}).get("signature")) if isinstance(body, dict) else None
+                    signature = (
+                        ((body.get("data") or {}).get("signature"))
+                        if isinstance(body, dict)
+                        else None
+                    )
                     if isinstance(signature, str) and signature:
                         checks.append(
                             _create_check(
@@ -2371,13 +2665,17 @@ async def _validate_transit_provider(payload: dict[str, Any], checks: list[dict[
         )
 
 
-def _append_cloud_provider_validation(payload: dict[str, Any], checks: list[dict[str, str]]) -> None:
+def _append_cloud_provider_validation(
+    payload: dict[str, Any], checks: list[dict[str, str]]
+) -> None:
     _validate_provider_key_reference(payload, checks)
     _validate_provider_auth_mode(payload, checks)
     _validate_provider_algorithm_support(payload, checks)
 
 
-async def _append_adapter_live_validation(payload: dict[str, Any], checks: list[dict[str, str]]) -> bool:
+async def _append_adapter_live_validation(
+    payload: dict[str, Any], checks: list[dict[str, str]]
+) -> bool:
     """Run live checks through a provider adapter when one is available."""
     adapter = _get_adapter(payload)
     if adapter is None:
@@ -2429,7 +2727,9 @@ async def _append_adapter_live_validation(payload: dict[str, Any], checks: list[
     return True
 
 
-async def _append_cloud_provider_live_validation(payload: dict[str, Any], checks: list[dict[str, str]]) -> None:
+async def _append_cloud_provider_live_validation(
+    payload: dict[str, Any], checks: list[dict[str, str]]
+) -> None:
     provider = payload.get("provider") or "provider"
     validator_url = _cloud_validator_url(provider)
     if not validator_url:
@@ -2464,7 +2764,9 @@ async def _append_cloud_provider_live_validation(payload: dict[str, Any], checks
         return
 
     try:
-        probe_ok, error_detail = await _run_cloud_validator_probe(payload, validator_url)
+        probe_ok, error_detail = await _run_cloud_validator_probe(
+            payload, validator_url
+        )
         if probe_ok:
             checks.append(
                 _create_check(
@@ -2541,7 +2843,10 @@ async def _append_cloud_provider_live_validation(payload: dict[str, Any], checks
             )
         )
 
-async def _run_cloud_provider_validation(payload: dict[str, Any], checks: list[dict[str, str]]) -> None:
+
+async def _run_cloud_provider_validation(
+    payload: dict[str, Any], checks: list[dict[str, str]]
+) -> None:
     _append_cloud_provider_validation(payload, checks)
     await _append_cloud_provider_live_validation(payload, checks)
 
@@ -2573,18 +2878,22 @@ async def _build_key_management_config(
     snapshot: dict[str, Any],
     registry_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    registry = registry_override or await _load_registered_service_registry(request, resolved_org_id)
+    registry = registry_override or await _load_registered_service_registry(
+        request, resolved_org_id
+    )
     registered_services = registry.get("services") if isinstance(registry, dict) else []
     writable_services = [
         normalized
-        for normalized in (_normalize_registered_service(service) for service in registered_services if isinstance(registered_services, list))
+        for normalized in (
+            _normalize_registered_service(service)
+            for service in registered_services
+            if isinstance(registered_services, list)
+        )
         if normalized
     ]
 
     key_reference_purposes = _normalize_key_reference_purposes(
-        registry.get("key_reference_purposes")
-        if isinstance(registry, dict)
-        else None
+        registry.get("key_reference_purposes") if isinstance(registry, dict) else None
     )
     services: list[dict[str, Any]] = []
     managed_openbao_service = _managed_openbao_service(
@@ -2594,25 +2903,39 @@ async def _build_key_management_config(
     )
     if managed_openbao_service:
         services.append(managed_openbao_service)
-        writable_services = [service for service in writable_services if service.get("id") != MANAGED_OPENBAO_SERVICE_ID]
+        writable_services = [
+            service
+            for service in writable_services
+            if service.get("id") != MANAGED_OPENBAO_SERVICE_ID
+        ]
     services.extend(writable_services)
-    certificate_overrides = await _service_certificate_overrides(request, resolved_org_id)
+    certificate_overrides = await _service_certificate_overrides(
+        request, resolved_org_id
+    )
     services = [
         _apply_service_certificate_override(service, certificate_overrides)
         for service in services
     ]
 
-    requested_default = registry.get("default_service_id") if isinstance(registry, dict) else None
+    requested_default = (
+        registry.get("default_service_id") if isinstance(registry, dict) else None
+    )
     default_service_id = _default_service_id(services, requested_default)
     default_service = _default_service(services, default_service_id)
-    snapshot_provider_metadata = snapshot.get("provider_metadata") or _provider_metadata(status="metadata_only", key_count=0)
+    snapshot_provider_metadata = snapshot.get(
+        "provider_metadata"
+    ) or _provider_metadata(status="metadata_only", key_count=0)
 
     return {
         "hsm_enabled": bool(services),
-        "hsm_settings": _legacy_hsm_settings_from_default_service(default_service, snapshot),
+        "hsm_settings": _legacy_hsm_settings_from_default_service(
+            default_service, snapshot
+        ),
         "vault_enabled": False,
         "vault_settings": {},
-        "provider_metadata": _provider_metadata_from_default_service(snapshot_provider_metadata, default_service),
+        "provider_metadata": _provider_metadata_from_default_service(
+            snapshot_provider_metadata, default_service
+        ),
         "domain_config": _domain_config(request),
         "supports_native_key_management": False,
         "registration_mode": "external-only",
@@ -2633,27 +2956,45 @@ async def _resolve_effective_service(
     registry = await _load_registered_service_registry(request, resolved_org_id)
     raw_services = registry.get("services") if isinstance(registry, dict) else []
     service = next(
-        (candidate for candidate in raw_services if isinstance(candidate, dict) and candidate.get("id") == service_id),
+        (
+            candidate
+            for candidate in raw_services
+            if isinstance(candidate, dict) and candidate.get("id") == service_id
+        ),
         None,
     )
     from_registry = service is not None
 
     if service is None:
         snapshot = await _load_signing_key_snapshot(resolved_org_id)
-        config = await _build_key_management_config(request, resolved_org_id, snapshot, registry_override=registry)
+        config = await _build_key_management_config(
+            request, resolved_org_id, snapshot, registry_override=registry
+        )
         config_services = config.get("services") if isinstance(config, dict) else []
         service = next(
-            (candidate for candidate in config_services if isinstance(candidate, dict) and candidate.get("id") == service_id),
+            (
+                candidate
+                for candidate in config_services
+                if isinstance(candidate, dict) and candidate.get("id") == service_id
+            ),
             None,
         )
 
     if service is None:
-        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Service '{service_id}' not found."
+        )
 
-    certificate_overrides = await _service_certificate_overrides(request, resolved_org_id)
-    effective_service = _apply_service_certificate_override(service, certificate_overrides)
+    certificate_overrides = await _service_certificate_overrides(
+        request, resolved_org_id
+    )
+    effective_service = _apply_service_certificate_override(
+        service, certificate_overrides
+    )
     if effective_service.get("id") == MANAGED_OPENBAO_SERVICE_ID:
-        effective_service["endpoint"] = effective_service.get("endpoint") or (_bao_address() or "")
+        effective_service["endpoint"] = effective_service.get("endpoint") or (
+            _bao_address() or ""
+        )
         effective_service["mount"] = effective_service.get("mount") or "transit"
         if effective_service.get("auth_mode") == "service_token":
             # Keep the config payload free of secrets, but use the real token for
@@ -2664,8 +3005,13 @@ async def _resolve_effective_service(
         effective_service["key_reference"] = key_reference_override.strip()
         key_aliases = _dedupe_strings(effective_service.get("key_aliases"))
         if key_reference_override.strip() not in key_aliases:
-            effective_service["key_aliases"] = [key_reference_override.strip(), *key_aliases]
-        effective_service["key_count"] = max(int(effective_service.get("key_count", 0) or 0), 1)
+            effective_service["key_aliases"] = [
+                key_reference_override.strip(),
+                *key_aliases,
+            ]
+        effective_service["key_count"] = max(
+            int(effective_service.get("key_count", 0) or 0), 1
+        )
 
     normalized = _normalize_registered_service(effective_service)
     if normalized is None:
@@ -2678,7 +3024,9 @@ async def _load_signing_key_snapshot(resolved_org_id: str | None) -> dict[str, A
     if not _has_openbao_access():
         return {
             "keys": [],
-            "provider_metadata": _provider_metadata(status="metadata_only", key_count=0),
+            "provider_metadata": _provider_metadata(
+                status="metadata_only", key_count=0
+            ),
             "config": {
                 "hsm_enabled": False,
                 "hsm_settings": {},
@@ -2689,17 +3037,26 @@ async def _load_signing_key_snapshot(resolved_org_id: str | None) -> dict[str, A
         }
 
     try:
-        listed_keys = await _openbao_get_json("/v1/transit/keys", params={"list": "true"})
+        listed_keys = await _openbao_get_json(
+            "/v1/transit/keys", params={"list": "true"}
+        )
         key_names = listed_keys.get("data", {}).get("keys", [])
-        signing_key_names = [key_name for key_name in key_names if _looks_like_signing_key(key_name)]
+        signing_key_names = [
+            key_name for key_name in key_names if _looks_like_signing_key(key_name)
+        ]
 
         key_responses = await asyncio.gather(
-            *[_openbao_get_json(f"/v1/transit/keys/{key_name}") for key_name in signing_key_names]
+            *[
+                _openbao_get_json(f"/v1/transit/keys/{key_name}")
+                for key_name in signing_key_names
+            ]
         )
         keys = sorted(
             [
                 _normalize_openbao_signing_key(key_name, key_response.get("data", {}))
-                for key_name, key_response in zip(signing_key_names, key_responses, strict=False)
+                for key_name, key_response in zip(
+                    signing_key_names, key_responses, strict=False
+                )
             ],
             key=_sort_key_record,
         )
@@ -2721,7 +3078,9 @@ async def _load_signing_key_snapshot(resolved_org_id: str | None) -> dict[str, A
 
         return {
             "keys": keys,
-            "provider_metadata": _provider_metadata(status="configured", key_count=len(keys)),
+            "provider_metadata": _provider_metadata(
+                status="configured", key_count=len(keys)
+            ),
             "config": config,
             "message": None,
         }
@@ -2743,7 +3102,9 @@ async def _load_signing_key_snapshot(resolved_org_id: str | None) -> dict[str, A
         }
         return {
             "keys": [],
-            "provider_metadata": _provider_metadata(status="degraded", key_count=0, error=str(exc)),
+            "provider_metadata": _provider_metadata(
+                status="degraded", key_count=0, error=str(exc)
+            ),
             "config": config,
             "message": "OpenBao signing-key inventory could not be loaded.",
         }
@@ -2752,7 +3113,9 @@ async def _load_signing_key_snapshot(resolved_org_id: str | None) -> dict[str, A
 @signing_key_router.get("", summary="List Signing Keys")
 async def list_signing_keys(
     request: Request,
-    organization_id: str | None = Query(None, description="Optional organization scope"),
+    organization_id: str | None = Query(
+        None, description="Optional organization scope"
+    ),
 ):
     """Return signing-key metadata and inventory from the configured OpenBao transit service."""
     resolved_org_id = _resolve_org_id(request, organization_id)
@@ -2806,7 +3169,10 @@ async def _create_managed_openbao_transit_key(
         )
 
     if not endpoint or not token:
-        raise HTTPException(status_code=503, detail="Managed OpenBao access is not configured for the gateway.")
+        raise HTTPException(
+            status_code=503,
+            detail="Managed OpenBao access is not configured for the gateway.",
+        )
 
     async def create_key() -> None:
         await _openbao_post_json(
@@ -2845,12 +3211,18 @@ async def _create_managed_openbao_transit_key(
                 await create_key()
             except httpx.HTTPStatusError as retry_exc:
                 retry_detail = _httpx_error_detail(retry_exc)
-                retry_status_code = retry_exc.response.status_code if retry_exc.response is not None else 0
+                retry_status_code = (
+                    retry_exc.response.status_code
+                    if retry_exc.response is not None
+                    else 0
+                )
                 if _is_openbao_existing_key_error(retry_status_code, retry_detail):
                     return await read_existing_key()
 
                 raise HTTPException(
-                    status_code=400 if retry_status_code and retry_status_code < 500 else 502,
+                    status_code=400
+                    if retry_status_code and retry_status_code < 500
+                    else 502,
                     detail=f"OpenBao could not create transit key '{key_reference}' after enabling mount: {retry_detail}",
                 ) from retry_exc
 
@@ -2861,7 +3233,9 @@ async def _create_managed_openbao_transit_key(
             detail=f"OpenBao could not create transit key '{key_reference}': {detail}",
         ) from exc
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Managed OpenBao key creation failed: {exc}") from exc
+        raise HTTPException(
+            status_code=503, detail=f"Managed OpenBao key creation failed: {exc}"
+        ) from exc
 
     created = await _openbao_get_json(
         f"/v1/{mount}/keys/{key_reference}",
@@ -2876,55 +3250,83 @@ async def _create_managed_openbao_transit_key(
 async def create_signing_key(
     request: Request,
     body: dict = Body(default_factory=dict),
-    organization_id: str | None = Query(None, description="Optional organization scope"),
+    organization_id: str | None = Query(
+        None, description="Optional organization scope"
+    ),
 ):
     """Create a new managed OpenBao transit signing key for the active organization."""
     resolved_org_id = _resolve_org_id(request, organization_id)
 
-    requested_name = body.get("name") if isinstance(body.get("name"), str) else body.get("key_name")
+    requested_name = (
+        body.get("name") if isinstance(body.get("name"), str) else body.get("key_name")
+    )
     if not isinstance(requested_name, str) or not requested_name.strip():
         raise HTTPException(status_code=422, detail="name is required.")
 
-    algorithm = body.get("algorithm") if isinstance(body.get("algorithm"), str) else "ES256"
+    algorithm = (
+        body.get("algorithm") if isinstance(body.get("algorithm"), str) else "ES256"
+    )
     if algorithm not in SUPPORTED_SIGNING_ALGORITHMS:
-        raise HTTPException(status_code=422, detail=f"Unsupported algorithm '{algorithm}'.")
+        raise HTTPException(
+            status_code=422, detail=f"Unsupported algorithm '{algorithm}'."
+        )
 
-    key_purpose = body.get("key_purpose") if isinstance(body.get("key_purpose"), str) else "vc_jwt_issuer"
+    key_purpose = (
+        body.get("key_purpose")
+        if isinstance(body.get("key_purpose"), str)
+        else "vc_jwt_issuer"
+    )
     if key_purpose not in KEY_PURPOSES:
-        raise HTTPException(status_code=422, detail=f"Unsupported key_purpose '{key_purpose}'.")
+        raise HTTPException(
+            status_code=422, detail=f"Unsupported key_purpose '{key_purpose}'."
+        )
     if key_purpose == "lti_tool_signing" and algorithm != "RS256":
         raise HTTPException(
             status_code=422,
             detail="lti_tool_signing keys must use RS256.",
         )
 
-    service_id = body.get("service_id") if isinstance(body.get("service_id"), str) else None
+    service_id = (
+        body.get("service_id") if isinstance(body.get("service_id"), str) else None
+    )
     if not service_id:
         snapshot = await _load_signing_key_snapshot(resolved_org_id)
         config = await _build_key_management_config(request, resolved_org_id, snapshot)
-        service_id = config.get("default_service_id") if isinstance(config.get("default_service_id"), str) else None
+        service_id = (
+            config.get("default_service_id")
+            if isinstance(config.get("default_service_id"), str)
+            else None
+        )
 
     if not service_id:
-        raise HTTPException(status_code=400, detail="No signing service is configured for this organization.")
+        raise HTTPException(
+            status_code=400,
+            detail="No signing service is configured for this organization.",
+        )
 
-    _, _, normalized_service, _ = await _resolve_effective_service(request, resolved_org_id, service_id)
+    _, _, normalized_service, _ = await _resolve_effective_service(
+        request, resolved_org_id, service_id
+    )
     if service_id != MANAGED_OPENBAO_SERVICE_ID:
         raise HTTPException(
             status_code=400,
             detail="Gateway-managed key creation is currently supported only for the managed OpenBao transit service.",
         )
 
-    provider_key_name = _normalize_requested_openbao_key_name(requested_name, key_purpose, algorithm)
-    registry = await _load_registered_service_registry(request, resolved_org_id)
-    bindings = _normalize_key_reference_purposes(
-        registry.get("key_reference_purposes")
+    provider_key_name = _normalize_requested_openbao_key_name(
+        requested_name, key_purpose, algorithm
     )
+    registry = await _load_registered_service_registry(request, resolved_org_id)
+    bindings = _normalize_key_reference_purposes(registry.get("key_reference_purposes"))
     service_bindings = dict(bindings.get(service_id, {}))
     existing_purposes = service_bindings.get(provider_key_name, [])
-    if existing_purposes and (
-        "lti_tool_signing" in existing_purposes
-        or key_purpose == "lti_tool_signing"
-    ) and existing_purposes != [key_purpose]:
+    if (
+        existing_purposes
+        and (
+            "lti_tool_signing" in existing_purposes or key_purpose == "lti_tool_signing"
+        )
+        and existing_purposes != [key_purpose]
+    ):
         raise HTTPException(
             status_code=409,
             detail=(
@@ -2932,7 +3334,9 @@ async def create_signing_key(
                 "purpose and cannot be reused for LTI tool signing."
             ),
         )
-    created_key_details = await _create_managed_openbao_transit_key(normalized_service, provider_key_name, algorithm)
+    created_key_details = await _create_managed_openbao_transit_key(
+        normalized_service, provider_key_name, algorithm
+    )
     created_key = _normalize_openbao_signing_key(provider_key_name, created_key_details)
     created_key["name"] = requested_name.strip()
     created_key["service_id"] = service_id
@@ -2960,7 +3364,9 @@ async def create_signing_key(
 @signing_key_router.get("/config", summary="Get Signing Key Management Config")
 async def get_signing_key_config(
     request: Request,
-    organization_id: str | None = Query(None, description="Optional organization scope"),
+    organization_id: str | None = Query(
+        None, description="Optional organization scope"
+    ),
 ):
     """Return the signing-key service registry and the managed OpenBao connection if present."""
     resolved_org_id = _resolve_org_id(request, organization_id)
@@ -2974,13 +3380,18 @@ async def get_signing_key_config(
 async def update_signing_key_config(
     request: Request,
     body: dict = Body(default_factory=dict),
-    organization_id: str | None = Query(None, description="Optional organization scope"),
+    organization_id: str | None = Query(
+        None, description="Optional organization scope"
+    ),
 ):
     """Persist the external signing-key service registry for the active organization."""
     resolved_org_id = _resolve_org_id(request, organization_id)
 
     current_registry = await _load_registered_service_registry(request, resolved_org_id)
-    registry_override = _normalize_requested_registry(body) or {"services": [], "default_service_id": None}
+    registry_override = _normalize_requested_registry(body) or {
+        "services": [],
+        "default_service_id": None,
+    }
     if "key_reference_purposes" not in body:
         # The console edits service registrations independently of managed key
         # bindings.  Never erase the per-key authorization boundary just
@@ -3004,7 +3415,9 @@ async def update_signing_key_config(
     return JSONResponse(content=config)
 
 
-@signing_key_router.post("/config/validate", summary="Validate Signing Key Management Service")
+@signing_key_router.post(
+    "/config/validate", summary="Validate Signing Key Management Service"
+)
 async def validate_signing_key_service(
     request: Request,
     body: dict = Body(default_factory=dict),
@@ -3018,9 +3431,16 @@ async def validate_signing_key_service(
         resolved_org_id = _resolve_org_id(request, organization_id)
         registry = await _load_registered_service_registry(request, resolved_org_id)
         services = registry.get("services") if isinstance(registry, dict) else []
-        service_idx = next((i for i, s in enumerate(services) if s.get("id") == body["service_id"]), None)
+        service_idx = next(
+            (i for i, s in enumerate(services) if s.get("id") == body["service_id"]),
+            None,
+        )
         if service_idx is not None:
-            capabilities = result.get("capabilities") if isinstance(result.get("capabilities"), dict) else {}
+            capabilities = (
+                result.get("capabilities")
+                if isinstance(result.get("capabilities"), dict)
+                else {}
+            )
             discovered = {
                 "connectivity": True,
                 "provider_validation": True,
@@ -3028,7 +3448,9 @@ async def validate_signing_key_service(
                 "supports_rotation": bool(capabilities.get("rotate_keys")),
                 "supports_discovery": bool(capabilities.get("discover_keys")),
             }
-            services[service_idx]["discovered_capabilities"] = _merge_discovered_capabilities(services[service_idx], discovered)
+            services[service_idx]["discovered_capabilities"] = (
+                _merge_discovered_capabilities(services[service_idx], discovered)
+            )
             services[service_idx]["updated_at"] = _utcnow_iso()
             registry["services"] = services
             await _save_registered_service_registry(request, resolved_org_id, registry)
@@ -3036,7 +3458,9 @@ async def validate_signing_key_service(
     return JSONResponse(content=result)
 
 
-@signing_key_router.post("/config/resolve", summary="Resolve Signing Service for Format/Purpose")
+@signing_key_router.post(
+    "/config/resolve", summary="Resolve Signing Service for Format/Purpose"
+)
 async def resolve_signing_service(
     request: Request,
     body: dict = Body(default_factory=dict),
@@ -3055,11 +3479,21 @@ async def resolve_signing_service(
     resolved_org_id = _resolve_org_id(request, organization_id)
     registry = await _load_registered_service_registry(request, resolved_org_id)
 
-    credential_format = body.get("credential_format") if isinstance(body.get("credential_format"), str) else None
-    key_purpose = body.get("key_purpose") if isinstance(body.get("key_purpose"), str) else None
-    algorithm = body.get("algorithm") if isinstance(body.get("algorithm"), str) else None
+    credential_format = (
+        body.get("credential_format")
+        if isinstance(body.get("credential_format"), str)
+        else None
+    )
+    key_purpose = (
+        body.get("key_purpose") if isinstance(body.get("key_purpose"), str) else None
+    )
+    algorithm = (
+        body.get("algorithm") if isinstance(body.get("algorithm"), str) else None
+    )
 
-    service = _resolve_service_for_format(registry, credential_format, key_purpose, algorithm)
+    service = _resolve_service_for_format(
+        registry, credential_format, key_purpose, algorithm
+    )
     if service is None:
         raise HTTPException(
             status_code=404,
@@ -3091,7 +3525,10 @@ async def resolve_signing_service(
         service["key_reference"] = resolved_key_reference
 
     mdoc_hints = None
-    if key_purpose in {"mdoc_dsc", "vdsnc_signing", "csca"} or credential_format in {"mso_mdoc", "zk_mdoc"}:
+    if key_purpose in {"mdoc_dsc", "vdsnc_signing", "csca"} or credential_format in {
+        "mso_mdoc",
+        "zk_mdoc",
+    }:
         x5c = _service_x5c_chain(service)
         if x5c:
             mdoc_hints = {
@@ -3100,15 +3537,17 @@ async def resolve_signing_service(
                 "key_reference": service.get("key_reference"),
             }
 
-    return JSONResponse(content={
-        "service": service,
-        "resolved_by": {
-            "credential_format": credential_format,
-            "key_purpose": key_purpose,
-            "algorithm": algorithm,
-        },
-        "mdoc_signing_hints": mdoc_hints,
-    })
+    return JSONResponse(
+        content={
+            "service": service,
+            "resolved_by": {
+                "credential_format": credential_format,
+                "key_purpose": key_purpose,
+                "algorithm": algorithm,
+            },
+            "mdoc_signing_hints": mdoc_hints,
+        }
+    )
 
 
 @signing_key_router.get("/config/purposes", summary="List Available Key Purposes")
@@ -3118,11 +3557,15 @@ async def list_key_purposes(request: Request):
     return await proxy_request(request, service_url, "/v1/signing-keys/config/purposes")
 
 
-@signing_key_router.get("/config/service-capabilities", summary="List Provider Capability Metadata")
+@signing_key_router.get(
+    "/config/service-capabilities", summary="List Provider Capability Metadata"
+)
 async def list_service_capabilities(request: Request):
     """Return canonical provider capabilities from the signing-keys service."""
     service_url = get_registry().get_service_url("signing-keys")
-    return await proxy_request(request, service_url, "/v1/signing-keys/config/service-capabilities")
+    return await proxy_request(
+        request, service_url, "/v1/signing-keys/config/service-capabilities"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -3172,24 +3615,40 @@ async def _generate_csr_from_service(
         serialization.load_pem_public_key(public_key_pem.encode(), default_backend())
 
         # Build subject name
-        service_name = service_config.get("name") or service_config.get("key_reference") or "Marty Signing Key"
-        subject = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, service_name),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Marty Credential Platform"),
-        ])
+        service_name = (
+            service_config.get("name")
+            or service_config.get("key_reference")
+            or "Marty Signing Key"
+        )
+        subject = x509.Name(
+            [
+                x509.NameAttribute(NameOID.COMMON_NAME, service_name),
+                x509.NameAttribute(
+                    NameOID.ORGANIZATION_NAME, "Marty Credential Platform"
+                ),
+            ]
+        )
 
         # Build enough context to prove the key is reachable. CSR signing for
         # remote KMS keys requires a provider-specific Sign operation and DER
         # CSR assembly, which is not implemented for this route yet.
         builder = x509.CertificateSigningRequestBuilder()
         builder = builder.subject_name(subject)
-        builder = builder.add_extension(x509.SubjectAlternativeName([x509.UniformResourceIdentifier("urn:marty:kms")]), critical=False)
+        builder = builder.add_extension(
+            x509.SubjectAlternativeName(
+                [x509.UniformResourceIdentifier("urn:marty:kms")]
+            ),
+            critical=False,
+        )
         return None
     except Exception:  # noqa: BLE001
         return None
 
 
-@signing_key_router.post("/services/{service_id}/certificate-csr", summary="Generate Certificate Signing Request")
+@signing_key_router.post(
+    "/services/{service_id}/certificate-csr",
+    summary="Generate Certificate Signing Request",
+)
 async def generate_csr(
     request: Request,
     service_id: str,
@@ -3206,7 +3665,9 @@ async def generate_csr(
     services = registry.get("services") if isinstance(registry, dict) else []
     service = next((s for s in services if s.get("id") == service_id), None)
     if service is None:
-        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Service '{service_id}' not found."
+        )
 
     normalized = _normalize_registered_service(service)
     if normalized is None:
@@ -3233,7 +3694,9 @@ async def generate_csr(
     )
 
 
-@signing_key_router.put("/services/{service_id}/certificate", summary="Store Certificate for Service")
+@signing_key_router.put(
+    "/services/{service_id}/certificate", summary="Store Certificate for Service"
+)
 async def store_service_certificate(
     request: Request,
     service_id: str,
@@ -3244,7 +3707,11 @@ async def store_service_certificate(
     resolved_org_id = _resolve_org_id(request, organization_id)
 
     cert_pem = body.get("cert_pem") if isinstance(body.get("cert_pem"), str) else None
-    cert_chain_pem = body.get("cert_chain_pem") if isinstance(body.get("cert_chain_pem"), str) else None
+    cert_chain_pem = (
+        body.get("cert_chain_pem")
+        if isinstance(body.get("cert_chain_pem"), str)
+        else None
+    )
 
     if not cert_pem:
         raise HTTPException(status_code=400, detail="cert_pem is required.")
@@ -3258,7 +3725,9 @@ async def store_service_certificate(
         service_id,
     )
     services = registry.get("services") if isinstance(registry, dict) else []
-    service_idx = next((i for i, s in enumerate(services) if s.get("id") == service_id), None)
+    service_idx = next(
+        (i for i, s in enumerate(services) if s.get("id") == service_id), None
+    )
 
     updated_at = _utcnow_iso()
     attachment = {
@@ -3292,7 +3761,9 @@ async def store_service_certificate(
         registry["services"] = services
         await _save_registered_service_registry(request, resolved_org_id, registry)
 
-    normalized = _apply_service_certificate_override(normalized, {service_id: attachment})
+    normalized = _apply_service_certificate_override(
+        normalized, {service_id: attachment}
+    )
     return JSONResponse(
         content={
             "ok": True,
@@ -3305,7 +3776,9 @@ async def store_service_certificate(
     )
 
 
-@signing_key_router.get("/services/{service_id}/certificate", summary="Retrieve Service Certificate")
+@signing_key_router.get(
+    "/services/{service_id}/certificate", summary="Retrieve Service Certificate"
+)
 async def get_service_certificate(
     request: Request,
     service_id: str,
@@ -3320,7 +3793,9 @@ async def get_service_certificate(
         service_id,
     )
     if not normalized or not normalized.get("cert_pem"):
-        raise HTTPException(status_code=404, detail=f"No certificate stored for service '{service_id}'.")
+        raise HTTPException(
+            status_code=404, detail=f"No certificate stored for service '{service_id}'."
+        )
 
     return JSONResponse(
         content={
@@ -3332,10 +3807,15 @@ async def get_service_certificate(
     )
 
 
-@signing_key_router.get("/config/certificate-expiry-alerts", summary="List Services with Expiring Certificates")
+@signing_key_router.get(
+    "/config/certificate-expiry-alerts",
+    summary="List Services with Expiring Certificates",
+)
 async def list_certificate_expiry_alerts(
     request: Request,
-    days_until_expiry: int = Query(30, description="Alert if certificate expires within this many days"),
+    days_until_expiry: int = Query(
+        30, description="Alert if certificate expires within this many days"
+    ),
     organization_id: str | None = Query(None),
 ):
     """Return services whose certificates expire within the specified days threshold."""
@@ -3360,17 +3840,21 @@ async def list_certificate_expiry_alerts(
             cert_expires_at = svc.get("cert_expires_at")
             if cert_expires_at:
                 try:
-                    expiry_dt = datetime.fromisoformat(cert_expires_at.replace("Z", "+00:00"))
+                    expiry_dt = datetime.fromisoformat(
+                        cert_expires_at.replace("Z", "+00:00")
+                    )
                     if expiry_dt <= expiry_threshold:
                         # Don't require normalization - we have what we need
                         days_left = (expiry_dt - now).days
-                        alerts.append({
-                            "service_id": svc.get("id"),
-                            "service_name": svc.get("name"),
-                            "cert_expires_at": cert_expires_at,
-                            "days_until_expiry": max(0, days_left),
-                            "status": "critical" if days_left <= 7 else "warning",
-                        })
+                        alerts.append(
+                            {
+                                "service_id": svc.get("id"),
+                                "service_name": svc.get("name"),
+                                "cert_expires_at": cert_expires_at,
+                                "days_until_expiry": max(0, days_left),
+                                "status": "critical" if days_left <= 7 else "warning",
+                            }
+                        )
                 except ValueError:
                     pass
 
@@ -3388,7 +3872,9 @@ async def list_certificate_expiry_alerts(
 # ---------------------------------------------------------------------------
 
 
-@signing_key_router.post("/services/{service_id}/publish-jwks", summary="Publish Service Public Key to JWKS")
+@signing_key_router.post(
+    "/services/{service_id}/publish-jwks", summary="Publish Service Public Key to JWKS"
+)
 async def publish_service_to_jwks(
     request: Request,
     service_id: str,
@@ -3403,7 +3889,11 @@ async def publish_service_to_jwks(
     resolved_org_id = _resolve_org_id(request, organization_id)
 
     safe_body = body if isinstance(body, dict) else {}
-    key_reference_override = safe_body.get("key_reference") if isinstance(safe_body.get("key_reference"), str) else None
+    key_reference_override = (
+        safe_body.get("key_reference")
+        if isinstance(safe_body.get("key_reference"), str)
+        else None
+    )
     registry, _, normalized, from_registry = await _resolve_effective_service(
         request,
         resolved_org_id,
@@ -3414,19 +3904,31 @@ async def publish_service_to_jwks(
     # Fetch public key via adapter
     adapter = _get_adapter(normalized)
     if adapter is None:
-        raise HTTPException(status_code=400, detail=f"No adapter found for service type '{normalized.get('service_type')}'.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"No adapter found for service type '{normalized.get('service_type')}'.",
+        )
 
     try:
         raw_jwk = await adapter.get_public_key_jwk(normalized)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=503, detail=f"Failed to fetch public key from KMS: {str(e)}")
+        raise HTTPException(
+            status_code=503, detail=f"Failed to fetch public key from KMS: {str(e)}"
+        )
 
-    key_reference = normalized.get("key_reference") if isinstance(normalized.get("key_reference"), str) else None
+    key_reference = (
+        normalized.get("key_reference")
+        if isinstance(normalized.get("key_reference"), str)
+        else None
+    )
     jwk = _extract_public_jwk(raw_jwk, key_reference_hint=key_reference)
     if not jwk and isinstance(raw_jwk, dict):
         jwk = dict(raw_jwk)
     if not jwk:
-        raise HTTPException(status_code=503, detail="Provider did not return a usable public key for JWKS publication.")
+        raise HTTPException(
+            status_code=503,
+            detail="Provider did not return a usable public key for JWKS publication.",
+        )
 
     discovered = {
         "public_key_export": True,
@@ -3435,9 +3937,13 @@ async def publish_service_to_jwks(
     }
 
     services = registry.get("services") if isinstance(registry, dict) else []
-    service_idx = next((i for i, s in enumerate(services) if s.get("id") == service_id), None)
+    service_idx = next(
+        (i for i, s in enumerate(services) if s.get("id") == service_id), None
+    )
     if from_registry and service_idx is not None:
-        services[service_idx]["discovered_capabilities"] = _merge_discovered_capabilities(services[service_idx], discovered)
+        services[service_idx]["discovered_capabilities"] = (
+            _merge_discovered_capabilities(services[service_idx], discovered)
+        )
         services[service_idx]["updated_at"] = _utcnow_iso()
         registry["services"] = services
         await _save_registered_service_registry(request, resolved_org_id, registry)
@@ -3447,13 +3953,11 @@ async def publish_service_to_jwks(
         _jwks_storage_key(resolved_org_id),
         {"keys": [], "organization_id": resolved_org_id, "updated_at": _utcnow_iso()},
     )
-    existing_keys = jwks_doc.get("keys") if isinstance(jwks_doc.get("keys"), list) else []
-
-    kid = (
-        jwk.get("kid")
-        or normalized.get("key_reference")
-        or service_id
+    existing_keys = (
+        jwks_doc.get("keys") if isinstance(jwks_doc.get("keys"), list) else []
     )
+
+    kid = jwk.get("kid") or normalized.get("key_reference") or service_id
     stored_jwk = dict(jwk)
     stored_jwk["kid"] = kid
     stored_jwk["service_id"] = service_id
@@ -3492,7 +3996,10 @@ async def publish_service_to_jwks(
     )
 
 
-@signing_key_router.post("/services/{service_id}/publish-did-vm", summary="Publish Service Public Key to DID Document")
+@signing_key_router.post(
+    "/services/{service_id}/publish-did-vm",
+    summary="Publish Service Public Key to DID Document",
+)
 async def publish_service_to_did(
     request: Request,
     service_id: str,
@@ -3514,7 +4021,11 @@ async def publish_service_to_did(
     """
     resolved_org_id = _resolve_org_id(request, organization_id)
 
-    key_reference_override = body.get("key_reference") if isinstance(body.get("key_reference"), str) else None
+    key_reference_override = (
+        body.get("key_reference")
+        if isinstance(body.get("key_reference"), str)
+        else None
+    )
     registry, _, normalized, from_registry = await _resolve_effective_service(
         request,
         resolved_org_id,
@@ -3525,52 +4036,83 @@ async def publish_service_to_did(
     # Fetch public key via adapter
     adapter = _get_adapter(normalized)
     if adapter is None:
-        raise HTTPException(status_code=400, detail=f"No adapter found for service type '{normalized.get('service_type')}'.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"No adapter found for service type '{normalized.get('service_type')}'.",
+        )
 
     try:
         raw_jwk = await adapter.get_public_key_jwk(normalized)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=503, detail=f"Failed to fetch public key from KMS: {str(e)}")
+        raise HTTPException(
+            status_code=503, detail=f"Failed to fetch public key from KMS: {str(e)}"
+        )
 
-    key_reference = normalized.get("key_reference") if isinstance(normalized.get("key_reference"), str) else None
+    key_reference = (
+        normalized.get("key_reference")
+        if isinstance(normalized.get("key_reference"), str)
+        else None
+    )
     jwk = _extract_public_jwk(raw_jwk, key_reference_hint=key_reference)
     if not jwk and isinstance(raw_jwk, dict):
         jwk = dict(raw_jwk)
     if not jwk:
-        raise HTTPException(status_code=503, detail="Provider did not return a usable public key for DID publication.")
+        raise HTTPException(
+            status_code=503,
+            detail="Provider did not return a usable public key for DID publication.",
+        )
 
     # --- Resolve DID identifier ---------------------------------------------------
     # Only an exact DID on this gateway's configured did:web domain may claim a
     # local public slug. External and root DIDs remain publishable without a
     # local mapping for compatibility.
-    configured_public_domain = _normalize_did_web_domain(_domain_config(request).get("public_domain"))
+    configured_public_domain = _normalize_did_web_domain(
+        _domain_config(request).get("public_domain")
+    )
     if not configured_public_domain:
-        raise HTTPException(status_code=503, detail="PUBLIC_DOMAIN is not a valid did:web domain.")
+        raise HTTPException(
+            status_code=503, detail="PUBLIC_DOMAIN is not a valid did:web domain."
+        )
 
     raw_did_id = body.get("did_id")
     if raw_did_id is not None and (
-        not isinstance(raw_did_id, str) or not raw_did_id or raw_did_id != raw_did_id.strip()
+        not isinstance(raw_did_id, str)
+        or not raw_did_id
+        or raw_did_id != raw_did_id.strip()
     ):
-        raise HTTPException(status_code=422, detail="did_id must be a non-empty DID without surrounding whitespace.")
+        raise HTTPException(
+            status_code=422,
+            detail="did_id must be a non-empty DID without surrounding whitespace.",
+        )
     did_id = raw_did_id
 
     raw_org_slug = body.get("org_slug")
     if raw_org_slug is not None and (
         not isinstance(raw_org_slug, str) or not _SLUG_PATTERN.fullmatch(raw_org_slug)
     ):
-        raise HTTPException(status_code=422, detail="org_slug must contain only letters, numbers, '.', '_' or '-'.")
+        raise HTTPException(
+            status_code=422,
+            detail="org_slug must contain only letters, numbers, '.', '_' or '-'.",
+        )
     org_slug = raw_org_slug.lower() if isinstance(raw_org_slug, str) else None
 
     if not did_id:
         org_slug = org_slug or resolved_org_id.lower()
         if not _SLUG_PATTERN.fullmatch(org_slug):
-            raise HTTPException(status_code=422, detail="Organization ID cannot be used as a did:web slug.")
+            raise HTTPException(
+                status_code=422,
+                detail="Organization ID cannot be used as a did:web slug.",
+            )
         did_domain = configured_public_domain.replace(":", "%3A")
         did_id = f"did:web:{did_domain}:orgs:{org_slug}"
     elif did_id.startswith("did:web:"):
         local_slug = _did_web_org_slug(did_id, public_domain=configured_public_domain)
         did_domain = _did_web_domain(did_id)
-        if did_domain == configured_public_domain and len(did_id.split(":")) != 3 and local_slug is None:
+        if (
+            did_domain == configured_public_domain
+            and len(did_id.split(":")) != 3
+            and local_slug is None
+        ):
             raise HTTPException(
                 status_code=422,
                 detail="Local did:web identifiers must use did:web:<PUBLIC_DOMAIN>:orgs:<slug>.",
@@ -3582,10 +4124,15 @@ async def publish_service_to_did(
             )
         org_slug = org_slug or local_slug
     elif org_slug is not None:
-        raise HTTPException(status_code=422, detail="org_slug is only valid for a local path-scoped did:web identifier.")
+        raise HTTPException(
+            status_code=422,
+            detail="org_slug is only valid for a local path-scoped did:web identifier.",
+        )
 
     # Build verification method structure
-    vm_id = body.get("fragment") or _did_fragment_for_key_reference(service_id, key_reference)
+    vm_id = body.get("fragment") or _did_fragment_for_key_reference(
+        service_id, key_reference
+    )
     verification_method = {
         "id": f"{did_id}#{vm_id}",
         "type": "JsonWebKey",
@@ -3606,9 +4153,13 @@ async def publish_service_to_did(
         "has_x5c": bool(x5c),
     }
     services = registry.get("services") if isinstance(registry, dict) else []
-    service_idx = next((i for i, s in enumerate(services) if s.get("id") == service_id), None)
+    service_idx = next(
+        (i for i, s in enumerate(services) if s.get("id") == service_id), None
+    )
     if from_registry and service_idx is not None:
-        services[service_idx]["discovered_capabilities"] = _merge_discovered_capabilities(services[service_idx], discovered)
+        services[service_idx]["discovered_capabilities"] = (
+            _merge_discovered_capabilities(services[service_idx], discovered)
+        )
         services[service_idx]["updated_at"] = _utcnow_iso()
         registry["services"] = services
         await _save_registered_service_registry(request, resolved_org_id, registry)
@@ -3629,12 +4180,24 @@ async def publish_service_to_did(
     did_doc["id"] = did_id
     did_doc["controller"] = did_id
 
-    methods = did_doc.get("verificationMethod") if isinstance(did_doc.get("verificationMethod"), list) else []
-    methods = [m for m in methods if not (isinstance(m, dict) and m.get("id") == verification_method["id"])]
+    methods = (
+        did_doc.get("verificationMethod")
+        if isinstance(did_doc.get("verificationMethod"), list)
+        else []
+    )
+    methods = [
+        m
+        for m in methods
+        if not (isinstance(m, dict) and m.get("id") == verification_method["id"])
+    ]
     methods.append(verification_method)
     did_doc["verificationMethod"] = methods
 
-    assertion = did_doc.get("assertionMethod") if isinstance(did_doc.get("assertionMethod"), list) else []
+    assertion = (
+        did_doc.get("assertionMethod")
+        if isinstance(did_doc.get("assertionMethod"), list)
+        else []
+    )
     assertion = [entry for entry in assertion if entry != verification_method["id"]]
     assertion.append(verification_method["id"])
     did_doc["assertionMethod"] = assertion
@@ -3697,7 +4260,9 @@ async def get_organization_did_document(
     return JSONResponse(content=did_doc)
 
 
-@signing_key_router.get("/services/{service_id}/mdoc-x5c", summary="Get mDoc X.509 Header Material")
+@signing_key_router.get(
+    "/services/{service_id}/mdoc-x5c", summary="Get mDoc X.509 Header Material"
+)
 async def get_mdoc_x5c_material(
     request: Request,
     service_id: str,
@@ -3709,7 +4274,9 @@ async def get_mdoc_x5c_material(
     services = registry.get("services") if isinstance(registry, dict) else []
     service = next((s for s in services if s.get("id") == service_id), None)
     if service is None:
-        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Service '{service_id}' not found."
+        )
 
     normalized = _normalize_registered_service(service)
     if normalized is None:
@@ -3717,7 +4284,10 @@ async def get_mdoc_x5c_material(
 
     x5c = _service_x5c_chain(normalized)
     if not x5c:
-        raise HTTPException(status_code=404, detail=f"No certificate chain stored for service '{service_id}'.")
+        raise HTTPException(
+            status_code=404,
+            detail=f"No certificate chain stored for service '{service_id}'.",
+        )
 
     return JSONResponse(
         content={
@@ -3732,7 +4302,9 @@ async def get_mdoc_x5c_material(
     )
 
 
-@signing_key_router.post("/services/{service_id}/sign", summary="Sign Payload Using Service Key")
+@signing_key_router.post(
+    "/services/{service_id}/sign", summary="Sign Payload Using Service Key"
+)
 async def sign_payload_with_service(
     request: Request,
     service_id: str,
@@ -3779,9 +4351,15 @@ async def sign_payload_with_service(
             raise HTTPException(status_code=400, detail=f"Invalid payload_hex: {exc}")
 
     if not payload_bytes:
-        raise HTTPException(status_code=400, detail="Either payload_b64 or payload_hex is required")
+        raise HTTPException(
+            status_code=400, detail="Either payload_b64 or payload_hex is required"
+        )
 
-    key_reference_override = body.get("key_reference") if isinstance(body.get("key_reference"), str) else None
+    key_reference_override = (
+        body.get("key_reference")
+        if isinstance(body.get("key_reference"), str)
+        else None
+    )
     registry, service, normalized, _ = await _resolve_effective_service(
         request,
         resolved_org_id,
@@ -3795,9 +4373,7 @@ async def sign_payload_with_service(
     # was registered for it.  This prevents credential-issuer keys from being
     # reused as protocol/client-assertion keys merely by knowing a service ID.
     key_purpose = (
-        body.get("key_purpose")
-        if isinstance(body.get("key_purpose"), str)
-        else None
+        body.get("key_purpose") if isinstance(body.get("key_purpose"), str) else None
     )
     requested_key_reference = (
         key_reference_override.strip()
@@ -3813,10 +4389,7 @@ async def sign_payload_with_service(
         if requested_key_reference
         else []
     )
-    if (
-        "lti_tool_signing" in reference_purposes
-        and key_purpose != "lti_tool_signing"
-    ):
+    if "lti_tool_signing" in reference_purposes and key_purpose != "lti_tool_signing":
         raise HTTPException(
             status_code=409,
             detail=(
@@ -3833,7 +4406,10 @@ async def sign_payload_with_service(
         service_purposes = normalized.get("key_purposes")
         if not isinstance(service_purposes, list):
             service_purposes = service.get("key_purposes")
-        if not isinstance(service_purposes, list) or key_purpose not in service_purposes:
+        if (
+            not isinstance(service_purposes, list)
+            or key_purpose not in service_purposes
+        ):
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -3882,11 +4458,21 @@ async def sign_payload_with_service(
                 )
 
     # Validate algorithm if specified
-    service_algorithms = _normalize_algorithm_list(normalized.get("algorithms")) or _normalize_algorithm_list(service.get("algorithms"))
-    service_algorithm = algorithm if algorithm in service_algorithms else (service_algorithms[0] if service_algorithms else "ES256")
+    service_algorithms = _normalize_algorithm_list(
+        normalized.get("algorithms")
+    ) or _normalize_algorithm_list(service.get("algorithms"))
+    service_algorithm = (
+        algorithm
+        if algorithm in service_algorithms
+        else (service_algorithms[0] if service_algorithms else "ES256")
+    )
     if algorithm:
         if algorithm != service_algorithm:
-            allowed_algorithms = service_algorithms or service.get("supported_algorithms") or [service_algorithm]
+            allowed_algorithms = (
+                service_algorithms
+                or service.get("supported_algorithms")
+                or [service_algorithm]
+            )
             if algorithm not in allowed_algorithms:
                 raise HTTPException(
                     status_code=400,
@@ -3898,35 +4484,57 @@ async def sign_payload_with_service(
     # Get adapter and sign
     adapter = _get_adapter(normalized)
     if adapter is None:
-        raise HTTPException(status_code=400, detail=f"No adapter found for service type '{service.get('service_type')}'.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"No adapter found for service type '{service.get('service_type')}'.",
+        )
 
     try:
         signature_bytes = await adapter.sign(normalized, payload_bytes)
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code if exc.response is not None else 0
-        key_reference = normalized.get("key_reference") if isinstance(normalized.get("key_reference"), str) else ""
-        service_type = str(normalized.get("service_type") or service.get("service_type") or "")
+        key_reference = (
+            normalized.get("key_reference")
+            if isinstance(normalized.get("key_reference"), str)
+            else ""
+        )
+        service_type = str(
+            normalized.get("service_type") or service.get("service_type") or ""
+        )
         can_auto_create_managed_key = (
             service_id == MANAGED_OPENBAO_SERVICE_ID
             and status_code == 404
-            and service_type in {"openbao-transit", "hashicorp-vault-transit", "custom-transit-compatible"}
+            and service_type
+            in {
+                "openbao-transit",
+                "hashicorp-vault-transit",
+                "custom-transit-compatible",
+            }
             and key_reference
         )
         if not can_auto_create_managed_key:
-            raise HTTPException(status_code=503, detail=f"Signing failed: {_httpx_error_detail(exc)}") from exc
+            raise HTTPException(
+                status_code=503, detail=f"Signing failed: {_httpx_error_detail(exc)}"
+            ) from exc
 
         logger.warning(
             "Managed OpenBao key %s was missing during sign for org=%s; creating and retrying once.",
             key_reference,
             resolved_org_id,
         )
-        await _create_managed_openbao_transit_key(normalized, key_reference, algorithm or service_algorithm)
+        await _create_managed_openbao_transit_key(
+            normalized, key_reference, algorithm or service_algorithm
+        )
         try:
             signature_bytes = await adapter.sign(normalized, payload_bytes)
         except Exception as retry_exc:  # noqa: BLE001
-            raise HTTPException(status_code=503, detail=f"Signing retry failed: {str(retry_exc)}") from retry_exc
+            raise HTTPException(
+                status_code=503, detail=f"Signing retry failed: {str(retry_exc)}"
+            ) from retry_exc
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=503, detail=f"Signing failed: {str(exc)}") from exc
+        raise HTTPException(
+            status_code=503, detail=f"Signing failed: {str(exc)}"
+        ) from exc
 
     # Determine signature encoding from adapter
     signature_encoding = getattr(adapter, "signature_encoding", "der")
@@ -3937,8 +4545,11 @@ async def sign_payload_with_service(
     if signature_encoding == "der":
         try:
             # Infer key size from algorithm
-            key_size_bytes = 32 if algorithm in {"ES256"} else (48 if algorithm in {"ES384"} else 32)
+            key_size_bytes = (
+                32 if algorithm in {"ES256"} else (48 if algorithm in {"ES384"} else 32)
+            )
             from gateway.kms_adapters import der_to_raw_ecdsa
+
             signature_transcoded = der_to_raw_ecdsa(signature_bytes, key_size_bytes)
         except Exception:  # noqa: BLE001
             # If transcoding fails, just return DER; caller can handle it
@@ -3958,18 +4569,27 @@ async def sign_payload_with_service(
 
     # Add transcoded signature if available
     if signature_transcoded:
-        response_data["signature_raw_b64"] = base64.urlsafe_b64encode(signature_transcoded).decode().rstrip("=")
+        response_data["signature_raw_b64"] = (
+            base64.urlsafe_b64encode(signature_transcoded).decode().rstrip("=")
+        )
         response_data["signature_raw_hex"] = signature_transcoded.hex()
 
     return JSONResponse(content=response_data)
 
 
-@internal_signing_key_router.get("/issuer-context", summary="Resolve Active Issuer Profile")
+@internal_signing_key_router.get(
+    "/issuer-context", summary="Resolve Active Issuer Profile"
+)
 async def internal_resolve_issuer_context(
     request: Request,
     organization_id: str = Query(..., description="Organization ID"),
-    issuer_profile_id: str | None = Query(None, description="Explicit issuer profile ID to use"),
-    issuer_mode: str = Query("org_managed", description="Issuer mode to select when issuer_profile_id is omitted"),
+    issuer_profile_id: str | None = Query(
+        None, description="Explicit issuer profile ID to use"
+    ),
+    issuer_mode: str = Query(
+        "org_managed",
+        description="Issuer mode to select when issuer_profile_id is omitted",
+    ),
     credential_format: str | None = Query(None),
     key_purpose: str | None = Query(None),
     algorithm: str | None = Query(None),
@@ -4000,7 +4620,14 @@ async def internal_resolve_issuer_context(
     ]
 
     if issuer_profile_id:
-        selected = next((profile for profile in active_profiles if profile.get("id") == issuer_profile_id), None)
+        selected = next(
+            (
+                profile
+                for profile in active_profiles
+                if profile.get("id") == issuer_profile_id
+            ),
+            None,
+        )
         if selected is None:
             raise HTTPException(
                 status_code=404,
@@ -4019,7 +4646,8 @@ async def internal_resolve_issuer_context(
         active_profiles = [
             profile
             for profile in active_profiles
-            if _normalize_issuer_mode(profile.get("issuer_mode")) == requested_issuer_mode
+            if _normalize_issuer_mode(profile.get("issuer_mode"))
+            == requested_issuer_mode
         ]
 
     if key_purpose:
@@ -4042,7 +4670,11 @@ async def internal_resolve_issuer_context(
     profile = active_profiles[0]
     profile_issuer_mode = _normalize_issuer_mode(profile.get("issuer_mode"))
     service_id = str(profile["signing_service_id"])
-    key_reference = profile.get("signing_key_reference") if isinstance(profile.get("signing_key_reference"), str) else None
+    key_reference = (
+        profile.get("signing_key_reference")
+        if isinstance(profile.get("signing_key_reference"), str)
+        else None
+    )
     registry, _, normalized, _ = await _resolve_effective_service(
         request,
         organization_id,
@@ -4052,9 +4684,9 @@ async def internal_resolve_issuer_context(
 
     requested_purpose = key_purpose or profile.get("key_purpose")
     effective_profile = dict(profile)
-    effective_profile["signing_key_reference"] = (
-        profile.get("signing_key_reference") or normalized.get("key_reference")
-    )
+    effective_profile["signing_key_reference"] = profile.get(
+        "signing_key_reference"
+    ) or normalized.get("key_reference")
     effective_profile["key_purpose"] = requested_purpose or "vc_jwt_issuer"
     _assert_issuer_profile_key_compatible(effective_profile, registry)
     # mDoc issuer authentication uses an X.509 chain in the protected COSE
@@ -4063,7 +4695,9 @@ async def internal_resolve_issuer_context(
     # claim or inferred by the issuance service.
     mdoc_x5c = _service_x5c_chain(normalized)
     if credential_format or requested_purpose or algorithm:
-        resolved = _resolve_service_for_format(registry, credential_format, requested_purpose, algorithm)
+        resolved = _resolve_service_for_format(
+            registry, credential_format, requested_purpose, algorithm
+        )
         if resolved is not None and resolved.get("id") != service_id:
             logger.info(
                 "Issuer profile service %s differs from format resolver %s for org=%s format=%s purpose=%s",
@@ -4082,12 +4716,20 @@ async def internal_resolve_issuer_context(
             "issuer_mode": profile_issuer_mode,
             "issuer_did": profile.get("issuer_did"),
             "signing_service_id": service_id,
-            "signing_key_reference": profile.get("signing_key_reference") or normalized.get("key_reference"),
-            "verification_method_id": profile.get("verification_method_id") or _normalize_did_verification_method_id(
+            "signing_key_reference": profile.get("signing_key_reference")
+            or normalized.get("key_reference"),
+            "verification_method_id": profile.get("verification_method_id")
+            or _normalize_did_verification_method_id(
                 str(profile.get("issuer_did") or ""),
-                _did_fragment_for_key_reference(service_id, profile.get("signing_key_reference") or normalized.get("key_reference")),
+                _did_fragment_for_key_reference(
+                    service_id,
+                    profile.get("signing_key_reference")
+                    or normalized.get("key_reference"),
+                ),
             ),
-            "key_purpose": profile.get("key_purpose") or requested_purpose or "vc_jwt_issuer",
+            "key_purpose": profile.get("key_purpose")
+            or requested_purpose
+            or "vc_jwt_issuer",
             "mdoc_x5c": mdoc_x5c,
             "issuer_profile": profile,
             "service": normalized,
@@ -4095,12 +4737,16 @@ async def internal_resolve_issuer_context(
     )
 
 
-@internal_signing_key_router.get("/resolve-issuer-did", summary="Resolve Issuer DID Through Org Registry")
+@internal_signing_key_router.get(
+    "/resolve-issuer-did", summary="Resolve Issuer DID Through Org Registry"
+)
 async def internal_resolve_issuer_did(
     request: Request,
     organization_id: str = Query(..., description="Organization ID"),
     issuer_did: str = Query(..., description="Issuer DID from the credential"),
-    verification_method_id: str | None = Query(None, description="Expected DID verification method / kid"),
+    verification_method_id: str | None = Query(
+        None, description="Expected DID verification method / kid"
+    ),
     credential_format: str | None = Query(None),
     key_purpose: str | None = Query(None),
     algorithm: str | None = Query(None),
@@ -4127,7 +4773,9 @@ async def internal_resolve_issuer_did(
     return JSONResponse(content=resolved)
 
 
-@internal_signing_key_router.post("/services/{service_id}/sign", summary="Sign Payload Using Service Key")
+@internal_signing_key_router.post(
+    "/services/{service_id}/sign", summary="Sign Payload Using Service Key"
+)
 async def internal_sign_payload_with_service(
     request: Request,
     service_id: str,
@@ -4145,11 +4793,294 @@ async def internal_sign_payload_with_service(
     )
 
 
+async def _resolve_exact_issuer_profile_identity(
+    request: Request,
+    *,
+    organization_id: str,
+    issuer_profile_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    profiles_doc = await _load_json_document(
+        request,
+        _issuer_profiles_storage_key(organization_id),
+        {"profiles": []},
+    )
+    profiles = profiles_doc.get("profiles") if isinstance(profiles_doc, dict) else []
+    profile = next(
+        (
+            candidate
+            for candidate in (profiles or [])
+            if isinstance(candidate, dict)
+            and candidate.get("id") == issuer_profile_id
+            and candidate.get("status") == "active"
+        ),
+        None,
+    )
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Active issuer profile not found.")
+
+    issuer_did = str(profile.get("issuer_did") or "")
+    key_purpose = str(profile.get("key_purpose") or "")
+    algorithm = str(profile.get("algorithm") or "ES256")
+    if (
+        not issuer_did
+        or not profile.get("signing_service_id")
+        or not profile.get("signing_key_reference")
+        or not key_purpose
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Issuer profile has an incomplete signing identity binding.",
+        )
+    identity = await _resolve_org_scoped_issuer_identity(
+        request,
+        organization_id=organization_id,
+        issuer_did=issuer_did,
+        verification_method_id=(
+            str(profile.get("verification_method_id"))
+            if profile.get("verification_method_id")
+            else None
+        ),
+        key_purpose=key_purpose,
+        algorithm=algorithm,
+    )
+    resolved_profile = identity.get("issuer_profile")
+    if (
+        not isinstance(resolved_profile, dict)
+        or resolved_profile.get("id") != issuer_profile_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Issuer profile DID binding resolved to a different identity.",
+        )
+    return profile, identity
+
+
+@internal_signing_key_router.get(
+    "/issuer-profiles/{issuer_profile_id}/identity",
+    summary="Resolve Issuer Profile Identity",
+)
+async def internal_get_issuer_profile_identity(
+    request: Request,
+    issuer_profile_id: str,
+    organization_id: str = Query(..., description="Organization scope"),
+    x_api_key: str | None = Header(default=None),
+):
+    """Return only the public DID material needed by a protocol service."""
+    _require_internal_signing_key_api_key(x_api_key)
+    profile, identity = await _resolve_exact_issuer_profile_identity(
+        request,
+        organization_id=organization_id,
+        issuer_profile_id=issuer_profile_id,
+    )
+    return JSONResponse(
+        content={
+            "issuer_profile_id": issuer_profile_id,
+            "issuer_did": identity["issuer_did"],
+            "verification_method_id": identity["verification_method_id"],
+            "public_jwk": identity["public_jwk"],
+            "did_document": identity["did_document"],
+            "key_purpose": profile["key_purpose"],
+            "algorithm": profile.get("algorithm") or "ES256",
+        }
+    )
+
+
+@internal_signing_key_router.post(
+    "/flow-key-envelopes/wrap",
+    summary="Wrap Per-Flow Private Key Material",
+)
+async def internal_wrap_flow_key(
+    body: dict = Body(default_factory=dict),
+    organization_id: str = Query(..., description="Organization scope"),
+    x_api_key: str | None = Header(default=None),
+):
+    """Persist per-flow key material only as KMS-authenticated ciphertext."""
+    _require_internal_signing_key_api_key(x_api_key)
+    flow_instance_id = str(body.get("flow_instance_id") or "").strip()
+    plaintext_b64 = str(body.get("plaintext_b64") or "").strip()
+    if not flow_instance_id or not plaintext_b64:
+        raise HTTPException(
+            status_code=422, detail="flow_instance_id and plaintext_b64 are required."
+        )
+    try:
+        plaintext = base64.urlsafe_b64decode(
+            plaintext_b64 + "=" * (-len(plaintext_b64) % 4)
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=422, detail="plaintext_b64 is invalid."
+        ) from exc
+    if not plaintext or len(plaintext) > 16_384:
+        raise HTTPException(
+            status_code=422, detail="Flow key material has an invalid size."
+        )
+    envelope = json.dumps(
+        {
+            "schema": "marty.flow-key-envelope/v1",
+            "organization_id": organization_id,
+            "flow_instance_id": flow_instance_id,
+            "purpose": "oid4vp_response_decryption",
+            "plaintext_b64": plaintext_b64,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    try:
+        response = await _openbao_post_json(
+            f"/v1/transit/encrypt/{_FLOW_ENVELOPE_KEY_ID}",
+            {"plaintext": base64.b64encode(envelope).decode("ascii")},
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503, detail="KMS flow-key wrapping failed."
+        ) from exc
+    ciphertext = (response.get("data") or {}).get("ciphertext")
+    if not isinstance(ciphertext, str) or not ciphertext.startswith("vault:"):
+        raise HTTPException(
+            status_code=503, detail="KMS returned an invalid flow-key envelope."
+        )
+    return JSONResponse(
+        content={
+            "schema": "marty.flow-key-envelope/v1",
+            "flow_instance_id": flow_instance_id,
+            "ciphertext": ciphertext,
+        }
+    )
+
+
+@internal_signing_key_router.post(
+    "/flow-key-envelopes/unwrap",
+    summary="Unwrap Per-Flow Private Key Material",
+)
+async def internal_unwrap_flow_key(
+    body: dict = Body(default_factory=dict),
+    organization_id: str = Query(..., description="Organization scope"),
+    x_api_key: str | None = Header(default=None),
+):
+    """Unwrap key material only when its organization and flow binding match."""
+    _require_internal_signing_key_api_key(x_api_key)
+    flow_instance_id = str(body.get("flow_instance_id") or "").strip()
+    ciphertext = str(body.get("ciphertext") or "").strip()
+    if not flow_instance_id or not ciphertext.startswith("vault:"):
+        raise HTTPException(
+            status_code=422, detail="flow_instance_id and KMS ciphertext are required."
+        )
+    try:
+        response = await _openbao_post_json(
+            f"/v1/transit/decrypt/{_FLOW_ENVELOPE_KEY_ID}",
+            {"ciphertext": ciphertext},
+        )
+        encoded = (response.get("data") or {}).get("plaintext")
+        envelope = json.loads(base64.b64decode(encoded))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=400, detail="KMS flow-key envelope could not be decrypted."
+        ) from exc
+    if (
+        not isinstance(envelope, dict)
+        or envelope.get("schema") != "marty.flow-key-envelope/v1"
+        or envelope.get("organization_id") != organization_id
+        or envelope.get("flow_instance_id") != flow_instance_id
+        or envelope.get("purpose") != "oid4vp_response_decryption"
+        or not isinstance(envelope.get("plaintext_b64"), str)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="KMS flow-key envelope binding does not match this flow.",
+        )
+    return JSONResponse(
+        content={
+            "schema": "marty.flow-key-envelope/v1",
+            "flow_instance_id": flow_instance_id,
+            "plaintext_b64": envelope["plaintext_b64"],
+        }
+    )
+
+
+@internal_signing_key_router.post(
+    "/issuer-profiles/{issuer_profile_id}/sign",
+    summary="Sign Payload Through Issuer Profile Identity",
+)
+async def internal_sign_payload_with_issuer_profile(
+    request: Request,
+    issuer_profile_id: str,
+    body: dict = Body(default_factory=dict),
+    organization_id: str = Query(..., description="Organization scope"),
+    x_api_key: str | None = Header(default=None),
+):
+    """Sign through an active issuer profile and its published DID.
+
+    Callers select an identity profile, never a KMS service or provider key.
+    The gateway owns profile-to-KMS resolution and returns the DID verification
+    method used for the signature.  A caller cannot override the service, key
+    reference, purpose, or algorithm bound to the profile.
+    """
+    _require_internal_signing_key_api_key(x_api_key)
+    profile, identity = await _resolve_exact_issuer_profile_identity(
+        request,
+        organization_id=organization_id,
+        issuer_profile_id=issuer_profile_id,
+    )
+    service_id = str(profile.get("signing_service_id") or "")
+    key_reference = str(profile.get("signing_key_reference") or "")
+    key_purpose = str(profile.get("key_purpose") or "")
+    algorithm = str(profile.get("algorithm") or body.get("algorithm") or "ES256")
+
+    requested_algorithm = body.get("algorithm")
+    if requested_algorithm and requested_algorithm != algorithm:
+        raise HTTPException(
+            status_code=409,
+            detail="Signing algorithm must match the issuer profile binding.",
+        )
+    if body.get("key_reference") or body.get("key_purpose") or body.get("service_id"):
+        raise HTTPException(
+            status_code=422,
+            detail="Issuer-profile signing does not accept KMS routing overrides.",
+        )
+
+    signing_body = {
+        key: value
+        for key, value in body.items()
+        if key in {"payload_b64", "payload_hex"}
+    }
+    signing_body.update(
+        {
+            "algorithm": algorithm,
+            "key_reference": key_reference,
+            "key_purpose": key_purpose,
+        }
+    )
+    signed_response = await sign_payload_with_service(
+        request=request,
+        service_id=service_id,
+        body=signing_body,
+        organization_id=organization_id,
+    )
+    signed = json.loads(signed_response.body)
+    signed.update(
+        {
+            "issuer_profile_id": issuer_profile_id,
+            "issuer_did": identity["issuer_did"],
+            "verification_method_id": identity["verification_method_id"],
+            "public_jwk": identity["public_jwk"],
+        }
+    )
+    signed.pop("service_id", None)
+    return JSONResponse(content=signed)
+
+
 async def _rotate_openbao_transit_key(service: dict[str, Any]) -> dict[str, Any]:
     endpoint = (service.get("endpoint") or _bao_address() or "").rstrip("/")
-    token = _bao_token() if service.get("auth_mode") == "service_token" else (service.get("auth_reference") or _bao_token())
+    token = (
+        _bao_token()
+        if service.get("auth_mode") == "service_token"
+        else (service.get("auth_reference") or _bao_token())
+    )
     if not endpoint or not token:
-        return {"ok": False, "error": "Transit endpoint or token unavailable for rotation."}
+        return {
+            "ok": False,
+            "error": "Transit endpoint or token unavailable for rotation.",
+        }
 
     mount = service.get("mount") or "transit"
     key_reference = service.get("key_reference")
@@ -4161,10 +5092,15 @@ async def _rotate_openbao_transit_key(service: dict[str, Any]) -> dict[str, Any]
     if isinstance(namespace, str) and namespace.strip():
         headers["X-Vault-Namespace"] = namespace
 
-    async with httpx.AsyncClient(base_url=endpoint, timeout=8.0, headers=headers) as client:
+    async with httpx.AsyncClient(
+        base_url=endpoint, timeout=8.0, headers=headers
+    ) as client:
         rotate_response = await client.post(f"/v1/{mount}/keys/{key_reference}/rotate")
         if rotate_response.status_code not in {200, 204}:
-            return {"ok": False, "error": f"Rotation call failed with HTTP {rotate_response.status_code}."}
+            return {
+                "ok": False,
+                "error": f"Rotation call failed with HTTP {rotate_response.status_code}.",
+            }
 
         read_response = await client.get(f"/v1/{mount}/keys/{key_reference}")
         if read_response.status_code != 200:
@@ -4176,7 +5112,9 @@ async def _rotate_openbao_transit_key(service: dict[str, Any]) -> dict[str, Any]
         return {"ok": True, "version": latest_version}
 
 
-@signing_key_router.post("/services/{service_id}/rotate", summary="Rotate Signing Service Key")
+@signing_key_router.post(
+    "/services/{service_id}/rotate", summary="Rotate Signing Service Key"
+)
 async def rotate_service_key(
     request: Request,
     service_id: str,
@@ -4185,23 +5123,46 @@ async def rotate_service_key(
 ):
     """Rotate a signing key with overlap and optional publication refresh."""
     resolved_org_id = _resolve_org_id(request, organization_id)
-    registry, service, normalized, from_registry = await _resolve_effective_service(request, resolved_org_id, service_id)
+    registry, service, normalized, from_registry = await _resolve_effective_service(
+        request, resolved_org_id, service_id
+    )
 
     overlap_days = int(body.get("overlap_days", 7) or 7)
-    activate_at = body.get("activate_at") if isinstance(body.get("activate_at"), str) else _utcnow_iso()
+    activate_at = (
+        body.get("activate_at")
+        if isinstance(body.get("activate_at"), str)
+        else _utcnow_iso()
+    )
     publish_updates = bool(body.get("publish_updates", True))
 
-    provider_rotation = {"ok": False, "error": "No provider rotation adapter available."}
-    if normalized.get("service_type") in {"openbao-transit", "hashicorp-vault-transit", "custom-transit-compatible"}:
+    provider_rotation = {
+        "ok": False,
+        "error": "No provider rotation adapter available.",
+    }
+    if normalized.get("service_type") in {
+        "openbao-transit",
+        "hashicorp-vault-transit",
+        "custom-transit-compatible",
+    }:
         provider_rotation = await _rotate_openbao_transit_key(normalized)
 
-    rotation_state = service.get("rotation_state") if isinstance(service.get("rotation_state"), dict) else {}
-    previous = rotation_state.get("previous_versions") if isinstance(rotation_state.get("previous_versions"), list) else []
+    rotation_state = (
+        service.get("rotation_state")
+        if isinstance(service.get("rotation_state"), dict)
+        else {}
+    )
+    previous = (
+        rotation_state.get("previous_versions")
+        if isinstance(rotation_state.get("previous_versions"), list)
+        else []
+    )
     if normalized.get("key_reference"):
         previous.append(
             {
                 "key_reference": normalized.get("key_reference"),
-                "retire_after": (datetime.now(timezone.utc) + timedelta(days=overlap_days)).isoformat(),
+                "retire_after": (
+                    datetime.now(timezone.utc) + timedelta(days=overlap_days)
+                ).isoformat(),
                 "recorded_at": _utcnow_iso(),
             }
         )
@@ -4217,7 +5178,11 @@ async def rotate_service_key(
     )
 
     service["rotation_state"] = rotation_state
-    policy = service.get("rotation_policy") if isinstance(service.get("rotation_policy"), dict) else {}
+    policy = (
+        service.get("rotation_policy")
+        if isinstance(service.get("rotation_policy"), dict)
+        else {}
+    )
     service["rotation_policy"] = {
         "rotation_interval_days": int(policy.get("rotation_interval_days", 0) or 0),
         "overlap_days": overlap_days,
@@ -4226,7 +5191,9 @@ async def rotate_service_key(
     service["updated_at"] = _utcnow_iso()
     if from_registry:
         services = registry.get("services") if isinstance(registry, dict) else []
-        service_idx = next((i for i, s in enumerate(services) if s.get("id") == service_id), None)
+        service_idx = next(
+            (i for i, s in enumerate(services) if s.get("id") == service_id), None
+        )
         if service_idx is not None:
             services[service_idx] = service
             registry["services"] = services
@@ -4235,12 +5202,19 @@ async def rotate_service_key(
     publication = {"jwks": False, "did": False}
     if publish_updates:
         try:
-            await publish_service_to_jwks(request=request, service_id=service_id, organization_id=resolved_org_id)
+            await publish_service_to_jwks(
+                request=request, service_id=service_id, organization_id=resolved_org_id
+            )
             publication["jwks"] = True
         except Exception:
             publication["jwks"] = False
         try:
-            await publish_service_to_did(request=request, service_id=service_id, body={}, organization_id=resolved_org_id)
+            await publish_service_to_did(
+                request=request,
+                service_id=service_id,
+                body={},
+                organization_id=resolved_org_id,
+            )
             publication["did"] = True
         except Exception:
             publication["did"] = False
@@ -4265,15 +5239,29 @@ async def register_holder_key(
 ):
     """Register a wallet-supplied holder binding or presentation key descriptor."""
     resolved_org_id = _resolve_org_id(request, organization_id)
-    key_purpose = body.get("key_purpose") if isinstance(body.get("key_purpose"), str) else "holder_binding"
+    key_purpose = (
+        body.get("key_purpose")
+        if isinstance(body.get("key_purpose"), str)
+        else "holder_binding"
+    )
     if key_purpose not in {"holder_binding", "presentation_signing"}:
-        raise HTTPException(status_code=422, detail="key_purpose must be holder_binding or presentation_signing")
+        raise HTTPException(
+            status_code=422,
+            detail="key_purpose must be holder_binding or presentation_signing",
+        )
 
     device_id = body.get("device_id") if isinstance(body.get("device_id"), str) else ""
-    credential_id = body.get("credential_id") if isinstance(body.get("credential_id"), str) else ""
-    public_jwk = body.get("public_jwk") if isinstance(body.get("public_jwk"), dict) else None
+    credential_id = (
+        body.get("credential_id") if isinstance(body.get("credential_id"), str) else ""
+    )
+    public_jwk = (
+        body.get("public_jwk") if isinstance(body.get("public_jwk"), dict) else None
+    )
     if not device_id or not credential_id or not public_jwk:
-        raise HTTPException(status_code=422, detail="device_id, credential_id, and public_jwk are required")
+        raise HTTPException(
+            status_code=422,
+            detail="device_id, credential_id, and public_jwk are required",
+        )
 
     holder_doc = await _load_json_document(
         request,
@@ -4282,7 +5270,9 @@ async def register_holder_key(
     )
     records = holder_doc.get("keys") if isinstance(holder_doc.get("keys"), list) else []
     record_id = f"holder:{device_id}:{credential_id}:{key_purpose}"
-    records = [r for r in records if not (isinstance(r, dict) and r.get("id") == record_id)]
+    records = [
+        r for r in records if not (isinstance(r, dict) and r.get("id") == record_id)
+    ]
     records.append(
         {
             "id": record_id,
@@ -4295,9 +5285,13 @@ async def register_holder_key(
     )
     holder_doc["keys"] = records
     holder_doc["updated_at"] = _utcnow_iso()
-    await _save_json_document(request, _holder_keys_storage_key(resolved_org_id), holder_doc)
+    await _save_json_document(
+        request, _holder_keys_storage_key(resolved_org_id), holder_doc
+    )
 
-    return JSONResponse(content={"ok": True, "record_id": record_id, "registered_at": _utcnow_iso()})
+    return JSONResponse(
+        content={"ok": True, "record_id": record_id, "registered_at": _utcnow_iso()}
+    )
 
 
 @signing_key_router.get("/holder-keys", summary="List Holder/Presentation Keys")
@@ -4314,11 +5308,17 @@ async def list_holder_keys(
     )
     records = holder_doc.get("keys") if isinstance(holder_doc.get("keys"), list) else []
     if device_id:
-        records = [r for r in records if isinstance(r, dict) and r.get("device_id") == device_id]
+        records = [
+            r
+            for r in records
+            if isinstance(r, dict) and r.get("device_id") == device_id
+        ]
     return JSONResponse(content={"organization_id": resolved_org_id, "keys": records})
 
 
-@signing_key_router.post("/holder-keys/derive", summary="Derive Holder Binding Key Reference")
+@signing_key_router.post(
+    "/holder-keys/derive", summary="Derive Holder Binding Key Reference"
+)
 async def derive_holder_key_reference(
     request: Request,
     body: dict = Body(default_factory=dict),
@@ -4327,9 +5327,13 @@ async def derive_holder_key_reference(
     """Expose deterministic holder-binding key derivation for server-managed wallet flows."""
     _resolve_org_id(request, organization_id)
     device_id = body.get("device_id") if isinstance(body.get("device_id"), str) else ""
-    credential_id = body.get("credential_id") if isinstance(body.get("credential_id"), str) else ""
+    credential_id = (
+        body.get("credential_id") if isinstance(body.get("credential_id"), str) else ""
+    )
     if not device_id or not credential_id:
-        raise HTTPException(status_code=422, detail="device_id and credential_id are required")
+        raise HTTPException(
+            status_code=422, detail="device_id and credential_id are required"
+        )
 
     try:
         from marty_common.crypto.credential_kms import CredentialKeyPrefix  # type: ignore
@@ -4350,7 +5354,9 @@ async def derive_holder_key_reference(
     )
 
 
-@signing_key_router.post("/services/vdsnc/register", summary="Register VDS-NC Signing Service")
+@signing_key_router.post(
+    "/services/vdsnc/register", summary="Register VDS-NC Signing Service"
+)
 async def register_vdsnc_service(
     request: Request,
     body: dict = Body(default_factory=dict),
@@ -4358,19 +5364,39 @@ async def register_vdsnc_service(
 ):
     """Register a namespaced VDS-NC signer entry in the service registry."""
     resolved_org_id = _resolve_org_id(request, organization_id)
-    country_code = (body.get("country_code") or "").strip().upper() if isinstance(body.get("country_code"), str) else ""
-    authority_name = (body.get("authority_name") or "").strip() if isinstance(body.get("authority_name"), str) else ""
-    role = (body.get("role") or "dsc").strip().lower() if isinstance(body.get("role"), str) else "dsc"
+    country_code = (
+        (body.get("country_code") or "").strip().upper()
+        if isinstance(body.get("country_code"), str)
+        else ""
+    )
+    authority_name = (
+        (body.get("authority_name") or "").strip()
+        if isinstance(body.get("authority_name"), str)
+        else ""
+    )
+    role = (
+        (body.get("role") or "dsc").strip().lower()
+        if isinstance(body.get("role"), str)
+        else "dsc"
+    )
     generation = int(body.get("generation", 1) or 1)
-    key_reference = (body.get("key_reference") or "").strip() if isinstance(body.get("key_reference"), str) else ""
+    key_reference = (
+        (body.get("key_reference") or "").strip()
+        if isinstance(body.get("key_reference"), str)
+        else ""
+    )
     if not country_code or not authority_name:
-        raise HTTPException(status_code=422, detail="country_code and authority_name are required")
+        raise HTTPException(
+            status_code=422, detail="country_code and authority_name are required"
+        )
 
     if not key_reference:
         try:
             from marty_common.crypto.credential_kms import CredentialKeyPrefix  # type: ignore
 
-            key_reference = CredentialKeyPrefix.vdsnc_key_id(country_code, role, generation)
+            key_reference = CredentialKeyPrefix.vdsnc_key_id(
+                country_code, role, generation
+            )
         except Exception:
             key_reference = f"cred:vdsnc:{country_code}:{role}:{generation}"
 
@@ -4401,16 +5427,24 @@ async def register_vdsnc_service(
         }
     )
     if new_service is None:
-        raise HTTPException(status_code=400, detail="Failed to normalize VDS-NC service registration")
+        raise HTTPException(
+            status_code=400, detail="Failed to normalize VDS-NC service registration"
+        )
 
-    services = [s for s in services if not (isinstance(s, dict) and s.get("id") == new_service["id"])]
+    services = [
+        s
+        for s in services
+        if not (isinstance(s, dict) and s.get("id") == new_service["id"])
+    ]
     services.append(new_service)
     registry["services"] = services
     if not registry.get("default_service_id"):
         registry["default_service_id"] = new_service["id"]
     await _save_registered_service_registry(request, resolved_org_id, registry)
 
-    return JSONResponse(content={"ok": True, "service": new_service, "registered_at": _utcnow_iso()})
+    return JSONResponse(
+        content={"ok": True, "service": new_service, "registered_at": _utcnow_iso()}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -4418,7 +5452,9 @@ async def register_vdsnc_service(
 # ---------------------------------------------------------------------------
 
 
-@signing_key_router.get("/services/{service_id}/verify-current", summary="Verify Current Public Key")
+@signing_key_router.get(
+    "/services/{service_id}/verify-current", summary="Verify Current Public Key"
+)
 async def verify_service_public_key(
     request: Request,
     service_id: str,
@@ -4438,7 +5474,9 @@ async def verify_service_public_key(
     services = registry.get("services") if isinstance(registry, dict) else []
     service = next((s for s in services if s.get("id") == service_id), None)
     if service is None:
-        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Service '{service_id}' not found."
+        )
 
     normalized = _normalize_registered_service(service)
     if normalized is None:
@@ -4447,19 +5485,31 @@ async def verify_service_public_key(
     # Fetch current public key via adapter
     adapter = _get_adapter(normalized)
     if adapter is None:
-        raise HTTPException(status_code=400, detail=f"No adapter found for service type '{service.get('service_type')}'.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"No adapter found for service type '{service.get('service_type')}'.",
+        )
 
     try:
         current_raw = await adapter.get_public_key_jwk(normalized)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=503, detail=f"Failed to fetch public key from KMS: {str(e)}")
+        raise HTTPException(
+            status_code=503, detail=f"Failed to fetch public key from KMS: {str(e)}"
+        )
 
-    key_reference = normalized.get("key_reference") if isinstance(normalized.get("key_reference"), str) else None
+    key_reference = (
+        normalized.get("key_reference")
+        if isinstance(normalized.get("key_reference"), str)
+        else None
+    )
     current_jwk = _extract_public_jwk(current_raw, key_reference_hint=key_reference)
     if not current_jwk and isinstance(current_raw, dict):
         current_jwk = dict(current_raw)
     if not current_jwk:
-        raise HTTPException(status_code=503, detail="Provider did not return a usable public key for verification.")
+        raise HTTPException(
+            status_code=503,
+            detail="Provider did not return a usable public key for verification.",
+        )
 
     # Verify key properties
     verification_results = {
@@ -4473,7 +5523,9 @@ async def verify_service_public_key(
     verification_results["checks"]["key_present"] = bool(current_jwk)
 
     # Check key has required fields
-    verification_results["checks"]["required_fields_present"] = bool(current_jwk.get("kty"))
+    verification_results["checks"]["required_fields_present"] = bool(
+        current_jwk.get("kty")
+    )
 
     # Check algorithm is supported
     supported_algs = {"RS256", "ES256", "PS256"}
@@ -4482,9 +5534,7 @@ async def verify_service_public_key(
     )
 
     # Overall result
-    verification_results["key_valid"] = all(
-        verification_results["checks"].values()
-    )
+    verification_results["key_valid"] = all(verification_results["checks"].values())
 
     return JSONResponse(content=verification_results)
 
@@ -4494,7 +5544,9 @@ async def verify_service_public_key(
 # ---------------------------------------------------------------------------
 
 
-@signing_key_router.get("/services/{service_id}/audit-log", summary="Get Key Audit Events")
+@signing_key_router.get(
+    "/services/{service_id}/audit-log", summary="Get Key Audit Events"
+)
 async def get_key_audit_log(
     request: Request,
     service_id: str,
@@ -4513,7 +5565,9 @@ async def get_key_audit_log(
     services = registry.get("services") if isinstance(registry, dict) else []
     service = next((s for s in services if s.get("id") == service_id), None)
     if service is None:
-        raise HTTPException(status_code=404, detail=f"Service '{service_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Service '{service_id}' not found."
+        )
 
     return mip_error_response(
         status_code=501,
@@ -4526,7 +5580,9 @@ async def get_key_audit_log(
     )
 
 
-@signing_key_router.get("/compliance/keys-summary", summary="Get Key Compliance Summary")
+@signing_key_router.get(
+    "/compliance/keys-summary", summary="Get Key Compliance Summary"
+)
 async def get_keys_compliance_summary(
     request: Request,
     organization_id: str | None = Query(None),
@@ -4560,7 +5616,10 @@ _ISSUER_MODES = {"org_managed", "elevenid_managed", "elevenid_alias_for_org"}
 def _normalize_issuer_mode(value: Any) -> str:
     mode = str(value or "org_managed").strip() or "org_managed"
     if mode not in _ISSUER_MODES:
-        raise HTTPException(status_code=422, detail=f"Invalid issuer_mode '{mode}'. Must be one of {sorted(_ISSUER_MODES)}.")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid issuer_mode '{mode}'. Must be one of {sorted(_ISSUER_MODES)}.",
+        )
     return mode
 
 
@@ -4581,10 +5640,15 @@ def _normalize_issuer_profile(
 
     status = body.get("status", base.get("status", "draft"))
     if status not in _ISSUER_PROFILE_STATUSES:
-        raise HTTPException(status_code=422, detail=f"Invalid status '{status}'. Must be one of {sorted(_ISSUER_PROFILE_STATUSES)}.")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid status '{status}'. Must be one of {sorted(_ISSUER_PROFILE_STATUSES)}.",
+        )
 
     issuer_did = body.get("issuer_did", base.get("issuer_did", ""))
-    signing_service_id = body.get("signing_service_id", base.get("signing_service_id", ""))
+    signing_service_id = body.get(
+        "signing_service_id", base.get("signing_service_id", "")
+    )
     if not issuer_did:
         raise HTTPException(status_code=422, detail="issuer_did is required.")
     if not isinstance(issuer_did, str) or not issuer_did.startswith("did:"):
@@ -4594,7 +5658,10 @@ def _normalize_issuer_profile(
 
     key_purpose = body.get("key_purpose", base.get("key_purpose", "vc_jwt_issuer"))
     if key_purpose not in KEY_PURPOSES:
-        raise HTTPException(status_code=422, detail=f"Invalid key_purpose '{key_purpose}'. Must be one of {list(KEY_PURPOSES)}.")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid key_purpose '{key_purpose}'. Must be one of {list(KEY_PURPOSES)}.",
+        )
     if key_purpose == "lti_tool_signing":
         raise HTTPException(
             status_code=422,
@@ -4603,9 +5670,14 @@ def _normalize_issuer_profile(
 
     algorithm = body.get("algorithm", base.get("algorithm", ""))
     if algorithm and algorithm not in SUPPORTED_SIGNING_ALGORITHMS:
-        raise HTTPException(status_code=422, detail=f"Invalid algorithm '{algorithm}'. Must be one of {list(SUPPORTED_SIGNING_ALGORITHMS)}.")
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid algorithm '{algorithm}'. Must be one of {list(SUPPORTED_SIGNING_ALGORITHMS)}.",
+        )
 
-    issuer_mode = _normalize_issuer_mode(body.get("issuer_mode", base.get("issuer_mode", "org_managed")))
+    issuer_mode = _normalize_issuer_mode(
+        body.get("issuer_mode", base.get("issuer_mode", "org_managed"))
+    )
 
     return {
         "id": profile_id,
@@ -4614,8 +5686,12 @@ def _normalize_issuer_profile(
         "issuer_mode": issuer_mode,
         "issuer_did": issuer_did,
         "signing_service_id": signing_service_id,
-        "signing_key_reference": body.get("signing_key_reference", base.get("signing_key_reference", "")),
-        "verification_method_id": body.get("verification_method_id", base.get("verification_method_id", "")),
+        "signing_key_reference": body.get(
+            "signing_key_reference", base.get("signing_key_reference", "")
+        ),
+        "verification_method_id": body.get(
+            "verification_method_id", base.get("verification_method_id", "")
+        ),
         "key_purpose": key_purpose,
         "algorithm": algorithm,
         "status": status,
@@ -4624,10 +5700,16 @@ def _normalize_issuer_profile(
     }
 
 
-def _assert_issuer_profile_service_compatible(profile: dict[str, Any], service: dict[str, Any]) -> None:
+def _assert_issuer_profile_service_compatible(
+    profile: dict[str, Any], service: dict[str, Any]
+) -> None:
     """Reject issuer profiles that point at an incompatible signing service."""
     key_purpose = profile.get("key_purpose")
-    service_purposes = service.get("key_purposes") if isinstance(service.get("key_purposes"), list) else []
+    service_purposes = (
+        service.get("key_purposes")
+        if isinstance(service.get("key_purposes"), list)
+        else []
+    )
     if key_purpose and service_purposes and key_purpose not in service_purposes:
         raise HTTPException(
             status_code=422,
@@ -4635,7 +5717,9 @@ def _assert_issuer_profile_service_compatible(profile: dict[str, Any], service: 
         )
 
     algorithm = profile.get("algorithm")
-    service_algorithms = service.get("algorithms") if isinstance(service.get("algorithms"), list) else []
+    service_algorithms = (
+        service.get("algorithms") if isinstance(service.get("algorithms"), list) else []
+    )
     if algorithm and service_algorithms and algorithm not in service_algorithms:
         raise HTTPException(
             status_code=422,
@@ -4745,10 +5829,16 @@ async def _resolve_org_scoped_issuer_identity(
     if did_doc.get("id") != issuer_did:
         did_doc = _retarget_did_document(did_doc, issuer_did)
 
-    last_mismatch_detail = "No matching DID verification method was found for the issuer profile."
+    last_mismatch_detail = (
+        "No matching DID verification method was found for the issuer profile."
+    )
     for profile in active_profiles:
         service_id = str(profile["signing_service_id"])
-        key_reference = profile.get("signing_key_reference") if isinstance(profile.get("signing_key_reference"), str) else None
+        key_reference = (
+            profile.get("signing_key_reference")
+            if isinstance(profile.get("signing_key_reference"), str)
+            else None
+        )
         registry, _, normalized_service, _ = await _resolve_effective_service(
             request,
             organization_id,
@@ -4756,19 +5846,34 @@ async def _resolve_org_scoped_issuer_identity(
             key_reference_override=key_reference,
         )
         effective_profile = dict(profile)
-        effective_profile["signing_key_reference"] = (
-            profile.get("signing_key_reference")
-            or normalized_service.get("key_reference")
-        )
+        effective_profile["signing_key_reference"] = profile.get(
+            "signing_key_reference"
+        ) or normalized_service.get("key_reference")
         effective_profile["key_purpose"] = (
             key_purpose or profile.get("key_purpose") or "vc_jwt_issuer"
         )
         _assert_issuer_profile_key_compatible(effective_profile, registry)
 
-        service_formats = normalized_service.get("credential_formats") if isinstance(normalized_service.get("credential_formats"), list) else []
-        service_purposes = normalized_service.get("key_purposes") if isinstance(normalized_service.get("key_purposes"), list) else []
-        service_algorithms = normalized_service.get("algorithms") if isinstance(normalized_service.get("algorithms"), list) else []
-        if credential_format and service_formats and credential_format not in service_formats:
+        service_formats = (
+            normalized_service.get("credential_formats")
+            if isinstance(normalized_service.get("credential_formats"), list)
+            else []
+        )
+        service_purposes = (
+            normalized_service.get("key_purposes")
+            if isinstance(normalized_service.get("key_purposes"), list)
+            else []
+        )
+        service_algorithms = (
+            normalized_service.get("algorithms")
+            if isinstance(normalized_service.get("algorithms"), list)
+            else []
+        )
+        if (
+            credential_format
+            and service_formats
+            and credential_format not in service_formats
+        ):
             last_mismatch_detail = f"Signing service '{service_id}' is not configured for credential_format '{credential_format}'."
             continue
         if key_purpose and service_purposes and key_purpose not in service_purposes:
@@ -4779,7 +5884,9 @@ async def _resolve_org_scoped_issuer_identity(
             continue
 
         if credential_format or key_purpose or algorithm:
-            resolved = _resolve_service_for_format(registry, credential_format, key_purpose, algorithm)
+            resolved = _resolve_service_for_format(
+                registry, credential_format, key_purpose, algorithm
+            )
             if resolved is not None and resolved.get("id") != service_id:
                 logger.info(
                     "Issuer DID resolver kept profile service %s despite format resolver preferring %s for org=%s issuer=%s",
@@ -4805,12 +5912,19 @@ async def _resolve_org_scoped_issuer_identity(
             try:
                 public_jwk = await _public_jwk_from_service(
                     normalized_service,
-                    key_reference_hint=key_reference or normalized_service.get("key_reference"),
+                    key_reference_hint=key_reference
+                    or normalized_service.get("key_reference"),
                 )
             except Exception as exc:  # noqa: BLE001
-                raise HTTPException(status_code=503, detail=f"Failed to refresh issuer public key from KMS: {exc}") from exc
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Failed to refresh issuer public key from KMS: {exc}",
+                ) from exc
         if public_jwk is None:
-            raise HTTPException(status_code=503, detail="Issuer DID verification method has no usable public key material.")
+            raise HTTPException(
+                status_code=503,
+                detail="Issuer DID verification method has no usable public key material.",
+            )
         public_jwk = dict(public_jwk)
         public_jwk["kid"] = method["id"]
 
@@ -4853,7 +5967,11 @@ async def create_issuer_profile(
     resolved_org_id = _resolve_org_id(request, organization_id)
     profile = _normalize_issuer_profile(body, org_id=resolved_org_id)
     service_id = str(profile["signing_service_id"])
-    key_reference = profile.get("signing_key_reference") if isinstance(profile.get("signing_key_reference"), str) else None
+    key_reference = (
+        profile.get("signing_key_reference")
+        if isinstance(profile.get("signing_key_reference"), str)
+        else None
+    )
 
     registry, _, normalized_service, _ = await _resolve_effective_service(
         request,
@@ -4862,7 +5980,9 @@ async def create_issuer_profile(
         key_reference_override=key_reference,
     )
     _assert_issuer_profile_service_compatible(profile, normalized_service)
-    if not profile.get("signing_key_reference") and normalized_service.get("key_reference"):
+    if not profile.get("signing_key_reference") and normalized_service.get(
+        "key_reference"
+    ):
         profile["signing_key_reference"] = normalized_service["key_reference"]
     _assert_issuer_profile_key_compatible(profile, registry)
 
@@ -4870,12 +5990,18 @@ async def create_issuer_profile(
     doc = await _load_json_document(request, storage_key, {"profiles": []})
     profiles: list = doc.get("profiles") or []
 
-    async def ensure_did_web_verification_method(target_profile: dict[str, Any]) -> dict[str, Any]:
+    async def ensure_did_web_verification_method(
+        target_profile: dict[str, Any],
+    ) -> dict[str, Any]:
         issuer_did = str(target_profile.get("issuer_did") or "")
-        if not issuer_did.startswith("did:web:") or target_profile.get("verification_method_id"):
+        if not issuer_did.startswith("did:web:") or target_profile.get(
+            "verification_method_id"
+        ):
             return target_profile
 
-        configured_public_domain = _normalize_did_web_domain(_domain_config(request).get("public_domain"))
+        configured_public_domain = _normalize_did_web_domain(
+            _domain_config(request).get("public_domain")
+        )
         org_slug = _did_web_org_slug(issuer_did, public_domain=configured_public_domain)
         if not configured_public_domain or not org_slug:
             raise HTTPException(
@@ -4892,7 +6018,9 @@ async def create_issuer_profile(
             body={
                 "did_id": issuer_did,
                 "org_slug": org_slug,
-                "fragment": _did_fragment_for_key_reference(service_id, target_profile.get("signing_key_reference") or None),
+                "fragment": _did_fragment_for_key_reference(
+                    service_id, target_profile.get("signing_key_reference") or None
+                ),
                 "key_reference": target_profile.get("signing_key_reference") or None,
             },
             organization_id=resolved_org_id,
@@ -4901,8 +6029,14 @@ async def create_issuer_profile(
             publication_body = json.loads(publication_response.body)
         except Exception:
             publication_body = {}
-        verification_method = publication_body.get("verification_method") if isinstance(publication_body, dict) else None
-        if isinstance(verification_method, dict) and isinstance(verification_method.get("id"), str):
+        verification_method = (
+            publication_body.get("verification_method")
+            if isinstance(publication_body, dict)
+            else None
+        )
+        if isinstance(verification_method, dict) and isinstance(
+            verification_method.get("id"), str
+        ):
             next_profile = dict(target_profile)
             next_profile["verification_method_id"] = verification_method["id"]
             return next_profile
@@ -4920,17 +6054,24 @@ async def create_issuer_profile(
                 candidate.get("signing_key_reference")
                 or normalized_service.get("key_reference")
                 or ""
-            ) == (profile.get("signing_key_reference") or "")
-            and (candidate.get("key_purpose") or "vc_jwt_issuer") == (profile.get("key_purpose") or "vc_jwt_issuer")
+            )
+            == (profile.get("signing_key_reference") or "")
+            and (candidate.get("key_purpose") or "vc_jwt_issuer")
+            == (profile.get("key_purpose") or "vc_jwt_issuer")
         ),
         None,
     )
     if existing_profile_index is not None:
         existing_profile = profiles[existing_profile_index]
         repaired_profile = dict(existing_profile)
-        if profile.get("status") == "active" and repaired_profile.get("status") != "active":
+        if (
+            profile.get("status") == "active"
+            and repaired_profile.get("status") != "active"
+        ):
             repaired_profile["status"] = "active"
-        if not repaired_profile.get("signing_key_reference") and profile.get("signing_key_reference"):
+        if not repaired_profile.get("signing_key_reference") and profile.get(
+            "signing_key_reference"
+        ):
             repaired_profile["signing_key_reference"] = profile["signing_key_reference"]
         if not repaired_profile.get("key_purpose") and profile.get("key_purpose"):
             repaired_profile["key_purpose"] = profile["key_purpose"]
@@ -4944,7 +6085,9 @@ async def create_issuer_profile(
             doc["profiles"] = profiles
             await _save_json_document(request, storage_key, doc)
 
-        return JSONResponse(content={"ok": True, "profile": repaired_profile, "created": False})
+        return JSONResponse(
+            content={"ok": True, "profile": repaired_profile, "created": False}
+        )
 
     if str(profile.get("issuer_did") or "").startswith("did:web:"):
         # Make DID identity creation an invariant of the profile, not a UI-only
@@ -5018,7 +6161,9 @@ async def update_issuer_profile(
     if idx is None:
         raise HTTPException(status_code=404, detail="Issuer profile not found.")
 
-    updated = _normalize_issuer_profile(body, existing=profiles[idx], org_id=resolved_org_id)
+    updated = _normalize_issuer_profile(
+        body, existing=profiles[idx], org_id=resolved_org_id
+    )
     updated["id"] = profile_id  # preserve original ID
     service_id = str(updated["signing_service_id"])
     key_reference = (
@@ -5077,6 +6222,7 @@ async def delete_issuer_profile(
 # paths so that FastAPI doesn't match "config", "jwks", etc. as a {key_id}.
 # ---------------------------------------------------------------------------
 
+
 @signing_key_router.get("/{key_id}", summary="Get Signing Key")
 async def get_signing_key(
     request: Request,
@@ -5089,11 +6235,17 @@ async def get_signing_key(
     snapshot = await _load_signing_key_snapshot(resolved_org_id)
     keys: list[dict[str, Any]] = snapshot.get("keys") or []
     key = next(
-        (k for k in keys if k.get("id") == key_id or k.get("provider_key_name") == key_id),
+        (
+            k
+            for k in keys
+            if k.get("id") == key_id or k.get("provider_key_name") == key_id
+        ),
         None,
     )
     if key is None:
-        raise HTTPException(status_code=404, detail=f"Signing key '{key_id}' not found.")
+        raise HTTPException(
+            status_code=404, detail=f"Signing key '{key_id}' not found."
+        )
     return JSONResponse(content=key)
 
 
@@ -5116,11 +6268,17 @@ async def update_signing_key(
     jwks_doc = await _load_json_document(request, storage_key, {"keys": []})
     jwks_keys: list[dict[str, Any]] = jwks_doc.get("keys") or []
     idx = next(
-        (i for i, k in enumerate(jwks_keys) if k.get("kid") == key_id or k.get("provider_key_name") == key_id),
+        (
+            i
+            for i, k in enumerate(jwks_keys)
+            if k.get("kid") == key_id or k.get("provider_key_name") == key_id
+        ),
         None,
     )
     if idx is None:
-        raise HTTPException(status_code=404, detail=f"Signing key '{key_id}' not found in org JWKS.")
+        raise HTTPException(
+            status_code=404, detail=f"Signing key '{key_id}' not found in org JWKS."
+        )
 
     allowed_updates = {"name", "status", "aliases", "key_aliases"}
     for field in allowed_updates:
@@ -5129,7 +6287,13 @@ async def update_signing_key(
 
     jwks_doc["keys"] = jwks_keys
     await _save_json_document(request, storage_key, jwks_doc)
-    return JSONResponse(content={"ok": True, "key_id": key_id, "updated": list(set(body.keys()) & allowed_updates)})
+    return JSONResponse(
+        content={
+            "ok": True,
+            "key_id": key_id,
+            "updated": list(set(body.keys()) & allowed_updates),
+        }
+    )
 
 
 @signing_key_router.delete("/{key_id}", summary="Delete / Deregister Signing Key")
@@ -5148,9 +6312,15 @@ async def delete_signing_key(
     storage_key = _jwks_storage_key(resolved_org_id)
     jwks_doc = await _load_json_document(request, storage_key, {"keys": []})
     jwks_keys: list[dict[str, Any]] = jwks_doc.get("keys") or []
-    filtered = [k for k in jwks_keys if k.get("kid") != key_id and k.get("provider_key_name") != key_id]
+    filtered = [
+        k
+        for k in jwks_keys
+        if k.get("kid") != key_id and k.get("provider_key_name") != key_id
+    ]
     if len(filtered) == len(jwks_keys):
-        raise HTTPException(status_code=404, detail=f"Signing key '{key_id}' not found in org JWKS.")
+        raise HTTPException(
+            status_code=404, detail=f"Signing key '{key_id}' not found in org JWKS."
+        )
 
     jwks_doc["keys"] = filtered
     await _save_json_document(request, storage_key, jwks_doc)
@@ -5163,6 +6333,7 @@ async def delete_signing_key(
 # These routes serve DID documents at the standard did:web resolution URLs.
 # did:web:{domain}:orgs:{slug}  →  GET /orgs/{slug}/did.json
 # did:web:{domain}               →  GET /.well-known/did.json  (root org)
+
 
 @did_web_public_router.get(
     "/orgs/{org_slug}/did.json",

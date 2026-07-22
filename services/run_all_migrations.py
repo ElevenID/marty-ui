@@ -31,12 +31,18 @@ from sqlalchemy import create_engine, text
 services_root = Path(__file__).parent
 sys.path.insert(0, str(services_root))
 
-from marty_common.migration import (
+from marty_common.migration import (  # noqa: E402 - services path is bootstrapped above
     AlembicMigrationAdapter,
     MigrationError,
 )
-from marty_common.migration_profile import migration_profile, migration_profile_settings
-from marty_common.system_ids import MARTY_DEFAULT_ORG_ID, MARTY_DEFAULT_ORG_SLUG
+from marty_common.migration_profile import (  # noqa: E402 - services path is bootstrapped above
+    migration_profile,
+    migration_profile_settings,
+)
+from marty_common.system_ids import (  # noqa: E402 - services path is bootstrapped above
+    MARTY_DEFAULT_ORG_ID,
+    MARTY_DEFAULT_ORG_SLUG,
+)
 
 
 # Service configurations
@@ -80,6 +86,7 @@ SERVICES = [
 ]
 
 MANAGED_OPENBAO_SERVICE_ID = "managed-openbao-transit"
+MARTY_FLOW_ENVELOPE_KEY_ID = "flow-response-envelope-marty-aes256"
 
 MARTY_KMS_KEY_SPECS: list[dict[str, Any]] = [
     {
@@ -115,6 +122,14 @@ MARTY_KMS_KEY_SPECS: list[dict[str, Any]] = [
         "credential_formats": [],
     },
     {
+        "id": "oid4vp-verifier-marty-es256",
+        "name": "Marty OID4VP verifier request key",
+        "type": "ecdsa-p256",
+        "algorithm": "ES256",
+        "key_purposes": ["oid4vp_request_signing"],
+        "credential_formats": [],
+    },
+    {
         "id": "cred-issuer-marty-eddsa",
         "name": "Marty EdDSA issuer key",
         "type": "ed25519",
@@ -138,6 +153,13 @@ MARTY_ISSUER_PROFILE_SPECS: list[dict[str, str]] = [
         "name": "Marty VC issuer",
         "signing_key_reference": "cred-issuer-marty-es256",
         "key_purpose": "vc_jwt_issuer",
+    },
+    {
+        "id": "ip-marty-oid4vp-verifier",
+        "name": "Marty OID4VP verifier",
+        "signing_key_reference": "oid4vp-verifier-marty-es256",
+        "key_purpose": "oid4vp_request_signing",
+        "algorithm": "ES256",
     },
     {
         "id": "ip-marty-mdoc-dsc",
@@ -191,7 +213,9 @@ def _public_domain() -> str:
     for env_name in ("MARTY_ISSUER_BASE_URL", "ISSUER_BASE_URL", "PUBLIC_API_URL"):
         candidate = os.environ.get(env_name, "").strip()
         if candidate:
-            parsed = urlparse(candidate if "://" in candidate else f"https://{candidate}")
+            parsed = urlparse(
+                candidate if "://" in candidate else f"https://{candidate}"
+            )
             if parsed.netloc:
                 return parsed.netloc
 
@@ -221,7 +245,9 @@ def _did_web_domain(public_domain: str) -> str:
 
 
 def _marty_org_slug() -> str:
-    configured = os.environ.get("MARTY_ORG_SLUG", MARTY_DEFAULT_ORG_SLUG).strip().lower()
+    configured = (
+        os.environ.get("MARTY_ORG_SLUG", MARTY_DEFAULT_ORG_SLUG).strip().lower()
+    )
     safe = "".join(ch for ch in configured if ch.isalnum() or ch in "._-")
     return safe or MARTY_DEFAULT_ORG_SLUG
 
@@ -274,11 +300,17 @@ def _b64url_uint(value: int) -> str:
     return _b64url(value.to_bytes(length, "big"))
 
 
-def _public_key_pem_to_jwk(public_key_pem: str, key_id: str, algorithm: str) -> dict[str, Any]:
+def _public_key_pem_to_jwk(
+    public_key_pem: str, key_id: str, algorithm: str
+) -> dict[str, Any]:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
     from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
     from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
-    from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_pem_public_key
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding,
+        PublicFormat,
+        load_pem_public_key,
+    )
 
     public_key = load_pem_public_key(public_key_pem.encode("utf-8"))
     jwk: dict[str, Any]
@@ -312,7 +344,9 @@ def _public_key_pem_to_jwk(public_key_pem: str, key_id: str, algorithm: str) -> 
     return jwk
 
 
-def _openbao_public_key_to_jwk(public_key: str, key_id: str, key_type: str, algorithm: str) -> dict[str, Any]:
+def _openbao_public_key_to_jwk(
+    public_key: str, key_id: str, key_type: str, algorithm: str
+) -> dict[str, Any]:
     if "BEGIN PUBLIC KEY" in public_key:
         return _public_key_pem_to_jwk(public_key, key_id, algorithm)
 
@@ -327,7 +361,9 @@ def _openbao_public_key_to_jwk(public_key: str, key_id: str, key_type: str, algo
             "use": "sig",
         }
 
-    raise RuntimeError(f"OpenBao key {key_id} does not expose a supported public key format.")
+    raise RuntimeError(
+        f"OpenBao key {key_id} does not expose a supported public key format."
+    )
 
 
 def _bao_request(
@@ -360,7 +396,9 @@ def _ensure_transit_mount(bao_addr: str, bao_token: str) -> None:
     import httpx
 
     try:
-        mounts = _bao_request("GET", "sys/mounts", bao_addr=bao_addr, bao_token=bao_token)
+        mounts = _bao_request(
+            "GET", "sys/mounts", bao_addr=bao_addr, bao_token=bao_token
+        )
         if "transit/" in (mounts.get("data") or {}):
             return
         _bao_request(
@@ -372,16 +410,25 @@ def _ensure_transit_mount(bao_addr: str, bao_token: str) -> None:
         )
     except httpx.HTTPStatusError as exc:
         if exc.response is not None and exc.response.status_code in {400, 403}:
-            print("  OpenBao transit mount could not be managed with this token; continuing with key read/create checks.")
+            print(
+                "  OpenBao transit mount could not be managed with this token; continuing with key read/create checks."
+            )
             return
         raise
 
 
-def _read_openbao_transit_key(bao_addr: str, bao_token: str, key_id: str) -> dict[str, Any] | None:
+def _read_openbao_transit_key(
+    bao_addr: str, bao_token: str, key_id: str
+) -> dict[str, Any] | None:
     import httpx
 
     try:
-        return _bao_request("GET", f"transit/keys/{key_id}", bao_addr=bao_addr, bao_token=bao_token).get("data") or {}
+        return (
+            _bao_request(
+                "GET", f"transit/keys/{key_id}", bao_addr=bao_addr, bao_token=bao_token
+            ).get("data")
+            or {}
+        )
     except httpx.HTTPStatusError as exc:
         if exc.response is not None and exc.response.status_code == 404:
             return None
@@ -393,7 +440,10 @@ def _extract_openbao_public_key(key_id: str, data: dict[str, Any]) -> str:
     if not isinstance(versions, dict) or not versions:
         raise RuntimeError(f"OpenBao key {key_id} has no public key versions.")
 
-    latest = str(data.get("latest_version") or max(int(v) for v in versions.keys() if str(v).isdigit()))
+    latest = str(
+        data.get("latest_version")
+        or max(int(v) for v in versions.keys() if str(v).isdigit())
+    )
     version_data = versions.get(latest) or versions.get(str(latest)) or {}
     public_key = version_data.get("public_key")
     if not isinstance(public_key, str) or not public_key:
@@ -401,7 +451,9 @@ def _extract_openbao_public_key(key_id: str, data: dict[str, Any]) -> str:
     return public_key
 
 
-def _ensure_openbao_key(bao_addr: str, bao_token: str, spec: dict[str, Any]) -> dict[str, Any]:
+def _ensure_openbao_key(
+    bao_addr: str, bao_token: str, spec: dict[str, Any]
+) -> dict[str, Any]:
     import httpx
 
     key_id = str(spec["id"])
@@ -426,7 +478,9 @@ def _ensure_openbao_key(bao_addr: str, bao_token: str, spec: dict[str, Any]) -> 
         raise RuntimeError(f"OpenBao key {key_id} is missing after create attempt.")
 
     public_key = _extract_openbao_public_key(key_id, data)
-    public_jwk = _openbao_public_key_to_jwk(public_key, key_id, str(spec["type"]), str(spec["algorithm"]))
+    public_jwk = _openbao_public_key_to_jwk(
+        public_key, key_id, str(spec["type"]), str(spec["algorithm"])
+    )
     return {
         **spec,
         "provider_key_name": key_id,
@@ -435,12 +489,40 @@ def _ensure_openbao_key(bao_addr: str, bao_token: str, spec: dict[str, Any]) -> 
     }
 
 
-def _load_json_from_redis(redis_client: Any, key: str, default: dict[str, Any]) -> dict[str, Any]:
+def _ensure_openbao_envelope_key(bao_addr: str, bao_token: str) -> None:
+    """Ensure the non-exportable KEK used for per-flow private key envelopes."""
+    import httpx
+
+    if (
+        _read_openbao_transit_key(bao_addr, bao_token, MARTY_FLOW_ENVELOPE_KEY_ID)
+        is not None
+    ):
+        return
+    try:
+        _bao_request(
+            "POST",
+            f"transit/keys/{MARTY_FLOW_ENVELOPE_KEY_ID}",
+            bao_addr=bao_addr,
+            bao_token=bao_token,
+            json_body={"type": "aes256-gcm96", "exportable": False},
+        )
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        raise RuntimeError(
+            f"OpenBao flow envelope key could not be created (HTTP {status})."
+        ) from exc
+
+
+def _load_json_from_redis(
+    redis_client: Any, key: str, default: dict[str, Any]
+) -> dict[str, Any]:
     payload = redis_client.get(key)
     if not payload:
         return dict(default)
     try:
-        parsed = json.loads(payload if isinstance(payload, str) else payload.decode("utf-8"))
+        parsed = json.loads(
+            payload if isinstance(payload, str) else payload.decode("utf-8")
+        )
     except Exception:
         return dict(default)
     return parsed if isinstance(parsed, dict) else dict(default)
@@ -450,19 +532,34 @@ def _save_json_to_redis(redis_client: Any, key: str, document: dict[str, Any]) -
     redis_client.set(key, json.dumps(document))
 
 
-def _seed_signing_registry(redis_client: Any, organization_id: str, key_records: list[dict[str, Any]]) -> None:
+def _seed_signing_registry(
+    redis_client: Any, organization_id: str, key_records: list[dict[str, Any]]
+) -> None:
     storage_key = _storage_key(organization_id)
     registry = _load_json_from_redis(
         redis_client,
         storage_key,
-        {"services": [], "default_service_id": None, "format_defaults": {}, "type_defaults": {}},
+        {
+            "services": [],
+            "default_service_id": None,
+            "format_defaults": {},
+            "type_defaults": {},
+        },
     )
 
     now = _utcnow_iso()
     key_aliases = [record["id"] for record in key_records]
     algorithms = sorted({record["algorithm"] for record in key_records})
-    key_purposes = sorted({purpose for record in key_records for purpose in record.get("key_purposes", [])})
-    credential_formats = sorted({fmt for record in key_records for fmt in record.get("credential_formats", [])})
+    key_purposes = sorted(
+        {
+            purpose
+            for record in key_records
+            for purpose in record.get("key_purposes", [])
+        }
+    )
+    credential_formats = sorted(
+        {fmt for record in key_records for fmt in record.get("credential_formats", [])}
+    )
 
     managed_service = {
         "id": MANAGED_OPENBAO_SERVICE_ID,
@@ -505,7 +602,9 @@ def _seed_signing_registry(redis_client: Any, organization_id: str, key_records:
         "updated_at": now,
     }
 
-    existing_services = registry.get("services") if isinstance(registry.get("services"), list) else []
+    existing_services = (
+        registry.get("services") if isinstance(registry.get("services"), list) else []
+    )
     services = [
         service
         for service in existing_services
@@ -513,16 +612,33 @@ def _seed_signing_registry(redis_client: Any, organization_id: str, key_records:
     ]
     services.insert(0, managed_service)
 
-    format_defaults = registry.get("format_defaults") if isinstance(registry.get("format_defaults"), dict) else {}
+    format_defaults = (
+        registry.get("format_defaults")
+        if isinstance(registry.get("format_defaults"), dict)
+        else {}
+    )
     for credential_format in ("jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "vds_nc"):
         format_defaults.setdefault(credential_format, MANAGED_OPENBAO_SERVICE_ID)
 
-    type_defaults = registry.get("type_defaults") if isinstance(registry.get("type_defaults"), dict) else {}
-    for key_purpose in ("vc_jwt_issuer", "jwks_signing", "lti_tool_signing", "mdoc_dsc", "vdsnc_signing"):
+    type_defaults = (
+        registry.get("type_defaults")
+        if isinstance(registry.get("type_defaults"), dict)
+        else {}
+    )
+    for key_purpose in (
+        "vc_jwt_issuer",
+        "jwks_signing",
+        "lti_tool_signing",
+        "oid4vp_request_signing",
+        "mdoc_dsc",
+        "vdsnc_signing",
+    ):
         type_defaults.setdefault(key_purpose, MANAGED_OPENBAO_SERVICE_ID)
 
     registry["services"] = services
-    registry["default_service_id"] = registry.get("default_service_id") or MANAGED_OPENBAO_SERVICE_ID
+    registry["default_service_id"] = (
+        registry.get("default_service_id") or MANAGED_OPENBAO_SERVICE_ID
+    )
     registry["format_defaults"] = format_defaults
     registry["type_defaults"] = type_defaults
     key_reference_purposes = (
@@ -571,22 +687,34 @@ def _seed_did_and_jwks(
     did_doc["controller"] = issuer_did
 
     key_ids = {record["id"] for record in key_records}
-    methods = did_doc.get("verificationMethod") if isinstance(did_doc.get("verificationMethod"), list) else []
+    methods = (
+        did_doc.get("verificationMethod")
+        if isinstance(did_doc.get("verificationMethod"), list)
+        else []
+    )
     methods_by_id = {
         method.get("id"): method
         for method in methods
-        if isinstance(method, dict) and isinstance(method.get("id"), str)
+        if isinstance(method, dict)
+        and isinstance(method.get("id"), str)
         and not (
             isinstance(method.get("publicKeyJwk"), dict)
             and method["publicKeyJwk"].get("kid") in key_ids
         )
     }
-    assertion = did_doc.get("assertionMethod") if isinstance(did_doc.get("assertionMethod"), list) else []
+    assertion = (
+        did_doc.get("assertionMethod")
+        if isinstance(did_doc.get("assertionMethod"), list)
+        else []
+    )
     assertion = [
         entry
         for entry in assertion
         if isinstance(entry, str)
-        and not any(entry.endswith(f"#{_did_fragment_for_key_reference(key_id)}") for key_id in key_ids)
+        and not any(
+            entry.endswith(f"#{_did_fragment_for_key_reference(key_id)}")
+            for key_id in key_ids
+        )
     ]
 
     # Protocol/client-assertion keys are published only through the Canvas LTI
@@ -656,8 +784,11 @@ def _seed_issuer_profiles(
             "signing_key_reference": spec["signing_key_reference"],
             "verification_method_id": verification_method_id,
             "key_purpose": spec["key_purpose"],
+            "algorithm": spec.get("algorithm", ""),
             "status": "active",
-            "created_at": existing.get("created_at") if isinstance(existing, dict) else now,
+            "created_at": existing.get("created_at")
+            if isinstance(existing, dict)
+            else now,
             "updated_at": now,
         }
         profiles_by_id[spec["id"]] = profile
@@ -668,9 +799,9 @@ def _seed_issuer_profiles(
 
 def bootstrap_marty_kms_identity() -> bool:
     """Seed the Marty KMS-backed DID identity used by clean-slate deployments."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("Marty KMS/DID bootstrap")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     if not _bool_env("MARTY_KMS_BOOTSTRAP_ENABLED", default=True):
         print("  Skipped: MARTY_KMS_BOOTSTRAP_ENABLED is disabled.")
@@ -686,9 +817,14 @@ def bootstrap_marty_kms_identity() -> bool:
         print("  Skipped: BAO_ADDR is not configured.")
         return True
 
-    bao_token = _read_secret_value("BAO_TOKEN") or _read_secret_value("OPENBAO_SERVICE_TOKEN")
+    bao_token = _read_secret_value("BAO_TOKEN") or _read_secret_value(
+        "OPENBAO_SERVICE_TOKEN"
+    )
     if not bao_token:
-        print("  Failed: BAO_TOKEN/OPENBAO_SERVICE_TOKEN is not configured.", file=sys.stderr)
+        print(
+            "  Failed: BAO_TOKEN/OPENBAO_SERVICE_TOKEN is not configured.",
+            file=sys.stderr,
+        )
         return False
 
     try:
@@ -704,18 +840,28 @@ def bootstrap_marty_kms_identity() -> bool:
                     raise
                 time.sleep(1)
 
-        organization_id = os.environ.get("MARTY_ORG_ID", MARTY_DEFAULT_ORG_ID).strip() or MARTY_DEFAULT_ORG_ID
+        organization_id = (
+            os.environ.get("MARTY_ORG_ID", MARTY_DEFAULT_ORG_ID).strip()
+            or MARTY_DEFAULT_ORG_ID
+        )
         issuer_did = _issuer_did()
         issuer_url = _issuer_base_url()
 
         _ensure_transit_mount(bao_addr, bao_token)
-        key_records = [_ensure_openbao_key(bao_addr, bao_token, spec) for spec in MARTY_KMS_KEY_SPECS]
+        _ensure_openbao_envelope_key(bao_addr, bao_token)
+        key_records = [
+            _ensure_openbao_key(bao_addr, bao_token, spec)
+            for spec in MARTY_KMS_KEY_SPECS
+        ]
 
         _seed_signing_registry(redis_client, organization_id, key_records)
         _seed_did_and_jwks(redis_client, organization_id, issuer_did, key_records)
         _seed_issuer_profiles(redis_client, organization_id, issuer_did, issuer_url)
 
         print(f"  Seeded {len(key_records)} OpenBao keys for org {organization_id}.")
+        print(
+            f"  Ensured non-exportable flow envelope key: {MARTY_FLOW_ENVELOPE_KEY_ID}"
+        )
         print(f"  Published issuer DID: {issuer_did}")
         print(f"  Published did:web slug: {_marty_org_slug()} -> {organization_id}")
         print("  Seeded signing registry, DID document, JWKS, and issuer profiles.")
@@ -731,17 +877,17 @@ def get_database_url() -> str:
     if not database_url:
         print("✗ Error: DATABASE_URL environment variable not set", file=sys.stderr)
         sys.exit(1)
-    
+
     # Convert asyncpg URL to sync for Alembic
     return database_url.replace("+asyncpg", "")
 
 
 def ensure_schemas(database_url: str) -> None:
     """Ensure all service schemas exist."""
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("Creating database schemas...")
-    print("="*60)
-    
+    print("=" * 60)
+
     schemas = [
         "organization_service",
         "auth_service",
@@ -753,7 +899,7 @@ def ensure_schemas(database_url: str) -> None:
         "flow_service",
         "revocation_profile_service",
     ]
-    
+
     engine = create_engine(database_url)
     try:
         with engine.connect() as conn:
@@ -769,53 +915,59 @@ def ensure_schemas(database_url: str) -> None:
         engine.dispose()
 
 
-def run_service_migration(service_config: dict, database_url: str, verify_only: bool = False) -> bool:
+def run_service_migration(
+    service_config: dict, database_url: str, verify_only: bool = False
+) -> bool:
     """Run migrations for a single service.
-    
+
     Args:
         service_config: Service configuration dict with name and module
         database_url: Database connection URL
         verify_only: If True, only verify schema without applying migrations
-        
+
     Returns:
         True if migrations successful/verified, False otherwise
     """
     service_name = service_config["name"]
     module_name = service_config["module"]
-    
-    print(f"\n{'='*60}")
+
+    print(f"\n{'=' * 60}")
     print(f"Service: {service_name}")
-    print(f"{'='*60}")
-    
+    print(f"{'=' * 60}")
+
     try:
         # Import service models
         module = __import__(module_name, fromlist=["mapper_registry"])
         mapper_registry = module.mapper_registry
-        
+
         # Create migration adapter
         adapter = AlembicMigrationAdapter(
             database_url=database_url,
             metadata=mapper_registry.metadata,
         )
-        
+
         # Initialize migrations directory (creates alembic.ini, env.py, etc. if they don't exist)
         migrations_dir = services_root / service_name / "infrastructure" / "migrations"
-        
+
         # Only initialize if migrations directory doesn't have required files
-        if not (migrations_dir / "alembic.ini").exists() or not (migrations_dir / "env.py").exists():
+        if (
+            not (migrations_dir / "alembic.ini").exists()
+            or not (migrations_dir / "env.py").exists()
+        ):
             adapter.initialize(service_name=service_name, migrations_dir=migrations_dir)
         else:
             # Manually configure the adapter to use existing migration infrastructure
             adapter._service_name = service_name
             adapter._migrations_dir = migrations_dir
             alembic_ini_path = migrations_dir / "alembic.ini"
-            
+
             from alembic.config import Config
+
             adapter.alembic_cfg = Config(str(alembic_ini_path))
             adapter.alembic_cfg.set_main_option("script_location", str(migrations_dir))
             adapter.alembic_cfg.set_main_option("sqlalchemy.url", database_url)
             adapter.alembic_cfg.attributes["target_metadata"] = mapper_registry.metadata
-        
+
         if verify_only:
             # Verify schema is up-to-date
             is_valid = adapter.verify_schema(raise_on_mismatch=False)
@@ -829,15 +981,18 @@ def run_service_migration(service_config: dict, database_url: str, verify_only: 
             # Apply migrations
             current = adapter.current()
             print(f"  Current revision: {current or 'None'}")
-            
+
             # Check if there are any migrations to apply
             from alembic.script import ScriptDirectory
+
             script_dir = ScriptDirectory.from_config(adapter.alembic_cfg)
             head = script_dir.get_current_head()
             print(f"  Head revision: {head or 'None'}")
-            
+
             if not head:
-                print(f"⚠ {service_name}: No migration files found in versions directory")
+                print(
+                    f"⚠ {service_name}: No migration files found in versions directory"
+                )
                 print(f"  Versions directory: {migrations_dir / 'versions'}")
             elif current != head:
                 # Run migrations when current doesn't match head
@@ -849,20 +1004,21 @@ def run_service_migration(service_config: dict, database_url: str, verify_only: 
             else:
                 print("  Already up-to-date")
                 print(f"✓ {service_name}: No migrations needed")
-            
+
             return True
-            
+
     except ImportError as e:
         print(f"⚠ {service_name}: No models module found ({e}), skipping...")
         return True  # Not an error if service doesn't have migrations yet
-        
+
     except MigrationError as e:
         print(f"✗ {service_name}: Migration error: {e}", file=sys.stderr)
         return False
-        
+
     except Exception as e:
         print(f"✗ {service_name}: Unexpected error: {e}", file=sys.stderr)
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -870,7 +1026,7 @@ def run_service_migration(service_config: dict, database_url: str, verify_only: 
 def main():
     """Main entry point."""
     import argparse
-    
+
     parser = argparse.ArgumentParser(
         description="Run migrations for all Marty-UI services"
     )
@@ -879,16 +1035,18 @@ def main():
         action="store_true",
         help="Only verify migrations are up-to-date without applying",
     )
-    
+
     args = parser.parse_args()
-    
+
     # Get database URL
     database_url = get_database_url()
-    
-    print("="*60)
+
+    print("=" * 60)
     print("MARTY-UI DATABASE MIGRATION RUNNER")
-    print("="*60)
-    print(f"Database: {database_url.split('@')[1] if '@' in database_url else database_url}")
+    print("=" * 60)
+    print(
+        f"Database: {database_url.split('@')[1] if '@' in database_url else database_url}"
+    )
     print(f"Mode: {'Verify Only' if args.verify_only else 'Apply Migrations'}")
     profile = migration_profile()
     settings = migration_profile_settings()
@@ -902,15 +1060,15 @@ def main():
         f"experimental_fixes={settings.allow_experimental_data_fixes}, "
         f"persistent={settings.persistent})"
     )
-    
+
     # Ensure schemas exist first
     if not args.verify_only:
         ensure_schemas(database_url)
-    
+
     # Run migrations for each service
     success_count = 0
     failure_count = 0
-    
+
     for service_config in SERVICES:
         success = run_service_migration(service_config, database_url, args.verify_only)
         if success:
@@ -921,16 +1079,16 @@ def main():
     kms_bootstrap_success = True
     if not args.verify_only:
         kms_bootstrap_success = bootstrap_marty_kms_identity()
-    
+
     # Print summary
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("MIGRATION SUMMARY")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Total services: {len(SERVICES)}")
     print(f"Marty KMS identity: {'ready' if kms_bootstrap_success else 'failed'}")
     print(f"✓ Successful: {success_count}")
     print(f"✗ Failed: {failure_count}")
-    
+
     if failure_count > 0 or not kms_bootstrap_success:
         if not kms_bootstrap_success:
             print("\nMarty KMS/DID bootstrap failed")
