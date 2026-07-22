@@ -383,11 +383,13 @@ def test_w3c_vc_uses_public_issuer_profile_did_material(
                 "issuer": issuer,
                 "claims": {
                     "iss": issuer,
+                    "jti": "urn:uuid:credential-123",
                     "vc": {
+                        "id": "urn:uuid:credential-123",
                         "credentialSubject": {
                             "id": "did:example:alice",
                             "role": "student",
-                        }
+                        },
                     },
                 },
                 "errors": [],
@@ -405,6 +407,7 @@ def test_w3c_vc_uses_public_issuer_profile_did_material(
     assert result["verified"] is True
     assert result["issuer_did"] == issuer
     assert result["claims"] == {"id": "did:example:alice", "role": "student"}
+    assert result["credential_id"] == "urn:uuid:credential-123"
     assert captured == {"token": token, "issuer_public_jwk": public_jwk}
     assert all(parameter not in json.dumps(captured) for parameter in ('"d"', '"k"'))
 
@@ -453,6 +456,61 @@ def test_w3c_vc_did_key_resolution_stays_inside_rust(
 
     assert result["verified"] is True
     assert captured == {"token": token}
+
+
+def test_w3c_vc_does_not_expose_unverified_credential_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer = "did:web:issuer.example"
+    token = ".".join(
+        [
+            _jwt_segment({"alg": "ES256", "kid": f"{issuer}#key-1"}),
+            _jwt_segment({"iss": issuer, "jti": "caller-controlled-id"}),
+            "signature",
+        ]
+    )
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_vcdm_jwt=lambda _request: json.dumps(
+                {
+                    "valid": False,
+                    "issuer": issuer,
+                    "claims": {
+                        "jti": "caller-controlled-id",
+                        "vc": {"id": "caller-controlled-vc-id"},
+                    },
+                    "errors": ["signature is invalid"],
+                }
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        pp,
+        "_resolve_did_document",
+        lambda _issuer: {
+            "id": issuer,
+            "verificationMethod": [
+                {
+                    "id": f"{issuer}#key-1",
+                    "controller": issuer,
+                    "publicKeyJwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "public-x",
+                        "y": "public-y",
+                    },
+                }
+            ],
+        },
+    )
+
+    result = pp._verify_w3c_vc(token, None, None)
+
+    assert result["verified"] is False
+    assert result["credential_id"] is None
+    assert result["claims"] == {}
 
 
 def test_w3c_vc_fails_closed_without_profile_public_key(
