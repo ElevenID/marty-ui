@@ -432,6 +432,7 @@ def _extract_jose_envelope(value: dict[str, Any], field: str) -> str:
     explicitly unsupported.
     """
     context = value.get("@context")
+    contexts = context if isinstance(context, list) else [context]
     types = value.get("type")
     identifier = value.get("id")
     expected_type = (
@@ -440,9 +441,8 @@ def _extract_jose_envelope(value: dict[str, Any], field: str) -> str:
         else "EnvelopedVerifiablePresentation"
     )
     if (
-        not isinstance(context, list)
-        or not context
-        or context[0] != "https://www.w3.org/ns/credentials/v2"
+        not contexts
+        or contexts[0] != "https://www.w3.org/ns/credentials/v2"
         or not isinstance(types, (list, str))
         or expected_type not in (types if isinstance(types, list) else [types])
         or not isinstance(identifier, str)
