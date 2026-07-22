@@ -3129,10 +3129,68 @@ async def delete_delivery_destination(
 internal_router = APIRouter(prefix="/internal", tags=["internal"])
 
 
-def _has_kms_backed_issuer(template: Any) -> bool:
+def _has_profile_backed_issuer(template: Any) -> bool:
     issuer_profile_id = str(getattr(template, "issuer_profile_id", "") or "").strip()
-    key_access_mode = str(getattr(template, "key_access_mode", "") or "").strip().upper()
+    key_access_mode = (
+        str(getattr(template, "key_access_mode", "") or "").strip().upper()
+    )
     return bool(issuer_profile_id and key_access_mode == "REMOTE_SIGNING")
+
+
+def _oid4vci_configuration(template: CredentialTemplate) -> dict[str, Any] | None:
+    """Render the template's actual production format for OID4VCI metadata."""
+    credential_type = (template.credential_type or "").strip()
+    if not credential_type:
+        return None
+
+    payload_format = _extract_template_credential_format(template)
+    algorithm = (template.issuer_algorithm or "ES256").strip() or "ES256"
+    common: dict[str, Any] = {
+        "scope": f"{credential_type}_credential",
+        "cryptographic_binding_methods_supported": ["jwk"],
+        "credential_signing_alg_values_supported": [algorithm],
+        "proof_types_supported": {
+            "jwt": {"proof_signing_alg_values_supported": ["ES256"]}
+        },
+        "credential_metadata": {
+            "display": [{"name": template.name or credential_type, "locale": "en-US"}]
+        },
+    }
+
+    if payload_format == CredentialFormat.SD_JWT_VC.value:
+        vct = (template.vct or "").strip()
+        if not vct:
+            logger.warning(
+                "Skipping active SD-JWT template %s in issuer metadata "
+                "because it has no VCT",
+                template.id,
+            )
+            return None
+        return {**common, "format": "dc+sd-jwt", "vct": vct}
+
+    if payload_format == CredentialFormat.MDOC.value:
+        return {
+            **common,
+            "format": "mso_mdoc",
+            "doctype": (template.doctype or credential_type).strip(),
+        }
+
+    if payload_format == CredentialFormat.VC_JWT.value:
+        return {
+            **common,
+            "format": "jwt_vc_json",
+            "credential_definition": {
+                "type": ["VerifiableCredential", credential_type]
+            },
+        }
+
+    logger.warning(
+        "Skipping active credential template %s in issuer metadata because "
+        "format %s is not an OID4VCI format",
+        template.id,
+        payload_format,
+    )
+    return None
 
 
 @internal_router.get("/credential-configurations")
@@ -3146,12 +3204,6 @@ async def get_credential_configurations(request: Request) -> dict:
 
     No authentication is required — this path must not be exposed externally.
     """
-    _proof_types: dict = {
-        "jwt": {"proof_signing_alg_values_supported": ["ES256", "EdDSA"]}
-    }
-    _binding = ["did:key"]
-    _signing_algs = ["ES256", "EdDSA"]
-
     configs: dict = {}
 
     if _repo is None:
@@ -3171,31 +3223,18 @@ async def get_credential_configurations(request: Request) -> dict:
 
     advertised_templates: list[CredentialTemplate] = []
     for t in templates:
-        if not _has_kms_backed_issuer(t):
+        if not _has_profile_backed_issuer(t):
             logger.warning(
-                "Skipping active credential template %s in issuer metadata because it lacks a KMS-backed issuer profile",
+                "Skipping active credential template %s in issuer metadata because "
+                "it lacks an active managed issuer profile",
                 getattr(t, "id", None) or getattr(t, "name", None) or "unknown",
             )
             continue
-        cred_type = (t.credential_type or "").strip()
-        if not cred_type:
+        config = _oid4vci_configuration(t)
+        if config is None:
             continue
 
-        # Always emit jwt_vc_json — that is the only format our issuance service
-        # produces, regardless of what the template's supported_formats list says.
-        fmt = "jwt_vc_json"
-
-        configs[cred_type] = {
-            "format": fmt,
-            "scope": f"{cred_type}_credential",
-            "cryptographic_binding_methods_supported": _binding,
-            "credential_signing_alg_values_supported": _signing_algs,
-            "proof_types_supported": _proof_types,
-            "credential_definition": {
-                "type": ["VerifiableCredential", cred_type]
-            },
-            "display": [{"name": t.name or cred_type, "locale": "en-US"}],
-        }
+        configs[t.credential_type.strip()] = config
         advertised_templates.append(t)
 
     # Try to look up the issuer display name from the org service using the
