@@ -1,6 +1,6 @@
 {
   "schema": "marty.stack-lock/v1",
-  "release": "marty-ui@1.1.14",
+  "release": "marty-ui@1.1.15",
   "components": [
     {
       "name": "marty-api-core",
@@ -44,13 +44,13 @@
     {
       "name": "marty-credentials-issuance",
       "repository": "ElevenID/marty-credentials",
-      "version": "0.1.9",
-      "commit": "f34a1aa7b85bfbf57f1e658a4e7b5bd1c432f89f",
+      "version": "0.1.10",
+      "commit": "891b74302bae6f73bfbbfcf978dfc3c5d96c4031",
       "artifacts": [{
         "type": "oci",
         "uri": "ghcr.io/elevenid/marty-credentials-issuance",
-        "digest": "sha256:e2cae86dc208a541382a5edda65e54232532bb18777f9c1c2e54244b3ad2a070",
-        "sbom": "https://github.com/ElevenID/marty-credentials/releases/download/v0.1.9/marty-credentials-issuance.spdx.json",
+        "digest": "sha256:f372922df49461b85e5c48542e2e83c12ac1d8862f0fdda5f6652d9923cf4f80",
+        "sbom": "https://github.com/ElevenID/marty-credentials/releases/download/v0.1.10/marty-credentials-issuance.spdx.json",
         "provenance": "https://github.com/ElevenID/marty-credentials/attestations"
       }]
     },
