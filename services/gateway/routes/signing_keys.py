@@ -52,6 +52,7 @@ OPENBAO_SIGNING_KEY_PREFIXES = (
     "cred-issuer-",
     "cred-dsc-",
     "lti-tool-",
+    "oid4vp-verifier-",
 )
 
 OPENBAO_NAME_OVERRIDES = {
@@ -61,6 +62,7 @@ OPENBAO_NAME_OVERRIDES = {
     "cred-issuer-marty-eddsa": "Marty EdDSA issuer key",
     "cred-dsc-marty-primary": "Marty document signer key",
     "lti-tool-marty-rs256": "Marty LTI tool signing key",
+    "oid4vp-verifier-marty-es256": "Marty OID4VP verifier request key",
 }
 
 OPENBAO_ALGORITHM_BY_TYPE = {
