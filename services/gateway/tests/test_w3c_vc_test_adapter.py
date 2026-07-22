@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import sys
 import types
@@ -14,10 +16,19 @@ from gateway.routes import w3c_vc_test_adapter as adapter
 
 
 def _request() -> Request:
-    return Request({"type": "http", "method": "POST", "path": "/__test__/vc-api/credentials/verify", "headers": []})
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/__test__/vc-api/credentials/verify",
+            "headers": [],
+        }
+    )
 
 
-def test_adapter_is_disabled_without_explicit_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_adapter_is_disabled_without_explicit_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("W3C_VC_TEST_ADAPTER", raising=False)
     with pytest.raises(HTTPException) as exc_info:
         adapter._enabled_policy_id()
@@ -26,7 +37,9 @@ def test_adapter_is_disabled_without_explicit_environment(monkeypatch: pytest.Mo
 
 def test_adapter_rejects_unimplemented_json_ld_proofs() -> None:
     with pytest.raises(HTTPException) as exc_info:
-        adapter._token_or_unsupported({"proof": {"cryptosuite": "eddsa-rdfc-2022"}}, "verifiableCredential")
+        adapter._token_or_unsupported(
+            {"proof": {"cryptosuite": "eddsa-rdfc-2022"}}, "verifiableCredential"
+        )
     assert exc_info.value.status_code == 422
     assert exc_info.value.detail["error"] == "unsupported_serialization"
 
@@ -54,11 +67,14 @@ def _official_baseline_credential() -> dict:
 
 def test_issuer_adapter_keeps_only_supported_subject_claims() -> None:
     assert adapter._claims_from_w3c_credential(_valid_w3c_credential()) == {
-        "id": "did:key:z6MkExample", "name": "Ada"
+        "id": "did:key:z6MkExample",
+        "name": "Ada",
     }
 
 
-def test_issuer_adapter_accepts_official_id_only_baseline_before_issuer_injection() -> None:
+def test_issuer_adapter_accepts_official_id_only_baseline_before_issuer_injection() -> (
+    None
+):
     assert adapter._claims_from_w3c_credential(_official_baseline_credential()) == {
         "id": "did:example:subject"
     }
@@ -96,15 +112,20 @@ def test_issuer_adapter_rejects_non_vcdm_input_before_issuance() -> None:
     assert exc_info.value.status_code == 422
 
 
-@pytest.mark.parametrize("field,value", [
-    ("id", None),
-    ("credentialStatus", {"id": "did:example:status"}),
-    ("credentialSchema", {"type": "JsonSchema"}),
-    ("name", {"@value": 4}),
-    ("validFrom", "not-a-date"),
-    ("relatedResource", {"id": "https://resource.example"}),
-])
-def test_issuer_adapter_rejects_malformed_vcdm_structures(field: str, value: object) -> None:
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("id", None),
+        ("credentialStatus", {"id": "did:example:status"}),
+        ("credentialSchema", {"type": "JsonSchema"}),
+        ("name", {"@value": 4}),
+        ("validFrom", "not-a-date"),
+        ("relatedResource", {"id": "https://resource.example"}),
+    ],
+)
+def test_issuer_adapter_rejects_malformed_vcdm_structures(
+    field: str, value: object
+) -> None:
     credential = _valid_w3c_credential()
     credential[field] = value
     with pytest.raises(HTTPException) as exc_info:
@@ -114,7 +135,9 @@ def test_issuer_adapter_rejects_malformed_vcdm_structures(field: str, value: obj
 
 def test_issuer_adapter_rejects_reversed_validity_period() -> None:
     credential = _valid_w3c_credential()
-    credential.update({"validFrom": "2030-01-01T00:00:00Z", "validUntil": "2020-01-01T00:00:00Z"})
+    credential.update(
+        {"validFrom": "2030-01-01T00:00:00Z", "validUntil": "2020-01-01T00:00:00Z"}
+    )
     with pytest.raises(HTTPException) as exc_info:
         adapter._claims_from_w3c_credential(credential)
     assert exc_info.value.status_code == 422
@@ -130,13 +153,72 @@ def test_issuer_adapter_rejects_protected_context_redefinition() -> None:
 
 def test_issuer_adapter_accepts_a_valid_object_issuer_and_context_type() -> None:
     credential = _valid_w3c_credential()
-    credential["issuer"] = {"id": "https://issuer.example.test", "name": {"@value": "Issuer", "@language": "en"}}
-    credential["@context"].append({"ExampleCredential": "https://example.test/ExampleCredential"})
+    credential["issuer"] = {
+        "id": "https://issuer.example.test",
+        "name": {"@value": "Issuer", "@language": "en"},
+    }
+    credential["@context"].append(
+        {"ExampleCredential": "https://example.test/ExampleCredential"}
+    )
     credential["type"].append("ExampleCredential")
     assert adapter._claims_from_w3c_credential(credential)["name"] == "Ada"
 
 
-def test_issuer_adapter_requires_explicit_disposable_fixture_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_issuer_adapter_accepts_official_examples_context_type() -> None:
+    credential = _official_baseline_credential()
+    credential["@context"].append("https://www.w3.org/ns/credentials/examples/v2")
+    credential["type"].append("RelationshipCredential")
+    assert (
+        adapter._claims_from_w3c_credential(credential)["id"] == "did:example:subject"
+    )
+
+
+def test_issuer_adapter_accepts_multiple_language_value_objects() -> None:
+    credential = _official_baseline_credential()
+    credential["name"] = [
+        {"@value": "Dog", "@language": "en"},
+        {"@value": "Chien", "@language": "fr"},
+    ]
+    assert (
+        adapter._claims_from_w3c_credential(credential)["id"] == "did:example:subject"
+    )
+
+
+@pytest.mark.asyncio
+async def test_related_resource_digest_validation_accepts_real_bytes_and_rejects_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"official context bytes"
+    digest = base64.b64encode(hashlib.sha384(content).digest()).decode("ascii")
+
+    class Response:
+        status_code = 200
+
+        def __init__(self) -> None:
+            self.content = content
+
+    class Client:
+        async def get(self, url: str, **_kwargs):
+            assert url == "https://www.w3.org/ns/credentials/v2"
+            return Response()
+
+    monkeypatch.setattr(adapter, "get_http_client", lambda: Client())
+    credential = {
+        "relatedResource": {
+            "id": adapter._BASE_CONTEXT,
+            "digestSRI": f"sha384-{digest}",
+        }
+    }
+    await adapter._validate_related_resource_digests(credential)
+    credential["relatedResource"]["digestSRI"] = "sha384-wrong"
+    with pytest.raises(HTTPException) as exc_info:
+        await adapter._validate_related_resource_digests(credential)
+    assert exc_info.value.detail["error"] == "related_resource_digest_mismatch"
+
+
+def test_issuer_adapter_requires_explicit_disposable_fixture_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
     monkeypatch.setenv("W3C_VC_TEST_POLICY_ID", "fixture-policy")
     monkeypatch.delenv("W3C_VC_TEST_ORGANIZATION_ID", raising=False)
@@ -147,7 +229,9 @@ def test_issuer_adapter_requires_explicit_disposable_fixture_configuration(monke
 
 
 def test_issuer_adapter_wraps_only_a_compact_jwt_vc() -> None:
-    envelope = adapter._jose_vc_envelope(_valid_w3c_credential(), "header.payload.signature")
+    envelope = adapter._jose_vc_envelope(
+        _valid_w3c_credential(), "header.payload.signature"
+    )
     assert envelope["type"] == "EnvelopedVerifiableCredential"
     assert envelope["id"] == "data:application/vc+jwt,header.payload.signature"
     with pytest.raises(HTTPException):
@@ -156,10 +240,14 @@ def test_issuer_adapter_wraps_only_a_compact_jwt_vc() -> None:
 
 def test_issuer_adapter_source_defines_a_jwt_vc_fixture_contract() -> None:
     source = adapter._issue_jwt_vc.__code__.co_consts
-    assert "W3C fixture template must issue JWT VC, not SD-JWT, mdoc, or JSON-LD" in source
+    assert (
+        "W3C fixture template must issue JWT VC, not SD-JWT, mdoc, or JSON-LD" in source
+    )
 
 
-def test_issuer_adapter_uses_the_released_oid4vci_proof_binding(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_issuer_adapter_uses_the_released_oid4vci_proof_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured: dict[str, str] = {}
 
     def create_proof(issuer_url: str, nonce: str) -> str:
@@ -170,9 +258,14 @@ def test_issuer_adapter_uses_the_released_oid4vci_proof_binding(monkeypatch: pyt
     module._marty_rs = types.SimpleNamespace(oid4vci_create_proof_jwt=create_proof)
     monkeypatch.setitem(sys.modules, "marty_rs", module)
 
-    proof = adapter._create_oid4vci_proof("https://issuer.example.test/org/fixture", "nonce-1")
+    proof = adapter._create_oid4vci_proof(
+        "https://issuer.example.test/org/fixture", "nonce-1"
+    )
     assert proof == "header.payload.signature"
-    assert captured == {"issuer_url": "https://issuer.example.test/org/fixture", "nonce": "nonce-1"}
+    assert captured == {
+        "issuer_url": "https://issuer.example.test/org/fixture",
+        "nonce": "nonce-1",
+    }
 
 
 @pytest.mark.asyncio
@@ -233,11 +326,16 @@ async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
 
     monkeypatch.setattr(adapter, "_load_credential_template", load_template)
     monkeypatch.setattr(adapter, "_resolve_issuer_identity", resolve_identity)
-    monkeypatch.setattr(adapter, "_create_oid4vci_proof", lambda issuer, nonce: "proof.jwt.value")
+    monkeypatch.setattr(
+        adapter, "_create_oid4vci_proof", lambda issuer, nonce: "proof.jwt.value"
+    )
     monkeypatch.setattr(adapter, "get_registry", lambda: Registry())
     monkeypatch.setattr(adapter, "get_http_client", lambda: Client())
 
-    assert await adapter._issue_jwt_vc(credential, _request()) == "header.payload.signature"
+    assert (
+        await adapter._issue_jwt_vc(credential, _request())
+        == "header.payload.signature"
+    )
     initiate_body = captured[0][1]["json"]
     assert initiate_body["claims"] == {}
     assert initiate_body["credential_subject"] == credential["credentialSubject"]
@@ -255,11 +353,14 @@ def test_adapter_extracts_a_w3c_jose_vc_envelope_without_trusting_it() -> None:
     assert token == "header.payload.signature"
 
 
-@pytest.mark.parametrize("identifier", [
-    "data:application/vc+jwt,not-a-jws",
-    "data:application/ld+json,header.payload.signature",
-    "https://example.test/credential",
-])
+@pytest.mark.parametrize(
+    "identifier",
+    [
+        "data:application/vc+jwt,not-a-jws",
+        "data:application/ld+json,header.payload.signature",
+        "https://example.test/credential",
+    ],
+)
 def test_adapter_rejects_invalid_or_unsupported_jose_envelopes(identifier: str) -> None:
     with pytest.raises(HTTPException) as exc_info:
         adapter._token_or_unsupported(
@@ -274,7 +375,9 @@ def test_adapter_rejects_invalid_or_unsupported_jose_envelopes(identifier: str) 
 
 
 @pytest.mark.asyncio
-async def test_adapter_forwards_supported_token_to_actual_policy_evaluator(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_adapter_forwards_supported_token_to_actual_policy_evaluator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
     monkeypatch.setenv("W3C_VC_TEST_POLICY_ID", "fixture-policy")
 
@@ -293,11 +396,15 @@ async def test_adapter_forwards_supported_token_to_actual_policy_evaluator(monke
     monkeypatch.setattr(adapter, "get_registry", lambda: Registry())
     monkeypatch.setattr(adapter, "proxy_request", fake_proxy)
 
-    response = await adapter._evaluate("header.payload.signature", {"challenge": "n", "domain": "aud"}, _request())
+    response = await adapter._evaluate(
+        "header.payload.signature", {"challenge": "n", "domain": "aud"}, _request()
+    )
 
     assert response == "actual-policy-response"
     assert captured["path"] == "/v1/presentation-policies/fixture-policy/evaluate"
     assert json.loads(captured["body_override"]) == {
-        "vp_token": "header.payload.signature", "nonce": "n", "audience": "aud"
+        "vp_token": "header.payload.signature",
+        "nonce": "n",
+        "audience": "aud",
     }
     assert captured["inject_headers"] == {"Content-Type": "application/json"}
