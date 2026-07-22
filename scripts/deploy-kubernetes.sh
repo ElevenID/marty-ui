@@ -371,7 +371,14 @@ cmd_deploy() {
   info "Waiting for migration job to complete…"
   kubectl wait --for=condition=complete job/db-migrate -n "$NAMESPACE" --timeout=300s \
     || { kubectl logs job/db-migrate -n "$NAMESPACE" --tail=50; error "Migration job failed"; }
-  success "Database migrations completed"
+  success "Marty UI database migrations completed"
+
+  kubectl delete job issuance-migrations -n "$NAMESPACE" --ignore-not-found=true
+  apply_manifest "${K8S_DIR}/06a-issuance-migrations.yaml"
+  info "Waiting for credentials issuance migrations to completeâ€¦"
+  kubectl wait --for=condition=complete job/issuance-migrations -n "$NAMESPACE" --timeout=300s \
+    || { kubectl logs job/issuance-migrations -n "$NAMESPACE" --tail=50; error "Issuance migration job failed"; }
+  success "All database migrations completed"
 
   step "Deploying Keycloak…"
   apply_manifest "${K8S_DIR}/05-keycloak.yaml"

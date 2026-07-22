@@ -1,0 +1,49 @@
+---
+# ================================================================
+# Credentials Issuance Migration Job
+# Runs after the Marty UI schema job and from the exact issuance image.
+# Re-run by deleting the Job and applying again.
+# ================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: issuance-migrations
+  namespace: marty-prod
+  labels:
+    app: issuance-migrations
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      initContainers:
+        - name: wait-postgres
+          image: busybox:1.36
+          command: ['sh', '-c',
+            'until nc -z postgres 5432; do echo "waiting for postgres"; sleep 3; done']
+      containers:
+        - name: issuance-migrations
+          image: ${OCIR_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}
+          imagePullPolicy: Always
+          command: ['python', 'manage_migrations.py', 'upgrade']
+          envFrom:
+            - configMapRef:
+                name: marty-config
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_SYNC_URL
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"

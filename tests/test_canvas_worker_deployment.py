@@ -30,6 +30,10 @@ def test_compose_stacks_run_canvas_worker_outside_issuance_web_process() -> None
         assert worker["healthcheck"] == {"disable": True}
         assert "ports" not in worker
         assert worker["depends_on"]["db-migrate"]["condition"] == "service_completed_successfully"
+        assert (
+            worker["depends_on"]["issuance-migrations"]["condition"]
+            == "service_completed_successfully"
+        )
 
         environment = worker["environment"]
         api_environment = api["environment"]
@@ -77,6 +81,41 @@ def test_compose_stacks_run_canvas_worker_outside_issuance_web_process() -> None
             assert private_key_setting not in api_environment
         assert PROCESSOR in environment["CANVAS_SYNC_PROCESSOR"]
         assert "CANVAS_SYNC_WORKER_POLL_SECONDS" in environment
+
+
+def test_deployments_migrate_issuance_from_the_released_credentials_image() -> None:
+    for path in ("docker-compose.base.yml", "docker-compose.selfhost.prod.yml"):
+        services = _yaml(path)["services"]
+        migration = services["issuance-migrations"]
+
+        assert migration["image"] == services["issuance"]["image"]
+        command = str(migration["command"])
+        assert "manage_migrations.py" in command
+        assert "upgrade" in command
+        assert migration["healthcheck"] == {"disable": True}
+        assert migration["restart"] == "no"
+        assert (
+            migration["depends_on"]["db-migrate"]["condition"]
+            == "service_completed_successfully"
+        )
+        assert (
+            services["issuance"]["depends_on"]["issuance-migrations"]["condition"]
+            == "service_completed_successfully"
+        )
+
+    kubernetes = _yaml("k8s/oracle/06a-issuance-migrations.yaml")
+    assert kubernetes["kind"] == "Job"
+    assert kubernetes["metadata"]["name"] == "issuance-migrations"
+    container = kubernetes["spec"]["template"]["spec"]["containers"][0]
+    assert container["image"] == "${OCIR_REGISTRY}/marty-ui/issuance:${IMAGE_TAG}"
+    assert container["command"] == ["python", "manage_migrations.py", "upgrade"]
+    assert container["env"][0]["valueFrom"]["secretKeyRef"]["key"] == "DATABASE_SYNC_URL"
+
+    deploy = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
+    ui_wait = deploy.index("condition=complete job/db-migrate")
+    issuance_apply = deploy.index('06a-issuance-migrations.yaml')
+    issuance_wait = deploy.index("condition=complete job/issuance-migrations")
+    assert ui_wait < issuance_apply < issuance_wait
 
 
 def test_kubernetes_runs_headless_canvas_worker_as_its_own_deployment() -> None:

@@ -306,8 +306,10 @@ def test_reviewer_bootstrap_requires_the_exact_existing_project(
 
 def test_ghcr_profile_keeps_dedicated_issuance_artifact() -> None:
     profile = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
+    base = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
 
     assert "  issuance:\n    image: ${MARTY_ISSUANCE_IMAGE" in profile
+    assert "  issuance-migrations:\n    image: ${MARTY_ISSUANCE_IMAGE" in base
 
 
 def test_oidf_profile_propagates_public_origin_to_seeded_and_runtime_urls() -> None:
@@ -355,6 +357,14 @@ def test_conformance_profile_uses_a_disposable_reviewer_via_normal_oidc() -> Non
     assert (
         "MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL" in organization
     )
+
+
+def test_credentials_migration_is_a_required_one_shot() -> None:
+    profile = (ROOT / "docker-compose.profile.conformance.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "issuance-migrations" in stack.ONE_SHOT_SERVICES
+    assert "  issuance-migrations:\n    container_name: !reset null" in profile
 
 
 def test_keycloak_configurator_bootstraps_missing_application_roles() -> None:

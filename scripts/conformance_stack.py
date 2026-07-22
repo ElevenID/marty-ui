@@ -27,7 +27,12 @@ W3C_FILE = "docker-compose.profile.w3c-vc.yml"
 HAIP_FILE = "docker-compose.profile.oidf-haip.yml"
 ISOLATION_FILE = "docker-compose.profile.conformance.yml"
 PUBLIC_PORT_SERVICES = {"oidf-tls-proxy"}
-ONE_SHOT_SERVICES = {"db-migrate", "keycloak-configurator", "openbao-init"}
+ONE_SHOT_SERVICES = {
+    "db-migrate",
+    "issuance-migrations",
+    "keycloak-configurator",
+    "openbao-init",
+}
 LOCAL_BUILD_ARGS = (
     "MARTY_RS_URI",
     "MARTY_RS_DIGEST",

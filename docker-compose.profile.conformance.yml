@@ -47,6 +47,8 @@ services:
       # organization-controlled and cannot resolve to a customer mailbox.
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_CONFORMANCE_ADMIN_EMAIL:-conformance@elevenid.dev}
       MARTY_ORG_REVIEWER_EMAIL: ${MARTY_CONFORMANCE_REVIEWER_EMAIL:-conformance.reviewer@elevenid.dev}
+  issuance-migrations:
+    container_name: !reset null
   gateway:
     container_name: !reset null
     ports: !reset []
