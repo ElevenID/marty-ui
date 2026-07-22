@@ -529,6 +529,8 @@ try {
 
     if ($EnablePortableCanvas) {
         Write-Step "Publish the dedicated OpenBao LTI tool public key"
+        $canvasLtiIssuerDid = "did:web:$(([uri]$BetaOrigin).Host):orgs:marty"
+        $canvasLtiVerificationMethodId = "$canvasLtiIssuerDid#lti-tool-marty-rs256"
         $openBaoResponsePath = [IO.Path]::GetTempFileName()
         try {
             $openBaoResponse = & docker exec marty-openbao sh -lc 'BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$BAO_DEV_ROOT_TOKEN_ID" bao read -format=json transit/keys/lti-tool-marty-rs256' 2>$null
@@ -541,7 +543,8 @@ try {
                 "--input", $openBaoResponsePath,
                 "--output", $canvasLtiJwksPath,
                 "--active-kid-output", $canvasLtiActiveKidPath,
-                "--key-name", "lti-tool-marty-rs256"
+                "--key-name", "lti-tool-marty-rs256",
+                "--verification-method-id", $canvasLtiVerificationMethodId
             )
         }
         finally {
@@ -550,7 +553,7 @@ try {
 
         $canvasLtiActiveKid = (Get-Content -LiteralPath $canvasLtiActiveKidPath -Raw).Trim()
         $canvasLtiPublicJwks = (Get-Content -LiteralPath $canvasLtiJwksPath -Raw).Trim()
-        if ($canvasLtiActiveKid -notmatch '^lti-tool-marty-rs256-v[1-9][0-9]*$') {
+        if ($canvasLtiActiveKid -ne $canvasLtiVerificationMethodId) {
             throw "Exported Canvas LTI active kid is invalid"
         }
         $canvasLtiDocument = $canvasLtiPublicJwks | ConvertFrom-Json
@@ -562,9 +565,9 @@ try {
         $env:CANVAS_LTI_EXPERIENCE_BASE_URL = $BetaOrigin
         $env:CANVAS_OAUTH_COMPLETION_REDIRECT_URL = "$BetaOrigin/console/org/deploy/canvas"
         $env:CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID = $PilotOrganizationId
-        $env:CANVAS_LTI_TOOL_SIGNING_SERVICE_ID = "managed-openbao-transit"
-        $env:CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE = "lti-tool-marty-rs256"
-        $env:CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES = "cred-issuer-marty-es256,cred-issuer-marty-es384,cred-issuer-marty-rs256,cred-issuer-marty-eddsa,cred-dsc-marty-primary"
+        $env:CANVAS_LTI_TOOL_ISSUER_PROFILE_ID = "ip-marty-canvas-lti-tool"
+        $env:CANVAS_LTI_TOOL_ISSUER_DID = $canvasLtiIssuerDid
+        $env:CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS = "ip-marty-vc-jwt-issuer,ip-marty-mdoc-dsc,ip-marty-vdsnc-issuer"
         $env:CANVAS_LTI_TOOL_ACTIVE_KID = $canvasLtiActiveKid
         $env:CANVAS_LTI_TOOL_PUBLIC_JWKS = $canvasLtiPublicJwks
         $env:CANVAS_PORTABLE_INTEGRATION_ENABLED = "true"
@@ -641,8 +644,8 @@ $deploymentManifest = [ordered]@{
         enabled = [bool]$EnablePortableCanvas
         canvas_origin = if ($EnablePortableCanvas) { $CanvasOrigin } else { $null }
         pilot_organization_id = if ($EnablePortableCanvas) { $PilotOrganizationId } else { $null }
-        lti_signing_service_id = if ($EnablePortableCanvas) { "managed-openbao-transit" } else { $null }
-        lti_signing_key_reference = if ($EnablePortableCanvas) { "lti-tool-marty-rs256" } else { $null }
+        lti_issuer_profile_id = if ($EnablePortableCanvas) { "ip-marty-canvas-lti-tool" } else { $null }
+        lti_issuer_did = if ($EnablePortableCanvas) { $canvasLtiIssuerDid } else { $null }
         lti_active_kid = $canvasLtiActiveKid
         public_jwks_sha256 = $canvasLtiJwksSha256
         legacy_event_ingest_enabled = $false

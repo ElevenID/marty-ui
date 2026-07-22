@@ -177,26 +177,36 @@ def validate(expected_organization_id: str) -> dict[str, Any]:
 
     signer_settings = (
         "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
-        "CANVAS_LTI_TOOL_SIGNING_SERVICE_ID",
-        "CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE",
+        "CANVAS_LTI_TOOL_ISSUER_PROFILE_ID",
+        "CANVAS_LTI_TOOL_ISSUER_DID",
         "CANVAS_LTI_TOOL_ACTIVE_KID",
         "CANVAS_LTI_TOOL_PUBLIC_JWKS",
-        "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES",
+        "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
     )
     for setting in signer_settings:
         _require(bool(issuance.get(setting, "").strip()), f"Deployed beta issuance is missing {setting}")
         _require(worker.get(setting) == issuance.get(setting), f"Canvas worker {setting} differs from deployed issuance")
-    _require(
-        issuance["CANVAS_LTI_TOOL_SIGNING_SERVICE_ID"] == "managed-openbao-transit",
-        "Beta portability requires the managed OpenBao signing service",
+    issuer_profile_id = issuance["CANVAS_LTI_TOOL_ISSUER_PROFILE_ID"].strip()
+    issuer_did = issuance["CANVAS_LTI_TOOL_ISSUER_DID"].strip()
+    _require(issuer_did.startswith("did:"), "Canvas LTI issuer identity is not a DID")
+    credential_profile_ids = set(
+        _csv(
+            issuance["CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS"],
+            "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
+        )
     )
-    lti_reference = issuance["CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE"].strip()
-    _require(lti_reference.startswith("lti-tool-"), "Managed OpenBao LTI signing key must use the lti-tool- namespace")
-    credential_references = set(_csv(issuance["CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES"], "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES"))
-    _require(lti_reference not in credential_references, "LTI signing key overlaps a credential issuer key")
+    _require(
+        issuer_profile_id not in credential_profile_ids,
+        "LTI issuer profile overlaps a credential issuer profile",
+    )
+    active_kid = issuance["CANVAS_LTI_TOOL_ACTIVE_KID"].strip()
+    _require(
+        active_kid.startswith(f"{issuer_did}#"),
+        "Canvas LTI active kid is not a verification method of its issuer DID",
+    )
     configured_jwks = _validate_jwks(
         issuance["CANVAS_LTI_TOOL_PUBLIC_JWKS"],
-        issuance["CANVAS_LTI_TOOL_ACTIVE_KID"].strip(),
+        active_kid,
     )
     public_jwks = _public_jwks()
     _require(set(public_jwks) == set(configured_jwks), "Public beta JWKS key set differs from deployed signer configuration")
@@ -229,9 +239,9 @@ def validate(expected_organization_id: str) -> dict[str, Any]:
             "pilot_organization_admitted": True,
             "self_managed_origin_allowlisted": True,
             "legacy_event_ingest_disabled": True,
-            "dedicated_managed_openbao_rs256_signer": True,
+            "issuer_profile_did_rs256_signer": True,
             "public_jwks_matches_deployment": True,
-            "credential_and_lti_keys_distinct": True,
+            "credential_and_lti_profiles_distinct": True,
             "canvas_worker_running_same_image": True,
             "readiness_and_evidence_ttls_fail_closed": True,
             "worker_job_deadline_fail_closed": True,

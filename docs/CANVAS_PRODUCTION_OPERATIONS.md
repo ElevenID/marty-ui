@@ -57,32 +57,33 @@ The production defaults are fail-closed:
 | `CANVAS_BACKGROUND_ROSTER_BATCH_SIZE` | `500` | Bounds each worker roster page/batch |
 | `CANVAS_BACKGROUND_ROSTER_MAX_SIZE` | `5000` | Bounds one background roster evaluation job |
 
-Portable Canvas also requires a dedicated remote RS256 tool-signing **key** in
-both the issuance API and `canvas-sync-worker`. The same multi-key KMS service
-may hold both credential and LTI keys, but their key references and registered
-purposes must remain distinct:
+Portable Canvas requires a dedicated RS256 issuer profile and DID identity in
+both the issuance API and `canvas-sync-worker`. Application code selects only
+that profile and DID verification method. The profile owns the private KMS key
+binding, which is never accepted from an issuance or LTI request:
 
 | Setting | Requirement |
 |---|---|
-| `CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID` | Organization that owns the system tool-signing service; it is not selected from a credential template |
-| `CANVAS_LTI_TOOL_SIGNING_SERVICE_ID` | Registered external KMS/signing service ID; service exclusivity is not required |
-| `CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE` | Explicit RSA key reference registered only for `lti_tool_signing`; it must not match a credential issuer/document signer key reference |
-| `CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES` | Required comma-separated inventory of credential issuer/document signer key references; preflight rejects startup if it is empty or overlaps the LTI reference |
-| `CANVAS_LTI_TOOL_ACTIVE_KID` | Active public key ID used in every RS256 client assertion |
+| `CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID` | Organization that owns the issuer profile |
+| `CANVAS_LTI_TOOL_ISSUER_PROFILE_ID` | Active issuer profile selected for LTI tool assertions |
+| `CANVAS_LTI_TOOL_ISSUER_DID` | DID controlled by that issuer profile |
+| `CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS` | Required comma-separated inventory of credential issuer profiles; the dedicated LTI profile must not overlap |
+| `CANVAS_LTI_TOOL_ACTIVE_KID` | DID verification method (`<issuer DID>#<fragment>`) used in every RS256 client assertion |
 | `CANVAS_LTI_TOOL_PUBLIC_JWKS` | Compact public RSA/RS256 JWKS; retiring keys include `retired_at` and remain published for seven days |
 | `SIGNING_KEYS_INTERNAL_URL` and API-key secret | Internal signing gateway used by the API and worker; production Compose mounts the key from a secret file and Kubernetes uses a Secret key |
 
-The production preflight rejects missing signer settings, credential/LTI key
-overlap, an invalid managed-key namespace, a missing active `kid`, non-RSA/RS256
+The production preflight rejects missing signer settings, credential/LTI profile
+overlap, a non-DID issuer, a `kid` outside that DID, non-RSA/RS256
 keys, duplicate key IDs, and every RSA private parameter (`d`, `p`, `q`, `dp`,
 `dq`, `qi`, or `oth`). Never place a private JWK in an environment variable,
 ConfigMap, Compose secret, or deployment artifact.
 
-For a preexisting external KMS key, register its exclusive binding before
-enabling Canvas. The signing-key configuration must contain
+For a preexisting external KMS key, bind it to the LTI issuer profile before
+enabling Canvas. Only the profile layer may contain the underlying
+`signing_service_id` and `signing_key_reference`; its signing-key configuration contains
 `key_reference_purposes.<service_id>.<key_reference> = ["lti_tool_signing"]`.
-The same service may contain other keys with credential purposes, but the LTI
-reference may have no second purpose. Signing, issuer-profile creation/update,
+The same KMS service may contain other keys with credential purposes, but the LTI
+profile's reference may have no second purpose. Signing, issuer-profile creation/update,
 and issuer resolution all fail closed if this binding is absent or conflicts.
 
 Enabling the global flag is insufficient by itself. The organization must also

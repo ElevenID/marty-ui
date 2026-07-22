@@ -120,7 +120,8 @@ def test_seed_issuer_did_and_jwks_excludes_lti_protocol_key() -> None:
     issuer_jwks = json.loads(redis.store[migrations._jwks_storage_key(organization_id)])
     serialized_did = json.dumps(did_document)
     assert "cred-issuer-marty-rs256" in serialized_did
-    assert "lti-tool-marty-rs256" not in serialized_did
+    assert "lti-tool-marty-rs256" in serialized_did
+    assert all("lti-tool-marty-rs256" not in method for method in did_document["assertionMethod"])
     assert [key["kid"] for key in issuer_jwks["keys"]] == ["cred-issuer-marty-rs256"]
 
 
@@ -144,6 +145,7 @@ def test_seed_issuer_profiles_creates_active_marty_kms_profiles():
     assert set(profiles) == {
         "ip-marty-vc-jwt-issuer",
         "ip-marty-oid4vp-verifier",
+        "ip-marty-canvas-lti-tool",
         "ip-marty-mdoc-dsc",
         "ip-marty-vdsnc-issuer",
     }
@@ -164,6 +166,12 @@ def test_seed_issuer_profiles_creates_active_marty_kms_profiles():
         profiles["ip-marty-oid4vp-verifier"]["key_purpose"] == "oid4vp_request_signing"
     )
     assert profiles["ip-marty-oid4vp-verifier"]["algorithm"] == "ES256"
+    assert (
+        profiles["ip-marty-canvas-lti-tool"]["signing_key_reference"]
+        == "lti-tool-marty-rs256"
+    )
+    assert profiles["ip-marty-canvas-lti-tool"]["key_purpose"] == "lti_tool_signing"
+    assert profiles["ip-marty-canvas-lti-tool"]["algorithm"] == "RS256"
     assert (
         profiles["ip-marty-mdoc-dsc"]["signing_key_reference"]
         == "cred-dsc-marty-primary"
