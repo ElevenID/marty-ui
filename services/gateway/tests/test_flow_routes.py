@@ -9,14 +9,34 @@ from gateway.routes import flows
 from gateway.models import StartVerificationFlowRequest
 
 
-def test_gateway_preserves_haip_and_post_request_uri_options() -> None:
+def test_gateway_preserves_profile_haip_and_post_request_uri_options() -> None:
     request = StartVerificationFlowRequest(
         presentation_policy_id="policy-1",
+        issuer_profile_id="issuer-profile-1",
+        issuer_did="did:web:verifier.example",
         oid4vp_profile="haip",
         request_uri_method="post",
     )
+    assert request.model_dump()["issuer_profile_id"] == "issuer-profile-1"
+    assert request.model_dump()["issuer_did"] == "did:web:verifier.example"
     assert request.model_dump()["oid4vp_profile"] == "haip"
     assert request.model_dump()["request_uri_method"] == "post"
+
+
+@pytest.mark.parametrize(
+    "direct_kms_field",
+    ("signing_service_id", "signing_key_reference", "issuer_key_id"),
+)
+def test_verification_flow_rejects_direct_kms_routing(direct_kms_field: str) -> None:
+    with pytest.raises(ValueError, match=direct_kms_field):
+        StartVerificationFlowRequest.model_validate(
+            {
+                "presentation_policy_id": "policy-1",
+                "issuer_profile_id": "issuer-profile-1",
+                "issuer_did": "did:web:verifier.example",
+                direct_kms_field: "must-not-cross-runtime-boundary",
+            }
+        )
 
 
 @pytest.mark.asyncio

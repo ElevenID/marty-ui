@@ -83,9 +83,18 @@ def issuer_profile_signer(monkeypatch):
         "algorithm": "ES256",
     }
 
-    async def _identity(_organization_id: str, issuer_profile_id: str | None = None):
+    async def _identity(
+        _organization_id: str,
+        issuer_profile_id: str | None = None,
+        expected_issuer_did: str | None = None,
+    ):
         result = dict(identity)
         result["issuer_profile_id"] = issuer_profile_id or identity["issuer_profile_id"]
+        if expected_issuer_did and expected_issuer_did != result["issuer_did"]:
+            raise HTTPException(
+                status_code=409,
+                detail="Selected issuer profile does not own the requested issuer DID",
+            )
         return result
 
     async def _sign(**kwargs):
@@ -944,6 +953,37 @@ async def test_application_approved_webhook_manual_issue_does_not_bootstrap_defa
 
 
 @pytest.mark.asyncio
+async def test_start_verification_rejects_profile_did_mismatch(monkeypatch) -> None:
+    _install_reference_validation_stubs(
+        monkeypatch,
+        templates={},
+        policies={
+            "policy-1": {
+                "organization_id": "org-1",
+                "status": "active",
+                "credential_requirements_json": "[]",
+            },
+        },
+    )
+
+    with pytest.raises(HTTPException) as failure:
+        await start_verification_flow(
+            StartVerificationFlowRequest(
+                presentation_policy_id="policy-1",
+                issuer_profile_id="issuer-profile-1",
+                issuer_did="did:web:attacker.example",
+            ),
+            user_id="auth-service",
+            repo=InMemoryFlowRepository(),
+        )
+
+    assert failure.value.status_code == 409
+    assert failure.value.detail == (
+        "Selected issuer profile does not own the requested issuer DID"
+    )
+
+
+@pytest.mark.asyncio
 async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
     monkeypatch,
 ):
@@ -963,10 +1003,18 @@ async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
     repo = InMemoryFlowRepository()
 
     started = await start_verification_flow(
-        StartVerificationFlowRequest(presentation_policy_id="policy-1"),
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            issuer_profile_id="issuer-profile-1",
+            issuer_did="did:web:verifier.example:oid4vp",
+        ),
         user_id="auth-service",
         repo=repo,
     )
+    instance = await repo.get_instance(started.instance_id)
+    assert instance is not None
+    assert instance.context["oid4vp_issuer_profile_id"] == "issuer-profile-1"
+    assert instance.context["oid4vp_issuer_did"] == "did:web:verifier.example:oid4vp"
     parsed = urlparse(started.request_uri)
     parameters = parse_qs(parsed.query)
     client_identifier = "decentralized_identifier:did:web:verifier.example:oid4vp"
