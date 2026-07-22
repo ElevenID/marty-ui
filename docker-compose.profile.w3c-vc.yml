@@ -2,7 +2,8 @@
 #
 # This is deliberately an overlay instead of a production default. It exposes
 # the gateway's test-only VC API adapter only for an isolated conformance
-# deployment and requires an active fixture presentation policy. The adapter
+# deployment and requires separate active credential and presentation
+# policies. The adapter
 # forwards to the normal presentation-policy evaluator; it is not an inline
 # verifier or a test bypass.
 
@@ -10,7 +11,8 @@ services:
   gateway:
     environment:
       W3C_VC_TEST_ADAPTER: "1"
-      W3C_VC_TEST_POLICY_ID: ${W3C_VC_TEST_POLICY_ID:?set W3C_VC_TEST_POLICY_ID to a disposable fixture policy}
+      W3C_VC_TEST_CREDENTIAL_POLICY_ID: ${W3C_VC_TEST_CREDENTIAL_POLICY_ID:?set a disposable JWT credential policy}
+      W3C_VC_TEST_PRESENTATION_POLICY_ID: ${W3C_VC_TEST_PRESENTATION_POLICY_ID:?set a disposable Data Integrity presentation policy}
       W3C_VC_TEST_ORGANIZATION_ID: ${W3C_VC_TEST_ORGANIZATION_ID:?set W3C_VC_TEST_ORGANIZATION_ID to a disposable fixture organization}
       W3C_VC_TEST_TEMPLATE_ID: ${W3C_VC_TEST_TEMPLATE_ID:?set W3C_VC_TEST_TEMPLATE_ID to a disposable JWT-VC fixture template}
       # The upstream W3C suite issues many independent documents in a short

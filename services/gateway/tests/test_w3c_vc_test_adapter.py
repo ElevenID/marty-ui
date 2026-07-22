@@ -32,7 +32,7 @@ def test_adapter_is_disabled_without_explicit_environment(
 ) -> None:
     monkeypatch.delenv("W3C_VC_TEST_ADAPTER", raising=False)
     with pytest.raises(HTTPException) as exc_info:
-        adapter._enabled_policy_id()
+        adapter._enabled_policy_id(presentation=False)
     assert exc_info.value.status_code == 404
 
 
@@ -221,7 +221,7 @@ def test_issuer_adapter_requires_explicit_disposable_fixture_configuration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
-    monkeypatch.setenv("W3C_VC_TEST_POLICY_ID", "fixture-policy")
+    monkeypatch.setenv("W3C_VC_TEST_CREDENTIAL_POLICY_ID", "fixture-policy")
     monkeypatch.delenv("W3C_VC_TEST_ORGANIZATION_ID", raising=False)
     monkeypatch.delenv("W3C_VC_TEST_TEMPLATE_ID", raising=False)
     with pytest.raises(HTTPException) as exc_info:
@@ -274,7 +274,7 @@ async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
-    monkeypatch.setenv("W3C_VC_TEST_POLICY_ID", "fixture-policy")
+    monkeypatch.setenv("W3C_VC_TEST_CREDENTIAL_POLICY_ID", "fixture-policy")
     monkeypatch.setenv("W3C_VC_TEST_ORGANIZATION_ID", "fixture-org")
     monkeypatch.setenv("W3C_VC_TEST_TEMPLATE_ID", "fixture-template")
     credential = _official_baseline_credential()
@@ -392,7 +392,7 @@ async def test_adapter_forwards_supported_token_to_actual_policy_evaluator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
-    monkeypatch.setenv("W3C_VC_TEST_POLICY_ID", "fixture-policy")
+    monkeypatch.setenv("W3C_VC_TEST_CREDENTIAL_POLICY_ID", "fixture-policy")
 
     class Registry:
         @staticmethod
@@ -413,7 +413,10 @@ async def test_adapter_forwards_supported_token_to_actual_policy_evaluator(
     monkeypatch.setattr(adapter, "proxy_request", fake_proxy)
 
     response = await adapter._evaluate(
-        "header.payload.signature", {"challenge": "n", "domain": "aud"}, _request()
+        "header.payload.signature",
+        {"challenge": "n", "domain": "aud"},
+        _request(),
+        presentation=False,
     )
 
     assert response.status_code == 200
@@ -432,7 +435,7 @@ async def test_adapter_forwards_data_integrity_document_without_stringifying_it_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
-    monkeypatch.setenv("W3C_VC_TEST_POLICY_ID", "fixture-policy")
+    monkeypatch.setenv("W3C_VC_TEST_PRESENTATION_POLICY_ID", "fixture-policy")
     document = {
         "@context": ["https://www.w3.org/ns/credentials/v2"],
         "type": ["VerifiablePresentation"],
@@ -457,7 +460,10 @@ async def test_adapter_forwards_data_integrity_document_without_stringifying_it_
     monkeypatch.setattr(adapter, "proxy_request", fake_proxy)
 
     response = await adapter._evaluate(
-        document, {"challenge": "n", "domain": "aud"}, _request()
+        document,
+        {"challenge": "n", "domain": "aud"},
+        _request(),
+        presentation=True,
     )
     assert response.status_code == 200
     assert json.loads(response.body)["verified"] is True
@@ -469,7 +475,7 @@ async def test_adapter_maps_policy_denial_to_vc_api_rejection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
-    monkeypatch.setenv("W3C_VC_TEST_POLICY_ID", "fixture-policy")
+    monkeypatch.setenv("W3C_VC_TEST_CREDENTIAL_POLICY_ID", "fixture-policy")
 
     class Registry:
         @staticmethod
@@ -485,7 +491,9 @@ async def test_adapter_maps_policy_denial_to_vc_api_rejection(
     monkeypatch.setattr(adapter, "get_registry", lambda: Registry())
     monkeypatch.setattr(adapter, "proxy_request", fake_proxy)
 
-    response = await adapter._evaluate("a.b.c", {}, _request())
+    response = await adapter._evaluate(
+        "a.b.c", {}, _request(), presentation=False
+    )
     assert response.status_code == 422
     assert json.loads(response.body) == {
         "verified": False,
