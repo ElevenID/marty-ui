@@ -1157,8 +1157,15 @@ class EvaluateInlineRequest(BaseModel):
 # =============================================================================
 
 class StartVerificationFlowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     presentation_policy_id: str | None = None
     organization_id: str | None = None
+    # Select the issuer profile and assert the DID that signs the OID4VP
+    # Request Object. KMS service/key routing remains an internal property of
+    # that profile and is deliberately not accepted by this API.
+    issuer_profile_id: str | None = Field(None, max_length=255)
+    issuer_did: str | None = Field(None, pattern=r"^did:", max_length=2048)
     response_type: str = "vp_token"
     trust_profile_id: str | None = None
     deployment_profile_id: str | None = None
