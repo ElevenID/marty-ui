@@ -1049,7 +1049,12 @@ def _verify_credential_by_format(
                 f"Credential format {credential_format} requires a string serialization"
             )
         if credential_format == "w3c-vc":
-            return _verify_w3c_vc(vp_token, nonce, audience)
+            return _verify_w3c_vc(
+                vp_token,
+                nonce,
+                audience,
+                issuer_public_jwk,
+            )
         elif credential_format == "sd-jwt":
             return _verify_sd_jwt(vp_token, nonce, audience, issuer_public_jwk)
         elif credential_format == "mdoc":
@@ -1164,8 +1169,19 @@ def _verify_vcdm_data_integrity(
     }
 
 
-def _verify_w3c_vc(vp_token: str, nonce: str | None, audience: str | None) -> dict:
-    """Verify W3C Verifiable Credential via Rust OID4VP engine."""
+def _verify_w3c_vc(
+    vp_token: str,
+    _nonce: str | None,
+    _audience: str | None,
+    issuer_public_jwk: dict[str, Any] | None = None,
+) -> dict:
+    """Verify a standalone VCDM v2 VC-JWT against issuer-profile DID material.
+
+    The protected JWT header and payload are decoded only to select public
+    verification material. Trust and acceptance come exclusively from the
+    released Rust verifier. Signing remains behind the issuer profile and this
+    path never accepts a KMS key coordinate or private JWK.
+    """
     _marty_rs = _load_marty_rs_binding()
     if _marty_rs is None:
         logger.warning("_marty_rs not available — W3C VC verification disabled")
@@ -1178,52 +1194,59 @@ def _verify_w3c_vc(vp_token: str, nonce: str | None, audience: str | None) -> di
         }
 
     try:
-        import json as _json
-
-        if hasattr(_marty_rs, "oid4vp_verify_vp_token"):
-            result_json = _marty_rs.oid4vp_verify_vp_token(
-                vp_token,
-                nonce or "",
-                audience or "",
+        if not hasattr(_marty_rs, "verify_vcdm_jwt"):
+            raise RuntimeError(
+                "marty-rs VCDM JWT verification function is not available"
             )
-        elif hasattr(_marty_rs, "verify_vp_token_jwt"):
-            result_json = _marty_rs.verify_vp_token_jwt(
-                audience or "",
-                audience or "",
-                vp_token,
-                nonce or "",
+
+        header, payload = _jwt_header_and_payload(vp_token)
+        issuer = payload.get("iss")
+        if not isinstance(issuer, str) or not issuer:
+            raise ValueError("VC-JWT payload does not contain an issuer")
+        kid = header.get("kid") if isinstance(header.get("kid"), str) else None
+
+        public_jwk = issuer_public_jwk
+        if public_jwk is None and not issuer.startswith("did:key:"):
+            did_document = _resolve_did_document(issuer)
+            public_jwk = _select_public_jwk_from_did_document(
+                did_document,
+                issuer,
+                kid,
             )
-        else:
-            raise RuntimeError("marty-rs OID4VP verification function is not available")
-        result = _json.loads(result_json)
-        is_valid = result.get("valid", False)
-        errors = result.get("errors", [])
 
-        # Extract claims from the VP token payload
-        claims = {}
-        try:
-            import base64 as _b64
-
-            parts = vp_token.split(".")
-            if len(parts) >= 2:
-                padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
-                payload = _json.loads(_b64.urlsafe_b64decode(padded))
-                claims = payload.get(
-                    "credentialSubject",
-                    payload.get("vc", {}).get("credentialSubject", {}),
-                )
-                issuer = payload.get("iss", payload.get("issuer", "unknown"))
-            else:
-                issuer = "unknown"
-        except Exception:
-            issuer = "unknown"
+        request: dict[str, Any] = {"token": vp_token}
+        if public_jwk is not None:
+            request["issuer_public_jwk"] = public_jwk
+        result = json.loads(_marty_rs.verify_vcdm_jwt(json.dumps(request)))
+        if not isinstance(result, dict):
+            raise ValueError("VCDM JWT verifier returned a non-object result")
+        is_valid = result.get("valid") is True
+        verified_payload = result.get("claims") if is_valid else None
+        verified_vc = (
+            verified_payload.get("vc")
+            if isinstance(verified_payload, dict)
+            and isinstance(verified_payload.get("vc"), dict)
+            else {}
+        )
+        claims = verified_vc.get("credentialSubject", {})
+        if not isinstance(claims, (dict, list)):
+            claims = {}
+        verified_issuer = result.get("issuer") if is_valid else None
+        errors = result.get("errors")
+        error_count = len(errors) if isinstance(errors, list) else 1
 
         return {
             "verified": is_valid,
             "claims": claims,
-            "issuer_did": issuer,
+            "issuer_did": verified_issuer
+            if isinstance(verified_issuer, str)
+            else "unknown",
             "format": "w3c-vc",
-            "error": "; ".join(errors) if errors else None,
+            "error": (
+                None
+                if is_valid
+                else f"VCDM JWT verification rejected the credential ({error_count} error(s))"
+            ),
         }
     except Exception as e:
         logger.error("W3C VC Rust verification failed: %s", e)
