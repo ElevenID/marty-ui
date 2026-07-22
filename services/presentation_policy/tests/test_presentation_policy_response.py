@@ -489,6 +489,60 @@ def test_w3c_vc_fails_closed_without_profile_public_key(
     assert "no issuer profile DID key" in result["error"]
 
 
+def test_w3c_vc_logs_only_fixed_verifier_error_categories(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    issuer = "did:web:issuer.example:profiles:private"
+    kid = f"{issuer}#secret-key-name"
+    token = ".".join(
+        [
+            _jwt_segment({"alg": "ES256", "kid": kid}),
+            _jwt_segment(
+                {
+                    "iss": issuer,
+                    "vc": {
+                        "@context": ["https://www.w3.org/ns/credentials/v2"],
+                        "type": ["VerifiableCredential"],
+                        "issuer": issuer,
+                        "credentialSubject": {"id": "did:example:alice"},
+                    },
+                }
+            ),
+            "signature",
+        ]
+    )
+    errors = [
+        f"VC-JWT signature is invalid for {kid}",
+        f"issuer {issuer} does not match key controller",
+    ]
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_vcdm_jwt=lambda _request: json.dumps(
+                {
+                    "valid": False,
+                    "issuer": issuer,
+                    "claims": None,
+                    "errors": errors,
+                }
+            )
+        ),
+    )
+
+    result = pp._verify_w3c_vc(
+        token,
+        None,
+        None,
+        {"kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y"},
+    )
+
+    assert result["verified"] is False
+    assert "issuer-binding,signature" in caplog.text
+    assert issuer not in caplog.text
+    assert "secret-key-name" not in caplog.text
+
+
 def test_open_badge_login_policy_format_accepts_sd_jwt_aliases() -> None:
     assert pp._credential_format_satisfies_requirement("sd-jwt", "sd_jwt_vc")
     assert pp._credential_format_satisfies_requirement("sd-jwt", "dc+sd-jwt")

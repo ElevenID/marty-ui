@@ -1234,6 +1234,13 @@ def _verify_w3c_vc(
         verified_issuer = result.get("issuer") if is_valid else None
         errors = result.get("errors")
         error_count = len(errors) if isinstance(errors, list) else 1
+        if not is_valid:
+            categories = _vcdm_jwt_error_categories(errors)
+            logger.warning(
+                "VCDM JWT verification error categories=%s error_count=%d",
+                ",".join(categories),
+                error_count,
+            )
 
         return {
             "verified": is_valid,
@@ -1257,6 +1264,50 @@ def _verify_w3c_vc(
             "format": "w3c-vc",
             "error": str(e),
         }
+
+
+def _vcdm_jwt_error_categories(errors: Any) -> list[str]:
+    """Reduce Rust verifier details to stable, non-sensitive diagnostics.
+
+    The full verifier errors can contain issuer DIDs or verification-method
+    identifiers. Those values must not be copied into public conformance logs.
+    Categories are intentionally coarse: they identify the failed contract
+    layer without exposing credential or key material.
+    """
+    messages = errors if isinstance(errors, list) else []
+    categories: set[str] = set()
+    rules = (
+        ("private-key-material", ("private key", "private parameter")),
+        ("signature", ("signature",)),
+        (
+            "public-key-resolution",
+            ("public jwk", "public key", "did:key", "resolve", "verification method"),
+        ),
+        ("issuer-binding", ("issuer", "controller", "`kid`", "key id")),
+        ("context", ("context",)),
+        ("credential-type", ("credential type", "verifiablecredential")),
+        ("credential-subject", ("credentialsubject", "`sub`", "subject")),
+        (
+            "validity",
+            ("expired", "not yet valid", "numericdate", "validfrom", "validuntil"),
+        ),
+        (
+            "serialization",
+            ("compact jws", "payload", "json", "jwt verification request"),
+        ),
+    )
+    for message in messages:
+        normalized = str(message).lower()
+        category = next(
+            (
+                name
+                for name, needles in rules
+                if any(needle in normalized for needle in needles)
+            ),
+            "verifier",
+        )
+        categories.add(category)
+    return sorted(categories or {"verifier"})
 
 
 def _verify_sd_jwt(
