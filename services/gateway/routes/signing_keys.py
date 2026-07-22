@@ -1290,6 +1290,37 @@ def _pem_to_x5c_entry(pem_cert: str) -> str | None:
         return None
 
 
+def _certificate_public_jwk(cert_pem: str) -> dict[str, Any] | None:
+    """Extract the public JWK from a PEM certificate without private material."""
+
+    if not _CRYPTOGRAPHY_AVAILABLE or not isinstance(cert_pem, str):
+        return None
+    try:
+        from cryptography import x509
+
+        certificate = x509.load_pem_x509_certificate(cert_pem.encode("ascii"))
+    except Exception:
+        return None
+    return _public_key_object_to_jwk(certificate.public_key())
+
+
+def _same_public_jwk(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """Compare only public key coordinates, ignoring JOSE metadata."""
+
+    fields_by_type = {
+        "EC": ("kty", "crv", "x", "y"),
+        "RSA": ("kty", "n", "e"),
+        "OKP": ("kty", "crv", "x"),
+    }
+    key_type = left.get("kty")
+    fields = fields_by_type.get(key_type)
+    return bool(
+        fields
+        and right.get("kty") == key_type
+        and all(left.get(field) == right.get(field) for field in fields)
+    )
+
+
 def _service_x5c_chain(service: dict[str, Any]) -> list[str]:
     chain = _split_pem_chain(service.get("cert_chain_pem"))
     leaf = _split_pem_chain(service.get("cert_pem"))
@@ -4691,11 +4722,11 @@ async def internal_resolve_issuer_context(
     ) or normalized.get("key_reference")
     effective_profile["key_purpose"] = requested_purpose or "vc_jwt_issuer"
     _assert_issuer_profile_key_compatible(effective_profile, registry)
-    # mDoc issuer authentication uses an X.509 chain in the protected COSE
-    # header.  Return it only on this internal, service-to-service contract;
-    # it is public certificate material, but must not be supplied by a wallet
-    # claim or inferred by the issuance service.
-    mdoc_x5c = _service_x5c_chain(normalized)
+    # Certificate material belongs to the issuer profile identity. It is
+    # resolved from the profile's custody binding inside the gateway and must
+    # never be supplied by a wallet or credential request. Both SD-JWT JOSE
+    # and mDoc COSE issuance consume this same public chain.
+    issuer_x5c = _service_x5c_chain(normalized)
     if credential_format or requested_purpose or algorithm:
         resolved = _resolve_service_for_format(
             registry, credential_format, requested_purpose, algorithm
@@ -4732,7 +4763,10 @@ async def internal_resolve_issuer_context(
             "key_purpose": profile.get("key_purpose")
             or requested_purpose
             or "vc_jwt_issuer",
-            "mdoc_x5c": mdoc_x5c,
+            "issuer_x5c": issuer_x5c,
+            # Compatibility for marty-credentials releases predating the
+            # profile-wide issuer_x5c name.
+            "mdoc_x5c": issuer_x5c,
             "issuer_profile": profile,
             "service": normalized,
         }
@@ -6140,6 +6174,119 @@ async def get_issuer_profile(
     if profile is None:
         raise HTTPException(status_code=404, detail="Issuer profile not found.")
     return JSONResponse(content={"profile": profile})
+
+
+@signing_key_router.get(
+    "/issuer-profiles/{profile_id}/public-identity",
+    summary="Get Issuer Profile Public Identity",
+    response_class=JSONResponse,
+)
+async def get_issuer_profile_public_identity(
+    request: Request,
+    profile_id: str,
+    organization_id: str | None = Query(None),
+):
+    """Return the profile's DID key and public certificate chain.
+
+    The response intentionally omits the profile's KMS service and provider key
+    coordinates. Protocol tooling addresses the issuer profile and its DID;
+    only the gateway resolves the custody binding.
+    """
+
+    resolved_org_id = _resolve_org_id(request, organization_id)
+    profile, identity = await _resolve_exact_issuer_profile_identity(
+        request,
+        organization_id=resolved_org_id,
+        issuer_profile_id=profile_id,
+    )
+    service_id = str(profile["signing_service_id"])
+    key_reference = str(profile["signing_key_reference"])
+    _, _, normalized, _ = await _resolve_effective_service(
+        request,
+        resolved_org_id,
+        service_id,
+        key_reference_override=key_reference,
+    )
+    return JSONResponse(
+        content={
+            "issuer_profile_id": profile_id,
+            "issuer_did": identity["issuer_did"],
+            "verification_method_id": identity["verification_method_id"],
+            "public_jwk": identity["public_jwk"],
+            "algorithm": profile.get("algorithm") or "ES256",
+            "x5c": _service_x5c_chain(normalized),
+            "certificate_expires_at": normalized.get("cert_expires_at"),
+        }
+    )
+
+
+@signing_key_router.put(
+    "/issuer-profiles/{profile_id}/certificate",
+    summary="Attach Certificate to Issuer Profile",
+    response_class=JSONResponse,
+)
+async def store_issuer_profile_certificate(
+    request: Request,
+    profile_id: str,
+    body: dict = Body(default_factory=dict),
+    organization_id: str | None = Query(None),
+):
+    """Attach an X.509 chain to the profile's DID signing key.
+
+    The leaf certificate must wrap the exact public key published by the
+    profile's DID. The caller cannot choose or override a KMS service/key.
+    """
+
+    resolved_org_id = _resolve_org_id(request, organization_id)
+    profile, identity = await _resolve_exact_issuer_profile_identity(
+        request,
+        organization_id=resolved_org_id,
+        issuer_profile_id=profile_id,
+    )
+    cert_pem = body.get("cert_pem") if isinstance(body.get("cert_pem"), str) else ""
+    certificate_jwk = _certificate_public_jwk(cert_pem)
+    identity_jwk = identity.get("public_jwk")
+    if not certificate_jwk:
+        raise HTTPException(
+            status_code=400, detail="cert_pem is not a valid supported certificate."
+        )
+    if not isinstance(identity_jwk, dict) or not _same_public_jwk(
+        certificate_jwk, identity_jwk
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Certificate public key does not match the issuer profile DID key.",
+        )
+
+    service_id = str(profile["signing_service_id"])
+    await store_service_certificate(
+        request=request,
+        service_id=service_id,
+        body=body,
+        organization_id=resolved_org_id,
+    )
+    _, _, normalized, _ = await _resolve_effective_service(
+        request,
+        resolved_org_id,
+        service_id,
+        key_reference_override=str(profile["signing_key_reference"]),
+    )
+    x5c = _service_x5c_chain(normalized)
+    if not x5c:
+        raise HTTPException(
+            status_code=500,
+            detail="Issuer profile certificate chain was not persisted.",
+        )
+    return JSONResponse(
+        content={
+            "ok": True,
+            "issuer_profile_id": profile_id,
+            "issuer_did": identity["issuer_did"],
+            "verification_method_id": identity["verification_method_id"],
+            "certificate_chain_length": len(x5c),
+            "certificate_expires_at": normalized.get("cert_expires_at"),
+        }
+    )
 
 
 @signing_key_router.patch(
