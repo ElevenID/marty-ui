@@ -42,9 +42,9 @@ def test_compose_stacks_run_canvas_worker_outside_issuance_web_process() -> None
         assert {"TOKEN_HMAC_KEY", "TOKEN_HMAC_KEY_FILE"}.intersection(environment)
         assert "CANVAS_LEGACY_EVENT_INGEST_ENABLED" in environment
         assert "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID" in environment
-        assert "CANVAS_LTI_TOOL_SIGNING_SERVICE_ID" in environment
-        assert "CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE" in environment
-        assert "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES" in environment
+        assert "CANVAS_LTI_TOOL_ISSUER_PROFILE_ID" in environment
+        assert "CANVAS_LTI_TOOL_ISSUER_DID" in environment
+        assert "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS" in environment
         assert "CANVAS_LTI_TOOL_ACTIVE_KID" in environment
         assert "CANVAS_LTI_TOOL_PUBLIC_JWKS" in environment
         assert environment["CANVAS_BINDING_READINESS_MAX_AGE_SECONDS"].endswith(
@@ -57,9 +57,9 @@ def test_compose_stacks_run_canvas_worker_outside_issuance_web_process() -> None
         assert {"SIGNING_KEYS_INTERNAL_API_KEY", "SIGNING_KEYS_INTERNAL_API_KEY_FILE"}.intersection(environment)
         for key in (
             "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
-            "CANVAS_LTI_TOOL_SIGNING_SERVICE_ID",
-            "CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE",
-            "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES",
+            "CANVAS_LTI_TOOL_ISSUER_PROFILE_ID",
+            "CANVAS_LTI_TOOL_ISSUER_DID",
+            "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
             "CANVAS_LTI_TOOL_ACTIVE_KID",
             "CANVAS_LTI_TOOL_PUBLIC_JWKS",
         ):
@@ -185,9 +185,9 @@ def test_kubernetes_canvas_worker_configuration_includes_safe_defaults() -> None
         "CANVAS_PILOT_ORGANIZATION_IDS",
         "CANVAS_LEGACY_EVENT_INGEST_ENABLED",
         "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
-        "CANVAS_LTI_TOOL_SIGNING_SERVICE_ID",
-        "CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE",
-        "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES",
+        "CANVAS_LTI_TOOL_ISSUER_PROFILE_ID",
+        "CANVAS_LTI_TOOL_ISSUER_DID",
+        "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
         "CANVAS_LTI_TOOL_ACTIVE_KID",
         "CANVAS_LTI_TOOL_PUBLIC_JWKS",
         "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
@@ -227,13 +227,14 @@ def test_production_preflight_requires_a_configured_canvas_worker_processor() ->
         "CANVAS_PILOT_ORGANIZATION_IDS": "org-pilot",
         "CANVAS_LEGACY_EVENT_INGEST_ENABLED": "false",
         "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID": "system-tools",
-        "CANVAS_LTI_TOOL_SIGNING_SERVICE_ID": "canvas-lti-rs256",
-        "CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE": "kms://canvas-lti-key",
-        "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES": "kms://credential-issuer-key",
-        "CANVAS_LTI_TOOL_ACTIVE_KID": "canvas-lti-active",
+        "CANVAS_LTI_TOOL_ISSUER_PROFILE_ID": "ip-marty-canvas-lti-tool",
+        "CANVAS_LTI_TOOL_ISSUER_DID": "did:web:marty.example.com:orgs:system-tools",
+        "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS": "ip-marty-vc-jwt-issuer",
+        "CANVAS_LTI_TOOL_ACTIVE_KID": "did:web:marty.example.com:orgs:system-tools#lti-tool-rs256",
         "CANVAS_LTI_TOOL_PUBLIC_JWKS": (
             '{"keys":[{"kty":"RSA","alg":"RS256","use":"sig",'
-            '"kid":"canvas-lti-active","n":"public-modulus","e":"AQAB"}]}'
+            '"kid":"did:web:marty.example.com:orgs:system-tools#lti-tool-rs256",'
+            '"n":"public-modulus","e":"AQAB"}]}'
         ),
         "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "600",
     }
@@ -242,7 +243,7 @@ def test_production_preflight_requires_a_configured_canvas_worker_processor() ->
         validate(enabled)
 
     without_issuer_inventory = dict(enabled)
-    without_issuer_inventory.pop("CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES")
+    without_issuer_inventory.pop("CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS")
     with pytest.raises(check_error, match="must inventory"):
         validate({**without_issuer_inventory, "CANVAS_SYNC_PROCESSOR": PROCESSOR})
 
@@ -268,33 +269,29 @@ def test_production_preflight_requires_a_configured_canvas_worker_processor() ->
             "CANVAS_LTI_TOOL_PUBLIC_JWKS": private_jwks,
         })
 
-    with pytest.raises(check_error, match="credential issuer/document-signing key"):
+    with pytest.raises(check_error, match="must be a DID"):
         validate({
             **enabled,
             "CANVAS_SYNC_PROCESSOR": PROCESSOR,
-            "CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE": "cred-issuer-marty-rs256",
+            "CANVAS_LTI_TOOL_ISSUER_DID": "kms://canvas-lti-key",
         })
 
     with pytest.raises(check_error, match="also listed"):
         validate({
             **enabled,
             "CANVAS_SYNC_PROCESSOR": PROCESSOR,
-            "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES": (
-                "kms://credential-key,kms://canvas-lti-key"
-            ),
+            "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS": "ip-credential,ip-marty-canvas-lti-tool",
         })
 
-    with pytest.raises(check_error, match="lti-tool- namespace"):
+    with pytest.raises(check_error, match="verification method"):
         validate({
             **enabled,
             "CANVAS_SYNC_PROCESSOR": PROCESSOR,
-            "CANVAS_LTI_TOOL_SIGNING_SERVICE_ID": "managed-openbao-transit",
+            "CANVAS_LTI_TOOL_ACTIVE_KID": "did:web:other.example#key-1",
         })
 
-    managed = validate({
+    configured = validate({
         **enabled,
         "CANVAS_SYNC_PROCESSOR": PROCESSOR,
-        "CANVAS_LTI_TOOL_SIGNING_SERVICE_ID": "managed-openbao-transit",
-        "CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE": "lti-tool-marty-rs256",
     })
-    assert "CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE" in managed
+    assert "CANVAS_LTI_TOOL_ISSUER_DID" in configured

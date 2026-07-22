@@ -162,6 +162,13 @@ MARTY_ISSUER_PROFILE_SPECS: list[dict[str, str]] = [
         "algorithm": "ES256",
     },
     {
+        "id": "ip-marty-canvas-lti-tool",
+        "name": "Marty Canvas LTI tool",
+        "signing_key_reference": "lti-tool-marty-rs256",
+        "key_purpose": "lti_tool_signing",
+        "algorithm": "RS256",
+    },
+    {
         "id": "ip-marty-mdoc-dsc",
         "name": "Marty mDoc document signer",
         "signing_key_reference": "cred-dsc-marty-primary",
@@ -717,15 +724,8 @@ def _seed_did_and_jwks(
         )
     ]
 
-    # Protocol/client-assertion keys are published only through the Canvas LTI
-    # JWKS. They must never become credential issuer assertion methods.
-    issuer_key_records = [
-        record
-        for record in key_records
-        if "lti_tool_signing" not in (record.get("key_purposes") or [])
-    ]
     jwks = []
-    for record in issuer_key_records:
+    for record in key_records:
         key_id = record["id"]
         fragment = _did_fragment_for_key_reference(key_id)
         vm_id = f"{issuer_did}#{fragment}"
@@ -737,9 +737,13 @@ def _seed_did_and_jwks(
             "controller": issuer_did,
             "publicKeyJwk": public_jwk,
         }
-        if vm_id not in assertion:
-            assertion.append(vm_id)
-        jwks.append(public_jwk)
+        # The LTI client-assertion key is controlled by the issuer profile and
+        # its DID verification method, but is not a credential assertion method
+        # and is not exposed through the credential-issuer JWKS collection.
+        if "lti_tool_signing" not in (record.get("key_purposes") or []):
+            if vm_id not in assertion:
+                assertion.append(vm_id)
+            jwks.append(public_jwk)
 
     did_doc["verificationMethod"] = list(methods_by_id.values())
     did_doc["assertionMethod"] = assertion

@@ -20,16 +20,16 @@ def _environment() -> dict[str, str]:
         "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS": "900",
         "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS": "900",
         "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID": "org-signing-system",
-        "CANVAS_LTI_TOOL_SIGNING_SERVICE_ID": "managed-openbao-transit",
-        "CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE": "lti-tool-beta-rs256",
-        "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES": "cred-issuer-beta",
-        "CANVAS_LTI_TOOL_ACTIVE_KID": "lti-beta-1",
+        "CANVAS_LTI_TOOL_ISSUER_PROFILE_ID": "ip-marty-canvas-lti-tool",
+        "CANVAS_LTI_TOOL_ISSUER_DID": "did:web:beta.elevenidllc.com:orgs:marty",
+        "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS": "ip-marty-vc-jwt-issuer",
+        "CANVAS_LTI_TOOL_ACTIVE_KID": "did:web:beta.elevenidllc.com:orgs:marty#lti-tool-marty-rs256",
         "CANVAS_LTI_TOOL_PUBLIC_JWKS": json.dumps(
             {
                 "keys": [
                     {
                         "kty": "RSA",
-                        "kid": "lti-beta-1",
+                        "kid": "did:web:beta.elevenidllc.com:orgs:marty#lti-tool-marty-rs256",
                         "alg": "RS256",
                         "use": "sig",
                         "n": "public-modulus",
@@ -63,7 +63,7 @@ def test_beta_capability_preflight_proves_deployed_runtime_without_secret_output
     _install_runtime(monkeypatch, env)
     report = capabilities.validate("org-pilot")
     serialized = json.dumps(report)
-    assert report["checks"]["dedicated_managed_openbao_rs256_signer"] is True
+    assert report["checks"]["issuer_profile_did_rs256_signer"] is True
     assert report["checks"]["readiness_and_evidence_ttls_fail_closed"] is True
     assert report["checks"]["worker_job_deadline_fail_closed"] is True
     assert report["composite_binding_readiness_required"] is True
@@ -100,9 +100,9 @@ def test_beta_capability_preflight_requires_pilot_ttls(
         capabilities.validate("org-pilot")
 
 
-def test_beta_capability_preflight_rejects_lti_credential_key_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_beta_capability_preflight_rejects_lti_credential_profile_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
     env = _environment()
-    env["CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES"] = env["CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE"]
+    env["CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS"] = env["CANVAS_LTI_TOOL_ISSUER_PROFILE_ID"]
     _install_runtime(monkeypatch, env)
-    with pytest.raises(capabilities.CapabilityError, match="overlaps a credential issuer key"):
+    with pytest.raises(capabilities.CapabilityError, match="overlaps a credential issuer profile"):
         capabilities.validate("org-pilot")

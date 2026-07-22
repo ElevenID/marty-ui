@@ -31,7 +31,12 @@ def _parse_timestamp(value: Any, *, field: str) -> datetime:
     return parsed.astimezone(timezone.utc)
 
 
-def export_public_jwks(document: dict[str, Any], *, key_name: str) -> tuple[dict[str, Any], str]:
+def export_public_jwks(
+    document: dict[str, Any],
+    *,
+    key_name: str,
+    verification_method_id: str | None = None,
+) -> tuple[dict[str, Any], str]:
     data = document.get("data")
     if not isinstance(data, dict):
         raise ValueError("OpenBao response is missing data")
@@ -39,6 +44,10 @@ def export_public_jwks(document: dict[str, Any], *, key_name: str) -> tuple[dict
         raise ValueError("OpenBao response key name does not match the requested LTI key")
     if not str(data.get("type", "")).startswith("rsa-"):
         raise ValueError("Canvas LTI tool signing key must be RSA")
+    if verification_method_id is not None and (
+        not verification_method_id.startswith("did:") or "#" not in verification_method_id
+    ):
+        raise ValueError("Canvas LTI verification method ID must be a DID URL")
 
     latest_version = data.get("latest_version")
     if not isinstance(latest_version, int) or latest_version < 1:
@@ -76,7 +85,11 @@ def export_public_jwks(document: dict[str, Any], *, key_name: str) -> tuple[dict
         key: dict[str, Any] = {
             "alg": "RS256",
             "e": _b64url_uint(numbers.e),
-            "kid": f"{key_name}-v{version}",
+            "kid": (
+                verification_method_id
+                if verification_method_id is not None and version == latest_version
+                else f"{key_name}-v{version}"
+            ),
             "kty": "RSA",
             "n": _b64url_uint(numbers.n),
             "use": "sig",
@@ -88,7 +101,7 @@ def export_public_jwks(document: dict[str, Any], *, key_name: str) -> tuple[dict
             key["retired_at"] = retired_at.isoformat().replace("+00:00", "Z")
         exported.append(key)
 
-    active_kid = f"{key_name}-v{latest_version}"
+    active_kid = verification_method_id or f"{key_name}-v{latest_version}"
     exported.sort(key=lambda key: key["kid"] != active_kid)
     return {"keys": exported}, active_kid
 
@@ -99,11 +112,16 @@ def main() -> int:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--active-kid-output", required=True, type=Path)
     parser.add_argument("--key-name", default="lti-tool-marty-rs256")
+    parser.add_argument("--verification-method-id")
     args = parser.parse_args()
 
     # Windows PowerShell 5.1's `Set-Content -Encoding utf8` includes a BOM.
     source = json.loads(args.input.read_text(encoding="utf-8-sig"))
-    jwks, active_kid = export_public_jwks(source, key_name=args.key_name)
+    jwks, active_kid = export_public_jwks(
+        source,
+        key_name=args.key_name,
+        verification_method_id=args.verification_method_id,
+    )
     args.output.write_text(json.dumps(jwks, separators=(",", ":"), sort_keys=True), encoding="utf-8")
     args.active_kid_output.write_text(active_kid, encoding="utf-8")
     return 0
