@@ -1228,6 +1228,14 @@ def _verify_w3c_vc(
             and isinstance(verified_payload.get("vc"), dict)
             else {}
         )
+        credential_id = None
+        if isinstance(verified_payload, dict):
+            jwt_id = verified_payload.get("jti")
+            vc_id = verified_vc.get("id")
+            for candidate in (jwt_id, vc_id):
+                if isinstance(candidate, str) and candidate.strip():
+                    credential_id = candidate.strip()
+                    break
         claims = verified_vc.get("credentialSubject", {})
         if not isinstance(claims, (dict, list)):
             claims = {}
@@ -1248,6 +1256,10 @@ def _verify_w3c_vc(
             "issuer_did": verified_issuer
             if isinstance(verified_issuer, str)
             else "unknown",
+            # This identifier comes only from the Rust-verified JWT payload.
+            # It lets the policy engine query the authoritative issuer-managed
+            # status record without trusting the caller or exposing KMS routing.
+            "credential_id": credential_id,
             "format": "w3c-vc",
             "error": (
                 None
