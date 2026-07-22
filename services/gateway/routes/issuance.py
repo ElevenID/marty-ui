@@ -1,4 +1,5 @@
 """Issuance, issued credentials, OID4VCI wallet endpoints, and Application Templates."""
+
 from __future__ import annotations
 
 import logging
@@ -22,6 +23,7 @@ from gateway.proxy import _resource_org_id, get_http_client, get_registry, proxy
 logger = logging.getLogger(__name__)
 
 passport_router = APIRouter(prefix="/v1/passport", tags=["Physical Documents"])
+
 
 def _read_secret_value(name: str) -> str:
     direct = os.environ.get(name)
@@ -85,7 +87,10 @@ async def _resolve_issuer_identity(
     if not issuer_profile_id:
         return None
     if not organization_id:
-        raise HTTPException(status_code=422, detail="organization_id is required to resolve issuer profile.")
+        raise HTTPException(
+            status_code=422,
+            detail="organization_id is required to resolve issuer profile.",
+        )
 
     try:
         from gateway.routes.signing_keys import (  # noqa: PLC0415
@@ -106,7 +111,8 @@ async def _resolve_issuer_identity(
             credential_format=credential_format,
             key_purpose=key_purpose or _key_purpose_for_format(credential_format),
             algorithm=algorithm,
-            x_api_key=_read_secret_value("SIGNING_KEYS_INTERNAL_API_KEY") or _read_secret_value("ISSUANCE_API_KEY"),
+            x_api_key=_read_secret_value("SIGNING_KEYS_INTERNAL_API_KEY")
+            or _read_secret_value("ISSUANCE_API_KEY"),
         )
     except HTTPException as exc:
         if exc.status_code in {404, 409, 422}:
@@ -116,9 +122,16 @@ async def _resolve_issuer_identity(
     try:
         payload = json.loads(response.body)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=503, detail="Signing-keys issuer profile resolver returned an invalid response.") from exc
+        raise HTTPException(
+            status_code=503,
+            detail="Signing-keys issuer profile resolver returned an invalid response.",
+        ) from exc
 
-    if not payload.get("ok") or not payload.get("issuer_did") or not payload.get("signing_service_id"):
+    if (
+        not payload.get("ok")
+        or not payload.get("issuer_did")
+        or not payload.get("signing_service_id")
+    ):
         return None
 
     service = payload.get("service") if isinstance(payload.get("service"), dict) else {}
@@ -128,7 +141,12 @@ async def _resolve_issuer_identity(
         "signing_service_id": str(payload["signing_service_id"]),
         "signing_key_reference": str(payload.get("signing_key_reference") or ""),
         "verification_method_id": str(payload.get("verification_method_id") or ""),
-        "key_purpose": str(payload.get("key_purpose") or key_purpose or _key_purpose_for_format(credential_format) or "vc_jwt_issuer"),
+        "key_purpose": str(
+            payload.get("key_purpose")
+            or key_purpose
+            or _key_purpose_for_format(credential_format)
+            or "vc_jwt_issuer"
+        ),
         "algorithm": str(algorithm_value),
     }
 
@@ -147,9 +165,13 @@ async def _load_credential_template(template_id: str, request: Request) -> dict:
         headers["Authorization"] = auth
     response = await client.get(url, timeout=10.0, headers=headers)
     if response.status_code == 404:
-        raise HTTPException(status_code=404, detail=f"Credential template not found: {template_id}")
+        raise HTTPException(
+            status_code=404, detail=f"Credential template not found: {template_id}"
+        )
     if response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail=response.text[:300])
+        raise HTTPException(
+            status_code=response.status_code, detail=response.text[:300]
+        )
     data = response.json()
     return data if isinstance(data, dict) else {}
 
@@ -162,7 +184,9 @@ def _clean_optional_id(value: object) -> str | None:
 
 
 def _select_issuer_profile_id(body: IssuanceCreate, credential_template: dict) -> str:
-    template_issuer_profile_id = _clean_optional_id(credential_template.get("issuer_profile_id"))
+    template_issuer_profile_id = _clean_optional_id(
+        credential_template.get("issuer_profile_id")
+    )
     body_issuer_profile_id = _clean_optional_id(body.issuer_profile_id)
     claim_issuer_profile_id = (
         _clean_optional_id(body.claims.get("issuer_profile_id"))
@@ -176,12 +200,18 @@ def _select_issuer_profile_id(body: IssuanceCreate, credential_template: dict) -
                 status_code=422,
                 detail="credential_template_id must reference a template bound to an active KMS-backed issuer profile.",
             )
-        if body_issuer_profile_id and body_issuer_profile_id != template_issuer_profile_id:
+        if (
+            body_issuer_profile_id
+            and body_issuer_profile_id != template_issuer_profile_id
+        ):
             raise HTTPException(
                 status_code=422,
                 detail="issuer_profile_id cannot override the credential template issuer profile.",
             )
-        if claim_issuer_profile_id and claim_issuer_profile_id != template_issuer_profile_id:
+        if (
+            claim_issuer_profile_id
+            and claim_issuer_profile_id != template_issuer_profile_id
+        ):
             raise HTTPException(
                 status_code=422,
                 detail="claims.issuer_profile_id cannot override the credential template issuer profile.",
@@ -202,7 +232,9 @@ def _select_issuer_profile_id(body: IssuanceCreate, credential_template: dict) -
 
 
 issuance_router = APIRouter(prefix="/v1/issuance", tags=["Issuance"])
-issued_credential_router = APIRouter(prefix="/v1/issued-credentials", tags=["Issued Credentials"])
+issued_credential_router = APIRouter(
+    prefix="/v1/issued-credentials", tags=["Issued Credentials"]
+)
 
 
 def _issuance_service_url() -> str:
@@ -218,32 +250,46 @@ async def get_passport_capabilities(request: Request) -> Response:
         timeout=10.0,
     )
     if response.status_code == 404:
-        return JSONResponse({
-            "supported": False,
-            "state": "UNSUPPORTED",
-            "code": "PHYSICAL_DOCUMENTS_UNSUPPORTED",
-            "message": "Physical document issuance is not installed in this deployment.",
-        })
+        return JSONResponse(
+            {
+                "supported": False,
+                "state": "UNSUPPORTED",
+                "code": "PHYSICAL_DOCUMENTS_UNSUPPORTED",
+                "message": "Physical document issuance is not installed in this deployment.",
+            }
+        )
     if response.status_code in {402, 403}:
         try:
             error_payload = response.json()
         except ValueError:
             error_payload = {}
-        code = str(error_payload.get("code") or error_payload.get("error") or "").upper()
+        code = str(
+            error_payload.get("code") or error_payload.get("error") or ""
+        ).upper()
         if "PLAN" in code or "ENTITLEMENT" in code:
-            return JSONResponse({
-                "supported": True,
-                "state": "ENTITLEMENT_REQUIRED",
-                "code": code or "PHYSICAL_DOCUMENT_ENTITLEMENT_REQUIRED",
-                "message": "This capability is available but is not included in the current entitlement.",
-            })
+            return JSONResponse(
+                {
+                    "supported": True,
+                    "state": "ENTITLEMENT_REQUIRED",
+                    "code": code or "PHYSICAL_DOCUMENT_ENTITLEMENT_REQUIRED",
+                    "message": "This capability is available but is not included in the current entitlement.",
+                }
+            )
     if response.status_code >= 500:
-        raise HTTPException(status_code=503, detail="Physical document capabilities are temporarily unavailable")
+        raise HTTPException(
+            status_code=503,
+            detail="Physical document capabilities are temporarily unavailable",
+        )
     if response.status_code >= 400:
-        raise HTTPException(status_code=response.status_code, detail="Unable to load physical document capabilities")
+        raise HTTPException(
+            status_code=response.status_code,
+            detail="Unable to load physical document capabilities",
+        )
     payload = response.json()
     if not isinstance(payload, dict):
-        raise HTTPException(status_code=503, detail="Physical document capability response is malformed")
+        raise HTTPException(
+            status_code=503, detail="Physical document capability response is malformed"
+        )
     payload.setdefault("supported", True)
     payload.setdefault("state", "AVAILABLE")
     return JSONResponse(payload)
@@ -251,41 +297,103 @@ async def get_passport_capabilities(request: Request) -> Response:
 
 @passport_router.post("/applications", summary="Create Physical Document Application")
 async def create_passport_application(request: Request) -> Response:
-    return await proxy_request(request, _issuance_service_url(), "/v1/passport/applications", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        _issuance_service_url(),
+        "/v1/passport/applications",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@passport_router.post("/applications/{application_id}/generate-sod", summary="Sign Physical Document SOD")
+@passport_router.post(
+    "/applications/{application_id}/generate-sod", summary="Sign Physical Document SOD"
+)
 async def generate_passport_sod(application_id: str, request: Request) -> Response:
-    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/generate-sod", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        _issuance_service_url(),
+        f"/v1/passport/applications/{application_id}/generate-sod",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@passport_router.post("/applications/{application_id}/generate-data-groups", summary="Generate Physical Document Data Groups")
-async def generate_passport_data_groups(application_id: str, request: Request) -> Response:
-    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/generate-data-groups", inject_headers=_ISSUANCE_HEADERS)
+@passport_router.post(
+    "/applications/{application_id}/generate-data-groups",
+    summary="Generate Physical Document Data Groups",
+)
+async def generate_passport_data_groups(
+    application_id: str, request: Request
+) -> Response:
+    return await proxy_request(
+        request,
+        _issuance_service_url(),
+        f"/v1/passport/applications/{application_id}/generate-data-groups",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@passport_router.post("/applications/{application_id}/submit-personalization", summary="Submit Physical Document Production")
-async def submit_passport_personalization(application_id: str, request: Request) -> Response:
-    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/submit-personalization", inject_headers=_ISSUANCE_HEADERS)
+@passport_router.post(
+    "/applications/{application_id}/submit-personalization",
+    summary="Submit Physical Document Production",
+)
+async def submit_passport_personalization(
+    application_id: str, request: Request
+) -> Response:
+    return await proxy_request(
+        request,
+        _issuance_service_url(),
+        f"/v1/passport/applications/{application_id}/submit-personalization",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@passport_router.get("/applications/{application_id}/production-status", summary="Get Physical Document Production Status")
-async def get_passport_production_status(application_id: str, request: Request) -> Response:
-    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/production-status", inject_headers=_ISSUANCE_HEADERS)
+@passport_router.get(
+    "/applications/{application_id}/production-status",
+    summary="Get Physical Document Production Status",
+)
+async def get_passport_production_status(
+    application_id: str, request: Request
+) -> Response:
+    return await proxy_request(
+        request,
+        _issuance_service_url(),
+        f"/v1/passport/applications/{application_id}/production-status",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@passport_router.post("/applications/{application_id}/quality-verify", summary="Record Physical Document Quality Result")
+@passport_router.post(
+    "/applications/{application_id}/quality-verify",
+    summary="Record Physical Document Quality Result",
+)
 async def verify_passport_quality(application_id: str, request: Request) -> Response:
-    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/quality-verify", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        _issuance_service_url(),
+        f"/v1/passport/applications/{application_id}/quality-verify",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@passport_router.post("/applications/{application_id}/activate", summary="Activate Physical Document")
+@passport_router.post(
+    "/applications/{application_id}/activate", summary="Activate Physical Document"
+)
 async def activate_passport(application_id: str, request: Request) -> Response:
-    return await proxy_request(request, _issuance_service_url(), f"/v1/passport/applications/{application_id}/activate", inject_headers=_ISSUANCE_HEADERS)
-application_template_router = APIRouter(prefix="/v1/application-templates", tags=["Application Templates"])
+    return await proxy_request(
+        request,
+        _issuance_service_url(),
+        f"/v1/passport/applications/{application_id}/activate",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
+
+
+application_template_router = APIRouter(
+    prefix="/v1/application-templates", tags=["Application Templates"]
+)
 
 
 # ── Issuance ─────────────────────────────────────────────────────────
+
 
 @issuance_router.post("", response_model=IssuanceResponse, summary="Create Issuance")
 async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
@@ -297,17 +405,23 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
     """
     credential_template: dict = {}
     if body.credential_template_id:
-        credential_template = await _load_credential_template(body.credential_template_id, request)
+        credential_template = await _load_credential_template(
+            body.credential_template_id, request
+        )
         owner_org = credential_template.get("organization_id")
         if owner_org != body.organization_id:
-            raise HTTPException(status_code=403, detail="Access denied: credential template belongs to another organization")
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: credential template belongs to another organization",
+            )
 
     # Resolve the DID issuer identity and its bound remote signing service as a
     # pair. A format-only KMS resolver can select a key that is not published in
     # the DID document, which breaks BYOK issuer identity guarantees.
-    credential_format: str | None = (
-        credential_template.get("credential_payload_format")
-        or (body.claims.get("credential_format") if isinstance(body.claims, dict) else None)
+    credential_format: str | None = credential_template.get(
+        "credential_payload_format"
+    ) or (
+        body.claims.get("credential_format") if isinstance(body.claims, dict) else None
     )
     issuer_profile_id = _select_issuer_profile_id(body, credential_template)
     issuer_identity = await _resolve_issuer_identity(
@@ -321,29 +435,35 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
             status_code=422,
             detail="issuer_profile_id must reference an active KMS-backed issuer profile for this organization.",
         )
-    signing_service_id = issuer_identity.get("signing_service_id") if issuer_identity else None
-
     inject_headers: dict[str, str] = dict(_ISSUANCE_HEADERS or {})
-    if signing_service_id:
-        inject_headers["X-Signing-Service-Id"] = signing_service_id
-        logger.debug(
-            "Resolved signing service %s for org=%s format=%s",
-            signing_service_id,
-            body.organization_id,
-            credential_format,
-        )
+    inject_headers["X-Issuer-Profile-Id"] = issuer_profile_id
+    logger.debug(
+        "Selected issuer profile %s for org=%s format=%s",
+        issuer_profile_id,
+        body.organization_id,
+        credential_format,
+    )
 
     issuer_did = issuer_identity.get("issuer_did") if issuer_identity else None
     if issuer_did:
         inject_headers["X-Issuer-Did"] = issuer_did
-        logger.debug("Resolved issuer DID %s for org=%s", issuer_did, body.organization_id)
+        logger.debug(
+            "Resolved issuer DID %s for org=%s", issuer_did, body.organization_id
+        )
 
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/initiate", inject_headers=inject_headers or None)
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/issuance/initiate",
+        inject_headers=inject_headers or None,
+    )
 
 
-@issuance_router.get("", response_model=list[IssuanceResponse], summary="List Issuances")
+@issuance_router.get(
+    "", response_model=list[IssuanceResponse], summary="List Issuances"
+)
 async def list_issuances(
     organization_id: str = Query(..., description="Organization ID"),
     request: Request = None,
@@ -351,7 +471,12 @@ async def list_issuances(
     """List issuance records for an organization."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/transactions", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/issuance/transactions",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
 @issuance_router.get("/authorize", summary="OID4VCI Authorization Endpoint")
@@ -368,12 +493,19 @@ async def authorize_issuance(request: Request) -> Response:
     return await proxy_request(request, service_url, "/v1/issuance/authorize")
 
 
-@issuance_router.get("/{issuance_id}", response_model=IssuanceResponse, summary="Get Issuance")
+@issuance_router.get(
+    "/{issuance_id}", response_model=IssuanceResponse, summary="Get Issuance"
+)
 async def get_issuance(issuance_id: str, request: Request) -> Response:
     """Get an issuance record by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/issuance/transactions/{issuance_id}", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/issuance/transactions/{issuance_id}",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
 @issuance_router.post("/{issuance_id}/revoke", summary="Revoke Issuance")
@@ -381,20 +513,39 @@ async def revoke_issuance(issuance_id: str, request: Request) -> Response:
     """Revoke a credential issuance transaction."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/issuance/transactions/{issuance_id}/revoke", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/issuance/transactions/{issuance_id}/revoke",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@issuance_router.get("/{issuance_id}/revocation-status", summary="Get Revocation Status")
-async def get_issuance_revocation_status(issuance_id: str, request: Request) -> Response:
+@issuance_router.get(
+    "/{issuance_id}/revocation-status", summary="Get Revocation Status"
+)
+async def get_issuance_revocation_status(
+    issuance_id: str, request: Request
+) -> Response:
     """Get the revocation status of an issuance transaction."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/issuance/transactions/{issuance_id}/revocation-status", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/issuance/transactions/{issuance_id}/revocation-status",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
 # ── DIDComm v2 delivery ─────────────────────────────────────────────
 
-@issuance_router.post("/didcomm/deliver", response_model=DidcommDeliveryResponse, summary="DIDComm V2 Deliver")
+
+@issuance_router.post(
+    "/didcomm/deliver",
+    response_model=DidcommDeliveryResponse,
+    summary="DIDComm V2 Deliver",
+)
 async def didcomm_deliver(body: DidcommDeliverRequest, request: Request) -> Response:
     """Deliver a credential to a holder via DIDComm v2 push.
 
@@ -404,7 +555,12 @@ async def didcomm_deliver(body: DidcommDeliverRequest, request: Request) -> Resp
     """
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/didcomm/deliver", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/issuance/didcomm/deliver",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
 @issuance_router.post("/didcomm/receive", summary="DIDComm V2 Receive")
@@ -421,7 +577,12 @@ async def didcomm_receive(request: Request) -> Response:
 
 # ── Issued Credentials ──────────────────────────────────────────────
 
-@issued_credential_router.get("", response_model=list[IssuedCredentialRecordResponse], summary="List Issued Credentials")
+
+@issued_credential_router.get(
+    "",
+    response_model=list[IssuedCredentialRecordResponse],
+    summary="List Issued Credentials",
+)
 async def list_issued_credentials(
     organization_id: str = Query(..., description="Organization ID"),
     status: str | None = Query(None),
@@ -430,7 +591,9 @@ async def list_issued_credentials(
     """List issued credential lifecycle records for an organization."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issued-credentials", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request, service_url, "/v1/issued-credentials", inject_headers=_ISSUANCE_HEADERS
+    )
 
 
 @issued_credential_router.get("/mine", summary="List My Issued Credentials")
@@ -441,39 +604,77 @@ async def list_my_issued_credentials(request: Request) -> Response:
     return await proxy_request(request, service_url, "/v1/issued-credentials/mine")
 
 
-@issued_credential_router.get("/{credential_id}", response_model=IssuedCredentialRecordResponse, summary="Get Issued Credential")
+@issued_credential_router.get(
+    "/{credential_id}",
+    response_model=IssuedCredentialRecordResponse,
+    summary="Get Issued Credential",
+)
 async def get_issued_credential(credential_id: str, request: Request) -> Response:
     """Get an issued credential lifecycle record by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/issued-credentials/{credential_id}", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/issued-credentials/{credential_id}",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@issued_credential_router.post("/{credential_id}/revoke", response_model=IssuedCredentialRecordResponse, summary="Revoke Issued Credential")
+@issued_credential_router.post(
+    "/{credential_id}/revoke",
+    response_model=IssuedCredentialRecordResponse,
+    summary="Revoke Issued Credential",
+)
 async def revoke_issued_credential(credential_id: str, request: Request) -> Response:
     """Revoke an issued credential lifecycle record."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/issued-credentials/{credential_id}/revoke", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/issued-credentials/{credential_id}/revoke",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@issued_credential_router.post("/{credential_id}/suspend", response_model=IssuedCredentialRecordResponse, summary="Suspend Issued Credential")
+@issued_credential_router.post(
+    "/{credential_id}/suspend",
+    response_model=IssuedCredentialRecordResponse,
+    summary="Suspend Issued Credential",
+)
 async def suspend_issued_credential(credential_id: str, request: Request) -> Response:
     """Suspend an issued credential lifecycle record."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/issued-credentials/{credential_id}/suspend", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/issued-credentials/{credential_id}/suspend",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@issued_credential_router.post("/{credential_id}/reinstate", response_model=IssuedCredentialRecordResponse, summary="Reinstate Issued Credential")
+@issued_credential_router.post(
+    "/{credential_id}/reinstate",
+    response_model=IssuedCredentialRecordResponse,
+    summary="Reinstate Issued Credential",
+)
 async def reinstate_issued_credential(credential_id: str, request: Request) -> Response:
     """Reinstate a suspended issued credential lifecycle record."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/issued-credentials/{credential_id}/reinstate", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/issued-credentials/{credential_id}/reinstate",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@issued_credential_router.post("/{credential_id}/renew", summary="Renew Issued Credential")
+@issued_credential_router.post(
+    "/{credential_id}/renew", summary="Renew Issued Credential"
+)
 async def renew_issued_credential(credential_id: str, request: Request) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
@@ -485,15 +686,25 @@ async def renew_issued_credential(credential_id: str, request: Request) -> Respo
     )
 
 
-@issuance_router.get("/delivery-records/canvas-credentials/provenance", summary="Resolve Canvas Mirror Provenance")
+@issuance_router.get(
+    "/delivery-records/canvas-credentials/provenance",
+    summary="Resolve Canvas Mirror Provenance",
+)
 async def get_canvas_mirror_provenance(request: Request) -> Response:
     """Resolve a Canvas mirror record to its canonical ElevenID issuance context."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/delivery-records/canvas-credentials/provenance")
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/issuance/delivery-records/canvas-credentials/provenance",
+    )
 
 
-@issuance_router.post("/delivery-records/canvas-credentials/process-pending", summary="Process Pending Canvas Mirror Deliveries")
+@issuance_router.post(
+    "/delivery-records/canvas-credentials/process-pending",
+    summary="Process Pending Canvas Mirror Deliveries",
+)
 async def process_pending_canvas_mirror_deliveries(request: Request) -> Response:
     """Process pending Canvas mirror delivery records through issuance."""
     registry = get_registry()
@@ -538,7 +749,10 @@ async def run_canvas_mirror_automation_cycle(request: Request) -> Response:
     )
 
 
-@issuance_router.get("/organizations/{organization_id}/canvas-mirror-health", summary="Get Canvas Mirror Health")
+@issuance_router.get(
+    "/organizations/{organization_id}/canvas-mirror-health",
+    summary="Get Canvas Mirror Health",
+)
 async def get_canvas_mirror_health(organization_id: str, request: Request) -> Response:
     """Return Canvas mirror publish and lifecycle sync health for an organization."""
     registry = get_registry()
@@ -553,6 +767,7 @@ async def get_canvas_mirror_health(organization_id: str, request: Request) -> Re
 
 # ── OID4VCI Wallet-facing Endpoints ─────────────────────────────────
 
+
 @issuance_router.get("/offers/{tx_id}", summary="Get Credential Offer")
 async def get_credential_offer(tx_id: str, request: Request) -> Response:
     """
@@ -563,7 +778,12 @@ async def get_credential_offer(tx_id: str, request: Request) -> Response:
     """
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/issuance/offers/{tx_id}", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/issuance/offers/{tx_id}",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
 @issuance_router.post("/token", summary="Exchange Token")
@@ -576,7 +796,9 @@ async def exchange_token(request: Request) -> Response:
     """
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/token", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request, service_url, "/v1/issuance/token", inject_headers=_ISSUANCE_HEADERS
+    )
 
 
 @issuance_router.post("/credential", summary="Issue Credential")
@@ -589,7 +811,12 @@ async def issue_credential(request: Request) -> Response:
     """
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/credential", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/issuance/credential",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
 @issuance_router.post("/par", summary="Pushed Authorization Request")
@@ -602,7 +829,9 @@ async def pushed_authorization_request(request: Request) -> Response:
     """
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/par", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request, service_url, "/v1/issuance/par", inject_headers=_ISSUANCE_HEADERS
+    )
 
 
 @issuance_router.post("/nonce", summary="Get Fresh Nonce")
@@ -615,7 +844,9 @@ async def get_nonce(request: Request) -> Response:
     """
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/nonce", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request, service_url, "/v1/issuance/nonce", inject_headers=_ISSUANCE_HEADERS
+    )
 
 
 @issuance_router.post("/notification", summary="Credential Notification")
@@ -623,7 +854,12 @@ async def credential_notification(request: Request) -> Response:
     """OID4VCI-1FINAL §11 — Wallet notifies issuer of credential lifecycle event."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/notification", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/issuance/notification",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
 @issuance_router.post("/deferred-credential", summary="Deferred Credential")
@@ -631,10 +867,16 @@ async def deferred_credential(request: Request) -> Response:
     """OID4VCI-1FINAL §9.1 — Poll for a deferred credential using a transaction_id."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/deferred-credential", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/issuance/deferred-credential",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
 # ── Application Templates ───────────────────────────────────────────
+
 
 async def _validate_application_template_dependencies(
     body: ApplicationTemplateCreate,
@@ -660,16 +902,32 @@ async def _validate_application_template_dependencies(
             detail="Access denied: credential template belongs to another organization",
         )
 
-@application_template_router.post("", response_model=ApplicationTemplateResponse, summary="Create Application Template")
-async def create_application_template(body: ApplicationTemplateCreate, request: Request) -> Response:
+
+@application_template_router.post(
+    "",
+    response_model=ApplicationTemplateResponse,
+    summary="Create Application Template",
+)
+async def create_application_template(
+    body: ApplicationTemplateCreate, request: Request
+) -> Response:
     """Create an Application Template defining how users apply for credentials."""
     await _validate_application_template_dependencies(body, request)
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/application-templates", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/application-templates",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@application_template_router.get("", response_model=list[ApplicationTemplateResponse], summary="List Application Templates")
+@application_template_router.get(
+    "",
+    response_model=list[ApplicationTemplateResponse],
+    summary="List Application Templates",
+)
 async def list_application_templates(
     organization_id: str = Query(..., description="Organization ID"),
     request: Request = None,
@@ -677,52 +935,111 @@ async def list_application_templates(
     """List Application Templates for an organization."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/application-templates", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/application-templates",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@application_template_router.get("/{template_id}", response_model=ApplicationTemplateResponse, summary="Get Application Template")
+@application_template_router.get(
+    "/{template_id}",
+    response_model=ApplicationTemplateResponse,
+    summary="Get Application Template",
+)
 async def get_application_template(template_id: str, request: Request) -> Response:
     """Get an Application Template by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/application-templates/{template_id}",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@application_template_router.patch("/{template_id}", response_model=ApplicationTemplateResponse, summary="Update draft Application Template")
-async def update_application_template(template_id: str, body: ApplicationTemplatePatch, request: Request) -> Response:
+@application_template_router.patch(
+    "/{template_id}",
+    response_model=ApplicationTemplateResponse,
+    summary="Update draft Application Template",
+)
+async def update_application_template(
+    template_id: str, body: ApplicationTemplatePatch, request: Request
+) -> Response:
     """Patch mutable fields on a draft Application Template."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/application-templates/{template_id}",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@application_template_router.delete("/{template_id}", summary="Delete Application Template")
+@application_template_router.delete(
+    "/{template_id}", summary="Delete Application Template"
+)
 async def delete_application_template(template_id: str, request: Request) -> Response:
     """Delete a draft Application Template."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/application-templates/{template_id}",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@application_template_router.post("/{template_id}/validate", summary="Validate Application Template")
+@application_template_router.post(
+    "/{template_id}/validate", summary="Validate Application Template"
+)
 async def validate_application_template(template_id: str, request: Request) -> Response:
     """Return section-scoped validation errors without changing lifecycle state."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}/validate", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/application-templates/{template_id}/validate",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@application_template_router.post("/{template_id}/activate", response_model=ApplicationTemplateResponse, summary="Activate Application Template")
+@application_template_router.post(
+    "/{template_id}/activate",
+    response_model=ApplicationTemplateResponse,
+    summary="Activate Application Template",
+)
 async def activate_application_template(template_id: str, request: Request) -> Response:
     """Validate and activate a draft Application Template."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}/activate", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/application-templates/{template_id}/activate",
+        inject_headers=_ISSUANCE_HEADERS,
+    )
 
 
-@application_template_router.post("/{template_id}/deprecate", response_model=ApplicationTemplateResponse, summary="Deprecate Application Template")
-async def deprecate_application_template(template_id: str, request: Request) -> Response:
+@application_template_router.post(
+    "/{template_id}/deprecate",
+    response_model=ApplicationTemplateResponse,
+    summary="Deprecate Application Template",
+)
+async def deprecate_application_template(
+    template_id: str, request: Request
+) -> Response:
     """Deprecate an active Application Template while preserving history."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, f"/v1/application-templates/{template_id}/deprecate", inject_headers=_ISSUANCE_HEADERS)
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/application-templates/{template_id}/deprecate",
+        inject_headers=_ISSUANCE_HEADERS,
+    )

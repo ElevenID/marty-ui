@@ -61,7 +61,9 @@ def _enabled_policy_id(*, presentation: bool) -> str:
     )
     policy_id = os.environ.get(variable, "").strip()
     if not policy_id:
-        raise HTTPException(status_code=503, detail=f"W3C VC test adapter requires {variable}")
+        raise HTTPException(
+            status_code=503, detail=f"W3C VC test adapter requires {variable}"
+        )
     return policy_id
 
 
@@ -564,10 +566,11 @@ async def _issue_jwt_vc(credential: dict[str, Any], request: Request) -> str:
             status_code=422,
             detail="W3C fixture template must issue JWT VC, not SD-JWT, mdoc, or JSON-LD",
         )
+    issuer_profile_id = _select_issuer_profile_id(body, template)
     issuer_identity = await _resolve_issuer_identity(
         request,
         organization_id,
-        _select_issuer_profile_id(body, template),
+        issuer_profile_id,
         credential_format=credential_format,
     )
     if issuer_identity is None:
@@ -580,7 +583,7 @@ async def _issue_jwt_vc(credential: dict[str, Any], request: Request) -> str:
     if not service_url:
         raise HTTPException(status_code=503, detail="Issuance service unavailable")
     headers = dict(_ISSUANCE_HEADERS or {})
-    headers["X-Signing-Service-Id"] = issuer_identity["signing_service_id"]
+    headers["X-Issuer-Profile-Id"] = issuer_profile_id
     headers["X-Issuer-Did"] = issuer_identity["issuer_did"]
     client = get_http_client()
 

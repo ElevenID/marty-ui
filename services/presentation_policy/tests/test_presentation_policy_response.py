@@ -342,6 +342,153 @@ def _jwt_segment(payload: dict) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
+def test_w3c_vc_uses_public_issuer_profile_did_material(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer = "did:web:issuer.example:profiles:university"
+    public_jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "public-x",
+        "y": "public-y",
+    }
+    token = ".".join(
+        [
+            _jwt_segment({"alg": "ES256", "typ": "JWT", "kid": f"{issuer}#key-1"}),
+            _jwt_segment(
+                {
+                    "iss": issuer,
+                    "vc": {
+                        "@context": ["https://www.w3.org/ns/credentials/v2"],
+                        "type": ["VerifiableCredential"],
+                        "issuer": issuer,
+                        "credentialSubject": {
+                            "id": "did:example:alice",
+                            "role": "student",
+                        },
+                    },
+                }
+            ),
+            "signature",
+        ]
+    )
+    captured: dict[str, object] = {}
+
+    def verify(request_json: str) -> str:
+        captured.update(json.loads(request_json))
+        return json.dumps(
+            {
+                "valid": True,
+                "algorithm": "ES256",
+                "issuer": issuer,
+                "claims": {
+                    "iss": issuer,
+                    "vc": {
+                        "credentialSubject": {
+                            "id": "did:example:alice",
+                            "role": "student",
+                        }
+                    },
+                },
+                "errors": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(verify_vcdm_jwt=verify),
+    )
+
+    result = pp._verify_w3c_vc(token, None, None, public_jwk)
+
+    assert result["verified"] is True
+    assert result["issuer_did"] == issuer
+    assert result["claims"] == {"id": "did:example:alice", "role": "student"}
+    assert captured == {"token": token, "issuer_public_jwk": public_jwk}
+    assert all(parameter not in json.dumps(captured) for parameter in ('"d"', '"k"'))
+
+
+def test_w3c_vc_did_key_resolution_stays_inside_rust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer = "did:key:z6MkhIssuer"
+    token = ".".join(
+        [
+            _jwt_segment({"alg": "EdDSA", "kid": f"{issuer}#z6MkhIssuer"}),
+            _jwt_segment(
+                {
+                    "iss": issuer,
+                    "vc": {"credentialSubject": {"id": "did:example:alice"}},
+                }
+            ),
+            "signature",
+        ]
+    )
+    captured: dict[str, object] = {}
+
+    def verify(request_json: str) -> str:
+        captured.update(json.loads(request_json))
+        return json.dumps(
+            {
+                "valid": True,
+                "issuer": issuer,
+                "claims": {"vc": {"credentialSubject": {"id": "did:example:alice"}}},
+                "errors": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(verify_vcdm_jwt=verify),
+    )
+    monkeypatch.setattr(
+        pp,
+        "_resolve_did_document",
+        lambda _did: pytest.fail("did:key must be resolved by the Rust verifier"),
+    )
+
+    result = pp._verify_w3c_vc(token, None, None)
+
+    assert result["verified"] is True
+    assert captured == {"token": token}
+
+
+def test_w3c_vc_fails_closed_without_profile_public_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer = "https://issuer.example"
+    token = ".".join(
+        [
+            _jwt_segment({"alg": "ES256"}),
+            _jwt_segment(
+                {
+                    "iss": issuer,
+                    "vc": {"credentialSubject": {"id": "did:example:alice"}},
+                }
+            ),
+            "signature",
+        ]
+    )
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(verify_vcdm_jwt=lambda _request: pytest.fail()),
+    )
+
+    def fail_resolution(_did: str) -> dict:
+        raise RuntimeError("no issuer profile DID key")
+
+    monkeypatch.setattr(pp, "_resolve_did_document", fail_resolution)
+
+    result = pp._verify_w3c_vc(token, None, None)
+
+    assert result["verified"] is False
+    assert result["claims"] == {}
+    assert "no issuer profile DID key" in result["error"]
+
+
 def test_open_badge_login_policy_format_accepts_sd_jwt_aliases() -> None:
     assert pp._credential_format_satisfies_requirement("sd-jwt", "sd_jwt_vc")
     assert pp._credential_format_satisfies_requirement("sd-jwt", "dc+sd-jwt")

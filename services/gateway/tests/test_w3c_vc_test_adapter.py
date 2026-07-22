@@ -340,6 +340,11 @@ async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
     initiate_body = captured[0][1]["json"]
     assert initiate_body["claims"] == {}
     assert initiate_body["credential_subject"] == credential["credentialSubject"]
+    assert captured[0][1]["headers"] == {
+        "X-Issuer-Profile-Id": "issuer-profile",
+        "X-Issuer-Did": "did:web:issuer.example",
+    }
+    assert "X-Signing-Service-Id" not in captured[0][1]["headers"]
 
 
 def test_adapter_extracts_a_w3c_jose_vc_envelope_without_trusting_it() -> None:
@@ -491,9 +496,7 @@ async def test_adapter_maps_policy_denial_to_vc_api_rejection(
     monkeypatch.setattr(adapter, "get_registry", lambda: Registry())
     monkeypatch.setattr(adapter, "proxy_request", fake_proxy)
 
-    response = await adapter._evaluate(
-        "a.b.c", {}, _request(), presentation=False
-    )
+    response = await adapter._evaluate("a.b.c", {}, _request(), presentation=False)
     assert response.status_code == 422
     assert json.loads(response.body) == {
         "verified": False,

@@ -1,4 +1,5 @@
 """Tests for gateway issuance route header injection (X-Issuer-Did)."""
+
 from __future__ import annotations
 
 import json
@@ -63,12 +64,16 @@ class _NamedRegistry:
 
 
 @pytest.mark.asyncio
-async def test_application_template_activation_delegates_authoritative_validation(monkeypatch: pytest.MonkeyPatch):
+async def test_application_template_activation_delegates_authoritative_validation(
+    monkeypatch: pytest.MonkeyPatch,
+):
     request = _build_request()
     captured = {}
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update(service_url=service_url, path=path, inject_headers=inject_headers)
+        captured.update(
+            service_url=service_url, path=path, inject_headers=inject_headers
+        )
         return JSONResponse({"id": "template-1", "status": "ACTIVE"})
 
     monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
@@ -86,12 +91,16 @@ async def test_application_template_activation_delegates_authoritative_validatio
 
 
 @pytest.mark.asyncio
-async def test_application_template_validation_delegates_to_issuance(monkeypatch: pytest.MonkeyPatch):
+async def test_application_template_validation_delegates_to_issuance(
+    monkeypatch: pytest.MonkeyPatch,
+):
     request = _build_request()
     captured = {}
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update(service_url=service_url, path=path, inject_headers=inject_headers)
+        captured.update(
+            service_url=service_url, path=path, inject_headers=inject_headers
+        )
         return JSONResponse({"valid": False, "errors": [{"section": "form_fields"}]})
 
     monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
@@ -104,26 +113,38 @@ async def test_application_template_validation_delegates_to_issuance(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_canvas_evidence_event_status_proxy_preserves_metadata(monkeypatch: pytest.MonkeyPatch):
+async def test_canvas_evidence_event_status_proxy_preserves_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict = {}
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
-        return JSONResponse({
-            "provider_event_id": "evt-1",
-            "evidence_facts": [{"id": "fact-1", "fact_type": "canvas.course_completion"}],
-            "policy_decision": {"allowed": False, "policy_source": "policy_set"},
-        })
+        captured.update(
+            {
+                "service_url": service_url,
+                "path": path,
+                "inject_headers": inject_headers,
+            }
+        )
+        return JSONResponse(
+            {
+                "provider_event_id": "evt-1",
+                "evidence_facts": [
+                    {"id": "fact-1", "fact_type": "canvas.course_completion"}
+                ],
+                "policy_decision": {"allowed": False, "policy_source": "policy_set"},
+            }
+        )
 
     monkeypatch.setattr(canvas_integrations, "get_registry", lambda: _Registry())
     monkeypatch.setattr(canvas_integrations, "proxy_request", _proxy)
-    monkeypatch.setattr(canvas_integrations, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
+    monkeypatch.setattr(
+        canvas_integrations, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"}
+    )
 
-    response = await canvas_integrations.get_canvas_evidence_event_status("acct-1", "evt-1", _build_request())
+    response = await canvas_integrations.get_canvas_evidence_event_status(
+        "acct-1", "evt-1", _build_request()
+    )
     body = json.loads(response.body)
 
     assert captured["service_url"] == "http://issuance-service"
@@ -134,25 +155,37 @@ async def test_canvas_evidence_event_status_proxy_preserves_metadata(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_canvas_ags_score_event_proxy_preserves_signed_payload(monkeypatch: pytest.MonkeyPatch):
+async def test_canvas_ags_score_event_proxy_preserves_signed_payload(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict = {}
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
-        return JSONResponse({
-            "source_event_id": "ags-evt-1",
-            "evidence_facts": [{"id": "fact-ags-1", "fact_type": "canvas.assignment_score"}],
-        })
+        captured.update(
+            {
+                "service_url": service_url,
+                "path": path,
+                "inject_headers": inject_headers,
+            }
+        )
+        return JSONResponse(
+            {
+                "source_event_id": "ags-evt-1",
+                "evidence_facts": [
+                    {"id": "fact-ags-1", "fact_type": "canvas.assignment_score"}
+                ],
+            }
+        )
 
     monkeypatch.setattr(canvas_integrations, "get_registry", lambda: _Registry())
     monkeypatch.setattr(canvas_integrations, "proxy_request", _proxy)
-    monkeypatch.setattr(canvas_integrations, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
+    monkeypatch.setattr(
+        canvas_integrations, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"}
+    )
 
-    response = await canvas_integrations.process_canvas_ags_score_event(_build_request())
+    response = await canvas_integrations.process_canvas_ags_score_event(
+        _build_request()
+    )
     body = json.loads(response.body)
 
     assert captured["service_url"] == "http://issuance-service"
@@ -162,25 +195,37 @@ async def test_canvas_ags_score_event_proxy_preserves_signed_payload(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_canvas_nrps_membership_event_proxy_preserves_signed_payload(monkeypatch: pytest.MonkeyPatch):
+async def test_canvas_nrps_membership_event_proxy_preserves_signed_payload(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict = {}
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
-        return JSONResponse({
-            "source_event_id": "nrps-evt-1",
-            "evidence_facts": [{"id": "fact-nrps-1", "fact_type": "canvas.nrps_membership"}],
-        })
+        captured.update(
+            {
+                "service_url": service_url,
+                "path": path,
+                "inject_headers": inject_headers,
+            }
+        )
+        return JSONResponse(
+            {
+                "source_event_id": "nrps-evt-1",
+                "evidence_facts": [
+                    {"id": "fact-nrps-1", "fact_type": "canvas.nrps_membership"}
+                ],
+            }
+        )
 
     monkeypatch.setattr(canvas_integrations, "get_registry", lambda: _Registry())
     monkeypatch.setattr(canvas_integrations, "proxy_request", _proxy)
-    monkeypatch.setattr(canvas_integrations, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
+    monkeypatch.setattr(
+        canvas_integrations, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"}
+    )
 
-    response = await canvas_integrations.process_canvas_nrps_membership_event(_build_request())
+    response = await canvas_integrations.process_canvas_nrps_membership_event(
+        _build_request()
+    )
     body = json.loads(response.body)
 
     assert captured["service_url"] == "http://issuance-service"
@@ -190,23 +235,31 @@ async def test_canvas_nrps_membership_event_proxy_preserves_signed_payload(monke
 
 
 @pytest.mark.asyncio
-async def test_canvas_platform_and_program_binding_routes_proxy_with_management_header(monkeypatch: pytest.MonkeyPatch):
+async def test_canvas_platform_and_program_binding_routes_proxy_with_management_header(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: list[dict] = []
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.append({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
+        captured.append(
+            {
+                "service_url": service_url,
+                "path": path,
+                "inject_headers": inject_headers,
+            }
+        )
         return JSONResponse({"ok": True})
 
     monkeypatch.setattr(canvas_integrations, "get_registry", lambda: _Registry())
     monkeypatch.setattr(canvas_integrations, "proxy_request", _proxy)
-    monkeypatch.setattr(canvas_integrations, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
+    monkeypatch.setattr(
+        canvas_integrations, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"}
+    )
 
     await canvas_integrations.create_canvas_platform(_build_request())
-    await canvas_integrations.create_canvas_program_binding("platform-1", _build_request())
+    await canvas_integrations.create_canvas_program_binding(
+        "platform-1", _build_request()
+    )
     await canvas_integrations.list_canvas_program_bindings(_build_request())
 
     assert [call["path"] for call in captured] == [
@@ -218,19 +271,25 @@ async def test_canvas_platform_and_program_binding_routes_proxy_with_management_
 
 
 @pytest.mark.asyncio
-async def test_canvas_production_management_routes_proxy_with_trusted_header(monkeypatch: pytest.MonkeyPatch):
+async def test_canvas_production_management_routes_proxy_with_trusted_header(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: list[dict] = []
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.append({
-            "path": path,
-            "inject_headers": inject_headers,
-        })
+        captured.append(
+            {
+                "path": path,
+                "inject_headers": inject_headers,
+            }
+        )
         return JSONResponse({"ok": True})
 
     monkeypatch.setattr(canvas_integrations, "get_registry", lambda: _Registry())
     monkeypatch.setattr(canvas_integrations, "proxy_request", _proxy)
-    monkeypatch.setattr(canvas_integrations, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
+    monkeypatch.setattr(
+        canvas_integrations, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"}
+    )
     request = _build_request()
 
     await canvas_integrations.configure_canvas_lti_installation("platform-1", request)
@@ -260,15 +319,19 @@ async def test_canvas_production_management_routes_proxy_with_trusted_header(mon
 
 
 @pytest.mark.asyncio
-async def test_canvas_experience_code_and_session_routes_do_not_receive_management_key(monkeypatch: pytest.MonkeyPatch):
+async def test_canvas_experience_code_and_session_routes_do_not_receive_management_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: list[dict] = []
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.append({
-            "path": path,
-            "inject_headers": inject_headers,
-            "authorization": request.headers.get("authorization"),
-        })
+        captured.append(
+            {
+                "path": path,
+                "inject_headers": inject_headers,
+                "authorization": request.headers.get("authorization"),
+            }
+        )
         return JSONResponse({"ok": True})
 
     monkeypatch.setattr(canvas_integrations, "get_registry", lambda: _Registry())
@@ -295,8 +358,7 @@ async def test_canvas_experience_code_and_session_routes_do_not_receive_manageme
     ]
     assert all(call["inject_headers"] is None for call in captured)
     assert all(
-        call["authorization"] == "Bearer experience-session-token"
-        for call in captured
+        call["authorization"] == "Bearer experience-session-token" for call in captured
     )
 
 
@@ -318,19 +380,25 @@ async def test_state_addressed_canvas_lti_routes_are_retired(handler) -> None:
 
 
 @pytest.mark.asyncio
-async def test_canvas_mirror_provenance_route_proxies_without_management_header(monkeypatch: pytest.MonkeyPatch):
+async def test_canvas_mirror_provenance_route_proxies_without_management_header(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict = {}
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
-        return JSONResponse({
-            "delivery_record_id": "delivery-1",
-            "trust_basis": {"canonical_issuance_backed": True},
-        })
+        captured.update(
+            {
+                "service_url": service_url,
+                "path": path,
+                "inject_headers": inject_headers,
+            }
+        )
+        return JSONResponse(
+            {
+                "delivery_record_id": "delivery-1",
+                "trust_basis": {"canonical_issuance_backed": True},
+            }
+        )
 
     monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
     monkeypatch.setattr(issuance, "proxy_request", _proxy)
@@ -340,13 +408,18 @@ async def test_canvas_mirror_provenance_route_proxies_without_management_header(
     body = json.loads(response.body)
 
     assert captured["service_url"] == "http://issuance-service"
-    assert captured["path"] == "/v1/issuance/delivery-records/canvas-credentials/provenance"
+    assert (
+        captured["path"]
+        == "/v1/issuance/delivery-records/canvas-credentials/provenance"
+    )
     assert captured["inject_headers"] is None
     assert body["trust_basis"]["canonical_issuance_backed"] is True
 
 
 def test_canvas_mirror_provenance_route_is_public_for_employer_demo():
-    route_config = get_route_config("/v1/issuance/delivery-records/canvas-credentials/provenance")
+    route_config = get_route_config(
+        "/v1/issuance/delivery-records/canvas-credentials/provenance"
+    )
 
     assert route_config is not None
     assert route_config["service"] == "issuance"
@@ -391,7 +464,9 @@ async def test_create_issuance_rejects_claims_only_issuer_profile_id():
 
 
 @pytest.mark.asyncio
-async def test_create_issuance_forwards_explicit_issuer_profile_context(monkeypatch: pytest.MonkeyPatch):
+async def test_create_issuance_forwards_explicit_issuer_profile_context(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict = {}
 
     async def fake_resolve_identity(
@@ -420,7 +495,9 @@ async def test_create_issuance_forwards_explicit_issuer_profile_context(monkeypa
         captured["service_url"] = service_url
         captured["path"] = path
         captured["inject_headers"] = inject_headers
-        return JSONResponse({"id": "iss-1", "organization_id": "org_123", "status": "PENDING"})
+        return JSONResponse(
+            {"id": "iss-1", "organization_id": "org_123", "status": "PENDING"}
+        )
 
     monkeypatch.setattr(issuance, "_resolve_issuer_identity", fake_resolve_identity)
     monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
@@ -446,13 +523,15 @@ async def test_create_issuance_forwards_explicit_issuer_profile_context(monkeypa
     assert captured["path"] == "/v1/issuance/initiate"
     assert captured["inject_headers"] == {
         "X-API-Key": "secret",
-        "X-Signing-Service-Id": "svc-bao",
+        "X-Issuer-Profile-Id": "ip-1",
         "X-Issuer-Did": "did:web:beta.elevenidllc.com:orgs:acme",
     }
 
 
 @pytest.mark.asyncio
-async def test_create_issuance_uses_template_bound_issuer_profile(monkeypatch: pytest.MonkeyPatch):
+async def test_create_issuance_uses_template_bound_issuer_profile(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict = {}
 
     async def fake_load_template(template_id, request):
@@ -484,7 +563,9 @@ async def test_create_issuance_uses_template_bound_issuer_profile(monkeypatch: p
 
     async def _proxy(request, service_url, path, inject_headers=None):
         captured["inject_headers"] = inject_headers
-        return JSONResponse({"id": "iss-1", "organization_id": "org_123", "status": "PENDING"})
+        return JSONResponse(
+            {"id": "iss-1", "organization_id": "org_123", "status": "PENDING"}
+        )
 
     monkeypatch.setattr(issuance, "_load_credential_template", fake_load_template)
     monkeypatch.setattr(issuance, "_resolve_issuer_identity", fake_resolve_identity)
@@ -508,11 +589,14 @@ async def test_create_issuance_uses_template_bound_issuer_profile(monkeypatch: p
         "issuer_profile_id": "ip-template",
         "credential_format": "sd_jwt_vc",
     }
-    assert captured["inject_headers"]["X-Signing-Service-Id"] == "svc-bao"
+    assert captured["inject_headers"]["X-Issuer-Profile-Id"] == "ip-template"
+    assert "X-Signing-Service-Id" not in captured["inject_headers"]
 
 
 @pytest.mark.asyncio
-async def test_create_issuance_rejects_body_issuer_profile_override_for_template(monkeypatch: pytest.MonkeyPatch):
+async def test_create_issuance_rejects_body_issuer_profile_override_for_template(
+    monkeypatch: pytest.MonkeyPatch,
+):
     async def fake_load_template(template_id, request):
         return {
             "id": template_id,
@@ -533,11 +617,16 @@ async def test_create_issuance_rejects_body_issuer_profile_override_for_template
         )
 
     assert exc_info.value.status_code == 422
-    assert "cannot override the credential template issuer profile" in exc_info.value.detail
+    assert (
+        "cannot override the credential template issuer profile"
+        in exc_info.value.detail
+    )
 
 
 @pytest.mark.asyncio
-async def test_create_issuance_rejects_claims_issuer_profile_override_for_template(monkeypatch: pytest.MonkeyPatch):
+async def test_create_issuance_rejects_claims_issuer_profile_override_for_template(
+    monkeypatch: pytest.MonkeyPatch,
+):
     async def fake_load_template(template_id, request):
         return {
             "id": template_id,
@@ -562,15 +651,19 @@ async def test_create_issuance_rejects_claims_issuer_profile_override_for_templa
 
 
 @pytest.mark.asyncio
-async def test_authorize_issuance_proxies_without_management_header(monkeypatch: pytest.MonkeyPatch):
+async def test_authorize_issuance_proxies_without_management_header(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict = {}
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
+        captured.update(
+            {
+                "service_url": service_url,
+                "path": path,
+                "inject_headers": inject_headers,
+            }
+        )
         return JSONResponse({"code": "authorization-code"})
 
     monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
@@ -588,24 +681,32 @@ async def test_authorize_issuance_proxies_without_management_header(monkeypatch:
 
 def test_authorize_route_precedes_issuance_id_catch_all() -> None:
     paths = [route.path for route in issuance.issuance_router.routes]
-    assert paths.index("/v1/issuance/authorize") < paths.index("/v1/issuance/{issuance_id}")
+    assert paths.index("/v1/issuance/authorize") < paths.index(
+        "/v1/issuance/{issuance_id}"
+    )
 
 
 @pytest.mark.asyncio
-async def test_canvas_mirror_automation_cycle_route_proxies_with_management_header(monkeypatch: pytest.MonkeyPatch):
+async def test_canvas_mirror_automation_cycle_route_proxies_with_management_header(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict = {}
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
-        return JSONResponse({
-            "processed_count": 2,
-            "publish": {"processed_count": 1},
-            "status_sync": {"processed_count": 1},
-        })
+        captured.update(
+            {
+                "service_url": service_url,
+                "path": path,
+                "inject_headers": inject_headers,
+            }
+        )
+        return JSONResponse(
+            {
+                "processed_count": 2,
+                "publish": {"processed_count": 1},
+                "status_sync": {"processed_count": 1},
+            }
+        )
 
     monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
     monkeypatch.setattr(issuance, "proxy_request", _proxy)
@@ -615,21 +716,28 @@ async def test_canvas_mirror_automation_cycle_route_proxies_with_management_head
     body = json.loads(response.body)
 
     assert captured["service_url"] == "http://issuance-service"
-    assert captured["path"] == "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle"
+    assert (
+        captured["path"]
+        == "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle"
+    )
     assert captured["inject_headers"] == {"X-API-Key": "secret"}
     assert body["processed_count"] == 2
 
 
 @pytest.mark.asyncio
-async def test_canvas_mirror_retry_routes_proxy_with_management_header(monkeypatch: pytest.MonkeyPatch):
+async def test_canvas_mirror_retry_routes_proxy_with_management_header(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: list[dict] = []
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.append({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
+        captured.append(
+            {
+                "service_url": service_url,
+                "path": path,
+                "inject_headers": inject_headers,
+            }
+        )
         return JSONResponse({"processed_count": 1})
 
     monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
@@ -648,15 +756,19 @@ async def test_canvas_mirror_retry_routes_proxy_with_management_header(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_canvas_mirror_health_route_proxies_with_management_header(monkeypatch: pytest.MonkeyPatch):
+async def test_canvas_mirror_health_route_proxies_with_management_header(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict = {}
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
+        captured.update(
+            {
+                "service_url": service_url,
+                "path": path,
+                "inject_headers": inject_headers,
+            }
+        )
         return JSONResponse({"organization_id": "org-1", "pending_publish_count": 1})
 
     monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
@@ -673,26 +785,36 @@ async def test_canvas_mirror_health_route_proxies_with_management_header(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_applicant_evidence_summary_route_reads_from_issuance(monkeypatch: pytest.MonkeyPatch):
+async def test_applicant_evidence_summary_route_reads_from_issuance(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict = {}
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
-        return JSONResponse({
-            "application_id": "app-1",
-            "evidence_facts": [{"id": "fact-1", "fact_type": "canvas.module_completion"}],
-            "policy_decision": {"allowed": True},
-        })
+        captured.update(
+            {
+                "service_url": service_url,
+                "path": path,
+                "inject_headers": inject_headers,
+            }
+        )
+        return JSONResponse(
+            {
+                "application_id": "app-1",
+                "evidence_facts": [
+                    {"id": "fact-1", "fact_type": "canvas.module_completion"}
+                ],
+                "policy_decision": {"allowed": True},
+            }
+        )
 
     monkeypatch.setattr(applicants, "get_registry", lambda: _Registry())
     monkeypatch.setattr(applicants, "proxy_request", _proxy)
     monkeypatch.setattr(applicants, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
 
-    response = await applicants.get_organization_applicant_evidence_summary("org-1", "app-1", _build_request())
+    response = await applicants.get_organization_applicant_evidence_summary(
+        "org-1", "app-1", _build_request()
+    )
     body = json.loads(response.body)
 
     assert captured["path"] == "/internal/applications/app-1/evidence-summary"
@@ -701,21 +823,30 @@ async def test_applicant_evidence_summary_route_reads_from_issuance(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_applicant_external_evidence_api_check_route_reads_from_issuance(monkeypatch: pytest.MonkeyPatch):
+async def test_applicant_external_evidence_api_check_route_reads_from_issuance(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict = {}
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
-        return JSONResponse({
-            "application_id": "app-1",
-            "check_id": "passport-document-check",
-            "evidence_fact": {"id": "fact-1", "fact_type": "passport.document_verified"},
-            "policy_decision": {"allowed": True},
-        })
+        captured.update(
+            {
+                "service_url": service_url,
+                "path": path,
+                "inject_headers": inject_headers,
+            }
+        )
+        return JSONResponse(
+            {
+                "application_id": "app-1",
+                "check_id": "passport-document-check",
+                "evidence_fact": {
+                    "id": "fact-1",
+                    "fact_type": "passport.document_verified",
+                },
+                "policy_decision": {"allowed": True},
+            }
+        )
 
     monkeypatch.setattr(applicants, "get_registry", lambda: _Registry())
     monkeypatch.setattr(applicants, "proxy_request", _proxy)
@@ -729,21 +860,28 @@ async def test_applicant_external_evidence_api_check_route_reads_from_issuance(m
     )
     body = json.loads(response.body)
 
-    assert captured["path"] == "/internal/applications/app-1/evidence/api-checks/passport-document-check/run"
+    assert (
+        captured["path"]
+        == "/internal/applications/app-1/evidence/api-checks/passport-document-check/run"
+    )
     assert captured["inject_headers"] == {"X-API-Key": "secret"}
     assert body["evidence_fact"]["fact_type"] == "passport.document_verified"
 
 
 @pytest.mark.asyncio
-async def test_organization_applicant_withdraw_route_reads_from_applicant_service(monkeypatch: pytest.MonkeyPatch):
+async def test_organization_applicant_withdraw_route_reads_from_applicant_service(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict = {}
 
     async def _proxy(request, service_url, path, inject_headers=None):
-        captured.update({
-            "service_url": service_url,
-            "path": path,
-            "inject_headers": inject_headers,
-        })
+        captured.update(
+            {
+                "service_url": service_url,
+                "path": path,
+                "inject_headers": inject_headers,
+            }
+        )
         return JSONResponse({"id": "app-1", "status": "WITHDRAWN"})
 
     monkeypatch.setattr(
@@ -753,7 +891,9 @@ async def test_organization_applicant_withdraw_route_reads_from_applicant_servic
     )
     monkeypatch.setattr(applicants, "proxy_request", _proxy)
 
-    response = await applicants.withdraw_organization_applicant("org-1", "app-1", _build_request())
+    response = await applicants.withdraw_organization_applicant(
+        "org-1", "app-1", _build_request()
+    )
     body = json.loads(response.body)
 
     assert captured["service_url"] == "http://applicant-service"
@@ -763,7 +903,9 @@ async def test_organization_applicant_withdraw_route_reads_from_applicant_servic
 
 
 @pytest.mark.asyncio
-async def test_resolve_issuer_identity_requires_explicit_active_profile(monkeypatch: pytest.MonkeyPatch):
+async def test_resolve_issuer_identity_requires_explicit_active_profile(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """_resolve_issuer_identity should only return the explicitly selected active profile."""
     from fastapi import HTTPException as FastAPIHTTPException
 
@@ -772,18 +914,22 @@ async def test_resolve_issuer_identity_requires_explicit_active_profile(monkeypa
         assert kwargs["x_api_key"] == "secret"
         if kwargs["issuer_profile_id"] == "ip-1":
             raise FastAPIHTTPException(status_code=404, detail="not active")
-        return JSONResponse({
-            "ok": True,
-            "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
-            "signing_service_id": "svc-2",
-            "signing_key_reference": "",
-            "verification_method_id": "",
-            "key_purpose": "vc_jwt_issuer",
-            "service": {},
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
+                "signing_service_id": "svc-2",
+                "signing_key_reference": "",
+                "verification_method_id": "",
+                "key_purpose": "vc_jwt_issuer",
+                "service": {},
+            }
+        )
 
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "secret")
-    monkeypatch.setattr(signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context)
+    monkeypatch.setattr(
+        signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context
+    )
 
     request = _build_request(session_org_id="org_acme")
     assert await issuance._resolve_issuer_identity(request, "org_acme", None) is None
@@ -801,24 +947,31 @@ async def test_resolve_issuer_identity_requires_explicit_active_profile(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_resolve_issuer_identity_prefers_format_scoped_profile(monkeypatch: pytest.MonkeyPatch):
+async def test_resolve_issuer_identity_prefers_format_scoped_profile(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """_resolve_issuer_identity should not inject a VC profile for mDoc issuance."""
+
     async def fake_resolve_issuer_context(**kwargs):
         assert kwargs["issuer_profile_id"] == "ip-mdoc"
         assert kwargs["credential_format"] == "mso_mdoc"
         assert kwargs["key_purpose"] == "mdoc_dsc"
-        return JSONResponse({
-            "ok": True,
-            "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
-            "signing_service_id": "svc-mdoc",
-            "signing_key_reference": "cred-dsc-acme-primary",
-            "verification_method_id": "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary",
-            "key_purpose": "mdoc_dsc",
-            "service": {"algorithm": "ES256"},
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
+                "signing_service_id": "svc-mdoc",
+                "signing_key_reference": "cred-dsc-acme-primary",
+                "verification_method_id": "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary",
+                "key_purpose": "mdoc_dsc",
+                "service": {"algorithm": "ES256"},
+            }
+        )
 
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "secret")
-    monkeypatch.setattr(signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context)
+    monkeypatch.setattr(
+        signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context
+    )
 
     request = _build_request(session_org_id="org_acme")
     identity = await issuance._resolve_issuer_identity(
@@ -830,12 +983,17 @@ async def test_resolve_issuer_identity_prefers_format_scoped_profile(monkeypatch
 
     assert identity["signing_service_id"] == "svc-mdoc"
     assert identity["signing_key_reference"] == "cred-dsc-acme-primary"
-    assert identity["verification_method_id"] == "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary"
+    assert (
+        identity["verification_method_id"]
+        == "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary"
+    )
     assert identity["key_purpose"] == "mdoc_dsc"
 
 
 @pytest.mark.asyncio
-async def test_resolve_issuer_identity_returns_none_when_no_active(monkeypatch: pytest.MonkeyPatch):
+async def test_resolve_issuer_identity_returns_none_when_no_active(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """_resolve_issuer_identity should return None when the explicit profile is not active."""
     from fastapi import HTTPException as FastAPIHTTPException
 
@@ -843,7 +1001,9 @@ async def test_resolve_issuer_identity_returns_none_when_no_active(monkeypatch: 
         raise FastAPIHTTPException(status_code=404, detail="not active")
 
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "secret")
-    monkeypatch.setattr(signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context)
+    monkeypatch.setattr(
+        signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context
+    )
 
     request = _build_request(session_org_id="org_x")
     result = await issuance._resolve_issuer_identity(request, "org_x", "ip-1")
@@ -852,7 +1012,9 @@ async def test_resolve_issuer_identity_returns_none_when_no_active(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_resolve_issuer_identity_returns_none_when_no_profiles(monkeypatch: pytest.MonkeyPatch):
+async def test_resolve_issuer_identity_returns_none_when_no_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """_resolve_issuer_identity should return None when no profiles exist at all."""
     from fastapi import HTTPException as FastAPIHTTPException
 
@@ -860,7 +1022,9 @@ async def test_resolve_issuer_identity_returns_none_when_no_profiles(monkeypatch
         raise FastAPIHTTPException(status_code=404, detail="no profiles")
 
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "secret")
-    monkeypatch.setattr(signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context)
+    monkeypatch.setattr(
+        signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context
+    )
 
     request = _build_request(session_org_id="org_empty")
     result = await issuance._resolve_issuer_identity(request, "org_empty", "ip-1")
@@ -869,7 +1033,9 @@ async def test_resolve_issuer_identity_returns_none_when_no_profiles(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_resolve_issuer_identity_preserves_signing_key_service_outage(monkeypatch: pytest.MonkeyPatch):
+async def test_resolve_issuer_identity_preserves_signing_key_service_outage(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """_resolve_issuer_identity should not hide resolver outages as an invalid profile."""
     from fastapi import HTTPException as FastAPIHTTPException
 
@@ -877,7 +1043,9 @@ async def test_resolve_issuer_identity_preserves_signing_key_service_outage(monk
         raise FastAPIHTTPException(status_code=503, detail="signing keys unavailable")
 
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "secret")
-    monkeypatch.setattr(signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context)
+    monkeypatch.setattr(
+        signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context
+    )
 
     request = _build_request(session_org_id="org_x")
     with pytest.raises(FastAPIHTTPException) as exc_info:
