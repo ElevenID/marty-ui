@@ -14,6 +14,25 @@ from starlette.responses import JSONResponse
 from gateway.routes import signing_keys
 
 
+def test_oid4vp_profile_key_is_part_of_managed_signing_inventory() -> None:
+    key_name = "oid4vp-verifier-marty-es256"
+
+    assert signing_keys._looks_like_signing_key(key_name)
+    normalized = signing_keys._normalize_openbao_signing_key(
+        key_name,
+        {
+            "type": "ecdsa-p256",
+            "supports_signing": True,
+            "soft_deleted": False,
+            "latest_version": 1,
+            "keys": {"1": {"creation_time": "2026-01-01T00:00:00Z"}},
+        },
+    )
+    assert normalized["provider_key_name"] == key_name
+    assert normalized["algorithm"] == "ES256"
+    assert normalized["name"] == "Marty OID4VP verifier request key"
+
+
 @pytest.mark.asyncio
 async def test_internal_issuer_profile_signing_hides_kms_routing(
     monkeypatch: pytest.MonkeyPatch,
