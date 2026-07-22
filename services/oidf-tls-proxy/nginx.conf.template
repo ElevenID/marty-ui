@@ -7,10 +7,18 @@ server {
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_session_cache shared:SSL:10m;
 
+    # Compose can replace a service container while retaining its DNS name.
+    # Resolve the upstream for every short Docker-DNS validity window instead
+    # of keeping the address Nginx saw when this proxy first started.
+    resolver 127.0.0.11 valid=5s ipv6=off;
+    resolver_timeout 5s;
+    set $keycloak_upstream http://keycloak:8080;
+    set $gateway_upstream http://gateway:8000;
+
     # Keycloak must be available at the same public origin used in its issuer
     # metadata; the authenticated gateway flow therefore remains real.
     location /realms/ {
-        proxy_pass http://keycloak:8080;
+        proxy_pass $keycloak_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host $host;
@@ -18,7 +26,7 @@ server {
     }
 
     location / {
-        proxy_pass http://gateway:8000;
+        proxy_pass $gateway_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host $host;
