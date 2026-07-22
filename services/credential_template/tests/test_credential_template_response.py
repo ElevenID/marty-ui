@@ -691,13 +691,14 @@ def test_internal_credential_configurations_preserves_envelope_without_repo() ->
 	}
 
 
-def test_internal_credential_configurations_only_advertise_kms_backed_templates() -> None:
+def test_internal_credential_configurations_only_advertise_profile_backed_templates() -> None:
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 
 	valid = credential_template.CredentialTemplate(
 		organization_id="org-1",
 		name="Employee Badge",
 		credential_type="EmployeeBadge",
+		vct="https://issuer.example/credentials/EmployeeBadge",
 		issuer_profile_id="issuer-profile-1",
 		key_access_mode="REMOTE_SIGNING",
 	)
@@ -737,3 +738,50 @@ def test_internal_credential_configurations_only_advertise_kms_backed_templates(
 	assert "EmployeeBadge" in configs
 	assert "LegacyBadge" not in configs
 	assert "default" not in configs
+	assert configs["EmployeeBadge"]["format"] == "dc+sd-jwt"
+	assert configs["EmployeeBadge"]["vct"] == (
+		"https://issuer.example/credentials/EmployeeBadge"
+	)
+	assert configs["EmployeeBadge"]["cryptographic_binding_methods_supported"] == [
+		"jwk"
+	]
+	assert "signing_service_id" not in configs["EmployeeBadge"]
+	assert "signing_key_reference" not in configs["EmployeeBadge"]
+
+
+def test_internal_credential_configurations_advertise_mdoc_contract() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	template = credential_template.CredentialTemplate(
+		organization_id="org-1",
+		name="Mobile Driving Licence",
+		credential_type="org.iso.18013.5.1.mDL",
+		doctype="org.iso.18013.5.1.mDL",
+		supported_formats=[credential_template.CredentialFormat.MDOC],
+		credential_payload_format=credential_template.CredentialFormat.MDOC.value,
+		issuer_profile_id="issuer-profile-mdoc",
+		key_access_mode="REMOTE_SIGNING",
+		issuer_algorithm="ES256",
+	)
+	template.activate()
+	asyncio.run(repo.save(template))
+	client, _ = _build_client(repo)
+
+	response = client.get("/internal/credential-configurations")
+
+	assert response.status_code == 200
+	config = response.json()["credential_configurations_supported"][
+		template.credential_type
+	]
+	assert config == {
+		"scope": "org.iso.18013.5.1.mDL_credential",
+		"cryptographic_binding_methods_supported": ["jwk"],
+		"credential_signing_alg_values_supported": ["ES256"],
+		"proof_types_supported": {
+			"jwt": {"proof_signing_alg_values_supported": ["ES256"]},
+		},
+		"credential_metadata": {
+			"display": [{"name": "Mobile Driving Licence", "locale": "en-US"}],
+		},
+		"format": "mso_mdoc",
+		"doctype": "org.iso.18013.5.1.mDL",
+	}
