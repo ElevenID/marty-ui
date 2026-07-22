@@ -607,6 +607,10 @@ def test_open_badge_login_policy_format_accepts_sd_jwt_aliases() -> None:
     assert pp._credential_format_satisfies_requirement("sd-jwt", "ietf_sd_jwt")
     assert not pp._credential_format_satisfies_requirement("sd-jwt", "openbadge-v3")
     assert pp._credential_format_satisfies_requirement("w3c-vcdm-di", "w3c_vcdm_v2_di")
+    assert pp._credential_format_satisfies_requirement(
+        "w3c-vc", "w3c_vcdm_v2_jwt_vc"
+    )
+    assert pp._credential_format_satisfies_requirement("w3c-vc", "jwt_vc_json")
 
 
 def test_trust_profile_service_url_defaults_to_compose_service_name(

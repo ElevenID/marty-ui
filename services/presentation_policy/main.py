@@ -743,6 +743,17 @@ def _required_format_to_canonical(required_format: str | None) -> str | None:
         return "OPENBADGE_V3"
     if normalized in {"openbadge-v2", "open-badge-v2", "openbadge2"}:
         return "OPENBADGE_V2"
+    if normalized in {
+        "w3c_vcdm_v2_jwt_vc",
+        "w3c-vcdm-v2-jwt-vc",
+        "jwt_vc",
+        "jwt-vc",
+        "vc_jwt",
+        "vc-jwt",
+        "jwt_vc_json",
+        "jwt-vc-json",
+    }:
+        return "VC_JWT"
     try:
         return parse_credential_format(required_format).value
     except ValueError:

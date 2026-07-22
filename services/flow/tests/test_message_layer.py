@@ -10,6 +10,7 @@ import pytest
 from fastapi import HTTPException
 from jwcrypto import jwt as jwcrypto_jwt
 from jwcrypto import jwk as jwcrypto_jwk
+from pydantic import ValidationError
 from starlette.requests import Request
 
 import flow.main as flow_main
@@ -41,6 +42,28 @@ from flow.main import (
     submit_verification_response,
     update_flow_definition,
 )
+
+
+def test_verification_runtime_accepts_profile_identity_not_kms_coordinates() -> None:
+    request = StartVerificationFlowRequest(
+        presentation_policy_id="policy-1",
+        issuer_profile_id="issuer-profile-1",
+        issuer_did="did:web:verifier.example:oid4vp",
+    )
+
+    assert request.issuer_profile_id == "issuer-profile-1"
+    assert request.issuer_did == "did:web:verifier.example:oid4vp"
+
+    with pytest.raises(ValidationError):
+        StartVerificationFlowRequest.model_validate(
+            {
+                "presentation_policy_id": "policy-1",
+                "issuer_profile_id": "issuer-profile-1",
+                "issuer_did": "did:web:verifier.example:oid4vp",
+                "signing_service_id": "managed-openbao-transit",
+                "signing_key_reference": "oid4vp-verifier-key",
+            }
+        )
 
 
 @pytest.fixture(autouse=True)
