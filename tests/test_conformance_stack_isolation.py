@@ -398,3 +398,15 @@ def test_oidf_runner_can_join_only_the_project_scoped_tls_proxy_bridge() -> None
     assert "OIDF_CONFORMANCE_BRIDGE_ALIAS" in proxy
     assert "OIDF_INTERNAL_TLS_PORT" in proxy
     assert "nginx.conf.template" in proxy
+
+
+def test_oidf_tls_proxy_refreshes_compose_upstream_addresses() -> None:
+    config = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(encoding="utf-8")
+
+    assert "resolver 127.0.0.11 valid=5s ipv6=off;" in config
+    assert "set $gateway_upstream http://gateway:8000;" in config
+    assert "set $keycloak_upstream http://keycloak:8080;" in config
+    assert "proxy_pass $gateway_upstream;" in config
+    assert "proxy_pass $keycloak_upstream;" in config
+    assert "proxy_pass http://gateway:8000;" not in config
+    assert "proxy_pass http://keycloak:8080;" not in config
