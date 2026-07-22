@@ -140,8 +140,9 @@ def _read_secret_value(name: str) -> str:
 async def _oid4vp_issuer_profile_identity(
     organization_id: str,
     issuer_profile_id: str | None = None,
+    expected_issuer_did: str | None = None,
 ) -> dict[str, Any]:
-    """Resolve public verifier identity material through an issuer profile."""
+    """Resolve and bind public verifier identity through an issuer profile."""
     profile_id = (
         issuer_profile_id
         or os.environ.get("OID4VP_ISSUER_PROFILE_ID")
@@ -192,6 +193,11 @@ async def _oid4vp_issuer_profile_identity(
         raise HTTPException(
             status_code=503,
             detail="OID4VP issuer profile returned an invalid DID signing identity",
+        )
+    if expected_issuer_did and issuer_did != expected_issuer_did:
+        raise HTTPException(
+            status_code=409,
+            detail="Selected issuer profile does not own the requested issuer DID",
         )
     return identity
 
@@ -3227,10 +3233,13 @@ class StartVerificationFlowRequest(BaseModel):
     For SIOPv2: set response_type='id_token'; presentation_policy_id is not needed.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     # Optional so SIOPv2 flows (response_type=id_token) don't require a policy.
     presentation_policy_id: str | None = None
     organization_id: str | None = None
     issuer_profile_id: str | None = None
+    issuer_did: str | None = Field(None, pattern=r"^did:", max_length=2048)
     # SIOPv2 Draft 13 §9: response_type=id_token selects SIOPv2 authentication.
     response_type: str = "vp_token"
     trust_profile_id: str | None = None
@@ -3408,6 +3417,7 @@ async def start_verification_flow(
         signing_identity = await _oid4vp_issuer_profile_identity(
             organization_id,
             request.issuer_profile_id,
+            request.issuer_did,
         )
         flow_definition_id = str(uuid.uuid4())
         instance = FlowInstance(
@@ -3425,6 +3435,7 @@ async def start_verification_flow(
                 "response_type": "id_token",
                 "callback_url": request.callback_url,
                 "oid4vp_issuer_profile_id": signing_identity["issuer_profile_id"],
+                "oid4vp_issuer_did": signing_identity["issuer_did"],
                 "oid4vp_signing_identity": signing_identity,
             },
             external_reference=request.external_reference,
@@ -3511,6 +3522,7 @@ async def start_verification_flow(
     signing_identity = await _oid4vp_issuer_profile_identity(
         organization_id,
         request.issuer_profile_id,
+        request.issuer_did,
     )
     signing_profile_id = str(signing_identity["issuer_profile_id"])
     flow_definition_id = str(uuid.uuid4())
@@ -3528,6 +3540,7 @@ async def start_verification_flow(
             "flow_type": "verification",
             "oid4vp_profile": request.oid4vp_profile,
             "oid4vp_issuer_profile_id": signing_profile_id,
+            "oid4vp_issuer_did": signing_identity["issuer_did"],
             "oid4vp_signing_identity": signing_identity,
             "request_uri_method": request.request_uri_method,
             "protocol_flow_type": FlowType.OID4VP_PRESENTATION.value,
@@ -4103,6 +4116,7 @@ async def get_verification_request_object(
     signing_identity = await _oid4vp_issuer_profile_identity(
         instance.organization_id,
         signing_profile_id,
+        instance.context.get("oid4vp_issuer_did"),
     )
 
     # Build base URL for response_uri (where wallet posts the VP)
