@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -11,6 +12,108 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from gateway.routes import signing_keys
+
+
+@pytest.mark.asyncio
+async def test_internal_issuer_profile_signing_hides_kms_routing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+    profile = {
+        "id": "ip-verifier",
+        "issuer_did": "did:web:verifier.example",
+        "signing_service_id": "managed-openbao-transit",
+        "signing_key_reference": "oid4vp-verifier-marty-es256",
+        "verification_method_id": "did:web:verifier.example#oid4vp",
+        "key_purpose": "oid4vp_request_signing",
+        "algorithm": "ES256",
+        "status": "active",
+    }
+    identity = {
+        "issuer_profile": profile,
+        "issuer_did": profile["issuer_did"],
+        "verification_method_id": profile["verification_method_id"],
+        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+    }
+    monkeypatch.setattr(
+        signing_keys,
+        "_resolve_exact_issuer_profile_identity",
+        AsyncMock(return_value=(profile, identity)),
+    )
+    captured = {}
+
+    async def fake_sign_payload_with_service(**kwargs):
+        captured.update(kwargs)
+        return JSONResponse(
+            content={
+                "ok": True,
+                "service_id": "managed-openbao-transit",
+                "algorithm": "ES256",
+                "signature_encoding": "raw_ieee_p1363",
+                "signature_b64": "signature",
+            }
+        )
+
+    monkeypatch.setattr(
+        signing_keys, "sign_payload_with_service", fake_sign_payload_with_service
+    )
+    response = await signing_keys.internal_sign_payload_with_issuer_profile(
+        request=_build_request("org-1"),
+        issuer_profile_id="ip-verifier",
+        body={"payload_b64": "cGF5bG9hZA", "algorithm": "ES256"},
+        organization_id="org-1",
+        x_api_key="test-internal-key",
+    )
+    data = json.loads(response.body)
+
+    assert captured["body"]["key_reference"] == "oid4vp-verifier-marty-es256"
+    assert captured["body"]["key_purpose"] == "oid4vp_request_signing"
+    assert data["issuer_profile_id"] == "ip-verifier"
+    assert data["issuer_did"] == "did:web:verifier.example"
+    assert "service_id" not in data
+
+
+@pytest.mark.asyncio
+async def test_flow_key_envelope_is_bound_to_org_and_flow(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+    stored: dict[str, bytes] = {}
+
+    async def fake_openbao(path, payload):
+        if "/encrypt/" in path:
+            plaintext = base64.b64decode(payload["plaintext"])
+            stored["vault:v1:test"] = plaintext
+            return {"data": {"ciphertext": "vault:v1:test"}}
+        return {
+            "data": {
+                "plaintext": base64.b64encode(stored[payload["ciphertext"]]).decode()
+            }
+        }
+
+    monkeypatch.setattr(signing_keys, "_openbao_post_json", fake_openbao)
+    wrapped = await signing_keys.internal_wrap_flow_key(
+        body={"flow_instance_id": "flow-1", "plaintext_b64": "cHJpdmF0ZS1qd2s"},
+        organization_id="org-1",
+        x_api_key="test-internal-key",
+    )
+    ciphertext = json.loads(wrapped.body)["ciphertext"]
+    unwrapped = await signing_keys.internal_unwrap_flow_key(
+        body={"flow_instance_id": "flow-1", "ciphertext": ciphertext},
+        organization_id="org-1",
+        x_api_key="test-internal-key",
+    )
+    assert json.loads(unwrapped.body)["plaintext_b64"] == "cHJpdmF0ZS1qd2s"
+
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    with pytest.raises(FastAPIHTTPException) as exc_info:
+        await signing_keys.internal_unwrap_flow_key(
+            body={"flow_instance_id": "flow-2", "ciphertext": ciphertext},
+            organization_id="org-1",
+            x_api_key="test-internal-key",
+        )
+    assert exc_info.value.status_code == 409
 
 
 def _format_iso_datetime(dt: datetime) -> str:
@@ -47,14 +150,20 @@ def _build_request(
     return request
 
 
-def _http_status_error(status_code: int, payload: dict, url: str = "http://openbao.test/v1/transit/keys/test") -> httpx.HTTPStatusError:
+def _http_status_error(
+    status_code: int,
+    payload: dict,
+    url: str = "http://openbao.test/v1/transit/keys/test",
+) -> httpx.HTTPStatusError:
     request = httpx.Request("POST", url)
     response = httpx.Response(status_code, json=payload, request=request)
     return httpx.HTTPStatusError("request failed", request=request, response=response)
 
 
 @pytest.mark.asyncio
-async def test_list_signing_keys_uses_session_org_fallback(monkeypatch: pytest.MonkeyPatch):
+async def test_list_signing_keys_uses_session_org_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
     request = _build_request("org_fallback")
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
@@ -94,7 +203,9 @@ async def test_list_signing_keys_uses_session_org_fallback(monkeypatch: pytest.M
 
     monkeypatch.setattr(signing_keys, "_load_signing_key_snapshot", fake_snapshot)
 
-    response = await signing_keys.list_signing_keys(request=request, organization_id=None)
+    response = await signing_keys.list_signing_keys(
+        request=request, organization_id=None
+    )
 
     assert response.status_code == 200
     assert b'"cred-issuer-marty-es256"' in response.body
@@ -104,7 +215,9 @@ async def test_list_signing_keys_uses_session_org_fallback(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_get_signing_key_config_returns_service_registry(monkeypatch: pytest.MonkeyPatch):
+async def test_get_signing_key_config_returns_service_registry(
+    monkeypatch: pytest.MonkeyPatch,
+):
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(
         return_value=json.dumps(
@@ -157,7 +270,9 @@ async def test_get_signing_key_config_returns_service_registry(monkeypatch: pyte
 
     monkeypatch.setattr(signing_keys, "_load_signing_key_snapshot", fake_snapshot)
 
-    response = await signing_keys.get_signing_key_config(request=request, organization_id=None)
+    response = await signing_keys.get_signing_key_config(
+        request=request, organization_id=None
+    )
 
     assert response.status_code == 200
     assert b'"service_type_catalog"' in response.body
@@ -169,7 +284,9 @@ async def test_get_signing_key_config_returns_service_registry(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
-async def test_update_signing_key_config_persists_registered_services(monkeypatch: pytest.MonkeyPatch):
+async def test_update_signing_key_config_persists_registered_services(
+    monkeypatch: pytest.MonkeyPatch,
+):
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(return_value=None)
     redis_mock.set = AsyncMock()
@@ -254,7 +371,9 @@ async def test_update_signing_key_config_persists_registered_services(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_validate_signing_key_service_returns_gateway_checks(monkeypatch: pytest.MonkeyPatch):
+async def test_validate_signing_key_service_returns_gateway_checks(
+    monkeypatch: pytest.MonkeyPatch,
+):
     async def fake_validate(body: dict):
         assert body["service_type"] == "custom-transit-compatible"
         assert body["endpoint"] == "https://signer.example.com"
@@ -284,7 +403,7 @@ async def test_validate_signing_key_service_returns_gateway_checks(monkeypatch: 
             "auth_reference": "vault-token",
             "key_reference": "cred-issuer-prod",
             "algorithms": ["ES256"],
-        }
+        },
     )
 
     assert response.status_code == 200
@@ -302,7 +421,7 @@ async def test_validate_signing_key_service_marks_missing_key_reference_as_failu
             "service_type": "aws-kms",
             "auth_mode": "iam_role",
             "algorithms": ["ES256"],
-        }
+        },
     )
 
     assert response.status_code == 200
@@ -322,23 +441,31 @@ async def test_validate_signing_key_service_checks_provider_key_reference_format
             "auth_mode": "iam_role",
             "key_reference": "not-an-arn",
             "algorithms": ["ES256"],
-        }
+        },
     )
 
     assert response.status_code == 200
     assert b'"ok":false' in response.body
     assert b'"name":"Provider key format"' in response.body
-    assert b'AWS key reference should be a key ARN' in response.body
+    assert b"AWS key reference should be a key ARN" in response.body
 
 
 @pytest.mark.asyncio
-async def test_validate_signing_key_service_uses_cloud_validator_bridge(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(signing_keys, "_cloud_validator_url", lambda provider: "http://validator" if provider == "aws" else "")
+async def test_validate_signing_key_service_uses_cloud_validator_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        signing_keys,
+        "_cloud_validator_url",
+        lambda provider: "http://validator" if provider == "aws" else "",
+    )
     request = _build_request("org_123")
 
     async def fake_probe(payload: dict, validator_url: str):
         assert payload["provider"] == "aws"
-        assert payload["key_reference"] == "arn:aws:kms:us-west-2:123456789012:key/abc123"
+        assert (
+            payload["key_reference"] == "arn:aws:kms:us-west-2:123456789012:key/abc123"
+        )
         assert validator_url == "http://validator"
         return True, None
 
@@ -352,17 +479,21 @@ async def test_validate_signing_key_service_uses_cloud_validator_bridge(monkeypa
             "auth_mode": "iam_role",
             "key_reference": "arn:aws:kms:us-west-2:123456789012:key/abc123",
             "algorithms": ["ES256"],
-        }
+        },
     )
 
     assert response.status_code == 200
     assert b'"ok":true' in response.body
     assert b'"Connected to provider validator bridge."' in response.body
-    assert b'"Validator bridge completed a remote sign-capability probe."' in response.body
+    assert (
+        b'"Validator bridge completed a remote sign-capability probe."' in response.body
+    )
 
 
 @pytest.mark.asyncio
-async def test_validate_signing_key_service_uses_adapter_when_no_validator(monkeypatch: pytest.MonkeyPatch):
+async def test_validate_signing_key_service_uses_adapter_when_no_validator(
+    monkeypatch: pytest.MonkeyPatch,
+):
     class FakeAdapter:
         async def verify_connection(self, payload: dict):
             assert payload["service_type"] == "aws-kms"
@@ -391,7 +522,7 @@ async def test_validate_signing_key_service_uses_adapter_when_no_validator(monke
             "auth_mode": "iam_role",
             "key_reference": "arn:aws:kms:us-west-2:123456789012:key/abc123",
             "algorithms": ["ES256"],
-        }
+        },
     )
 
     assert response.status_code == 200
@@ -401,7 +532,9 @@ async def test_validate_signing_key_service_uses_adapter_when_no_validator(monke
 
 
 @pytest.mark.asyncio
-async def test_validate_signing_key_service_falls_back_when_no_validator_or_adapter(monkeypatch: pytest.MonkeyPatch):
+async def test_validate_signing_key_service_falls_back_when_no_validator_or_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(signing_keys, "_cloud_validator_url", lambda provider: "")
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda payload: None)
     request = _build_request("org_123")
@@ -414,12 +547,15 @@ async def test_validate_signing_key_service_falls_back_when_no_validator_or_adap
             "auth_mode": "iam_role",
             "key_reference": "arn:aws:kms:us-west-2:123456789012:key/abc123",
             "algorithms": ["ES256"],
-        }
+        },
     )
 
     assert response.status_code == 200
     assert b'"No aws validator bridge is configured' in response.body
-    assert b'"Gateway could not run a live sign test for this provider type."' in response.body
+    assert (
+        b'"Gateway could not run a live sign test for this provider type."'
+        in response.body
+    )
 
 
 # =============================================================================
@@ -519,7 +655,9 @@ def test_resolve_service_returns_global_default(monkeypatch: pytest.MonkeyPatch)
         "type_defaults": {},
     }
     # Re-run normalization so id/shape is consistent
-    registry["services"] = [signing_keys._normalize_registered_service(svc) for svc in registry["services"]]
+    registry["services"] = [
+        signing_keys._normalize_registered_service(svc) for svc in registry["services"]
+    ]
 
     result = signing_keys._resolve_service_for_format(registry, "mso_mdoc", None, None)
     assert result is not None
@@ -529,10 +667,20 @@ def test_resolve_service_returns_global_default(monkeypatch: pytest.MonkeyPatch)
 def test_resolve_service_format_defaults_win_over_global():
     """format_defaults should take priority over global default_service_id."""
     svc_global = signing_keys._normalize_registered_service(
-        {"id": "svc-global", "service_type": "openbao-transit", "key_reference": "k", "algorithms": ["ES256"]}
+        {
+            "id": "svc-global",
+            "service_type": "openbao-transit",
+            "key_reference": "k",
+            "algorithms": ["ES256"],
+        }
     )
     svc_jwt = signing_keys._normalize_registered_service(
-        {"id": "svc-jwt", "service_type": "openbao-transit", "key_reference": "k2", "algorithms": ["RS256"]}
+        {
+            "id": "svc-jwt",
+            "service_type": "openbao-transit",
+            "key_reference": "k2",
+            "algorithms": ["RS256"],
+        }
     )
     registry = {
         "services": [svc_global, svc_jwt],
@@ -540,7 +688,9 @@ def test_resolve_service_format_defaults_win_over_global():
         "format_defaults": {"jwt_vc_json": "svc-jwt"},
         "type_defaults": {},
     }
-    result = signing_keys._resolve_service_for_format(registry, "jwt_vc_json", None, None)
+    result = signing_keys._resolve_service_for_format(
+        registry, "jwt_vc_json", None, None
+    )
     assert result is not None
     assert result["id"] == "svc-jwt"
 
@@ -548,11 +698,21 @@ def test_resolve_service_format_defaults_win_over_global():
 def test_resolve_service_type_defaults_beat_format_defaults():
     """type_defaults should win over format_defaults."""
     svc_a = signing_keys._normalize_registered_service(
-        {"id": "svc-a", "service_type": "openbao-transit", "key_reference": "a", "algorithms": ["ES256"]}
+        {
+            "id": "svc-a",
+            "service_type": "openbao-transit",
+            "key_reference": "a",
+            "algorithms": ["ES256"],
+        }
     )
     svc_b = signing_keys._normalize_registered_service(
-        {"id": "svc-b", "service_type": "aws-kms", "auth_mode": "iam_role",
-         "key_reference": "arn:aws:kms:us-east-1:000000000000:key/b", "algorithms": ["ES256"]}
+        {
+            "id": "svc-b",
+            "service_type": "aws-kms",
+            "auth_mode": "iam_role",
+            "key_reference": "arn:aws:kms:us-east-1:000000000000:key/b",
+            "algorithms": ["ES256"],
+        }
     )
     registry = {
         "services": [svc_a, svc_b],
@@ -560,14 +720,21 @@ def test_resolve_service_type_defaults_beat_format_defaults():
         "format_defaults": {"mso_mdoc": "svc-a"},
         "type_defaults": {"mdoc_dsc": "svc-b"},
     }
-    result = signing_keys._resolve_service_for_format(registry, "mso_mdoc", "mdoc_dsc", None)
+    result = signing_keys._resolve_service_for_format(
+        registry, "mso_mdoc", "mdoc_dsc", None
+    )
     assert result is not None
     assert result["id"] == "svc-b"
 
 
 def test_resolve_service_returns_none_when_no_services():
     result = signing_keys._resolve_service_for_format(
-        {"services": [], "default_service_id": None, "format_defaults": {}, "type_defaults": {}},
+        {
+            "services": [],
+            "default_service_id": None,
+            "format_defaults": {},
+            "type_defaults": {},
+        },
         "jwt_vc_json",
         None,
         None,
@@ -594,13 +761,16 @@ def test_resolve_key_reference_selects_mdoc_dsc_in_multi_key_service():
         {"id": "cred-dsc-marty-primary", "algorithm": "ES256"},
     ]
 
-    assert signing_keys._resolve_key_reference_for_purpose(
-        registry,
-        service,
-        keys,
-        key_purpose="mdoc_dsc",
-        algorithm="ES256",
-    ) == "cred-dsc-marty-primary"
+    assert (
+        signing_keys._resolve_key_reference_for_purpose(
+            registry,
+            service,
+            keys,
+            key_purpose="mdoc_dsc",
+            algorithm="ES256",
+        )
+        == "cred-dsc-marty-primary"
+    )
 
 
 def test_resolve_key_reference_honors_requested_algorithm():
@@ -622,17 +792,22 @@ def test_resolve_key_reference_honors_requested_algorithm():
         {"provider_key_name": "issuer-es384", "algorithm": "ES384"},
     ]
 
-    assert signing_keys._resolve_key_reference_for_purpose(
-        registry,
-        service,
-        keys,
-        key_purpose="vc_jwt_issuer",
-        algorithm="ES384",
-    ) == "issuer-es384"
+    assert (
+        signing_keys._resolve_key_reference_for_purpose(
+            registry,
+            service,
+            keys,
+            key_purpose="vc_jwt_issuer",
+            algorithm="ES384",
+        )
+        == "issuer-es384"
+    )
 
 
 @pytest.mark.asyncio
-async def test_resolve_endpoint_returns_matching_service(monkeypatch: pytest.MonkeyPatch):
+async def test_resolve_endpoint_returns_matching_service(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """POST /v1/signing-keys/config/resolve should return the resolved service."""
     svc = signing_keys._normalize_registered_service(
         {
@@ -658,7 +833,9 @@ async def test_resolve_endpoint_returns_matching_service(monkeypatch: pytest.Mon
     async def fake_snapshot(org_id):
         return {"keys": [], "provider_metadata": {}, "message": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_registry
+    )
     monkeypatch.setattr(signing_keys, "_load_signing_key_snapshot", fake_snapshot)
 
     request = _build_request("org_123")
@@ -676,11 +853,20 @@ async def test_resolve_endpoint_returns_matching_service(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_resolve_endpoint_returns_404_when_no_service(monkeypatch: pytest.MonkeyPatch):
+async def test_resolve_endpoint_returns_404_when_no_service(
+    monkeypatch: pytest.MonkeyPatch,
+):
     async def fake_registry(request, org_id):
-        return {"services": [], "default_service_id": None, "format_defaults": {}, "type_defaults": {}}
+        return {
+            "services": [],
+            "default_service_id": None,
+            "format_defaults": {},
+            "type_defaults": {},
+        }
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_registry
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 
@@ -695,7 +881,9 @@ async def test_resolve_endpoint_returns_404_when_no_service(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_list_key_purposes_proxies_to_signing_keys_service(monkeypatch: pytest.MonkeyPatch):
+async def test_list_key_purposes_proxies_to_signing_keys_service(
+    monkeypatch: pytest.MonkeyPatch,
+):
     proxy = AsyncMock(return_value=JSONResponse({"purposes": []}))
     registry = Mock()
     registry.get_service_url.return_value = "http://signing-keys:8017"
@@ -713,7 +901,9 @@ async def test_list_key_purposes_proxies_to_signing_keys_service(monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_list_service_capabilities_proxies_to_signing_keys_service(monkeypatch: pytest.MonkeyPatch):
+async def test_list_service_capabilities_proxies_to_signing_keys_service(
+    monkeypatch: pytest.MonkeyPatch,
+):
     proxy = AsyncMock(return_value=JSONResponse({"service_capabilities": []}))
     registry = Mock()
     registry.get_service_url.return_value = "http://signing-keys:8017"
@@ -743,7 +933,9 @@ def test_baseline_validation_warns_on_purpose_algorithm_mismatch():
         },
         checks,
     )
-    purpose_check = next((c for c in checks if c["name"] == "Key purpose algorithm fit"), None)
+    purpose_check = next(
+        (c for c in checks if c["name"] == "Key purpose algorithm fit"), None
+    )
     assert purpose_check is not None
     assert purpose_check["status"] == "warning"
     assert "RS256" in purpose_check["detail"]
@@ -762,14 +954,18 @@ def test_baseline_validation_passes_on_compatible_purpose_algorithm():
         },
         checks,
     )
-    purpose_check = next((c for c in checks if c["name"] == "Key purpose algorithm fit"), None)
+    purpose_check = next(
+        (c for c in checks if c["name"] == "Key purpose algorithm fit"), None
+    )
     assert purpose_check is not None
     assert purpose_check["status"] == "pass"
 
 
 def test_lti_tool_signing_is_distinct_and_rs256_only():
     assert "lti_tool_signing" in signing_keys.KEY_PURPOSES
-    assert signing_keys.KEY_PURPOSE_ALGORITHM_CONSTRAINTS["lti_tool_signing"] == frozenset({"RS256"})
+    assert signing_keys.KEY_PURPOSE_ALGORITHM_CONSTRAINTS[
+        "lti_tool_signing"
+    ] == frozenset({"RS256"})
     assert signing_keys.KEY_PURPOSE_CREDENTIAL_FORMATS["lti_tool_signing"] == ()
 
 
@@ -784,7 +980,10 @@ def test_normalize_requested_registry_persists_format_and_type_defaults():
         }
     )
     assert result is not None
-    assert result["format_defaults"] == {"mso_mdoc": "svc-dsc", "jwt_vc_json": "svc-jwt"}
+    assert result["format_defaults"] == {
+        "mso_mdoc": "svc-dsc",
+        "jwt_vc_json": "svc-jwt",
+    }
     assert result["type_defaults"] == {"mdoc_dsc": "svc-dsc"}
 
 
@@ -801,14 +1000,18 @@ def test_extract_cert_expiry_date_parses_valid_certificate():
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.x509.oid import NameOID
     from datetime import datetime, timezone, timedelta
-    
+
     # Generate a self-signed cert
     from cryptography.hazmat.primitives.asymmetric import rsa
-    
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
-    subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, "test.example.com"),
-    ])
+
+    key = rsa.generate_private_key(
+        public_exponent=65537, key_size=2048, backend=default_backend()
+    )
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, "test.example.com"),
+        ]
+    )
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -819,10 +1022,10 @@ def test_extract_cert_expiry_date_parses_valid_certificate():
         .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
         .sign(key, hashes.SHA256(), default_backend())
     )
-    
+
     cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
     result = signing_keys._extract_cert_expiry_date(cert_pem)
-    
+
     assert result is not None
     assert result.endswith("Z")
     assert "T" in result  # ISO format check
@@ -843,9 +1046,9 @@ def test_normalize_service_includes_certificate_fields():
         "cert_chain_pem": "-----BEGIN CERTIFICATE-----\nMIIC...",
         "cert_expires_at": "2025-12-31T23:59:59Z",
     }
-    
+
     result = signing_keys._normalize_registered_service(service)
-    
+
     assert result is not None
     assert result["cert_pem"] == "-----BEGIN CERTIFICATE-----\nMIIC..."
     assert result["cert_chain_pem"] == "-----BEGIN CERTIFICATE-----\nMIIC..."
@@ -858,9 +1061,9 @@ def test_normalize_service_certificate_fields_default_to_none():
         "service_type": "aws-kms",
         "name": "AWS DSC",
     }
-    
+
     result = signing_keys._normalize_registered_service(service)
-    
+
     assert result is not None
     assert result["cert_pem"] is None
     assert result["cert_chain_pem"] is None
@@ -868,7 +1071,9 @@ def test_normalize_service_certificate_fields_default_to_none():
 
 
 @pytest.mark.asyncio
-async def test_store_service_certificate_saves_and_extracts_expiry(monkeypatch: pytest.MonkeyPatch):
+async def test_store_service_certificate_saves_and_extracts_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Storing a certificate should extract and save the expiry date."""
     from cryptography import x509
     from cryptography.hazmat.backends import default_backend
@@ -876,12 +1081,16 @@ async def test_store_service_certificate_saves_and_extracts_expiry(monkeypatch: 
     from cryptography.hazmat.primitives.asymmetric import rsa
     from cryptography.x509.oid import NameOID
     from datetime import datetime, timezone, timedelta
-    
+
     # Generate a test certificate
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048, backend=default_backend())
-    subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, "test-dsc.example.com"),
-    ])
+    key = rsa.generate_private_key(
+        public_exponent=65537, key_size=2048, backend=default_backend()
+    )
+    subject = issuer = x509.Name(
+        [
+            x509.NameAttribute(NameOID.COMMON_NAME, "test-dsc.example.com"),
+        ]
+    )
     cert = (
         x509.CertificateBuilder()
         .subject_name(subject)
@@ -893,26 +1102,30 @@ async def test_store_service_certificate_saves_and_extracts_expiry(monkeypatch: 
         .sign(key, hashes.SHA256(), default_backend())
     )
     cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
-    
+
     test_service = {
         "id": "svc-dsc-1",
         "service_type": "custom-transit-compatible",
         "name": "Test DSC",
     }
-    
+
     async def fake_load_registry(request, org_id):
         assert org_id == "org_123"
         return {"services": [test_service], "default_service_id": None}
-    
+
     saved_registry = {}
-    
+
     async def fake_save_registry(request, org_id, registry):
         assert org_id == "org_123"
         saved_registry["data"] = registry
-    
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
-    monkeypatch.setattr(signing_keys, "_save_registered_service_registry", fake_save_registry)
-    
+
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+    monkeypatch.setattr(
+        signing_keys, "_save_registered_service_registry", fake_save_registry
+    )
+
     request = _build_request("org_123")
     response = await signing_keys.store_service_certificate(
         request=request,
@@ -920,13 +1133,13 @@ async def test_store_service_certificate_saves_and_extracts_expiry(monkeypatch: 
         body={"cert_pem": cert_pem, "cert_chain_pem": "chain"},
         organization_id=None,
     )
-    
+
     assert response.status_code == 200
     data = json.loads(response.body)
     assert data["ok"] is True
     assert data["cert_expires_at"] is not None
     assert "T" in data["cert_expires_at"]
-    
+
     # Check that registry was saved with updated certificate
     assert saved_registry["data"]["services"][0]["cert_pem"] == cert_pem
     assert saved_registry["data"]["services"][0]["cert_chain_pem"] == "chain"
@@ -934,7 +1147,9 @@ async def test_store_service_certificate_saves_and_extracts_expiry(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_store_managed_service_certificate_uses_sidecar_document(monkeypatch: pytest.MonkeyPatch):
+async def test_store_managed_service_certificate_uses_sidecar_document(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Dynamically discovered OpenBao services can retain public DSC material."""
     normalized_service = {
         "id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
@@ -960,7 +1175,9 @@ async def test_store_managed_service_certificate_uses_sidecar_document(monkeypat
     monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve)
     monkeypatch.setattr(signing_keys, "_load_json_document", fake_load_document)
     monkeypatch.setattr(signing_keys, "_save_json_document", fake_save_document)
-    monkeypatch.setattr(signing_keys, "_extract_cert_expiry_date", lambda _: "2026-07-22T12:00:00Z")
+    monkeypatch.setattr(
+        signing_keys, "_extract_cert_expiry_date", lambda _: "2026-07-22T12:00:00Z"
+    )
 
     response = await signing_keys.store_service_certificate(
         request=_build_request("org_123"),
@@ -971,14 +1188,18 @@ async def test_store_managed_service_certificate_uses_sidecar_document(monkeypat
 
     assert response.status_code == 200
     storage_key = signing_keys._service_certificates_storage_key("org_123")
-    attachment = stored_documents[storage_key]["services"][signing_keys.MANAGED_OPENBAO_SERVICE_ID]
+    attachment = stored_documents[storage_key]["services"][
+        signing_keys.MANAGED_OPENBAO_SERVICE_ID
+    ]
     assert attachment["cert_pem"] == "leaf"
     assert attachment["cert_chain_pem"] == "root"
     assert attachment["cert_expires_at"] == "2026-07-22T12:00:00Z"
 
 
 @pytest.mark.asyncio
-async def test_managed_service_config_applies_certificate_sidecar(monkeypatch: pytest.MonkeyPatch):
+async def test_managed_service_config_applies_certificate_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Config refreshes expose the certificate without persisting a managed service copy."""
 
     async def fake_overrides(request, org_id):
@@ -998,21 +1219,37 @@ async def test_managed_service_config_applies_certificate_sidecar(monkeypatch: p
         {
             "config": {
                 "hsm_enabled": True,
-                "hsm_settings": {"provider": "openbao", "service_url": "http://openbao", "mount": "transit"},
+                "hsm_settings": {
+                    "provider": "openbao",
+                    "service_url": "http://openbao",
+                    "mount": "transit",
+                },
             },
-            "keys": [{"id": "cred-dsc-marty-primary", "provider_key_name": "cred-dsc-marty-primary", "algorithm": "ES256"}],
+            "keys": [
+                {
+                    "id": "cred-dsc-marty-primary",
+                    "provider_key_name": "cred-dsc-marty-primary",
+                    "algorithm": "ES256",
+                }
+            ],
             "provider_metadata": {"status": "configured"},
         },
         registry_override={"services": [], "key_reference_purposes": {}},
     )
 
-    managed = next(service for service in config["services"] if service["id"] == signing_keys.MANAGED_OPENBAO_SERVICE_ID)
+    managed = next(
+        service
+        for service in config["services"]
+        if service["id"] == signing_keys.MANAGED_OPENBAO_SERVICE_ID
+    )
     assert managed["cert_pem"] == "leaf"
     assert managed["cert_chain_pem"] == "root"
 
 
 @pytest.mark.asyncio
-async def test_get_service_certificate_returns_stored_data(monkeypatch: pytest.MonkeyPatch):
+async def test_get_service_certificate_returns_stored_data(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Getting a service certificate should return cert, chain, and expiry."""
     test_service = {
         "id": "svc-dsc-1",
@@ -1022,19 +1259,21 @@ async def test_get_service_certificate_returns_stored_data(monkeypatch: pytest.M
         "cert_chain_pem": "-----BEGIN CERTIFICATE-----\nMIIC...",
         "cert_expires_at": "2025-12-31T23:59:59Z",
     }
-    
+
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
-    
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
-    
+
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+
     request = _build_request("org_123")
     response = await signing_keys.get_service_certificate(
         request=request,
         service_id="svc-dsc-1",
         organization_id=None,
     )
-    
+
     assert response.status_code == 200
     data = json.loads(response.body)
     assert data["service_id"] == "svc-dsc-1"
@@ -1044,21 +1283,25 @@ async def test_get_service_certificate_returns_stored_data(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_get_service_certificate_404_when_no_cert(monkeypatch: pytest.MonkeyPatch):
+async def test_get_service_certificate_404_when_no_cert(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Getting a certificate for a service without one should return 404."""
     test_service = {
         "id": "svc-no-cert",
         "service_type": "custom-transit-compatible",
         "name": "No Cert",
     }
-    
+
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
-    
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
-    
+
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+
     from fastapi import HTTPException as FastAPIHTTPException
-    
+
     request = _build_request("org_123")
     with pytest.raises(FastAPIHTTPException) as exc_info:
         await signing_keys.get_service_certificate(
@@ -1066,19 +1309,21 @@ async def test_get_service_certificate_404_when_no_cert(monkeypatch: pytest.Monk
             service_id="svc-no-cert",
             organization_id=None,
         )
-    
+
     assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_list_certificate_expiry_alerts_filters_by_threshold(monkeypatch: pytest.MonkeyPatch):
+async def test_list_certificate_expiry_alerts_filters_by_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """list_certificate_expiry_alerts should filter services by expiry threshold."""
     from datetime import timedelta
-    
+
     now = datetime.now(timezone.utc)
     expiring_soon = _format_iso_datetime(now + timedelta(days=5))
     expiring_later = _format_iso_datetime(now + timedelta(days=60))
-    
+
     test_services = [
         {
             "id": "svc-expiring-soon",
@@ -1098,24 +1343,26 @@ async def test_list_certificate_expiry_alerts_filters_by_threshold(monkeypatch: 
             "name": "No Cert",
         },
     ]
-    
+
     async def fake_load_registry(request, org_id):
         assert org_id == "org_123"
         return {"services": test_services, "default_service_id": None}
-    
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
-    
+
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+
     request = _build_request("org_123")
     response = await signing_keys.list_certificate_expiry_alerts(
         request=request,
         days_until_expiry=30,
         organization_id=None,
     )
-    
+
     assert response.status_code == 200
     data = json.loads(response.body)
     alerts = data["alerts"]
-    
+
     # Should only include svc-expiring-soon (within 30 days)
     assert len(alerts) == 1
     assert alerts[0]["service_id"] == "svc-expiring-soon"
@@ -1123,14 +1370,16 @@ async def test_list_certificate_expiry_alerts_filters_by_threshold(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_list_certificate_expiry_alerts_marks_critical_status(monkeypatch: pytest.MonkeyPatch):
+async def test_list_certificate_expiry_alerts_marks_critical_status(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Certificates expiring within 7 days should be marked as critical."""
     from datetime import timedelta
 
     now = datetime.now(timezone.utc)
     critical = _format_iso_datetime(now + timedelta(days=3))
     warning = _format_iso_datetime(now + timedelta(days=15))
-    
+
     test_services = [
         {
             "id": "svc-critical",
@@ -1145,26 +1394,30 @@ async def test_list_certificate_expiry_alerts_marks_critical_status(monkeypatch:
             "cert_expires_at": warning,
         },
     ]
-    
+
     async def fake_load_registry(request, org_id):
         return {"services": test_services, "default_service_id": None}
-    
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
-    
+
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+
     request = _build_request("org_123")
     response = await signing_keys.list_certificate_expiry_alerts(
         request=request,
         days_until_expiry=30,
         organization_id=None,
     )
-    
+
     assert response.status_code == 200
     data = json.loads(response.body)
     alerts = data["alerts"]
-    
-    critical_alert = next((a for a in alerts if a["service_id"] == "svc-critical"), None)
+
+    critical_alert = next(
+        (a for a in alerts if a["service_id"] == "svc-critical"), None
+    )
     warning_alert = next((a for a in alerts if a["service_id"] == "svc-warning"), None)
-    
+
     assert critical_alert is not None
     assert critical_alert["status"] == "critical"
     assert warning_alert is not None
@@ -1172,15 +1425,17 @@ async def test_list_certificate_expiry_alerts_marks_critical_status(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_list_certificate_expiry_alerts_sorted_by_urgency(monkeypatch: pytest.MonkeyPatch):
+async def test_list_certificate_expiry_alerts_sorted_by_urgency(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """list_certificate_expiry_alerts should return alerts sorted by urgency (soonest first)."""
     from datetime import timedelta
-    
+
     now = datetime.now(timezone.utc)
     very_soon = _format_iso_datetime(now + timedelta(days=2))
     soon = _format_iso_datetime(now + timedelta(days=10))
     later = _format_iso_datetime(now + timedelta(days=20))
-    
+
     test_services = [
         {
             "id": "svc-3",
@@ -1201,23 +1456,25 @@ async def test_list_certificate_expiry_alerts_sorted_by_urgency(monkeypatch: pyt
             "cert_expires_at": soon,
         },
     ]
-    
+
     async def fake_load_registry(request, org_id):
         return {"services": test_services, "default_service_id": None}
-    
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
-    
+
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+
     request = _build_request("org_123")
     response = await signing_keys.list_certificate_expiry_alerts(
         request=request,
         days_until_expiry=30,
         organization_id=None,
     )
-    
+
     assert response.status_code == 200
     data = json.loads(response.body)
     alerts = data["alerts"]
-    
+
     # Should be sorted by days_until_expiry ascending
     assert alerts[0]["service_id"] == "svc-1"  # 2 days
     assert alerts[1]["service_id"] == "svc-2"  # 10 days
@@ -1228,14 +1485,16 @@ async def test_list_certificate_expiry_alerts_sorted_by_urgency(monkeypatch: pyt
 async def test_store_certificate_requires_cert_pem(monkeypatch: pytest.MonkeyPatch):
     """Storing a certificate without cert_pem should return 400."""
     test_service = {"id": "svc-1", "service_type": "aws-kms", "name": "Test"}
-    
+
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
-    
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
-    
+
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+
     from fastapi import HTTPException as FastAPIHTTPException
-    
+
     request = _build_request("org_123")
     with pytest.raises(FastAPIHTTPException) as exc_info:
         await signing_keys.store_service_certificate(
@@ -1244,7 +1503,7 @@ async def test_store_certificate_requires_cert_pem(monkeypatch: pytest.MonkeyPat
             body={},  # Missing cert_pem
             organization_id=None,
         )
-    
+
     assert exc_info.value.status_code == 400
     assert "cert_pem is required" in str(exc_info.value.detail)
 
@@ -1255,24 +1514,33 @@ async def test_store_certificate_requires_cert_pem(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
-async def test_generate_csr_returns_404_when_service_not_found(monkeypatch: pytest.MonkeyPatch):
+async def test_generate_csr_returns_404_when_service_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """generate_csr should return 404 when the service_id is not in the registry."""
+
     async def fake_load_registry(request, org_id):
         return {"services": [], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 
     request = _build_request("org_123")
     with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.generate_csr(request=request, service_id="missing", organization_id=None)
+        await signing_keys.generate_csr(
+            request=request, service_id="missing", organization_id=None
+        )
 
     assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_generate_csr_returns_501_when_generation_unavailable(monkeypatch: pytest.MonkeyPatch):
+async def test_generate_csr_returns_501_when_generation_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """generate_csr should fail explicitly until remote-KMS CSR signing is implemented."""
     test_service = {
         "id": "svc-1",
@@ -1285,7 +1553,9 @@ async def test_generate_csr_returns_501_when_generation_unavailable(monkeypatch:
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: None)
 
     request = _build_request("org_123")
@@ -1293,7 +1563,9 @@ async def test_generate_csr_returns_501_when_generation_unavailable(monkeypatch:
     from fastapi import HTTPException as FastAPIHTTPException
 
     with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.generate_csr(request=request, service_id="svc-1", organization_id=None)
+        await signing_keys.generate_csr(
+            request=request, service_id="svc-1", organization_id=None
+        )
 
     assert exc_info.value.status_code == 501
     assert exc_info.value.detail["error"] == "kms_csr_generation_unavailable"
@@ -1306,24 +1578,33 @@ async def test_generate_csr_returns_501_when_generation_unavailable(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_publish_service_to_jwks_returns_404_when_service_not_found(monkeypatch: pytest.MonkeyPatch):
+async def test_publish_service_to_jwks_returns_404_when_service_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """publish_service_to_jwks should return 404 when service_id is missing."""
+
     async def fake_load_registry(request, org_id):
         return {"services": [], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 
     request = _build_request("org_123")
     with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.publish_service_to_jwks(request=request, service_id="missing", organization_id=None)
+        await signing_keys.publish_service_to_jwks(
+            request=request, service_id="missing", organization_id=None
+        )
 
     assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_create_signing_key_creates_managed_openbao_key(monkeypatch: pytest.MonkeyPatch):
+async def test_create_signing_key_creates_managed_openbao_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
     async def fake_load_registry(request, org_id):
         return {"services": [], "default_service_id": None}
 
@@ -1366,9 +1647,13 @@ async def test_create_signing_key_creates_managed_openbao_key(monkeypatch: pytes
             },
         }
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(signing_keys, "_load_signing_key_snapshot", fake_snapshot)
-    monkeypatch.setattr(signing_keys, "_create_managed_openbao_transit_key", fake_create)
+    monkeypatch.setattr(
+        signing_keys, "_create_managed_openbao_transit_key", fake_create
+    )
 
     request = _build_request("org_123")
     response = await signing_keys.create_signing_key(
@@ -1392,7 +1677,9 @@ async def test_create_signing_key_creates_managed_openbao_key(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
-async def test_create_managed_openbao_key_enables_missing_transit_mount(monkeypatch: pytest.MonkeyPatch):
+async def test_create_managed_openbao_key_enables_missing_transit_mount(
+    monkeypatch: pytest.MonkeyPatch,
+):
     calls: list[tuple[str, dict]] = []
 
     async def fake_post_json(path: str, payload: dict, **kwargs):
@@ -1400,7 +1687,11 @@ async def test_create_managed_openbao_key_enables_missing_transit_mount(monkeypa
         if path == "/v1/transit/keys/cred-issuer-test" and len(calls) == 1:
             raise _http_status_error(
                 404,
-                {"errors": ['no handler for route "transit/keys/cred-issuer-test". route entry not found.']},
+                {
+                    "errors": [
+                        'no handler for route "transit/keys/cred-issuer-test". route entry not found.'
+                    ]
+                },
             )
         return {}
 
@@ -1427,7 +1718,9 @@ async def test_create_managed_openbao_key_enables_missing_transit_mount(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_publish_service_to_jwks_returns_400_when_no_adapter(monkeypatch: pytest.MonkeyPatch):
+async def test_publish_service_to_jwks_returns_400_when_no_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """publish_service_to_jwks should return 400 when no adapter is available."""
     test_service = {
         "id": "svc-aws",
@@ -1439,20 +1732,26 @@ async def test_publish_service_to_jwks_returns_400_when_no_adapter(monkeypatch: 
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: None)
 
     from fastapi import HTTPException as FastAPIHTTPException
 
     request = _build_request("org_123")
     with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.publish_service_to_jwks(request=request, service_id="svc-aws", organization_id=None)
+        await signing_keys.publish_service_to_jwks(
+            request=request, service_id="svc-aws", organization_id=None
+        )
 
     assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_publish_service_to_jwks_returns_jwk_on_success(monkeypatch: pytest.MonkeyPatch):
+async def test_publish_service_to_jwks_returns_jwk_on_success(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """publish_service_to_jwks should return the JWK from the adapter."""
     test_service = {
         "id": "svc-bao",
@@ -1464,16 +1763,24 @@ async def test_publish_service_to_jwks_returns_jwk_on_success(monkeypatch: pytes
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     class FakeAdapter:
         async def get_public_key_jwk(self, config: dict):
-            return {"provider": "openbao", "key_reference": "cred-issuer-es256", "public_key_pem": "---"}
+            return {
+                "provider": "openbao",
+                "key_reference": "cred-issuer-es256",
+                "public_key_pem": "---",
+            }
 
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
 
     request = _build_request("org_123")
-    response = await signing_keys.publish_service_to_jwks(request=request, service_id="svc-bao", organization_id=None)
+    response = await signing_keys.publish_service_to_jwks(
+        request=request, service_id="svc-bao", organization_id=None
+    )
 
     assert response.status_code == 200
     data = json.loads(response.body)
@@ -1484,7 +1791,9 @@ async def test_publish_service_to_jwks_returns_jwk_on_success(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
-async def test_publish_service_to_jwks_uses_key_reference_override(monkeypatch: pytest.MonkeyPatch):
+async def test_publish_service_to_jwks_uses_key_reference_override(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """JWKS publication must publish the selected issuer key, not the service default."""
     observed_configs: list[dict] = []
     test_service = {
@@ -1497,7 +1806,9 @@ async def test_publish_service_to_jwks_uses_key_reference_override(monkeypatch: 
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     class FakeAdapter:
         async def get_public_key_jwk(self, config: dict):
@@ -1527,7 +1838,9 @@ async def test_publish_service_to_jwks_uses_key_reference_override(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_publish_service_to_jwks_returns_503_when_adapter_raises(monkeypatch: pytest.MonkeyPatch):
+async def test_publish_service_to_jwks_returns_503_when_adapter_raises(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """publish_service_to_jwks should return 503 when the adapter throws."""
     test_service = {
         "id": "svc-bao",
@@ -1539,7 +1852,9 @@ async def test_publish_service_to_jwks_returns_503_when_adapter_raises(monkeypat
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     class FailingAdapter:
         async def get_public_key_jwk(self, config: dict):
@@ -1551,13 +1866,17 @@ async def test_publish_service_to_jwks_returns_503_when_adapter_raises(monkeypat
 
     request = _build_request("org_123")
     with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.publish_service_to_jwks(request=request, service_id="svc-bao", organization_id=None)
+        await signing_keys.publish_service_to_jwks(
+            request=request, service_id="svc-bao", organization_id=None
+        )
 
     assert exc_info.value.status_code == 503
 
 
 @pytest.mark.asyncio
-async def test_publish_service_to_did_returns_verification_method(monkeypatch: pytest.MonkeyPatch):
+async def test_publish_service_to_did_returns_verification_method(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """publish_service_to_did should build and return a verificationMethod from the adapter JWK."""
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
@@ -1571,7 +1890,9 @@ async def test_publish_service_to_did_returns_verification_method(monkeypatch: p
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     class FakeAdapter:
         async def get_public_key_jwk(self, config: dict):
@@ -1601,7 +1922,9 @@ async def test_publish_service_to_did_returns_verification_method(monkeypatch: p
 
 
 @pytest.mark.asyncio
-async def test_publish_service_to_did_resolves_managed_openbao_service(monkeypatch: pytest.MonkeyPatch):
+async def test_publish_service_to_did_resolves_managed_openbao_service(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 
@@ -1643,7 +1966,9 @@ async def test_publish_service_to_did_resolves_managed_openbao_service(monkeypat
             assert config["auth_reference"] == "bao-service-token"
             return {"kty": "EC", "crv": "P-256", "x": "abc", "y": "def"}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(signing_keys, "_load_signing_key_snapshot", fake_snapshot)
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
 
@@ -1666,11 +1991,15 @@ async def test_publish_service_to_did_resolves_managed_openbao_service(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_publish_service_to_did_returns_404_when_service_not_found(monkeypatch: pytest.MonkeyPatch):
+async def test_publish_service_to_did_returns_404_when_service_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+):
     async def fake_load_registry(request, org_id):
         return {"services": [], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 
@@ -1689,24 +2018,33 @@ async def test_publish_service_to_did_returns_404_when_service_not_found(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_verify_service_public_key_returns_404_when_service_missing(monkeypatch: pytest.MonkeyPatch):
+async def test_verify_service_public_key_returns_404_when_service_missing(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """verify_service_public_key should return 404 when service_id is not in registry."""
+
     async def fake_load_registry(request, org_id):
         return {"services": [], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 
     request = _build_request("org_123")
     with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.verify_service_public_key(request=request, service_id="missing", organization_id=None)
+        await signing_keys.verify_service_public_key(
+            request=request, service_id="missing", organization_id=None
+        )
 
     assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_verify_service_public_key_runs_checks_on_adapter_jwk(monkeypatch: pytest.MonkeyPatch):
+async def test_verify_service_public_key_runs_checks_on_adapter_jwk(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """verify_service_public_key should run structural checks on the JWK from the adapter."""
     test_service = {
         "id": "svc-bao",
@@ -1718,7 +2056,9 @@ async def test_verify_service_public_key_runs_checks_on_adapter_jwk(monkeypatch:
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     class FakeAdapter:
         async def get_public_key_jwk(self, config: dict):
@@ -1744,7 +2084,9 @@ async def test_verify_service_public_key_runs_checks_on_adapter_jwk(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_verify_service_public_key_fails_on_unsupported_algorithm(monkeypatch: pytest.MonkeyPatch):
+async def test_verify_service_public_key_fails_on_unsupported_algorithm(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """verify_service_public_key should mark key_valid=False for unsupported algorithm."""
     test_service = {
         "id": "svc-bao",
@@ -1756,7 +2098,9 @@ async def test_verify_service_public_key_fails_on_unsupported_algorithm(monkeypa
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     class FakeAdapter:
         async def get_public_key_jwk(self, config: dict):
@@ -1776,7 +2120,9 @@ async def test_verify_service_public_key_fails_on_unsupported_algorithm(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_rotate_service_key_updates_rotation_state(monkeypatch: pytest.MonkeyPatch):
+async def test_rotate_service_key_updates_rotation_state(
+    monkeypatch: pytest.MonkeyPatch,
+):
     registry = {
         "services": [
             {
@@ -1799,8 +2145,12 @@ async def test_rotate_service_key_updates_rotation_state(monkeypatch: pytest.Mon
 
     save_registry = AsyncMock()
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
-    monkeypatch.setattr(signing_keys, "_save_registered_service_registry", save_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+    monkeypatch.setattr(
+        signing_keys, "_save_registered_service_registry", save_registry
+    )
 
     async def fake_rotate(service: dict):
         assert service["id"] == "svc-bao"
@@ -1861,7 +2211,9 @@ async def test_register_and_list_holder_keys(monkeypatch: pytest.MonkeyPatch):
     )
     assert register_response.status_code == 200
 
-    list_response = await signing_keys.list_holder_keys(request=request, organization_id=None, device_id="device-1")
+    list_response = await signing_keys.list_holder_keys(
+        request=request, organization_id=None, device_id="device-1"
+    )
     assert list_response.status_code == 200
     data = json.loads(list_response.body)
     assert len(data["keys"]) == 1
@@ -1870,15 +2222,21 @@ async def test_register_and_list_holder_keys(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_register_vdsnc_service_derives_key_reference(monkeypatch: pytest.MonkeyPatch):
+async def test_register_vdsnc_service_derives_key_reference(
+    monkeypatch: pytest.MonkeyPatch,
+):
     registry = {"services": [], "default_service_id": None}
 
     async def fake_load_registry(request, org_id):
         return registry
 
     save_registry = AsyncMock()
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
-    monkeypatch.setattr(signing_keys, "_save_registered_service_registry", save_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+    monkeypatch.setattr(
+        signing_keys, "_save_registered_service_registry", save_registry
+    )
 
     request = _build_request("org_123")
     response = await signing_keys.register_vdsnc_service(
@@ -1901,7 +2259,9 @@ async def test_register_vdsnc_service_derives_key_reference(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_verify_service_public_key_returns_400_when_no_adapter(monkeypatch: pytest.MonkeyPatch):
+async def test_verify_service_public_key_returns_400_when_no_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """verify_service_public_key should return 400 when no adapter is registered."""
     test_service = {
         "id": "svc-aws",
@@ -1913,14 +2273,18 @@ async def test_verify_service_public_key_returns_400_when_no_adapter(monkeypatch
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: None)
 
     from fastapi import HTTPException as FastAPIHTTPException
 
     request = _build_request("org_123")
     with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.verify_service_public_key(request=request, service_id="svc-aws", organization_id=None)
+        await signing_keys.verify_service_public_key(
+            request=request, service_id="svc-aws", organization_id=None
+        )
 
     assert exc_info.value.status_code == 400
 
@@ -1931,26 +2295,37 @@ async def test_verify_service_public_key_returns_400_when_no_adapter(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_get_key_audit_log_returns_404_when_service_not_found(monkeypatch: pytest.MonkeyPatch):
+async def test_get_key_audit_log_returns_404_when_service_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """get_key_audit_log should return 404 when service_id is not in the registry."""
+
     async def fake_load_registry(request, org_id):
         return {"services": [], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 
     request = _build_request("org_123")
     with pytest.raises(FastAPIHTTPException) as exc_info:
         await signing_keys.get_key_audit_log(
-            request=request, service_id="missing", limit=100, offset=0, organization_id=None
+            request=request,
+            service_id="missing",
+            limit=100,
+            offset=0,
+            organization_id=None,
         )
 
     assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_get_key_audit_log_returns_unavailable_when_storage_is_not_implemented(monkeypatch: pytest.MonkeyPatch):
+async def test_get_key_audit_log_returns_unavailable_when_storage_is_not_implemented(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """get_key_audit_log should not return fabricated audit events."""
     test_service = {
         "id": "svc-bao",
@@ -1962,7 +2337,9 @@ async def test_get_key_audit_log_returns_unavailable_when_storage_is_not_impleme
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     request = _build_request("org_123")
     response = await signing_keys.get_key_audit_log(
@@ -1981,14 +2358,20 @@ async def test_get_key_audit_log_returns_unavailable_when_storage_is_not_impleme
 async def test_get_key_audit_log_requires_org_id(monkeypatch: pytest.MonkeyPatch):
     """get_key_audit_log should fail fast instead of loading a global registry."""
     load_registry = AsyncMock()
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", load_registry
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 
     request = _build_request(None)
     with pytest.raises(FastAPIHTTPException) as exc_info:
         await signing_keys.get_key_audit_log(
-            request=request, service_id="svc-bao", limit=10, offset=0, organization_id=None
+            request=request,
+            service_id="svc-bao",
+            limit=10,
+            offset=0,
+            organization_id=None,
         )
 
     assert exc_info.value.status_code == 422
@@ -2000,7 +2383,9 @@ async def test_get_keys_compliance_summary_returns_unavailable_without_live_sour
     """get_keys_compliance_summary should not return synthetic perfect-compliance metrics."""
 
     request = _build_request("org_123")
-    response = await signing_keys.get_keys_compliance_summary(request=request, organization_id=None)
+    response = await signing_keys.get_keys_compliance_summary(
+        request=request, organization_id=None
+    )
 
     assert response.status_code == 501
     data = json.loads(response.body)
@@ -2010,16 +2395,22 @@ async def test_get_keys_compliance_summary_returns_unavailable_without_live_sour
 
 
 @pytest.mark.asyncio
-async def test_get_keys_compliance_summary_requires_org_id(monkeypatch: pytest.MonkeyPatch):
+async def test_get_keys_compliance_summary_requires_org_id(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """get_keys_compliance_summary should fail fast without an organization context."""
     load_registry = AsyncMock()
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", load_registry
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 
     request = _build_request(None)
     with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.get_keys_compliance_summary(request=request, organization_id=None)
+        await signing_keys.get_keys_compliance_summary(
+            request=request, organization_id=None
+        )
 
     assert exc_info.value.status_code == 422
     load_registry.assert_not_called()
@@ -2031,12 +2422,17 @@ async def test_get_keys_compliance_summary_requires_org_id(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_sign_payload_with_service_returns_404_when_service_not_found(monkeypatch: pytest.MonkeyPatch):
+async def test_sign_payload_with_service_returns_404_when_service_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """sign_payload_with_service should return 404 when service_id is not in registry."""
+
     async def fake_load_registry(request, org_id):
         return {"services": [], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 
@@ -2065,7 +2461,9 @@ async def test_sign_payload_requires_payload_input(monkeypatch: pytest.MonkeyPat
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 
@@ -2105,7 +2503,9 @@ async def test_sign_payload_accepts_base64_payload(monkeypatch: pytest.MonkeyPat
             assert payload == b"Hello World"
             return signed_payload
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
 
     request = _build_request("org_123")
@@ -2156,7 +2556,9 @@ async def test_sign_payload_enforces_requested_key_purpose(
         async def sign(self, config: dict, payload: bytes):
             return b"signature"
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(return_value=None)
@@ -2227,7 +2629,9 @@ async def test_lti_signing_uses_distinct_key_within_multi_key_openbao_service(
             signed_with.append(config["key_reference"])
             return b"signature"
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(return_value=None)
@@ -2263,7 +2667,9 @@ async def test_lti_signing_uses_distinct_key_within_multi_key_openbao_service(
             organization_id=None,
         )
 
-    with pytest.raises(FastAPIHTTPException, match="not registered exclusively") as exc_info:
+    with pytest.raises(
+        FastAPIHTTPException, match="not registered exclusively"
+    ) as exc_info:
         await signing_keys.sign_payload_with_service(
             request=request,
             service_id=signing_keys.MANAGED_OPENBAO_SERVICE_ID,
@@ -2297,7 +2703,9 @@ async def test_lti_signing_fails_closed_without_explicit_key_binding(
             "key_reference_purposes": {},
         }
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     request = _build_request("org_123")
 
     from fastapi import HTTPException as FastAPIHTTPException
@@ -2355,7 +2763,9 @@ async def test_lti_signing_rejects_key_assigned_to_issuer_profile(
     async def fake_issuer_references(request, organization_id):
         return {key_reference}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(
         signing_keys,
         "_credential_issuer_key_references",
@@ -2364,7 +2774,9 @@ async def test_lti_signing_rejects_key_assigned_to_issuer_profile(
 
     from fastapi import HTTPException as FastAPIHTTPException
 
-    with pytest.raises(FastAPIHTTPException, match="credential issuer profile") as exc_info:
+    with pytest.raises(
+        FastAPIHTTPException, match="credential issuer profile"
+    ) as exc_info:
         await signing_keys.sign_payload_with_service(
             request=_build_request("org_123"),
             service_id="shared-kms",
@@ -2430,16 +2842,22 @@ def test_lti_key_creation_uses_protocol_specific_namespace() -> None:
         "lti_tool_signing",
         "RS256",
     ).startswith("lti-tool-")
-    assert signing_keys._normalize_requested_openbao_key_name(
-        "cred-issuer-canvas-production",
-        "lti_tool_signing",
-        "RS256",
-    ) == "lti-tool-canvas-production-rs256"
-    assert signing_keys._normalize_requested_openbao_key_name(
-        "lti-tool-canvas-production",
-        "vc_jwt_issuer",
-        "RS256",
-    ) == "cred-issuer-canvas-production-rs256"
+    assert (
+        signing_keys._normalize_requested_openbao_key_name(
+            "cred-issuer-canvas-production",
+            "lti_tool_signing",
+            "RS256",
+        )
+        == "lti-tool-canvas-production-rs256"
+    )
+    assert (
+        signing_keys._normalize_requested_openbao_key_name(
+            "lti-tool-canvas-production",
+            "vc_jwt_issuer",
+            "RS256",
+        )
+        == "cred-issuer-canvas-production-rs256"
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 
@@ -2507,7 +2925,9 @@ async def test_sign_payload_accepts_hex_payload(monkeypatch: pytest.MonkeyPatch)
             assert payload == bytes.fromhex("48656c6c6f")  # "Hello" in hex
             return signed_payload
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
 
     request = _build_request("org_123")
@@ -2525,7 +2945,9 @@ async def test_sign_payload_accepts_hex_payload(monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.asyncio
-async def test_sign_payload_returns_der_signature_from_aws_adapter(monkeypatch: pytest.MonkeyPatch):
+async def test_sign_payload_returns_der_signature_from_aws_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """sign_payload_with_service should indicate DER encoding when adapter returns DER."""
     test_service = {
         "id": "svc-aws",
@@ -2547,7 +2969,9 @@ async def test_sign_payload_returns_der_signature_from_aws_adapter(monkeypatch: 
         async def sign(self, config: dict, payload: bytes):
             return der_signature
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAwsAdapter())
 
     request = _build_request("org_123")
@@ -2568,7 +2992,9 @@ async def test_sign_payload_returns_der_signature_from_aws_adapter(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_sign_payload_returns_algorithm_in_response(monkeypatch: pytest.MonkeyPatch):
+async def test_sign_payload_returns_algorithm_in_response(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """sign_payload_with_service should return the algorithm used for signing."""
     test_service = {
         "id": "svc-bao",
@@ -2587,7 +3013,9 @@ async def test_sign_payload_returns_algorithm_in_response(monkeypatch: pytest.Mo
         async def sign(self, config: dict, payload: bytes):
             return b"signature"
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
 
     request = _build_request("org_123")
@@ -2604,7 +3032,9 @@ async def test_sign_payload_returns_algorithm_in_response(monkeypatch: pytest.Mo
 
 
 @pytest.mark.asyncio
-async def test_sign_payload_returns_503_when_adapter_fails(monkeypatch: pytest.MonkeyPatch):
+async def test_sign_payload_returns_503_when_adapter_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """sign_payload_with_service should return 503 when the adapter raises an error."""
     test_service = {
         "id": "svc-bao",
@@ -2623,7 +3053,9 @@ async def test_sign_payload_returns_503_when_adapter_fails(monkeypatch: pytest.M
         async def sign(self, config: dict, payload: bytes):
             raise RuntimeError("Transit service unreachable")
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FailingAdapter())
 
     from fastapi import HTTPException as FastAPIHTTPException
@@ -2642,7 +3074,9 @@ async def test_sign_payload_returns_503_when_adapter_fails(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
-async def test_sign_payload_auto_creates_missing_managed_openbao_key(monkeypatch: pytest.MonkeyPatch):
+async def test_sign_payload_auto_creates_missing_managed_openbao_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
     normalized_service = {
         "id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
         "service_type": "openbao-transit",
@@ -2652,7 +3086,9 @@ async def test_sign_payload_auto_creates_missing_managed_openbao_key(monkeypatch
     sign_attempts = 0
     created: list[tuple[str, str]] = []
 
-    async def fake_resolve_effective_service(request, resolved_org_id, service_id, *, key_reference_override=None):
+    async def fake_resolve_effective_service(
+        request, resolved_org_id, service_id, *, key_reference_override=None
+    ):
         assert service_id == signing_keys.MANAGED_OPENBAO_SERVICE_ID
         return {}, normalized_service, normalized_service, False
 
@@ -2666,7 +3102,11 @@ async def test_sign_payload_auto_creates_missing_managed_openbao_key(monkeypatch
             if sign_attempts == 1:
                 raise _http_status_error(
                     404,
-                    {"errors": ['no handler for route "transit/sign/cred-issuer-marty-es256". route entry not found.']},
+                    {
+                        "errors": [
+                            'no handler for route "transit/sign/cred-issuer-marty-es256". route entry not found.'
+                        ]
+                    },
                 )
             assert payload == b"hello"
             return b"signature"
@@ -2676,9 +3116,15 @@ async def test_sign_payload_auto_creates_missing_managed_openbao_key(monkeypatch
         assert service is normalized_service
         return {"type": "ecdsa-p256"}
 
-    monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve_effective_service)
-    monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: MissingKeyThenSuccessAdapter())
-    monkeypatch.setattr(signing_keys, "_create_managed_openbao_transit_key", fake_create)
+    monkeypatch.setattr(
+        signing_keys, "_resolve_effective_service", fake_resolve_effective_service
+    )
+    monkeypatch.setattr(
+        signing_keys, "_get_adapter", lambda cfg: MissingKeyThenSuccessAdapter()
+    )
+    monkeypatch.setattr(
+        signing_keys, "_create_managed_openbao_transit_key", fake_create
+    )
 
     request = _build_request("org_123")
     response = await signing_keys.sign_payload_with_service(
@@ -2709,7 +3155,9 @@ async def test_sign_payload_rejects_invalid_base64(monkeypatch: pytest.MonkeyPat
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 
@@ -2727,7 +3175,9 @@ async def test_sign_payload_rejects_invalid_base64(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
-async def test_sign_payload_returns_400_when_no_adapter(monkeypatch: pytest.MonkeyPatch):
+async def test_sign_payload_returns_400_when_no_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """sign_payload_with_service should return 400 when no adapter is available."""
     test_service = {
         "id": "svc-bao",
@@ -2739,7 +3189,9 @@ async def test_sign_payload_returns_400_when_no_adapter(monkeypatch: pytest.Monk
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: None)
 
     from fastapi import HTTPException as FastAPIHTTPException
@@ -2788,7 +3240,9 @@ def _build_public_request(
 
 
 @pytest.mark.asyncio
-async def test_resolve_did_web_by_slug_returns_404_when_no_mapping(monkeypatch: pytest.MonkeyPatch):
+async def test_resolve_did_web_by_slug_returns_404_when_no_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """resolve_did_web_by_slug should 404 when the slug has no Redis mapping."""
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
@@ -2801,13 +3255,17 @@ async def test_resolve_did_web_by_slug_returns_404_when_no_mapping(monkeypatch: 
     from fastapi import HTTPException as FastAPIHTTPException
 
     with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.resolve_did_web_by_slug(request=request, org_slug="unknown-org")
+        await signing_keys.resolve_did_web_by_slug(
+            request=request, org_slug="unknown-org"
+        )
 
     assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_resolve_did_web_by_slug_returns_did_document(monkeypatch: pytest.MonkeyPatch):
+async def test_resolve_did_web_by_slug_returns_did_document(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """resolve_did_web_by_slug should return the stored DID document."""
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
@@ -2831,7 +3289,9 @@ async def test_resolve_did_web_by_slug_returns_did_document(monkeypatch: pytest.
     redis_mock.get = AsyncMock(side_effect=fake_get)
     request = _build_public_request(redis_client=redis_mock)
 
-    response = await signing_keys.resolve_did_web_by_slug(request=request, org_slug="acme")
+    response = await signing_keys.resolve_did_web_by_slug(
+        request=request, org_slug="acme"
+    )
 
     assert response.status_code == 200
     data = json.loads(response.body)
@@ -2842,7 +3302,9 @@ async def test_resolve_did_web_by_slug_returns_did_document(monkeypatch: pytest.
 
 
 @pytest.mark.asyncio
-async def test_resolve_did_web_by_slug_rejects_invalid_slug(monkeypatch: pytest.MonkeyPatch):
+async def test_resolve_did_web_by_slug_rejects_invalid_slug(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """resolve_did_web_by_slug should 400 on slugs with invalid characters."""
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
@@ -2853,20 +3315,26 @@ async def test_resolve_did_web_by_slug_rejects_invalid_slug(monkeypatch: pytest.
     from fastapi import HTTPException as FastAPIHTTPException
 
     with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.resolve_did_web_by_slug(request=request, org_slug="../../etc/passwd")
+        await signing_keys.resolve_did_web_by_slug(
+            request=request, org_slug="../../etc/passwd"
+        )
 
     assert exc_info.value.status_code == 400
 
 
 @pytest.mark.asyncio
-async def test_resolve_did_web_root_returns_404_when_no_default_org(monkeypatch: pytest.MonkeyPatch):
+async def test_resolve_did_web_root_returns_404_when_no_default_org(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """resolve_did_web_root should 404 when DEFAULT_ORG_ID is not set."""
     monkeypatch.delenv("DEFAULT_ORG_ID", raising=False)
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 
     redis_mock = AsyncMock()
-    request = _build_public_request(redis_client=redis_mock, path="/.well-known/did.json")
+    request = _build_public_request(
+        redis_client=redis_mock, path="/.well-known/did.json"
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 
@@ -2877,7 +3345,9 @@ async def test_resolve_did_web_root_returns_404_when_no_default_org(monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_resolve_did_web_root_returns_document_when_configured(monkeypatch: pytest.MonkeyPatch):
+async def test_resolve_did_web_root_returns_document_when_configured(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """resolve_did_web_root should return the DID document when DEFAULT_ORG_ID is set."""
     monkeypatch.setenv("DEFAULT_ORG_ID", "org_root")
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
@@ -2898,7 +3368,9 @@ async def test_resolve_did_web_root_returns_document_when_configured(monkeypatch
         return None
 
     redis_mock.get = AsyncMock(side_effect=fake_get)
-    request = _build_public_request(redis_client=redis_mock, path="/.well-known/did.json")
+    request = _build_public_request(
+        redis_client=redis_mock, path="/.well-known/did.json"
+    )
 
     response = await signing_keys.resolve_did_web_root(request=request)
 
@@ -2909,7 +3381,9 @@ async def test_resolve_did_web_root_returns_document_when_configured(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_resolve_did_web_root_retargets_org_scoped_document(monkeypatch: pytest.MonkeyPatch):
+async def test_resolve_did_web_root_retargets_org_scoped_document(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Root did:web resolution should remain valid when the org stores a path DID."""
     monkeypatch.setenv("DEFAULT_ORG_ID", "org_root")
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
@@ -2926,7 +3400,9 @@ async def test_resolve_did_web_root_retargets_org_scoped_document(monkeypatch: p
                 "publicKeyJwk": {"kty": "EC", "crv": "P-256", "x": "abc", "y": "def"},
             }
         ],
-        "assertionMethod": ["did:web:beta.elevenidllc.com:orgs:marty#cred-issuer-marty-es256"],
+        "assertionMethod": [
+            "did:web:beta.elevenidllc.com:orgs:marty#cred-issuer-marty-es256"
+        ],
     }
 
     redis_mock = AsyncMock()
@@ -2937,19 +3413,28 @@ async def test_resolve_did_web_root_retargets_org_scoped_document(monkeypatch: p
         return None
 
     redis_mock.get = AsyncMock(side_effect=fake_get)
-    request = _build_public_request(redis_client=redis_mock, path="/.well-known/did.json")
+    request = _build_public_request(
+        redis_client=redis_mock, path="/.well-known/did.json"
+    )
 
     response = await signing_keys.resolve_did_web_root(request=request)
 
     data = json.loads(response.body)
     assert data["id"] == "did:web:beta.elevenidllc.com"
-    assert data["verificationMethod"][0]["id"] == "did:web:beta.elevenidllc.com#cred-issuer-marty-es256"
+    assert (
+        data["verificationMethod"][0]["id"]
+        == "did:web:beta.elevenidllc.com#cred-issuer-marty-es256"
+    )
     assert data["verificationMethod"][0]["controller"] == "did:web:beta.elevenidllc.com"
-    assert data["assertionMethod"] == ["did:web:beta.elevenidllc.com#cred-issuer-marty-es256"]
+    assert data["assertionMethod"] == [
+        "did:web:beta.elevenidllc.com#cred-issuer-marty-es256"
+    ]
 
 
 @pytest.mark.asyncio
-async def test_publish_service_to_did_stores_slug_mapping(monkeypatch: pytest.MonkeyPatch):
+async def test_publish_service_to_did_stores_slug_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """publish_service_to_did should store the did-web-slug mapping when org_slug is provided."""
     test_service = {
         "id": "svc-bao",
@@ -2961,7 +3446,9 @@ async def test_publish_service_to_did_stores_slug_mapping(monkeypatch: pytest.Mo
     async def fake_load_registry(request, org_id):
         return {"services": [test_service], "default_service_id": None}
 
-    monkeypatch.setattr(signing_keys, "_load_registered_service_registry", fake_load_registry)
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com:8443")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com:8443")
 
@@ -3037,7 +3524,9 @@ async def test_publish_service_to_did_rejects_malformed_or_mismatched_local_iden
         async def get_public_key_jwk(self, config: dict):
             return {"kty": "EC", "crv": "P-256", "x": "abc", "y": "def"}
 
-    monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve_effective_service)
+    monkeypatch.setattr(
+        signing_keys, "_resolve_effective_service", fake_resolve_effective_service
+    )
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
 
     redis_mock = AsyncMock()
@@ -3091,8 +3580,12 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
         published_body = kwargs["body"]
         return JSONResponse(content={"ok": True})
 
-    monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve_effective_service)
-    monkeypatch.setattr(signing_keys, "publish_service_to_did", fake_publish_service_to_did)
+    monkeypatch.setattr(
+        signing_keys, "_resolve_effective_service", fake_resolve_effective_service
+    )
+    monkeypatch.setattr(
+        signing_keys, "publish_service_to_did", fake_publish_service_to_did
+    )
 
     request = _build_request("org_issuer", redis_client=redis_mock)
     response = await signing_keys.create_issuer_profile(
@@ -3139,7 +3632,9 @@ async def test_create_issuer_profile_requires_local_path_did_only_for_auto_publi
         )
 
     publish_mock = AsyncMock()
-    monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve_effective_service)
+    monkeypatch.setattr(
+        signing_keys, "_resolve_effective_service", fake_resolve_effective_service
+    )
     monkeypatch.setattr(signing_keys, "publish_service_to_did", publish_mock)
 
     redis_mock = AsyncMock()
@@ -3172,29 +3667,52 @@ async def test_create_issuer_profile_requires_local_path_did_only_for_auto_publi
     )
 
     assert response.status_code == 200
-    assert json.loads(response.body)["profile"]["verification_method_id"].endswith("#issuer-key")
+    assert json.loads(response.body)["profile"]["verification_method_id"].endswith(
+        "#issuer-key"
+    )
     publish_mock.assert_not_awaited()
 
 
 def test_did_web_org_slug_accepts_only_standard_path_scoped_identifiers():
-    assert signing_keys._did_web_org_slug("did:web:issuer.example:orgs:Acme-1") == "acme-1"
-    assert signing_keys._did_web_org_slug("did:web:issuer.example%3A8443:orgs:org_123") == "org_123"
-    assert signing_keys._did_web_org_slug(
-        "did:web:issuer.example%3A8443:orgs:org_123",
-        public_domain="issuer.example:8443",
-    ) == "org_123"
-    assert signing_keys._did_web_org_slug(
-        "did:web:issuer.example:orgs:acme",
-        public_domain="other.example",
-    ) is None
+    assert (
+        signing_keys._did_web_org_slug("did:web:issuer.example:orgs:Acme-1") == "acme-1"
+    )
+    assert (
+        signing_keys._did_web_org_slug("did:web:issuer.example%3A8443:orgs:org_123")
+        == "org_123"
+    )
+    assert (
+        signing_keys._did_web_org_slug(
+            "did:web:issuer.example%3A8443:orgs:org_123",
+            public_domain="issuer.example:8443",
+        )
+        == "org_123"
+    )
+    assert (
+        signing_keys._did_web_org_slug(
+            "did:web:issuer.example:orgs:acme",
+            public_domain="other.example",
+        )
+        is None
+    )
     assert signing_keys._did_web_org_slug("did:web:issuer.example") is None
     assert signing_keys._did_web_org_slug("did:key:z6Mkh") is None
-    assert signing_keys._did_web_org_slug("did:web:issuer.example:orgs:bad/slug") is None
-    assert signing_keys._did_web_org_slug("did:web:issuer.example:teams:orgs:acme") is None
-    assert signing_keys._did_web_org_slug("did:web:issuer.example%2Forgs:orgs:acme") is None
+    assert (
+        signing_keys._did_web_org_slug("did:web:issuer.example:orgs:bad/slug") is None
+    )
+    assert (
+        signing_keys._did_web_org_slug("did:web:issuer.example:teams:orgs:acme") is None
+    )
+    assert (
+        signing_keys._did_web_org_slug("did:web:issuer.example%2Forgs:orgs:acme")
+        is None
+    )
     assert signing_keys._did_web_org_slug("did:web:-issuer.example:orgs:acme") is None
     assert signing_keys._did_web_org_slug("did:web:issuer..example:orgs:acme") is None
-    assert signing_keys._did_web_org_slug("did:web:issuer.example%3A70000:orgs:acme") is None
+    assert (
+        signing_keys._did_web_org_slug("did:web:issuer.example%3A70000:orgs:acme")
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -3325,8 +3843,12 @@ async def test_create_issuer_profile_duplicate_tuple_returns_existing_without_re
             }
         )
 
-    monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve_effective_service)
-    monkeypatch.setattr(signing_keys, "publish_service_to_did", fake_publish_service_to_did)
+    monkeypatch.setattr(
+        signing_keys, "_resolve_effective_service", fake_resolve_effective_service
+    )
+    monkeypatch.setattr(
+        signing_keys, "publish_service_to_did", fake_publish_service_to_did
+    )
 
     request = _build_request("org_issuer", redis_client=redis_mock)
     body = {
@@ -3337,7 +3859,9 @@ async def test_create_issuer_profile_duplicate_tuple_returns_existing_without_re
         "status": "active",
     }
 
-    first = await signing_keys.create_issuer_profile(request=request, body=body, organization_id=None)
+    first = await signing_keys.create_issuer_profile(
+        request=request, body=body, organization_id=None
+    )
     second = await signing_keys.create_issuer_profile(
         request=request,
         body={**body, "name": "Same Key, New Label"},
@@ -3418,8 +3942,12 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
             }
         )
 
-    monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve_effective_service)
-    monkeypatch.setattr(signing_keys, "publish_service_to_did", fake_publish_service_to_did)
+    monkeypatch.setattr(
+        signing_keys, "_resolve_effective_service", fake_resolve_effective_service
+    )
+    monkeypatch.setattr(
+        signing_keys, "publish_service_to_did", fake_publish_service_to_did
+    )
 
     request = _build_request("org_issuer", redis_client=redis_mock)
     response = await signing_keys.create_issuer_profile(
@@ -3440,7 +3968,10 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
     assert response_body["profile"]["status"] == "active"
     assert response_body["profile"]["signing_key_reference"] == "cred-issuer-test-es256"
     assert response_body["profile"]["key_purpose"] == "vc_jwt_issuer"
-    assert response_body["profile"]["verification_method_id"] == "did:web:beta.elevenidllc.com:orgs:acme#cred-issuer-test-es256"
+    assert (
+        response_body["profile"]["verification_method_id"]
+        == "did:web:beta.elevenidllc.com:orgs:acme#cred-issuer-test-es256"
+    )
     assert publish_count == 1
 
     saved_profiles = json.loads(stored[storage_key])["profiles"]
@@ -3448,11 +3979,16 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
     assert saved_profiles[0]["id"] == "ip-stale"
     assert saved_profiles[0]["status"] == "active"
     assert saved_profiles[0]["key_purpose"] == "vc_jwt_issuer"
-    assert saved_profiles[0]["verification_method_id"] == "did:web:beta.elevenidllc.com:orgs:acme#cred-issuer-test-es256"
+    assert (
+        saved_profiles[0]["verification_method_id"]
+        == "did:web:beta.elevenidllc.com:orgs:acme#cred-issuer-test-es256"
+    )
 
 
 @pytest.mark.asyncio
-async def test_create_issuer_profile_rejects_missing_did(monkeypatch: pytest.MonkeyPatch):
+async def test_create_issuer_profile_rejects_missing_did(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """create_issuer_profile should 422 when issuer_did is absent."""
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
@@ -3478,18 +4014,32 @@ async def test_list_issuer_profiles_returns_all(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 
-    profiles_doc = json.dumps({
-        "profiles": [
-            {"id": "ip-1", "name": "A", "issuer_did": "did:web:a", "signing_service_id": "svc-1"},
-            {"id": "ip-2", "name": "B", "issuer_did": "did:web:b", "signing_service_id": "svc-2"},
-        ]
-    })
+    profiles_doc = json.dumps(
+        {
+            "profiles": [
+                {
+                    "id": "ip-1",
+                    "name": "A",
+                    "issuer_did": "did:web:a",
+                    "signing_service_id": "svc-1",
+                },
+                {
+                    "id": "ip-2",
+                    "name": "B",
+                    "issuer_did": "did:web:b",
+                    "signing_service_id": "svc-2",
+                },
+            ]
+        }
+    )
 
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(return_value=profiles_doc)
 
     request = _build_request("org_issuer", redis_client=redis_mock)
-    response = await signing_keys.list_issuer_profiles(request=request, organization_id=None)
+    response = await signing_keys.list_issuer_profiles(
+        request=request, organization_id=None
+    )
 
     assert response.status_code == 200
     data = json.loads(response.body)
@@ -3503,19 +4053,33 @@ async def test_get_issuer_profile_returns_single(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 
-    profiles_doc = json.dumps({
-        "profiles": [
-            {"id": "ip-1", "name": "A", "issuer_did": "did:web:a", "signing_service_id": "svc-1"},
-            {"id": "ip-2", "name": "B", "issuer_did": "did:web:b", "signing_service_id": "svc-2"},
-        ]
-    })
+    profiles_doc = json.dumps(
+        {
+            "profiles": [
+                {
+                    "id": "ip-1",
+                    "name": "A",
+                    "issuer_did": "did:web:a",
+                    "signing_service_id": "svc-1",
+                },
+                {
+                    "id": "ip-2",
+                    "name": "B",
+                    "issuer_did": "did:web:b",
+                    "signing_service_id": "svc-2",
+                },
+            ]
+        }
+    )
 
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(return_value=profiles_doc)
 
     request = _build_request("org_issuer", redis_client=redis_mock)
     response = await signing_keys.get_issuer_profile(
-        request=request, profile_id="ip-2", organization_id=None,
+        request=request,
+        profile_id="ip-2",
+        organization_id=None,
     )
 
     assert response.status_code == 200
@@ -3525,7 +4089,9 @@ async def test_get_issuer_profile_returns_single(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-async def test_get_issuer_profile_returns_404_when_missing(monkeypatch: pytest.MonkeyPatch):
+async def test_get_issuer_profile_returns_404_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """get_issuer_profile should 404 for unknown profile_id."""
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
@@ -3539,7 +4105,9 @@ async def test_get_issuer_profile_returns_404_when_missing(monkeypatch: pytest.M
 
     with pytest.raises(FastAPIHTTPException) as exc_info:
         await signing_keys.get_issuer_profile(
-            request=request, profile_id="ip-nope", organization_id=None,
+            request=request,
+            profile_id="ip-nope",
+            organization_id=None,
         )
 
     assert exc_info.value.status_code == 404
@@ -3552,17 +4120,19 @@ async def test_update_issuer_profile_patches_fields(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 
     existing = {
-        "profiles": [{
-            "id": "ip-1",
-            "organization_id": "org_issuer",
-            "name": "Old Name",
-            "issuer_did": "did:web:a",
-            "signing_service_id": "svc-1",
-            "key_purpose": "vc_jwt_issuer",
-            "status": "draft",
-            "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
-        }]
+        "profiles": [
+            {
+                "id": "ip-1",
+                "organization_id": "org_issuer",
+                "name": "Old Name",
+                "issuer_did": "did:web:a",
+                "signing_service_id": "svc-1",
+                "key_purpose": "vc_jwt_issuer",
+                "status": "draft",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z",
+            }
+        ]
     }
 
     stored = {}
@@ -3636,7 +4206,9 @@ async def test_delete_issuer_profile_removes_entry(monkeypatch: pytest.MonkeyPat
 
     request = _build_request("org_issuer", redis_client=redis_mock)
     response = await signing_keys.delete_issuer_profile(
-        request=request, profile_id="ip-2", organization_id=None,
+        request=request,
+        profile_id="ip-2",
+        organization_id=None,
     )
 
     assert response.status_code == 200
@@ -3650,7 +4222,9 @@ async def test_delete_issuer_profile_removes_entry(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
-async def test_delete_issuer_profile_returns_404_when_missing(monkeypatch: pytest.MonkeyPatch):
+async def test_delete_issuer_profile_returns_404_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """delete_issuer_profile should 404 for unknown profile_id."""
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
@@ -3664,14 +4238,18 @@ async def test_delete_issuer_profile_returns_404_when_missing(monkeypatch: pytes
 
     with pytest.raises(FastAPIHTTPException) as exc_info:
         await signing_keys.delete_issuer_profile(
-            request=request, profile_id="ip-ghost", organization_id=None,
+            request=request,
+            profile_id="ip-ghost",
+            organization_id=None,
         )
 
     assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_internal_resolve_issuer_context_uses_explicit_profile(monkeypatch: pytest.MonkeyPatch):
+async def test_internal_resolve_issuer_context_uses_explicit_profile(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Explicit issuer_profile_id should select that profile instead of first active."""
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
     docs = {
@@ -3755,7 +4333,9 @@ async def test_internal_resolve_issuer_context_uses_explicit_profile(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_internal_resolve_issuer_context_defaults_to_org_managed_mode(monkeypatch: pytest.MonkeyPatch):
+async def test_internal_resolve_issuer_context_defaults_to_org_managed_mode(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Hosted ElevenID profiles must not become implicit defaults."""
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
     docs = {
@@ -3831,7 +4411,9 @@ async def test_internal_resolve_issuer_context_defaults_to_org_managed_mode(monk
 
 
 @pytest.mark.asyncio
-async def test_internal_resolve_issuer_context_rejects_unknown_explicit_profile(monkeypatch: pytest.MonkeyPatch):
+async def test_internal_resolve_issuer_context_rejects_unknown_explicit_profile(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(return_value=json.dumps({"profiles": []}))
@@ -3855,7 +4437,9 @@ async def test_internal_resolve_issuer_context_rejects_unknown_explicit_profile(
 
 
 @pytest.mark.asyncio
-async def test_internal_resolve_issuer_context_rejects_profile_without_requested_key_purpose(monkeypatch: pytest.MonkeyPatch):
+async def test_internal_resolve_issuer_context_rejects_profile_without_requested_key_purpose(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
     docs = {
         "org:org_issuer:issuer-profiles": {
@@ -3911,7 +4495,9 @@ async def test_internal_resolve_issuer_context_rejects_profile_without_requested
 
 
 @pytest.mark.asyncio
-async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(monkeypatch: pytest.MonkeyPatch):
+async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Internal DID resolver should use the org issuer profile and DID document."""
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
     issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
@@ -3954,7 +4540,12 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(monkeyp
                     "id": vm_id,
                     "type": "JsonWebKey",
                     "controller": issuer_did,
-                    "publicKeyJwk": {"kty": "EC", "crv": "P-256", "x": "abc", "y": "def"},
+                    "publicKeyJwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "abc",
+                        "y": "def",
+                    },
                 }
             ],
             "assertionMethod": [vm_id],
@@ -3993,7 +4584,9 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_internal_resolve_issuer_did_rejects_unscoped_profile_for_requested_key_purpose(monkeypatch: pytest.MonkeyPatch):
+async def test_internal_resolve_issuer_did_rejects_unscoped_profile_for_requested_key_purpose(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Internal DID resolver should not use an unscoped issuer profile for a purpose-specific path."""
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
     issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
@@ -4039,7 +4632,9 @@ async def test_internal_resolve_issuer_did_rejects_unscoped_profile_for_requeste
 
 
 @pytest.mark.asyncio
-async def test_internal_resolve_issuer_did_rejects_unknown_org_issuer(monkeypatch: pytest.MonkeyPatch):
+async def test_internal_resolve_issuer_did_rejects_unknown_org_issuer(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """Internal DID resolver should fail closed when issuer DID is not active for org."""
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
     redis_mock = AsyncMock()
@@ -4072,12 +4667,18 @@ async def test_internal_resolve_issuer_did_rejects_unknown_org_issuer(monkeypatc
         ("get_signing_key_config", {}),
         ("update_signing_key_config", {"body": {"services": []}}),
         ("generate_csr", {"service_id": "svc-1"}),
-        ("store_service_certificate", {"service_id": "svc-1", "body": {"cert_pem": "cert"}}),
+        (
+            "store_service_certificate",
+            {"service_id": "svc-1", "body": {"cert_pem": "cert"}},
+        ),
         ("get_service_certificate", {"service_id": "svc-1"}),
         ("list_certificate_expiry_alerts", {"days_until_expiry": 30}),
         ("publish_service_to_jwks", {"service_id": "svc-1", "body": {}}),
         ("publish_service_to_did", {"service_id": "svc-1", "body": {}}),
-        ("sign_payload_with_service", {"service_id": "svc-1", "body": {"payload_b64": "dGVzdA"}}),
+        (
+            "sign_payload_with_service",
+            {"service_id": "svc-1", "body": {"payload_b64": "dGVzdA"}},
+        ),
         ("rotate_service_key", {"service_id": "svc-1", "body": {}}),
         ("verify_service_public_key", {"service_id": "svc-1"}),
         ("get_key_audit_log", {"service_id": "svc-1"}),
@@ -4087,7 +4688,9 @@ async def test_internal_resolve_issuer_did_rejects_unknown_org_issuer(monkeypatc
         ("delete_signing_key", {"key_id": "key-1"}),
     ],
 )
-async def test_org_scoped_signing_key_routes_require_org_context(route_name: str, kwargs: dict):
+async def test_org_scoped_signing_key_routes_require_org_context(
+    route_name: str, kwargs: dict
+):
     """Org-scoped signing-key routes must fail before touching default/global storage."""
     from fastapi import HTTPException as FastAPIHTTPException
 
