@@ -82,7 +82,12 @@ If `up` is interrupted after Compose creates project containers, rerun it with
 `--resume`. Resume accepts only resources carrying that exact project label;
 it does not adopt containers from another stack.
 
-Add `--include-w3c` after assigning `W3C_VC_TEST_POLICY_ID`. For EUDI, start
+Add `--include-w3c` after assigning both
+`W3C_VC_TEST_CREDENTIAL_POLICY_ID` and
+`W3C_VC_TEST_PRESENTATION_POLICY_ID`. The credential policy verifies issued
+JWT VCs without imposing presentation holder binding; the presentation policy
+verifies `eddsa-rdfc-2022` presentations with challenge and domain binding.
+For EUDI, start
 the pinned `conformance/eudi-reference.compose.yml` from
 `ElevenID/marty-integration-tests` as its own Compose project. Its wallet
 tester and wallet-kit harness join only `${MARTY_CONFORMANCE_PROJECT}_oidf-runner`;

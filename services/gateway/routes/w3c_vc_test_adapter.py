@@ -1,8 +1,8 @@
 """Narrow VC-API adapter used only by the pinned W3C VCDM v2 test suite.
 
 This router intentionally has no production registration.  A disposable
-interop stack may enable it with ``W3C_VC_TEST_ADAPTER=1`` and must provide an
-active, fixture-only presentation policy.  Requests are forwarded to Marty’s
+interop stack may enable it with ``W3C_VC_TEST_ADAPTER=1`` and must provide
+separate active credential and presentation policies. Requests are forwarded to Marty’s
 normal presentation-policy evaluator; this module does not validate a
 credential itself or turn a failed verification into a success.
 """
@@ -51,20 +51,23 @@ class IssueCredentialRequest(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
-def _enabled_policy_id() -> str:
+def _enabled_policy_id(*, presentation: bool) -> str:
     if os.environ.get("W3C_VC_TEST_ADAPTER") != "1":
         raise HTTPException(status_code=404, detail="W3C VC test adapter is disabled")
-    policy_id = os.environ.get("W3C_VC_TEST_POLICY_ID", "").strip()
+    variable = (
+        "W3C_VC_TEST_PRESENTATION_POLICY_ID"
+        if presentation
+        else "W3C_VC_TEST_CREDENTIAL_POLICY_ID"
+    )
+    policy_id = os.environ.get(variable, "").strip()
     if not policy_id:
-        raise HTTPException(
-            status_code=503, detail="W3C VC test adapter requires W3C_VC_TEST_POLICY_ID"
-        )
+        raise HTTPException(status_code=503, detail=f"W3C VC test adapter requires {variable}")
     return policy_id
 
 
 def _issuance_fixture_configuration() -> tuple[str, str]:
     """Return the explicit disposable organization and JWT-VC template IDs."""
-    _enabled_policy_id()
+    _enabled_policy_id(presentation=False)
     organization_id = os.environ.get("W3C_VC_TEST_ORGANIZATION_ID", "").strip()
     template_id = os.environ.get("W3C_VC_TEST_TEMPLATE_ID", "").strip()
     if not organization_id or not template_id:
@@ -477,9 +480,13 @@ def _extract_jose_envelope(value: dict[str, Any], field: str) -> str:
 
 
 async def _evaluate(
-    token: str | dict[str, Any], options: dict[str, Any], request: Request
+    token: str | dict[str, Any],
+    options: dict[str, Any],
+    request: Request,
+    *,
+    presentation: bool,
 ) -> Response:
-    policy_id = _enabled_policy_id()
+    policy_id = _enabled_policy_id(presentation=presentation)
     registry = get_registry()
     service_url = registry.get_service_url("presentation-policies")
     if not service_url:
@@ -655,6 +662,7 @@ async def verify_credential(
         _token_or_unsupported(body.verifiableCredential, "verifiableCredential"),
         body.options,
         request,
+        presentation=False,
     )
 
 
@@ -667,6 +675,7 @@ async def verify_presentation(
         _token_or_unsupported(body.verifiablePresentation, "verifiablePresentation"),
         body.options,
         request,
+        presentation=True,
     )
 
 
