@@ -359,6 +359,18 @@ def test_adapter_extracts_a_w3c_jose_vc_envelope_without_trusting_it() -> None:
     assert token == "header.payload.signature"
 
 
+def test_adapter_extracts_official_suite_scalar_context_envelope() -> None:
+    token = adapter._token_or_unsupported(
+        {
+            "@context": "https://www.w3.org/ns/credentials/v2",
+            "type": "EnvelopedVerifiableCredential",
+            "id": "data:application/vc+jwt,header.payload.signature",
+        },
+        "verifiableCredential",
+    )
+    assert token == "header.payload.signature"
+
+
 def test_adapter_preserves_data_integrity_document_for_production_verifier() -> None:
     document = {
         "@context": ["https://www.w3.org/ns/credentials/v2"],
