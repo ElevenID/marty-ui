@@ -10,7 +10,10 @@ from unittest.mock import AsyncMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from marty_common.org_authorization import OrganizationMembership, OrganizationRoleSummary
+from marty_common.org_authorization import (
+    OrganizationMembership,
+    OrganizationRoleSummary,
+)
 import pytest
 
 from services.presentation_policy import main as pp
@@ -52,7 +55,11 @@ def _build_client(
                 user_id="user-1",
                 organization_id="org-1",
                 status="active",
-                roles=[OrganizationRoleSummary(id="role-admin", name="admin", display_name="Admin")],
+                roles=[
+                    OrganizationRoleSummary(
+                        id="role-admin", name="admin", display_name="Admin"
+                    )
+                ],
                 permissions={
                     "presentation-policy:view",
                     "presentation-policy:create",
@@ -130,7 +137,9 @@ def test_get_presentation_policy_returns_protocol_shape_only() -> None:
     body = response.json()
 
     # Every key must be protocol-allowed
-    assert set(body.keys()) <= PROTOCOL_KEYS, f"Extra keys: {set(body.keys()) - PROTOCOL_KEYS}"
+    assert set(body.keys()) <= PROTOCOL_KEYS, (
+        f"Extra keys: {set(body.keys()) - PROTOCOL_KEYS}"
+    )
 
     # Required protocol fields present
     assert body["id"] == policy.id
@@ -160,9 +169,16 @@ def test_get_presentation_policy_returns_protocol_shape_only() -> None:
     assert "ligero_age_over_21" in body["supported_circuits"]
 
     # Legacy fields must NOT be present
-    for legacy_key in ("display_metadata", "credential_requirements",
-                       "alternative_requirements", "compliance_profile_id", "version"):
-        assert legacy_key not in body, f"Legacy key {legacy_key!r} must not appear in protocol response"
+    for legacy_key in (
+        "display_metadata",
+        "credential_requirements",
+        "alternative_requirements",
+        "compliance_profile_id",
+        "version",
+    ):
+        assert legacy_key not in body, (
+            f"Legacy key {legacy_key!r} must not appear in protocol response"
+        )
 
 
 def test_create_presentation_policy_accepts_protocol_required_claims() -> None:
@@ -237,7 +253,88 @@ def test_detect_credential_format_recognizes_json_open_badge_v3() -> None:
         },
     }
 
-    assert pp._detect_credential_format(json.dumps({"credential": credential})) == "openbadge-v3"
+    assert (
+        pp._detect_credential_format(json.dumps({"credential": credential}))
+        == "openbadge-v3"
+    )
+
+
+def test_detect_credential_format_recognizes_vcdm_data_integrity_object() -> None:
+    document = {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiablePresentation"],
+        "proof": {
+            "type": "DataIntegrityProof",
+            "cryptosuite": "eddsa-rdfc-2022",
+        },
+    }
+    assert pp._detect_credential_format(document) == "w3c-vcdm-di"
+
+
+def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_claims(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests: list[dict] = []
+
+    def verify(request_json: str) -> str:
+        requests.append(json.loads(request_json))
+        return json.dumps(
+            {
+                "valid": True,
+                "kind": "presentation",
+                "verified_proofs": 1,
+                "verified_credentials": 1,
+                "errors": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(verify_vcdm_data_integrity=verify),
+    )
+    credential = {
+        "type": ["VerifiableCredential"],
+        "issuer": "did:key:issuer",
+        "credentialSubject": {"id": "did:key:holder", "role": "member"},
+    }
+    document = {
+        "type": ["VerifiablePresentation"],
+        "holder": "did:key:holder",
+        "verifiableCredential": [credential],
+    }
+
+    result = pp._verify_vcdm_data_integrity(document, "challenge", "verifier")
+
+    assert result["verified"] is True
+    assert result["issuer_did"] == "did:key:issuer"
+    assert result["claims"] == {"id": "did:key:holder", "role": "member"}
+    assert requests == [
+        {
+            "document": document,
+            "expected_challenge": "challenge",
+            "expected_domain": "verifier",
+        }
+    ]
+
+
+def test_vcdm_data_integrity_fails_closed_without_leaking_engine_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = SimpleNamespace(
+        verify_vcdm_data_integrity=lambda _request: json.dumps(
+            {"valid": False, "errors": ["cryptographic implementation detail"]}
+        )
+    )
+    monkeypatch.setattr(pp, "_load_marty_rs_binding", lambda: binding)
+
+    result = pp._verify_vcdm_data_integrity(
+        {"type": ["VerifiableCredential"]}, None, None
+    )
+
+    assert result["verified"] is False
+    assert result["claims"] == {}
+    assert "cryptographic implementation detail" not in result["error"]
 
 
 def _jwt_segment(payload: dict) -> str:
@@ -250,16 +347,21 @@ def test_open_badge_login_policy_format_accepts_sd_jwt_aliases() -> None:
     assert pp._credential_format_satisfies_requirement("sd-jwt", "dc+sd-jwt")
     assert pp._credential_format_satisfies_requirement("sd-jwt", "ietf_sd_jwt")
     assert not pp._credential_format_satisfies_requirement("sd-jwt", "openbadge-v3")
+    assert pp._credential_format_satisfies_requirement("w3c-vcdm-di", "w3c_vcdm_v2_di")
 
 
-def test_trust_profile_service_url_defaults_to_compose_service_name(monkeypatch) -> None:
+def test_trust_profile_service_url_defaults_to_compose_service_name(
+    monkeypatch,
+) -> None:
     monkeypatch.delenv("TRUST_PROFILE_SERVICE_URL", raising=False)
 
     assert pp._trust_profile_service_url() == "http://trust-profile:8004"
 
 
 def test_trust_profile_service_url_honors_env_override(monkeypatch) -> None:
-    monkeypatch.setenv("TRUST_PROFILE_SERVICE_URL", "http://trust-profile.internal:8004")
+    monkeypatch.setenv(
+        "TRUST_PROFILE_SERVICE_URL", "http://trust-profile.internal:8004"
+    )
 
     assert pp._trust_profile_service_url() == "http://trust-profile.internal:8004"
 
@@ -267,7 +369,10 @@ def test_trust_profile_service_url_honors_env_override(monkeypatch) -> None:
 def test_trust_profile_lookup_url_uses_internal_service_endpoint(monkeypatch) -> None:
     monkeypatch.setenv("TRUST_PROFILE_SERVICE_URL", "http://trust-profile:8004")
 
-    assert pp._trust_profile_lookup_url("profile-1") == "http://trust-profile:8004/internal/v1/trust-profiles/profile-1"
+    assert (
+        pp._trust_profile_lookup_url("profile-1")
+        == "http://trust-profile:8004/internal/v1/trust-profiles/profile-1"
+    )
 
 
 def test_trust_profile_cache_ttl_defaults_to_five_minutes(monkeypatch) -> None:
@@ -320,7 +425,13 @@ def test_verify_sd_jwt_reports_did_resolution_failure(monkeypatch) -> None:
     token = ".".join(
         [
             _jwt_segment({"alg": "ES256", "typ": "vc+sd-jwt", "kid": "#issuer-key"}),
-            _jwt_segment({"iss": "did:web:example.com:orgs:marty", "sub": "did:example:holder", "email": "member@example.com"}),
+            _jwt_segment(
+                {
+                    "iss": "did:web:example.com:orgs:marty",
+                    "sub": "did:example:holder",
+                    "email": "member@example.com",
+                }
+            ),
             "signature",
         ]
     )
@@ -332,7 +443,9 @@ def test_verify_sd_jwt_reports_did_resolution_failure(monkeypatch) -> None:
     )
 
     def _fail_resolution(_did: str):
-        raise RuntimeError("DID resolution failed for did:web:example.com:orgs:marty: HTTP 404")
+        raise RuntimeError(
+            "DID resolution failed for did:web:example.com:orgs:marty: HTTP 404"
+        )
 
     monkeypatch.setattr(pp, "_resolve_did_document", _fail_resolution)
 
@@ -345,7 +458,9 @@ def test_verify_sd_jwt_reports_did_resolution_failure(monkeypatch) -> None:
 
 def test_resolve_did_jwk_without_network() -> None:
     public_jwk = {"kty": "EC", "crv": "P-256", "x": "x-value", "y": "y-value"}
-    encoded = base64.urlsafe_b64encode(json.dumps(public_jwk).encode()).decode().rstrip("=")
+    encoded = (
+        base64.urlsafe_b64encode(json.dumps(public_jwk).encode()).decode().rstrip("=")
+    )
     did = f"did:jwk:{encoded}"
 
     document = pp._resolve_did_document(did)
@@ -357,18 +472,24 @@ def test_resolve_did_jwk_without_network() -> None:
 
 def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
     public_jwk = {"kty": "EC", "crv": "P-256", "x": "x-value", "y": "y-value"}
-    encoded = base64.urlsafe_b64encode(json.dumps(public_jwk).encode()).decode().rstrip("=")
+    encoded = (
+        base64.urlsafe_b64encode(json.dumps(public_jwk).encode()).decode().rstrip("=")
+    )
     did = f"did:jwk:{encoded}"
     token = ".".join(
         [
             _jwt_segment({"alg": "ES256", "typ": "dc+sd-jwt", "kid": did}),
-            _jwt_segment({"iss": did, "sub": "did:example:holder", "email": "member@example.com"}),
+            _jwt_segment(
+                {"iss": did, "sub": "did:example:holder", "email": "member@example.com"}
+            ),
             "signature",
         ]
     )
     captured: dict[str, object] = {}
 
-    def _verify(token: str, issuer_jwk: str, audience: str | None, nonce: str | None) -> str:
+    def _verify(
+        token: str, issuer_jwk: str, audience: str | None, nonce: str | None
+    ) -> str:
         captured.update(
             token=token,
             issuer_jwk=json.loads(issuer_jwk),
@@ -383,7 +504,9 @@ def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
         lambda: SimpleNamespace(verify_sd_jwt=_verify),
     )
 
-    result = pp._verify_sd_jwt(token, nonce="nonce-123", audience="https://verifier.example")
+    result = pp._verify_sd_jwt(
+        token, nonce="nonce-123", audience="https://verifier.example"
+    )
 
     assert result["verified"] is True
     assert result["issuer_did"] == did
@@ -451,7 +574,10 @@ def test_verify_open_badge_v3_uses_binding_and_flattens_claims(monkeypatch) -> N
     assert result["claims"]["given_name"] == "Marty"
     assert result["claims"]["family_name"] == "Member"
     assert result["claims"]["name"] == "Verified Member Badge"
-    assert result["claims"]["description"] == "Verifiable proof of active organization membership"
+    assert (
+        result["claims"]["description"]
+        == "Verifiable proof of active organization membership"
+    )
     assert result["revocation_checked"] is True
     assert result["not_revoked"] is True
     assert result["is_revoked"] is False
@@ -501,7 +627,9 @@ def _install_marty_trust_profile(
         "60000000-0000-0000-0000-000000000001",
         {
             "organization_id": organization_id,
-            "allowed_issuers": ["did:web:beta.elevenidllc.com:orgs:marty"] if allowed_issuers is None else allowed_issuers,
+            "allowed_issuers": ["did:web:beta.elevenidllc.com:orgs:marty"]
+            if allowed_issuers is None
+            else allowed_issuers,
             "denied_issuers": denied_issuers or [],
             "trust_sources": trust_sources or [],
             "time_policy": {"freshness_window_seconds": 3600},
@@ -531,7 +659,9 @@ def test_rest_evaluation_rejects_cross_org_trust_profile_override(monkeypatch) -
     )
 
 
-@pytest.mark.parametrize("ambiguous_organization_id", [None, "", ["org-1"], {"id": "org-1"}])
+@pytest.mark.parametrize(
+    "ambiguous_organization_id", [None, "", ["org-1"], {"id": "org-1"}]
+)
 def test_evaluator_rejects_trust_profile_without_unambiguous_org(
     monkeypatch,
     ambiguous_organization_id: object,
@@ -593,7 +723,10 @@ def test_open_badge_login_policy_allows_verified_sd_jwt_badge(monkeypatch) -> No
 
     assert response.result == "passed"
     assert response.decision == "allow"
-    assert response.credential_results[0].credential_template_id == "50000000-0000-0000-0000-000000000040"
+    assert (
+        response.credential_results[0].credential_template_id
+        == "50000000-0000-0000-0000-000000000040"
+    )
     assert response.verified_claims["email"] == "member@example.com"
 
 
@@ -662,7 +795,9 @@ def test_open_badge_login_policy_allows_issuer_url_alias(monkeypatch) -> None:
     assert response.decision == "allow"
 
 
-def test_open_badge_login_policy_allows_did_web_issuer_by_domain_alias(monkeypatch) -> None:
+def test_open_badge_login_policy_allows_did_web_issuer_by_domain_alias(
+    monkeypatch,
+) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
     _install_marty_trust_profile(monkeypatch, allowed_issuers=["beta.elevenidllc.com"])
@@ -728,7 +863,9 @@ def test_open_badge_login_policy_denies_issuer_by_domain_alias(monkeypatch) -> N
     assert "explicitly denied" in response.decision_reason
 
 
-def test_open_badge_login_policy_allows_pinned_issuer_url_trust_source(monkeypatch) -> None:
+def test_open_badge_login_policy_allows_pinned_issuer_url_trust_source(
+    monkeypatch,
+) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
     _install_marty_trust_profile(
@@ -771,7 +908,10 @@ def test_open_badge_login_policy_uses_marty_trust_profile() -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
 
-    assert policy.credential_requirements[0].trust_profile_id == "60000000-0000-0000-0000-000000000001"
+    assert (
+        policy.credential_requirements[0].trust_profile_id
+        == "60000000-0000-0000-0000-000000000001"
+    )
 
 
 def test_open_badge_login_policy_denies_unverified_open_badge(monkeypatch) -> None:
@@ -879,7 +1019,9 @@ def test_policy_freshness_denies_revoked_credential(monkeypatch) -> None:
     assert response.credential_results[0].freshness_check_passed is False
 
 
-def test_policy_freshness_accepts_managed_issuer_active_credential_status(monkeypatch) -> None:
+def test_policy_freshness_accepts_managed_issuer_active_credential_status(
+    monkeypatch,
+) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
     issuer_did = "did:web:issuer.example:orgs:demo"
@@ -895,7 +1037,10 @@ def test_policy_freshness_accepts_managed_issuer_active_credential_status(monkey
         "_verify_credential_by_format",
         lambda *_args, **_kwargs: {
             "verified": True,
-            "claims": {"email": "member@example.com", "credential_id": "credential-123"},
+            "claims": {
+                "email": "member@example.com",
+                "credential_id": "credential-123",
+            },
             "issuer_did": issuer_did,
             "format": "w3c-vc",
             "error": None,
@@ -920,7 +1065,9 @@ def test_policy_freshness_accepts_managed_issuer_active_credential_status(monkey
     assert response.verified_claims["email"] == "member@example.com"
 
 
-def test_policy_freshness_denies_managed_issuer_revoked_credential_status(monkeypatch) -> None:
+def test_policy_freshness_denies_managed_issuer_revoked_credential_status(
+    monkeypatch,
+) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
     issuer_did = "did:web:issuer.example:orgs:demo"

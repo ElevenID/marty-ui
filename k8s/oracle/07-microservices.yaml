@@ -85,6 +85,15 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: PRESENTATION_POLICY_SERVICE_URL
+            - name: OID4VP_ISSUER_PROFILE_ID
+              value: "ip-marty-oid4vp-verifier"
+            - name: SIGNING_KEYS_INTERNAL_URL
+              value: "http://gateway:8000/internal/signing-keys"
+            - name: SIGNING_KEYS_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTERNAL_API_KEY
             - name: DEPLOYMENT_PROFILE_SERVICE_URL
               valueFrom:
                 configMapKeyRef:

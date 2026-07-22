@@ -33,6 +33,7 @@ ONE_SHOT_SERVICES = {
     "keycloak-configurator",
     "openbao-init",
 }
+PUBLIC_JWK_PRIVATE_PARAMETERS = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
 LOCAL_BUILD_ARGS = (
     "MARTY_RS_URI",
     "MARTY_RS_DIGEST",
@@ -256,6 +257,69 @@ def project_container_ids(project: str) -> list[str]:
     return [line for line in completed.stdout.splitlines() if line]
 
 
+def issuer_profile_identity(command: list[str]) -> dict[str, Any]:
+    """Resolve the conformance verifier's public identity through its profile.
+
+    The query executes inside the gateway container, so the internal API key is
+    read from that service's environment and is never copied to the host command
+    line or output. Only public DID material crosses the container boundary.
+    """
+    script = """
+import json
+import os
+import urllib.parse
+import urllib.request
+
+profile_id = os.environ.get("OID4VP_ISSUER_PROFILE_ID", "ip-marty-oid4vp-verifier")
+organization_id = os.environ.get("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001")
+api_key = os.environ["SIGNING_KEYS_INTERNAL_API_KEY"]
+query = urllib.parse.urlencode({"organization_id": organization_id})
+request = urllib.request.Request(
+    f"http://127.0.0.1:8000/internal/signing-keys/issuer-profiles/{urllib.parse.quote(profile_id, safe='')}/identity?{query}",
+    headers={"X-Api-Key": api_key, "Accept": "application/json"},
+)
+with urllib.request.urlopen(request, timeout=15) as response:
+    payload = json.loads(response.read().decode("utf-8"))
+if payload.get("issuer_profile_id") != profile_id:
+    raise RuntimeError("issuer-profile identity response did not match the configured profile")
+print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+""".strip()
+    completed = subprocess.run(
+        [*command, "exec", "-T", "gateway", "python", "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode:
+        detail = completed.stderr.strip() or "gateway identity query failed"
+        raise ValueError(f"could not resolve issuer-profile identity: {detail}")
+    try:
+        identity = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError("issuer-profile identity response was not JSON") from exc
+    public_jwk = identity.get("public_jwk") if isinstance(identity, dict) else None
+    if (
+        not isinstance(identity, dict)
+        or not isinstance(identity.get("issuer_profile_id"), str)
+        or not identity.get("issuer_profile_id")
+        or not isinstance(identity.get("issuer_did"), str)
+        or not isinstance(identity.get("verification_method_id"), str)
+        or identity.get("key_purpose") != "oid4vp_request_signing"
+        or identity.get("algorithm") != "ES256"
+        or not isinstance(public_jwk, dict)
+        or public_jwk.get("kty") != "EC"
+        or public_jwk.get("crv") != "P-256"
+        or not isinstance(public_jwk.get("x"), str)
+        or not isinstance(public_jwk.get("y"), str)
+        or PUBLIC_JWK_PRIVATE_PARAMETERS.intersection(public_jwk)
+    ):
+        raise ValueError(
+            "issuer profile did not resolve to the expected public ES256 DID identity"
+        )
+    return identity
+
+
 def container_project(container_id: str) -> str:
     completed = subprocess.run(
         [
@@ -351,7 +415,7 @@ def main() -> int:
     parser.add_argument(
         "--haip",
         action="store_true",
-        help="enable the isolated HAIP verifier profile; requires disposable verifier certificate and signing key",
+        help="enable the isolated HAIP verifier profile; requires a certificate for the configured KMS-backed issuer profile",
     )
     parser.add_argument(
         "--local-build",
@@ -365,7 +429,15 @@ def main() -> int:
     )
     parser.add_argument(
         "command",
-        choices=("bootstrap-reviewer", "config", "up", "ps", "ports", "down"),
+        choices=(
+            "bootstrap-reviewer",
+            "issuer-profile-identity",
+            "config",
+            "up",
+            "ps",
+            "ports",
+            "down",
+        ),
     )
     args = parser.parse_args()
     project = validate_project(args.project)
@@ -395,6 +467,13 @@ def main() -> int:
     ports = validate_isolation(config, project)
     if args.command == "config":
         print(json.dumps(config, indent=2, sort_keys=True))
+        return 0
+    if args.command == "issuer-profile-identity":
+        if not project_container_ids(project):
+            raise ValueError(
+                "issuer-profile-identity requires an existing exact conformance project"
+            )
+        print(json.dumps(issuer_profile_identity(command), sort_keys=True))
         return 0
     if args.command == "up":
         assert_ports_available(ports, project, resume=args.resume)

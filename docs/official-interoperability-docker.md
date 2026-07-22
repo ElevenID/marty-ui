@@ -89,8 +89,11 @@ tester and wallet-kit harness join only `${MARTY_CONFORMANCE_PROJECT}_oidf-runne
 they must never join `marty-network`.
 
 For the OID4VP HAIP verifier plan, add `--haip` to every launcher command and
-supply a fresh `VERIFIER_SIGNING_KEY_PEM` and matching
-`VERIFIER_X509_CERT_PEM`. This selects the separate HAIP overlay, which enables
+issue `VERIFIER_X509_CERT_PEM` for the public key published by the active
+`OID4VP_ISSUER_PROFILE_ID`. Request-object signatures are performed through
+that issuer profile and its DID; the private key remains non-exportable in the
+configured KMS. Do not supply a verifier private key to Compose or the flow
+service. This selects the separate HAIP overlay, which enables
 HAIP only for that disposable deployment and uses `x509_hash` client IDs.
 
 Inspect and remove exactly that project with:
