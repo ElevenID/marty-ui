@@ -2,7 +2,7 @@
   "schema_version": 1,
   "groups": {
     "infra": ["postgres", "redis", "keycloak"],
-    "selfhost_core": ["db-migrate", "keycloak-configurator", "ui", "edge", "cloudflared"],
+    "selfhost_core": ["db-migrate", "issuance-migrations", "keycloak-configurator", "ui", "edge", "cloudflared"],
     "app": [
       "gateway",
       "auth",
@@ -31,6 +31,7 @@
     "keycloak": {"compose_service": "keycloak", "k8s_deployment": "keycloak", "group": "infra", "image_name": "keycloak", "public_image": true},
     "keycloak-configurator": {"compose_service": "keycloak-configurator", "k8s_deployment": "keycloak-configurator", "group": "selfhost_core", "image_name": "keycloak", "public_image": true, "lifecycle": "oneshot"},
     "db-migrate": {"compose_service": "db-migrate", "k8s_deployment": "db-migrate", "group": "selfhost_core", "image_name": "db-migrate", "dockerfile": "services/Dockerfile.migrations", "context": ".", "public_image": true, "lifecycle": "oneshot"},
+    "issuance-migrations": {"compose_service": "issuance-migrations", "k8s_deployment": "issuance-migrations", "group": "selfhost_core", "image_name": "issuance", "artifact_role": "marty-credentials-issuance", "public_image": true, "lifecycle": "oneshot"},
     "ui": {"compose_service": "ui", "k8s_deployment": "ui", "group": "selfhost_core", "image_name": "ui-selfhost", "dockerfile": "ui/Dockerfile.prod", "context": "ui", "public_image": true},
     "edge": {"compose_service": "edge", "k8s_deployment": "edge", "group": "selfhost_core", "image_name": "nginx", "public_image": true},
     "cloudflared": {"compose_service": "cloudflared", "k8s_deployment": "cloudflared", "group": "selfhost_core", "image_name": "cloudflared-wrapper", "public_image": true},

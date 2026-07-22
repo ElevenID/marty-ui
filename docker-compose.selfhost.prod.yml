@@ -188,6 +188,30 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # marty-credentials owns the issuance schema. Apply migrations from the
+  # exact immutable issuance image before its API or worker starts.
+  issuance-migrations:
+    image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        . /app/load-secrets-env.sh
+        exec python manage_migrations.py upgrade
+    environment:
+      <<: *runtime-env
+      DATABASE_URL_TEMPLATE: *database-url-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+    secrets:
+      - marty_db_password
+    volumes:
+      - ./scripts/load-secrets-env.sh:/app/load-secrets-env.sh:ro
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+    restart: "no"
+
   gateway:
     build:
       context: .
@@ -477,6 +501,8 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      issuance-migrations:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
       interval: 30s
@@ -535,6 +561,8 @@ services:
       - token_hmac_key
     depends_on:
       db-migrate:
+        condition: service_completed_successfully
+      issuance-migrations:
         condition: service_completed_successfully
     healthcheck:
       disable: true
@@ -814,7 +842,6 @@ services:
       <<: *runtime-env
       EVENT_STREAM_GRPC_ENABLED: "true"
       EVENT_STREAM_GRPC_PORT: "9015"
-    secrets:
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8015/health"]
       interval: 30s
