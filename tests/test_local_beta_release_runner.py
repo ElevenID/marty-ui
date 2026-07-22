@@ -27,7 +27,7 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     assert '"BAO_TOKEN"' in script
     assert "export_canvas_lti_public_jwks.py" in script
     assert "CANVAS_LTI_TOOL_PUBLIC_JWKS" in script
-    assert "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES" in script
+    assert "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS" in script
     assert "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST" in script
     assert '$env:CANVAS_OAUTH_COMPLETION_REDIRECT_URL = "$BetaOrigin/console/org/deploy/canvas"' in script
     assert 'MARTY_KMS_BOOTSTRAP_ENABLED=$rehearsalKmsEnabled' in script

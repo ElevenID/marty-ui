@@ -58,6 +58,19 @@ def test_exports_only_public_rs256_fields_and_versioned_active_kid() -> None:
     assert not ({"d", "p", "q", "dp", "dq", "qi"} & set(jwks["keys"][0]))
 
 
+def test_exports_active_key_under_issuer_did_verification_method() -> None:
+    verification_method_id = "did:web:issuer.example:orgs:marty#lti-tool-marty-rs256"
+    jwks, active_kid = export_public_jwks(
+        transit_response(),
+        key_name="lti-tool-marty-rs256",
+        verification_method_id=verification_method_id,
+    )
+
+    assert active_kid == verification_method_id
+    assert jwks["keys"][0]["kid"] == verification_method_id
+    assert jwks["keys"][1]["kid"] == "lti-tool-marty-rs256-v1"
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
