@@ -41,7 +41,7 @@
     "i18next-http-backend": "^4.0.0",
     "node-forge": "^1.4.0",
     "qrcode.react": "^4.2.0",
-    "react": "^19.2.7",
+    "react": "^19.2.8",
     "react-dom": "^19.2.7",
     "react-helmet-async": "^3.0.0",
     "react-i18next": "^17.0.10",
