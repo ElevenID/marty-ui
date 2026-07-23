@@ -41,7 +41,7 @@ tenacity>=8.2.0  # Retry logic for service proxying
 # gRPC (inter-service communication)
 grpcio>=1.76.0
 grpcio-tools>=1.76.0
-grpcio-health-checking>=1.76.0
+grpcio-health-checking>=1.82.1
 grpcio-reflection>=1.82.1
 googleapis-common-protos>=1.62.0
 
