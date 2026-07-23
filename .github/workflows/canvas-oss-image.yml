@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 240
     steps:
       - name: Check out acceptance harness
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -83,7 +83,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Check out exact Canvas source
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: instructure/canvas-lms
           ref: ${{ steps.lock.outputs.source_tag }}
@@ -155,7 +155,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=canvas-oss-${{ steps.lock.outputs.source_sha }}
 
       - name: Attest published image digest
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-name: ${{ steps.lock.outputs.image_repo }}
           subject-digest: ${{ steps.build.outputs.digest }}
