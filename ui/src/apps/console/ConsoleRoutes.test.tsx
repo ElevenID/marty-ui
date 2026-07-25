@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Outlet } from 'react-router-dom';
+import { MemoryRouter, Outlet } from 'react-router';
 import { renderWithoutRouter, screen, waitFor } from '@test/utils';
 import type { ReactNode } from 'react';
 

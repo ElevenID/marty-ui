@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 import { waitForFonts } from '../../utils/waitForFonts';
 import i18n from '../../i18n';
 

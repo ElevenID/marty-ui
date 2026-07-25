@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { Alert, Box, Tab, Tabs } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router';
 import VerificationSessionManager from '../../vendor/verification/VerificationSessionManager';
 import CanvasMirrorProvenanceLookup from '../../canvas/CanvasMirrorProvenanceLookup';
 import { ResourcePage } from '../../common';

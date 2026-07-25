@@ -1,5 +1,5 @@
 import { Box, Typography, Button, Paper, Chip } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { DISABLE_PUBLIC_GET_STARTED_BUTTONS, SHOW_PUBLIC_GET_STARTED_BUTTONS } from '@ui-public-config';
 import FutureFeatureButton from '../FutureFeatureButton';
 import { SEOHead, softwareApplicationSchema } from '../seo';

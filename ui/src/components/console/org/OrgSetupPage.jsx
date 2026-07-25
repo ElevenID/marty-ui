@@ -29,7 +29,7 @@ import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
 import CodeIcon from '@mui/icons-material/Code';
-import { useNavigate, Navigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, Navigate, useSearchParams } from 'react-router';
 
 import { getMyOrganizations } from '../../../services/organizationsApi';
 import { useConsole } from '../../../contexts/ConsoleContext';

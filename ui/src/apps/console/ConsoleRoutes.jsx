@@ -1,4 +1,4 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes } from 'react-router';
 import { Box, CircularProgress, Typography } from '@mui/material';
 
 import { get } from '../../services/api';

@@ -1,5 +1,5 @@
 import { Box, Typography, Button } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { SEOHead, softwareApplicationSchema } from '../seo';
 
 function SdJwtVerificationPage() {

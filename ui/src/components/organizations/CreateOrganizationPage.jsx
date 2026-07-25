@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import { Alert, Box, Button, CircularProgress, Container, Paper, Typography } from '@mui/material';
 
 import { createOrganization, getErrorMessage } from '../../services/organizationsApi';

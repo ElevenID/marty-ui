@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderWithoutRouter, screen } from '@test/utils'
-import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { MemoryRouter, Routes, Route } from 'react-router'
 import ProtectedRoute, { AdminRoute, VendorRoute, ApplicantRoute } from '../ProtectedRoute'
 import * as useAuthModule from '@hooks/useAuth'
 

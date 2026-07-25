@@ -19,7 +19,7 @@ import {
   CircularProgress,
   Chip,
 } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import SecurityIcon from '@mui/icons-material/Security';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutlined';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';

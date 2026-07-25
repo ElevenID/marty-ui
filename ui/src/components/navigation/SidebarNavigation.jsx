@@ -6,7 +6,7 @@
  */
 
 import { useState, useMemo, useCallback, useEffect } from 'react';
-import { useLocation, useNavigate, Link } from 'react-router-dom';
+import { useLocation, useNavigate, Link } from 'react-router';
 import {
   Drawer,
   List,
@@ -335,7 +335,11 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
   const handleCollapseToggle = useCallback(() => {
     setCollapsed((prev) => {
       const next = !prev;
-      try { localStorage.setItem('sidebar-collapsed', String(next)); } catch {}
+      try {
+        localStorage.setItem('sidebar-collapsed', String(next));
+      } catch {
+        // Storage can be unavailable in privacy-restricted browser contexts.
+      }
       if (next) setExpandedItems({});
       return next;
     });

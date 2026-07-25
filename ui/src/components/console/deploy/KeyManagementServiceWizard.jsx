@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import {
   Alert,
   Box,
@@ -257,7 +257,7 @@ const KeyManagementServiceWizard = () => {
         }
         return Boolean(data.auth_mode);
       case 2:
-        if (!Boolean(data.key_reference?.trim() || data.key_aliases?.trim())) {
+        if (!(data.key_reference?.trim() || data.key_aliases?.trim())) {
           return false;
         }
         {

@@ -6,7 +6,7 @@
  */
 
 import { createContext, useContext, useState, useCallback } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import PropTypes from 'prop-types';
 import { redirectBrowser, shouldBrowserRedirect } from '../application/routing/appHandoff';
 

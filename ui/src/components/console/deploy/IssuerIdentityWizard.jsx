@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router';
 import {
   Alert,
   Box,
@@ -507,6 +507,7 @@ export default function IssuerIdentityWizard() {
       } catch (err) {
         throw new Error(
           `Key creation failed: ${err?.response?.data?.detail || err?.message || 'The signing service could not create a new key.'}\n\nMake sure the signing service is running and reachable from the gateway.`,
+          { cause: err },
         );
       }
     }
@@ -560,6 +561,7 @@ export default function IssuerIdentityWizard() {
         } catch (err) {
           throw new Error(
             `Issuer profile could not be saved: ${err?.response?.data?.detail || err?.message || 'Unknown error'}. Resolve the issuer profile error before using this identity for credential issuance.`,
+            { cause: err },
           );
         }
       }
@@ -594,6 +596,7 @@ export default function IssuerIdentityWizard() {
       } catch (err) {
         throw new Error(
           `Issuer profile could not be saved: ${err?.response?.data?.detail || err?.message || 'Unknown error'}. Resolve the issuer profile error before using this identity for credential issuance.`,
+          { cause: err },
         );
       }
 

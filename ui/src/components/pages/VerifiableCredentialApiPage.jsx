@@ -6,7 +6,7 @@
  */
 
 import { Box, Typography, Button, Card, CardContent, Grid, List, ListItem, ListItemIcon, ListItemText, Paper, Chip, Divider } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import {
   DISABLE_PUBLIC_GET_STARTED_BUTTONS,
   DISABLE_PUBLIC_PRICING_BUTTONS,

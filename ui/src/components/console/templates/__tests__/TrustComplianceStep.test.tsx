@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { screen, waitFor } from '@testing-library/react'
 import { renderWithoutRouter } from '@test/utils'
 

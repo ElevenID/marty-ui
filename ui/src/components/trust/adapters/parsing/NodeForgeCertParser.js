@@ -52,7 +52,7 @@ class NodeForgeCertParser {
       const cert = forge.pki.certificateFromPem(pemData);
       return this._mapCertToData(cert, pemData, forge);
     } catch (error) {
-      throw new Error(`Failed to parse certificate: ${error.message}`);
+      throw new Error(`Failed to parse certificate: ${error.message}`, { cause: error });
     }
   }
 
@@ -172,7 +172,7 @@ class NodeForgeCertParser {
       const pems = certs.map(cert => forge.pki.certificateToPem(cert));
       return pems.join('\n');
     } catch (error) {
-      throw new Error(`Failed to parse P7B file: ${error.message}`);
+      throw new Error(`Failed to parse P7B file: ${error.message}`, { cause: error });
     }
   }
 

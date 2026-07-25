@@ -5,7 +5,7 @@
  * Redirects to Credential Templates by default.
  */
 
-import { Navigate } from 'react-router-dom';
+import { Navigate } from 'react-router';
 
 function TemplatesPage() {
   return <Navigate to="/console/org/templates/credentials" replace />;

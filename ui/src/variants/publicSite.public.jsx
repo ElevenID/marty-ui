@@ -1,5 +1,5 @@
 import { lazy } from 'react';
-import { Navigate, Route } from 'react-router-dom';
+import { Navigate, Route } from 'react-router';
 import { DISABLE_PUBLIC_GET_STARTED_BUTTONS } from '@ui-public-config';
 import { useAuth } from '../hooks/useAuth';
 import { renderCommercePublicRoutes } from '../extensions/commerce';

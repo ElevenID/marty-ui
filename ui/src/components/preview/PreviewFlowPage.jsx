@@ -6,7 +6,7 @@
  */
 
 import { useAsyncData } from '../../hooks/useAsyncData';
-import { useParams } from 'react-router-dom';
+import { useParams } from 'react-router';
 import { PreviewProvider, usePreview } from '../../contexts/PreviewContext';
 import { Container, Alert, CircularProgress, Typography, Box } from '@mui/material';
 import ApplicationForm from '../applicant/ApplicationForm';
