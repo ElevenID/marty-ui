@@ -16,7 +16,7 @@ import BusinessIcon from '@mui/icons-material/Business';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import PendingIcon from '@mui/icons-material/Pending';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 
 import { membershipHasOrgConsoleAccess } from '../../application/session/authSession';
 

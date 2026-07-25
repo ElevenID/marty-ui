@@ -161,7 +161,7 @@ export async function ensureApplicantProfileForApplication({
         }
 
         if (!applicantId) {
-          throw new Error('Unable to resolve applicant profile');
+          throw new Error('Unable to resolve applicant profile', { cause: error });
         }
       } else {
         throw error;

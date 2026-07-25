@@ -1,5 +1,5 @@
 import { Suspense } from 'react';
-import { BrowserRouter as Router } from 'react-router-dom';
+import { BrowserRouter as Router } from 'react-router';
 import { Box, Typography } from '@mui/material';
 
 import { AuthProvider } from '../../contexts/AuthContext';

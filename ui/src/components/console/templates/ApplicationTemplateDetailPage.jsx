@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router';
 import {
   Alert, Box, Button, Chip, CircularProgress, Container, Dialog, DialogActions,
   DialogContent, DialogTitle, Divider, Paper, Stack, Typography,

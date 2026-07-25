@@ -1,5 +1,5 @@
 import { Box, Divider, Link as MuiLink, Stack, Typography } from '@mui/material';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 
 const footerLinks = [
   { label: 'Privacy Policy', to: '/privacy-policy', testId: 'public-footer-privacy-link' },

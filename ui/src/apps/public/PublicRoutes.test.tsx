@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { renderWithoutRouter, screen } from '@test/utils';
 
 import PublicRoutes from './PublicRoutes';
@@ -81,7 +81,7 @@ vi.mock('../../components/BrowserRedirect', () => ({
 }));
 
 vi.mock('../../components/layouts', async () => {
-  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  const actual = await vi.importActual<typeof import('react-router')>('react-router');
   return {
     PublicLayout: () => (
       <div data-testid="public-layout">

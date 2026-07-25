@@ -5,7 +5,7 @@
  */
 
 import { useAsyncData } from '../../hooks/useAsyncData';
-import { useParams } from 'react-router-dom';
+import { useParams } from 'react-router';
 import { PreviewProvider, usePreview } from '../../contexts/PreviewContext';
 import { Box, Container, Paper, Typography, CircularProgress, Alert } from '@mui/material';
 import PreviewNotFound from './PreviewNotFound';

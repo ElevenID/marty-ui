@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { screen, waitFor } from '@testing-library/react';
 import { renderWithoutRouter } from '../../../test/utils';
 import IssuancePage from './IssuancePage';

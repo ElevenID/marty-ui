@@ -1,7 +1,7 @@
 import { Box, Button, Chip, Divider, Grid, Paper, Typography } from '@mui/material';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import { SEOHead } from '../seo';
 import {
   DEVELOPER_QUICKSTART,

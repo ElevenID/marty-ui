@@ -16,7 +16,7 @@ import {
   Button,
   Skeleton,
 } from '@mui/material';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import BadgeIcon from '@mui/icons-material/Badge';

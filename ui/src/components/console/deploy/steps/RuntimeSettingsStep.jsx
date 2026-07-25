@@ -21,7 +21,7 @@ import {
   CircularProgress,
   Button,
 } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutlined';
 import PolicyIcon from '@mui/icons-material/Policy';
 import { useTranslation } from 'react-i18next';

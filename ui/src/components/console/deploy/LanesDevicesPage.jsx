@@ -32,7 +32,7 @@ import SearchIcon from '@mui/icons-material/Search';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import SettingsIcon from '@mui/icons-material/Settings';
 import DevicesIcon from '@mui/icons-material/Devices';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
 
 import { ResourcePage, AddButton } from '../../common';

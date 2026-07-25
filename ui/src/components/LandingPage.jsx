@@ -6,7 +6,7 @@
  */
 
 import { Suspense, lazy, useEffect, useState } from 'react';
-import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
 import {
   DISABLE_PUBLIC_PRICING_BUTTONS,
   SHOW_PUBLIC_PRICING_BUTTONS,

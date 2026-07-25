@@ -15,7 +15,7 @@ import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstructions';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import GitHubIcon from '@mui/icons-material/GitHub';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 
 const ICON_MAP = {
   'Portability': <PortableWifiOffIcon sx={{ fontSize: 48 }} />,

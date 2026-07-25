@@ -37,7 +37,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import BlockIcon from '@mui/icons-material/Block';
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutlined';
 import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutlined';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useAsyncData } from '../../../hooks/useAsyncData';

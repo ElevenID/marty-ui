@@ -24,7 +24,7 @@ import {
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import { ResourcePage, StatusChip, EmptyState, EmptyStates } from '../../common';
 import { TrustProvider } from '../../trust';

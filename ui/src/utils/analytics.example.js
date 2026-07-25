@@ -6,7 +6,7 @@
 
 // 1. Add imports at the top of App.jsx:
 import { useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 import { initAnalytics, trackPageView, trackWebVitals } from './utils/analytics';
 
 // 2. Inside AppContent function, add these hooks:

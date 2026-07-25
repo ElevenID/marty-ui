@@ -5,7 +5,7 @@
  * Redirects to Flow Definitions by default.
  */
 
-import { Navigate } from 'react-router-dom';
+import { Navigate } from 'react-router';
 
 function FlowsPage() {
   return <Navigate to="/console/org/flows/definitions" replace />;

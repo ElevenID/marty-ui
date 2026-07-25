@@ -8,7 +8,7 @@
  */
 
 import { useState } from 'react';
-import { useParams, useNavigate, Link as RouterLink } from 'react-router-dom';
+import { useParams, useNavigate, Link as RouterLink } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { getFlow, publishFlow, testFlow, validateFlow } from '../../../services/flowsApi';

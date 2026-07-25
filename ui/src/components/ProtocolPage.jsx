@@ -10,7 +10,7 @@ import { Box, Typography, Card, CardContent, CardActionArea, Grid, Paper, Button
 import { SEOHead } from './seo';
 import { protocolSchema } from './seo/structuredData';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';

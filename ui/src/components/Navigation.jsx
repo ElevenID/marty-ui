@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Tabs, Tab, Box, Button } from '@mui/material';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../hooks/useAuth';
 import { PUBLIC_TABS, SHOW_PUBLIC_CTA } from '@ui-public-config';

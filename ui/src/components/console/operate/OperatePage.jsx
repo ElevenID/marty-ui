@@ -5,7 +5,7 @@
  * Redirects to Issuance by default.
  */
 
-import { Navigate } from 'react-router-dom';
+import { Navigate } from 'react-router';
 
 function OperatePage() {
   return <Navigate to="/console/org/operate/issuance" replace />;

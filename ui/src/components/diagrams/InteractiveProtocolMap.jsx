@@ -37,7 +37,7 @@ import SecurityIcon from '@mui/icons-material/Security';
 import SchoolIcon from '@mui/icons-material/School';
 import CodeIcon from '@mui/icons-material/Code';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 
 // ── Node definitions ───────────────────────────────────────────────────────────
 

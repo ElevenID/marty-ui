@@ -21,7 +21,7 @@ import {
   Typography,
 } from '@mui/material';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import { ResourcePage, StatusChip, EmptyState, EmptyStates } from '../../common';
 import { useAsyncData } from '../../../hooks/useAsyncData';

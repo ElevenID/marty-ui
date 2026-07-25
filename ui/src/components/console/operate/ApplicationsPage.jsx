@@ -35,7 +35,7 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ReplayIcon from '@mui/icons-material/Replay';
 import SendIcon from '@mui/icons-material/Send';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useAsyncData } from '../../../hooks/useAsyncData';

@@ -5,7 +5,7 @@
  * Redirects to Trust Profiles by default.
  */
 
-import { Navigate } from 'react-router-dom';
+import { Navigate } from 'react-router';
 
 function TrustPage() {
   return <Navigate to="/console/org/trust/profiles" replace />;

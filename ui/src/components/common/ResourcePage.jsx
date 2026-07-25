@@ -6,7 +6,7 @@
  */
 
 import { Box, Typography, Tabs, Tab, Paper, Breadcrumbs, Link as MuiLink } from '@mui/material';
-import { Link, useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router';
 import NavigateNextIcon from '@mui/icons-material/NavigateNext';
 import BuildButton from './BuildButton';
 

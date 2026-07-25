@@ -277,7 +277,7 @@ export default function MyPage() {
 
 ```jsx
 import { useWizard } from '../hooks/useWizard';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 
 function MyWizard() {
   const navigate = useNavigate();

@@ -26,7 +26,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import PreviewIcon from '@mui/icons-material/Preview';
 import RuleIcon from '@mui/icons-material/Rule';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { listApplicationTemplates } from '../../../services/applicationTemplatesApi';

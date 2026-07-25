@@ -7,7 +7,7 @@
  */
 
 import { useState, useCallback } from 'react';
-import { useNavigate, Link as RouterLink } from 'react-router-dom';
+import { useNavigate, Link as RouterLink } from 'react-router';
 import {
   Alert,
   Box,

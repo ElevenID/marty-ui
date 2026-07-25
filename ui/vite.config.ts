@@ -19,7 +19,7 @@ function createManualChunk(id: string) {
   if (normalizedId.includes('/node_modules/@mui/icons-material/')) return 'mui-icons-vendor'
   if (normalizedId.includes('/node_modules/@mui/x-date-pickers/') || normalizedId.includes('/node_modules/date-fns/')) return 'mui-pickers-vendor'
   if (normalizedId.includes('/node_modules/@mui/') || normalizedId.includes('/node_modules/@popperjs/core/')) return 'mui-core-vendor'
-  if (normalizedId.includes('/node_modules/react/') || normalizedId.includes('/node_modules/react-dom/') || normalizedId.includes('/node_modules/react-router-dom/')) return 'react-vendor'
+  if (normalizedId.includes('/node_modules/react/') || normalizedId.includes('/node_modules/react-dom/') || normalizedId.includes('/node_modules/react-router/')) return 'react-vendor'
   if (normalizedId.includes('/node_modules/recharts/')) return 'chart-vendor'
   if (normalizedId.includes('/node_modules/i18next/') || normalizedId.includes('/node_modules/react-i18next/')) return 'i18n-vendor'
   if (normalizedId.includes('/node_modules/qrcode.react/')) return 'qr-vendor'
@@ -201,12 +201,12 @@ export default defineConfig(async ({ mode }) => {
       },
       // Force all react-* and router packages to resolve to a single copy from this
       // project root. This prevents duplicate instances when @elevenid/marty-blog
-      // local package) carries its own node_modules with react-router-dom – which would
+      // local package) carries its own node_modules with react-router – which would
       // create a second RouterContext that has no access to the outer <BrowserRouter>.
-      dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router-dom', 'react-router'],
+      dedupe: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router'],
     },
     optimizeDeps: {
-      include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router-dom'],
+      include: ['react', 'react-dom', 'react/jsx-runtime', 'react/jsx-dev-runtime', 'react-router'],
       exclude: isSelfhostBuild ? [] : ['@elevenid/marty-blog'],
     },
     plugins: [

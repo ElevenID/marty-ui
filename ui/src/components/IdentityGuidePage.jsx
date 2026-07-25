@@ -12,7 +12,7 @@ import { IDENTITY_CONCEPTS } from '../data/marketingContent';
 import { TrustModelDiagram, IdentityTransactionDiagram, CredentialFlowDiagram } from './diagrams';
 import Button from '@mui/material/Button';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 
 function IdentityGuidePage() {
   const navigate = useNavigate();

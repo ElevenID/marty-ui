@@ -5,7 +5,7 @@
  * Redirects to login if not authenticated, or to home if unauthorized.
  */
 
-import { Navigate, useLocation } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router';
 import { CircularProgress, Box, Typography } from '@mui/material';
 import { useAuth } from '../hooks/useAuth';
 import { useConsole } from '../contexts/ConsoleContext';

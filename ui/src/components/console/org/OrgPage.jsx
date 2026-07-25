@@ -5,7 +5,7 @@
  * Redirects to Organization Settings by default.
  */
 
-import { Navigate } from 'react-router-dom';
+import { Navigate } from 'react-router';
 
 function OrgPage() {
   return <Navigate to="/console/org/settings" replace />;

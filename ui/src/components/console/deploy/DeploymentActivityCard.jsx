@@ -22,7 +22,7 @@ import {
   Skeleton,
   Tooltip,
 } from '@mui/material';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import QrCode2Icon from '@mui/icons-material/QrCode2';

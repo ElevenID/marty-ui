@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 import { Box, CircularProgress, Typography } from '@mui/material';
 import { redirectBrowser } from '../application/routing/appHandoff';
 

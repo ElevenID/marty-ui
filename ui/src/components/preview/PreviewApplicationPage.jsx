@@ -6,7 +6,7 @@
  */
 
 import { useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams } from 'react-router';
 import { PreviewProvider, usePreview } from '../../contexts/PreviewContext';
 import ApplicationForm from '../applicant/ApplicationForm';
 

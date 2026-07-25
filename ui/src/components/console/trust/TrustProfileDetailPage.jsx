@@ -10,7 +10,7 @@
 
 import { useState, useCallback } from 'react';
 import { useAsyncData } from '../../../hooks/useAsyncData';
-import { useParams, useNavigate, Link as RouterLink } from 'react-router-dom';
+import { useParams, useNavigate, Link as RouterLink } from 'react-router';
 import {
   Box,
   Button,

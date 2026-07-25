@@ -14,7 +14,7 @@ import {
   Chip,
   CircularProgress,
 } from '@mui/material';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import WarningIcon from '@mui/icons-material/Warning';

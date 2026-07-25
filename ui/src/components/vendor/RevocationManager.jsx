@@ -255,7 +255,7 @@ function BatchRevokeDialog({ open, onClose, onBatchRevoke }) {
 /**
  * Active Credentials Tab
  */
-function ActiveCredentialsTab({ organizationId }) {
+function ActiveCredentialsTab({ organizationId, showSuccess, showError }) {
   const { t } = useTranslation('vendor');
   const [credentials, setCredentials] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -616,7 +616,11 @@ export default function RevocationManager() {
       </Tabs>
 
       <TabPanel value={currentTab} index={0}>
-        <ActiveCredentialsTab organizationId={organizationId} />
+        <ActiveCredentialsTab
+          organizationId={organizationId}
+          showSuccess={showSuccess}
+          showError={showError}
+        />
       </TabPanel>
 
       <TabPanel value={currentTab} index={1}>

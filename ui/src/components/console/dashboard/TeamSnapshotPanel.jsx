@@ -24,7 +24,7 @@ import {
   Tooltip,
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import PersonAddIcon from '@mui/icons-material/PersonAdd';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import CodeIcon from '@mui/icons-material/Code';
