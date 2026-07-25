@@ -12,7 +12,7 @@
  */
 
 import { createContext, useState, useEffect, useCallback, useContext, useMemo } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import { getPreferences, updatePreferences } from '../services/preferencesApi';
 import { getMyOrganizations } from '../services/organizationsApi';
 import { AuthContext } from './AuthContext';

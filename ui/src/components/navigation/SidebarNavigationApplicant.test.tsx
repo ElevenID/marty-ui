@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { renderWithoutRouter, screen, waitFor } from '../../test/utils';
 import SidebarNavigation from './SidebarNavigation';
 

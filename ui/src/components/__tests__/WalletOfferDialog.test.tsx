@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { renderWithoutRouter, screen, waitFor } from '../../test/utils'
 import WalletOfferDialog from '../applicant/WalletOfferDialog'
 import { generateIssuanceOffer } from '../../services/credentialsApi'

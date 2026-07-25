@@ -38,8 +38,8 @@ vi.mock('../../../../services/presentationPolicyApi', () => ({
   updateTrustProfile: (...args: unknown[]) => updateTrustProfile(...args),
 }))
 
-vi.mock('react-router-dom', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('react-router-dom')>()
+vi.mock('react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react-router')>()
   return {
     ...actual,
     useParams: () => ({ id: 'profile-1' }),

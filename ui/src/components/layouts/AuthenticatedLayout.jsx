@@ -6,7 +6,7 @@
  */
 
 import { useState } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router';
 import { Box, Button, Alert, Typography, useTheme, useMediaQuery } from '@mui/material';
 import { SidebarNavigation } from '../navigation/index.js';
 import { ConsoleHeaderBar } from '../navigation/ConsoleHeaderBar';

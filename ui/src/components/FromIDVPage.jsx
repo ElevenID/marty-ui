@@ -8,7 +8,7 @@
 import { Box, Typography, Paper, Card, CardContent, Grid, List, ListItem, ListItemIcon, ListItemText, Divider, Button } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { SEOHead } from './seo';
 import { articleSchema, breadcrumbListSchema } from './seo/structuredData';
 import { useBranding } from '../hooks/useBranding';

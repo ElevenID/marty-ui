@@ -6,7 +6,7 @@
  * Adds smooth scrolling and proper spacing for sticky nav.
  */
 
-import { Outlet } from 'react-router-dom';
+import { Outlet } from 'react-router';
 import { Container, Box } from '@mui/material';
 import Navigation from '../Navigation';
 import PublicFooter from './PublicFooter';

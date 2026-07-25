@@ -1,7 +1,7 @@
 import { Box, Typography, Paper, Grid, Button, Divider } from '@mui/material';
 import { SEOHead } from '../seo';
 import { articleSchema, breadcrumbListSchema } from '../seo/structuredData';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import SearchIcon from '@mui/icons-material/Search';
 
 function WhatIsCredentialVerificationPage() {

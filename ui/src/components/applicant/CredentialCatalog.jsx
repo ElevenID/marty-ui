@@ -46,7 +46,7 @@ import CheckIcon from '@mui/icons-material/CheckCircle';
 import PendingIcon from '@mui/icons-material/Schedule';
 import BusinessIcon from '@mui/icons-material/Business';
 import VerifiedIcon from '@mui/icons-material/Verified';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../hooks/useAuth';
 import { usePreview } from '../../contexts/PreviewContext';

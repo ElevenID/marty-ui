@@ -20,7 +20,7 @@ import {
   Button,
   Chip,
 } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import SecurityIcon from '@mui/icons-material/Security';
 import AddCircleOutlineIcon from '@mui/icons-material/AddCircleOutlined';
 import LanguageIcon from '@mui/icons-material/Language';

@@ -22,7 +22,7 @@ import {
   ListItemIcon,
   ListItemText,
 } from '@mui/material';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import BadgeIcon from '@mui/icons-material/Badge';
 import AssignmentIcon from '@mui/icons-material/Assignment';

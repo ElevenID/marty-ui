@@ -8,7 +8,7 @@ import IntegrationInstructionsIcon from '@mui/icons-material/IntegrationInstruct
 import SchemaIcon from '@mui/icons-material/Schema';
 import PolicyIcon from '@mui/icons-material/Policy';
 import TerminalIcon from '@mui/icons-material/Terminal';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 
 const capabilities = [
   {

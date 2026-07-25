@@ -1,6 +1,6 @@
 import { Suspense } from 'react';
 import { render, screen } from '@testing-library/react';
-import { MemoryRouter, Routes } from 'react-router-dom';
+import { MemoryRouter, Routes } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../components/pages/LegalPages', () => ({

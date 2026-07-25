@@ -18,7 +18,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import SyncAltIcon from '@mui/icons-material/SyncAlt';
 import WalletIcon from '@mui/icons-material/AccountBalanceWallet';
 import WarningIcon from '@mui/icons-material/Warning';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router';
 import { useMemo, useState } from 'react';
 
 import { ResourcePage } from '../../common';

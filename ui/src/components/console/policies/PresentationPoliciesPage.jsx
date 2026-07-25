@@ -27,7 +27,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import QrCodeIcon from '@mui/icons-material/QrCode';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 import { useConsole } from '../../../contexts/ConsoleContext';

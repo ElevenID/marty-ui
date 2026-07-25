@@ -22,7 +22,7 @@ import {
   Chip,
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 
 import { useAuth } from '../../hooks/useAuth';

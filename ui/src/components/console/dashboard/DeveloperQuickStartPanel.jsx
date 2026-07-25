@@ -23,7 +23,7 @@ import {
   CircularProgress,
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import CodeIcon from '@mui/icons-material/Code';

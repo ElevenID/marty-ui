@@ -38,7 +38,7 @@ import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import EmailIcon from '@mui/icons-material/Email';
 import PublicIcon from '@mui/icons-material/Public';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 
 import { discoverOrganizations } from '../../services/organizationsApi';
 

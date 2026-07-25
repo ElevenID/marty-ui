@@ -15,7 +15,7 @@
  */
 
 import { useEffect } from 'react';
-import { useParams, useSearchParams, useNavigate, useLocation } from 'react-router-dom';
+import { useParams, useSearchParams, useNavigate, useLocation } from 'react-router';
 import { Box, CircularProgress, Typography, Container, Paper, Alert } from '@mui/material';
 import { useAuth } from '../hooks/useAuth';
 import {

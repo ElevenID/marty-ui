@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router';
 import { renderWithRouter, screen, waitFor } from '@test/utils';
 
 import ApplicationTemplateDetailPage from './ApplicationTemplateDetailPage';

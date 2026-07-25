@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { Box, CircularProgress, Typography, Alert } from '@mui/material';
 import { useAuth } from '../hooks/useAuth';
 import { useConsole, getDefaultLandingPath } from '../contexts/ConsoleContext';

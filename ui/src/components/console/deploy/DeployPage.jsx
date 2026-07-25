@@ -5,7 +5,7 @@
  * Redirects to Deployment Profiles by default.
  */
 
-import { Navigate } from 'react-router-dom';
+import { Navigate } from 'react-router';
 
 function DeployPage() {
   return <Navigate to="/console/org/deploy/profiles" replace />;

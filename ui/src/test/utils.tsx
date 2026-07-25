@@ -9,7 +9,7 @@
 
 import { ReactElement } from 'react'
 import { render as rtlRender, RenderOptions } from '@testing-library/react'
-import { BrowserRouter, MemoryRouter } from 'react-router-dom'
+import { BrowserRouter, MemoryRouter } from 'react-router'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
 import { NotificationProvider } from '../contexts/NotificationContext'
 import userEvent from '@testing-library/user-event'

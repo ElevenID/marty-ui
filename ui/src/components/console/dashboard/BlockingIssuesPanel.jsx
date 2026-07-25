@@ -15,7 +15,7 @@ import {
   Button,
   Box,
 } from '@mui/material';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import WarningIcon from '@mui/icons-material/Warning';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { useTranslation } from 'react-i18next';

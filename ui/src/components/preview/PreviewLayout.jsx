@@ -6,7 +6,7 @@
  */
 
 import { Box } from '@mui/material';
-import { Outlet } from 'react-router-dom';
+import { Outlet } from 'react-router';
 import PreviewModeBanner from '../common/PreviewModeBanner';
 import { usePreview } from '../../contexts/PreviewContext';
 

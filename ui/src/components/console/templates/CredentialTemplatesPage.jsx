@@ -29,7 +29,7 @@ import AddIcon from '@mui/icons-material/Add';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import WarningIcon from '@mui/icons-material/Warning';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
 import { useAuth } from '../../../hooks/useAuth';

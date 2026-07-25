@@ -116,7 +116,7 @@ VITE_GA_MEASUREMENT_ID=G-XXXXXXXXXX
 In `ui/src/App.jsx`, add:
 ```javascript
 import { useEffect } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 import { initAnalytics, trackPageView, trackWebVitals } from './utils/analytics';
 
 function App() {
