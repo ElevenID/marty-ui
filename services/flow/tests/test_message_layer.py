@@ -1962,6 +1962,25 @@ def test_select_vp_token_unwraps_descriptor_map_payload():
     assert _select_vp_token_for_evaluation(wrapped) == token
 
 
+def test_select_vp_token_unwraps_unprefixed_dcql_mdoc_device_response():
+    # Minimal structural DeviceResponse envelope. The downstream Rust verifier
+    # remains responsible for complete CBOR and cryptographic validation.
+    device_response = bytes.fromhex(
+        "a36776657273696f6e63312e3069646f63756d656e747381a06673746174757300"
+    )
+    token = base64.urlsafe_b64encode(device_response).rstrip(b"=").decode()
+    wrapped = json.dumps({"org.iso.18013.5.1.mDL": [token]})
+
+    assert _select_vp_token_for_evaluation(wrapped) == token
+
+
+def test_select_vp_token_does_not_treat_arbitrary_base64url_as_mdoc():
+    token = base64.urlsafe_b64encode(b"not-a-device-response").rstrip(b"=").decode()
+    wrapped = json.dumps({"untrusted": [token]})
+
+    assert _select_vp_token_for_evaluation(wrapped) == wrapped
+
+
 def test_dcql_claims_include_required_direct_sd_jwt_paths():
     descriptor = {
         "constraints": {
