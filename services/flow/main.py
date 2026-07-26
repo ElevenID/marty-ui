@@ -4541,23 +4541,6 @@ async def get_oid4vp_did_web_document(request: Request) -> JSONResponse:
     )
 
 
-def _base58_decode(s: str) -> bytes:
-    """Base58btc decode (Bitcoin alphabet)."""
-    ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-    num = 0
-    for char in s:
-        num = num * 58 + ALPHABET.index(char)
-    # Determine byte count
-    pad = 0
-    for char in s:
-        if char == "1":
-            pad += 1
-        else:
-            break
-    result = num.to_bytes((num.bit_length() + 7) // 8, "big") if num else b""
-    return b"\x00" * pad + result
-
-
 def _base58_encode(data: bytes) -> str:
     """Base58btc encode (Bitcoin alphabet)."""
     ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
@@ -4958,113 +4941,6 @@ def _oid4vp_client_metadata(
     return metadata
 
 
-def _resolve_did_key_to_ed25519_pubkey(did: str) -> bytes | None:
-    """Resolve a did:key to its raw Ed25519 public key bytes (32 bytes).
-
-    Returns None if the DID is not an Ed25519 did:key.
-    Supports the multibase 'z' prefix (base58btc) + multicodec 0xed01 prefix.
-    """
-    if not did.startswith("did:key:z"):
-        return None
-    multibase_encoded = did[len("did:key:z") :]
-    try:
-        multicodec_bytes = _base58_decode(multibase_encoded)
-    except (ValueError, IndexError):
-        return None
-    # Ed25519 multicodec prefix: 0xed 0x01 (varint for 0x1300? No — 0xed01 as two bytes)
-    if len(multicodec_bytes) < 2 or multicodec_bytes[:2] != b"\xed\x01":
-        return None
-    return multicodec_bytes[2:]  # 32-byte Ed25519 public key
-
-
-def _verify_vp_jwt_signature(vp_token: str) -> bool:
-    """Verify the Ed25519 holder signature on a VP JWT when we can.
-
-    Returns True if the signature is valid, False otherwise. Unsupported holder
-    DID methods/algorithms are deferred to downstream policy verification.
-
-    SD-JWT presentations are shaped as issuer-jwt~disclosures~kb-jwt. The
-    holder proof is the key-binding JWT at the end, not the first issuer JWT.
-    """
-    import base64 as _b64
-
-    def _b64decode_unpadded(s: str) -> bytes:
-        s = s.replace("-", "+").replace("_", "/")
-        padding = 4 - len(s) % 4
-        if padding != 4:
-            s += "=" * padding
-        return _b64.b64decode(s)
-
-    # Plain JWT VPs carry the holder signature directly. SD-JWT VPs carry it
-    # in the final key-binding JWT.
-    def _looks_like_jwt(value: str) -> bool:
-        return len(value.split(".")) == 3
-
-    jwt_part = vp_token.strip()
-    if "~" in vp_token:
-        parts = [part.strip() for part in vp_token.split("~") if part.strip()]
-        jwt_part = ""
-        for part in reversed(parts[1:]):
-            if _looks_like_jwt(part):
-                jwt_part = part
-                break
-        if not jwt_part:
-            logger.debug(
-                "SD-JWT VP has no key-binding JWT; deferring holder signature verification"
-            )
-            return True
-    segments = jwt_part.split(".")
-    if len(segments) != 3:
-        return False  # Malformed JWT
-
-    try:
-        header = json.loads(_b64decode_unpadded(segments[0]))
-        payload = json.loads(_b64decode_unpadded(segments[1]))
-    except Exception:
-        logger.debug("VP JWT header/payload decode failed", exc_info=True)
-        return False  # Undecodable header/payload
-
-    alg = str(header.get("alg") or "")
-    if alg.lower() == "none":
-        logger.debug("VP signature check skipped: unsigned test JWT")
-        return True
-    if alg and alg != "EdDSA":
-        logger.debug("VP signature check skipped: unsupported JWT alg %s", alg)
-        return True
-
-    # Prefer kid because KB-JWT iss values vary by wallet, while kid identifies
-    # the holder proof key.
-    iss = payload.get("iss", "")
-    kid = header.get("kid", "")
-    # kid may be "did:key:z...#fragment" — strip the fragment
-    did = (
-        kid.split("#")[0] if isinstance(kid, str) and kid.startswith("did:key:") else ""
-    )
-    if not did and isinstance(iss, str) and iss.startswith("did:key:"):
-        did = iss.split("#")[0]
-
-    pubkey_bytes = _resolve_did_key_to_ed25519_pubkey(did)
-    if pubkey_bytes is None:
-        # Not a did:key — skip verification (other DID methods not yet supported)
-        logger.debug(f"VP signature check skipped: not a did:key DID ({did})")
-        return True
-
-    try:
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-        from cryptography.exceptions import InvalidSignature
-
-        public_key = Ed25519PublicKey.from_public_bytes(pubkey_bytes)
-        signing_input = f"{segments[0]}.{segments[1]}".encode()
-        signature = _b64decode_unpadded(segments[2])
-        public_key.verify(signature, signing_input)
-        return True
-    except InvalidSignature:
-        return False
-    except Exception as exc:
-        logger.warning(f"VP signature verification error (skipping): {exc}")
-        return True  # Don't reject on unexpected verification errors
-
-
 def _select_vp_token_for_evaluation(vp_token: str) -> str:
     """Extract the actual credential token from OID4VP descriptor wrappers.
 
@@ -5119,81 +4995,6 @@ def _select_vp_token_for_evaluation(vp_token: str) -> str:
         return None
 
     return _walk(parsed) or vp_token
-
-
-def _extract_claims_from_vp_token(vp_token: str) -> dict:
-    """
-    Best-effort claim extraction from a VP token without full cryptographic verification.
-
-    For SD-JWT VCs (``<header>.<payload>.<signature>~<disclosure1>~...``):
-      - Decode the JWT payload to get base claims
-      - Decode each ``~``-separated disclosure (base64url JSON arrays of
-        ``[salt, claim_name, claim_value]``) and merge into the result
-
-    For plain JWT VPs (3-part dot-separated), decode the payload directly.
-
-    Both paths skip signature verification — the presentation-policy service
-    is responsible for cryptographic validation.  This function is used only
-    as a fallback when the policy service is unreachable.
-    """
-    import base64 as _b64
-
-    def _b64decode_unpadded(s: str) -> bytes:
-        s = s.replace("-", "+").replace("_", "/")
-        padding = 4 - len(s) % 4
-        if padding != 4:
-            s += "=" * padding
-        return _b64.b64decode(s)
-
-    claims: dict = {}
-    try:
-        # SD-JWT: split on ~ to separate JWT from disclosures
-        parts = vp_token.split("~")
-        jwt_part = parts[0]
-
-        # Decode JWT payload (ignore header + signature)
-        jwt_segments = jwt_part.split(".")
-        if len(jwt_segments) >= 2:
-            payload_bytes = _b64decode_unpadded(jwt_segments[1])
-            payload = json.loads(payload_bytes)
-            # Strip SD-JWT-specific internal claims
-            for k, v in payload.items():
-                if k not in (
-                    "_sd",
-                    "_sd_alg",
-                    "aud",
-                    "cnf",
-                    "exp",
-                    "iat",
-                    "iss",
-                    "jti",
-                    "nbf",
-                    "nonce",
-                    "state",
-                ):
-                    claims[k] = v
-
-        # Decode SD-JWT disclosures: each is base64url([salt, name, value])
-        for disclosure in parts[1:]:
-            if not disclosure:
-                continue
-            try:
-                decoded = json.loads(_b64decode_unpadded(disclosure))
-                if isinstance(decoded, list) and len(decoded) == 3:
-                    _salt, claim_name, claim_value = decoded
-                    claims[claim_name] = claim_value
-            except Exception:
-                logger.debug(
-                    "Failed to decode SD-JWT disclosure: %s",
-                    disclosure[:50],
-                    exc_info=True,
-                )
-                continue
-
-    except Exception as exc:
-        logger.debug(f"Could not extract claims from VP token: {exc}")
-
-    return claims
 
 
 def _parse_presentation_submission(
@@ -5444,83 +5245,12 @@ async def _submit_verification_response_internal(
     if vp_token != raw_vp_token:
         logger.info("Unwrapped OID4VP descriptor-map vp_token for policy evaluation")
 
+    # The flow service owns OID4VP transport and replay state. It deliberately
+    # does not decode unverified JWT/CBOR claims or implement a partial
+    # algorithm allowlist. The presentation-policy service is the sole
+    # cryptographic verifier for SD-JWT, JWT VC, Data Integrity and mdoc, and
+    # receives the exact nonce and audience from this flow below.
     expected_nonce = instance.context.get("nonce")
-    if expected_nonce:
-        # MIP §26: reject replayed nonces
-        if not await _check_nonce(expected_nonce):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "nonce_reused",
-                    "error_description": "This nonce has already been used",
-                },
-            )
-        try:
-            # SD-JWT VP token structure: issuer-jwt~disclosure1~...~kb-jwt
-            # The nonce lives in the Key Binding JWT (last segment after ~),
-            # NOT in the issuer JWT (first segment).  Fall back to checking
-            # the issuer JWT payload for non-SD-JWT VP tokens.
-            #
-            # mDoc VP tokens are CBOR-encoded (not JWT) — the nonce lives in
-            # the DeviceAuthentication CBOR structure.  We skip inline nonce
-            # checking for non-JWT token formats and let the downstream
-            # presentation-policy service validate the nonce during evaluation.
-            _parts = vp_token.split("~")
-            _first_segment = _parts[0].strip()
-            _is_jwt_based = (
-                "." in _first_segment and len(_first_segment.split(".")) >= 3
-            )
-
-            if _is_jwt_based:
-                vp_nonce = None
-
-                # Try the KB-JWT (last non-empty segment) first
-                _kb_jwt_part = _parts[-1].strip() if len(_parts) > 1 else ""
-                if _kb_jwt_part:
-                    _kb_segments = _kb_jwt_part.split(".")
-                    if len(_kb_segments) >= 2:
-                        _pad = _kb_segments[1] + "=" * (4 - len(_kb_segments[1]) % 4)
-                        _kb_payload = json.loads(base64.urlsafe_b64decode(_pad))
-                        vp_nonce = _kb_payload.get("nonce")
-
-                # Fall back to the issuer JWT payload (for non-SD-JWT tokens)
-                if vp_nonce is None:
-                    _jwt_part = _parts[0]
-                    _segments = _jwt_part.split(".")
-                    if len(_segments) >= 2:
-                        _pad = _segments[1] + "=" * (4 - len(_segments[1]) % 4)
-                        _payload = json.loads(base64.urlsafe_b64decode(_pad))
-                        vp_nonce = _payload.get("nonce")
-
-                if vp_nonce != expected_nonce:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Nonce mismatch: VP nonce does not match the authorization request nonce",
-                    )
-            else:
-                # Non-JWT format (mDoc/CBOR) — nonce is in the CBOR DeviceAuthentication
-                # structure.  Defer nonce validation to the presentation-policy service.
-                logger.info(
-                    "VP token is non-JWT (likely mDoc); deferring nonce check to policy service"
-                )
-        except HTTPException:
-            raise
-        except Exception:
-            logger.debug(
-                "VP nonce decode failed; will be verified by policy service",
-                exc_info=True,
-            )
-
-    # OID4VP 1.0 Final §8.6: verify holder signature on VP JWT
-    # For non-JWT formats (mDoc/CBOR), the signature is a COSE_Sign1 structure
-    # inside the DeviceResponse — defer verification to the policy service.
-    _first_seg = vp_token.split("~")[0].strip()
-    _looks_like_jwt = "." in _first_seg and len(_first_seg.split(".")) >= 3
-    if _looks_like_jwt and not _verify_vp_jwt_signature(vp_token):
-        raise HTTPException(
-            status_code=400,
-            detail="VP signature verification failed: invalid holder signature",
-        )
 
     # Store the presentation
     instance.context["vp_token"] = vp_token
@@ -5601,11 +5331,14 @@ async def _submit_verification_response_internal(
                     decision_reason or "<none>",
                 )
             else:
-                logger.warning(
-                    f"Policy evaluation returned empty result for {instance_id}; "
-                    f"falling back to VP token claim extraction"
+                logger.error(
+                    "Policy evaluation returned no decision for %s; denying",
+                    instance_id,
                 )
-                verified_claims = _extract_claims_from_vp_token(vp_token)
+                evaluation_result = "failed"
+                evaluation_decision = "deny"
+                decision_reason = "Policy service returned no verification decision"
+                verified_claims = {}
         except Exception as exc:
             # MIP §5.7.3: trust evaluation MUST be executed — failing open is prohibited.
             logger.error(
@@ -5616,7 +5349,32 @@ async def _submit_verification_response_internal(
             decision_reason = f"Policy service unavailable: {exc}"
             verified_claims = {}
     else:
-        verified_claims = _extract_claims_from_vp_token(vp_token)
+        logger.error(
+            "Verification flow %s has no presentation policy; denying",
+            instance_id,
+        )
+        evaluation_result = "failed"
+        evaluation_decision = "deny"
+        decision_reason = "A presentation policy is required for verification"
+        verified_claims = {}
+
+    # Mark the challenge used only after the authoritative verifier has
+    # accepted the cryptographic presentation. Invalid signatures must not be
+    # able to consume a legitimate wallet's nonce. SET NX keeps concurrent
+    # submissions atomic across replicas and rejects the second response.
+    if (
+        expected_nonce
+        and evaluation_result == "passed"
+        and evaluation_decision == "allow"
+        and not await _check_nonce(expected_nonce)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "nonce_reused",
+                "error_description": "This nonce has already been used",
+            },
+        )
 
     instance.status = FlowInstanceStatus.COMPLETED
     instance.completed_at = datetime.now(timezone.utc)

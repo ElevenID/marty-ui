@@ -27,7 +27,6 @@ from flow.main import (
     StartVerificationFlowRequest,
     DigitalCredentialSubmissionRequest,
     InMemoryFlowRepository,
-    _base58_encode,
     _build_openid4vp_mdoc_session_transcript,
     _build_presentation_definition,
     _create_oid4vci_artifact,
@@ -36,7 +35,6 @@ from flow.main import (
     _oid4vp_did_web_document,
     _select_vp_token_for_evaluation,
     _validate_credential_layer_references,
-    _verify_vp_jwt_signature,
     handle_application_approved,
     get_verification_request_object,
     submit_digital_credential_response,
@@ -447,6 +445,32 @@ def _install_reference_validation_stubs(monkeypatch, *, templates, policies):
     monkeypatch.setattr("flow.main.app.state.pp_grpc_channel", object(), raising=False)
 
 
+def _install_accepting_evaluation_stub(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    claims: dict | None = None,
+) -> None:
+    verified_claims = claims or {"given_name": "Marty"}
+
+    class FakePresentationPolicyStub:
+        def __init__(self, _channel):
+            pass
+
+        async def EvaluatePresentation(self, _request):
+            return SimpleNamespace(
+                result="passed",
+                decision="allow",
+                decision_reason="Cryptographic presentation accepted",
+                verified_claims_json=json.dumps(verified_claims),
+            )
+
+    monkeypatch.setattr(
+        "marty_proto.v1.presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub",
+        FakePresentationPolicyStub,
+    )
+    monkeypatch.setattr("flow.main.app.state.pp_grpc_channel", object(), raising=False)
+
+
 class _FakeMembership:
     def __init__(self, permissions: set[str] | None = None):
         self.permissions = permissions or set()
@@ -480,26 +504,6 @@ def _install_org_client(monkeypatch, *, permissions: set[str]):
         flow_main, "get_organization_client", _fake_get_organization_client
     )
     return org_client
-
-
-def _ed25519_did_key(public_key) -> str:
-    serialization = pytest.importorskip("cryptography.hazmat.primitives.serialization")
-    public_bytes = public_key.public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
-    )
-    multicodec = b"\xed\x01" + public_bytes
-    return f"did:key:z{_base58_encode(multicodec)}"
-
-
-def _signed_eddsa_jwt(payload: dict, private_key, did: str) -> str:
-    header = _jwt_segment(
-        {"alg": "EdDSA", "kid": f"{did}#{did.removeprefix('did:key:')}"}
-    )
-    body = _jwt_segment(payload)
-    signing_input = f"{header}.{body}".encode()
-    signature = private_key.sign(signing_input)
-    return f"{header}.{body}.{_raw_segment(signature)}"
 
 
 def _encrypted_dc_api_response(payload: dict, public_jwk: dict) -> str:
@@ -1769,14 +1773,17 @@ async def test_post_request_uri_binds_wallet_nonce_to_signed_request(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_submit_verification_response_decrypts_per_flow_direct_post_jwt():
+async def test_submit_verification_response_decrypts_per_flow_direct_post_jwt(
+    monkeypatch,
+):
+    _install_accepting_evaluation_stub(monkeypatch, claims={"given_name": "HAIP"})
     repo = InMemoryFlowRepository()
     public_jwk, private_jwk = flow_main._new_haip_response_encryption_key()
     instance = FlowInstance(
         flow_definition_id="__verification__",
         organization_id="org-1",
         status=FlowInstanceStatus.AWAITING_WALLET,
-        context={"nonce": "nonce-haip"},
+        context={"nonce": "nonce-haip", "presentation_policy_id": "policy-1"},
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     instance.context[
@@ -2004,51 +2011,6 @@ def test_oid4vp_did_web_document_exposes_verifier_key(
     assert verification_method["publicKeyJwk"]["kty"] == "EC"
     assert document["authentication"] == [verification_method["id"]]
     assert document["assertionMethod"] == [verification_method["id"]]
-
-
-def test_vp_signature_check_uses_sd_jwt_key_binding_jwt():
-    ed25519 = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.ed25519")
-
-    holder_key = ed25519.Ed25519PrivateKey.generate()
-    holder_did = _ed25519_did_key(holder_key.public_key())
-    issuer_jwt_with_bad_signature = (
-        f"{_jwt_segment({'alg': 'EdDSA', 'kid': f'{holder_did}#issuer'})}."
-        f"{_jwt_segment({'iss': holder_did, 'vct': 'https://marty.example/credentials/MemberCredential'})}."
-        "not-a-valid-signature"
-    )
-    disclosure = _raw_segment(
-        json.dumps(["salt", "email", "holder@example.test"]).encode()
-    )
-    key_binding_jwt = _signed_eddsa_jwt(
-        {
-            "nonce": "nonce-xyz",
-            "aud": "https://beta.elevenidllc.com/v1/flows/instances/1/submit",
-        },
-        holder_key,
-        holder_did,
-    )
-
-    assert (
-        _verify_vp_jwt_signature(
-            f"{issuer_jwt_with_bad_signature}~{disclosure}~{key_binding_jwt}"
-        )
-        is True
-    )
-
-
-def test_vp_signature_check_rejects_invalid_key_binding_jwt_signature():
-    ed25519 = pytest.importorskip("cryptography.hazmat.primitives.asymmetric.ed25519")
-
-    holder_key = ed25519.Ed25519PrivateKey.generate()
-    holder_did = _ed25519_did_key(holder_key.public_key())
-    issuer_jwt = (
-        f"{_jwt_segment({'alg': 'none'})}."
-        f"{_jwt_segment({'iss': 'did:web:beta.elevenidllc.com:orgs:marty'})}."
-    )
-    valid_kb_jwt = _signed_eddsa_jwt({"nonce": "nonce-xyz"}, holder_key, holder_did)
-    invalid_kb_jwt = f"{valid_kb_jwt.rsplit('.', 1)[0]}.AAAA"
-
-    assert _verify_vp_jwt_signature(f"{issuer_jwt}~{invalid_kb_jwt}") is False
 
 
 def test_select_vp_token_unwraps_descriptor_map_payload():
@@ -2286,7 +2248,7 @@ async def test_build_presentation_definition_accepts_current_and_legacy_open_bad
 
 
 @pytest.mark.asyncio
-async def test_submit_verification_response_records_verification_result_message():
+async def test_submit_verification_without_policy_records_fail_closed_result_message():
     repo = InMemoryFlowRepository()
     instance = FlowInstance(
         flow_definition_id="__verification__",
@@ -2307,13 +2269,15 @@ async def test_submit_verification_response_records_verification_result_message(
         instance.id, vp_token, None, None, repo
     )
 
-    assert response.result == "passed"
+    assert response.result == "failed"
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
     message = instance.context["mip_messages"]["verification_result"]
     assert message["message_type"] == MessageType.VERIFICATION_RESULT.value
     assert message["correlation_id"] == instance.id
-    assert message["payload"]["overall_result"] == "PASSED"
+    assert message["payload"]["overall_result"] == "FAILED"
     assert message["payload"]["verifier_nonce"] == "nonce-xyz"
-    assert message["payload"]["claim_results"][0]["claim_name"] == "given_name"
+    assert message["payload"]["claim_results"] == []
 
 
 @pytest.mark.asyncio
@@ -2419,16 +2383,113 @@ async def test_internal_flow_fails_closed_when_policy_rejects_cross_org_trust(
     assert response.result == "failed"
     assert response.decision == "deny"
     assert "same organization" in response.decision_reason
+    assert "nonce-xyz" not in flow_main._used_nonces
 
 
 @pytest.mark.asyncio
-async def test_submit_verification_response_unwraps_descriptor_map_vp_token():
+async def test_internal_flow_fails_closed_when_policy_returns_no_decision(
+    monkeypatch,
+):
+    class EmptyPresentationPolicyStub:
+        def __init__(self, _channel):
+            pass
+
+        async def EvaluatePresentation(self, _request):
+            return SimpleNamespace(
+                result="",
+                decision="",
+                decision_reason="",
+                verified_claims_json="",
+            )
+
+    monkeypatch.setattr(
+        "marty_proto.v1.presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub",
+        EmptyPresentationPolicyStub,
+    )
+    monkeypatch.setattr("flow.main.app.state.pp_grpc_channel", object(), raising=False)
     repo = InMemoryFlowRepository()
     instance = FlowInstance(
         flow_definition_id="__verification__",
         organization_id="org-1",
         status=FlowInstanceStatus.AWAITING_WALLET,
-        context={},
+        context={
+            "nonce": "nonce-empty-decision",
+            "presentation_policy_id": "policy-1",
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+
+    response = await submit_verification_response(
+        instance.id,
+        f"{_jwt_segment({'alg': 'none'})}.{_jwt_segment({'nonce': 'nonce-empty-decision'})}.",
+        None,
+        None,
+        repo,
+    )
+
+    assert response.result == "failed"
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
+    assert "nonce-empty-decision" not in flow_main._used_nonces
+
+
+@pytest.mark.asyncio
+async def test_two_accepted_presentations_cannot_reuse_one_nonce(monkeypatch):
+    _install_accepting_evaluation_stub(monkeypatch)
+    repo = InMemoryFlowRepository()
+    instances = [
+        FlowInstance(
+            flow_definition_id="__verification__",
+            organization_id="org-1",
+            status=FlowInstanceStatus.AWAITING_WALLET,
+            context={
+                "nonce": "nonce-shared",
+                "presentation_policy_id": "policy-1",
+            },
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        )
+        for _ in range(2)
+    ]
+    for instance in instances:
+        await repo.save_instance(instance)
+    vp_token = (
+        f"{_jwt_segment({'alg': 'none'})}."
+        f"{_jwt_segment({'nonce': 'nonce-shared'})}."
+    )
+
+    first = await submit_verification_response(
+        instances[0].id,
+        vp_token,
+        None,
+        None,
+        repo,
+    )
+    assert first.result == "passed"
+
+    with pytest.raises(HTTPException) as replay:
+        await submit_verification_response(
+            instances[1].id,
+            vp_token,
+            None,
+            None,
+            repo,
+        )
+    assert replay.value.status_code == 400
+    assert replay.value.detail["error"] == "nonce_reused"
+
+
+@pytest.mark.asyncio
+async def test_submit_verification_response_unwraps_descriptor_map_vp_token(
+    monkeypatch,
+):
+    _install_accepting_evaluation_stub(monkeypatch)
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={"presentation_policy_id": "policy-1"},
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     await repo.save_instance(instance)
@@ -2449,7 +2510,8 @@ async def test_submit_verification_response_unwraps_descriptor_map_vp_token():
 
 
 @pytest.mark.asyncio
-async def test_submit_digital_credential_response_uses_origin_audience():
+async def test_submit_digital_credential_response_uses_origin_audience(monkeypatch):
+    _install_accepting_evaluation_stub(monkeypatch)
     repo = InMemoryFlowRepository()
     instance = FlowInstance(
         flow_definition_id="__verification__",
@@ -2457,6 +2519,7 @@ async def test_submit_digital_credential_response_uses_origin_audience():
         status=FlowInstanceStatus.AWAITING_WALLET,
         context={
             "nonce": "nonce-xyz",
+            "presentation_policy_id": "policy-1",
             "dc_api_expected_origins": ["https://beta.elevenidllc.com"],
         },
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
@@ -2489,7 +2552,10 @@ async def test_submit_digital_credential_response_uses_origin_audience():
 
 
 @pytest.mark.asyncio
-async def test_submit_digital_credential_response_decrypts_dc_api_jwt_response():
+async def test_submit_digital_credential_response_decrypts_dc_api_jwt_response(
+    monkeypatch,
+):
+    _install_accepting_evaluation_stub(monkeypatch, claims={"given_name": "HAIP"})
     repo = InMemoryFlowRepository()
     instance = FlowInstance(
         flow_definition_id="__verification__",
@@ -2497,6 +2563,7 @@ async def test_submit_digital_credential_response_decrypts_dc_api_jwt_response()
         status=FlowInstanceStatus.AWAITING_WALLET,
         context={
             "nonce": "nonce-haip",
+            "presentation_policy_id": "policy-1",
             "dc_api_expected_origins": ["https://beta.elevenidllc.com"],
         },
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
