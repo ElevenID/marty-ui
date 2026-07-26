@@ -1027,6 +1027,25 @@ def _detect_credential_format(vp_token: str | dict[str, Any]) -> str:
         # mDoc is CBOR-encoded
         if vp_token.startswith("\\x"):
             return "mdoc"
+        mdoc_candidate = stripped
+        for prefix in ("mso_mdoc:", "mdoc:"):
+            if mdoc_candidate.startswith(prefix):
+                mdoc_candidate = mdoc_candidate[len(prefix) :]
+                break
+        if mdoc_candidate and "." not in mdoc_candidate and "~" not in mdoc_candidate:
+            try:
+                import base64 as _b64
+
+                mdoc_bytes = _b64.urlsafe_b64decode(
+                    mdoc_candidate + "=" * (-len(mdoc_candidate) % 4)
+                )
+                marty_rs = _load_marty_rs_binding()
+                if marty_rs is None:
+                    raise RuntimeError("marty-rs verification binding is unavailable")
+                marty_rs.parse_device_response(mdoc_bytes)
+                return "mdoc"
+            except Exception:
+                pass
 
     except Exception as e:
         logger.warning(f"Format detection error: {e}")
@@ -1040,6 +1059,8 @@ def _verify_credential_by_format(
     nonce: str | None,
     audience: str | None,
     issuer_public_jwk: dict[str, Any] | None = None,
+    verification_context: dict[str, Any] | None = None,
+    mdoc_trust_anchors_pem: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Verify credential based on detected format.
@@ -1069,7 +1090,13 @@ def _verify_credential_by_format(
         elif credential_format == "sd-jwt":
             return _verify_sd_jwt(vp_token, nonce, audience, issuer_public_jwk)
         elif credential_format == "mdoc":
-            return _verify_mdoc(vp_token, nonce, audience)
+            return _verify_mdoc(
+                vp_token,
+                nonce,
+                audience,
+                verification_context or {},
+                mdoc_trust_anchors_pem or [],
+            )
         elif credential_format == "openbadge-v2":
             return _verify_open_badge_v2(vp_token)
         elif credential_format == "openbadge-v3":
@@ -1499,11 +1526,16 @@ def _verify_sd_jwt(
         return {"verified": False, "error": str(exc), "claims": {}}
 
 
-def _verify_mdoc(vp_token: str, nonce: str | None, audience: str | None) -> dict:
+def _verify_mdoc(
+    vp_token: str,
+    nonce: str | None,
+    audience: str | None,
+    verification_context: dict[str, Any],
+    trusted_issuer_certs_pem: list[str],
+) -> dict:
     """Verify mDoc/ISO 18013-5 credential via Rust mDoc verification."""
-    try:
-        import _marty_rs
-    except ImportError:
+    marty_rs = _load_marty_rs_binding()
+    if marty_rs is None:
         logger.warning("_marty_rs not available — mDoc verification disabled")
         return {
             "verified": False,
@@ -1517,25 +1549,64 @@ def _verify_mdoc(vp_token: str, nonce: str | None, audience: str | None) -> dict
         import base64 as _b64
 
         # mDoc VP tokens are typically base64url-encoded CBOR DeviceResponse
-        padded = vp_token + "=" * (4 - len(vp_token) % 4)
+        encoded = vp_token.strip()
+        for prefix in ("mso_mdoc:", "mdoc:"):
+            if encoded.startswith(prefix):
+                encoded = encoded[len(prefix) :]
+                break
+        padded = encoded + "=" * (-len(encoded) % 4)
         cbor_bytes = _b64.urlsafe_b64decode(padded)
 
-        # Extract claims via Rust
-        claims = _marty_rs.verify_mdoc_cbor(cbor_bytes)
-        if not isinstance(claims, dict):
-            claims = {}
+        transcript_b64url = verification_context.get(
+            "mdoc_session_transcript_b64url"
+        )
+        if not isinstance(transcript_b64url, str) or not transcript_b64url:
+            raise ValueError(
+                "Verifier-owned mdoc session transcript is required"
+            )
+        session_transcript_cbor = _b64.urlsafe_b64decode(
+            transcript_b64url + "=" * (-len(transcript_b64url) % 4)
+        )
+        context_client_id = verification_context.get("oid4vp_client_id")
+        if (
+            audience
+            and isinstance(context_client_id, str)
+            and context_client_id
+            and context_client_id != audience
+        ):
+            raise ValueError("mdoc verifier audience does not match request state")
+        if not trusted_issuer_certs_pem:
+            raise ValueError("No trusted mdoc issuer certificates are configured")
 
-        # Attempt signature verification (no trusted certs = structural only)
-        result = _marty_rs.verify_mdoc_signature(cbor_bytes, [])
-        is_valid = result.signature_valid
+        result = marty_rs.verify_mdoc_presentation(
+            cbor_bytes,
+            session_transcript_cbor,
+            trusted_issuer_certs_pem,
+        )
+        is_valid = bool(
+            result.issuer_signature_valid
+            and result.issuer_trusted
+            and result.device_authentication_valid
+        )
         error = result.error
+        claims: dict[str, Any] = {}
+        if is_valid:
+            extracted = marty_rs.verify_mdoc_cbor(cbor_bytes)
+            if isinstance(extracted, dict):
+                claims = extracted
 
         return {
             "verified": is_valid,
             "claims": claims,
-            "issuer_did": "mdoc-issuer",
+            "issuer_did": "unknown",
             "format": "mdoc",
             "error": error,
+            "document_types": list(result.document_types),
+            "issuer_signature_valid": bool(result.issuer_signature_valid),
+            "issuer_trusted": bool(result.issuer_trusted),
+            "device_authentication_valid": bool(
+                result.device_authentication_valid
+            ),
         }
     except Exception as e:
         logger.error("mDoc Rust verification failed: %s", e)
@@ -1849,6 +1920,30 @@ def _pinned_issuer_jwk(
         if isinstance(public_jwk, dict) and public_jwk.get("kty"):
             return public_jwk
     return None
+
+
+def _mdoc_trust_anchors_pem(
+    trust_profile_data: dict[str, Any] | None,
+) -> list[str]:
+    """Extract mdoc certificate anchors from the selected Trust Profile."""
+    if not trust_profile_data:
+        return []
+    anchors: list[str] = []
+    for source in trust_profile_data.get("trust_sources") or []:
+        if not isinstance(source, dict):
+            continue
+        candidates = [source.get("certificate_pem")]
+        pinned = source.get("pinned_certificates")
+        if isinstance(pinned, list):
+            candidates.extend(pinned)
+        for candidate in candidates:
+            if (
+                isinstance(candidate, str)
+                and "-----BEGIN CERTIFICATE-----" in candidate
+                and candidate not in anchors
+            ):
+                anchors.append(candidate)
+    return anchors
 
 
 def _trust_source_issuer_candidates(source: dict[str, Any]) -> set[str]:
@@ -2904,10 +2999,13 @@ async def evaluate_presentation(
     # A nonce is a freshness challenge, not holder binding by itself. It is
     # supplied only when the configured proof profile requires a signed challenge.
     proof_freshness = policy.holder_binding.proof_freshness
+    requires_bound_presentation = (
+        policy.holder_binding.required or credential_format == "mdoc"
+    )
     verify_nonce = (
         request.nonce
         if (
-            policy.holder_binding.required
+            requires_bound_presentation
             and proof_freshness.get("challenge_required", True)
         )
         else None
@@ -2915,7 +3013,7 @@ async def evaluate_presentation(
     verify_audience = (
         request.audience
         if (
-            policy.holder_binding.required
+            requires_bound_presentation
             and proof_freshness.get("audience_binding_required", True)
         )
         else None
@@ -2950,6 +3048,8 @@ async def evaluate_presentation(
         verify_nonce,
         verify_audience,
         pinned_issuer_jwk,
+        request.context,
+        _mdoc_trust_anchors_pem(trust_profile_data),
     )
     # 4. Check issuer trust using Trust Profile
     # 5. Evaluate claims against policy constraints

@@ -65,6 +65,11 @@ def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateRespon
             required=c.get("required", False),
             selectively_disclosable=c.get("selectively_disclosable", False),
             derivable=c.get("derivable", "derived_from" in c),
+            mdoc_namespace=c.get("mdoc_namespace", c.get("namespace", "")),
+            mdoc_element_identifier=c.get(
+                "mdoc_element_identifier",
+                c.get("name", "") if c.get("mdoc_namespace") or c.get("namespace") else "",
+            ),
         )
         for c in resp.claims
     ]
@@ -87,7 +92,9 @@ def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateRespon
         require_revalidation=validity_payload.get("require_revalidation", False),
         revalidation_interval_days=validity_payload.get("revalidation_interval_days", 0),
     )
-    supported_formats = list(getattr(resp, "supported_formats", []) or [])
+    supported_formats = list(getattr(template, "supported_formats", []) or [])
+    if not supported_formats:
+        supported_formats = list(getattr(resp, "supported_formats", []) or [])
     if not supported_formats and getattr(resp, "credential_payload_format", None):
         supported_formats = [_payload_format_to_wire(resp.credential_payload_format)]
 
@@ -109,7 +116,7 @@ def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateRespon
         description=resp.description or "",
         credential_type=resp.credential_type or "",
         vct=resp.vct or "",
-        doctype=getattr(resp, "doctype", "") or "",
+        doctype=getattr(template, "doctype", "") or getattr(resp, "doctype", "") or "",
         claims=claims,
         privacy_posture=privacy_posture_value,
         selective_disclosure_fields=list(getattr(resp, "selective_disclosure_fields", []) or []),

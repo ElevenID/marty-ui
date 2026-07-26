@@ -28,9 +28,11 @@ from flow.main import (
     DigitalCredentialSubmissionRequest,
     InMemoryFlowRepository,
     _base58_encode,
+    _build_openid4vp_mdoc_session_transcript,
     _build_presentation_definition,
     _create_oid4vci_artifact,
     _dcql_claims_for_descriptor,
+    _dcql_meta_for_descriptor,
     _oid4vp_did_web_document,
     _select_vp_token_for_evaluation,
     _validate_credential_layer_references,
@@ -42,6 +44,8 @@ from flow.main import (
     submit_verification_response,
     update_flow_definition,
 )
+
+_PROFILE_SIGNER_UNDER_TEST = flow_main._sign_request_object_with_issuer_profile
 
 
 def test_verification_runtime_accepts_profile_identity_not_kms_coordinates() -> None:
@@ -64,6 +68,131 @@ def test_verification_runtime_accepts_profile_identity_not_kms_coordinates() -> 
                 "signing_key_reference": "oid4vp-verifier-key",
             }
         )
+
+
+@pytest.mark.asyncio
+async def test_request_object_signing_uses_profile_scoped_api_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer_did = "did:web:verifier.example:oid4vp"
+    verification_method_id = f"{issuer_did}#request-signing-1"
+    identity = {
+        "issuer_profile_id": "issuer-profile-1",
+        "issuer_did": issuer_did,
+        "verification_method_id": verification_method_id,
+    }
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict[str, str]:
+            return {
+                **identity,
+                "algorithm": "ES256",
+                "signature_raw_b64": "AQ",
+            }
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, *, params, headers, json):
+            captured.update(url=url, params=params, headers=headers, json=json)
+            return _Response()
+
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_URL", "http://issuer-profile.internal")
+    monkeypatch.setattr(flow_main, "_read_secret_value", lambda _name: "api-key")
+    monkeypatch.setattr(
+        flow_main.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _Client(),
+    )
+
+    token = await _PROFILE_SIGNER_UNDER_TEST(
+        organization_id="org-1",
+        issuer_profile_id="issuer-profile-1",
+        identity=identity,
+        protected_header={
+            "alg": "ES256",
+            "kid": verification_method_id,
+        },
+        claims={"iss": issuer_did, "sub": issuer_did},
+    )
+
+    assert captured["url"] == (
+        "http://issuer-profile.internal/issuer-profiles/issuer-profile-1/sign"
+    )
+    assert captured["params"] == {"organization_id": "org-1"}
+    assert set(captured["json"]) == {"payload_b64", "algorithm"}
+    assert "signing_service_id" not in captured["json"]
+    assert "signing_key_reference" not in captured["json"]
+    assert token.endswith(".AQ")
+
+
+def test_mdoc_dcql_uses_doctype_and_two_element_claim_paths() -> None:
+    descriptor = {
+        "id": "mdl",
+        "format": {"mso_mdoc": {"alg": ["ES256"]}},
+        "_marty_mdoc": {
+            "doctype": "org.iso.18013.5.1.mDL",
+            "claims": [
+                {
+                    "id": "claim_given_name",
+                    "path": ["org.iso.18013.5.1", "given_name"],
+                    "intent_to_retain": False,
+                }
+            ],
+        },
+    }
+
+    assert _dcql_meta_for_descriptor(descriptor, "mso_mdoc") == {
+        "doctype_value": "org.iso.18013.5.1.mDL"
+    }
+    assert _dcql_claims_for_descriptor(descriptor, "mso_mdoc") == [
+        {
+            "id": "claim_given_name",
+            "path": ["org.iso.18013.5.1", "given_name"],
+            "intent_to_retain": False,
+        }
+    ]
+
+
+def test_mdoc_session_transcript_is_bound_to_verifier_state() -> None:
+    public_jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "AQ",
+        "y": "Ag",
+        "kid": "public-metadata-is-not-thumbprinted",
+    }
+    transcript = _build_openid4vp_mdoc_session_transcript(
+        client_id="did:web:verifier.example:oid4vp",
+        nonce="nonce-1",
+        response_uri="https://verifier.example/submit",
+        response_encryption_jwk=public_jwk,
+    )
+    same_key_without_metadata = _build_openid4vp_mdoc_session_transcript(
+        client_id="did:web:verifier.example:oid4vp",
+        nonce="nonce-1",
+        response_uri="https://verifier.example/submit",
+        response_encryption_jwk={key: public_jwk[key] for key in ("kty", "crv", "x", "y")},
+    )
+    changed_nonce = _build_openid4vp_mdoc_session_transcript(
+        client_id="did:web:verifier.example:oid4vp",
+        nonce="nonce-2",
+        response_uri="https://verifier.example/submit",
+        response_encryption_jwk=public_jwk,
+    )
+
+    assert transcript == same_key_without_metadata
+    assert transcript != changed_nonce
+    assert transcript.startswith(b"\x83\xf6\xf6\x82qOpenID4VPHandover")
+    assert b"nonce-1" not in transcript
 
 
 @pytest.fixture(autouse=True)

@@ -271,6 +271,142 @@ def test_detect_credential_format_recognizes_vcdm_data_integrity_object() -> Non
     assert pp._detect_credential_format(document) == "w3c-vcdm-di"
 
 
+def test_detect_credential_format_recognizes_base64url_mdoc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parsed: list[bytes] = []
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            parse_device_response=lambda value: parsed.append(bytes(value))
+        ),
+    )
+    token = base64.urlsafe_b64encode(b"\xa1aa\x01").rstrip(b"=").decode()
+
+    assert pp._detect_credential_format(token) == "mdoc"
+    assert parsed == [b"\xa1aa\x01"]
+
+
+def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[bytes, bytes, list[str]]] = []
+
+    def verify_presentation(
+        mdoc_bytes: bytes,
+        transcript_bytes: bytes,
+        anchors: list[str],
+    ) -> SimpleNamespace:
+        calls.append((bytes(mdoc_bytes), bytes(transcript_bytes), anchors))
+        return SimpleNamespace(
+            issuer_signature_valid=True,
+            issuer_trusted=True,
+            device_authentication_valid=True,
+            document_types=["org.iso.18013.5.1.mDL"],
+            error=None,
+        )
+
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_mdoc_presentation=verify_presentation,
+            verify_mdoc_cbor=lambda _value: {"given_name": "Ada"},
+        ),
+    )
+    mdoc_bytes = b"\xa1aa\x01"
+    transcript = b"\x83\xf6\xf6\x82qOpenID4VPHandoverX"
+    result = pp._verify_mdoc(
+        base64.urlsafe_b64encode(mdoc_bytes).rstrip(b"=").decode(),
+        "nonce-1",
+        "did:web:verifier.example",
+        {
+            "mdoc_session_transcript_b64url": base64.urlsafe_b64encode(transcript)
+            .rstrip(b"=")
+            .decode(),
+            "oid4vp_client_id": "did:web:verifier.example",
+        },
+        ["-----BEGIN CERTIFICATE-----\nanchor\n-----END CERTIFICATE-----"],
+    )
+
+    assert result["verified"] is True
+    assert result["claims"] == {"given_name": "Ada"}
+    assert calls == [
+        (
+            mdoc_bytes,
+            transcript,
+            ["-----BEGIN CERTIFICATE-----\nanchor\n-----END CERTIFICATE-----"],
+        )
+    ]
+
+
+def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.credential_requirements[0].credential_payload_format = "mso_mdoc"
+    policy.holder_binding = pp.HolderBinding(required=False)
+    asyncio.run(repo.save(policy))
+    _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=[],
+        trust_sources=[
+            {
+                "source_type": "ROOT_CA",
+                "certificate_pem": (
+                    "-----BEGIN CERTIFICATE-----\nanchor\n"
+                    "-----END CERTIFICATE-----"
+                ),
+            }
+        ],
+    )
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "mdoc")
+    captured: dict[str, object] = {}
+
+    def _verify(*args, **_kwargs):
+        captured.update(
+            nonce=args[2],
+            audience=args[3],
+            context=args[5],
+            anchors=args[6],
+        )
+        return {
+            "verified": True,
+            "claims": {"email": "member@example.com"},
+            "issuer_did": "unknown",
+            "format": "mdoc",
+            "error": None,
+        }
+
+    monkeypatch.setattr(pp, "_verify_credential_by_format", _verify)
+    context = {
+        "mdoc_session_transcript_b64url": "gw",
+        "oid4vp_client_id": "did:web:verifier.example",
+    }
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(
+                vp_token="device-response",
+                nonce="nonce-1",
+                audience="did:web:verifier.example",
+                context=context,
+            ),
+            repo=repo,
+        )
+    )
+
+    assert response.result == "passed"
+    assert captured == {
+        "nonce": "nonce-1",
+        "audience": "did:web:verifier.example",
+        "context": context,
+        "anchors": [
+            "-----BEGIN CERTIFICATE-----\nanchor\n-----END CERTIFICATE-----"
+        ],
+    }
+
+
 def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_claims(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
