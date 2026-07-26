@@ -4975,6 +4975,30 @@ def _verify_vp_jwt_signature(vp_token: str) -> bool:
         return True  # Don't reject on unexpected verification errors
 
 
+def _looks_like_base64url_mdoc_device_response(value: str) -> bool:
+    """Recognize an unprefixed, base64url-encoded ISO DeviceResponse envelope.
+
+    OID4VP DCQL transports mdoc presentations inside a JSON object keyed by
+    credential-query id. The value itself has no ``mdoc:`` prefix. This check
+    only selects the candidate from that transport wrapper; the presentation
+    policy service still performs the complete CBOR, issuer, trust, and holder
+    authentication checks.
+    """
+
+    candidate = value.strip()
+    if len(candidate) < 32 or not re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", candidate):
+        return False
+    try:
+        decoded = base64.urlsafe_b64decode(candidate + "=" * (-len(candidate) % 4))
+    except (ValueError, TypeError):
+        return False
+    return bool(
+        decoded
+        and decoded[0] >> 5 == 5
+        and all(key in decoded for key in (b"version", b"documents", b"status"))
+    )
+
+
 def _select_vp_token_for_evaluation(vp_token: str) -> str:
     """Extract the actual credential token from OID4VP descriptor wrappers.
 
@@ -4997,6 +5021,7 @@ def _select_vp_token_for_evaluation(vp_token: str) -> str:
             "~" in candidate
             or candidate.count(".") >= 2
             or candidate.startswith(("mso_mdoc:", "mdoc:", "oob:"))
+            or _looks_like_base64url_mdoc_device_response(candidate)
         )
 
     def _walk(value: Any) -> str | None:
