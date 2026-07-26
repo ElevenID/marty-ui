@@ -4975,30 +4975,6 @@ def _verify_vp_jwt_signature(vp_token: str) -> bool:
         return True  # Don't reject on unexpected verification errors
 
 
-def _looks_like_base64url_mdoc_device_response(value: str) -> bool:
-    """Recognize an unprefixed, base64url-encoded ISO DeviceResponse envelope.
-
-    OID4VP DCQL transports mdoc presentations inside a JSON object keyed by
-    credential-query id. The value itself has no ``mdoc:`` prefix. This check
-    only selects the candidate from that transport wrapper; the presentation
-    policy service still performs the complete CBOR, issuer, trust, and holder
-    authentication checks.
-    """
-
-    candidate = value.strip()
-    if len(candidate) < 32 or not re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", candidate):
-        return False
-    try:
-        decoded = base64.urlsafe_b64decode(candidate + "=" * (-len(candidate) % 4))
-    except (ValueError, TypeError):
-        return False
-    return bool(
-        decoded
-        and decoded[0] >> 5 == 5
-        and all(key in decoded for key in (b"version", b"documents", b"status"))
-    )
-
-
 def _select_vp_token_for_evaluation(vp_token: str) -> str:
     """Extract the actual credential token from OID4VP descriptor wrappers.
 
@@ -5015,13 +4991,26 @@ def _select_vp_token_for_evaluation(vp_token: str) -> str:
     except json.JSONDecodeError:
         return vp_token
 
+    # OID4VP DCQL sends a JSON object keyed by credential-query id. This
+    # evaluator currently supports one requested credential, so accept only
+    # the exact one-query/one-presentation transport shape. The value remains
+    # untrusted and is fully parsed and authenticated by the policy service.
+    if isinstance(parsed, dict) and len(parsed) == 1:
+        presentations = next(iter(parsed.values()))
+        if (
+            isinstance(presentations, list)
+            and len(presentations) == 1
+            and isinstance(presentations[0], str)
+            and presentations[0].strip()
+        ):
+            return presentations[0]
+
     def _looks_token_like(value: str) -> bool:
         candidate = value.strip()
         return (
             "~" in candidate
             or candidate.count(".") >= 2
             or candidate.startswith(("mso_mdoc:", "mdoc:", "oob:"))
-            or _looks_like_base64url_mdoc_device_response(candidate)
         )
 
     def _walk(value: Any) -> str | None:
