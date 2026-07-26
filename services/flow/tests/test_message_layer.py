@@ -1962,24 +1962,26 @@ def test_select_vp_token_unwraps_descriptor_map_payload():
     assert _select_vp_token_for_evaluation(wrapped) == token
 
 
-def test_select_vp_token_unwraps_unprefixed_dcql_mdoc_device_response():
-    # Minimal structural DeviceResponse envelope. The downstream Rust verifier
-    # remains responsible for complete CBOR and cryptographic validation.
-    device_response = bytes.fromhex(
-        "a36776657273696f6e63312e3069646f63756d656e747381a06673746174757300"
-    )
-    token = base64.urlsafe_b64encode(device_response).rstrip(b"=").decode()
+def test_select_vp_token_unwraps_exact_dcql_mdoc_transport_shape():
+    # The official wallet owns the presentation serialization. The transport
+    # layer unwraps it; the downstream Rust verifier determines validity.
+    token = "opaque-official-mdoc-presentation"
     wrapped = json.dumps({"org.iso.18013.5.1.mDL": [token]})
 
     assert _select_vp_token_for_evaluation(wrapped) == token
 
 
-def test_select_vp_token_does_not_treat_arbitrary_base64url_as_mdoc():
-    token = base64.urlsafe_b64encode(b"not-a-device-response").rstrip(b"=").decode()
-    wrapped = json.dumps({"untrusted": [token]})
-
+@pytest.mark.parametrize(
+    "wrapped",
+    [
+        json.dumps({"query-1": []}),
+        json.dumps({"query-1": ["one", "two"]}),
+        json.dumps({"query-1": ["one"], "query-2": ["two"]}),
+        json.dumps({"query-1": [{"presentation": "one"}]}),
+    ],
+)
+def test_select_vp_token_rejects_ambiguous_dcql_transport_shape(wrapped):
     assert _select_vp_token_for_evaluation(wrapped) == wrapped
-
 
 def test_dcql_claims_include_required_direct_sd_jwt_paths():
     descriptor = {
