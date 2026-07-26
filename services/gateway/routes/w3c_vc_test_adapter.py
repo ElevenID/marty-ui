@@ -29,7 +29,7 @@ from gateway.routes.issuance import (
     _ISSUANCE_HEADERS,
     _load_credential_template,
     _resolve_issuer_identity,
-    _select_issuer_profile_id,
+    _select_issuer_identity_request,
 )
 
 
@@ -566,17 +566,22 @@ async def _issue_jwt_vc(credential: dict[str, Any], request: Request) -> str:
             status_code=422,
             detail="W3C fixture template must issue JWT VC, not SD-JWT, mdoc, or JSON-LD",
         )
-    issuer_profile_id = _select_issuer_profile_id(body, template)
+    issuer_did, legacy_issuer_profile_id = _select_issuer_identity_request(
+        body, template
+    )
     issuer_identity = await _resolve_issuer_identity(
         request,
         organization_id,
-        issuer_profile_id,
+        issuer_did,
+        legacy_issuer_profile_id=legacy_issuer_profile_id,
         credential_format=credential_format,
     )
     if issuer_identity is None:
         raise HTTPException(
             status_code=422, detail="W3C fixture template has no active issuer identity"
         )
+    issuer_profile_id = issuer_identity["issuer_profile_id"]
+    body = body.model_copy(update={"issuer_did": issuer_did})
 
     registry = get_registry()
     service_url = registry.get_service_url("issuance")

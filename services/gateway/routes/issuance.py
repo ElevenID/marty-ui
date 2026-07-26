@@ -78,23 +78,24 @@ def _key_purpose_for_format(value: str | None) -> str | None:
 async def _resolve_issuer_identity(
     request: Request,
     organization_id: str | None,
-    issuer_profile_id: str | None,
+    issuer_did: str | None,
+    legacy_issuer_profile_id: str | None = None,
     credential_format: str | None = None,
     key_purpose: str | None = None,
     algorithm: str | None = None,
 ) -> dict[str, str] | None:
-    """Return the explicitly selected active DID issuer identity."""
-    if not issuer_profile_id:
+    """Resolve a public DID to exactly one org-owned active issuer profile."""
+    if not issuer_did:
         return None
     if not organization_id:
         raise HTTPException(
             status_code=422,
-            detail="organization_id is required to resolve issuer profile.",
+            detail="organization_id is required to resolve issuer_did.",
         )
 
     try:
         from gateway.routes.signing_keys import (  # noqa: PLC0415
-            internal_resolve_issuer_context,
+            internal_resolve_issuer_did,
         )
     except ImportError:
         raise HTTPException(
@@ -103,20 +104,20 @@ async def _resolve_issuer_identity(
         )
 
     try:
-        response = await internal_resolve_issuer_context(
+        response = await internal_resolve_issuer_did(
             request=request,
             organization_id=organization_id,
-            issuer_profile_id=issuer_profile_id,
-            issuer_mode="org_managed",
+            issuer_did=issuer_did,
+            verification_method_id=None,
             credential_format=credential_format,
             key_purpose=key_purpose or _key_purpose_for_format(credential_format),
             algorithm=algorithm,
             x_api_key=_read_secret_value("SIGNING_KEYS_INTERNAL_API_KEY")
             or _read_secret_value("ISSUANCE_API_KEY"),
         )
-    except HTTPException as exc:
-        if exc.status_code in {404, 409, 422}:
-            return None
+    except HTTPException:
+        # Preserve the resolver's fail-closed 404/409/422 distinction so an
+        # ambiguous or cross-tenant identity can never degrade to a fallback.
         raise
 
     try:
@@ -127,22 +128,52 @@ async def _resolve_issuer_identity(
             detail="Signing-keys issuer profile resolver returned an invalid response.",
         ) from exc
 
+    profile = (
+        payload.get("issuer_profile")
+        if isinstance(payload.get("issuer_profile"), dict)
+        else {}
+    )
+    service = (
+        payload.get("signing_service")
+        if isinstance(payload.get("signing_service"), dict)
+        else {}
+    )
+    resolved_profile_id = _clean_optional_id(profile.get("id"))
+    resolved_issuer_did = _clean_optional_id(payload.get("issuer_did"))
+    resolved_organization_id = _clean_optional_id(payload.get("organization_id"))
     if (
         not payload.get("ok")
-        or not payload.get("issuer_did")
-        or not payload.get("signing_service_id")
+        or not resolved_profile_id
+        or not resolved_issuer_did
+        or not service.get("id")
     ):
         return None
+    if resolved_organization_id != organization_id or resolved_issuer_did != issuer_did:
+        raise HTTPException(
+            status_code=409,
+            detail="Issuer DID resolver returned an identity outside the requested organization scope.",
+        )
+    if (
+        legacy_issuer_profile_id
+        and legacy_issuer_profile_id != resolved_profile_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Legacy issuer_profile_id does not match the issuer profile "
+                "resolved from organization_id and issuer_did."
+            ),
+        )
 
-    service = payload.get("service") if isinstance(payload.get("service"), dict) else {}
-    algorithm_value = service.get("algorithm") or ""
+    algorithm_value = profile.get("algorithm") or ""
     return {
-        "issuer_did": str(payload["issuer_did"]),
-        "signing_service_id": str(payload["signing_service_id"]),
-        "signing_key_reference": str(payload.get("signing_key_reference") or ""),
+        "issuer_profile_id": resolved_profile_id,
+        "issuer_did": resolved_issuer_did,
+        "signing_service_id": str(service["id"]),
+        "signing_key_reference": str(profile.get("signing_key_reference") or ""),
         "verification_method_id": str(payload.get("verification_method_id") or ""),
         "key_purpose": str(
-            payload.get("key_purpose")
+            profile.get("key_purpose")
             or key_purpose
             or _key_purpose_for_format(credential_format)
             or "vc_jwt_issuer"
@@ -183,10 +214,19 @@ def _clean_optional_id(value: object) -> str | None:
     return cleaned or None
 
 
-def _select_issuer_profile_id(body: IssuanceCreate, credential_template: dict) -> str:
+def _select_issuer_identity_request(
+    body: IssuanceCreate, credential_template: dict
+) -> tuple[str, str | None]:
+    """Select the public DID and optional legacy profile assertion.
+
+    The profile assertion never selects a signing key. Resolution always starts
+    from the organization-scoped DID and the operation constraints.
+    """
+    template_issuer_did = _clean_optional_id(credential_template.get("issuer_did"))
     template_issuer_profile_id = _clean_optional_id(
         credential_template.get("issuer_profile_id")
     )
+    body_issuer_did = _clean_optional_id(body.issuer_did)
     body_issuer_profile_id = _clean_optional_id(body.issuer_profile_id)
     claim_issuer_profile_id = (
         _clean_optional_id(body.claims.get("issuer_profile_id"))
@@ -194,41 +234,73 @@ def _select_issuer_profile_id(body: IssuanceCreate, credential_template: dict) -
         else None
     )
 
+    if claim_issuer_profile_id:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "claims.issuer_profile_id is not a supported public signing "
+                "identity input; use issuer_did."
+            ),
+        )
+
     if credential_template:
-        if not template_issuer_profile_id:
+        if not template_issuer_did:
             raise HTTPException(
                 status_code=422,
-                detail="credential_template_id must reference a template bound to an active KMS-backed issuer profile.",
+                detail=(
+                    "credential_template_id must reference a template with an "
+                    "issuer_did; migrate this legacy template before issuance."
+                ),
+            )
+        if (
+            body_issuer_did
+            and body_issuer_did != template_issuer_did
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="issuer_did cannot override the credential template issuer DID.",
             )
         if (
             body_issuer_profile_id
+            and template_issuer_profile_id
             and body_issuer_profile_id != template_issuer_profile_id
         ):
             raise HTTPException(
-                status_code=422,
-                detail="issuer_profile_id cannot override the credential template issuer profile.",
+                status_code=409,
+                detail=(
+                    "Legacy issuer_profile_id does not match the credential "
+                    "template issuer profile."
+                ),
             )
-        if (
-            claim_issuer_profile_id
-            and claim_issuer_profile_id != template_issuer_profile_id
-        ):
-            raise HTTPException(
-                status_code=422,
-                detail="claims.issuer_profile_id cannot override the credential template issuer profile.",
-            )
-        return template_issuer_profile_id
+        return (
+            template_issuer_did,
+            body_issuer_profile_id or template_issuer_profile_id,
+        )
 
-    if not body_issuer_profile_id:
+    if not body_issuer_did:
         raise HTTPException(
             status_code=422,
-            detail="issuer_profile_id is required for direct issuance without a credential template.",
+            detail="issuer_did is required for direct issuance without a credential template.",
         )
-    if claim_issuer_profile_id and claim_issuer_profile_id != body_issuer_profile_id:
+    return body_issuer_did, body_issuer_profile_id
+
+
+def _select_issuer_profile_id(body: IssuanceCreate, credential_template: dict) -> str:
+    """Deprecated compatibility helper for internal adapters.
+
+    New code must call :func:`_select_issuer_identity_request`. This helper
+    cannot choose a profile from public input; it only returns an existing
+    template assertion while older internal adapters migrate.
+    """
+    _, legacy_profile_id = _select_issuer_identity_request(
+        body, credential_template
+    )
+    if not legacy_profile_id:
         raise HTTPException(
             status_code=422,
-            detail="claims.issuer_profile_id cannot override the request issuer profile.",
+            detail="Legacy credential template has no issuer profile assertion.",
         )
-    return body_issuer_profile_id
+    return legacy_profile_id
 
 
 issuance_router = APIRouter(prefix="/v1/issuance", tags=["Issuance"])
@@ -423,18 +495,25 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
     ) or (
         body.claims.get("credential_format") if isinstance(body.claims, dict) else None
     )
-    issuer_profile_id = _select_issuer_profile_id(body, credential_template)
+    issuer_did, legacy_issuer_profile_id = _select_issuer_identity_request(
+        body, credential_template
+    )
     issuer_identity = await _resolve_issuer_identity(
         request,
         body.organization_id,
-        issuer_profile_id,
+        issuer_did,
+        legacy_issuer_profile_id=legacy_issuer_profile_id,
         credential_format=credential_format,
     )
     if issuer_identity is None:
         raise HTTPException(
             status_code=422,
-            detail="issuer_profile_id must reference an active KMS-backed issuer profile for this organization.",
+            detail=(
+                "issuer_did must resolve to exactly one active KMS-backed issuer "
+                "profile for this organization."
+            ),
         )
+    issuer_profile_id = issuer_identity["issuer_profile_id"]
     inject_headers: dict[str, str] = dict(_ISSUANCE_HEADERS or {})
     inject_headers["X-Issuer-Profile-Id"] = issuer_profile_id
     logger.debug(

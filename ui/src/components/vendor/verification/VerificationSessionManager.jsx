@@ -35,6 +35,7 @@ import HourglassTopIcon from '@mui/icons-material/HourglassTop';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { startVerificationFlow } from '../../../services/zkVerificationApi';
 import { listFlowExecutions } from '../../../services/flowsApi';
+import { listIssuerProfiles } from '../../../services/signingKeysApi';
 import PolicySelectStep from './steps/PolicySelectStep';
 import SessionConfigStep from './steps/SessionConfigStep';
 import QRDisplayStep from './steps/QRDisplayStep';
@@ -146,6 +147,9 @@ function VerificationSessionManager({ organizationId }) {
   const [pendingSession, setPendingSession] = useState(null);
   const [wizardLoading, setWizardLoading] = useState(false);
   const [wizardError, setWizardError] = useState(null);
+  const [issuerDid, setIssuerDid] = useState(null);
+  const [issuerIdentityLoading, setIssuerIdentityLoading] = useState(true);
+  const [issuerIdentityError, setIssuerIdentityError] = useState(null);
 
   // Detail drawer state
   const [detailSession, setDetailSession] = useState(null);
@@ -179,6 +183,47 @@ function VerificationSessionManager({ organizationId }) {
     fetchSessions();
   }, [fetchSessions]);
 
+  const fetchVerifierIssuerDid = useCallback(async () => {
+    if (!organizationId) {
+      setIssuerDid(null);
+      setIssuerIdentityError(null);
+      setIssuerIdentityLoading(false);
+      return;
+    }
+    setIssuerIdentityLoading(true);
+    setIssuerIdentityError(null);
+    try {
+      const result = await listIssuerProfiles({ organization_id: organizationId });
+      const profiles = Array.isArray(result) ? result : (result?.profiles || []);
+      const issuerDids = [...new Set(
+        profiles
+          .filter((profile) => (
+            String(profile?.status || '').toLowerCase() === 'active'
+            && profile?.key_purpose === 'oid4vp_request_signing'
+            && String(profile?.issuer_did || '').startsWith('did:')
+          ))
+          .map((profile) => String(profile.issuer_did).trim()),
+      )];
+      if (issuerDids.length !== 1) {
+        throw new Error(
+          issuerDids.length === 0
+            ? 'Configure one active OID4VP issuer DID before starting verification.'
+            : 'Multiple OID4VP issuer DIDs are active. Disable the obsolete identity before starting verification.',
+        );
+      }
+      setIssuerDid(issuerDids[0]);
+    } catch (err) {
+      setIssuerDid(null);
+      setIssuerIdentityError(err.message || 'Failed to resolve the OID4VP issuer DID');
+    } finally {
+      setIssuerIdentityLoading(false);
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    fetchVerifierIssuerDid();
+  }, [fetchVerifierIssuerDid]);
+
   // ── Filtered session lists ────────────────────────────────────────────────
 
   const activeSessions  = sessions.filter((s) => ACTIVE_STATUSES.includes(normalizeSessionStatus(s.status)));
@@ -205,8 +250,14 @@ function VerificationSessionManager({ organizationId }) {
       setWizardLoading(true);
       setWizardError(null);
       try {
+        if (!issuerDid) {
+          throw new Error(
+            issuerIdentityError || 'The organization has no active OID4VP issuer DID.',
+          );
+        }
         let session = await startVerificationFlow({
           organization_id: organizationId,
+          issuer_did: issuerDid,
           presentation_policy_id: wizardData.policy_id || undefined,
           trust_profile_id: wizardData.trust_profile_id || undefined,
           deployment_profile_id: wizardData.deployment_profile_id || undefined,
@@ -323,7 +374,13 @@ function VerificationSessionManager({ organizationId }) {
         <Box sx={{ display: 'flex', gap: 1 }}>
           <Tooltip title="Refresh">
             <span>
-              <IconButton onClick={fetchSessions} disabled={loading}>
+              <IconButton
+                onClick={() => {
+                  fetchSessions();
+                  fetchVerifierIssuerDid();
+                }}
+                disabled={loading || issuerIdentityLoading}
+              >
                 <RefreshIcon />
               </IconButton>
             </span>
@@ -332,6 +389,7 @@ function VerificationSessionManager({ organizationId }) {
             variant="contained"
             startIcon={<AddIcon />}
             onClick={openWizard}
+            disabled={issuerIdentityLoading || !issuerDid}
           >
             New Verification
           </Button>
@@ -346,6 +404,11 @@ function VerificationSessionManager({ organizationId }) {
       {error && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError(null)}>
           {error}
+        </Alert>
+      )}
+      {issuerIdentityError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {issuerIdentityError}
         </Alert>
       )}
 

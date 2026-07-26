@@ -509,16 +509,19 @@ class CredentialTemplateCreate(BaseModel):
     # Validity configuration
     validity_rules: TemplateValidityRules | None = None
 
-    # Cryptographic configuration
-    issuer_key_id: str | None = Field(None, max_length=255)
-    issuer_key_algorithm: str | None = Field(None, max_length=50)
-    issuer_algorithm: str | None = Field(None, max_length=50)
+    # Public signing identity. Profile, provider, key, and certificate routing
+    # are resolved internally from this DID.
     signing_algorithm: str | None = Field(None, max_length=50)
-    key_access_mode: str = Field(default="key_vault", max_length=50)
-    remote_signing_config: dict[str, Any] | None = None
-    issuer_certificate_chain_pem: str | None = Field(None, max_length=65536)
-    issuer_did: str | None = Field(None, max_length=2048)
-    issuer_profile_id: str | None = Field(None, max_length=255)
+    issuer_did: str = Field(pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
+    issuer_profile_id: str | None = Field(
+        None,
+        max_length=255,
+        json_schema_extra={"deprecated": True},
+        description=(
+            "Temporary legacy assertion only; it must match issuer_did "
+            "resolution and cannot select custody."
+        ),
+    )
     auto_generate_artifacts: bool = False
 
     derived_attributes: list[dict] = []
@@ -1161,11 +1164,21 @@ class StartVerificationFlowRequest(BaseModel):
 
     presentation_policy_id: str | None = None
     organization_id: str | None = None
-    # Select the issuer profile and assert the DID that signs the OID4VP
-    # Request Object. KMS service/key routing remains an internal property of
-    # that profile and is deliberately not accepted by this API.
-    issuer_profile_id: str | None = Field(None, max_length=255)
-    issuer_did: str | None = Field(None, pattern=r"^did:", max_length=2048)
+    issuer_did: str | None = Field(
+        None,
+        pattern=r"^did:",
+        max_length=2048,
+        description="Public DID that signs the OID4VP Request Object.",
+    )
+    issuer_profile_id: str | None = Field(
+        None,
+        max_length=255,
+        json_schema_extra={"deprecated": True},
+        description=(
+            "Temporary legacy assertion only. It cannot select a signing "
+            "identity and must match the organization-scoped issuer_did result."
+        ),
+    )
     response_type: str = "vp_token"
     trust_profile_id: str | None = None
     deployment_profile_id: str | None = None
@@ -1322,6 +1335,17 @@ class IssuanceCreate(BaseModel):
     """Create an issuance request."""
     organization_id: str
     credential_template_id: str | None = None
+    issuer_did: str | None = Field(
+        default=None,
+        pattern=r"^did:[a-z0-9]+:.+",
+        description=(
+            "Public issuer identity. The organization-scoped issuer registry "
+            "resolves this DID to the sole authorized active issuer profile."
+        ),
+    )
+    # Transitional compatibility only. Public callers should send issuer_did.
+    # When present this value is treated as an assertion and must exactly match
+    # the profile resolved from organization_id + issuer_did.
     issuer_profile_id: str | None = None
     subject_did: str | None = None
     holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery

@@ -427,7 +427,7 @@ def test_canvas_mirror_provenance_route_is_public_for_employer_demo():
 
 
 @pytest.mark.asyncio
-async def test_create_issuance_rejects_missing_issuer_profile_id():
+async def test_create_issuance_rejects_missing_issuer_did():
     request = _build_request(session_org_id="org_123")
 
     with pytest.raises(issuance.HTTPException) as exc_info:
@@ -440,7 +440,7 @@ async def test_create_issuance_rejects_missing_issuer_profile_id():
         )
 
     assert exc_info.value.status_code == 422
-    assert "issuer_profile_id is required" in exc_info.value.detail
+    assert "issuer_did is required" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -460,11 +460,11 @@ async def test_create_issuance_rejects_claims_only_issuer_profile_id():
         )
 
     assert exc_info.value.status_code == 422
-    assert "issuer_profile_id is required for direct issuance" in exc_info.value.detail
+    assert "not a supported public signing identity input" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
-async def test_create_issuance_forwards_explicit_issuer_profile_context(
+async def test_create_issuance_resolves_did_and_forwards_internal_profile_context(
     monkeypatch: pytest.MonkeyPatch,
 ):
     captured: dict = {}
@@ -472,17 +472,20 @@ async def test_create_issuance_forwards_explicit_issuer_profile_context(
     async def fake_resolve_identity(
         request,
         organization_id,
-        issuer_profile_id,
+        issuer_did,
+        legacy_issuer_profile_id=None,
         credential_format=None,
         key_purpose=None,
         algorithm=None,
     ):
         captured["resolver"] = {
             "organization_id": organization_id,
-            "issuer_profile_id": issuer_profile_id,
+            "issuer_did": issuer_did,
+            "legacy_issuer_profile_id": legacy_issuer_profile_id,
             "credential_format": credential_format,
         }
         return {
+            "issuer_profile_id": "ip-1",
             "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
             "signing_service_id": "svc-bao",
             "signing_key_reference": "cred-issuer-acme-es256",
@@ -507,7 +510,7 @@ async def test_create_issuance_forwards_explicit_issuer_profile_context(
     response = await issuance.create_issuance(
         issuance.IssuanceCreate(
             organization_id="org_123",
-            issuer_profile_id="ip-1",
+            issuer_did="did:web:beta.elevenidllc.com:orgs:acme",
             claims={"credential_format": "sd_jwt_vc"},
         ),
         _build_request(session_org_id="org_123"),
@@ -516,7 +519,8 @@ async def test_create_issuance_forwards_explicit_issuer_profile_context(
     assert response.status_code == 200
     assert captured["resolver"] == {
         "organization_id": "org_123",
-        "issuer_profile_id": "ip-1",
+        "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
+        "legacy_issuer_profile_id": None,
         "credential_format": "sd_jwt_vc",
     }
     assert captured["service_url"] == "http://issuance-service"
@@ -539,6 +543,7 @@ async def test_create_issuance_uses_template_bound_issuer_profile(
         return {
             "id": template_id,
             "organization_id": "org_123",
+            "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
             "issuer_profile_id": "ip-template",
             "credential_payload_format": "sd_jwt_vc",
         }
@@ -546,17 +551,20 @@ async def test_create_issuance_uses_template_bound_issuer_profile(
     async def fake_resolve_identity(
         request,
         organization_id,
-        issuer_profile_id,
+        issuer_did,
+        legacy_issuer_profile_id=None,
         credential_format=None,
         key_purpose=None,
         algorithm=None,
     ):
         captured["resolver"] = {
             "organization_id": organization_id,
-            "issuer_profile_id": issuer_profile_id,
+            "issuer_did": issuer_did,
+            "legacy_issuer_profile_id": legacy_issuer_profile_id,
             "credential_format": credential_format,
         }
         return {
+            "issuer_profile_id": "ip-template",
             "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
             "signing_service_id": "svc-bao",
         }
@@ -586,7 +594,8 @@ async def test_create_issuance_uses_template_bound_issuer_profile(
     assert captured["template_id"] == "template-1"
     assert captured["resolver"] == {
         "organization_id": "org_123",
-        "issuer_profile_id": "ip-template",
+        "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
+        "legacy_issuer_profile_id": "ip-template",
         "credential_format": "sd_jwt_vc",
     }
     assert captured["inject_headers"]["X-Issuer-Profile-Id"] == "ip-template"
@@ -601,6 +610,7 @@ async def test_create_issuance_rejects_body_issuer_profile_override_for_template
         return {
             "id": template_id,
             "organization_id": "org_123",
+            "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
             "issuer_profile_id": "ip-template",
         }
 
@@ -616,11 +626,8 @@ async def test_create_issuance_rejects_body_issuer_profile_override_for_template
             _build_request(session_org_id="org_123"),
         )
 
-    assert exc_info.value.status_code == 422
-    assert (
-        "cannot override the credential template issuer profile"
-        in exc_info.value.detail
-    )
+    assert exc_info.value.status_code == 409
+    assert "does not match the credential template" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -631,6 +638,7 @@ async def test_create_issuance_rejects_claims_issuer_profile_override_for_templa
         return {
             "id": template_id,
             "organization_id": "org_123",
+            "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
             "issuer_profile_id": "ip-template",
         }
 
@@ -647,7 +655,7 @@ async def test_create_issuance_rejects_claims_issuer_profile_override_for_templa
         )
 
     assert exc_info.value.status_code == 422
-    assert "claims.issuer_profile_id cannot override" in exc_info.value.detail
+    assert "not a supported public signing identity input" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -903,41 +911,44 @@ async def test_organization_applicant_withdraw_route_reads_from_applicant_servic
 
 
 @pytest.mark.asyncio
-async def test_resolve_issuer_identity_requires_explicit_active_profile(
+async def test_resolve_issuer_identity_uses_org_scoped_did(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """_resolve_issuer_identity should only return the explicitly selected active profile."""
-    from fastapi import HTTPException as FastAPIHTTPException
+    """The public DID selects the identity; the profile remains internal."""
+    issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
 
-    async def fake_resolve_issuer_context(**kwargs):
+    async def fake_resolve_issuer_did(**kwargs):
         assert kwargs["organization_id"] == "org_acme"
+        assert kwargs["issuer_did"] == issuer_did
         assert kwargs["x_api_key"] == "secret"
-        if kwargs["issuer_profile_id"] == "ip-1":
-            raise FastAPIHTTPException(status_code=404, detail="not active")
         return JSONResponse(
             {
                 "ok": True,
-                "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
-                "signing_service_id": "svc-2",
-                "signing_key_reference": "",
+                "organization_id": "org_acme",
+                "issuer_did": issuer_did,
                 "verification_method_id": "",
-                "key_purpose": "vc_jwt_issuer",
-                "service": {},
+                "issuer_profile": {
+                    "id": "ip-2",
+                    "key_purpose": "vc_jwt_issuer",
+                },
+                "signing_service": {"id": "svc-2"},
             }
         )
 
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "secret")
     monkeypatch.setattr(
-        signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context
+        signing_keys, "internal_resolve_issuer_did", fake_resolve_issuer_did
     )
 
     request = _build_request(session_org_id="org_acme")
     assert await issuance._resolve_issuer_identity(request, "org_acme", None) is None
-    assert await issuance._resolve_issuer_identity(request, "org_acme", "ip-1") is None
 
-    identity = await issuance._resolve_issuer_identity(request, "org_acme", "ip-2")
+    identity = await issuance._resolve_issuer_identity(
+        request, "org_acme", issuer_did
+    )
     assert identity == {
-        "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
+        "issuer_profile_id": "ip-2",
+        "issuer_did": issuer_did,
         "signing_service_id": "svc-2",
         "signing_key_reference": "",
         "verification_method_id": "",
@@ -951,33 +962,38 @@ async def test_resolve_issuer_identity_prefers_format_scoped_profile(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """_resolve_issuer_identity should not inject a VC profile for mDoc issuance."""
+    issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
 
-    async def fake_resolve_issuer_context(**kwargs):
-        assert kwargs["issuer_profile_id"] == "ip-mdoc"
+    async def fake_resolve_issuer_did(**kwargs):
+        assert kwargs["issuer_did"] == issuer_did
         assert kwargs["credential_format"] == "mso_mdoc"
         assert kwargs["key_purpose"] == "mdoc_dsc"
         return JSONResponse(
             {
                 "ok": True,
-                "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
-                "signing_service_id": "svc-mdoc",
-                "signing_key_reference": "cred-dsc-acme-primary",
+                "organization_id": "org_acme",
+                "issuer_did": issuer_did,
                 "verification_method_id": "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary",
-                "key_purpose": "mdoc_dsc",
-                "service": {"algorithm": "ES256"},
+                "issuer_profile": {
+                    "id": "ip-mdoc",
+                    "signing_key_reference": "cred-dsc-acme-primary",
+                    "key_purpose": "mdoc_dsc",
+                    "algorithm": "ES256",
+                },
+                "signing_service": {"id": "svc-mdoc"},
             }
         )
 
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "secret")
     monkeypatch.setattr(
-        signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context
+        signing_keys, "internal_resolve_issuer_did", fake_resolve_issuer_did
     )
 
     request = _build_request(session_org_id="org_acme")
     identity = await issuance._resolve_issuer_identity(
         request,
         "org_acme",
-        "ip-mdoc",
+        issuer_did,
         credential_format="mso_mdoc",
     )
 
@@ -991,45 +1007,65 @@ async def test_resolve_issuer_identity_prefers_format_scoped_profile(
 
 
 @pytest.mark.asyncio
-async def test_resolve_issuer_identity_returns_none_when_no_active(
+async def test_resolve_issuer_identity_rejects_legacy_profile_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """_resolve_issuer_identity should return None when the explicit profile is not active."""
+    """A legacy profile ID is an assertion, never a selector."""
     from fastapi import HTTPException as FastAPIHTTPException
+    issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
 
-    async def fake_resolve_issuer_context(**kwargs):
-        raise FastAPIHTTPException(status_code=404, detail="not active")
+    async def fake_resolve_issuer_did(**kwargs):
+        return JSONResponse(
+            {
+                "ok": True,
+                "organization_id": "org_x",
+                "issuer_did": issuer_did,
+                "verification_method_id": f"{issuer_did}#key-1",
+                "issuer_profile": {"id": "resolved-profile"},
+                "signing_service": {"id": "svc-1"},
+            }
+        )
 
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "secret")
     monkeypatch.setattr(
-        signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context
+        signing_keys, "internal_resolve_issuer_did", fake_resolve_issuer_did
     )
 
     request = _build_request(session_org_id="org_x")
-    result = await issuance._resolve_issuer_identity(request, "org_x", "ip-1")
+    with pytest.raises(FastAPIHTTPException) as exc_info:
+        await issuance._resolve_issuer_identity(
+            request,
+            "org_x",
+            issuer_did,
+            legacy_issuer_profile_id="caller-profile",
+        )
 
-    assert result is None
+    assert exc_info.value.status_code == 409
+    assert "does not match" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
-async def test_resolve_issuer_identity_returns_none_when_no_profiles(
+async def test_resolve_issuer_identity_preserves_unknown_did(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """_resolve_issuer_identity should return None when no profiles exist at all."""
+    """An unknown or cross-org DID must remain a fail-closed 404."""
     from fastapi import HTTPException as FastAPIHTTPException
 
-    async def fake_resolve_issuer_context(**kwargs):
+    async def fake_resolve_issuer_did(**kwargs):
         raise FastAPIHTTPException(status_code=404, detail="no profiles")
 
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "secret")
     monkeypatch.setattr(
-        signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context
+        signing_keys, "internal_resolve_issuer_did", fake_resolve_issuer_did
     )
 
     request = _build_request(session_org_id="org_empty")
-    result = await issuance._resolve_issuer_identity(request, "org_empty", "ip-1")
+    with pytest.raises(FastAPIHTTPException) as exc_info:
+        await issuance._resolve_issuer_identity(
+            request, "org_empty", "did:web:example.com:issuer"
+        )
 
-    assert result is None
+    assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -1039,16 +1075,18 @@ async def test_resolve_issuer_identity_preserves_signing_key_service_outage(
     """_resolve_issuer_identity should not hide resolver outages as an invalid profile."""
     from fastapi import HTTPException as FastAPIHTTPException
 
-    async def fake_resolve_issuer_context(**kwargs):
+    async def fake_resolve_issuer_did(**kwargs):
         raise FastAPIHTTPException(status_code=503, detail="signing keys unavailable")
 
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "secret")
     monkeypatch.setattr(
-        signing_keys, "internal_resolve_issuer_context", fake_resolve_issuer_context
+        signing_keys, "internal_resolve_issuer_did", fake_resolve_issuer_did
     )
 
     request = _build_request(session_org_id="org_x")
     with pytest.raises(FastAPIHTTPException) as exc_info:
-        await issuance._resolve_issuer_identity(request, "org_x", "ip-1")
+        await issuance._resolve_issuer_identity(
+            request, "org_x", "did:web:example.com:issuer"
+        )
 
     assert exc_info.value.status_code == 503

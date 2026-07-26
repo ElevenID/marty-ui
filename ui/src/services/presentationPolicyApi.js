@@ -507,12 +507,19 @@ export function buildCredentialTemplatePayload(data = {}) {
     issuance_protocol: _issuanceProtocol,
     wallet_configs: _walletConfigs,
     compliance_profile: _embeddedComplianceProfile,
+    issuer_profile_id: _issuerProfileId,
+    issuer_key_id: _issuerKeyId,
+    issuer_key_algorithm: _issuerKeyAlgorithm,
+    issuer_algorithm: _issuerAlgorithm,
+    key_access_mode: _keyAccessMode,
+    remote_signing_config: _remoteSigningConfig,
+    issuer_certificate_chain_pem: _issuerCertificateChain,
     ...contractData
   } = data;
-  const issuerProfileId = String(data.issuer_profile_id || '').trim();
-  if (!issuerProfileId) {
-    const error = new Error('An active issuer profile is required before creating a credential template.');
-    error.code = 'ISSUER_PROFILE_REQUIRED';
+  const issuerDid = String(data.issuer_did || '').trim();
+  if (!issuerDid.startsWith('did:')) {
+    const error = new Error('An active issuer DID is required before creating a credential template.');
+    error.code = 'ISSUER_DID_REQUIRED';
     error.status = 400;
     throw error;
   }
@@ -533,7 +540,7 @@ export function buildCredentialTemplatePayload(data = {}) {
 
   return {
     ...contractData,
-    issuer_profile_id: issuerProfileId,
+    issuer_did: issuerDid,
     compliance_profile_id: complianceProfileId,
     vct: normalizeCredentialTemplateVct(data),
     claims,

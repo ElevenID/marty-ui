@@ -245,12 +245,13 @@ describe('CredentialTemplateWizard', () => {
       await waitFor(() => {
         expect(createdPayload).toEqual(expect.objectContaining({
           organization_id: 'console-org',
-          issuer_profile_id: 'issuer-1',
-          key_access_mode: 'REMOTE_SIGNING',
+          issuer_did: 'did:web:issuer.example.com',
           trust_profile_id: 'trust-1',
           compliance_profile_id: 'compliance-1',
           revocation_profile_id: 'revocation-1',
         }))
+        expect(createdPayload).not.toHaveProperty('issuer_profile_id')
+        expect(createdPayload).not.toHaveProperty('key_access_mode')
         expect(createdPayload).not.toHaveProperty('activate_immediately')
         expect(createdPayload).not.toHaveProperty('supported_wallet_ids')
         expect(createdPayload).not.toHaveProperty('issuance_protocol')

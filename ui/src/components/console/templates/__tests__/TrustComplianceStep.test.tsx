@@ -89,7 +89,7 @@ describe('TrustComplianceStep', () => {
     renderWithoutRouter(
       <MemoryRouter>
         <TrustComplianceStep
-          data={{ trust_profile_id: 'trust-1', issuer_profile_id: 'issuer-1', signing_algorithm: 'ES256' }}
+          data={{ trust_profile_id: 'trust-1', issuer_did: 'did:web:issuer.example.com', signing_algorithm: 'ES256' }}
           onChange={onChange}
         />
       </MemoryRouter>
@@ -143,7 +143,7 @@ describe('TrustComplianceStep', () => {
     expect(screen.queryByText(/optional compliance profile/i)).not.toBeInTheDocument()
   })
 
-  it('auto-selects a single KMS-backed issuer profile as remote signing input', async () => {
+  it('auto-selects a single issuer DID without exposing custody routing', async () => {
     const onChange = vi.fn()
     mockUseAsyncData
       .mockReturnValueOnce({
@@ -175,7 +175,7 @@ describe('TrustComplianceStep', () => {
     renderWithoutRouter(
       <MemoryRouter>
         <TrustComplianceStep
-          data={{ trust_profile_id: 'trust-1', issuer_profile_id: null, signing_algorithm: 'ES256' }}
+          data={{ trust_profile_id: 'trust-1', issuer_did: null, signing_algorithm: 'ES256' }}
           onChange={onChange}
         />
       </MemoryRouter>
@@ -183,14 +183,11 @@ describe('TrustComplianceStep', () => {
 
     await waitFor(() => {
       expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
-        issuer_profile_id: 'issuer-1',
+        issuer_profile_id: null,
         issuer_did: 'did:web:issuer.example.com',
-        issuer_key_id: 'issuer-key',
-        key_access_mode: 'REMOTE_SIGNING',
-        remote_signing_config: expect.objectContaining({
-          signing_service_id: 'managed-openbao-transit',
-          signing_key_reference: 'issuer-key',
-        }),
+        issuer_key_id: null,
+        key_access_mode: null,
+        remote_signing_config: null,
       }))
     })
   })

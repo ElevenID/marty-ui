@@ -24,7 +24,6 @@ def test_issuer_profile_identity_returns_only_public_did_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = {
-        "issuer_profile_id": "ip-marty-oid4vp-verifier",
         "issuer_did": "did:web:marty.example",
         "verification_method_id": "did:web:marty.example#oid4vp",
         "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
@@ -47,13 +46,14 @@ def test_issuer_profile_identity_returns_only_public_did_material(
     assert "exec -T gateway python -c" in rendered
     assert "SIGNING_KEYS_INTERNAL_API_KEY" in rendered
     assert "dev-signing-keys-internal-api-key" not in rendered
+    assert "OID4VP_ISSUER_PROFILE_ID" not in rendered
+    assert "/resolve-issuer-did" in rendered
 
 
 def test_issuer_profile_identity_rejects_private_jwk_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = {
-        "issuer_profile_id": "ip-marty-oid4vp-verifier",
         "issuer_did": "did:web:marty.example",
         "verification_method_id": "did:web:marty.example#oid4vp",
         "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "private"},
@@ -69,7 +69,7 @@ def test_issuer_profile_identity_rejects_private_jwk_material(
             {"returncode": 0, "stdout": json.dumps(payload), "stderr": ""},
         )(),
     )
-    with pytest.raises(ValueError, match="public ES256 DID identity"):
+    with pytest.raises(ValueError, match="public ES256 identity"):
         stack.issuer_profile_identity(["docker", "compose"])
 
 

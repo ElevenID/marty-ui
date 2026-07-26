@@ -3,11 +3,20 @@
 Marty does not accept verifier private keys through environment variables,
 files, Compose values, or API payloads.
 
-Request Objects are signed through an active issuer profile. The flow service
-selects `OID4VP_ISSUER_PROFILE_ID`; the gateway resolves that profile's DID,
-verification method, signing purpose, and non-exportable KMS binding. The flow
-service receives public DID material and a signature, but never a KMS service
-ID, provider key reference, or private key.
+Request Objects are signed through an active issuer profile, but callers select
+only the public DID. The flow service sends `organization_id`,
+`issuer_did`, the `oid4vp_request_signing` purpose, and `ES256` to the gateway.
+The organization registry must resolve that tuple to exactly one active
+profile; unknown, incompatible, cross-tenant, and ambiguous mappings fail
+closed. The gateway keeps the profile and non-exportable KMS binding internal.
+The flow service receives public DID material and a signature, but never a KMS
+service ID, provider key reference, or private key.
+
+`OID4VP_ISSUER_DID` may configure a service-managed default for SIOPv2 and the
+published DID document. Interactive UI requests always send the organization
+issuer DID. `issuer_profile_id` is accepted only during the compatibility
+window as an assertion that must exactly match the DID resolution result; it
+does not select a key.
 
 HAIP and Digital Credentials API responses require a fresh ECDH recipient key
 for each flow. Marty generates that short-lived protocol key in memory and

@@ -46,16 +46,16 @@ from flow.main import (
 )
 
 _PROFILE_SIGNER_UNDER_TEST = flow_main._sign_request_object_with_issuer_profile
+_PROFILE_IDENTITY_UNDER_TEST = flow_main._oid4vp_issuer_profile_identity
 
 
-def test_verification_runtime_accepts_profile_identity_not_kms_coordinates() -> None:
+def test_verification_runtime_accepts_public_did_not_kms_coordinates() -> None:
     request = StartVerificationFlowRequest(
         presentation_policy_id="policy-1",
-        issuer_profile_id="issuer-profile-1",
         issuer_did="did:web:verifier.example:oid4vp",
     )
 
-    assert request.issuer_profile_id == "issuer-profile-1"
+    assert request.issuer_profile_id is None
     assert request.issuer_did == "did:web:verifier.example:oid4vp"
 
     with pytest.raises(ValidationError):
@@ -68,6 +68,95 @@ def test_verification_runtime_accepts_profile_identity_not_kms_coordinates() -> 
                 "signing_key_reference": "oid4vp-verifier-key",
             }
         )
+
+
+@pytest.mark.asyncio
+async def test_oid4vp_identity_resolves_did_without_public_profile_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer_did = "did:web:verifier.example:oid4vp"
+    verification_method_id = f"{issuer_did}#request-signing-1"
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status_code = 200
+        organization_id = "org-1"
+
+        @classmethod
+        def json(cls) -> dict:
+            return {
+                "ok": True,
+                "organization_id": cls.organization_id,
+                "issuer_did": issuer_did,
+                "verification_method_id": verification_method_id,
+                "public_jwk": {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": "x-coordinate",
+                    "y": "y-coordinate",
+                },
+                "did_document": {
+                    "id": issuer_did,
+                    "verificationMethod": [{"id": verification_method_id}],
+                },
+                "issuer_profile": {
+                    "id": "internal-profile-1",
+                    "key_purpose": "oid4vp_request_signing",
+                    "algorithm": "ES256",
+                },
+                "signing_service": {"id": "internal-service-1"},
+            }
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, *, params, headers):
+            captured.update(url=url, params=params, headers=headers)
+            return _Response()
+
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_URL", "http://signing.internal")
+    monkeypatch.setattr(flow_main, "_read_secret_value", lambda _name: "api-key")
+    monkeypatch.setattr(
+        flow_main.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _Client(),
+    )
+
+    identity = await _PROFILE_IDENTITY_UNDER_TEST(
+        "org-1", issuer_did
+    )
+
+    assert captured == {
+        "url": "http://signing.internal/resolve-issuer-did",
+        "params": {
+            "organization_id": "org-1",
+            "issuer_did": issuer_did,
+            "key_purpose": "oid4vp_request_signing",
+            "algorithm": "ES256",
+        },
+        "headers": {"X-API-Key": "api-key"},
+    }
+    assert identity["issuer_profile_id"] == "internal-profile-1"
+    assert identity["issuer_did"] == issuer_did
+    assert "signing_service_id" not in identity
+    assert "signing_key_reference" not in identity
+
+    with pytest.raises(HTTPException) as failure:
+        await _PROFILE_IDENTITY_UNDER_TEST(
+            "org-1",
+            issuer_did,
+            legacy_issuer_profile_id="caller-selected-profile",
+        )
+    assert failure.value.status_code == 409
+
+    _Response.organization_id = "other-org"
+    with pytest.raises(HTTPException) as cross_tenant:
+        await _PROFILE_IDENTITY_UNDER_TEST("org-1", issuer_did)
+    assert cross_tenant.value.status_code == 409
 
 
 @pytest.mark.asyncio
@@ -237,15 +326,22 @@ def issuer_profile_signer(monkeypatch):
 
     async def _identity(
         _organization_id: str,
-        issuer_profile_id: str | None = None,
-        expected_issuer_did: str | None = None,
+        issuer_did: str | None = None,
+        legacy_issuer_profile_id: str | None = None,
     ):
         result = dict(identity)
-        result["issuer_profile_id"] = issuer_profile_id or identity["issuer_profile_id"]
-        if expected_issuer_did and expected_issuer_did != result["issuer_did"]:
+        if issuer_did and issuer_did != result["issuer_did"]:
             raise HTTPException(
                 status_code=409,
-                detail="Selected issuer profile does not own the requested issuer DID",
+                detail="Issuer DID is not active for this organization",
+            )
+        if (
+            legacy_issuer_profile_id
+            and legacy_issuer_profile_id != result["issuer_profile_id"]
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Legacy issuer_profile_id does not match resolved issuer DID",
             )
         return result
 
@@ -1130,9 +1226,7 @@ async def test_start_verification_rejects_profile_did_mismatch(monkeypatch) -> N
         )
 
     assert failure.value.status_code == 409
-    assert failure.value.detail == (
-        "Selected issuer profile does not own the requested issuer DID"
-    )
+    assert failure.value.detail == "Issuer DID is not active for this organization"
 
 
 @pytest.mark.asyncio
@@ -1157,7 +1251,6 @@ async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
     started = await start_verification_flow(
         StartVerificationFlowRequest(
             presentation_policy_id="policy-1",
-            issuer_profile_id="issuer-profile-1",
             issuer_did="did:web:verifier.example:oid4vp",
         ),
         user_id="auth-service",
@@ -1165,7 +1258,10 @@ async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
     )
     instance = await repo.get_instance(started.instance_id)
     assert instance is not None
-    assert instance.context["oid4vp_issuer_profile_id"] == "issuer-profile-1"
+    assert (
+        instance.context["oid4vp_issuer_profile_id"]
+        == flow_main._DEFAULT_OID4VP_ISSUER_PROFILE_ID
+    )
     assert instance.context["oid4vp_issuer_did"] == "did:web:verifier.example:oid4vp"
     parsed = urlparse(started.request_uri)
     parameters = parse_qs(parsed.query)
