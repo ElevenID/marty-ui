@@ -258,6 +258,7 @@ describe('presentationPolicyApi', () => {
         name: 'mDL Template',
         doctype: 'org.iso.18013.5.1.mDL',
         namespace: 'org.iso.18013.5.1',
+        issuer_did: 'did:web:issuer.example.com',
         issuer_profile_id: 'ip-1',
         compliance_profile_id: 'compliance-1',
         fields: [],
@@ -278,11 +279,12 @@ describe('presentationPolicyApi', () => {
 
       expect(receivedData.name).toBe(newTemplate.name)
       expect(receivedData.organization_id).toBe('org-1')
-      expect(receivedData.issuer_profile_id).toBe('ip-1')
+      expect(receivedData.issuer_did).toBe('did:web:issuer.example.com')
+      expect(receivedData).not.toHaveProperty('issuer_profile_id')
       expect(result.doctype).toBe(newTemplate.doctype)
     })
 
-    it('fails locally instead of creating a credential template without an issuer profile', async () => {
+    it('fails locally instead of creating a credential template without an issuer DID', async () => {
       let requested = false
       server.use(
         http.post('http://localhost:8000/v1/credential-templates', () => {
@@ -293,10 +295,10 @@ describe('presentationPolicyApi', () => {
 
       await expect(createCredentialTemplate({
         organization_id: 'org-1',
-        name: 'Missing Issuer Profile',
+        name: 'Missing Issuer DID',
         credential_type: 'EmployeeBadge',
       })).rejects.toMatchObject({
-        code: 'ISSUER_PROFILE_REQUIRED',
+        code: 'ISSUER_DID_REQUIRED',
         status: 400,
       })
       expect(requested).toBe(false)
@@ -326,6 +328,7 @@ describe('presentationPolicyApi', () => {
         organization_id: 'org-1',
         name: 'Wizard Payload',
         credential_type: 'EmployeeBadge',
+        issuer_did: 'did:web:issuer.example.com',
         issuer_profile_id: 'ip-1',
         compliance_profile_id: 'compliance-1',
         vct: 'com.example.employee',
@@ -391,6 +394,7 @@ describe('presentationPolicyApi', () => {
         organization_id: 'org-1',
         name: 'Active Template',
         credential_type: 'EmployeeBadge',
+        issuer_did: 'did:web:issuer.example.com',
         issuer_profile_id: 'ip-1',
         compliance_profile_id: 'compliance-1',
         vct: 'com.example.employee',
@@ -436,6 +440,7 @@ describe('presentationPolicyApi', () => {
         organization_id: 'org-1',
         name: 'Active Template',
         credential_type: 'EmployeeBadge',
+        issuer_did: 'did:web:issuer.example.com',
         issuer_profile_id: 'ip-1',
         compliance_profile_id: 'compliance-1',
         vct: 'com.example.employee',
@@ -488,6 +493,7 @@ describe('presentationPolicyApi', () => {
         organization_id: 'org-1',
         name: 'Recovered Created Template',
         credential_type: 'EmployeeBadge',
+        issuer_did: 'did:web:issuer.example.com',
         issuer_profile_id: 'ip-1',
         compliance_profile_id: 'compliance-1',
         vct: 'com.example.recovered',
@@ -683,6 +689,7 @@ describe('presentationPolicyApi', () => {
         organization_id: 'org-1',
         name: 'Canonical Payload',
         credential_type: 'EmployeeBadge',
+        issuer_did: 'did:web:issuer.example.com',
         issuer_profile_id: 'ip-1',
         compliance_profile_id: '123e4567-e89b-12d3-a456-426614174000',
         supported_wallet_ids: ['removed-wallet-selection'],

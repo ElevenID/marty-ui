@@ -35,10 +35,6 @@ const firstNonEmpty = (...values) => values
   .map((value) => (typeof value === 'string' ? value.trim() : value))
   .find((value) => value);
 
-const pruneEmpty = (value) => Object.fromEntries(
-  Object.entries(value).filter(([, entryValue]) => entryValue !== undefined && entryValue !== null && entryValue !== '')
-);
-
 const isActiveKmsBackedIssuerProfile = (profile) => {
   if (!profile) {
     return false;
@@ -69,38 +65,16 @@ const buildIssuerProfilePatch = (profile, currentAlgorithm = 'ES256') => {
     };
   }
 
-  const signingKeyReference = firstNonEmpty(
-    profile.signing_key_reference,
-    profile.key_reference,
-    profile.metadata?.signing_key_reference
-  );
-  const signingServiceId = firstNonEmpty(
-    profile.signing_service_id,
-    profile.service_id,
-    profile.metadata?.signing_service_id
-  );
-  const verificationMethodId = firstNonEmpty(
-    profile.verification_method_id,
-    profile.metadata?.verification_method_id
-  );
   const algorithm = firstNonEmpty(profile.algorithm, currentAlgorithm, 'ES256');
 
   return {
-    issuer_profile_id: profile.id || null,
+    issuer_profile_id: null,
     issuer_did: firstNonEmpty(profile.issuer_did, profile.did) || null,
-    issuer_key_id: signingKeyReference || signingServiceId || null,
-    issuer_algorithm: algorithm || null,
+    issuer_key_id: null,
+    issuer_algorithm: null,
     signing_algorithm: algorithm || currentAlgorithm || null,
-    key_access_mode: signingKeyReference || signingServiceId ? 'REMOTE_SIGNING' : null,
-    remote_signing_config: signingKeyReference || signingServiceId || verificationMethodId
-      ? pruneEmpty({
-          provider: 'managed-signing-service',
-          signing_service_id: signingServiceId,
-          signing_key_reference: signingKeyReference,
-          verification_method_id: verificationMethodId,
-          key_purpose: firstNonEmpty(profile.key_purpose, profile.metadata?.key_purpose),
-        })
-      : null,
+    key_access_mode: null,
+    remote_signing_config: null,
   };
 };
 
@@ -161,6 +135,12 @@ const TrustComplianceStep = ({ data, onChange }) => {
   const issuerProfiles = Array.isArray(issuerProfilesData)
     ? issuerProfilesData.filter(isActiveKmsBackedIssuerProfile)
     : [];
+  const issuerIdentities = [...new Map(
+    issuerProfiles.map((profile) => [
+      firstNonEmpty(profile.issuer_did, profile.did),
+      profile,
+    ])
+  ).values()];
   const complianceProfiles = Array.isArray(complianceProfilesData) ? complianceProfilesData : [];
 
   // Auto-select if only one active profile and none already selected
@@ -171,10 +151,10 @@ const TrustComplianceStep = ({ data, onChange }) => {
   }, [trustProfiles]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (issuerProfiles.length === 1 && !data.issuer_profile_id) {
-      onChange(buildIssuerProfilePatch(issuerProfiles[0], data.signing_algorithm));
+    if (issuerIdentities.length === 1 && !data.issuer_did) {
+      onChange(buildIssuerProfilePatch(issuerIdentities[0], data.signing_algorithm));
     }
-  }, [issuerProfiles]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [issuerIdentities]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (complianceProfiles.length === 1 && !data.compliance_profile_id) {
@@ -354,21 +334,26 @@ const TrustComplianceStep = ({ data, onChange }) => {
         </Box>
       )}
 
-      {/* Issuer Profile Selection */}
+      {/* Issuer DID Selection */}
       <FormControl fullWidth required sx={{ mb: 3 }}>
-        <InputLabel>Issuer Profile</InputLabel>
+        <InputLabel>Issuer DID</InputLabel>
         <Select
-          value={data.issuer_profile_id || ''}
+          value={data.issuer_did || ''}
           onChange={(e) => {
-            const selectedProfile = issuerProfiles.find((profile) => profile.id === e.target.value);
+            const selectedProfile = issuerIdentities.find(
+              (profile) => firstNonEmpty(profile.issuer_did, profile.did) === e.target.value
+            );
             onChange(buildIssuerProfilePatch(selectedProfile, data.signing_algorithm));
           }}
-          label="Issuer Profile"
+          label="Issuer DID"
           disabled={issuerProfilesLoading}
           SelectDisplayProps={{ 'data-testid': 'template-issuer-profile-select' }}
         >
-          {issuerProfiles.map((profile) => (
-            <MenuItem key={profile.id} value={profile.id}>
+          {issuerIdentities.map((profile) => (
+            <MenuItem
+              key={firstNonEmpty(profile.issuer_did, profile.did)}
+              value={firstNonEmpty(profile.issuer_did, profile.did)}
+            >
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
                 <span>{profile.name || profile.issuer_did}</span>
                 <Chip
@@ -381,23 +366,23 @@ const TrustComplianceStep = ({ data, onChange }) => {
           ))}
         </Select>
         <FormHelperText>
-          {`${issuerProfiles.length} active issuer profile${issuerProfiles.length !== 1 ? 's' : ''} available. Credentials will claim the selected DID as the issuer.`}
+          {`${issuerIdentities.length} active issuer DID${issuerIdentities.length !== 1 ? 's' : ''} available. The organization registry selects its custody profile.`}
         </FormHelperText>
       </FormControl>
 
-      {/* Show selected issuer profile */}
-      {data.issuer_profile_id && (
+      {/* Show selected issuer DID */}
+      {data.issuer_did && (
         <Box sx={{ mb: 3, p: 2, bgcolor: 'action.hover', borderRadius: 1 }}>
           <Typography variant="caption" color="text.secondary" gutterBottom display="block">
             Selected issuer identity
           </Typography>
           <Chip
-            label={issuerProfiles.find((p) => p.id === data.issuer_profile_id)?.name || 'Unknown profile'}
+            label={issuerIdentities.find((p) => firstNonEmpty(p.issuer_did, p.did) === data.issuer_did)?.name || 'Issuer identity'}
             color="primary"
             icon={<LanguageIcon />}
           />
           <Typography variant="body2" fontFamily="monospace" color="text.secondary" sx={{ mt: 0.5 }}>
-            {issuerProfiles.find((p) => p.id === data.issuer_profile_id)?.issuer_did || ''}
+            {data.issuer_did}
           </Typography>
         </Box>
       )}

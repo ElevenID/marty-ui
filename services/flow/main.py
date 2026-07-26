@@ -138,17 +138,48 @@ def _read_secret_value(name: str) -> str:
     return ""
 
 
+def _configured_oid4vp_issuer_did() -> str:
+    """Return the deployment's public verifier DID, never a key selector."""
+    configured = (
+        os.environ.get("OID4VP_ISSUER_DID")
+        or os.environ.get("MARTY_ISSUER_DID")
+        or ""
+    ).strip()
+    if configured:
+        return configured
+    public_base_url = os.environ.get(
+        "PUBLIC_BASE_URL", "https://beta.elevenidllc.com"
+    )
+    parsed = urllib.parse.urlparse(public_base_url)
+    authority = parsed.netloc.strip().replace(":", "%3A")
+    org_slug = (os.environ.get("MARTY_ORG_SLUG") or "marty").strip() or "marty"
+    if not authority:
+        return ""
+    return f"did:web:{authority}:orgs:{org_slug}"
+
+
 async def _oid4vp_issuer_profile_identity(
     organization_id: str,
-    issuer_profile_id: str | None = None,
-    expected_issuer_did: str | None = None,
+    issuer_did: str | None = None,
+    legacy_issuer_profile_id: str | None = None,
 ) -> dict[str, Any]:
-    """Resolve and bind public verifier identity through an issuer profile."""
-    profile_id = (
-        issuer_profile_id
-        or os.environ.get("OID4VP_ISSUER_PROFILE_ID")
-        or _DEFAULT_OID4VP_ISSUER_PROFILE_ID
+    """Resolve a public verifier DID to one org-owned issuer profile.
+
+    ``legacy_issuer_profile_id`` is a migration assertion only. It never
+    selects the signing identity.
+    """
+    resolved_did = (
+        issuer_did
+        or _configured_oid4vp_issuer_did()
     ).strip()
+    if not resolved_did.startswith("did:"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "issuer_did is required to start a signed verification flow; "
+                "configure OID4VP_ISSUER_DID for service-managed defaults."
+            ),
+        )
     base_url = os.environ.get(
         "SIGNING_KEYS_INTERNAL_URL",
         "http://gateway:8000/internal/signing-keys",
@@ -163,28 +194,63 @@ async def _oid4vp_issuer_profile_identity(
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(
-                f"{base_url}/issuer-profiles/{profile_id}/identity",
-                params={"organization_id": organization_id},
+                f"{base_url}/resolve-issuer-did",
+                params={
+                    "organization_id": organization_id,
+                    "issuer_did": resolved_did,
+                    "key_purpose": "oid4vp_request_signing",
+                    "algorithm": "ES256",
+                },
                 headers={"X-API-Key": api_key},
             )
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=503, detail="Issuer-profile identity service is unavailable"
         ) from exc
+    if response.status_code in {404, 409, 422}:
+        try:
+            detail = response.json().get("detail")
+        except Exception:  # noqa: BLE001
+            detail = None
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=detail or "OID4VP issuer DID could not be resolved",
+        )
     if response.status_code >= 400:
         raise HTTPException(
-            status_code=503, detail="OID4VP issuer profile is unavailable or invalid"
+            status_code=503, detail="OID4VP issuer DID resolver is unavailable"
         )
-    identity = response.json()
+    resolved = response.json()
+    profile = (
+        resolved.get("issuer_profile")
+        if isinstance(resolved.get("issuer_profile"), dict)
+        else {}
+    )
+    if resolved.get("organization_id") != organization_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Issuer DID resolver returned an identity outside the requested organization.",
+        )
+    profile_id = str(profile.get("id") or "")
+    identity = {
+        "issuer_profile_id": profile_id,
+        "organization_id": resolved.get("organization_id"),
+        "issuer_did": resolved.get("issuer_did"),
+        "verification_method_id": resolved.get("verification_method_id"),
+        "public_jwk": resolved.get("public_jwk"),
+        "did_document": resolved.get("did_document"),
+        "key_purpose": profile.get("key_purpose"),
+        "algorithm": profile.get("algorithm"),
+    }
     public_jwk = identity.get("public_jwk")
-    issuer_did = str(identity.get("issuer_did") or "")
+    identity_issuer_did = str(identity.get("issuer_did") or "")
     if (
-        identity.get("issuer_profile_id") != profile_id
+        not profile_id
         or identity.get("key_purpose") != "oid4vp_request_signing"
         or identity.get("algorithm") != "ES256"
-        or not issuer_did.startswith("did:")
+        or not identity_issuer_did.startswith("did:")
         or not str(identity.get("verification_method_id") or "").startswith(
-            f"{issuer_did}#"
+            f"{identity_issuer_did}#"
         )
         or not isinstance(public_jwk, dict)
         or public_jwk.get("kty") != "EC"
@@ -195,10 +261,21 @@ async def _oid4vp_issuer_profile_identity(
             status_code=503,
             detail="OID4VP issuer profile returned an invalid DID signing identity",
         )
-    if expected_issuer_did and issuer_did != expected_issuer_did:
+    if identity_issuer_did != resolved_did:
         raise HTTPException(
             status_code=409,
-            detail="Selected issuer profile does not own the requested issuer DID",
+            detail="Issuer DID resolver returned a different public identity",
+        )
+    if (
+        legacy_issuer_profile_id
+        and profile_id != legacy_issuer_profile_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Legacy issuer_profile_id does not match the profile resolved "
+                "from organization_id and issuer_did"
+            ),
         )
     return identity
 
@@ -3239,8 +3316,21 @@ class StartVerificationFlowRequest(BaseModel):
     # Optional so SIOPv2 flows (response_type=id_token) don't require a policy.
     presentation_policy_id: str | None = None
     organization_id: str | None = None
-    issuer_profile_id: str | None = None
-    issuer_did: str | None = Field(None, pattern=r"^did:", max_length=2048)
+    issuer_did: str | None = Field(
+        None,
+        pattern=r"^did:",
+        max_length=2048,
+        description="Public DID that signs the OID4VP Request Object.",
+    )
+    issuer_profile_id: str | None = Field(
+        None,
+        max_length=255,
+        json_schema_extra={"deprecated": True},
+        description=(
+            "Temporary legacy assertion only; it must match the profile "
+            "resolved from organization_id and issuer_did."
+        ),
+    )
     # SIOPv2 Draft 13 §9: response_type=id_token selects SIOPv2 authentication.
     response_type: str = "vp_token"
     trust_profile_id: str | None = None
@@ -3417,8 +3507,8 @@ async def start_verification_flow(
         )
         signing_identity = await _oid4vp_issuer_profile_identity(
             organization_id,
-            request.issuer_profile_id,
             request.issuer_did,
+            request.issuer_profile_id,
         )
         flow_definition_id = str(uuid.uuid4())
         instance = FlowInstance(
@@ -3522,8 +3612,8 @@ async def start_verification_flow(
     # Create a verification flow instance directly
     signing_identity = await _oid4vp_issuer_profile_identity(
         organization_id,
-        request.issuer_profile_id,
         request.issuer_did,
+        request.issuer_profile_id,
     )
     signing_profile_id = str(signing_identity["issuer_profile_id"])
     flow_definition_id = str(uuid.uuid4())
@@ -4168,8 +4258,8 @@ async def get_verification_request_object(
     )
     signing_identity = await _oid4vp_issuer_profile_identity(
         instance.organization_id,
-        signing_profile_id,
         instance.context.get("oid4vp_issuer_did"),
+        signing_profile_id,
     )
 
     # Build base URL for response_uri (where wallet posts the VP)

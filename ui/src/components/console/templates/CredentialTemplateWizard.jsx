@@ -60,7 +60,7 @@ const CredentialTemplateWizard = () => {
       case 1: // Claims
         return data.claims && data.claims.length > 0;
       case 2: // Trust & Compliance
-        return Boolean(data.trust_profile_id && data.issuer_profile_id && data.compliance_profile_id);
+        return Boolean(data.trust_profile_id && data.issuer_did && data.compliance_profile_id);
       case 3: // Crypto & Validity (optional)
         return Boolean(data.revocation_profile_id);
       case 4: // Review
@@ -98,7 +98,7 @@ const CredentialTemplateWizard = () => {
       claims: [],
       trust_profile_id: null,
       compliance_profile_id: null,
-      issuer_profile_id: null,
+      issuer_did: null,
       signing_algorithm: 'ES256',
       validity_rules: {
         ttl_seconds: 31536000, // 1 year

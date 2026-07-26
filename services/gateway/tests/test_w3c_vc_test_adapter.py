@@ -316,11 +316,13 @@ async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
             "id": template_id,
             "organization_id": "fixture-org",
             "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
+            "issuer_did": "did:web:issuer.example",
             "issuer_profile_id": "issuer-profile",
         }
 
     async def resolve_identity(*args, **kwargs) -> dict:
         return {
+            "issuer_profile_id": "issuer-profile",
             "signing_service_id": "signing-service",
             "issuer_did": "did:web:issuer.example",
         }

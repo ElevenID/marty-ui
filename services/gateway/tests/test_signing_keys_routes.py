@@ -4750,6 +4750,90 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
 
 
 @pytest.mark.asyncio
+async def test_internal_resolve_issuer_did_rejects_ambiguous_active_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A DID must resolve to exactly one compatible active profile."""
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+    issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
+    vm_id = f"{issuer_did}#cred-issuer-acme-es256"
+    profile = {
+        "organization_id": "org_issuer",
+        "issuer_did": issuer_did,
+        "signing_service_id": "svc-bao",
+        "signing_key_reference": "cred-issuer-acme-es256",
+        "verification_method_id": vm_id,
+        "key_purpose": "vc_jwt_issuer",
+        "algorithm": "ES256",
+        "status": "active",
+    }
+    docs = {
+        "org:org_issuer:issuer-profiles": {
+            "profiles": [
+                {**profile, "id": "ip-1"},
+                {**profile, "id": "ip-2"},
+            ]
+        },
+        "org:org_issuer:signing-key-services": {
+            "services": [
+                {
+                    "id": "svc-bao",
+                    "service_type": "custom-transit-compatible",
+                    "key_reference": "cred-issuer-acme-es256",
+                    "key_purposes": ["vc_jwt_issuer"],
+                    "credential_formats": ["dc+sd-jwt"],
+                    "algorithms": ["ES256"],
+                }
+            ],
+            "default_service_id": "svc-bao",
+        },
+        "org:org_issuer:signing-key-did-document": {
+            "id": issuer_did,
+            "controller": issuer_did,
+            "verificationMethod": [
+                {
+                    "id": vm_id,
+                    "type": "JsonWebKey",
+                    "controller": issuer_did,
+                    "publicKeyJwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "abc",
+                        "y": "def",
+                    },
+                }
+            ],
+            "assertionMethod": [vm_id],
+        },
+    }
+    redis_mock = AsyncMock()
+
+    async def fake_get(key):
+        value = docs.get(key)
+        return json.dumps(value) if value is not None else None
+
+    redis_mock.get = AsyncMock(side_effect=fake_get)
+    request = _build_request("org_issuer", redis_client=redis_mock)
+
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    with pytest.raises(FastAPIHTTPException) as exc_info:
+        await signing_keys.internal_resolve_issuer_did(
+            request=request,
+            organization_id="org_issuer",
+            issuer_did=issuer_did,
+            verification_method_id=None,
+            credential_format="dc+sd-jwt",
+            key_purpose="vc_jwt_issuer",
+            algorithm="ES256",
+            x_api_key="test-internal-key",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "multiple active issuer profiles" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_internal_resolve_issuer_did_rejects_unscoped_profile_for_requested_key_purpose(
     monkeypatch: pytest.MonkeyPatch,
 ):

@@ -258,11 +258,11 @@ def project_container_ids(project: str) -> list[str]:
 
 
 def issuer_profile_identity(command: list[str]) -> dict[str, Any]:
-    """Resolve the conformance verifier's public identity through its profile.
+    """Resolve the conformance verifier's public DID through the org registry.
 
     The query executes inside the gateway container, so the internal API key is
     read from that service's environment and is never copied to the host command
-    line or output. Only public DID material crosses the container boundary.
+    line or output. Profile IDs and KMS routing stay inside the gateway.
     """
     script = """
 import json
@@ -270,19 +270,45 @@ import os
 import urllib.parse
 import urllib.request
 
-profile_id = os.environ.get("OID4VP_ISSUER_PROFILE_ID", "ip-marty-oid4vp-verifier")
 organization_id = os.environ.get("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001")
+issuer_did = (
+    os.environ.get("OID4VP_ISSUER_DID")
+    or os.environ.get("MARTY_ISSUER_DID")
+    or ""
+).strip()
+if not issuer_did:
+    public_domain = os.environ.get("PUBLIC_DOMAIN", "").strip()
+    if not public_domain:
+        public_url = os.environ.get("PUBLIC_API_URL", "http://localhost:8000")
+        public_domain = urllib.parse.urlparse(public_url).netloc
+    did_authority = public_domain.strip().strip("/").replace(":", "%3A").replace("/", ":")
+    org_slug = os.environ.get("MARTY_ORG_SLUG", "marty").strip() or "marty"
+    issuer_did = f"did:web:{did_authority}:orgs:{org_slug}"
 api_key = os.environ["SIGNING_KEYS_INTERNAL_API_KEY"]
-query = urllib.parse.urlencode({"organization_id": organization_id})
+query = urllib.parse.urlencode({
+    "organization_id": organization_id,
+    "issuer_did": issuer_did,
+    "key_purpose": "oid4vp_request_signing",
+    "algorithm": "ES256",
+})
 request = urllib.request.Request(
-    f"http://127.0.0.1:8000/internal/signing-keys/issuer-profiles/{urllib.parse.quote(profile_id, safe='')}/identity?{query}",
+    f"http://127.0.0.1:8000/internal/signing-keys/resolve-issuer-did?{query}",
     headers={"X-Api-Key": api_key, "Accept": "application/json"},
 )
 with urllib.request.urlopen(request, timeout=15) as response:
     payload = json.loads(response.read().decode("utf-8"))
-if payload.get("issuer_profile_id") != profile_id:
-    raise RuntimeError("issuer-profile identity response did not match the configured profile")
-print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+profile = payload.get("issuer_profile") or {}
+if payload.get("issuer_did") != issuer_did:
+    raise RuntimeError("issuer DID response did not match the configured public identity")
+public_identity = {
+    "issuer_did": payload.get("issuer_did"),
+    "verification_method_id": payload.get("verification_method_id"),
+    "public_jwk": payload.get("public_jwk"),
+    "did_document": payload.get("did_document"),
+    "key_purpose": profile.get("key_purpose"),
+    "algorithm": profile.get("algorithm"),
+}
+print(json.dumps(public_identity, separators=(",", ":"), sort_keys=True))
 """.strip()
     completed = subprocess.run(
         [*command, "exec", "-T", "gateway", "python", "-c", script],
@@ -293,16 +319,14 @@ print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
     )
     if completed.returncode:
         detail = completed.stderr.strip() or "gateway identity query failed"
-        raise ValueError(f"could not resolve issuer-profile identity: {detail}")
+        raise ValueError(f"could not resolve issuer DID identity: {detail}")
     try:
         identity = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise ValueError("issuer-profile identity response was not JSON") from exc
+        raise ValueError("issuer DID identity response was not JSON") from exc
     public_jwk = identity.get("public_jwk") if isinstance(identity, dict) else None
     if (
         not isinstance(identity, dict)
-        or not isinstance(identity.get("issuer_profile_id"), str)
-        or not identity.get("issuer_profile_id")
         or not isinstance(identity.get("issuer_did"), str)
         or not isinstance(identity.get("verification_method_id"), str)
         or identity.get("key_purpose") != "oid4vp_request_signing"
@@ -315,7 +339,7 @@ print(json.dumps(payload, separators=(",", ":"), sort_keys=True))
         or PUBLIC_JWK_PRIVATE_PARAMETERS.intersection(public_jwk)
     ):
         raise ValueError(
-            "issuer profile did not resolve to the expected public ES256 DID identity"
+            "issuer DID did not resolve to the expected public ES256 identity"
         )
     return identity
 
