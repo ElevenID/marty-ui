@@ -732,6 +732,8 @@ def _required_format_to_canonical(required_format: str | None) -> str | None:
         "w3c-vcdm-di",
         "w3c-vcdm-v2-di",
         "data-integrity",
+        "json-ld",
+        "ldp-vc",
     }:
         return "W3C_VCDM_V2_DI"
     if (
