@@ -121,6 +121,37 @@ class TestGetTemplate:
 # ── ListTemplates ────────────────────────────────────────────────────
 
 
+    async def test_mdoc_metadata_is_preserved(self, ctx):
+        template = _make_template_response(
+            credential_type="org.iso.18013.5.1.mDL",
+            doctype="org.iso.18013.5.1.mDL",
+            supported_formats=["mdoc"],
+            claims=[
+                {
+                    "name": "given_name",
+                    "display_name": "Given Name",
+                    "claim_type": "string",
+                    "required": True,
+                    "mdoc_namespace": "org.iso.18013.5.1",
+                    "mdoc_element_identifier": "given_name",
+                }
+            ],
+        )
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=template)
+        servicer = _build_servicer(repo=repo)
+
+        response = await servicer.GetTemplate(
+            ct_pb2.GetTemplateRequest(template_id="tpl-1"),
+            ctx,
+        )
+
+        assert response.doctype == "org.iso.18013.5.1.mDL"
+        assert list(response.supported_formats) == ["mdoc"]
+        assert response.claims[0].mdoc_namespace == "org.iso.18013.5.1"
+        assert response.claims[0].mdoc_element_identifier == "given_name"
+
+
 class TestListTemplates:
     async def test_returns_templates(self, ctx):
         templates = [

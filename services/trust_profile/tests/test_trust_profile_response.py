@@ -171,6 +171,7 @@ def test_get_trust_profile_returns_protocol_shape_only() -> None:
             "certificate_pem": "-----BEGIN CERTIFICATE-----AAMVA",
             "issuer_did": None,
             "description": "Primary root",
+            "pinned_certificates": [],
         }
     ]
     assert body["revocation_policy"] == {
@@ -302,9 +303,10 @@ def test_create_trust_profile_round_trips_canvas_issuer_aliases() -> None:
             "source_type": "PINNED_ISSUER",
             "url": "https://canvas.example.edu/issuers/issuer-123",
             "certificate_pem": None,
-            "issuer_did": None,
-            "description": "Pinned Canvas Credentials issuer",
-        }
+                "issuer_did": None,
+                "description": "Pinned Canvas Credentials issuer",
+                "pinned_certificates": [],
+            }
     ]
     get_membership.assert_awaited_once_with("user-1", "org-1")
 

@@ -2150,6 +2150,12 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
                 "required": c.required,
                 **({"selectively_disclosable": c.selectively_disclosable} if c.selectively_disclosable else {}),
                 **({"namespace": c.mdoc_namespace} if c.mdoc_namespace else {}),
+                **({"mdoc_namespace": c.mdoc_namespace} if c.mdoc_namespace else {}),
+                **(
+                    {"mdoc_element_identifier": c.mdoc_element_identifier}
+                    if c.mdoc_element_identifier
+                    else {}
+                ),
                 **({"derived_from": c.name} if c.derivable else {}),
                 **({"display": {"label": c.display_name}} if c.display_name else {}),
             }

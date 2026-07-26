@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -3647,7 +3648,9 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
 
         credential_type: str | None = None
         credential_vct: str | None = None
+        credential_doctype: str | None = None
         supported_formats: list[str] = []
+        template_mdoc_claims: dict[str, tuple[str, str]] = {}
         if template_id:
             try:
                 tmpl_resp = await ct_stub.GetTemplate(
@@ -3656,7 +3659,16 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
                 if tmpl_resp.id:
                     credential_type = tmpl_resp.credential_type or None
                     credential_vct = tmpl_resp.vct or None
+                    credential_doctype = getattr(tmpl_resp, "doctype", "") or None
                     supported_formats = list(tmpl_resp.supported_formats) or []
+                    template_mdoc_claims = {
+                        claim.name: (
+                            claim.mdoc_namespace,
+                            claim.mdoc_element_identifier or claim.name,
+                        )
+                        for claim in getattr(tmpl_resp, "claims", [])
+                        if claim.mdoc_namespace
+                    }
             except Exception as exc:
                 logger.warning(
                     f"_build_presentation_definition: could not fetch template "
@@ -3722,6 +3734,7 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
                 )
 
         # Add path hints for required claims (enables selective disclosure)
+        mdoc_claim_requests: list[dict[str, Any]] = []
         for claim in req.get("requested_claims", []):
             claim_name = (
                 claim.get("claim_name")
@@ -3744,6 +3757,17 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
                     if isinstance(claim, dict)
                     else getattr(claim, "intent_to_retain", False)
                 )
+                if _is_mdoc_format(supported_formats):
+                    mdoc_path = template_mdoc_claims.get(str(claim_name))
+                    if mdoc_path:
+                        mdoc_claim_requests.append(
+                            {
+                                "id": "claim_"
+                                + str(claim_name).replace("-", "_").replace(".", "_"),
+                                "path": [mdoc_path[0], mdoc_path[1]],
+                                "intent_to_retain": bool(retain_claim),
+                            }
+                        )
                 fields.append(
                     {
                         "name": claim_display_name,
@@ -3767,6 +3791,11 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
             "name": display_name,
             "purpose": purpose,
         }
+        if _is_mdoc_format(supported_formats):
+            descriptor["_marty_mdoc"] = {
+                "doctype": credential_doctype or credential_type or "",
+                "claims": mdoc_claim_requests,
+            }
         descriptor["format"] = _oid4vp_presentation_formats(supported_formats)
         if fields:
             descriptor["constraints"] = {"fields": fields}
@@ -4013,6 +4042,11 @@ def _dcql_meta_for_descriptor(
     descriptor: dict[str, Any], fmt_name: str
 ) -> dict[str, Any]:
     """Derive DCQL meta from Presentation Exchange type/vct filters."""
+    if fmt_name == "mso_mdoc":
+        mdoc = descriptor.get("_marty_mdoc")
+        doctype = mdoc.get("doctype") if isinstance(mdoc, dict) else None
+        if isinstance(doctype, str) and doctype:
+            return {"doctype_value": doctype}
     sd_jwt_formats = {"dc+sd-jwt", "vc+sd-jwt", "spruce-vc+sd-jwt", "sd_jwt_vc"}
     for constraint_field in descriptor.get("constraints", {}).get("fields", []):
         values = _json_schema_const_values(constraint_field.get("filter"))
@@ -4028,8 +4062,27 @@ def _dcql_meta_for_descriptor(
     return {}
 
 
-def _dcql_claims_for_descriptor(descriptor: dict[str, Any]) -> list[dict[str, Any]]:
+def _dcql_claims_for_descriptor(
+    descriptor: dict[str, Any], fmt_name: str | None = None
+) -> list[dict[str, Any]]:
     """Derive DCQL claim requests from Presentation Exchange fields."""
+    if fmt_name == "mso_mdoc":
+        mdoc = descriptor.get("_marty_mdoc")
+        candidates = mdoc.get("claims", []) if isinstance(mdoc, dict) else []
+        return [
+            {
+                "id": claim["id"],
+                "path": list(claim["path"]),
+                "intent_to_retain": bool(claim.get("intent_to_retain", False)),
+            }
+            for claim in candidates
+            if isinstance(claim, dict)
+            and isinstance(claim.get("id"), str)
+            and isinstance(claim.get("path"), list)
+            and len(claim["path"]) == 2
+            and all(isinstance(value, str) and value for value in claim["path"])
+        ]
+
     fields = descriptor.get("constraints", {}).get("fields", [])
     required_fields = [field for field in fields if not field.get("optional")]
     candidate_fields = required_fields or fields
@@ -4228,6 +4281,7 @@ async def get_verification_request_object(
         else:
             request_payload["client_metadata"] = _oid4vp_client_metadata(base_url)
 
+        response_encryption_jwk: dict[str, str] | None = None
         if transport == "dc_api":
             expected_origins = _expected_origins_for_dc_api(base_url)
             if not lissi_compat:
@@ -4273,6 +4327,10 @@ async def get_verification_request_object(
             instance.context["oid4vp_expected_state"] = instance_id
             instance.context["verification_audience"] = client_identifier
 
+        instance.context["oid4vp_client_id"] = client_identifier
+        instance.context["oid4vp_response_uri"] = request_payload.get("response_uri")
+        instance.context["oid4vp_response_encryption_jwk"] = response_encryption_jwk
+
         # OID4VP presentation definition (built from the real policy)
         pd = await _build_presentation_definition(
             instance.context.get("presentation_policy_id", "")
@@ -4291,14 +4349,24 @@ async def get_verification_request_object(
             dcql_meta = _dcql_meta_for_descriptor(descriptor, fmt_name)
             if dcql_meta:
                 entry["meta"] = dcql_meta
-            claims = _dcql_claims_for_descriptor(descriptor)
+            claims = _dcql_claims_for_descriptor(descriptor, fmt_name)
             if claims:
                 entry["claims"] = claims
             dcql_entries.append(entry)
         if not dcql_entries:
             dcql_entries = [{"id": "default-credential", "format": "jwt_vc_json"}]
         if lissi_compat:
-            request_payload["presentation_definition"] = pd
+            request_payload["presentation_definition"] = {
+                **pd,
+                "input_descriptors": [
+                    {
+                        key: value
+                        for key, value in descriptor.items()
+                        if not key.startswith("_marty_")
+                    }
+                    for descriptor in pd.get("input_descriptors", [])
+                ],
+            }
         else:
             request_payload["dcql_query"] = {"credentials": dcql_entries}
 
@@ -4425,6 +4493,78 @@ def _base64url_decode(data: str) -> bytes:
     """Base64url decode with optional padding omitted."""
     padding = "=" * (-len(data) % 4)
     return base64.urlsafe_b64decode((data + padding).encode("ascii"))
+
+
+def _cbor_length(major_type: int, length: int) -> bytes:
+    """Encode a canonical definite-length CBOR header."""
+    if length < 24:
+        return bytes([(major_type << 5) | length])
+    if length <= 0xFF:
+        return bytes([(major_type << 5) | 24, length])
+    if length <= 0xFFFF:
+        return bytes([(major_type << 5) | 25]) + length.to_bytes(2, "big")
+    if length <= 0xFFFFFFFF:
+        return bytes([(major_type << 5) | 26]) + length.to_bytes(4, "big")
+    return bytes([(major_type << 5) | 27]) + length.to_bytes(8, "big")
+
+
+def _cbor_encode_handover_value(value: Any) -> bytes:
+    """Encode only the types used by ISO OpenID4VP HandoverInfo."""
+    if value is None:
+        return b"\xf6"
+    if isinstance(value, bytes):
+        return _cbor_length(2, len(value)) + value
+    if isinstance(value, str):
+        encoded = value.encode("utf-8")
+        return _cbor_length(3, len(encoded)) + encoded
+    if isinstance(value, list):
+        return _cbor_length(4, len(value)) + b"".join(
+            _cbor_encode_handover_value(item) for item in value
+        )
+    raise TypeError(f"Unsupported OpenID4VP handover CBOR type: {type(value).__name__}")
+
+
+def _openid4vp_response_key_thumbprint(
+    response_encryption_jwk: dict[str, Any] | None,
+) -> bytes | None:
+    """Return the raw RFC 7638 thumbprint used by OpenID4VP HandoverInfo."""
+    if response_encryption_jwk is None:
+        return None
+    if response_encryption_jwk.get("kty") != "EC":
+        raise ValueError("OpenID4VP response-encryption JWK must be an EC key")
+    required = ("crv", "kty", "x", "y")
+    if any(not isinstance(response_encryption_jwk.get(name), str) for name in required):
+        raise ValueError("OpenID4VP response-encryption JWK is incomplete")
+    canonical = json.dumps(
+        {name: response_encryption_jwk[name] for name in required},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).digest()
+
+
+def _build_openid4vp_mdoc_session_transcript(
+    *,
+    client_id: str,
+    nonce: str,
+    response_uri: str,
+    response_encryption_jwk: dict[str, Any] | None,
+) -> bytes:
+    """Build ISO 18013-7 OpenID4VP SessionTranscript from verifier-owned state."""
+    if not client_id or not nonce or not response_uri:
+        raise ValueError("OpenID4VP mdoc handover requires client_id, nonce, and response_uri")
+    handover_info = [
+        client_id,
+        nonce,
+        _openid4vp_response_key_thumbprint(response_encryption_jwk),
+        response_uri,
+    ]
+    handover_digest = hashlib.sha256(
+        _cbor_encode_handover_value(handover_info)
+    ).digest()
+    return _cbor_encode_handover_value(
+        [None, None, ["OpenID4VPHandover", handover_digest]]
+    )
 
 
 def _verifier_x509_certificates() -> list[x509.Certificate]:
@@ -5304,6 +5444,28 @@ async def _submit_verification_response_internal(
             from marty_proto.v1 import presentation_policy_service_pb2_grpc as pp_grpc
 
             pp_stub = pp_grpc.PresentationPolicyServiceStub(app.state.pp_grpc_channel)
+            evaluation_context: dict[str, Any] = {}
+            mdoc_client_id = instance.context.get("oid4vp_client_id")
+            mdoc_nonce = instance.context.get("nonce")
+            mdoc_response_uri = instance.context.get("oid4vp_response_uri")
+            if all(
+                isinstance(value, str) and value
+                for value in (mdoc_client_id, mdoc_nonce, mdoc_response_uri)
+            ):
+                evaluation_context = {
+                    "mdoc_session_transcript_b64url": _base64url_encode(
+                        _build_openid4vp_mdoc_session_transcript(
+                            client_id=mdoc_client_id,
+                            nonce=mdoc_nonce,
+                            response_uri=mdoc_response_uri,
+                            response_encryption_jwk=instance.context.get(
+                                "oid4vp_response_encryption_jwk"
+                            ),
+                        )
+                    ),
+                    "oid4vp_client_id": mdoc_client_id,
+                    "oid4vp_response_uri": mdoc_response_uri,
+                }
             eval_resp = await pp_stub.EvaluatePresentation(
                 pp_pb2.EvaluatePresentationRequest(
                     policy_id=policy_id,
@@ -5311,6 +5473,11 @@ async def _submit_verification_response_internal(
                     nonce=instance.context.get("nonce", ""),
                     audience=effective_audience,
                     trust_profile_id=instance.context.get("trust_profile_id") or "",
+                    context_json=_json.dumps(
+                        evaluation_context,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ),
                 )
             )
             if eval_resp.result:

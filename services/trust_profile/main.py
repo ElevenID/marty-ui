@@ -2288,6 +2288,7 @@ def _profile_to_response(profile: TrustProfile) -> TrustProfileResponse:
                 "certificate_pem": ts.certificate_pem,
                 "issuer_did": ts.issuer_did,
                 "description": ts.description,
+                "pinned_certificates": list(ts.pinned_certificates),
             }
             for ts in profile.trust_sources
         ],
