@@ -341,6 +341,72 @@ def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
     ]
 
 
+def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.credential_requirements[0].credential_payload_format = "mso_mdoc"
+    policy.holder_binding = pp.HolderBinding(required=False)
+    asyncio.run(repo.save(policy))
+    _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=[],
+        trust_sources=[
+            {
+                "source_type": "ROOT_CA",
+                "certificate_pem": (
+                    "-----BEGIN CERTIFICATE-----\nanchor\n"
+                    "-----END CERTIFICATE-----"
+                ),
+            }
+        ],
+    )
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "mdoc")
+    captured: dict[str, object] = {}
+
+    def _verify(*args, **_kwargs):
+        captured.update(
+            nonce=args[2],
+            audience=args[3],
+            context=args[5],
+            anchors=args[6],
+        )
+        return {
+            "verified": True,
+            "claims": {"email": "member@example.com"},
+            "issuer_did": "unknown",
+            "format": "mdoc",
+            "error": None,
+        }
+
+    monkeypatch.setattr(pp, "_verify_credential_by_format", _verify)
+    context = {
+        "mdoc_session_transcript_b64url": "gw",
+        "oid4vp_client_id": "did:web:verifier.example",
+    }
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(
+                vp_token="device-response",
+                nonce="nonce-1",
+                audience="did:web:verifier.example",
+                context=context,
+            ),
+            repo=repo,
+        )
+    )
+
+    assert response.result == "passed"
+    assert captured == {
+        "nonce": "nonce-1",
+        "audience": "did:web:verifier.example",
+        "context": context,
+        "anchors": [
+            "-----BEGIN CERTIFICATE-----\nanchor\n-----END CERTIFICATE-----"
+        ],
+    }
+
+
 def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_claims(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

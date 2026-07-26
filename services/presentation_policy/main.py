@@ -2999,10 +2999,13 @@ async def evaluate_presentation(
     # A nonce is a freshness challenge, not holder binding by itself. It is
     # supplied only when the configured proof profile requires a signed challenge.
     proof_freshness = policy.holder_binding.proof_freshness
+    requires_bound_presentation = (
+        policy.holder_binding.required or credential_format == "mdoc"
+    )
     verify_nonce = (
         request.nonce
         if (
-            policy.holder_binding.required
+            requires_bound_presentation
             and proof_freshness.get("challenge_required", True)
         )
         else None
@@ -3010,7 +3013,7 @@ async def evaluate_presentation(
     verify_audience = (
         request.audience
         if (
-            policy.holder_binding.required
+            requires_bound_presentation
             and proof_freshness.get("audience_binding_required", True)
         )
         else None
