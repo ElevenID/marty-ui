@@ -7,9 +7,15 @@ import VerificationSessionManager from './VerificationSessionManager';
 const {
   mockListFlowExecutions,
   mockStartVerificationFlow,
+  mockListIssuerProfiles,
+  mockListPresentationPolicies,
+  mockListFlows,
 } = vi.hoisted(() => ({
   mockListFlowExecutions: vi.fn(),
   mockStartVerificationFlow: vi.fn(),
+  mockListIssuerProfiles: vi.fn(),
+  mockListPresentationPolicies: vi.fn(),
+  mockListFlows: vi.fn(),
 }));
 
 vi.mock('../../../hooks/useNotifications', () => ({
@@ -20,16 +26,35 @@ vi.mock('../../../hooks/useNotifications', () => ({
 
 vi.mock('../../../services/flowsApi', () => ({
   listFlowExecutions: (...args: unknown[]) => mockListFlowExecutions(...args),
+  listFlows: (...args: unknown[]) => mockListFlows(...args),
 }));
 
 vi.mock('../../../services/zkVerificationApi', () => ({
   startVerificationFlow: (...args: unknown[]) => mockStartVerificationFlow(...args),
 }));
 
+vi.mock('../../../services/signingKeysApi', () => ({
+  listIssuerProfiles: (...args: unknown[]) => mockListIssuerProfiles(...args),
+}));
+
+vi.mock('../../../services/presentationPolicyApi', () => ({
+  listPresentationPolicies: (...args: unknown[]) => mockListPresentationPolicies(...args),
+}));
+
 describe('VerificationSessionManager', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListFlowExecutions.mockResolvedValue([]);
+    mockListIssuerProfiles.mockResolvedValue({
+      profiles: [{
+        id: 'internal-profile-1',
+        issuer_did: 'did:web:verifier.example:oid4vp',
+        key_purpose: 'oid4vp_request_signing',
+        status: 'active',
+      }],
+    });
+    mockListPresentationPolicies.mockResolvedValue([]);
+    mockListFlows.mockResolvedValue([]);
   });
 
   it('lists OID4VP sessions from MIP flow instances', async () => {
@@ -113,5 +138,39 @@ describe('VerificationSessionManager', () => {
       'data-qr-value',
       requestUri,
     );
+  });
+
+  it('starts verification with the organization issuer DID and no public profile ID', async () => {
+    const user = userEvent.setup();
+    mockListPresentationPolicies.mockResolvedValue([
+      { id: 'policy-1', name: 'Employment proof' },
+    ]);
+    mockStartVerificationFlow.mockResolvedValue({
+      instance_id: 'flow-1',
+      request_uri: 'openid4vp://authorize?request_uri=https%3A%2F%2Fexample.test%2Frequest',
+      status: 'AWAITING_WALLET',
+    });
+
+    render(<VerificationSessionManager organizationId="org-1" />);
+
+    const newVerification = await screen.findByRole('button', { name: 'New Verification' });
+    await waitFor(() => expect(newVerification).toBeEnabled());
+    await user.click(newVerification);
+    await user.click(await screen.findByLabelText('Presentation Policy'));
+    await user.click(await screen.findByRole('option', { name: 'Employment proof' }));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Start Session' }));
+
+    await waitFor(() => {
+      expect(mockStartVerificationFlow).toHaveBeenCalledWith({
+        organization_id: 'org-1',
+        issuer_did: 'did:web:verifier.example:oid4vp',
+        presentation_policy_id: 'policy-1',
+        trust_profile_id: undefined,
+        deployment_profile_id: undefined,
+        external_reference: undefined,
+      });
+    });
+    expect(mockStartVerificationFlow.mock.calls[0][0]).not.toHaveProperty('issuer_profile_id');
   });
 });

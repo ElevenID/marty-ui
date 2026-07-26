@@ -148,8 +148,8 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
 
             <Grid item xs={12} md={6}>
               <ReviewField
-                label="Issuer Profile"
-                value={data.issuer_profile_id || undefined}
+                label="Issuer DID"
+                value={data.issuer_did || undefined}
                 placeholder="Required before activation"
               />
             </Grid>

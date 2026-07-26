@@ -1,6 +1,8 @@
 """Credential Template, Wallet Registry, and Compliance Profile routes."""
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from gateway.models import (
@@ -40,13 +42,44 @@ async def create_credential_template(body: CredentialTemplateCreate, request: Re
     owner_org = await _resource_org_id("compliance-profiles", compliance_path, request)
     if owner_org is not None and owner_org != body.organization_id:
         raise HTTPException(status_code=403, detail="Access denied: compliance profile belongs to another organization")
+
+    from gateway.routes.issuance import _resolve_issuer_identity  # noqa: PLC0415
+
+    payload_format = str(body.credential_payload_format or "").strip().lower()
+    public_format = {
+        "w3c_vcdm_v2_sd_jwt": "dc+sd-jwt",
+        "ietf_sd_jwt": "dc+sd-jwt",
+        "sd_jwt_vc": "dc+sd-jwt",
+        "w3c_vcdm_v2_jwt_vc": "jwt_vc_json",
+        "vc_jwt": "jwt_vc_json",
+        "mdoc": "mso_mdoc",
+    }.get(payload_format, payload_format or None)
+    issuer_identity = await _resolve_issuer_identity(
+        request,
+        body.organization_id,
+        body.issuer_did,
+        legacy_issuer_profile_id=body.issuer_profile_id,
+        credential_format=public_format,
+        algorithm=body.signing_algorithm,
+    )
+    if issuer_identity is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "issuer_did must resolve to exactly one active KMS-backed issuer "
+                "profile for this template."
+            ),
+        )
+    internal_body = body.model_dump(exclude_none=True)
+    internal_body["issuer_profile_id"] = issuer_identity["issuer_profile_id"]
+    internal_body["issuer_did"] = issuer_identity["issuer_did"]
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
     return await proxy_request(
         request,
         service_url,
         "/v1/credential-templates",
-        body_override=body.model_dump_json(exclude_none=True).encode(),
+        body_override=json.dumps(internal_body).encode(),
     )
 
 

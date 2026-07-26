@@ -5868,6 +5868,7 @@ async def _resolve_org_scoped_issuer_identity(
     last_mismatch_detail = (
         "No matching DID verification method was found for the issuer profile."
     )
+    resolved_identities: list[dict[str, Any]] = []
     for profile in active_profiles:
         service_id = str(profile["signing_service_id"])
         key_reference = (
@@ -5968,23 +5969,41 @@ async def _resolve_org_scoped_issuer_identity(
         if not profile_with_vm.get("verification_method_id"):
             profile_with_vm["verification_method_id"] = method["id"]
 
-        return {
-            "ok": True,
-            "organization_id": organization_id,
-            "issuer_did": issuer_did,
-            "verification_method_id": method["id"],
-            "public_jwk": public_jwk,
-            "verification_method": method,
-            "did_document": did_doc,
-            "issuer_profile": profile_with_vm,
-            "signing_service": _safe_signing_service_metadata(normalized_service),
-            "resolver": {
-                "type": "organization_issuer_profile",
-                "source": "gateway_signing_key_registry",
-                "public_fallback_used": False,
-                "resolved_at": _utcnow_iso(),
-            },
-        }
+        resolved_identities.append(
+            {
+                "ok": True,
+                "organization_id": organization_id,
+                "issuer_did": issuer_did,
+                "verification_method_id": method["id"],
+                "public_jwk": public_jwk,
+                "verification_method": method,
+                "did_document": did_doc,
+                "issuer_profile": profile_with_vm,
+                "signing_service": _safe_signing_service_metadata(normalized_service),
+                "resolver": {
+                    "type": "organization_issuer_profile",
+                    "source": "gateway_signing_key_registry",
+                    "public_fallback_used": False,
+                    "resolved_at": _utcnow_iso(),
+                },
+            }
+        )
+
+    if len(resolved_identities) > 1:
+        profile_ids = sorted(
+            str(identity["issuer_profile"].get("id") or "<unknown>")
+            for identity in resolved_identities
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Issuer DID resolves to multiple active issuer profiles for the "
+                "requested organization, purpose, format, and algorithm. Repair "
+                f"the issuer registry before signing. Matching profiles: {profile_ids}"
+            ),
+        )
+    if resolved_identities:
+        return resolved_identities[0]
 
     raise HTTPException(status_code=404, detail=last_mismatch_detail)
 

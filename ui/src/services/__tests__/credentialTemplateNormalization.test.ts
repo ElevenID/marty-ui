@@ -50,6 +50,7 @@ describe('credential template normalization', () => {
       organization_id: 'org-1',
       name: 'Canonical Payload',
       credential_type: 'EmployeeBadge',
+      issuer_did: 'did:web:issuer.example.com',
       issuer_profile_id: 'ip-1',
       compliance_profile_id: 'compliance-1',
       vct: 'com.example.employee',
@@ -73,7 +74,8 @@ describe('credential template normalization', () => {
       not_before_offset_seconds: 900,
     })
     expect(payload.vct).toBe(`${window.location.origin}/vct/com.example.employee`)
-    expect(payload.issuer_profile_id).toBe('ip-1')
+    expect(payload.issuer_did).toBe('did:web:issuer.example.com')
+    expect(payload).not.toHaveProperty('issuer_profile_id')
     expect(payload.compliance_profile_id).toBe('compliance-1')
     expect(payload).not.toHaveProperty('compliance_profile')
     expect(payload.claims).toEqual([
@@ -100,6 +102,7 @@ describe('credential template normalization', () => {
       organization_id: 'org-1',
       name: 'EUDI Payload',
       credential_type: 'PersonIdentificationData',
+      issuer_did: 'did:web:issuer.example.com',
       issuer_profile_id: 'ip-1',
       compliance_profile_id: 'compliance-2',
       vct: 'https://credentials.example.com/pid',
@@ -114,11 +117,11 @@ describe('credential template normalization', () => {
     expect(payload).not.toHaveProperty('wallet_configs')
   })
 
-  it('rejects payloads without an active issuer profile id', () => {
+  it('rejects payloads without an active issuer DID', () => {
     expect(() => buildCredentialTemplatePayload({
       organization_id: 'org-1',
       name: 'Missing Issuer',
       credential_type: 'EmployeeBadge',
-    })).toThrow('active issuer profile')
+    })).toThrow('active issuer DID')
   })
 })
