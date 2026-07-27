@@ -428,6 +428,15 @@ def configure_oidf_internal_tls_port() -> None:
     os.environ["OIDF_INTERNAL_TLS_PORT"] = port
 
 
+def emit_service_logs(command: list[str]) -> int:
+    """Emit complete, timestamped project logs without terminal color codes."""
+    return subprocess.run(
+        [*command, "logs", "--no-color", "--timestamps"],
+        cwd=ROOT,
+        check=False,
+    ).returncode
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -459,6 +468,7 @@ def main() -> int:
             "config",
             "up",
             "ps",
+            "logs",
             "ports",
             "down",
         ),
@@ -555,6 +565,8 @@ def main() -> int:
                     [*command, "port", service, str(target)], cwd=ROOT, check=True
                 )
         return 0
+    if args.command == "logs":
+        return emit_service_logs(command)
     return subprocess.run([*command, "ps"], cwd=ROOT, check=False).returncode
 
 
