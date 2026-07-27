@@ -63,7 +63,6 @@ def _build_client(
 		*,
 		organization_id: str,
 		issuer_did: str | None,
-		issuer_profile_id: str | None,
 		credential_format: str | None = None,
 		algorithm: str | None = None,
 	) -> dict:
@@ -73,11 +72,6 @@ def _build_client(
 				detail="issuer_did is required.",
 			)
 		resolved_profile_id = "issuer-profile-1"
-		if issuer_profile_id and issuer_profile_id != resolved_profile_id:
-			raise credential_template.HTTPException(
-				status_code=409,
-				detail="legacy issuer_profile_id does not match issuer_did resolution.",
-			)
 		return {
 			"ok": True,
 			"organization_id": organization_id,
@@ -332,13 +326,6 @@ def test_create_credential_template_persists_artifact_pipeline_fields() -> None:
 			"trust_profile_id": "trust-profile-1",
 			"revocation_profile_id": "revocation-profile-1",
 			"issuer_did": "did:web:beta.elevenidllc.com:orgs:test",
-			"issuer_key_id": "stale-client-key",
-			"signing_algorithm": "ES256",
-			"key_access_mode": "LOCAL",
-			"remote_signing_config": {
-				"signing_service_id": "stale-client-service",
-				"signing_key_reference": "stale-client-key",
-			},
 			"auto_generate_artifacts": False,
 		},
 	)
@@ -471,13 +458,7 @@ def test_update_credential_template_canonicalizes_issuer_metadata() -> None:
 		f"/v1/credential-templates/{template.id}",
 		headers={"x-user-id": "user-1"},
 		json={
-			"issuer_key_id": "stale-client-key",
 			"issuer_did": "did:web:beta.elevenidllc.com:orgs:test",
-			"key_access_mode": "LOCAL",
-			"remote_signing_config": {
-				"signing_service_id": "stale-client-service",
-				"signing_key_reference": "stale-client-key",
-			},
 		},
 	)
 
@@ -514,8 +495,6 @@ def test_update_credential_template_validation_failure_does_not_dirty_stored_tem
 		headers={"x-user-id": "user-1"},
 		json={
 			"name": "Should Not Persist",
-			"issuer_profile_id": "missing-profile",
-			"issuer_key_id": "stale-client-key",
 			"issuer_did": "did:web:attacker.example:orgs:evil",
 		},
 	)
