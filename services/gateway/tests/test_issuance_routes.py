@@ -759,6 +759,75 @@ async def test_create_issuance_uses_template_bound_issuer_did(
     assert "X-Signing-Service-Id" not in captured["inject_headers"]
 
 
+@pytest.mark.asyncio
+async def test_create_issuance_rejects_cross_tenant_template_substitution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller cannot use an organization-B template while issuing as org A."""
+
+    resolver_called = False
+
+    async def fake_load_template(template_id, request):
+        return {
+            "id": template_id,
+            "organization_id": "org-b",
+            "issuer_did": "did:web:issuer.example:orgs:org-b",
+            "credential_payload_format": "sd_jwt_vc",
+        }
+
+    async def fake_resolve_identity(*_args, **_kwargs):
+        nonlocal resolver_called
+        resolver_called = True
+        return {"issuer_did": "did:web:issuer.example:orgs:org-b"}
+
+    monkeypatch.setattr(issuance, "_load_credential_template", fake_load_template)
+    monkeypatch.setattr(issuance, "_resolve_issuer_identity", fake_resolve_identity)
+
+    with pytest.raises(issuance.HTTPException) as exc_info:
+        await issuance.create_issuance(
+            issuance.IssuanceCreate(
+                organization_id="org-a", credential_template_id="template-org-b"
+            ),
+            _build_request(session_org_id="org-a"),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "belongs to another organization" in exc_info.value.detail
+    assert resolver_called is False
+
+
+@pytest.mark.asyncio
+async def test_create_issuance_fails_closed_when_did_resolution_is_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolver ambiguity is never replaced by a caller-selected profile."""
+
+    async def fake_load_template(template_id, request):
+        return {
+            "id": template_id,
+            "organization_id": "org-a",
+            "issuer_did": "did:web:issuer.example:orgs:org-a",
+            "credential_payload_format": "sd_jwt_vc",
+        }
+
+    async def fake_resolve_identity(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(issuance, "_load_credential_template", fake_load_template)
+    monkeypatch.setattr(issuance, "_resolve_issuer_identity", fake_resolve_identity)
+
+    with pytest.raises(issuance.HTTPException) as exc_info:
+        await issuance.create_issuance(
+            issuance.IssuanceCreate(
+                organization_id="org-a", credential_template_id="template-org-a"
+            ),
+            _build_request(session_org_id="org-a"),
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "exactly one active" in exc_info.value.detail
+
+
 def test_issuance_model_rejects_public_issuer_profile_selector() -> None:
     with pytest.raises(ValueError, match="issuer_profile_id"):
         issuance.IssuanceCreate.model_validate(
