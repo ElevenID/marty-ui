@@ -1983,6 +1983,7 @@ async def test_get_verification_request_object_supports_dc_api(monkeypatch):
     assert "d" not in encryption_key
     assert instance.context["dc_api_expected_origins"] == ["https://verifier.example"]
     assert instance.context["dc_api_protocol"] == _DC_API_PROTOCOL
+    assert instance.context["oid4vp_verifier_context"] is True
     assert (
         instance.context["dc_api_response_mode"] == flow_main._DC_API_JWT_RESPONSE_MODE
     )
@@ -2284,7 +2285,7 @@ async def test_submit_verification_without_policy_records_fail_closed_result_mes
 async def test_submit_verification_response_forwards_flow_trust_profile_to_policy(
     monkeypatch,
 ):
-    captured: dict[str, str] = {}
+    captured: dict[str, object] = {}
 
     class FakePresentationPolicyStub:
         def __init__(self, _channel):
@@ -2293,6 +2294,7 @@ async def test_submit_verification_response_forwards_flow_trust_profile_to_polic
         async def EvaluatePresentation(self, request):
             captured["policy_id"] = request.policy_id
             captured["trust_profile_id"] = request.trust_profile_id
+            captured["context"] = json.loads(request.context_json)
             return SimpleNamespace(
                 result="passed",
                 decision="allow",
@@ -2314,6 +2316,7 @@ async def test_submit_verification_response_forwards_flow_trust_profile_to_polic
             "nonce": "nonce-xyz",
             "presentation_policy_id": "policy-1",
             "trust_profile_id": "trust-1",
+            "oid4vp_verifier_context": True,
         },
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
@@ -2335,6 +2338,7 @@ async def test_submit_verification_response_forwards_flow_trust_profile_to_polic
     assert captured == {
         "policy_id": "policy-1",
         "trust_profile_id": "trust-1",
+        "context": {"oid4vp_verifier_context": True},
     }
 
 

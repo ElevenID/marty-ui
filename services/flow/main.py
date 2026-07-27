@@ -4295,6 +4295,13 @@ async def get_verification_request_object(
             ],
         }
     else:
+        # Mark every request produced by this endpoint as an OID4VP verifier
+        # transaction.  Presentation policies may also be used for credential-
+        # only checks that intentionally have no holder proof; the downstream
+        # verifier needs this trusted flow-owned context to distinguish those
+        # calls from an OID4VP presentation, where SD-JWT key binding is
+        # mandatory regardless of an operator's policy setting.
+        instance.context["oid4vp_verifier_context"] = True
         response_uri = f"{base_url}/v1/flows/instances/{instance_id}/submit"
         # OID4VP 1.0 Final §5.10: identify the verifier with a DID-based
         # client identifier. SpruceID Kit rejects did:key/did:jwk for request
@@ -5279,6 +5286,8 @@ async def _submit_verification_response_internal(
 
             pp_stub = pp_grpc.PresentationPolicyServiceStub(app.state.pp_grpc_channel)
             evaluation_context: dict[str, Any] = {}
+            if instance.context.get("oid4vp_verifier_context") is True:
+                evaluation_context["oid4vp_verifier_context"] = True
             mdoc_client_id = instance.context.get("oid4vp_client_id")
             mdoc_nonce = instance.context.get("nonce")
             mdoc_response_uri = instance.context.get("oid4vp_response_uri")
