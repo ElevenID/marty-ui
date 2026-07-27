@@ -19,17 +19,20 @@ server {
     # metadata; the authenticated gateway flow therefore remains real.
     location /realms/ {
         proxy_pass $keycloak_upstream;
-        proxy_set_header Host $host;
+        # Preserve the complete public authority, including a non-default
+        # port. Sender-constrained protocols sign the absolute request URI,
+        # so dropping the port makes a valid DPoP proof fail at the backend.
+        proxy_set_header Host $http_host;
         proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Host $http_host;
         proxy_set_header X-Forwarded-Port ${OIDF_INTERNAL_TLS_PORT};
     }
 
     location / {
         proxy_pass $gateway_upstream;
-        proxy_set_header Host $host;
+        proxy_set_header Host $http_host;
         proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Host $http_host;
         proxy_set_header X-Forwarded-Port ${OIDF_INTERNAL_TLS_PORT};
         proxy_set_header X-Real-IP $remote_addr;
         proxy_http_version 1.1;
