@@ -546,8 +546,8 @@ async def test_create_issuance_registers_public_wallet_key_and_binds_offer(
                 "alg": "ES256",
                 "use": "sig",
                 "kid": "wallet-key-1",
-                "x": "public-x",
-                "y": "public-y",
+                "x": "A" * 43,
+                "y": "B" * 43,
             }
         ]
     }
@@ -639,6 +639,62 @@ def test_issuance_model_rejects_authorized_client_private_key() -> None:
                         }
                     ]
                 },
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "invalid_key",
+    [
+        {
+            "kty": "RSA",
+            "crv": "P-256",
+            "kid": "wallet-key-1",
+            "x": "A" * 43,
+            "y": "B" * 43,
+        },
+        {
+            "kty": "EC",
+            "crv": "P-384",
+            "kid": "wallet-key-1",
+            "x": "A" * 43,
+            "y": "B" * 43,
+        },
+        {
+            "kty": "EC",
+            "crv": "P-256",
+            "kid": "wallet-key-1",
+            "x": "short",
+            "y": "B" * 43,
+        },
+        {
+            "kty": "EC",
+            "crv": "P-256",
+            "kid": "wallet-key-1",
+            "x": "A" * 43,
+            "y": "B" * 43,
+            "alg": "none",
+        },
+        {
+            "kty": "EC",
+            "crv": "P-256",
+            "kid": "wallet-key-1",
+            "x": "A" * 43,
+            "y": "B" * 43,
+            "unexpected": "drift",
+        },
+    ],
+)
+def test_issuance_model_matches_protocol_authorized_client_key_shape(
+    invalid_key: dict,
+) -> None:
+    with pytest.raises(ValueError):
+        issuance.IssuanceCreate(
+            organization_id="org_123",
+            issuer_did="did:web:issuer.example",
+            authorized_client={
+                "client_id": "official-wallet",
+                "jwks": {"keys": [invalid_key]},
             },
         )
 

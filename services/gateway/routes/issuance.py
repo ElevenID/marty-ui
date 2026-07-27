@@ -381,7 +381,7 @@ async def _register_oid4vci_authorized_client(
             json={
                 "organization_id": body.organization_id,
                 "client_id": body.authorized_client.client_id,
-                "jwks": body.authorized_client.jwks,
+                "jwks": body.authorized_client.jwks.model_dump(exclude_none=True),
                 "redirect_uris": [],
                 "active": True,
             },
