@@ -180,6 +180,19 @@ async def start_verification_flow(body: StartVerificationFlowRequest, request: R
     Creates a flow instance with a QR code / request_uri for wallet scanning.
     For stateless verification, use POST /v1/presentation-policies/{id}/evaluate instead.
     """
+    organization_id = str(body.organization_id or "").strip()
+    issuer_did = str(body.issuer_did or "").strip()
+    if not organization_id:
+        raise HTTPException(
+            status_code=422,
+            detail="organization_id is required to start a signed verification flow.",
+        )
+    if not issuer_did:
+        raise HTTPException(
+            status_code=422,
+            detail="issuer_did is required to start a signed verification flow.",
+        )
+
     policy_organization_id: str | None = None
     if body.presentation_policy_id:
         policy_organization_id = await _resource_org_id(
@@ -190,6 +203,11 @@ async def start_verification_flow(body: StartVerificationFlowRequest, request: R
         if not isinstance(policy_organization_id, str) or not policy_organization_id.strip():
             raise HTTPException(status_code=422, detail=f"Presentation policy not found: {body.presentation_policy_id}")
         policy_organization_id = policy_organization_id.strip()
+        if policy_organization_id != organization_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Presentation policy belongs to another organization.",
+            )
     if body.trust_profile_id:
         trust_profile_organization_id = await _resource_org_id(
             "trust-profiles",
@@ -203,6 +221,11 @@ async def start_verification_flow(body: StartVerificationFlowRequest, request: R
             raise HTTPException(
                 status_code=422,
                 detail="Trust profile and presentation policy must belong to the same organization",
+            )
+        if trust_profile_organization_id != organization_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Trust profile belongs to another organization.",
             )
     registry = get_registry()
     service_url = registry.get_service_url("flows")

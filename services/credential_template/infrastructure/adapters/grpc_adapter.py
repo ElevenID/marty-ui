@@ -146,7 +146,6 @@ async def _resolve_grpc_issuer_fields(
     context: Any,
     organization_id: str,
     issuer_did: str | None,
-    issuer_profile_id: str | None,
     credential_payload_format: str | None,
     issuer_algorithm: str | None,
 ) -> dict[str, Any] | None:
@@ -161,7 +160,6 @@ async def _resolve_grpc_issuer_fields(
             SimpleNamespace(state=SimpleNamespace()),
             organization_id=organization_id,
             issuer_did=issuer_did,
-            issuer_profile_id=issuer_profile_id,
             credential_format=payload_format_to_wire(credential_payload_format),
             algorithm=issuer_algorithm or None,
         )
@@ -288,7 +286,6 @@ class CredentialTemplateServiceGrpc(
             context=context,
             organization_id=request.organization_id,
             issuer_did=getattr(request, "issuer_did", "") or None,
-            issuer_profile_id=getattr(request, "issuer_profile_id", "") or None,
             credential_payload_format=credential_payload_format,
             issuer_algorithm=getattr(request, "issuer_algorithm", "") or None,
         )
@@ -409,8 +406,6 @@ class CredentialTemplateServiceGrpc(
                 context.set_details(str(exc))
                 return ct_pb2.TemplateResponse()
 
-        if getattr(request, "issuer_profile_id", ""):
-            template.issuer_profile_id = request.issuer_profile_id
         if getattr(request, "issuer_did", ""):
             template.issuer_did = request.issuer_did
         if getattr(request, "issuer_algorithm", ""):
@@ -461,7 +456,6 @@ class CredentialTemplateServiceGrpc(
             context=context,
             organization_id=template.organization_id,
             issuer_did=getattr(template, "issuer_did", None),
-            issuer_profile_id=getattr(template, "issuer_profile_id", None),
             credential_payload_format=template.credential_payload_format,
             issuer_algorithm=getattr(template, "issuer_algorithm", None),
         )
@@ -497,7 +491,6 @@ class CredentialTemplateServiceGrpc(
             context=context,
             organization_id=template.organization_id,
             issuer_did=getattr(template, "issuer_did", None),
-            issuer_profile_id=getattr(template, "issuer_profile_id", None),
             credential_payload_format=template.credential_payload_format,
             issuer_algorithm=getattr(template, "issuer_algorithm", None),
         )

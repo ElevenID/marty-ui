@@ -1017,14 +1017,10 @@ class CreateCredentialTemplateRequest(BaseModel):
     revocation_profile_id: str | None = None
     # Compliance
     compliance_profile_id: str = Field(min_length=1, max_length=255)
-    issuer_key_id: str | None = None
     issuer_algorithm: str | None = None
     signing_algorithm: str | None = None
-    key_access_mode: str | None = None
-    remote_signing_config: dict[str, Any] | None = None
     issuer_certificate_chain_pem: str | None = None
     issuer_did: str | None = None
-    issuer_profile_id: str | None = None
     auto_generate_artifacts: bool = False
     credential_payload_format: str | None = None
     schema_uri: dict | None = None
@@ -1046,14 +1042,10 @@ class UpdateCredentialTemplateRequest(BaseModel):
     application_template_id: str | None = None
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
-    issuer_key_id: str | None = None
     issuer_algorithm: str | None = None
     signing_algorithm: str | None = None
-    key_access_mode: str | None = None
-    remote_signing_config: dict[str, Any] | None = None
     issuer_certificate_chain_pem: str | None = None
     issuer_did: str | None = None
-    issuer_profile_id: str | None = None
     auto_generate_artifacts: bool | None = None
     credential_payload_format: str | None = None
 
@@ -1518,7 +1510,6 @@ async def _require_active_issuer_profile(
     *,
     organization_id: str,
     issuer_did: str | None,
-    issuer_profile_id: str | None,
     credential_format: str | None = None,
     algorithm: str | None = None,
 ) -> dict[str, Any]:
@@ -1533,8 +1524,6 @@ async def _require_active_issuer_profile(
         )
     if not requested_did.startswith("did:"):
         raise HTTPException(status_code=422, detail="issuer_did must be a DID string.")
-
-    legacy_profile_id = str(issuer_profile_id or "").strip() or None
 
     base_url = os.environ.get("SIGNING_KEYS_INTERNAL_URL", "http://gateway:8000/internal/signing-keys").rstrip("/")
     api_key = _read_secret_value("SIGNING_KEYS_INTERNAL_API_KEY") or _read_secret_value("ISSUANCE_API_KEY")
@@ -1629,14 +1618,6 @@ async def _require_active_issuer_profile(
             detail=(
                 "issuer_did did not resolve to a complete organization-owned "
                 "managed-custody issuer identity."
-            ),
-        )
-    if legacy_profile_id and legacy_profile_id != resolved_profile_id:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "The legacy issuer_profile_id assertion does not match issuer_did "
-                "resolution. issuer_did is authoritative."
             ),
         )
     return payload
@@ -1804,7 +1785,6 @@ async def create_credential_template(
         request,
         organization_id=body.organization_id,
         issuer_did=body.issuer_did,
-        issuer_profile_id=body.issuer_profile_id,
         credential_format=format_to_wire(CredentialFormat(credential_payload_format)),
         algorithm=body.issuer_algorithm or body.signing_algorithm,
     )
@@ -1971,8 +1951,6 @@ async def update_credential_template(
         candidate.trust_profile_id = request.trust_profile_id
     if request.revocation_profile_id is not None:
         candidate.revocation_profile_id = request.revocation_profile_id
-    if request.issuer_profile_id is not None:
-        candidate.issuer_profile_id = request.issuer_profile_id
     if request.issuer_did is not None:
         candidate.issuer_did = request.issuer_did
     if request.issuer_algorithm is not None or request.signing_algorithm is not None:
@@ -2012,7 +1990,6 @@ async def update_credential_template(
         fastapi_request,
         organization_id=candidate.organization_id,
         issuer_did=candidate.issuer_did,
-        issuer_profile_id=candidate.issuer_profile_id,
         credential_format=payload_format_to_wire(candidate.credential_payload_format),
         algorithm=candidate.issuer_algorithm,
     )
@@ -2065,7 +2042,6 @@ async def activate_credential_template(
         fastapi_request,
         organization_id=template.organization_id,
         issuer_did=template.issuer_did,
-        issuer_profile_id=template.issuer_profile_id,
         credential_format=payload_format_to_wire(template.credential_payload_format),
         algorithm=template.issuer_algorithm,
     )

@@ -4617,7 +4617,12 @@ async def internal_resolve_issuer_context(
     request: Request,
     organization_id: str = Query(..., description="Organization ID"),
     issuer_profile_id: str | None = Query(
-        None, description="Explicit issuer profile ID to use"
+        None,
+        description="Internal legacy issuer-profile selector; public callers resolve by issuer DID",
+    ),
+    issuer_did: str | None = Query(
+        None,
+        description="Published issuer DID that must resolve to exactly one active profile",
     ),
     issuer_mode: str = Query(
         "org_managed",
@@ -4635,6 +4640,10 @@ async def internal_resolve_issuer_context(
     service that should sign credentials later.
     """
     _require_internal_signing_key_api_key(x_api_key)
+    # FastAPI substitutes query defaults during HTTP handling, while direct
+    # unit calls retain the Query object. Only an actual non-empty string is a
+    # DID selector.
+    issuer_did = issuer_did.strip() if isinstance(issuer_did, str) else None
     requested_issuer_mode = _normalize_issuer_mode(issuer_mode)
 
     profiles_doc = await _load_json_document(
@@ -4666,6 +4675,11 @@ async def internal_resolve_issuer_context(
                 status_code=404,
                 detail="Requested issuer profile is not active for this organization.",
             )
+        if issuer_did and selected.get("issuer_did") != issuer_did:
+            raise HTTPException(
+                status_code=409,
+                detail="issuer_profile_id does not match the requested issuer_did.",
+            )
         if key_purpose and selected.get("key_purpose") != key_purpose:
             raise HTTPException(
                 status_code=409,
@@ -4676,12 +4690,19 @@ async def internal_resolve_issuer_context(
             )
         active_profiles = [selected]
     else:
-        active_profiles = [
-            profile
-            for profile in active_profiles
-            if _normalize_issuer_mode(profile.get("issuer_mode"))
-            == requested_issuer_mode
-        ]
+        if issuer_did:
+            active_profiles = [
+                profile
+                for profile in active_profiles
+                if profile.get("issuer_did") == issuer_did
+            ]
+        else:
+            active_profiles = [
+                profile
+                for profile in active_profiles
+                if _normalize_issuer_mode(profile.get("issuer_mode"))
+                == requested_issuer_mode
+            ]
 
     if key_purpose:
         preferred = [
@@ -4697,6 +4718,15 @@ async def internal_resolve_issuer_context(
             detail=(
                 "No active issuer profile is configured for this organization. "
                 "Create a DID identity backed by a registered remote signing service first."
+            ),
+        )
+
+    if len(active_profiles) != 1:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Issuer DID resolution is ambiguous; configure exactly one active "
+                "issuer profile for this organization, DID, purpose, and format."
             ),
         )
 

@@ -112,7 +112,6 @@ async def test_resolves_did_without_public_profile_selector(
         _request(),
         organization_id="org-1",
         issuer_did=ISSUER_DID,
-        issuer_profile_id=None,
         credential_format="sd_jwt_vc",
         algorithm="ES256",
     )
@@ -157,22 +156,11 @@ def test_signing_format_uses_managed_service_capability_names(
 
 
 @pytest.mark.asyncio
-async def test_legacy_profile_is_only_a_matching_assertion(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install_client(monkeypatch)
-
-    with pytest.raises(credential_template.HTTPException) as exc_info:
-        await _require_active_issuer_profile(
-            _request(),
-            organization_id="org-1",
-            issuer_did=ISSUER_DID,
-            issuer_profile_id="attacker-selected-profile",
-            credential_format="sd_jwt_vc",
+def test_public_template_request_rejects_profile_selector() -> None:
+    with pytest.raises(ValueError, match="issuer_profile_id"):
+        credential_template.CreateCredentialTemplateRequest.model_validate(
+            {"issuer_profile_id": "attacker-selected-profile"}
         )
-
-    assert exc_info.value.status_code == 409
-    assert "issuer_did is authoritative" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -198,7 +186,6 @@ async def test_resolution_failures_fail_closed(
             _request(),
             organization_id="org-1",
             issuer_did=ISSUER_DID,
-            issuer_profile_id=None,
         )
 
     assert exc_info.value.status_code == expected_status
@@ -240,7 +227,6 @@ async def test_incomplete_or_cross_tenant_identity_fails_closed(
             _request(),
             organization_id="org-1",
             issuer_did=ISSUER_DID,
-            issuer_profile_id=None,
         )
 
     assert exc_info.value.status_code == 422
@@ -261,7 +247,6 @@ async def test_resolution_outage_fails_closed(
             _request(),
             organization_id="org-1",
             issuer_did=ISSUER_DID,
-            issuer_profile_id=None,
         )
 
     assert exc_info.value.status_code == 503

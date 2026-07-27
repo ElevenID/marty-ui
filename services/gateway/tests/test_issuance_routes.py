@@ -465,7 +465,7 @@ async def test_create_issuance_rejects_claims_only_issuer_profile_id():
 
 
 @pytest.mark.asyncio
-async def test_create_issuance_resolves_did_and_forwards_internal_profile_context(
+async def test_create_issuance_resolves_did_without_forwarding_profile_selectors(
     monkeypatch: pytest.MonkeyPatch,
 ):
     captured: dict = {}
@@ -474,7 +474,6 @@ async def test_create_issuance_resolves_did_and_forwards_internal_profile_contex
         request,
         organization_id,
         issuer_did,
-        legacy_issuer_profile_id=None,
         credential_format=None,
         key_purpose=None,
         algorithm=None,
@@ -482,7 +481,6 @@ async def test_create_issuance_resolves_did_and_forwards_internal_profile_contex
         captured["resolver"] = {
             "organization_id": organization_id,
             "issuer_did": issuer_did,
-            "legacy_issuer_profile_id": legacy_issuer_profile_id,
             "credential_format": credential_format,
         }
         return {
@@ -495,9 +493,10 @@ async def test_create_issuance_resolves_did_and_forwards_internal_profile_contex
             "algorithm": "ES256",
         }
 
-    async def _proxy(request, service_url, path, inject_headers=None):
+    async def _proxy(request, service_url, path, body_override=None, inject_headers=None):
         captured["service_url"] = service_url
         captured["path"] = path
+        captured["body"] = json.loads(body_override)
         captured["inject_headers"] = inject_headers
         return JSONResponse(
             {"id": "iss-1", "organization_id": "org_123", "status": "PENDING"}
@@ -521,16 +520,12 @@ async def test_create_issuance_resolves_did_and_forwards_internal_profile_contex
     assert captured["resolver"] == {
         "organization_id": "org_123",
         "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
-        "legacy_issuer_profile_id": None,
         "credential_format": "dc+sd-jwt",
     }
     assert captured["service_url"] == "http://issuance-service"
     assert captured["path"] == "/v1/issuance/initiate"
-    assert captured["inject_headers"] == {
-        "X-API-Key": "secret",
-        "X-Issuer-Profile-Id": "ip-1",
-        "X-Issuer-Did": "did:web:beta.elevenidllc.com:orgs:acme",
-    }
+    assert captured["inject_headers"] == {"X-API-Key": "secret"}
+    assert captured["body"]["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:acme"
 
 
 @pytest.mark.asyncio
@@ -613,11 +608,7 @@ async def test_create_issuance_registers_public_wallet_key_and_binds_offer(
     assert captured["body"]["authorized_client_id"] == "official-wallet"
     assert "authorized_client" not in captured["body"]
     assert captured["body"]["issuer_did"] == "did:web:issuer.example"
-    assert captured["inject_headers"] == {
-        "X-API-Key": "secret",
-        "X-Issuer-Profile-Id": "ip-1",
-        "X-Issuer-Did": "did:web:issuer.example",
-    }
+    assert captured["inject_headers"] == {"X-API-Key": "secret"}
 
 
 def test_issuance_model_rejects_authorized_client_private_key() -> None:
@@ -700,7 +691,7 @@ def test_issuance_model_matches_protocol_authorized_client_key_shape(
 
 
 @pytest.mark.asyncio
-async def test_create_issuance_uses_template_bound_issuer_profile(
+async def test_create_issuance_uses_template_bound_issuer_did(
     monkeypatch: pytest.MonkeyPatch,
 ):
     captured: dict = {}
@@ -719,7 +710,6 @@ async def test_create_issuance_uses_template_bound_issuer_profile(
         request,
         organization_id,
         issuer_did,
-        legacy_issuer_profile_id=None,
         credential_format=None,
         key_purpose=None,
         algorithm=None,
@@ -727,7 +717,6 @@ async def test_create_issuance_uses_template_bound_issuer_profile(
         captured["resolver"] = {
             "organization_id": organization_id,
             "issuer_did": issuer_did,
-            "legacy_issuer_profile_id": legacy_issuer_profile_id,
             "credential_format": credential_format,
         }
         return {
@@ -736,7 +725,8 @@ async def test_create_issuance_uses_template_bound_issuer_profile(
             "signing_service_id": "svc-bao",
         }
 
-    async def _proxy(request, service_url, path, inject_headers=None):
+    async def _proxy(request, service_url, path, body_override=None, inject_headers=None):
+        captured["body"] = json.loads(body_override)
         captured["inject_headers"] = inject_headers
         return JSONResponse(
             {"id": "iss-1", "organization_id": "org_123", "status": "PENDING"}
@@ -762,39 +752,22 @@ async def test_create_issuance_uses_template_bound_issuer_profile(
     assert captured["resolver"] == {
         "organization_id": "org_123",
         "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
-        "legacy_issuer_profile_id": "ip-template",
         "credential_format": "dc+sd-jwt",
     }
-    assert captured["inject_headers"]["X-Issuer-Profile-Id"] == "ip-template"
+    assert captured["inject_headers"] == {"X-API-Key": "secret"}
+    assert captured["body"]["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:acme"
     assert "X-Signing-Service-Id" not in captured["inject_headers"]
 
 
-@pytest.mark.asyncio
-async def test_create_issuance_rejects_body_issuer_profile_override_for_template(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    async def fake_load_template(template_id, request):
-        return {
-            "id": template_id,
-            "organization_id": "org_123",
-            "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
-            "issuer_profile_id": "ip-template",
-        }
-
-    monkeypatch.setattr(issuance, "_load_credential_template", fake_load_template)
-
-    with pytest.raises(issuance.HTTPException) as exc_info:
-        await issuance.create_issuance(
-            issuance.IssuanceCreate(
-                organization_id="org_123",
-                credential_template_id="template-1",
-                issuer_profile_id="ip-other",
-            ),
-            _build_request(session_org_id="org_123"),
+def test_issuance_model_rejects_public_issuer_profile_selector() -> None:
+    with pytest.raises(ValueError, match="issuer_profile_id"):
+        issuance.IssuanceCreate.model_validate(
+            {
+                "organization_id": "org_123",
+                "credential_template_id": "template-1",
+                "issuer_profile_id": "ip-other",
+            }
         )
-
-    assert exc_info.value.status_code == 409
-    assert "does not match the credential template" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -1203,11 +1176,10 @@ def test_public_signing_format_normalizes_template_and_wire_names(
 
 
 @pytest.mark.asyncio
-async def test_resolve_issuer_identity_rejects_legacy_profile_mismatch(
+async def test_resolve_issuer_identity_returns_internal_profile_only(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """A legacy profile ID is an assertion, never a selector."""
-    from fastapi import HTTPException as FastAPIHTTPException
+    """The resolver returns a profile only as trusted internal routing state."""
     issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
 
     async def fake_resolve_issuer_did(**kwargs):
@@ -1228,16 +1200,11 @@ async def test_resolve_issuer_identity_rejects_legacy_profile_mismatch(
     )
 
     request = _build_request(session_org_id="org_x")
-    with pytest.raises(FastAPIHTTPException) as exc_info:
-        await issuance._resolve_issuer_identity(
-            request,
-            "org_x",
-            issuer_did,
-            legacy_issuer_profile_id="caller-profile",
-        )
+    identity = await issuance._resolve_issuer_identity(request, "org_x", issuer_did)
 
-    assert exc_info.value.status_code == 409
-    assert "does not match" in str(exc_info.value.detail)
+    assert identity is not None
+    assert identity["issuer_profile_id"] == "resolved-profile"
+    assert identity["issuer_did"] == issuer_did
 
 
 @pytest.mark.asyncio

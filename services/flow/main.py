@@ -161,13 +161,8 @@ def _configured_oid4vp_issuer_did() -> str:
 async def _oid4vp_issuer_profile_identity(
     organization_id: str,
     issuer_did: str | None = None,
-    legacy_issuer_profile_id: str | None = None,
 ) -> dict[str, Any]:
-    """Resolve a public verifier DID to one org-owned issuer profile.
-
-    ``legacy_issuer_profile_id`` is a migration assertion only. It never
-    selects the signing identity.
-    """
+    """Resolve a public verifier DID to one org-owned issuer profile."""
     resolved_did = (
         issuer_did
         or _configured_oid4vp_issuer_did()
@@ -265,17 +260,6 @@ async def _oid4vp_issuer_profile_identity(
         raise HTTPException(
             status_code=409,
             detail="Issuer DID resolver returned a different public identity",
-        )
-    if (
-        legacy_issuer_profile_id
-        and profile_id != legacy_issuer_profile_id
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Legacy issuer_profile_id does not match the profile resolved "
-                "from organization_id and issuer_did"
-            ),
         )
     return identity
 
@@ -3315,21 +3299,11 @@ class StartVerificationFlowRequest(BaseModel):
 
     # Optional so SIOPv2 flows (response_type=id_token) don't require a policy.
     presentation_policy_id: str | None = None
-    organization_id: str | None = None
-    issuer_did: str | None = Field(
-        None,
+    organization_id: str = Field(min_length=1, max_length=255)
+    issuer_did: str = Field(
         pattern=r"^did:",
         max_length=2048,
         description="Public DID that signs the OID4VP Request Object.",
-    )
-    issuer_profile_id: str | None = Field(
-        None,
-        max_length=255,
-        json_schema_extra={"deprecated": True},
-        description=(
-            "Temporary legacy assertion only; it must match the profile "
-            "resolved from organization_id and issuer_did."
-        ),
     )
     # SIOPv2 Draft 13 §9: response_type=id_token selects SIOPv2 authentication.
     response_type: str = "vp_token"
@@ -3501,14 +3475,20 @@ async def start_verification_flow(
 
     # SIOPv2 path: no presentation policy needed — just authentication with an ID token.
     if request.response_type == "id_token":
-        organization_id = request.organization_id or os.environ.get(
-            "MARTY_ORG_ID",
-            "00000000-0000-0000-0000-000000000001",
-        )
+        organization_id = str(request.organization_id or "").strip()
+        if not organization_id:
+            raise HTTPException(
+                status_code=422,
+                detail="organization_id is required to start a signed verification flow.",
+            )
+        if not str(request.issuer_did or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail="issuer_did is required to start a signed verification flow.",
+            )
         signing_identity = await _oid4vp_issuer_profile_identity(
             organization_id,
             request.issuer_did,
-            request.issuer_profile_id,
         )
         flow_definition_id = str(uuid.uuid4())
         instance = FlowInstance(
@@ -3595,6 +3575,23 @@ async def start_verification_flow(
             detail=f"Presentation policy not found or service unavailable: {request.presentation_policy_id}",
         )
 
+    requested_organization_id = str(request.organization_id or "").strip()
+    if not requested_organization_id:
+        raise HTTPException(
+            status_code=422,
+            detail="organization_id is required to start a signed verification flow.",
+        )
+    if requested_organization_id != organization_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Presentation policy belongs to another organization.",
+        )
+    if not str(request.issuer_did or "").strip():
+        raise HTTPException(
+            status_code=422,
+            detail="issuer_did is required to start a signed verification flow.",
+        )
+
     # Verify that the requesting user is actually a member of the policy's org
     # before creating the instance. Service-to-service callers (non-UUID user IDs
     # like "auth-service") bypass this check so the credential-login flow works.
@@ -3613,7 +3610,6 @@ async def start_verification_flow(
     signing_identity = await _oid4vp_issuer_profile_identity(
         organization_id,
         request.issuer_did,
-        request.issuer_profile_id,
     )
     signing_profile_id = str(signing_identity["issuer_profile_id"])
     flow_definition_id = str(uuid.uuid4())
@@ -4251,16 +4247,13 @@ async def get_verification_request_object(
 
     # Resolve the active identity on every fetch so a revoked or rotated issuer
     # profile cannot continue signing from stale flow state.
-    signing_profile_id = str(
-        instance.context.get("oid4vp_issuer_profile_id")
-        or os.environ.get("OID4VP_ISSUER_PROFILE_ID")
-        or _DEFAULT_OID4VP_ISSUER_PROFILE_ID
-    )
     signing_identity = await _oid4vp_issuer_profile_identity(
         instance.organization_id,
         instance.context.get("oid4vp_issuer_did"),
-        signing_profile_id,
     )
+    # This profile ID is resolver-produced internal routing state. It is never
+    # accepted from the public request or stale flow context.
+    signing_profile_id = str(signing_identity["issuer_profile_id"])
 
     # Build base URL for response_uri (where wallet posts the VP)
     base_url = os.environ.get("PUBLIC_BASE_URL", "http://marty-gateway:8000")

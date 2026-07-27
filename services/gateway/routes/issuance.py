@@ -132,7 +132,6 @@ async def _resolve_issuer_identity(
     request: Request,
     organization_id: str | None,
     issuer_did: str | None,
-    legacy_issuer_profile_id: str | None = None,
     credential_format: str | None = None,
     key_purpose: str | None = None,
     algorithm: str | None = None,
@@ -206,18 +205,6 @@ async def _resolve_issuer_identity(
             status_code=409,
             detail="Issuer DID resolver returned an identity outside the requested organization scope.",
         )
-    if (
-        legacy_issuer_profile_id
-        and legacy_issuer_profile_id != resolved_profile_id
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Legacy issuer_profile_id does not match the issuer profile "
-                "resolved from organization_id and issuer_did."
-            ),
-        )
-
     algorithm_value = profile.get("algorithm") or ""
     return {
         "issuer_profile_id": resolved_profile_id,
@@ -269,18 +256,10 @@ def _clean_optional_id(value: object) -> str | None:
 
 def _select_issuer_identity_request(
     body: IssuanceCreate, credential_template: dict
-) -> tuple[str, str | None]:
-    """Select the public DID and optional legacy profile assertion.
-
-    The profile assertion never selects a signing key. Resolution always starts
-    from the organization-scoped DID and the operation constraints.
-    """
+) -> str:
+    """Select the public DID without exposing internal profile selectors."""
     template_issuer_did = _clean_optional_id(credential_template.get("issuer_did"))
-    template_issuer_profile_id = _clean_optional_id(
-        credential_template.get("issuer_profile_id")
-    )
     body_issuer_did = _clean_optional_id(body.issuer_did)
-    body_issuer_profile_id = _clean_optional_id(body.issuer_profile_id)
     claim_issuer_profile_id = (
         _clean_optional_id(body.claims.get("issuer_profile_id"))
         if isinstance(body.claims, dict)
@@ -313,47 +292,14 @@ def _select_issuer_identity_request(
                 status_code=422,
                 detail="issuer_did cannot override the credential template issuer DID.",
             )
-        if (
-            body_issuer_profile_id
-            and template_issuer_profile_id
-            and body_issuer_profile_id != template_issuer_profile_id
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Legacy issuer_profile_id does not match the credential "
-                    "template issuer profile."
-                ),
-            )
-        return (
-            template_issuer_did,
-            body_issuer_profile_id or template_issuer_profile_id,
-        )
+        return template_issuer_did
 
     if not body_issuer_did:
         raise HTTPException(
             status_code=422,
             detail="issuer_did is required for direct issuance without a credential template.",
         )
-    return body_issuer_did, body_issuer_profile_id
-
-
-def _select_issuer_profile_id(body: IssuanceCreate, credential_template: dict) -> str:
-    """Deprecated compatibility helper for internal adapters.
-
-    New code must call :func:`_select_issuer_identity_request`. This helper
-    cannot choose a profile from public input; it only returns an existing
-    template assertion while older internal adapters migrate.
-    """
-    _, legacy_profile_id = _select_issuer_identity_request(
-        body, credential_template
-    )
-    if not legacy_profile_id:
-        raise HTTPException(
-            status_code=422,
-            detail="Legacy credential template has no issuer profile assertion.",
-        )
-    return legacy_profile_id
+    return body_issuer_did
 
 
 issuance_router = APIRouter(prefix="/v1/issuance", tags=["Issuance"])
@@ -589,14 +535,11 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
         if isinstance(body.claims, dict)
         else None
     )
-    issuer_did, legacy_issuer_profile_id = _select_issuer_identity_request(
-        body, credential_template
-    )
+    issuer_did = _select_issuer_identity_request(body, credential_template)
     issuer_identity = await _resolve_issuer_identity(
         request,
         body.organization_id,
         issuer_did,
-        legacy_issuer_profile_id=legacy_issuer_profile_id,
         credential_format=credential_format,
     )
     if issuer_identity is None:
@@ -607,28 +550,22 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
                 "profile for this organization."
             ),
         )
-    issuer_profile_id = issuer_identity["issuer_profile_id"]
     inject_headers: dict[str, str] = dict(_ISSUANCE_HEADERS or {})
-    inject_headers["X-Issuer-Profile-Id"] = issuer_profile_id
     logger.debug(
-        "Selected issuer profile %s for org=%s format=%s",
-        issuer_profile_id,
+        "Resolved issuer DID for org=%s format=%s",
         body.organization_id,
         credential_format,
     )
-
-    issuer_did = issuer_identity.get("issuer_did") if issuer_identity else None
-    if issuer_did:
-        inject_headers["X-Issuer-Did"] = issuer_did
-        logger.debug(
-            "Resolved issuer DID %s for org=%s", issuer_did, body.organization_id
-        )
+    # The downstream issuance service enforces the same DID-only boundary.
+    # Propagate the canonical resolver result in the request body, never by a
+    # profile/key header that could act as a hidden selector.
+    downstream_body = body.model_dump(exclude_none=True)
+    downstream_body["issuer_did"] = issuer_identity["issuer_did"]
 
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     if body.authorized_client is not None:
         await _register_oid4vci_authorized_client(body, service_url)
-        downstream_body = body.model_dump(exclude_none=True)
         authorized_client = downstream_body.pop("authorized_client")
         downstream_body["authorized_client_id"] = authorized_client["client_id"]
         return await proxy_request(
@@ -642,6 +579,7 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
         request,
         service_url,
         "/v1/issuance/initiate",
+        body_override=json.dumps(downstream_body, separators=(",", ":")).encode("utf-8"),
         inject_headers=inject_headers or None,
     )
 

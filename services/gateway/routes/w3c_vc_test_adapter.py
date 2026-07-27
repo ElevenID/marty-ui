@@ -566,14 +566,11 @@ async def _issue_jwt_vc(credential: dict[str, Any], request: Request) -> str:
             status_code=422,
             detail="W3C fixture template must issue JWT VC, not SD-JWT, mdoc, or JSON-LD",
         )
-    issuer_did, legacy_issuer_profile_id = _select_issuer_identity_request(
-        body, template
-    )
+    issuer_did = _select_issuer_identity_request(body, template)
     issuer_identity = await _resolve_issuer_identity(
         request,
         organization_id,
         issuer_did,
-        legacy_issuer_profile_id=legacy_issuer_profile_id,
         credential_format=credential_format,
     )
     if issuer_identity is None:

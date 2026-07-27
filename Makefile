@@ -476,11 +476,7 @@ test: ## Run gRPC adapter and factory unit tests
 
 proto-gen: ## Regenerate Python proto stubs from .proto definitions
 	@echo "$(BLUE)Generating Python proto stubs...$(NC)"
-	@python -m grpc_tools.protoc \
-		-Iproto \
-		--python_out=packages/marty_proto/v1 \
-		--grpc_python_out=packages/marty_proto/v1 \
-		proto/v1/*.proto
+	@python scripts/compile_protos.py
 	@echo "$(GREEN)✓ Proto stubs generated$(NC)"
 
 grpc-health: ## Check gRPC health status of all gRPC-enabled services

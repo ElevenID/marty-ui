@@ -513,15 +513,6 @@ class CredentialTemplateCreate(BaseModel):
     # are resolved internally from this DID.
     signing_algorithm: str | None = Field(None, max_length=50)
     issuer_did: str = Field(pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
-    issuer_profile_id: str | None = Field(
-        None,
-        max_length=255,
-        json_schema_extra={"deprecated": True},
-        description=(
-            "Temporary legacy assertion only; it must match issuer_did "
-            "resolution and cannot select custody."
-        ),
-    )
     auto_generate_artifacts: bool = False
 
     derived_attributes: list[dict] = []
@@ -556,15 +547,6 @@ class CredentialTemplateUpdate(BaseModel):
         None,
         pattern=r"^did:[a-z0-9]+:.+",
         max_length=2048,
-    )
-    issuer_profile_id: str | None = Field(
-        None,
-        max_length=255,
-        json_schema_extra={"deprecated": True},
-        description=(
-            "Temporary legacy assertion only; it must match issuer_did "
-            "resolution and cannot select custody."
-        ),
     )
     auto_generate_artifacts: bool | None = None
     credential_payload_format: str | None = Field(None, max_length=100)
@@ -1198,21 +1180,11 @@ class StartVerificationFlowRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     presentation_policy_id: str | None = None
-    organization_id: str | None = None
-    issuer_did: str | None = Field(
-        None,
+    organization_id: str = Field(min_length=1, max_length=255)
+    issuer_did: str = Field(
         pattern=r"^did:",
         max_length=2048,
         description="Public DID that signs the OID4VP Request Object.",
-    )
-    issuer_profile_id: str | None = Field(
-        None,
-        max_length=255,
-        json_schema_extra={"deprecated": True},
-        description=(
-            "Temporary legacy assertion only. It cannot select a signing "
-            "identity and must match the organization-scoped issuer_did result."
-        ),
     )
     response_type: str = "vp_token"
     trust_profile_id: str | None = None
@@ -1427,6 +1399,8 @@ class Oid4vciAuthorizedClient(BaseModel):
 
 class IssuanceCreate(BaseModel):
     """Create an issuance request."""
+
+    model_config = ConfigDict(extra="forbid")
     organization_id: str
     credential_template_id: str | None = None
     issuer_did: str | None = Field(
@@ -1437,10 +1411,6 @@ class IssuanceCreate(BaseModel):
             "resolves this DID to the sole authorized active issuer profile."
         ),
     )
-    # Transitional compatibility only. Public callers should send issuer_did.
-    # When present this value is treated as an assertion and must exactly match
-    # the profile resolved from organization_id + issuer_did.
-    issuer_profile_id: str | None = None
     subject_did: str | None = None
     holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
     authorized_client: Oid4vciAuthorizedClient | None = None
