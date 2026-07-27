@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from gateway.models import CredentialTemplateCreate
+from gateway.models import CredentialTemplateCreate, CredentialTemplateUpdate
 from gateway.routes import credentials, issuance
 
 
@@ -79,7 +79,20 @@ async def test_template_create_resolves_did_and_hides_profile_from_caller(
 
     async def proxy(request, service_url, path, body_override=None, **_kwargs):
         captured["internal_body"] = json.loads(body_override)
-        return JSONResponse({"id": "template-1"})
+        return JSONResponse(
+            {
+                "id": "template-1",
+                "issuer_did": "did:web:issuer.example:orgs:org-1",
+                "issuer_algorithm": "ES256",
+                "issuer_profile_id": "internal-profile-1",
+                "issuer_key_id": "managed-key-reference",
+                "key_access_mode": "REMOTE_SIGNING",
+                "remote_signing_config": {
+                    "signing_service_id": "managed-openbao",
+                    "signing_key_reference": "managed-key-reference",
+                },
+            }
+        )
 
     monkeypatch.setattr(credentials, "_resource_exists", exists)
     monkeypatch.setattr(credentials, "_resource_org_id", owner)
@@ -103,6 +116,55 @@ async def test_template_create_resolves_did_and_hides_profile_from_caller(
     )
     assert "signing_service_id" not in captured["internal_body"]
     assert "signing_key_reference" not in captured["internal_body"]
+    public_body = json.loads(response.body)
+    assert public_body == {
+        "id": "template-1",
+        "issuer_did": "did:web:issuer.example:orgs:org-1",
+        "issuer_algorithm": "ES256",
+    }
+
+
+def test_template_list_response_hides_internal_custody_metadata() -> None:
+    response = credentials._sanitize_credential_template_response(
+        JSONResponse(
+            [
+                {
+                    "id": "template-1",
+                    "issuer_did": "did:web:issuer.example:orgs:org-1",
+                    "issuer_profile_id": "internal-profile-1",
+                    "issuer_key_id": "managed-key-reference",
+                    "key_access_mode": "REMOTE_SIGNING",
+                    "remote_signing_config": {"signing_service_id": "managed-openbao"},
+                }
+            ],
+            headers={"ETag": '"template-list-v1"'},
+        )
+    )
+
+    assert json.loads(response.body) == [
+        {
+            "id": "template-1",
+            "issuer_did": "did:web:issuer.example:orgs:org-1",
+        }
+    ]
+    assert response.headers["etag"] == '"template-list-v1"'
+
+
+def test_public_template_response_schema_has_no_custody_routing_fields() -> None:
+    schema = CredentialTemplateCreate.model_json_schema()
+    response_schema = credentials.CredentialTemplateResponse.model_json_schema()
+
+    # The profile ID is a documented temporary input assertion, never output.
+    assert schema["properties"]["issuer_profile_id"]["deprecated"] is True
+    for field in (
+        "issuer_profile_id",
+        "issuer_key_id",
+        "key_access_mode",
+        "remote_signing_config",
+        "signing_service_id",
+        "signing_key_reference",
+    ):
+        assert field not in response_schema["properties"]
 
 
 @pytest.mark.asyncio
@@ -183,3 +245,22 @@ def test_template_public_contract_rejects_custody_selectors(
                 forbidden_field: "caller-selected",
             }
         )
+
+
+@pytest.mark.parametrize(
+    "forbidden_field",
+    [
+        "issuer_key_id",
+        "issuer_algorithm",
+        "key_access_mode",
+        "remote_signing_config",
+        "issuer_certificate_chain_pem",
+        "signing_service_id",
+        "signing_key_reference",
+    ],
+)
+def test_template_update_contract_rejects_custody_selectors(
+    forbidden_field: str,
+) -> None:
+    with pytest.raises(ValidationError, match=forbidden_field):
+        CredentialTemplateUpdate.model_validate({forbidden_field: "caller-selected"})

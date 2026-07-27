@@ -32,12 +32,9 @@ from typing import Any, AsyncGenerator
 from urllib.parse import parse_qs, quote, urlparse
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Header, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from typing import Annotated
 from marty_common import OrganizationContext, require_org_membership
-from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 from marty_common.service_setup import create_service_app
 
 from credential_template.infrastructure.adapters import (
@@ -1444,6 +1441,8 @@ def _canonical_issuer_fields(
         profile = {}
     service = issuer_context.get("service")
     if not isinstance(service, dict):
+        service = issuer_context.get("signing_service")
+    if not isinstance(service, dict):
         service = {}
 
     signing_service_id = _first_non_empty(
@@ -1497,15 +1496,24 @@ async def _require_active_issuer_profile(
     request: Request,
     *,
     organization_id: str,
+    issuer_did: str | None,
     issuer_profile_id: str | None,
     credential_format: str | None = None,
     algorithm: str | None = None,
 ) -> dict[str, Any]:
-    if not issuer_profile_id or not str(issuer_profile_id).strip():
+    requested_did = str(issuer_did or "").strip()
+    if not requested_did:
         raise HTTPException(
             status_code=422,
-            detail="issuer_profile_id is required. Credential templates must use an active KMS-backed issuer profile.",
+            detail=(
+                "issuer_did is required. Credential templates must resolve an "
+                "organization-owned DID to an active managed-custody issuer profile."
+            ),
         )
+    if not requested_did.startswith("did:"):
+        raise HTTPException(status_code=422, detail="issuer_did must be a DID string.")
+
+    legacy_profile_id = str(issuer_profile_id or "").strip() or None
 
     base_url = os.environ.get("SIGNING_KEYS_INTERNAL_URL", "http://gateway:8000/internal/signing-keys").rstrip("/")
     api_key = _read_secret_value("SIGNING_KEYS_INTERNAL_API_KEY") or _read_secret_value("ISSUANCE_API_KEY")
@@ -1516,7 +1524,7 @@ async def _require_active_issuer_profile(
 
     params = {
         "organization_id": organization_id,
-        "issuer_profile_id": issuer_profile_id,
+        "issuer_did": requested_did,
         "key_purpose": _key_purpose_for_credential_format(credential_format),
     }
     if credential_format:
@@ -1526,31 +1534,88 @@ async def _require_active_issuer_profile(
 
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
-            response = await client.get(f"{base_url}/issuer-context", params=params, headers=headers)
+            response = await client.get(
+                f"{base_url}/resolve-issuer-did",
+                params=params,
+                headers=headers,
+            )
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=503,
-            detail=f"Unable to validate issuer profile through signing-keys service: {exc}",
+            detail=f"Unable to resolve issuer_did through signing-keys service: {exc}",
         ) from exc
 
     if response.status_code == 404:
         raise HTTPException(
             status_code=422,
-            detail="issuer_profile_id must reference an active issuer profile for this organization.",
+            detail=(
+                "issuer_did is not an active managed-custody issuer identity for "
+                "this organization, format, purpose, and algorithm."
+            ),
         )
     if response.status_code == 409:
-        raise HTTPException(status_code=422, detail=response.text)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "issuer_did does not resolve to exactly one active issuer profile "
+                "for this organization, format, purpose, and algorithm."
+            ),
+        )
+    if response.status_code == 422:
+        raise HTTPException(status_code=422, detail="issuer_did could not be resolved.")
     if response.status_code >= 400:
         raise HTTPException(
             status_code=503,
-            detail=f"Signing-keys issuer profile validation failed with status {response.status_code}.",
+            detail=f"Signing-keys issuer DID resolution failed with status {response.status_code}.",
         )
 
-    payload = response.json()
-    if not payload.get("ok") or not payload.get("signing_service_id") or not payload.get("issuer_did"):
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Signing-keys issuer DID resolution returned an invalid response.",
+        ) from exc
+
+    profile = payload.get("issuer_profile")
+    if not isinstance(profile, dict):
+        profile = {}
+    service = payload.get("signing_service")
+    if not isinstance(service, dict):
+        service = {}
+    resolved_profile_id = str(profile.get("id") or "").strip()
+    resolved_service_id = str(
+        profile.get("signing_service_id") or service.get("id") or ""
+    ).strip()
+    resolved_key_reference = str(
+        profile.get("signing_key_reference") or service.get("key_reference") or ""
+    ).strip()
+    profile_status = str(profile.get("status") or "active").strip().lower()
+    profile_issuer_did = str(profile.get("issuer_did") or requested_did).strip()
+    if (
+        not payload.get("ok")
+        or payload.get("organization_id") != organization_id
+        or payload.get("issuer_did") != requested_did
+        or profile_issuer_did != requested_did
+        or profile_status != "active"
+        or not resolved_profile_id
+        or not resolved_service_id
+        or not resolved_key_reference
+    ):
         raise HTTPException(
             status_code=422,
-            detail="issuer_profile_id did not resolve to a KMS-backed issuer profile.",
+            detail=(
+                "issuer_did did not resolve to a complete organization-owned "
+                "managed-custody issuer identity."
+            ),
+        )
+    if legacy_profile_id and legacy_profile_id != resolved_profile_id:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "The legacy issuer_profile_id assertion does not match issuer_did "
+                "resolution. issuer_did is authoritative."
+            ),
         )
     return payload
 
@@ -1716,6 +1781,7 @@ async def create_credential_template(
     issuer_context = await _require_active_issuer_profile(
         request,
         organization_id=body.organization_id,
+        issuer_did=body.issuer_did,
         issuer_profile_id=body.issuer_profile_id,
         credential_format=format_to_wire(CredentialFormat(credential_payload_format)),
         algorithm=body.issuer_algorithm or body.signing_algorithm,
@@ -1885,6 +1951,8 @@ async def update_credential_template(
         candidate.revocation_profile_id = request.revocation_profile_id
     if request.issuer_profile_id is not None:
         candidate.issuer_profile_id = request.issuer_profile_id
+    if request.issuer_did is not None:
+        candidate.issuer_did = request.issuer_did
     if request.issuer_algorithm is not None or request.signing_algorithm is not None:
         candidate.issuer_algorithm = request.issuer_algorithm or request.signing_algorithm
     if request.issuer_certificate_chain_pem is not None:
@@ -1921,6 +1989,7 @@ async def update_credential_template(
     issuer_context = await _require_active_issuer_profile(
         fastapi_request,
         organization_id=candidate.organization_id,
+        issuer_did=candidate.issuer_did,
         issuer_profile_id=candidate.issuer_profile_id,
         credential_format=payload_format_to_wire(candidate.credential_payload_format),
         algorithm=candidate.issuer_algorithm,
@@ -1973,6 +2042,7 @@ async def activate_credential_template(
     issuer_context = await _require_active_issuer_profile(
         fastapi_request,
         organization_id=template.organization_id,
+        issuer_did=template.issuer_did,
         issuer_profile_id=template.issuer_profile_id,
         credential_format=payload_format_to_wire(template.credential_payload_format),
         algorithm=template.issuer_algorithm,
@@ -3273,9 +3343,7 @@ async def get_credential_configurations(request: Request) -> dict:
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo, _wallet_repo, _delivery_destination_repo
     logger.info(f"Starting {SERVICE_NAME}...")
-    
-    config = get_config()
-    
+
     # Initialize database
     from marty_common.database import DatabaseManager, DatabaseConfig
     db = DatabaseManager(DatabaseConfig.from_env("credential-template"))

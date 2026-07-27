@@ -38,25 +38,30 @@ def _build_client(
 		request,
 		*,
 		organization_id: str,
+		issuer_did: str | None,
 		issuer_profile_id: str | None,
 		credential_format: str | None = None,
 		algorithm: str | None = None,
 	) -> dict:
-		if not issuer_profile_id:
+		if not issuer_did:
 			raise credential_template.HTTPException(
 				status_code=422,
-				detail="issuer_profile_id is required.",
+				detail="issuer_did is required.",
 			)
 		return {
 			"ok": True,
 			"organization_id": organization_id,
-			"issuer_profile_id": issuer_profile_id,
-			"issuer_did": "did:web:beta.elevenidllc.com:orgs:test",
-			"signing_service_id": "managed-openbao-transit",
-			"signing_key_reference": "cred-issuer-test-es256",
+			"issuer_did": issuer_did,
 			"verification_method_id": "did:web:beta.elevenidllc.com:orgs:test#cred-issuer-test-es256",
-			"key_purpose": "vc_jwt_issuer",
-			"service": {
+			"issuer_profile": {
+				"id": issuer_profile_id or "issuer-profile-1",
+				"issuer_did": issuer_did,
+				"signing_service_id": "managed-openbao-transit",
+				"signing_key_reference": "cred-issuer-test-es256",
+				"key_purpose": "vc_jwt_issuer",
+				"algorithm": "ES256",
+			},
+			"signing_service": {
 				"id": "managed-openbao-transit",
 				"algorithm": "ES256",
 				"key_reference": "cred-issuer-test-es256",
