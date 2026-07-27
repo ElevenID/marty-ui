@@ -317,7 +317,6 @@ async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
             "organization_id": "fixture-org",
             "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
             "issuer_did": "did:web:issuer.example",
-            "issuer_profile_id": "issuer-profile",
         }
 
     async def resolve_identity(*args, **kwargs) -> dict:
@@ -342,11 +341,14 @@ async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
     initiate_body = captured[0][1]["json"]
     assert initiate_body["claims"] == {}
     assert initiate_body["credential_subject"] == credential["credentialSubject"]
-    assert captured[0][1]["headers"] == {
-        "X-Issuer-Profile-Id": "issuer-profile",
-        "X-Issuer-Did": "did:web:issuer.example",
-    }
-    assert "X-Signing-Service-Id" not in captured[0][1]["headers"]
+    assert initiate_body["issuer_did"] == "did:web:issuer.example"
+    public_headers = {name.lower() for name in captured[0][1]["headers"]}
+    assert {
+        "x-issuer-profile-id",
+        "x-issuer-did",
+        "x-signing-service-id",
+        "x-signing-key-reference",
+    }.isdisjoint(public_headers)
 
 
 def test_adapter_extracts_a_w3c_jose_vc_envelope_without_trusting_it() -> None:

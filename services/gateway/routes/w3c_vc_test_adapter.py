@@ -577,7 +577,6 @@ async def _issue_jwt_vc(credential: dict[str, Any], request: Request) -> str:
         raise HTTPException(
             status_code=422, detail="W3C fixture template has no active issuer identity"
         )
-    issuer_profile_id = issuer_identity["issuer_profile_id"]
     body = body.model_copy(update={"issuer_did": issuer_did})
 
     registry = get_registry()
@@ -585,8 +584,6 @@ async def _issue_jwt_vc(credential: dict[str, Any], request: Request) -> str:
     if not service_url:
         raise HTTPException(status_code=503, detail="Issuance service unavailable")
     headers = dict(_ISSUANCE_HEADERS or {})
-    headers["X-Issuer-Profile-Id"] = issuer_profile_id
-    headers["X-Issuer-Did"] = issuer_identity["issuer_did"]
     client = get_http_client()
 
     initiated = await client.post(
