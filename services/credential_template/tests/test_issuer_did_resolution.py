@@ -124,7 +124,7 @@ async def test_resolves_did_without_public_profile_selector(
             "organization_id": "org-1",
             "issuer_did": ISSUER_DID,
             "key_purpose": "vc_jwt_issuer",
-            "credential_format": "sd_jwt_vc",
+            "credential_format": "dc+sd-jwt",
             "algorithm": "ES256",
         },
         "headers": {
@@ -132,6 +132,28 @@ async def test_resolves_did_without_public_profile_selector(
             "X-Request-ID": "request-1",
         },
     }
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("sd_jwt_vc", "dc+sd-jwt"),
+        ("w3c_vcdm_v2_sd_jwt", "dc+sd-jwt"),
+        ("dc+sd-jwt", "dc+sd-jwt"),
+        ("jwt_vc", "jwt_vc_json"),
+        ("w3c_vcdm_v2_jwt_vc", "jwt_vc_json"),
+        ("mdoc", "mso_mdoc"),
+        ("mso_mdoc", "mso_mdoc"),
+        ("ldp_vc", "ldp_vc"),
+        ("zk_mdoc", "zk_mdoc"),
+        (None, None),
+    ],
+)
+def test_signing_format_uses_managed_service_capability_names(
+    value: str | None,
+    expected: str | None,
+) -> None:
+    assert credential_template.payload_format_to_signing_wire(value) == expected
 
 
 @pytest.mark.asyncio
