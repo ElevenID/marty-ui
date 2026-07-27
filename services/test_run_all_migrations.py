@@ -51,6 +51,15 @@ def test_seed_signing_registry_binds_lti_key_inside_multi_key_service() -> None:
     assert "lti_tool_signing" in managed["key_purposes"]
     assert "oid4vp_request_signing" in managed["key_purposes"]
     assert "vc_jwt_issuer" in managed["key_purposes"]
+    assert "ldp_vc" in managed["credential_formats"]
+    assert payload["format_defaults"]["ldp_vc"] == migrations.MANAGED_OPENBAO_SERVICE_ID
+    ldp_keys = [
+        key
+        for key in migrations.MARTY_KMS_KEY_SPECS
+        if "ldp_vc" in key.get("credential_formats", [])
+    ]
+    assert [key["id"] for key in ldp_keys] == ["cred-issuer-marty-eddsa"]
+    assert ldp_keys[0]["algorithm"] == "EdDSA"
     assert bindings["lti-tool-marty-rs256"] == ["lti_tool_signing"]
     assert bindings["oid4vp-verifier-marty-es256"] == ["oid4vp_request_signing"]
     assert bindings["cred-issuer-marty-rs256"] == ["vc_jwt_issuer"]

@@ -135,7 +135,7 @@ MARTY_KMS_KEY_SPECS: list[dict[str, Any]] = [
         "type": "ed25519",
         "algorithm": "EdDSA",
         "key_purposes": ["vc_jwt_issuer", "jwks_signing"],
-        "credential_formats": ["jwt_vc_json", "dc+sd-jwt"],
+        "credential_formats": ["jwt_vc_json", "dc+sd-jwt", "ldp_vc"],
     },
     {
         "id": "cred-dsc-marty-primary",
@@ -624,7 +624,13 @@ def _seed_signing_registry(
         if isinstance(registry.get("format_defaults"), dict)
         else {}
     )
-    for credential_format in ("jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "vds_nc"):
+    for credential_format in (
+        "jwt_vc_json",
+        "dc+sd-jwt",
+        "ldp_vc",
+        "mso_mdoc",
+        "vds_nc",
+    ):
         format_defaults.setdefault(credential_format, MANAGED_OPENBAO_SERVICE_ID)
 
     type_defaults = (
