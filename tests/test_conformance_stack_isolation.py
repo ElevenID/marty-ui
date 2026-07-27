@@ -491,6 +491,23 @@ def test_oidf_tls_proxy_preserves_the_complete_public_authority() -> None:
     assert "proxy_set_header X-Forwarded-Host $host;" not in config
 
 
+def test_oidf_tls_proxy_rejects_legacy_tls12_cipher_suites() -> None:
+    config = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(
+        encoding="utf-8"
+    )
+
+    cipher_line = next(
+        line.strip()
+        for line in config.splitlines()
+        if line.strip().startswith("ssl_ciphers ")
+    )
+    assert "GCM" in cipher_line
+    assert "CHACHA20-POLY1305" in cipher_line
+    assert "CBC" not in cipher_line
+    assert "AES128-SHA" not in cipher_line
+    assert "ssl_prefer_server_ciphers on;" in config
+
+
 def test_conformance_stack_exposes_timestamped_service_logs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
