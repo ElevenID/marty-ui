@@ -60,6 +60,51 @@ _FORMAT_KEY_PURPOSE: dict[str, str] = {
     "vdsnc": "vdsnc_signing",
 }
 
+_PUBLIC_SIGNING_FORMAT_ALIASES: dict[str, str] = {
+    "w3c_vcdm_v2_sd_jwt": "dc+sd-jwt",
+    "ietf_sd_jwt": "dc+sd-jwt",
+    "sd_jwt_vc": "dc+sd-jwt",
+    "vc+sd_jwt": "dc+sd-jwt",
+    "vc+sd-jwt": "dc+sd-jwt",
+    "dc+sd_jwt": "dc+sd-jwt",
+    "dc+sd-jwt": "dc+sd-jwt",
+    "w3c_vcdm_v2_jwt_vc": "jwt_vc_json",
+    "vc_jwt": "jwt_vc_json",
+    "jwt_vc": "jwt_vc_json",
+    "jwt_vc_json": "jwt_vc_json",
+    "mdoc": "mso_mdoc",
+    "mso_mdoc": "mso_mdoc",
+}
+
+
+def _public_signing_credential_format(
+    credential_payload_format: str | None,
+    supported_formats: object = None,
+) -> str | None:
+    """Return the wire format used by issuer-profile capability resolution.
+
+    Credential templates store a Marty payload-shape name while signing
+    services advertise protocol wire formats. Keeping this conversion in one
+    place prevents a template that was valid at creation time from becoming
+    unresolvable during issuance.
+    """
+    explicit = (credential_payload_format or "").strip().lower()
+    if explicit:
+        return _PUBLIC_SIGNING_FORMAT_ALIASES.get(explicit, explicit)
+
+    candidates: set[str] = set()
+    if isinstance(supported_formats, list):
+        for value in supported_formats:
+            if not isinstance(value, str) or not value.strip():
+                continue
+            normalized = value.strip().lower()
+            candidates.add(
+                _PUBLIC_SIGNING_FORMAT_ALIASES.get(normalized, normalized)
+            )
+    if len(candidates) == 1:
+        return candidates.pop()
+    return None
+
 
 def _normalize_credential_format(value: str | None) -> str | None:
     normalized = (value or "").strip().lower()
@@ -490,10 +535,13 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
     # Resolve the DID issuer identity and its bound remote signing service as a
     # pair. A format-only KMS resolver can select a key that is not published in
     # the DID document, which breaks BYOK issuer identity guarantees.
-    credential_format: str | None = credential_template.get(
-        "credential_payload_format"
-    ) or (
-        body.claims.get("credential_format") if isinstance(body.claims, dict) else None
+    credential_format = _public_signing_credential_format(
+        credential_template.get("credential_payload_format"),
+        credential_template.get("supported_formats"),
+    ) or _public_signing_credential_format(
+        body.claims.get("credential_format")
+        if isinstance(body.claims, dict)
+        else None
     )
     issuer_did, legacy_issuer_profile_id = _select_issuer_identity_request(
         body, credential_template
