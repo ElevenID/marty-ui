@@ -111,6 +111,18 @@ _FORMAT_WIRE_NAMES: dict[str, str] = {
     "ZK_MDOC": "zk_mdoc",
 }
 
+# Managed signing services advertise protocol signing-format names. These are
+# intentionally distinct from the stable public credential-template aliases
+# above (for example, ``sd_jwt_vc`` is represented as ``dc+sd-jwt`` at the
+# signer capability boundary).
+_SIGNING_FORMAT_WIRE_NAMES: dict[str, str] = {
+    "MDOC": "mso_mdoc",
+    "SD_JWT_VC": "dc+sd-jwt",
+    "VC_JWT": "jwt_vc_json",
+    "JSON_LD": "ldp_vc",
+    "ZK_MDOC": "zk_mdoc",
+}
+
 
 def format_to_wire(fmt: CredentialFormat) -> str:
     """Return the primary wire-format name for a CredentialFormat enum value."""
@@ -165,6 +177,15 @@ def normalize_credential_payload_format(
 def payload_format_to_wire(value: str | None) -> str:
     normalized = normalize_credential_payload_format(value, [])
     return format_to_wire(CredentialFormat(normalized))
+
+
+def payload_format_to_signing_wire(value: str | None) -> str | None:
+    """Return the exact format name used by managed signer capabilities."""
+    if value is None or not str(value).strip():
+        return None
+    normalized = normalize_credential_payload_format(value, [])
+    fmt = CredentialFormat(normalized)
+    return _SIGNING_FORMAT_WIRE_NAMES.get(fmt.value, fmt.value.lower())
 
 
 @dataclass
@@ -1522,13 +1543,14 @@ async def _require_active_issuer_profile(
     if request_id:
         headers["X-Request-ID"] = request_id
 
+    signing_credential_format = payload_format_to_signing_wire(credential_format)
     params = {
         "organization_id": organization_id,
         "issuer_did": requested_did,
-        "key_purpose": _key_purpose_for_credential_format(credential_format),
+        "key_purpose": _key_purpose_for_credential_format(signing_credential_format),
     }
-    if credential_format:
-        params["credential_format"] = credential_format
+    if signing_credential_format:
+        params["credential_format"] = signing_credential_format
     if algorithm:
         params["algorithm"] = algorithm
 
