@@ -43,17 +43,15 @@ async def create_credential_template(body: CredentialTemplateCreate, request: Re
     if owner_org is not None and owner_org != body.organization_id:
         raise HTTPException(status_code=403, detail="Access denied: compliance profile belongs to another organization")
 
-    from gateway.routes.issuance import _resolve_issuer_identity  # noqa: PLC0415
+    from gateway.routes.issuance import (  # noqa: PLC0415
+        _public_signing_credential_format,
+        _resolve_issuer_identity,
+    )
 
-    payload_format = str(body.credential_payload_format or "").strip().lower()
-    public_format = {
-        "w3c_vcdm_v2_sd_jwt": "dc+sd-jwt",
-        "ietf_sd_jwt": "dc+sd-jwt",
-        "sd_jwt_vc": "dc+sd-jwt",
-        "w3c_vcdm_v2_jwt_vc": "jwt_vc_json",
-        "vc_jwt": "jwt_vc_json",
-        "mdoc": "mso_mdoc",
-    }.get(payload_format, payload_format or None)
+    public_format = _public_signing_credential_format(
+        body.credential_payload_format,
+        body.supported_formats,
+    )
     issuer_identity = await _resolve_issuer_identity(
         request,
         body.organization_id,

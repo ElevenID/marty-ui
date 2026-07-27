@@ -196,7 +196,10 @@ async def test_list_signing_keys_uses_session_org_fallback(
                 {
                     "id": "cred-issuer-marty-es256",
                     "name": "Marty ES256 issuer key",
-                    "algorithm": "ES256",
+                    # Legacy profiles may predate explicit algorithm binding.
+                    # Resolution must return the requested, service-supported
+                    # algorithm instead of leaking an empty profile value.
+                    "algorithm": "",
                     "status": "active",
                 }
             ],
@@ -4745,6 +4748,7 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
     assert data["verification_method_id"] == vm_id
     assert data["public_jwk"]["kid"] == vm_id
     assert data["public_jwk"]["kty"] == "EC"
+    assert data["issuer_profile"]["algorithm"] == "ES256"
     assert data["signing_service"]["id"] == "svc-bao"
     assert "auth_reference" not in data["signing_service"]
 

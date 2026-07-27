@@ -5965,9 +5965,14 @@ async def _resolve_org_scoped_issuer_identity(
         public_jwk = dict(public_jwk)
         public_jwk["kid"] = method["id"]
 
-        profile_with_vm = dict(profile)
+        profile_with_vm = dict(effective_profile)
         if not profile_with_vm.get("verification_method_id"):
             profile_with_vm["verification_method_id"] = method["id"]
+        if not profile_with_vm.get("algorithm"):
+            if algorithm:
+                profile_with_vm["algorithm"] = algorithm
+            elif len(service_algorithms) == 1:
+                profile_with_vm["algorithm"] = service_algorithms[0]
 
         resolved_identities.append(
             {
