@@ -50,10 +50,10 @@ _PROFILE_IDENTITY_UNDER_TEST = flow_main._oid4vp_issuer_profile_identity
 def test_verification_runtime_accepts_public_did_not_kms_coordinates() -> None:
     request = StartVerificationFlowRequest(
         presentation_policy_id="policy-1",
+        organization_id="org-1",
         issuer_did="did:web:verifier.example:oid4vp",
     )
 
-    assert request.issuer_profile_id is None
     assert request.issuer_did == "did:web:verifier.example:oid4vp"
 
     with pytest.raises(ValidationError):
@@ -142,14 +142,6 @@ async def test_oid4vp_identity_resolves_did_without_public_profile_selection(
     assert identity["issuer_did"] == issuer_did
     assert "signing_service_id" not in identity
     assert "signing_key_reference" not in identity
-
-    with pytest.raises(HTTPException) as failure:
-        await _PROFILE_IDENTITY_UNDER_TEST(
-            "org-1",
-            issuer_did,
-            legacy_issuer_profile_id="caller-selected-profile",
-        )
-    assert failure.value.status_code == 409
 
     _Response.organization_id = "other-org"
     with pytest.raises(HTTPException) as cross_tenant:
@@ -325,21 +317,12 @@ def issuer_profile_signer(monkeypatch):
     async def _identity(
         _organization_id: str,
         issuer_did: str | None = None,
-        legacy_issuer_profile_id: str | None = None,
     ):
         result = dict(identity)
         if issuer_did and issuer_did != result["issuer_did"]:
             raise HTTPException(
                 status_code=409,
                 detail="Issuer DID is not active for this organization",
-            )
-        if (
-            legacy_issuer_profile_id
-            and legacy_issuer_profile_id != result["issuer_profile_id"]
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="Legacy issuer_profile_id does not match resolved issuer DID",
             )
         return result
 
@@ -1204,35 +1187,16 @@ async def test_application_approved_webhook_manual_issue_does_not_bootstrap_defa
     assert await repo.list_definitions("org-1") == []
 
 
-@pytest.mark.asyncio
-async def test_start_verification_rejects_profile_did_mismatch(monkeypatch) -> None:
-    _install_reference_validation_stubs(
-        monkeypatch,
-        templates={},
-        policies={
-            "policy-1": {
+def test_start_verification_rejects_profile_selector_before_runtime() -> None:
+    with pytest.raises(ValidationError, match="issuer_profile_id"):
+        StartVerificationFlowRequest.model_validate(
+            {
+                "presentation_policy_id": "policy-1",
                 "organization_id": "org-1",
-                "status": "active",
-                "credential_requirements_json": "[]",
-            },
-        },
-    )
-
-    with pytest.raises(HTTPException) as failure:
-        await start_verification_flow(
-            StartVerificationFlowRequest(
-                presentation_policy_id="policy-1",
-                issuer_profile_id="issuer-profile-1",
-                issuer_did="did:web:attacker.example",
-            ),
-            user_id="auth-service",
-            repo=InMemoryFlowRepository(),
+                "issuer_did": "did:web:attacker.example",
+                "issuer_profile_id": "issuer-profile-1",
+            }
         )
-
-    assert failure.value.status_code == 409
-    assert failure.value.detail == "Issuer DID is not active for this organization"
-
-
 @pytest.mark.asyncio
 async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
     monkeypatch,
@@ -1255,6 +1219,7 @@ async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
     started = await start_verification_flow(
         StartVerificationFlowRequest(
             presentation_policy_id="policy-1",
+            organization_id="org-1",
             issuer_did="did:web:verifier.example:oid4vp",
         ),
         user_id="auth-service",
@@ -1321,6 +1286,8 @@ async def test_started_post_request_uri_transports_wallet_nonce_into_signed_requ
     started = await start_verification_flow(
         StartVerificationFlowRequest(
             presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example:oid4vp",
             request_uri_method="post",
         ),
         user_id="auth-service",

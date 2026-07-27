@@ -343,6 +343,9 @@ message StartVerificationRequest {
   string callback_url = 7;
   int32 expiry_minutes = 8;
   string user_id = 9;  // caller identity (for org membership checks)
+  // Public DID that resolves to the managed verifier signing profile. The
+  // profile, service, and key reference are intentionally not transportable.
+  string issuer_did = 10;
 }
 
 message VerificationRequestResponse {

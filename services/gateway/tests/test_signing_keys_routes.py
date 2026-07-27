@@ -4291,10 +4291,10 @@ async def test_delete_issuer_profile_returns_404_when_missing(
 
 
 @pytest.mark.asyncio
-async def test_internal_resolve_issuer_context_uses_explicit_profile(
+async def test_internal_resolve_issuer_context_resolves_exact_did(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Explicit issuer_profile_id should select that profile instead of first active."""
+    """A DID resolves its one active profile without selecting a profile ID."""
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
     docs = {
         "org:org_issuer:issuer-profiles": {
@@ -4359,7 +4359,8 @@ async def test_internal_resolve_issuer_context_uses_explicit_profile(
     response = await signing_keys.internal_resolve_issuer_context(
         request=request,
         organization_id="org_issuer",
-        issuer_profile_id="ip-selected",
+        issuer_profile_id=None,
+        issuer_did="did:web:beta.elevenidllc.com:orgs:elevenid",
         issuer_mode="org_managed",
         credential_format="dc+sd-jwt",
         key_purpose="vc_jwt_issuer",

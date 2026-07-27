@@ -9,15 +9,14 @@ from gateway.routes import flows
 from gateway.models import StartVerificationFlowRequest
 
 
-def test_gateway_preserves_profile_haip_and_post_request_uri_options() -> None:
+def test_gateway_preserves_did_haip_and_post_request_uri_options() -> None:
     request = StartVerificationFlowRequest(
         presentation_policy_id="policy-1",
-        issuer_profile_id="issuer-profile-1",
+        organization_id="org-1",
         issuer_did="did:web:verifier.example",
         oid4vp_profile="haip",
         request_uri_method="post",
     )
-    assert request.model_dump()["issuer_profile_id"] == "issuer-profile-1"
     assert request.model_dump()["issuer_did"] == "did:web:verifier.example"
     assert request.model_dump()["oid4vp_profile"] == "haip"
     assert request.model_dump()["request_uri_method"] == "post"
@@ -32,7 +31,7 @@ def test_verification_flow_rejects_direct_kms_routing(direct_kms_field: str) -> 
         StartVerificationFlowRequest.model_validate(
             {
                 "presentation_policy_id": "policy-1",
-                "issuer_profile_id": "issuer-profile-1",
+                "organization_id": "org-1",
                 "issuer_did": "did:web:verifier.example",
                 direct_kms_field: "must-not-cross-runtime-boundary",
             }
@@ -88,6 +87,8 @@ async def test_start_verification_requires_policy_and_trust_profile_in_same_org(
     body = StartVerificationFlowRequest(
         presentation_policy_id="policy-1",
         trust_profile_id="trust-1",
+        organization_id="org-policy",
+        issuer_did="did:web:verifier.example",
     )
     resource_org_id = AsyncMock(side_effect=["org-policy", "org-trust"])
     proxy = AsyncMock()
@@ -110,6 +111,8 @@ async def test_start_verification_proxies_same_org_policy_and_trust_profile(
     body = StartVerificationFlowRequest(
         presentation_policy_id="policy-1",
         trust_profile_id="trust-1",
+        organization_id="org-1",
+        issuer_did="did:web:verifier.example",
     )
     resource_org_id = AsyncMock(side_effect=["org-1", "org-1"])
     expected_response = SimpleNamespace(status_code=200)
@@ -141,6 +144,8 @@ async def test_start_verification_fails_closed_when_trust_profile_org_is_unavail
     body = StartVerificationFlowRequest(
         presentation_policy_id="policy-1",
         trust_profile_id="trust-1",
+        organization_id="org-1",
+        issuer_did="did:web:verifier.example",
     )
     monkeypatch.setattr(
         flows,
@@ -173,6 +178,8 @@ async def test_start_verification_rejects_ambiguous_resource_organization_fields
     body = StartVerificationFlowRequest(
         presentation_policy_id="policy-1",
         trust_profile_id="trust-1",
+        organization_id="org-1",
+        issuer_did="did:web:verifier.example",
     )
     monkeypatch.setattr(
         flows,

@@ -612,6 +612,12 @@ _ui_base_url: str = "http://localhost:3000"
 _redis_client: Any | None = None  # redis.asyncio.Redis
 _session_repository: Any | None = None  # RedisSessionRepository
 _credential_login_policy_id: str = os.environ.get("CREDENTIAL_LOGIN_POLICY_ID", "")
+_credential_login_organization_id: str = os.environ.get(
+    "CREDENTIAL_LOGIN_ORGANIZATION_ID", os.environ.get("MARTY_ORG_ID", "")
+)
+_credential_login_issuer_did: str = os.environ.get(
+    "CREDENTIAL_LOGIN_ISSUER_DID", os.environ.get("OID4VP_ISSUER_DID", "")
+)
 _auth_service_internal_url: str = os.environ.get(
     "AUTH_SERVICE_INTERNAL_URL", "http://auth:8001"
 )
@@ -2415,6 +2421,17 @@ async def credential_login(request: Request) -> HTMLResponse:
                 f"{_DEFAULT_OPEN_BADGE_LOGIN_POLICY_ID} and restart the auth service."
             ),
         )
+    if not (_credential_login_organization_id and _credential_login_issuer_did):
+        return _credential_login_unavailable_response(
+            request,
+            title="Open Badge sign-in is temporarily unavailable",
+            message="The wallet sign-in identity is not configured yet. Please use another sign-in method.",
+            operator_details=(
+                "Set CREDENTIAL_LOGIN_ORGANIZATION_ID and CREDENTIAL_LOGIN_ISSUER_DID "
+                "for the credential-login flow."
+            ),
+            allow_retry=False,
+        )
     if _redis_client is None:
         return _credential_login_unavailable_response(
             request,
@@ -2442,6 +2459,8 @@ async def credential_login(request: Request) -> HTMLResponse:
         flow_resp = await flow_stub.StartVerification(
             flow_service_pb2.StartVerificationRequest(
                 presentation_policy_id=_credential_login_policy_id,
+                organization_id=_credential_login_organization_id,
+                issuer_did=_credential_login_issuer_did,
                 callback_url=callback_url,
                 user_id="auth-service",
             )
