@@ -1366,6 +1366,65 @@ class InvitationAcceptResponse(BaseModel):
 # Issuance
 # =============================================================================
 
+class Oid4vciAuthorizedClientJwk(BaseModel):
+    """Public ES256 key defined by the marty-protocol issuance contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kty: Literal["EC"]
+    crv: Literal["P-256"]
+    kid: str = Field(min_length=1, max_length=256)
+    x: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+    y: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+    alg: Literal["ES256"] | None = None
+    use: Literal["sig"] | None = None
+    key_ops: list[Literal["verify"]] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=1,
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_private_parameters(cls, value: Any) -> Any:
+        if isinstance(value, dict) and set(value) & {
+            "d",
+            "p",
+            "q",
+            "dp",
+            "dq",
+            "qi",
+            "oth",
+            "k",
+        }:
+            raise ValueError("authorized_client.jwks must contain public keys only")
+        return value
+
+
+class Oid4vciAuthorizedClientJwks(BaseModel):
+    """JWKS wrapper with no fields outside the public protocol contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    keys: list[Oid4vciAuthorizedClientJwk] = Field(min_length=1)
+
+
+class Oid4vciAuthorizedClient(BaseModel):
+    """Tenant-owned wallet client bound to a credential offer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str = Field(min_length=1, max_length=512)
+    jwks: Oid4vciAuthorizedClientJwks
+
+    @model_validator(mode="after")
+    def public_keys_only(self) -> "Oid4vciAuthorizedClient":
+        key_ids = [key.kid for key in self.jwks.keys]
+        if len(set(key_ids)) != len(key_ids):
+            raise ValueError("authorized_client.jwks key ids must be unique")
+        return self
+
+
 class IssuanceCreate(BaseModel):
     """Create an issuance request."""
     organization_id: str
@@ -1384,6 +1443,7 @@ class IssuanceCreate(BaseModel):
     issuer_profile_id: str | None = None
     subject_did: str | None = None
     holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
+    authorized_client: Oid4vciAuthorizedClient | None = None
     application_id: str | None = None
     claims: dict = {}
     credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None

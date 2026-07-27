@@ -134,6 +134,9 @@ message InitiateIssuanceRequest {
   string subject_did = 4;
   map<string, string> claims = 5;
   string holder_did = 6;  // DIDComm v2: holder's DID for push delivery
+  // Internal client-registry reference. Public callers register a public JWK
+  // through the authenticated gateway and never select this identifier.
+  string authorized_client_id = 7;
 }
 
 message IssuanceResponse {
@@ -157,6 +160,8 @@ message ExchangeTokenRequest {
   string redirect_uri = 4;
   string client_id = 5;
   string code_verifier = 6;
+  string client_assertion_type = 7;
+  string client_assertion = 8;
 }
 
 message TokenResponse {
