@@ -3001,8 +3001,18 @@ async def evaluate_presentation(
     # A nonce is a freshness challenge, not holder binding by itself. It is
     # supplied only when the configured proof profile requires a signed challenge.
     proof_freshness = policy.holder_binding.proof_freshness
+    # An OID4VP flow always represents a holder presentation.  Its signed
+    # challenge cannot be disabled by a presentation-policy configuration
+    # intended for credential-only verification.  The marker is written by
+    # the flow service when it creates the request object and only strengthens
+    # verification if a stateless caller supplies it.
+    oid4vp_verifier_context = (
+        request.context.get("oid4vp_verifier_context") is True
+    )
     requires_bound_presentation = (
-        policy.holder_binding.required or credential_format == "mdoc"
+        policy.holder_binding.required
+        or credential_format == "mdoc"
+        or oid4vp_verifier_context
     )
     verify_nonce = (
         request.nonce

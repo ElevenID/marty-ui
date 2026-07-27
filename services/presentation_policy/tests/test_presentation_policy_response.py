@@ -1131,6 +1131,61 @@ def test_open_badge_login_policy_allows_verified_sd_jwt_badge(monkeypatch) -> No
     assert response.verified_claims["email"] == "member@example.com"
 
 
+def test_oid4vp_context_requires_sd_jwt_holder_binding_even_when_policy_does_not(
+    monkeypatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(monkeypatch)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+
+    def verify(
+        _token,
+        credential_format,
+        nonce,
+        audience,
+        *_args,
+        **_kwargs,
+    ):
+        captured.update(
+            credential_format=credential_format,
+            nonce=nonce,
+            audience=audience,
+        )
+        return {
+            "verified": False,
+            "claims": {},
+            "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+            "error": "invalid holder signature",
+        }
+
+    monkeypatch.setattr(pp, "_verify_credential_by_format", verify)
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(
+                vp_token="issuer.payload.signature~holder.payload.signature",
+                nonce="oid4vp-nonce",
+                audience="https://verifier.example/callback",
+                context={"oid4vp_verifier_context": True},
+            ),
+            repo=repo,
+        )
+    )
+
+    assert captured == {
+        "credential_format": "sd-jwt",
+        "nonce": "oid4vp-nonce",
+        "audience": "https://verifier.example/callback",
+    }
+    assert response.result == "failed"
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
+
+
 def test_open_badge_login_policy_denies_untrusted_issuer(monkeypatch) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
