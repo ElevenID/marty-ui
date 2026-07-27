@@ -105,6 +105,61 @@ async def test_template_create_resolves_did_and_hides_profile_from_caller(
     assert "signing_key_reference" not in captured["internal_body"]
 
 
+@pytest.mark.asyncio
+async def test_mdoc_template_infers_signing_wire_format_from_supported_formats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    async def exists(*_args, **_kwargs):
+        return True
+
+    async def owner(*_args, **_kwargs):
+        return "org-1"
+
+    async def resolve(
+        request,
+        organization_id,
+        issuer_did,
+        legacy_issuer_profile_id=None,
+        credential_format=None,
+        key_purpose=None,
+        algorithm=None,
+    ):
+        captured["credential_format"] = credential_format
+        return {
+            "issuer_profile_id": "internal-mdoc-profile",
+            "issuer_did": issuer_did,
+        }
+
+    class Registry:
+        @staticmethod
+        def get_service_url(_name: str) -> str:
+            return "http://credential-templates"
+
+    async def proxy(*_args, **_kwargs):
+        return JSONResponse({"id": "template-mdoc"})
+
+    monkeypatch.setattr(credentials, "_resource_exists", exists)
+    monkeypatch.setattr(credentials, "_resource_org_id", owner)
+    monkeypatch.setattr(issuance, "_resolve_issuer_identity", resolve)
+    monkeypatch.setattr(credentials, "get_registry", lambda: Registry())
+    monkeypatch.setattr(credentials, "proxy_request", proxy)
+
+    await credentials.create_credential_template(
+        _body(
+            credential_type="org.iso.18013.5.1.mDL",
+            vct="org.iso.18013.5.1.mDL",
+            doctype="org.iso.18013.5.1.mDL",
+            supported_formats=["mdoc"],
+            credential_payload_format=None,
+        ),
+        _request(),
+    )
+
+    assert captured["credential_format"] == "mso_mdoc"
+
+
 @pytest.mark.parametrize(
     "forbidden_field",
     [

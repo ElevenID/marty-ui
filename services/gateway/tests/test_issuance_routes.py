@@ -521,7 +521,7 @@ async def test_create_issuance_resolves_did_and_forwards_internal_profile_contex
         "organization_id": "org_123",
         "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
         "legacy_issuer_profile_id": None,
-        "credential_format": "sd_jwt_vc",
+        "credential_format": "dc+sd-jwt",
     }
     assert captured["service_url"] == "http://issuance-service"
     assert captured["path"] == "/v1/issuance/initiate"
@@ -596,7 +596,7 @@ async def test_create_issuance_uses_template_bound_issuer_profile(
         "organization_id": "org_123",
         "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
         "legacy_issuer_profile_id": "ip-template",
-        "credential_format": "sd_jwt_vc",
+        "credential_format": "dc+sd-jwt",
     }
     assert captured["inject_headers"]["X-Issuer-Profile-Id"] == "ip-template"
     assert "X-Signing-Service-Id" not in captured["inject_headers"]
@@ -1004,6 +1004,32 @@ async def test_resolve_issuer_identity_prefers_format_scoped_profile(
         == "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary"
     )
     assert identity["key_purpose"] == "mdoc_dsc"
+
+
+@pytest.mark.parametrize(
+    ("payload_format", "supported_formats", "expected"),
+    [
+        ("w3c_vcdm_v2_sd_jwt", ["sd_jwt_vc"], "dc+sd-jwt"),
+        ("ietf_sd_jwt", ["sd_jwt_vc"], "dc+sd-jwt"),
+        ("w3c_vcdm_v2_jwt_vc", ["jwt_vc"], "jwt_vc_json"),
+        ("mdoc", ["mdoc"], "mso_mdoc"),
+        (None, ["mdoc"], "mso_mdoc"),
+        (None, ["sd_jwt_vc"], "dc+sd-jwt"),
+        (None, ["mdoc", "sd_jwt_vc"], None),
+    ],
+)
+def test_public_signing_format_normalizes_template_and_wire_names(
+    payload_format,
+    supported_formats,
+    expected,
+):
+    assert (
+        issuance._public_signing_credential_format(
+            payload_format,
+            supported_formats,
+        )
+        == expected
+    )
 
 
 @pytest.mark.asyncio
