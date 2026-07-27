@@ -501,7 +501,8 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             callback_url = _normalize_grpc_callback_url(request.callback_url or None)
             req = StartVerificationFlowRequest(
                 presentation_policy_id=request.presentation_policy_id or None,
-                organization_id=request.organization_id or None,
+                organization_id=request.organization_id,
+                issuer_did=request.issuer_did,
                 response_type=request.response_type or "vp_token",
                 trust_profile_id=request.trust_profile_id or None,
                 deployment_profile_id=request.deployment_profile_id or None,

@@ -107,7 +107,6 @@ async def create_credential_template(body: CredentialTemplateCreate, request: Re
         request,
         body.organization_id,
         body.issuer_did,
-        legacy_issuer_profile_id=body.issuer_profile_id,
         credential_format=public_format,
         algorithm=body.signing_algorithm,
     )
@@ -120,7 +119,6 @@ async def create_credential_template(body: CredentialTemplateCreate, request: Re
             ),
         )
     internal_body = body.model_dump(exclude_none=True)
-    internal_body["issuer_profile_id"] = issuer_identity["issuer_profile_id"]
     internal_body["issuer_did"] = issuer_identity["issuer_did"]
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")

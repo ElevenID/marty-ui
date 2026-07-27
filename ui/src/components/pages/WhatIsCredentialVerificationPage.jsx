@@ -118,6 +118,7 @@ Content-Type: application/json
 
 {
   "organization_id": "org_123",
+  "issuer_did": "did:web:issuer.example:orgs:org_123",
   "presentation_policy_id": "policy_123",
   "external_reference": "Employment eligibility check"
 }`}

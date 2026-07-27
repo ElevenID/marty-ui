@@ -54,7 +54,6 @@ async def test_template_create_resolves_did_and_hides_profile_from_caller(
         request,
         organization_id,
         issuer_did,
-        legacy_issuer_profile_id=None,
         credential_format=None,
         key_purpose=None,
         algorithm=None,
@@ -62,7 +61,6 @@ async def test_template_create_resolves_did_and_hides_profile_from_caller(
         captured["resolution"] = {
             "organization_id": organization_id,
             "issuer_did": issuer_did,
-            "legacy_issuer_profile_id": legacy_issuer_profile_id,
             "credential_format": credential_format,
             "algorithm": algorithm,
         }
@@ -106,11 +104,9 @@ async def test_template_create_resolves_did_and_hides_profile_from_caller(
     assert captured["resolution"] == {
         "organization_id": "org-1",
         "issuer_did": "did:web:issuer.example:orgs:org-1",
-        "legacy_issuer_profile_id": None,
         "credential_format": "dc+sd-jwt",
         "algorithm": None,
     }
-    assert captured["internal_body"]["issuer_profile_id"] == "internal-profile-1"
     assert captured["internal_body"]["issuer_did"] == (
         "did:web:issuer.example:orgs:org-1"
     )
@@ -154,8 +150,6 @@ def test_public_template_response_schema_has_no_custody_routing_fields() -> None
     schema = CredentialTemplateCreate.model_json_schema()
     response_schema = credentials.CredentialTemplateResponse.model_json_schema()
 
-    # The profile ID is a documented temporary input assertion, never output.
-    assert schema["properties"]["issuer_profile_id"]["deprecated"] is True
     for field in (
         "issuer_profile_id",
         "issuer_key_id",
@@ -164,6 +158,7 @@ def test_public_template_response_schema_has_no_custody_routing_fields() -> None
         "signing_service_id",
         "signing_key_reference",
     ):
+        assert field not in schema["properties"]
         assert field not in response_schema["properties"]
 
 

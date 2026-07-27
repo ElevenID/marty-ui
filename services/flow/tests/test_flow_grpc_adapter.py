@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import sys
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import grpc
-import pytest
 
 # Pre-inject a lightweight stub for flow.main so the deferred import inside
 # the gRPC adapter doesn't pull in the entire flow service (and its heavy
@@ -26,8 +25,8 @@ _flow_main_stub = SimpleNamespace(
 )
 sys.modules.setdefault("flow.main", _flow_main_stub)
 
-from flow.infrastructure.adapters.grpc_adapter import FlowServiceGrpc
-from marty_proto.v1 import flow_service_pb2
+from flow.infrastructure.adapters.grpc_adapter import FlowServiceGrpc  # noqa: E402
+from marty_proto.v1 import flow_service_pb2  # noqa: E402
 
 
 def _build_servicer(**overrides) -> FlowServiceGrpc:
@@ -61,6 +60,7 @@ class TestStartVerification:
         req = flow_service_pb2.StartVerificationRequest(
             presentation_policy_id="pp-1",
             organization_id="org-1",
+            issuer_did="did:web:verifier.example:orgs:org-1",
             trust_profile_id="trust-1",
             user_id="user-1",
             callback_url="https://example.com/callback",
@@ -92,6 +92,7 @@ class TestStartVerification:
         req = flow_service_pb2.StartVerificationRequest(
             presentation_policy_id="pp-1",
             organization_id="org-1",
+            issuer_did="did:web:verifier.example:orgs:org-1",
             user_id="auth-service",
             callback_url="http://auth:8001/internal/v1/auth/credential-verified?nonce=abc",
         )
@@ -109,6 +110,7 @@ class TestStartVerification:
         req = flow_service_pb2.StartVerificationRequest(
             presentation_policy_id="pp-1",
             organization_id="org-1",
+            issuer_did="did:web:verifier.example:orgs:org-1",
             user_id="auth-service",
             callback_url="http://example.com/callback",
         )
@@ -127,9 +129,10 @@ class TestStartVerification:
         req = flow_service_pb2.StartVerificationRequest(
             presentation_policy_id="missing",
             organization_id="org-1",
+            issuer_did="did:web:verifier.example:orgs:org-1",
             user_id="user-1",
         )
-        resp = await servicer.StartVerification(req, ctx)
+        await servicer.StartVerification(req, ctx)
 
         assert ctx.code == grpc.StatusCode.NOT_FOUND
         assert "not found" in ctx.details.lower()
@@ -145,7 +148,7 @@ class TestStartVerification:
             organization_id="org-1",
             user_id="user-1",
         )
-        resp = await servicer.StartVerification(req, ctx)
+        await servicer.StartVerification(req, ctx)
 
         assert ctx.code == grpc.StatusCode.INVALID_ARGUMENT
 
@@ -157,9 +160,10 @@ class TestStartVerification:
         req = flow_service_pb2.StartVerificationRequest(
             presentation_policy_id="pp-1",
             organization_id="org-1",
+            issuer_did="did:web:verifier.example:orgs:org-1",
             user_id="user-1",
         )
-        resp = await servicer.StartVerification(req, ctx)
+        await servicer.StartVerification(req, ctx)
 
         assert ctx.code == grpc.StatusCode.INTERNAL
 
@@ -202,7 +206,7 @@ class TestApplicationApproved:
             data={},
             timestamp="2026-03-14T00:00:00Z",
         )
-        resp = await servicer.ApplicationApproved(req, ctx)
+        await servicer.ApplicationApproved(req, ctx)
 
         assert ctx.code == grpc.StatusCode.INTERNAL
         assert "boom" in ctx.details

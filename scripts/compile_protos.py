@@ -21,6 +21,24 @@ PROTO_DIR = ROOT / "proto" / "v1"
 OUT_DIR = ROOT / "packages" / "marty_proto" / "v1"
 
 
+def googleapis_proto_dir() -> Path:
+    """Return the installed include root that contains google/api/*.proto."""
+    try:
+        import google.api  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError(
+            "googleapis-common-protos is required to compile service protobufs"
+        ) from exc
+
+    api_dir = Path(next(iter(google.api.__path__)))
+    include_root = api_dir.parent.parent
+    if not (include_root / "google" / "api" / "annotations.proto").is_file():
+        raise RuntimeError(
+            "googleapis-common-protos does not provide google/api/annotations.proto"
+        )
+    return include_root
+
+
 def compile_protos() -> None:
     """Compile all .proto files into Python stubs."""
     proto_files = sorted(PROTO_DIR.glob("*.proto"))
@@ -39,6 +57,7 @@ def compile_protos() -> None:
         "-m",
         "grpc_tools.protoc",
         f"--proto_path={PROTO_DIR}",
+        f"--proto_path={googleapis_proto_dir()}",
         f"--python_out={OUT_DIR}",
         f"--grpc_python_out={OUT_DIR}",
         *[str(f) for f in proto_files],
@@ -139,6 +158,7 @@ def compile_descriptor_set() -> None:
         "-m",
         "grpc_tools.protoc",
         f"--proto_path={PROTO_DIR}",
+        f"--proto_path={googleapis_proto_dir()}",
         f"--descriptor_set_out={desc_file}",
         "--include_imports",
         *[str(f) for f in proto_files],
