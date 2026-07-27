@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 
 # =============================================================================
@@ -533,6 +533,43 @@ class CredentialTemplateCreate(BaseModel):
     credential_payload_format: str | None = Field(default=None, max_length=100)
 
 
+class CredentialTemplateUpdate(BaseModel):
+    """Public draft-template update; custody routing remains service-internal."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    claims: list[ClaimDefinitionModel] | None = None
+    privacy_posture: str | None = Field(None, max_length=50)
+    selective_disclosure_fields: list[str] | None = None
+    zk_predicate_claims: list[str] | None = None
+    derived_attributes: list[dict] | None = None
+    display_style: dict | None = None
+    validity_rules: TemplateValidityRules | None = None
+    supported_formats: list[str] | None = None
+    application_template_id: str | None = Field(None, max_length=255)
+    trust_profile_id: str | None = Field(None, max_length=255)
+    revocation_profile_id: str | None = Field(None, max_length=255)
+    signing_algorithm: str | None = Field(None, max_length=50)
+    issuer_did: str | None = Field(
+        None,
+        pattern=r"^did:[a-z0-9]+:.+",
+        max_length=2048,
+    )
+    issuer_profile_id: str | None = Field(
+        None,
+        max_length=255,
+        json_schema_extra={"deprecated": True},
+        description=(
+            "Temporary legacy assertion only; it must match issuer_did "
+            "resolution and cannot select custody."
+        ),
+    )
+    auto_generate_artifacts: bool | None = None
+    credential_payload_format: str | None = Field(None, max_length=100)
+
+
 class CredentialTemplateResponse(BaseModel):
     id: str
     organization_id: str
@@ -558,9 +595,7 @@ class CredentialTemplateResponse(BaseModel):
     validity_rules: dict | None
 
     # Cryptographic status
-    issuer_key_id: str | None
-    issuer_key_algorithm: str | None
-    key_access_mode: str
+    issuer_algorithm: str | None = None
     issuer_certificate_chain_configured: bool
     issuer_did: str | None
     artifacts_status: str

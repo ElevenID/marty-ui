@@ -137,6 +137,7 @@ def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateRespon
         remote_signing_config_json=json.dumps(getattr(resp, "remote_signing_config", None) or {}),
         issuer_profile_id=getattr(resp, "issuer_profile_id", None) or "",
         revocation_profile_id=getattr(resp, "revocation_profile_id", None) or "",
+        issuer_did=getattr(resp, "issuer_did", None) or "",
     )
 
 
@@ -144,6 +145,7 @@ async def _resolve_grpc_issuer_fields(
     *,
     context: Any,
     organization_id: str,
+    issuer_did: str | None,
     issuer_profile_id: str | None,
     credential_payload_format: str | None,
     issuer_algorithm: str | None,
@@ -158,17 +160,19 @@ async def _resolve_grpc_issuer_fields(
         issuer_context = await _require_active_issuer_profile(
             SimpleNamespace(state=SimpleNamespace()),
             organization_id=organization_id,
+            issuer_did=issuer_did,
             issuer_profile_id=issuer_profile_id,
             credential_format=payload_format_to_wire(credential_payload_format),
             algorithm=issuer_algorithm or None,
         )
     except Exception as exc:  # noqa: BLE001
         status_code = getattr(exc, "status_code", 500)
-        grpc_code = (
-            grpc.StatusCode.INVALID_ARGUMENT
-            if status_code in {400, 422}
-            else grpc.StatusCode.UNAVAILABLE
-        )
+        if status_code in {400, 422}:
+            grpc_code = grpc.StatusCode.INVALID_ARGUMENT
+        elif status_code == 409:
+            grpc_code = grpc.StatusCode.FAILED_PRECONDITION
+        else:
+            grpc_code = grpc.StatusCode.UNAVAILABLE
         context.set_code(grpc_code)
         context.set_details(str(getattr(exc, "detail", exc)))
         return None
@@ -283,6 +287,7 @@ class CredentialTemplateServiceGrpc(
         issuer_fields = await _resolve_grpc_issuer_fields(
             context=context,
             organization_id=request.organization_id,
+            issuer_did=getattr(request, "issuer_did", "") or None,
             issuer_profile_id=getattr(request, "issuer_profile_id", "") or None,
             credential_payload_format=credential_payload_format,
             issuer_algorithm=getattr(request, "issuer_algorithm", "") or None,
@@ -406,6 +411,8 @@ class CredentialTemplateServiceGrpc(
 
         if getattr(request, "issuer_profile_id", ""):
             template.issuer_profile_id = request.issuer_profile_id
+        if getattr(request, "issuer_did", ""):
+            template.issuer_did = request.issuer_did
         if getattr(request, "issuer_algorithm", ""):
             template.issuer_algorithm = request.issuer_algorithm
 
@@ -453,6 +460,7 @@ class CredentialTemplateServiceGrpc(
         issuer_fields = await _resolve_grpc_issuer_fields(
             context=context,
             organization_id=template.organization_id,
+            issuer_did=getattr(template, "issuer_did", None),
             issuer_profile_id=getattr(template, "issuer_profile_id", None),
             credential_payload_format=template.credential_payload_format,
             issuer_algorithm=getattr(template, "issuer_algorithm", None),
@@ -488,6 +496,7 @@ class CredentialTemplateServiceGrpc(
         issuer_fields = await _resolve_grpc_issuer_fields(
             context=context,
             organization_id=template.organization_id,
+            issuer_did=getattr(template, "issuer_did", None),
             issuer_profile_id=getattr(template, "issuer_profile_id", None),
             credential_payload_format=template.credential_payload_format,
             issuer_algorithm=getattr(template, "issuer_algorithm", None),

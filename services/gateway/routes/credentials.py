@@ -11,6 +11,7 @@ from gateway.models import (
     ComplianceProfileUpdate,
     CredentialTemplateCreate,
     CredentialTemplateResponse,
+    CredentialTemplateUpdate,
 )
 from gateway.proxy import _resource_exists, _resource_org_id, get_registry, proxy_request
 
@@ -18,6 +19,56 @@ credential_template_router = APIRouter(prefix="/v1/credential-templates", tags=[
 wallet_registry_router = APIRouter(prefix="/v1/wallet-registry", tags=["Wallet Registry"])
 delivery_destination_router = APIRouter(prefix="/v1/delivery-destinations", tags=["Delivery Destinations"])
 compliance_profile_router = APIRouter(prefix="/v1/compliance-profiles", tags=["Compliance Profiles"])
+
+_PRIVATE_TEMPLATE_RESPONSE_FIELDS = frozenset(
+    {
+        "issuer_profile_id",
+        "issuer_key_id",
+        "key_access_mode",
+        "remote_signing_config",
+        "signing_service_id",
+        "signing_key_reference",
+        "issuer_certificate_chain_pem",
+    }
+)
+
+
+def _sanitize_credential_template_response(response: Response) -> Response:
+    """Remove internal custody routing from proxied public template responses."""
+    if response.status_code == 204 or not response.body:
+        return response
+    try:
+        payload = json.loads(response.body)
+    except (TypeError, ValueError, UnicodeDecodeError):
+        return response
+
+    def sanitize_template(value):
+        if not isinstance(value, dict):
+            return value
+        return {
+            key: entry
+            for key, entry in value.items()
+            if key not in _PRIVATE_TEMPLATE_RESPONSE_FIELDS
+        }
+
+    if isinstance(payload, list):
+        sanitized = [sanitize_template(item) for item in payload]
+    elif isinstance(payload, dict):
+        sanitized = sanitize_template(payload)
+    else:
+        return response
+
+    headers = {
+        key: value
+        for key, value in response.headers.items()
+        if key.lower() not in {"content-length", "content-type"}
+    }
+    return Response(
+        content=json.dumps(sanitized, separators=(",", ":")),
+        status_code=response.status_code,
+        headers=headers,
+        media_type="application/json",
+    )
 
 
 # ── Credential Templates ─────────────────────────────────────────────
@@ -73,12 +124,13 @@ async def create_credential_template(body: CredentialTemplateCreate, request: Re
     internal_body["issuer_did"] = issuer_identity["issuer_did"]
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(
+    response = await proxy_request(
         request,
         service_url,
         "/v1/credential-templates",
         body_override=json.dumps(internal_body).encode(),
     )
+    return _sanitize_credential_template_response(response)
 
 
 @credential_template_router.get("", response_model=list[CredentialTemplateResponse], summary="List Credential Templates")
@@ -89,7 +141,8 @@ async def list_credential_templates(
     """List all Credential Templates for an organization."""
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(request, service_url, "/v1/credential-templates")
+    response = await proxy_request(request, service_url, "/v1/credential-templates")
+    return _sanitize_credential_template_response(response)
 
 
 @credential_template_router.get("/{template_id}", response_model=CredentialTemplateResponse, summary="Get Credential Template")
@@ -97,11 +150,12 @@ async def get_credential_template(template_id: str, request: Request) -> Respons
     """Get a Credential Template by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(
+    response = await proxy_request(
         request,
         service_url,
         f"/v1/credential-templates/{template_id}",
     )
+    return _sanitize_credential_template_response(response)
 
 
 @credential_template_router.get("/{template_id}/wallet-compatibility", summary="Get Wallet Compatibility")
@@ -113,11 +167,23 @@ async def get_credential_template_wallet_compatibility(template_id: str, request
 
 
 @credential_template_router.patch("/{template_id}", response_model=CredentialTemplateResponse, summary="Update Draft Credential Template")
-async def update_credential_template(template_id: str, request: Request) -> Response:
+async def update_credential_template(
+    template_id: str,
+    body: CredentialTemplateUpdate,
+    request: Request,
+) -> Response:
     """Partially update a draft Credential Template."""
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}")
+    response = await proxy_request(
+        request,
+        service_url,
+        f"/v1/credential-templates/{template_id}",
+        body_override=json.dumps(
+            body.model_dump(exclude_none=True, exclude_unset=True)
+        ).encode(),
+    )
+    return _sanitize_credential_template_response(response)
 
 
 @credential_template_router.delete("/{template_id}", summary="Delete Credential Template")
@@ -140,7 +206,12 @@ async def validate_credential_template_artifacts(template_id: str, request: Requ
     """
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/validate-artifacts")
+    response = await proxy_request(
+        request,
+        service_url,
+        f"/v1/credential-templates/{template_id}/validate-artifacts",
+    )
+    return _sanitize_credential_template_response(response)
 
 
 @credential_template_router.post("/{template_id}/activate", response_model=CredentialTemplateResponse, summary="Activate Credential Template")
@@ -148,7 +219,12 @@ async def activate_credential_template(template_id: str, request: Request) -> Re
     """Activate a Credential Template."""
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/activate")
+    response = await proxy_request(
+        request,
+        service_url,
+        f"/v1/credential-templates/{template_id}/activate",
+    )
+    return _sanitize_credential_template_response(response)
 
 
 @credential_template_router.post("/{template_id}/new-version", response_model=CredentialTemplateResponse, summary="Create Credential Template Version")
@@ -156,7 +232,12 @@ async def create_credential_template_version(template_id: str, request: Request)
     """Create a new draft version from an existing Credential Template."""
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/new-version")
+    response = await proxy_request(
+        request,
+        service_url,
+        f"/v1/credential-templates/{template_id}/new-version",
+    )
+    return _sanitize_credential_template_response(response)
 
 
 @credential_template_router.post("/{template_id}/deprecate", response_model=CredentialTemplateResponse, summary="Deprecate Credential Template")
@@ -164,7 +245,12 @@ async def deprecate_credential_template(template_id: str, request: Request) -> R
     """Deprecate an active Credential Template."""
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
-    return await proxy_request(request, service_url, f"/v1/credential-templates/{template_id}/deprecate")
+    response = await proxy_request(
+        request,
+        service_url,
+        f"/v1/credential-templates/{template_id}/deprecate",
+    )
+    return _sanitize_credential_template_response(response)
 
 
 @credential_template_router.get("/{template_id}/application-template", summary="Get Linked Application Template")
