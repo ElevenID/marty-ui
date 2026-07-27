@@ -20,8 +20,7 @@ const activeIssuerProfile = {
   signing_service_id: 'managed-openbao-transit',
 }
 const templateIssuerFields = {
-  issuer_profile_id: activeIssuerProfile.id,
-  key_access_mode: 'REMOTE_SIGNING',
+  issuer_did: activeIssuerProfile.issuer_did,
 }
 
 const readyTrustDependencies = {
@@ -471,7 +470,7 @@ describe('dashboardRules', () => {
       expect(result.policy.dependencyBlocked).toBe(true)
     })
 
-    it('should mark template as BLOCKED when the referenced issuer profile is inactive', () => {
+    it('should mark template as BLOCKED when the DID-resolved issuer profile is inactive', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
         issuerProfiles: [{ ...activeIssuerProfile, status: 'inactive' }],
@@ -497,7 +496,7 @@ describe('dashboardRules', () => {
       expect(result.policy.dependencyBlocked).toBe(true)
     })
 
-    it('should mark template as BLOCKED when the referenced issuer profile has no KMS signing service', () => {
+    it('should mark template as BLOCKED when the DID-resolved issuer profile has no KMS signing service', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
         issuerProfiles: [{

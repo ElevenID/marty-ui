@@ -181,13 +181,8 @@ function inferSetupIntent(data) {
 }
 
 function hasActiveKmsBackedIssuerProfile(template, issuerProfiles) {
-  const issuerProfileId = String(template?.issuer_profile_id || '').trim();
-  if (!issuerProfileId) {
-    return false;
-  }
-
-  const keyAccessMode = String(template?.key_access_mode || '').trim().toUpperCase();
-  if (keyAccessMode && keyAccessMode !== 'REMOTE_SIGNING') {
+  const issuerDid = String(template?.issuer_did || '').trim();
+  if (!issuerDid.startsWith('did:')) {
     return false;
   }
 
@@ -196,9 +191,8 @@ function hasActiveKmsBackedIssuerProfile(template, issuerProfiles) {
   }
 
   return issuerProfiles.some((profile) => (
-    String(profile?.id || '').trim() === issuerProfileId
+    String(profile?.issuer_did || profile?.did || '').trim() === issuerDid
     && String(profile?.status || '').trim().toLowerCase() === 'active'
-    && String(profile?.issuer_did || profile?.did || '').trim().startsWith('did:')
     && String(profile?.signing_service_id || profile?.service_id || profile?.metadata?.signing_service_id || '').trim()
   ));
 }

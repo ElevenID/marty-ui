@@ -133,8 +133,14 @@ async def test_credential_template_patch_proxies_without_full_create_model(
 ):
     captured: dict = {}
 
-    async def _proxy(request, service_url, path):
-        captured.update({"service_url": service_url, "path": path})
+    async def _proxy(request, service_url, path, body_override=None):
+        captured.update(
+            {
+                "service_url": service_url,
+                "path": path,
+                "body": json.loads(body_override),
+            }
+        )
         return JSONResponse({"id": "template-1"})
 
     monkeypatch.setattr(credentials, "get_registry", lambda: _Registry())
@@ -142,10 +148,12 @@ async def test_credential_template_patch_proxies_without_full_create_model(
 
     await credentials.update_credential_template(
         "template-1",
+        credentials.CredentialTemplateUpdate(name="Updated template"),
         _request("/v1/credential-templates/template-1"),
     )
 
     assert captured == {
         "service_url": "http://credential-template-service",
         "path": "/v1/credential-templates/template-1",
+        "body": {"name": "Updated template"},
     }

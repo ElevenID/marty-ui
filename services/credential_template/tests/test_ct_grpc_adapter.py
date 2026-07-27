@@ -9,7 +9,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import grpc
-import pytest
 
 
 # Pre-inject a lightweight stub for credential_template.main so the deferred
@@ -22,11 +21,11 @@ class _TemplateStatus(str, Enum):
 _ct_main_stub = SimpleNamespace(TemplateStatus=_TemplateStatus)
 sys.modules.setdefault("credential_template.main", _ct_main_stub)
 
-from credential_template.infrastructure.adapters.grpc_adapter import (
+from credential_template.infrastructure.adapters.grpc_adapter import (  # noqa: E402
     CredentialTemplateServiceGrpc,
     _template_to_pb,
 )
-from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
+from marty_proto.v1 import credential_template_service_pb2 as ct_pb2  # noqa: E402
 
 
 def _make_template_response(**overrides):
@@ -57,6 +56,7 @@ def _make_template_response(**overrides):
         created_at="2026-01-01T00:00:00Z",
         updated_at="2026-01-02T00:00:00Z",
         issuer_profile_id="issuer-profile-1",
+        issuer_did="did:web:issuer.example:orgs:org-1",
         key_access_mode="REMOTE_SIGNING",
         issuer_key_id="issuer-key-1",
         issuer_algorithm="ES256",
@@ -102,6 +102,7 @@ class TestGetTemplate:
         assert resp.display_style.background_color == "#003366"
         assert resp.validity_rules.default_validity_days == 365
         assert resp.issuer_profile_id == "issuer-profile-1"
+        assert resp.issuer_did == "did:web:issuer.example:orgs:org-1"
         assert resp.key_access_mode == "REMOTE_SIGNING"
         assert json.loads(resp.remote_signing_config_json)["signing_service_id"] == "managed-openbao-transit"
         assert ctx.code is None
@@ -112,7 +113,7 @@ class TestGetTemplate:
         servicer = _build_servicer(repo=repo)
 
         req = ct_pb2.GetTemplateRequest(template_id="missing")
-        resp = await servicer.GetTemplate(req, ctx)
+        await servicer.GetTemplate(req, ctx)
 
         assert ctx.code == grpc.StatusCode.NOT_FOUND
         assert "missing" in ctx.details
