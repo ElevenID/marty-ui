@@ -6,6 +6,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from starlette.responses import JSONResponse
@@ -530,6 +531,116 @@ async def test_create_issuance_resolves_did_and_forwards_internal_profile_contex
         "X-Issuer-Profile-Id": "ip-1",
         "X-Issuer-Did": "did:web:beta.elevenidllc.com:orgs:acme",
     }
+
+
+@pytest.mark.asyncio
+async def test_create_issuance_registers_public_wallet_key_and_binds_offer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    captured: dict = {}
+    public_jwks = {
+        "keys": [
+            {
+                "kty": "EC",
+                "crv": "P-256",
+                "alg": "ES256",
+                "use": "sig",
+                "kid": "wallet-key-1",
+                "x": "public-x",
+                "y": "public-y",
+            }
+        ]
+    }
+
+    async def fake_resolve_identity(*_args, **_kwargs):
+        return {
+            "issuer_profile_id": "ip-1",
+            "issuer_did": "did:web:issuer.example",
+        }
+
+    class _Client:
+        async def put(self, url, *, headers, json, timeout):
+            captured["registration"] = {
+                "url": url,
+                "headers": headers,
+                "json": json,
+                "timeout": timeout,
+            }
+            return httpx.Response(200, json={"client_id": json["client_id"]})
+
+    async def _proxy(
+        request,
+        service_url,
+        path,
+        inject_params=None,
+        body_override=None,
+        inject_headers=None,
+    ):
+        captured["path"] = path
+        captured["body"] = json.loads(body_override)
+        captured["inject_headers"] = inject_headers
+        return JSONResponse(
+            {"id": "iss-1", "organization_id": "org_123", "status": "PENDING"}
+        )
+
+    monkeypatch.setattr(issuance, "_resolve_issuer_identity", fake_resolve_identity)
+    monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(issuance, "get_http_client", lambda: _Client())
+    monkeypatch.setattr(issuance, "proxy_request", _proxy)
+    monkeypatch.setattr(issuance, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
+
+    response = await issuance.create_issuance(
+        issuance.IssuanceCreate(
+            organization_id="org_123",
+            issuer_did="did:web:issuer.example",
+            authorized_client={
+                "client_id": "official-wallet",
+                "jwks": public_jwks,
+            },
+            claims={"credential_format": "sd_jwt_vc"},
+        ),
+        _build_request(session_org_id="org_123"),
+    )
+
+    assert response.status_code == 200
+    assert captured["registration"]["json"] == {
+        "organization_id": "org_123",
+        "client_id": "official-wallet",
+        "jwks": public_jwks,
+        "redirect_uris": [],
+        "active": True,
+    }
+    assert captured["body"]["authorized_client_id"] == "official-wallet"
+    assert "authorized_client" not in captured["body"]
+    assert captured["body"]["issuer_did"] == "did:web:issuer.example"
+    assert captured["inject_headers"] == {
+        "X-API-Key": "secret",
+        "X-Issuer-Profile-Id": "ip-1",
+        "X-Issuer-Did": "did:web:issuer.example",
+    }
+
+
+def test_issuance_model_rejects_authorized_client_private_key() -> None:
+    with pytest.raises(ValueError, match="public keys only"):
+        issuance.IssuanceCreate(
+            organization_id="org_123",
+            issuer_did="did:web:issuer.example",
+            authorized_client={
+                "client_id": "official-wallet",
+                "jwks": {
+                    "keys": [
+                        {
+                            "kty": "EC",
+                            "crv": "P-256",
+                            "kid": "wallet-key-1",
+                            "x": "public-x",
+                            "y": "public-y",
+                            "d": "private",
+                        }
+                    ]
+                },
+            },
+        )
 
 
 @pytest.mark.asyncio

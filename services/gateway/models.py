@@ -1366,6 +1366,30 @@ class InvitationAcceptResponse(BaseModel):
 # Issuance
 # =============================================================================
 
+class Oid4vciAuthorizedClient(BaseModel):
+    """Public wallet key bound to a credential offer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    client_id: str = Field(min_length=1, max_length=512)
+    jwks: dict[str, Any]
+
+    @model_validator(mode="after")
+    def public_keys_only(self) -> "Oid4vciAuthorizedClient":
+        if set(self.jwks) != {"keys"}:
+            raise ValueError("authorized_client.jwks must contain only keys")
+        keys = self.jwks.get("keys")
+        if not isinstance(keys, list) or not keys:
+            raise ValueError("authorized_client.jwks.keys must be a non-empty array")
+        private_fields = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+        if any(
+            not isinstance(key, dict) or set(key) & private_fields
+            for key in keys
+        ):
+            raise ValueError("authorized_client.jwks must contain public keys only")
+        return self
+
+
 class IssuanceCreate(BaseModel):
     """Create an issuance request."""
     organization_id: str
@@ -1384,6 +1408,7 @@ class IssuanceCreate(BaseModel):
     issuer_profile_id: str | None = None
     subject_did: str | None = None
     holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
+    authorized_client: Oid4vciAuthorizedClient | None = None
     application_id: str | None = None
     claims: dict = {}
     credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None

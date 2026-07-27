@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import json
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
@@ -365,6 +366,44 @@ def _issuance_service_url() -> str:
     return get_registry().get_service_url("issuance")
 
 
+async def _register_oid4vci_authorized_client(
+    body: IssuanceCreate,
+    service_url: str,
+) -> None:
+    """Persist a public wallet key through the normal authenticated API path."""
+
+    if body.authorized_client is None:
+        return
+    try:
+        response = await get_http_client().put(
+            f"{service_url}/v1/issuance/oid4vci-clients",
+            headers=_ISSUANCE_HEADERS,
+            json={
+                "organization_id": body.organization_id,
+                "client_id": body.authorized_client.client_id,
+                "jwks": body.authorized_client.jwks,
+                "redirect_uris": [],
+                "active": True,
+            },
+            timeout=10.0,
+        )
+    except (httpx.TimeoutException, httpx.TransportError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="OID4VCI client registration is temporarily unavailable",
+        ) from exc
+    if response.status_code >= 400:
+        logger.warning(
+            "OID4VCI client registration failed for org=%s status=%s",
+            body.organization_id,
+            response.status_code,
+        )
+        raise HTTPException(
+            status_code=response.status_code,
+            detail="Unable to register the authorized wallet client",
+        )
+
+
 @passport_router.get("/capabilities", summary="Get Physical Document Capabilities")
 async def get_passport_capabilities(request: Request) -> Response:
     service_url = _issuance_service_url()
@@ -587,6 +626,18 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
 
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
+    if body.authorized_client is not None:
+        await _register_oid4vci_authorized_client(body, service_url)
+        downstream_body = body.model_dump(exclude_none=True)
+        authorized_client = downstream_body.pop("authorized_client")
+        downstream_body["authorized_client_id"] = authorized_client["client_id"]
+        return await proxy_request(
+            request,
+            service_url,
+            "/v1/issuance/initiate",
+            body_override=json.dumps(downstream_body, separators=(",", ":")).encode("utf-8"),
+            inject_headers=inject_headers or None,
+        )
     return await proxy_request(
         request,
         service_url,
