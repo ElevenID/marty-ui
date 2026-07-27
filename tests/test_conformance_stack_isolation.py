@@ -476,3 +476,54 @@ def test_oidf_tls_proxy_refreshes_compose_upstream_addresses() -> None:
     assert "proxy_pass $keycloak_upstream;" in config
     assert "proxy_pass http://gateway:8000;" not in config
     assert "proxy_pass http://keycloak:8080;" not in config
+
+
+def test_oidf_tls_proxy_preserves_the_complete_public_authority() -> None:
+    config = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(
+        encoding="utf-8"
+    )
+
+    # Nginx $host normalizes away a non-default port. DPoP signs the absolute
+    # target URI, so both upstream locations must use the original authority.
+    assert config.count("proxy_set_header Host $http_host;") == 2
+    assert config.count("proxy_set_header X-Forwarded-Host $http_host;") == 2
+    assert "proxy_set_header Host $host;" not in config
+    assert "proxy_set_header X-Forwarded-Host $host;" not in config
+
+
+def test_oidf_tls_proxy_rejects_legacy_tls12_cipher_suites() -> None:
+    config = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(
+        encoding="utf-8"
+    )
+
+    cipher_line = next(
+        line.strip()
+        for line in config.splitlines()
+        if line.strip().startswith("ssl_ciphers ")
+    )
+    assert "GCM" in cipher_line
+    assert "CHACHA20-POLY1305" in cipher_line
+    assert "CBC" not in cipher_line
+    assert "AES128-SHA" not in cipher_line
+    assert "ssl_prefer_server_ciphers on;" in config
+
+
+def test_conformance_stack_exposes_timestamped_service_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+    monkeypatch.setattr(
+        stack.subprocess,
+        "run",
+        lambda command, **kwargs: (
+            calls.append((command, kwargs)) or type("Result", (), {"returncode": 17})()
+        ),
+    )
+
+    assert stack.emit_service_logs(["docker", "compose"]) == 17
+    assert calls == [
+        (
+            ["docker", "compose", "logs", "--no-color", "--timestamps"],
+            {"cwd": stack.ROOT, "check": False},
+        )
+    ]
