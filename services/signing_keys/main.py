@@ -45,7 +45,7 @@ KEY_PURPOSE_ALGORITHM_CONSTRAINTS: dict[str, frozenset[str]] = {
 }
 
 KEY_PURPOSE_CREDENTIAL_FORMATS: dict[str, tuple[str, ...]] = {
-    "vc_jwt_issuer": ("jwt_vc_json", "dc+sd-jwt"),
+    "vc_jwt_issuer": ("jwt_vc_json", "dc+sd-jwt", "ldp_vc"),
     "mdoc_dsc": ("mso_mdoc", "zk_mdoc"),
     "x509_doc_signer": ("mso_mdoc", "zk_mdoc"),
     "holder_binding": ("mso_mdoc", "zk_mdoc", "dc+sd-jwt"),
