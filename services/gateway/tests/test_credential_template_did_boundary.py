@@ -157,6 +157,7 @@ def test_public_template_response_schema_has_no_custody_routing_fields() -> None
         "remote_signing_config",
         "signing_service_id",
         "signing_key_reference",
+        "auto_generate_artifacts",
     ):
         assert field not in schema["properties"]
         assert field not in response_schema["properties"]
@@ -206,15 +207,44 @@ async def test_mdoc_template_infers_signing_wire_format_from_supported_formats(
     await credentials.create_credential_template(
         _body(
             credential_type="org.iso.18013.5.1.mDL",
-            vct="org.iso.18013.5.1.mDL",
+            vct=None,
             doctype="org.iso.18013.5.1.mDL",
-            supported_formats=["mdoc"],
-            credential_payload_format=None,
+            supported_formats=["MDOC"],
+            credential_payload_format="MDOC",
         ),
         _request(),
     )
 
     assert captured["credential_format"] == "mso_mdoc"
+
+
+def test_public_template_model_uses_format_specific_identity_fields() -> None:
+    mdoc = _body(
+        credential_type="org.iso.18013.5.1.mDL",
+        vct=None,
+        doctype="org.iso.18013.5.1.mDL",
+        supported_formats=["MDOC"],
+        credential_payload_format="MDOC",
+    )
+    assert mdoc.vct is None
+    assert mdoc.doctype == "org.iso.18013.5.1.mDL"
+
+    with pytest.raises(ValidationError, match="doctype is required"):
+        _body(
+            credential_type="org.iso.18013.5.1.mDL",
+            vct=None,
+            doctype=None,
+            supported_formats=["MDOC"],
+            credential_payload_format="MDOC",
+        )
+
+    with pytest.raises(ValidationError, match="vct is required"):
+        _body(vct=None)
+
+
+def test_public_template_response_schema_exposes_mdoc_doctype() -> None:
+    response_schema = credentials.CredentialTemplateResponse.model_json_schema()
+    assert "doctype" in response_schema["properties"]
 
 
 @pytest.mark.parametrize(
@@ -228,6 +258,7 @@ async def test_mdoc_template_infers_signing_wire_format_from_supported_formats(
         "issuer_certificate_chain_pem",
         "signing_service_id",
         "signing_key_reference",
+        "auto_generate_artifacts",
     ],
 )
 def test_template_public_contract_rejects_custody_selectors(

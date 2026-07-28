@@ -274,6 +274,68 @@ def test_create_credential_template_returns_canonical_protocol_fields() -> None:
 	get_membership.assert_awaited_once_with("user-1", "org-1")
 
 
+def test_create_mdoc_template_uses_doctype_without_fabricating_vct() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	client, _ = _build_client(repo)
+
+	response = client.post(
+		"/v1/credential-templates",
+		headers={"x-user-id": "user-1"},
+		json={
+			"organization_id": "org-1",
+			"name": "Mobile Driving Licence",
+			"credential_type": "org.iso.18013.5.1.mDL",
+			"doctype": "org.iso.18013.5.1.mDL",
+			"compliance_profile_id": "123e4567-e89b-12d3-a456-426614174000",
+			"issuer_did": "did:web:beta.elevenidllc.com:orgs:test",
+			"claims": [
+				{
+					"name": "family_name",
+					"display_name": "Family Name",
+					"claim_type": "string",
+					"required": True,
+					"mdoc_namespace": "org.iso.18013.5.1",
+					"mdoc_element_identifier": "family_name",
+				}
+			],
+			"supported_formats": ["MDOC"],
+			"credential_payload_format": "MDOC",
+		},
+	)
+
+	assert response.status_code == 200
+	body = response.json()
+	assert body["credential_payload_format"] == "MDOC"
+	assert body["doctype"] == "org.iso.18013.5.1.mDL"
+	assert "vct" not in body
+	stored = asyncio.run(repo.get(body["id"]))
+	assert stored is not None
+	assert stored.vct == ""
+	assert stored.doctype == "org.iso.18013.5.1.mDL"
+
+
+def test_create_mdoc_template_requires_doctype() -> None:
+	credential_template._validate_template_protocol_requirements(
+		compliance_profile=None,
+		compliance_profile_id="profile-1",
+		credential_payload_format=credential_template.CredentialFormat.MDOC.value,
+		vct=None,
+		doctype="org.iso.18013.5.1.mDL",
+	)
+
+	with pytest.raises(
+		credential_template.HTTPException,
+		match="doctype is required",
+	):
+		credential_template._validate_template_protocol_requirements(
+			compliance_profile=None,
+			compliance_profile_id="profile-1",
+			credential_payload_format=credential_template.CredentialFormat.MDOC.value,
+			vct=None,
+			doctype=None,
+		)
+
+
 def test_create_credential_template_rejects_missing_issuer_did() -> None:
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	client, _ = _build_client(repo)

@@ -200,14 +200,6 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
 
       {/* Activation Options */}
       <ReviewToggleOption
-        sx={{ mb: 2 }}
-        checked={data.generate_artifacts_automatically !== false}
-        onChange={(e) => onChange({ generate_artifacts_automatically: e.target.checked })}
-        title={t('wizards.credentialTemplate.reviewStep.activationOptions.generateArtifacts.label')}
-        description={t('wizards.credentialTemplate.reviewStep.activationOptions.generateArtifacts.description')}
-      />
-
-      <ReviewToggleOption
         checked={data.activate_immediately !== false}
         onChange={(e) => onChange({ activate_immediately: e.target.checked })}
         title={t('wizards.credentialTemplate.reviewStep.activationOptions.activateImmediately.label')}

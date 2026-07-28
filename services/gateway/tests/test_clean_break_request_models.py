@@ -52,6 +52,17 @@ from gateway.routes.credentials import compliance_profile_router
                 "vct": "https://beta.elevenidllc.com/credentials/member",
                 "compliance_profile_id": "10000000-0000-0000-0000-000000000001",
             },
+            "auto_generate_artifacts",
+        ),
+        (
+            CredentialTemplateCreate,
+            {
+                "organization_id": "org-1",
+                "name": "Member badge",
+                "credential_type": "MemberCredential",
+                "vct": "https://beta.elevenidllc.com/credentials/member",
+                "compliance_profile_id": "10000000-0000-0000-0000-000000000001",
+            },
             "wallet_configs",
         ),
         (
