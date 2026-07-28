@@ -64,19 +64,17 @@ def test_issuer_adapter_requires_explicit_disposable_fixture_configuration(
     monkeypatch.setenv("W3C_VC_TEST_CREDENTIAL_POLICY_ID", "fixture-policy")
     monkeypatch.delenv("W3C_VC_TEST_ORGANIZATION_ID", raising=False)
     monkeypatch.delenv("W3C_VC_TEST_TEMPLATE_ID", raising=False)
+    monkeypatch.delenv("W3C_VC_TEST_ISSUER_DID", raising=False)
     with pytest.raises(HTTPException) as exc_info:
         adapter._issuance_fixture_configuration()
     assert exc_info.value.status_code == 503
 
 
-def test_issuer_adapter_source_defines_a_native_data_integrity_fixture_contract() -> (
-    None
-):
-    source = adapter._issue_data_integrity_credential.__code__.co_consts
-    assert (
-        "W3C fixture template must issue native VCDM v2 Data Integrity credentials"
-        in source
-    )
+def test_issuer_adapter_calls_the_general_issuance_application_path() -> None:
+    names = adapter._issue_data_integrity_credential.__code__.co_names
+    assert "create_issuance" in names
+    assert "_resolve_issuer_identity" not in names
+    assert "_load_credential_template" not in names
 
 
 def test_issuer_adapter_uses_the_released_oid4vci_proof_binding(
@@ -110,6 +108,7 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
     monkeypatch.setenv("W3C_VC_TEST_CREDENTIAL_POLICY_ID", "fixture-policy")
     monkeypatch.setenv("W3C_VC_TEST_ORGANIZATION_ID", "fixture-org")
     monkeypatch.setenv("W3C_VC_TEST_TEMPLATE_ID", "fixture-template")
+    monkeypatch.setenv("W3C_VC_TEST_ISSUER_DID", "did:web:issuer.example")
     credential = _official_baseline_credential()
     credential["credentialSubject"] = [
         {"id": "did:example:subject"},
@@ -118,7 +117,7 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
     credential["name"] = {"@value": "Official fixture", "@language": "en"}
     credential["validFrom"] = "2026-07-28T00:00:00Z"
 
-    class Response:
+    class ServiceResponse:
         def __init__(self, body: dict) -> None:
             self.status_code = 200
             self._body = body
@@ -132,13 +131,11 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
     class Client:
         async def post(self, url: str, **kwargs):
             captured.append((url, kwargs))
-            if url.endswith("/initiate"):
-                return Response({"pre_auth_code": "pre-auth"})
             if url.endswith("/token"):
-                return Response({"access_token": "access-token"})
+                return ServiceResponse({"access_token": "access-token"})
             if url.endswith("/nonce"):
-                return Response({"c_nonce": "nonce"})
-            return Response(
+                return ServiceResponse({"c_nonce": "nonce"})
+            return ServiceResponse(
                 {
                     "credentials": [
                         {
@@ -169,24 +166,17 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
             assert name == "issuance"
             return "http://issuance"
 
-    async def load_template(template_id: str, request: Request) -> dict:
-        return {
-            "id": template_id,
-            "organization_id": "fixture-org",
-            "credential_payload_format": "w3c_vcdm_v2_di",
-            "issuer_did": "did:web:issuer.example",
-        }
+    captured_issuance: dict[str, object] = {}
 
-    async def resolve_identity(*args, **kwargs) -> dict:
-        return {
-            "issuer_profile_id": "issuer-profile",
-            "signing_service_id": "signing-service",
-            "issuer_did": "did:web:issuer.example",
-            "algorithm": "EdDSA",
-        }
+    async def create_issuance(body, request: Request) -> Response:
+        captured_issuance["body"] = body
+        captured_issuance["request"] = request
+        return Response(
+            content=json.dumps({"pre_auth_code": "pre-auth"}),
+            media_type="application/json",
+        )
 
-    monkeypatch.setattr(adapter, "_load_credential_template", load_template)
-    monkeypatch.setattr(adapter, "_resolve_issuer_identity", resolve_identity)
+    monkeypatch.setattr(adapter, "create_issuance", create_issuance)
     monkeypatch.setattr(
         adapter, "_create_oid4vci_proof", lambda issuer, nonce: "proof.jwt.value"
     )
@@ -198,19 +188,22 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
         _request(),
     )
     assert issued["proof"]["cryptosuite"] == "eddsa-rdfc-2022"
-    initiate_body = captured[0][1]["json"]
+    initiate_body = captured_issuance["body"].model_dump(
+        exclude_none=True,
+        exclude_defaults=True,
+    )
     assert "claims" not in initiate_body
     assert "credential_subject" not in initiate_body
     assert initiate_body["credential_document"] == credential
     assert initiate_body["issuer_did"] == "did:web:issuer.example"
-    public_headers = {name.lower() for name in captured[0][1]["headers"]}
     assert {
-        "x-issuer-profile-id",
-        "x-issuer-did",
-        "x-signing-service-id",
-        "x-signing-key-reference",
-    }.isdisjoint(public_headers)
-    credential_request = captured[3][1]["json"]
+        "issuer_profile_id",
+        "signing_service_id",
+        "signing_key_reference",
+        "key_reference",
+        "kms_provider",
+    }.isdisjoint(initiate_body)
+    credential_request = captured[2][1]["json"]
     assert credential_request == {
         "format": "ldp_vc",
         "proofs": {"jwt": ["proof.jwt.value"]},

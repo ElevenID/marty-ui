@@ -20,12 +20,7 @@ from pydantic import BaseModel, Field
 
 from gateway.models import IssuanceCreate
 from gateway.proxy import get_http_client, get_registry, proxy_request
-from gateway.routes.issuance import (
-    _ISSUANCE_HEADERS,
-    _load_credential_template,
-    _resolve_issuer_identity,
-    _select_issuer_identity_request,
-)
+from gateway.routes.issuance import create_issuance
 
 
 router = APIRouter(prefix="/__test__/vc-api", tags=["test-only-w3c-vc-api"])
@@ -62,20 +57,21 @@ def _enabled_policy_id(*, presentation: bool) -> str:
     return policy_id
 
 
-def _issuance_fixture_configuration() -> tuple[str, str]:
-    """Return the explicit disposable organization and Data Integrity template IDs."""
+def _issuance_fixture_configuration() -> tuple[str, str, str]:
+    """Return the disposable organization, template, and public issuer DID."""
     _enabled_policy_id(presentation=False)
     organization_id = os.environ.get("W3C_VC_TEST_ORGANIZATION_ID", "").strip()
     template_id = os.environ.get("W3C_VC_TEST_TEMPLATE_ID", "").strip()
-    if not organization_id or not template_id:
+    issuer_did = os.environ.get("W3C_VC_TEST_ISSUER_DID", "").strip()
+    if not organization_id or not template_id or not issuer_did:
         raise HTTPException(
             status_code=503,
             detail=(
                 "W3C VC issuer adapter requires W3C_VC_TEST_ORGANIZATION_ID "
-                "and W3C_VC_TEST_TEMPLATE_ID"
+                "W3C_VC_TEST_TEMPLATE_ID, and W3C_VC_TEST_ISSUER_DID"
             ),
         )
-    return organization_id, template_id
+    return organization_id, template_id, issuer_did
 
 
 def _create_oid4vci_proof(issuer_url: str, nonce: str) -> str:
@@ -243,79 +239,38 @@ async def _issue_data_integrity_credential(
     issuer identity, creates a pre-authorized transaction, redeems a token,
     obtains a fresh nonce, and submits a cryptographically valid holder proof.
     """
-    organization_id, template_id = _issuance_fixture_configuration()
+    organization_id, template_id, issuer_did = _issuance_fixture_configuration()
     body = IssuanceCreate(
         organization_id=organization_id,
         credential_template_id=template_id,
+        issuer_did=issuer_did,
         credential_document=json.loads(json.dumps(credential)),
     )
-    template = await _load_credential_template(template_id, request)
-    if template.get("organization_id") != organization_id:
-        raise HTTPException(
-            status_code=403,
-            detail="W3C fixture template belongs to another organization",
-        )
-    template_format = (
-        str(template.get("credential_payload_format") or "").strip().lower()
-    )
-    if template_format not in {
-        "json-ld",
-        "json_ld",
-        "ldp_vc",
-        "w3c_vcdm_v2_di",
-    }:
-        raise HTTPException(
-            status_code=422,
-            detail="W3C fixture template must issue native VCDM v2 Data Integrity credentials",
-        )
-    issuer_did = _select_issuer_identity_request(body, template)
-    issuer_identity = await _resolve_issuer_identity(
-        request,
-        organization_id,
-        issuer_did,
-        credential_format="ldp_vc",
-        algorithm="EdDSA",
-    )
-    if issuer_identity is None:
-        raise HTTPException(
-            status_code=422, detail="W3C fixture template has no active issuer identity"
-        )
-    if issuer_identity.get("issuer_did") != issuer_did:
-        raise HTTPException(
-            status_code=409,
-            detail="W3C fixture issuer DID resolution returned a different identity",
-        )
-    if issuer_identity.get("algorithm") != "EdDSA":
-        raise HTTPException(
-            status_code=422,
-            detail="W3C Data Integrity fixture requires an EdDSA issuer profile",
-        )
-    body = body.model_copy(update={"issuer_did": issuer_did})
-
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    if not service_url:
-        raise HTTPException(status_code=503, detail="Issuance service unavailable")
-    headers = dict(_ISSUANCE_HEADERS or {})
-    client = get_http_client()
-
-    initiated = await client.post(
-        f"{service_url}/v1/issuance/initiate",
-        headers=headers,
-        json=body.model_dump(exclude_none=True, exclude_defaults=True),
-        timeout=30.0,
-    )
+    initiated = await create_issuance(body, request)
     if initiated.status_code >= 400:
         raise HTTPException(
-            status_code=initiated.status_code, detail=initiated.text[:300]
+            status_code=initiated.status_code,
+            detail=bytes(initiated.body)[:300].decode("utf-8", errors="replace"),
         )
-    transaction = initiated.json()
+    try:
+        transaction = json.loads(bytes(initiated.body))
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+        raise HTTPException(
+            status_code=502,
+            detail="Marty general issuance API returned an invalid response",
+        ) from None
     pre_auth_code = transaction.get("pre_auth_code")
     if not isinstance(pre_auth_code, str) or not pre_auth_code:
         raise HTTPException(
             status_code=502,
             detail="Marty issuance did not return a pre-authorized code",
         )
+
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    if not service_url:
+        raise HTTPException(status_code=503, detail="Issuance service unavailable")
+    client = get_http_client()
 
     token_response = await client.post(
         f"{service_url}/v1/issuance/token",
