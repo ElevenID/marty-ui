@@ -4860,6 +4860,8 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
                     "name": "Acme issuer signer",
                     "service_type": "custom-transit-compatible",
                     "key_reference": "cred-issuer-acme-es256",
+                    "cert_pem": "issuer-leaf-pem",
+                    "cert_chain_pem": "issuer-root-pem",
                     "key_purposes": ["vc_jwt_issuer"],
                     "credential_formats": ["dc+sd-jwt"],
                     "algorithms": ["ES256"],
@@ -4895,6 +4897,16 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
 
     redis_mock.get = AsyncMock(side_effect=fake_get)
     request = _build_request("org_issuer", redis_client=redis_mock)
+    monkeypatch.setattr(
+        signing_keys,
+        "_service_x5c_chain",
+        lambda service: (
+            ["issuer-leaf-x5c", "issuer-root-x5c"]
+            if service.get("cert_pem") == "issuer-leaf-pem"
+            and service.get("cert_chain_pem") == "issuer-root-pem"
+            else []
+        ),
+    )
 
     response = await signing_keys.internal_resolve_issuer_did(
         request=request,
@@ -4916,6 +4928,8 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
     assert data["public_jwk"]["kty"] == "EC"
     assert data["issuer_profile"]["algorithm"] == "ES256"
     assert data["signing_service"]["id"] == "svc-bao"
+    assert data["issuer_x5c"] == ["issuer-leaf-x5c", "issuer-root-x5c"]
+    assert data["mdoc_x5c"] == ["issuer-leaf-x5c", "issuer-root-x5c"]
     assert "auth_reference" not in data["signing_service"]
 
 
