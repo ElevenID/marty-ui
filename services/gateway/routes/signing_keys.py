@@ -5135,6 +5135,102 @@ async def internal_sign_payload_with_issuer_profile(
     return JSONResponse(content=signed)
 
 
+@internal_signing_key_router.post(
+    "/issuer-dids/sign",
+    summary="Sign Payload Through a Resolved Issuer DID",
+)
+async def internal_sign_payload_with_issuer_did(
+    request: Request,
+    body: dict = Body(default_factory=dict),
+    organization_id: str = Query(..., description="Organization scope"),
+    x_api_key: str | None = Header(default=None),
+):
+    """Sign a payload using the active issuer profile selected by its DID.
+
+    This is the service-to-service signing boundary for protocol services.  The
+    caller supplies a tenant-scoped DID plus the credential format/purpose it
+    is performing; the gateway resolves exactly one active compatible issuer
+    profile and keeps its KMS service and key reference private.  In
+    particular, protocol services cannot use a stored profile identifier as a
+    second identity selector or override custody routing.
+    """
+    _require_internal_signing_key_api_key(x_api_key)
+    issuer_did = body.get("issuer_did")
+    credential_format = body.get("credential_format")
+    key_purpose = body.get("key_purpose")
+    algorithm = body.get("algorithm")
+    if not isinstance(issuer_did, str) or not issuer_did.startswith("did:"):
+        raise HTTPException(status_code=422, detail="issuer_did must be a DID string.")
+    if not isinstance(credential_format, str) or not credential_format.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="credential_format is required for DID-mediated signing.",
+        )
+    if key_purpose is not None and (not isinstance(key_purpose, str) or not key_purpose.strip()):
+        raise HTTPException(status_code=422, detail="key_purpose must be a non-empty string.")
+    if any(
+        body.get(field)
+        for field in ("issuer_profile_id", "key_reference", "service_id", "signing_service_id")
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="DID-mediated signing does not accept profile or KMS routing overrides.",
+        )
+
+    identity = await _resolve_org_scoped_issuer_identity(
+        request,
+        organization_id=organization_id,
+        issuer_did=issuer_did,
+        credential_format=credential_format,
+        key_purpose=key_purpose,
+        algorithm=algorithm,
+    )
+    profile = identity.get("issuer_profile")
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=409, detail="Issuer DID resolved without an active profile.")
+    service_id = profile.get("signing_service_id")
+    key_reference = profile.get("signing_key_reference")
+    profile_purpose = profile.get("key_purpose")
+    profile_algorithm = profile.get("algorithm")
+    if not all(isinstance(value, str) and value for value in (service_id, key_reference, profile_purpose)):
+        raise HTTPException(
+            status_code=409,
+            detail="Issuer DID profile has an incomplete signing identity binding.",
+        )
+    if algorithm and algorithm != profile_algorithm:
+        raise HTTPException(
+            status_code=409,
+            detail="Signing algorithm must match the DID-resolved issuer profile binding.",
+        )
+
+    signing_body = {
+        key: value for key, value in body.items() if key in {"payload_b64", "payload_hex"}
+    }
+    signing_body.update(
+        {
+            "algorithm": profile_algorithm or "ES256",
+            "key_reference": key_reference,
+            "key_purpose": profile_purpose,
+        }
+    )
+    signed_response = await sign_payload_with_service(
+        request=request,
+        service_id=service_id,
+        body=signing_body,
+        organization_id=organization_id,
+    )
+    signed = json.loads(signed_response.body)
+    signed.update(
+        {
+            "issuer_did": identity["issuer_did"],
+            "verification_method_id": identity["verification_method_id"],
+            "public_jwk": identity["public_jwk"],
+        }
+    )
+    signed.pop("service_id", None)
+    return JSONResponse(content=signed)
+
+
 async def _rotate_openbao_transit_key(service: dict[str, Any]) -> dict[str, Any]:
     endpoint = (service.get("endpoint") or _bao_address() or "").rstrip("/")
     token = (
