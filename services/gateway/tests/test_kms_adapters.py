@@ -1,4 +1,5 @@
 """Tests for the KMS adapter module (GAP-003-h)."""
+
 from __future__ import annotations
 
 import base64
@@ -6,6 +7,8 @@ import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 
 from gateway.kms_adapters import (
     AwsKmsAdapter,
@@ -40,19 +43,19 @@ def _encode_der_sig(r: int, s: int, key_size: int = 32) -> bytes:
 
 def test_der_to_raw_ecdsa_round_trip():
     """DER → raw should produce key_size*2 bytes with correct r/s values."""
-    r = 0xDEADBEEF * (2 ** 200)
-    s = 0xCAFEBABE * (2 ** 200)
+    r = 0xDEADBEEF * (2**200)
+    s = 0xCAFEBABE * (2**200)
     der = _encode_der_sig(r, s, key_size=32)
     raw = der_to_raw_ecdsa(der, key_size_bytes=32)
     assert len(raw) == 64
-    assert int.from_bytes(raw[:32], "big") == r % (2 ** 256)
-    assert int.from_bytes(raw[32:], "big") == s % (2 ** 256)
+    assert int.from_bytes(raw[:32], "big") == r % (2**256)
+    assert int.from_bytes(raw[32:], "big") == s % (2**256)
 
 
 def test_der_to_raw_ecdsa_strips_leading_zero():
     """Integers with a leading zero byte (high-bit set) should decode correctly."""
     # r has a leading 0x00 in DER because its MSB is set
-    r = 2 ** 255 + 1
+    r = 2**255 + 1
     s = 1
     der = _encode_der_sig(r, s, key_size=32)
     raw = der_to_raw_ecdsa(der, key_size_bytes=32)
@@ -78,7 +81,9 @@ def test_der_to_raw_ecdsa_raises_on_missing_integer():
 def test_capability_result_add_check():
     result = CapabilityResult(ok=True)
     result.add_check("Foo", "pass", "All good")
-    assert result.checks == [{"name": "Foo", "status": "pass", "detail": "All good", "source": "adapter"}]
+    assert result.checks == [
+        {"name": "Foo", "status": "pass", "detail": "All good", "source": "adapter"}
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +159,12 @@ async def test_openbao_verify_connection_success():
 @pytest.mark.asyncio
 async def test_openbao_verify_connection_returns_fail_on_403():
     adapter = OpenBaoTransitAdapter()
-    config = {"endpoint": "http://openbao:8200", "mount": "transit", "key_reference": "key", "auth_reference": "bad"}
+    config = {
+        "endpoint": "http://openbao:8200",
+        "mount": "transit",
+        "key_reference": "key",
+        "auth_reference": "bad",
+    }
 
     mock_response = MagicMock()
     mock_response.status_code = 403
@@ -174,7 +184,12 @@ async def test_openbao_verify_connection_returns_fail_on_403():
 @pytest.mark.asyncio
 async def test_openbao_verify_connection_returns_fail_on_404():
     adapter = OpenBaoTransitAdapter()
-    config = {"endpoint": "http://openbao:8200", "mount": "transit", "key_reference": "missing", "auth_reference": "tok"}
+    config = {
+        "endpoint": "http://openbao:8200",
+        "mount": "transit",
+        "key_reference": "missing",
+        "auth_reference": "tok",
+    }
 
     mock_response = MagicMock()
     mock_response.status_code = 404
@@ -194,7 +209,9 @@ async def test_openbao_verify_connection_returns_fail_on_404():
 @pytest.mark.asyncio
 async def test_openbao_verify_connection_fails_when_no_endpoint():
     adapter = OpenBaoTransitAdapter()
-    result = await adapter.verify_connection({"mount": "transit", "key_reference": "key"})
+    result = await adapter.verify_connection(
+        {"mount": "transit", "key_reference": "key"}
+    )
     assert result.ok is False
     assert any(c["name"] == "Endpoint" for c in result.checks)
 
@@ -204,7 +221,12 @@ async def test_openbao_verify_connection_handles_connect_error():
     import httpx
 
     adapter = OpenBaoTransitAdapter()
-    config = {"endpoint": "http://unreachable:9999", "mount": "transit", "key_reference": "key", "auth_reference": "tok"}
+    config = {
+        "endpoint": "http://unreachable:9999",
+        "mount": "transit",
+        "key_reference": "key",
+        "auth_reference": "tok",
+    }
 
     with patch("httpx.AsyncClient") as mock_client_cls:
         mock_client = AsyncMock()
@@ -249,6 +271,42 @@ async def test_openbao_sign_returns_decoded_bytes():
         result = await adapter.sign(config, b"hello world")
 
     assert result == raw_sig
+    request_body = mock_client.post.await_args.kwargs["json"]
+    assert request_body["prehashed"] is True
+    assert base64.b64decode(request_body["input"]) != b"hello world"
+
+
+@pytest.mark.asyncio
+async def test_openbao_sign_sends_unhashed_message_for_eddsa():
+    adapter = OpenBaoTransitAdapter()
+    config = {
+        "endpoint": "http://openbao:8200",
+        "mount": "transit",
+        "key_reference": "cred-issuer-marty-eddsa",
+        "auth_reference": "root",
+        "algorithm": "EdDSA",
+    }
+    raw_sig = b"\x42" * 64
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "data": {"signature": "vault:v1:" + base64.b64encode(raw_sig).decode()}
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.post = AsyncMock(return_value=mock_response)
+
+        result = await adapter.sign(config, b"canonical proof bytes")
+
+    assert result == raw_sig
+    request_body = mock_client.post.await_args.kwargs["json"]
+    assert request_body == {
+        "input": base64.b64encode(b"canonical proof bytes").decode(),
+        "prehashed": False,
+    }
 
 
 @pytest.mark.asyncio
@@ -270,7 +328,9 @@ async def test_aws_sign_returns_der_signature_from_boto3():
     fake_client.sign.return_value = {"Signature": b"\x30\x06\x02\x01\x01\x02\x01\x02"}
 
     with patch.object(adapter, "_build_client", return_value=fake_client):
-        result = await adapter.sign({"key_reference": "arn:aws:kms:us-east-1:123:key/abc"}, b"payload")
+        result = await adapter.sign(
+            {"key_reference": "arn:aws:kms:us-east-1:123:key/abc"}, b"payload"
+        )
 
     assert result.startswith(b"\x30")
 
@@ -287,7 +347,9 @@ async def test_aws_get_public_key_returns_metadata_payload():
     }
 
     with patch.object(adapter, "_build_client", return_value=fake_client):
-        result = await adapter.get_public_key_jwk({"key_reference": "arn:aws:kms:us-east-1:123:key/abc"})
+        result = await adapter.get_public_key_jwk(
+            {"key_reference": "arn:aws:kms:us-east-1:123:key/abc"}
+        )
 
     assert result["provider"] == "aws"
     assert result["public_key_der_b64"] == base64.b64encode(b"DERBYTES").decode()
@@ -346,7 +408,9 @@ async def test_azure_get_public_key_returns_embedded_jwk():
     adapter = AzureKeyVaultAdapter()
 
     mock_response = MagicMock()
-    mock_response.json.return_value = {"key": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}}
+    mock_response.json.return_value = {
+        "key": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}
+    }
     mock_response.raise_for_status = MagicMock()
 
     with patch("httpx.AsyncClient") as mock_client_cls:
@@ -428,7 +492,10 @@ async def test_gcp_get_public_key_returns_metadata():
     adapter = GcpCloudKmsAdapter()
 
     mock_response = MagicMock()
-    mock_response.json.return_value = {"pem": "-----BEGIN PUBLIC KEY-----", "algorithm": "EC_SIGN_P256_SHA256"}
+    mock_response.json.return_value = {
+        "pem": "-----BEGIN PUBLIC KEY-----",
+        "algorithm": "EC_SIGN_P256_SHA256",
+    }
     mock_response.raise_for_status = MagicMock()
 
     with patch("httpx.AsyncClient") as mock_client_cls:
@@ -454,7 +521,7 @@ async def test_gcp_get_public_key_returns_metadata():
 
 
 @pytest.mark.asyncio
-async def test_openbao_get_public_key_returns_pem_and_ref():
+async def test_openbao_get_public_key_converts_ed25519_pem_to_public_jwk():
     adapter = OpenBaoTransitAdapter()
     config = {
         "endpoint": "http://openbao:8200",
@@ -462,14 +529,23 @@ async def test_openbao_get_public_key_returns_pem_and_ref():
         "key_reference": "cred-issuer",
         "auth_reference": "root",
     }
+    public_key = ed25519.Ed25519PrivateKey.from_private_bytes(
+        bytes(range(1, 33))
+    ).public_key()
+    public_key_pem = public_key.public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    public_key_raw = public_key.public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {
         "data": {
             "latest_version": 2,
-            "keys": {
-                "2": {"public_key": "-----BEGIN PUBLIC KEY-----\nMFk=\n-----END PUBLIC KEY-----\n"}
-            },
+            "keys": {"2": {"public_key": public_key_pem}},
         }
     }
     mock_response.raise_for_status = MagicMock()
@@ -482,9 +558,88 @@ async def test_openbao_get_public_key_returns_pem_and_ref():
 
         result = await adapter.get_public_key_jwk(config)
 
-    assert result["provider"] == "openbao"
-    assert result["key_reference"] == "cred-issuer"
-    assert "MFk=" in result["public_key_pem"]
+    assert result == {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": base64.urlsafe_b64encode(public_key_raw).decode().rstrip("="),
+        "kid": "cred-issuer",
+    }
+
+
+@pytest.mark.asyncio
+async def test_openbao_get_public_key_converts_p256_pem_to_public_jwk():
+    adapter = OpenBaoTransitAdapter()
+    config = {
+        "endpoint": "http://openbao:8200",
+        "mount": "transit",
+        "key_reference": "cred-issuer-es256",
+        "auth_reference": "root",
+    }
+    public_key = ec.derive_private_key(7, ec.SECP256R1()).public_key()
+    public_numbers = public_key.public_numbers()
+    public_key_pem = public_key.public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "data": {
+            "latest_version": 1,
+            "keys": {"1": {"public_key": public_key_pem}},
+        }
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        result = await adapter.get_public_key_jwk(config)
+
+    assert result == {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": base64.urlsafe_b64encode(public_numbers.x.to_bytes(32, "big"))
+        .decode()
+        .rstrip("="),
+        "y": base64.urlsafe_b64encode(public_numbers.y.to_bytes(32, "big"))
+        .decode()
+        .rstrip("="),
+        "kid": "cred-issuer-es256",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("public_key_pem", ["", "not a public key"])
+async def test_openbao_get_public_key_rejects_missing_or_invalid_pem(
+    public_key_pem: str,
+):
+    adapter = OpenBaoTransitAdapter()
+    config = {
+        "endpoint": "http://openbao:8200",
+        "mount": "transit",
+        "key_reference": "broken-key",
+        "auth_reference": "root",
+    }
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "data": {
+            "latest_version": 1,
+            "keys": {"1": {"public_key": public_key_pem}},
+        }
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with pytest.raises(ValueError, match="no public key|invalid public key"):
+            await adapter.get_public_key_jwk(config)
 
 
 @pytest.mark.asyncio
@@ -623,7 +778,9 @@ async def test_aws_verify_connection_reports_error_on_boto3_exception():
     fake_client.describe_key.side_effect = Exception("AccessDeniedException")
 
     with patch.object(adapter, "_build_client", return_value=fake_client):
-        result = await adapter.verify_connection({"key_reference": "arn:aws:kms:us-east-1:123:key/abc"})
+        result = await adapter.verify_connection(
+            {"key_reference": "arn:aws:kms:us-east-1:123:key/abc"}
+        )
 
     assert result.ok is False
     assert any("AWS KMS" in c["detail"] for c in result.checks)
