@@ -6129,6 +6129,7 @@ async def _resolve_org_scoped_issuer_identity(
                 profile_with_vm["algorithm"] = algorithm
             elif len(service_algorithms) == 1:
                 profile_with_vm["algorithm"] = service_algorithms[0]
+        issuer_x5c = _service_x5c_chain(normalized_service)
 
         resolved_identities.append(
             {
@@ -6140,6 +6141,12 @@ async def _resolve_org_scoped_issuer_identity(
                 "verification_method": method,
                 "did_document": did_doc,
                 "issuer_profile": profile_with_vm,
+                # Public certificate material is part of the issuer profile's
+                # DID identity. Preserve it on the DID-first resolution path
+                # so SD-JWT JOSE and mDoc COSE issuance do not fall back to a
+                # profile-ID-only context or lose the chain before signing.
+                "issuer_x5c": issuer_x5c,
+                "mdoc_x5c": issuer_x5c,
                 "signing_service": _safe_signing_service_metadata(normalized_service),
                 "resolver": {
                     "type": "organization_issuer_profile",
