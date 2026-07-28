@@ -1,6 +1,6 @@
 {
   "schema": "marty.stack-lock/v1",
-  "release": "marty-ui@1.1.51",
+  "release": "marty-ui@1.1.52",
   "components": [
     {
       "name": "marty-api-core",
@@ -31,26 +31,26 @@
     {
       "name": "marty-core-python",
       "repository": "ElevenID/marty-core",
-      "version": "0.1.24",
-      "commit": "f2074854ca31f76d6f44cbf03dc055a912814330",
+      "version": "0.1.25",
+      "commit": "c159c9c8412f895f463a31db4bf6d848350eb6f1",
       "artifacts": [{
         "type": "python",
-        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.24/marty_rs-0.1.24-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-        "digest": "sha256:b70e61dc95a3e11a616445491f6812ac4673cdd8281b2bd83212fc3540144c14",
-        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.1.24/marty-core.spdx.json",
+        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.25/marty_rs-0.1.25-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "digest": "sha256:55fc2e23fe4b620b1aa1a001628a7b4bf3c963c1b94b2e3d0c6bc4e5e68633a5",
+        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.1.25/marty-core.spdx.json",
         "provenance": "https://github.com/ElevenID/marty-core/attestations"
       }]
     },
     {
       "name": "marty-credentials-issuance",
       "repository": "ElevenID/marty-credentials",
-      "version": "0.1.27",
-      "commit": "cf4edaad499f42fa06215cadfc96365ec0ae01d4",
+      "version": "0.1.28",
+      "commit": "034d69d4a7304de4bdf3b19f794635b17e387099",
       "artifacts": [{
         "type": "oci",
         "uri": "ghcr.io/elevenid/marty-credentials-issuance",
-        "digest": "sha256:43f8a2de5dc8f6d66acfa0197f2a552a80a7c54317d93c5c99f45959b06dab2c",
-        "sbom": "https://github.com/ElevenID/marty-credentials/releases/download/v0.1.27/marty-credentials-issuance.spdx.json",
+        "digest": "sha256:05b2f33a81805c86627eb00edba4628d423c49d00e4e8564c139b7a27a8d87ef",
+        "sbom": "https://github.com/ElevenID/marty-credentials/releases/download/v0.1.28/marty-credentials-issuance.spdx.json",
         "provenance": "https://github.com/ElevenID/marty-credentials/attestations"
       }]
     },
