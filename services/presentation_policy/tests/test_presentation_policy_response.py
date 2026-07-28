@@ -497,6 +497,124 @@ def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_claims(
     ]
 
 
+def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer = "did:web:issuer.example:orgs:tenant-a"
+    method_id = f"{issuer}#key-1"
+    public_jwk = {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "11qYAYLefYxWxTqvCxbM9Apl1LrLJx8hHf9L8XvN4gk",
+    }
+    document = {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "issuer": issuer,
+        "credentialSubject": {"id": "did:example:holder", "role": "member"},
+        "proof": {
+            "type": "DataIntegrityProof",
+            "cryptosuite": "eddsa-rdfc-2022",
+            "proofPurpose": "assertionMethod",
+            "verificationMethod": method_id,
+            "proofValue": "zProof",
+        },
+    }
+    did_document = {
+        "id": issuer,
+        "verificationMethod": [
+            {
+                "id": method_id,
+                "type": "Multikey",
+                "controller": issuer,
+                "publicKeyJwk": public_jwk,
+            }
+        ],
+        "assertionMethod": [method_id],
+    }
+    captured: list[dict] = []
+
+    monkeypatch.setattr(pp, "_resolve_did_document", lambda did: did_document)
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_vcdm_data_integrity=lambda request: (
+                captured.append(json.loads(request))
+                or json.dumps(
+                    {
+                        "valid": True,
+                        "kind": "credential",
+                        "verified_proofs": 1,
+                        "verified_credentials": 1,
+                        "errors": [],
+                    }
+                )
+            )
+        ),
+    )
+
+    result = pp._verify_vcdm_data_integrity(document, None, None)
+
+    assert result["verified"] is True
+    assert captured == [
+        {
+            "document": document,
+            "resolved_verification_methods": [
+                {
+                    "id": method_id,
+                    "controller": issuer,
+                    "public_jwk": public_jwk,
+                }
+            ],
+        }
+    ]
+
+
+def test_vcdm_data_integrity_rejects_cross_tenant_proof_before_rust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer = "did:web:issuer.example:orgs:tenant-a"
+    attacker = "did:web:issuer.example:orgs:tenant-b"
+    binding_called = False
+
+    def verify(_request: str) -> str:
+        nonlocal binding_called
+        binding_called = True
+        return json.dumps({"valid": True, "errors": []})
+
+    monkeypatch.setattr(
+        pp,
+        "_resolve_did_document",
+        lambda _did: pytest.fail("cross-tenant DID must fail before resolution"),
+    )
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(verify_vcdm_data_integrity=verify),
+    )
+    document = {
+        "@context": ["https://www.w3.org/ns/credentials/v2"],
+        "type": ["VerifiableCredential"],
+        "issuer": issuer,
+        "credentialSubject": {"id": "did:example:holder"},
+        "proof": {
+            "type": "DataIntegrityProof",
+            "cryptosuite": "eddsa-rdfc-2022",
+            "proofPurpose": "assertionMethod",
+            "verificationMethod": f"{attacker}#key-1",
+            "proofValue": "zProof",
+        },
+    }
+
+    result = pp._verify_vcdm_data_integrity(document, None, None)
+
+    assert result["verified"] is False
+    assert result["claims"] == {}
+    assert binding_called is False
+    assert "tenant-b" not in result["error"]
+
+
 def test_vcdm_data_integrity_fails_closed_without_leaking_engine_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -883,6 +883,169 @@ def _resolve_did_document(did: str) -> dict[str, Any]:
     raise RuntimeError(f"DID resolution failed for {did}: {suffix}")
 
 
+def _document_identifier(document: dict[str, Any], name: str) -> str | None:
+    value = document.get(name)
+    if isinstance(value, str) and value.startswith("did:"):
+        return value
+    if isinstance(value, dict):
+        identifier = value.get("id")
+        if isinstance(identifier, str) and identifier.startswith("did:"):
+            return identifier
+    return None
+
+
+def _absolute_did_method_id(value: str, controller: str) -> str:
+    return f"{controller}{value}" if value.startswith("#") else value
+
+
+def _resolved_public_method(
+    did_document: dict[str, Any],
+    controller: str,
+    method_id: str,
+    relationship: str,
+) -> dict[str, Any]:
+    if did_document.get("id") != controller:
+        raise RuntimeError(
+            "DID resolution failed: resolved document id does not match the proof controller"
+        )
+
+    methods = (
+        did_document.get("verificationMethod")
+        if isinstance(did_document.get("verificationMethod"), list)
+        else []
+    )
+    method_by_id: dict[str, dict[str, Any]] = {}
+    for method in methods:
+        if not isinstance(method, dict) or not isinstance(method.get("id"), str):
+            continue
+        absolute_id = _absolute_did_method_id(method["id"], controller)
+        if absolute_id in method_by_id:
+            raise RuntimeError(
+                "DID resolution failed: duplicate verification method id"
+            )
+        method_by_id[absolute_id] = method
+
+    relationship_entries = did_document.get(relationship)
+    if not isinstance(relationship_entries, list):
+        raise RuntimeError(
+            f"DID resolution failed: verification method is not authorized for {relationship}"
+        )
+    authorized: dict[str, dict[str, Any] | None] = {}
+    for entry in relationship_entries:
+        if isinstance(entry, str):
+            authorized[_absolute_did_method_id(entry, controller)] = None
+        elif isinstance(entry, dict) and isinstance(entry.get("id"), str):
+            absolute_id = _absolute_did_method_id(entry["id"], controller)
+            authorized[absolute_id] = entry
+
+    if method_id not in authorized:
+        raise RuntimeError(
+            f"DID resolution failed: verification method is not authorized for {relationship}"
+        )
+    method = authorized[method_id] or method_by_id.get(method_id)
+    if not isinstance(method, dict):
+        raise RuntimeError(
+            "DID resolution failed: proof verification method was not found"
+        )
+    if _absolute_did_method_id(str(method.get("id", "")), controller) != method_id:
+        raise RuntimeError(
+            "DID resolution failed: proof verification method id does not match"
+        )
+    if method.get("controller") != controller:
+        raise RuntimeError(
+            "DID resolution failed: verification method controller does not match"
+        )
+    public_jwk = method.get("publicKeyJwk")
+    if not isinstance(public_jwk, dict) or not public_jwk.get("kty"):
+        raise RuntimeError(
+            "DID resolution failed: verification method has no publicKeyJwk"
+        )
+    prohibited = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}.intersection(
+        public_jwk
+    )
+    if prohibited:
+        raise RuntimeError(
+            "DID resolution failed: verification method contains private key material"
+        )
+    return {
+        "id": method_id,
+        "controller": controller,
+        "public_jwk": dict(public_jwk),
+    }
+
+
+def _resolved_data_integrity_methods(document: dict[str, Any]) -> list[dict[str, Any]]:
+    """Resolve non-did:key proof methods through the product DID resolver.
+
+    The proof selects a DID URL, never a key or custody backend. This function
+    resolves that DID, requires the exact relationship and controller, and
+    passes only public verification material to the Rust verifier.
+    """
+
+    document_types = document.get("type")
+    normalized_types = (
+        document_types if isinstance(document_types, list) else [document_types]
+    )
+    targets: list[tuple[dict[str, Any], str, str | None]] = []
+    if "VerifiablePresentation" in normalized_types:
+        targets.append(
+            (document, "authentication", _document_identifier(document, "holder"))
+        )
+        credentials = document.get("verifiableCredential")
+        if isinstance(credentials, list):
+            for credential in credentials:
+                if isinstance(credential, dict):
+                    targets.append(
+                        (
+                            credential,
+                            "assertionMethod",
+                            _document_identifier(credential, "issuer"),
+                        )
+                    )
+    else:
+        targets.append(
+            (document, "assertionMethod", _document_identifier(document, "issuer"))
+        )
+
+    resolved: dict[str, dict[str, Any]] = {}
+    for target, relationship, expected_controller in targets:
+        proof_value = target.get("proof")
+        proofs = proof_value if isinstance(proof_value, list) else [proof_value]
+        for proof in proofs:
+            if (
+                not isinstance(proof, dict)
+                or proof.get("type") != "DataIntegrityProof"
+            ):
+                continue
+            method_id = proof.get("verificationMethod")
+            if not isinstance(method_id, str) or "#" not in method_id:
+                continue
+            controller, fragment = method_id.split("#", 1)
+            if (
+                not controller.startswith("did:")
+                or not fragment
+                or controller.startswith("did:key:")
+            ):
+                continue
+            if expected_controller is not None and expected_controller != controller:
+                raise RuntimeError(
+                    "DID resolution failed: proof controller does not match document signer"
+                )
+            method = _resolved_public_method(
+                _resolve_did_document(controller),
+                controller,
+                method_id,
+                relationship,
+            )
+            existing = resolved.get(method_id)
+            if existing is not None and existing != method:
+                raise RuntimeError(
+                    "DID resolution failed: conflicting verification method material"
+                )
+            resolved[method_id] = method
+    return list(resolved.values())
+
+
 def _method_id_matches_kid(method_id: str, kid: str, issuer_did: str) -> bool:
     if not kid:
         return False
@@ -1170,14 +1333,16 @@ def _verify_vcdm_data_integrity(
             "error": "marty-rs VCDM Data Integrity binding is not installed",
         }
 
-    request: dict[str, Any] = {"document": document}
-    types = document.get("type")
-    normalized_types = types if isinstance(types, list) else [types]
-    if "VerifiablePresentation" in normalized_types:
-        request["expected_challenge"] = nonce
-        request["expected_domain"] = audience
-
     try:
+        request: dict[str, Any] = {"document": document}
+        resolved_methods = _resolved_data_integrity_methods(document)
+        if resolved_methods:
+            request["resolved_verification_methods"] = resolved_methods
+        types = document.get("type")
+        normalized_types = types if isinstance(types, list) else [types]
+        if "VerifiablePresentation" in normalized_types:
+            request["expected_challenge"] = nonce
+            request["expected_domain"] = audience
         result = json.loads(binding.verify_vcdm_data_integrity(json.dumps(request)))
         if not isinstance(result, dict):
             raise ValueError("VCDM verifier returned a non-object result")
