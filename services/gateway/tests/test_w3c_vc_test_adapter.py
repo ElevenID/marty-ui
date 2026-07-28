@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import json
 import sys
 import types
@@ -45,18 +43,6 @@ def test_adapter_rejects_unimplemented_json_ld_proofs() -> None:
     assert exc_info.value.detail["error"] == "unsupported_serialization"
 
 
-def _valid_w3c_credential() -> dict:
-    return {
-        "@context": [
-            "https://www.w3.org/ns/credentials/v2",
-            {"ExampleCredential": "https://issuer.example.test/ExampleCredential"},
-        ],
-        "type": ["VerifiableCredential", "ExampleCredential"],
-        "issuer": "https://issuer.example.test",
-        "credentialSubject": {"id": "did:key:z6MkExample", "name": "Ada"},
-    }
-
-
 def _official_baseline_credential() -> dict:
     """Pinned-suite credential-ok.json before its client injects issuer."""
     return {
@@ -66,155 +52,9 @@ def _official_baseline_credential() -> dict:
     }
 
 
-def test_issuer_adapter_keeps_only_supported_subject_claims() -> None:
-    assert adapter._claims_from_w3c_credential(_valid_w3c_credential()) == {
-        "id": "did:key:z6MkExample",
-        "name": "Ada",
-    }
-
-
-def test_issuer_adapter_accepts_official_id_only_baseline_before_issuer_injection() -> (
-    None
-):
-    assert adapter._claims_from_w3c_credential(_official_baseline_credential()) == {
-        "id": "did:example:subject"
-    }
-
-
-def test_issuer_adapter_preserves_multiple_credential_subjects() -> None:
-    credential = _official_baseline_credential()
-    credential["credentialSubject"] = [
-        {"id": "did:example:subject"},
-        {"id": "did:example:other:subject"},
-    ]
-
-    assert adapter._claims_from_w3c_credential(credential) == [
-        {"id": "did:example:subject"},
-        {"id": "did:example:other:subject"},
-    ]
-
-
-def test_issuer_adapter_rejects_scalar_context_as_required_by_vcdm_v2() -> None:
-    credential = _official_baseline_credential()
-    credential["@context"] = "https://www.w3.org/ns/credentials/v2"
-
-    with pytest.raises(HTTPException) as exc_info:
-        adapter._claims_from_w3c_credential(credential)
-
-    assert exc_info.value.status_code == 422
-    assert exc_info.value.detail["error"] == "invalid_context"
-
-
-def test_issuer_adapter_rejects_non_vcdm_input_before_issuance() -> None:
-    invalid = _valid_w3c_credential()
-    invalid["credentialSubject"] = []
-    with pytest.raises(HTTPException) as exc_info:
-        adapter._claims_from_w3c_credential(invalid)
-    assert exc_info.value.status_code == 422
-
-
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("id", None),
-        ("credentialStatus", {"id": "did:example:status"}),
-        ("credentialSchema", {"type": "JsonSchema"}),
-        ("name", {"@value": 4}),
-        ("validFrom", "not-a-date"),
-        ("relatedResource", {"id": "https://resource.example"}),
-    ],
-)
-def test_issuer_adapter_rejects_malformed_vcdm_structures(
-    field: str, value: object
-) -> None:
-    credential = _valid_w3c_credential()
-    credential[field] = value
-    with pytest.raises(HTTPException) as exc_info:
-        adapter._claims_from_w3c_credential(credential)
-    assert exc_info.value.status_code == 422
-
-
-def test_issuer_adapter_rejects_reversed_validity_period() -> None:
-    credential = _valid_w3c_credential()
-    credential.update(
-        {"validFrom": "2030-01-01T00:00:00Z", "validUntil": "2020-01-01T00:00:00Z"}
-    )
-    with pytest.raises(HTTPException) as exc_info:
-        adapter._claims_from_w3c_credential(credential)
-    assert exc_info.value.status_code == 422
-
-
-def test_issuer_adapter_rejects_protected_context_redefinition() -> None:
-    credential = _valid_w3c_credential()
-    credential["@context"].append({"VerifiableCredential": "https://example.test/bad"})
-    with pytest.raises(HTTPException) as exc_info:
-        adapter._claims_from_w3c_credential(credential)
-    assert exc_info.value.status_code == 422
-
-
-def test_issuer_adapter_accepts_a_valid_object_issuer_and_context_type() -> None:
-    credential = _valid_w3c_credential()
-    credential["issuer"] = {
-        "id": "https://issuer.example.test",
-        "name": {"@value": "Issuer", "@language": "en"},
-    }
-    credential["@context"].append(
-        {"ExampleCredential": "https://example.test/ExampleCredential"}
-    )
-    credential["type"].append("ExampleCredential")
-    assert adapter._claims_from_w3c_credential(credential)["name"] == "Ada"
-
-
-def test_issuer_adapter_accepts_official_examples_context_type() -> None:
-    credential = _official_baseline_credential()
-    credential["@context"].append("https://www.w3.org/ns/credentials/examples/v2")
-    credential["type"].append("RelationshipCredential")
-    assert (
-        adapter._claims_from_w3c_credential(credential)["id"] == "did:example:subject"
-    )
-
-
-def test_issuer_adapter_accepts_multiple_language_value_objects() -> None:
-    credential = _official_baseline_credential()
-    credential["name"] = [
-        {"@value": "Dog", "@language": "en"},
-        {"@value": "Chien", "@language": "fr"},
-    ]
-    assert (
-        adapter._claims_from_w3c_credential(credential)["id"] == "did:example:subject"
-    )
-
-
-@pytest.mark.asyncio
-async def test_related_resource_digest_validation_accepts_real_bytes_and_rejects_mismatch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    content = b"official context bytes"
-    digest = base64.b64encode(hashlib.sha384(content).digest()).decode("ascii")
-
-    class Response:
-        status_code = 200
-
-        def __init__(self) -> None:
-            self.content = content
-
-    class Client:
-        async def get(self, url: str, **_kwargs):
-            assert url == "https://www.w3.org/ns/credentials/v2"
-            return Response()
-
-    monkeypatch.setattr(adapter, "get_http_client", lambda: Client())
-    credential = {
-        "relatedResource": {
-            "id": adapter._BASE_CONTEXT,
-            "digestSRI": f"sha384-{digest}",
-        }
-    }
-    await adapter._validate_related_resource_digests(credential)
-    credential["relatedResource"]["digestSRI"] = "sha384-wrong"
-    with pytest.raises(HTTPException) as exc_info:
-        await adapter._validate_related_resource_digests(credential)
-    assert exc_info.value.detail["error"] == "related_resource_digest_mismatch"
+def test_issuer_adapter_has_no_test_owned_credential_semantic_validator() -> None:
+    assert not hasattr(adapter, "_validate_w3c_vcdm_credential")
+    assert not hasattr(adapter, "_validate_related_resource_digests")
 
 
 def test_issuer_adapter_requires_explicit_disposable_fixture_configuration(
