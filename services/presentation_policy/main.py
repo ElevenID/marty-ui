@@ -965,14 +965,19 @@ def _detect_credential_format(vp_token: str | dict[str, Any]) -> str:
     """
     try:
         if isinstance(vp_token, dict):
-            context = vp_token.get("@context")
-            contexts = context if isinstance(context, list) else [context]
             proof = vp_token.get("proof")
             proofs = proof if isinstance(proof, list) else [proof]
-            if "https://www.w3.org/ns/credentials/v2" in contexts and any(
+            if any(
                 isinstance(item, dict) and item.get("type") == "DataIntegrityProof"
                 for item in proofs
             ):
+                # This is routing, not acceptance. A structured document with
+                # a Data Integrity proof must reach the released VCDM engine,
+                # which validates its context, types, proof configuration,
+                # signature, and current validity. Requiring an exact context
+                # shape here can misclassify an otherwise verifiable document
+                # as "unknown" before cryptographic verification; relaxing
+                # candidate detection does not make an invalid document pass.
                 return "w3c-vcdm-di"
             return "unknown"
 
@@ -1559,13 +1564,9 @@ def _verify_mdoc(
         padded = encoded + "=" * (-len(encoded) % 4)
         cbor_bytes = _b64.urlsafe_b64decode(padded)
 
-        transcript_b64url = verification_context.get(
-            "mdoc_session_transcript_b64url"
-        )
+        transcript_b64url = verification_context.get("mdoc_session_transcript_b64url")
         if not isinstance(transcript_b64url, str) or not transcript_b64url:
-            raise ValueError(
-                "Verifier-owned mdoc session transcript is required"
-            )
+            raise ValueError("Verifier-owned mdoc session transcript is required")
         session_transcript_cbor = _b64.urlsafe_b64decode(
             transcript_b64url + "=" * (-len(transcript_b64url) % 4)
         )
@@ -1606,9 +1607,7 @@ def _verify_mdoc(
             "document_types": list(result.document_types),
             "issuer_signature_valid": bool(result.issuer_signature_valid),
             "issuer_trusted": bool(result.issuer_trusted),
-            "device_authentication_valid": bool(
-                result.device_authentication_valid
-            ),
+            "device_authentication_valid": bool(result.device_authentication_valid),
         }
     except Exception as e:
         logger.error("mDoc Rust verification failed: %s", e)
@@ -3006,9 +3005,7 @@ async def evaluate_presentation(
     # intended for credential-only verification.  The marker is written by
     # the flow service when it creates the request object and only strengthens
     # verification if a stateless caller supplies it.
-    oid4vp_verifier_context = (
-        request.context.get("oid4vp_verifier_context") is True
-    )
+    oid4vp_verifier_context = request.context.get("oid4vp_verifier_context") is True
     requires_bound_presentation = (
         policy.holder_binding.required
         or credential_format == "mdoc"
