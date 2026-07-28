@@ -8,10 +8,9 @@ import types
 
 import pytest
 from fastapi import HTTPException
+from gateway.routes import w3c_vc_test_adapter as adapter
 from starlette.requests import Request
 from starlette.responses import Response
-
-from gateway.routes import w3c_vc_test_adapter as adapter
 
 
 def _request() -> Request:
@@ -208,6 +207,33 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
         "format": "ldp_vc",
         "proofs": {"jwt": ["proof.jwt.value"]},
     }
+
+
+@pytest.mark.asyncio
+async def test_issuer_adapter_returns_controlled_validation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
+    monkeypatch.setenv("W3C_VC_TEST_CREDENTIAL_POLICY_ID", "fixture-policy")
+    monkeypatch.setenv("W3C_VC_TEST_ORGANIZATION_ID", "fixture-org")
+    monkeypatch.setenv("W3C_VC_TEST_TEMPLATE_ID", "fixture-template")
+    monkeypatch.setenv("W3C_VC_TEST_ISSUER_DID", "did:web:issuer.example")
+
+    invalid = _official_baseline_credential()
+    invalid["credentialSubject"] = {}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapter._issue_data_integrity_credential(invalid, _request())
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["error"] == "invalid_credential"
+    assert exc_info.value.detail["validation_errors"] == [
+        {
+            "type": "value_error",
+            "loc": (),
+            "msg": "Value error, credential_document must contain a non-empty credentialSubject",
+        }
+    ]
 
 
 def test_adapter_extracts_a_w3c_jose_vc_envelope_without_trusting_it() -> None:

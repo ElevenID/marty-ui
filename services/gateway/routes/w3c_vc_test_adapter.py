@@ -16,12 +16,10 @@ from urllib.parse import unquote_to_bytes
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, Field
-
 from gateway.models import IssuanceCreate
 from gateway.proxy import get_http_client, get_registry, proxy_request
 from gateway.routes.issuance import create_issuance
-
+from pydantic import BaseModel, Field, ValidationError
 
 router = APIRouter(prefix="/__test__/vc-api", tags=["test-only-w3c-vc-api"])
 
@@ -240,12 +238,30 @@ async def _issue_data_integrity_credential(
     obtains a fresh nonce, and submits a cryptographically valid holder proof.
     """
     organization_id, template_id, issuer_did = _issuance_fixture_configuration()
-    body = IssuanceCreate(
-        organization_id=organization_id,
-        credential_template_id=template_id,
-        issuer_did=issuer_did,
-        credential_document=json.loads(json.dumps(credential)),
-    )
+    try:
+        body = IssuanceCreate(
+            organization_id=organization_id,
+            credential_template_id=template_id,
+            issuer_did=issuer_did,
+            credential_document=json.loads(json.dumps(credential)),
+        )
+    except ValidationError as exc:
+        # This model is constructed inside the VC-API shape adapter, after
+        # FastAPI has validated the outer request. Translate production
+        # issuance validation failures into the same controlled 422 boundary
+        # a direct /v1/issuance request would expose, without logging the
+        # submitted credential or leaking an internal traceback.
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "invalid_credential",
+                "validation_errors": exc.errors(
+                    include_url=False,
+                    include_context=False,
+                    include_input=False,
+                ),
+            },
+        ) from None
     initiated = await create_issuance(body, request)
     if initiated.status_code >= 400:
         raise HTTPException(
