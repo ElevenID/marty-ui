@@ -872,6 +872,11 @@ def _resolve_did_document(did: str) -> dict[str, Any]:
             if response.status_code == 200:
                 document = response.json()
                 if isinstance(document, dict):
+                    if document.get("id") != did:
+                        errors.append(
+                            f"{url}: resolved DID document id does not match {did}"
+                        )
+                        continue
                     return document
                 errors.append(f"{url}: DID document was not a JSON object")
                 continue
@@ -960,9 +965,7 @@ def _resolved_public_method(
         raise RuntimeError(
             "DID resolution failed: verification method has no publicKeyJwk"
         )
-    prohibited = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}.intersection(
-        public_jwk
-    )
+    prohibited = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}.intersection(public_jwk)
     if prohibited:
         raise RuntimeError(
             "DID resolution failed: verification method contains private key material"
@@ -1012,10 +1015,7 @@ def _resolved_data_integrity_methods(document: dict[str, Any]) -> list[dict[str,
         proof_value = target.get("proof")
         proofs = proof_value if isinstance(proof_value, list) else [proof_value]
         for proof in proofs:
-            if (
-                not isinstance(proof, dict)
-                or proof.get("type") != "DataIntegrityProof"
-            ):
+            if not isinstance(proof, dict) or proof.get("type") != "DataIntegrityProof":
                 continue
             method_id = proof.get("verificationMethod")
             if not isinstance(method_id, str) or "#" not in method_id:

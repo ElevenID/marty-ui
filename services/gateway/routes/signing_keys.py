@@ -1086,7 +1086,17 @@ def _retarget_did_document(did_doc: dict[str, Any], did_id: str) -> dict[str, An
     ):
         entries = did_doc.get(relationship)
         if isinstance(entries, list):
-            retargeted[relationship] = [rewrite_identifier(entry) for entry in entries]
+            rewritten_entries: list[Any] = []
+            for entry in entries:
+                if isinstance(entry, dict):
+                    rewritten = dict(entry)
+                    rewritten["id"] = rewrite_identifier(rewritten.get("id"))
+                    if rewritten.get("controller") == source_did:
+                        rewritten["controller"] = did_id
+                    rewritten_entries.append(rewritten)
+                else:
+                    rewritten_entries.append(rewrite_identifier(entry))
+            retargeted[relationship] = rewritten_entries
 
     return retargeted
 
@@ -6693,6 +6703,7 @@ async def resolve_did_web_by_slug(request: Request, org_slug: str):
             "assertionMethod": [],
         },
     )
+    did_doc = _retarget_did_document(did_doc, fallback_did)
 
     return JSONResponse(
         content=did_doc,
