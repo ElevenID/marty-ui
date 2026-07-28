@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from starlette.responses import JSONResponse
 
 from gateway.routes import applicants
@@ -444,24 +445,15 @@ async def test_create_issuance_rejects_missing_issuer_did():
     assert "issuer_did is required" in exc_info.value.detail
 
 
-@pytest.mark.asyncio
-async def test_create_issuance_rejects_claims_only_issuer_profile_id():
-    request = _build_request(session_org_id="org_123")
-
-    with pytest.raises(issuance.HTTPException) as exc_info:
-        await issuance.create_issuance(
-            issuance.IssuanceCreate(
-                organization_id="org_123",
-                claims={
-                    "credential_format": "sd_jwt_vc",
-                    "issuer_profile_id": "ip-claims",
-                },
-            ),
-            request,
+def test_issuance_model_rejects_claims_only_issuer_profile_id():
+    with pytest.raises(ValidationError, match="not a public issuance input"):
+        issuance.IssuanceCreate(
+            organization_id="org_123",
+            claims={
+                "credential_format": "sd_jwt_vc",
+                "issuer_profile_id": "ip-claims",
+            },
         )
-
-    assert exc_info.value.status_code == 422
-    assert "not a supported public signing identity input" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -839,32 +831,13 @@ def test_issuance_model_rejects_public_issuer_profile_selector() -> None:
         )
 
 
-@pytest.mark.asyncio
-async def test_create_issuance_rejects_claims_issuer_profile_override_for_template(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    async def fake_load_template(template_id, request):
-        return {
-            "id": template_id,
-            "organization_id": "org_123",
-            "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
-            "issuer_profile_id": "ip-template",
-        }
-
-    monkeypatch.setattr(issuance, "_load_credential_template", fake_load_template)
-
-    with pytest.raises(issuance.HTTPException) as exc_info:
-        await issuance.create_issuance(
-            issuance.IssuanceCreate(
-                organization_id="org_123",
-                credential_template_id="template-1",
-                claims={"issuer_profile_id": "ip-other"},
-            ),
-            _build_request(session_org_id="org_123"),
+def test_issuance_model_rejects_claims_issuer_profile_override_for_template():
+    with pytest.raises(ValidationError, match="not a public issuance input"):
+        issuance.IssuanceCreate(
+            organization_id="org_123",
+            credential_template_id="template-1",
+            claims={"issuer_profile_id": "ip-other"},
         )
-
-    assert exc_info.value.status_code == 422
-    assert "not a supported public signing identity input" in exc_info.value.detail
 
 
 @pytest.mark.asyncio

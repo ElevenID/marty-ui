@@ -263,7 +263,7 @@ def test_issuer_adapter_uses_the_released_oid4vci_proof_binding(
 
 
 @pytest.mark.asyncio
-async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
+async def test_issuer_adapter_sends_complete_unsigned_document_to_production_issuance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
@@ -275,6 +275,8 @@ async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
         {"id": "did:example:subject"},
         {"id": "did:example:other:subject"},
     ]
+    credential["name"] = {"@value": "Official fixture", "@language": "en"}
+    credential["validFrom"] = "2026-07-28T00:00:00Z"
 
     class Response:
         def __init__(self, body: dict) -> None:
@@ -357,8 +359,9 @@ async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
     )
     assert issued["proof"]["cryptosuite"] == "eddsa-rdfc-2022"
     initiate_body = captured[0][1]["json"]
-    assert initiate_body["claims"] == {}
-    assert initiate_body["credential_subject"] == credential["credentialSubject"]
+    assert "claims" not in initiate_body
+    assert "credential_subject" not in initiate_body
+    assert initiate_body["credential_document"] == credential
     assert initiate_body["issuer_did"] == "did:web:issuer.example"
     public_headers = {name.lower() for name in captured[0][1]["headers"]}
     assert {

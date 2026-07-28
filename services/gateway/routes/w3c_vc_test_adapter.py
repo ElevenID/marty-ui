@@ -526,14 +526,13 @@ async def _issue_data_integrity_credential(
     issuer identity, creates a pre-authorized transaction, redeems a token,
     obtains a fresh nonce, and submits a cryptographically valid holder proof.
     """
-    credential_subject = _claims_from_w3c_credential(credential)
+    _claims_from_w3c_credential(credential)
     await _validate_related_resource_digests(credential)
     organization_id, template_id = _issuance_fixture_configuration()
     body = IssuanceCreate(
         organization_id=organization_id,
         credential_template_id=template_id,
-        claims={},
-        credential_subject=credential_subject,
+        credential_document=json.loads(json.dumps(credential)),
     )
     template = await _load_credential_template(template_id, request)
     if template.get("organization_id") != organization_id:
@@ -588,7 +587,7 @@ async def _issue_data_integrity_credential(
     initiated = await client.post(
         f"{service_url}/v1/issuance/initiate",
         headers=headers,
-        json=body.model_dump(),
+        json=body.model_dump(exclude_none=True, exclude_defaults=True),
         timeout=30.0,
     )
     if initiated.status_code >= 400:
@@ -654,11 +653,17 @@ async def _issue_data_integrity_credential(
         else None
     )
     document = result.get("credential") if isinstance(result, dict) else None
+    document_issuer = document.get("issuer") if isinstance(document, dict) else None
+    document_issuer_id = (
+        document_issuer.get("id")
+        if isinstance(document_issuer, dict)
+        else document_issuer
+    )
     if (
         not isinstance(result, dict)
         or result.get("format") != "ldp_vc"
         or not isinstance(document, dict)
-        or document.get("issuer") != issuer_did
+        or document_issuer_id != issuer_did
         or not isinstance(document.get("proof"), dict)
         or document["proof"].get("type") != "DataIntegrityProof"
         or document["proof"].get("cryptosuite") != "eddsa-rdfc-2022"
