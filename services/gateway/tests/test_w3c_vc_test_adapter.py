@@ -229,20 +229,13 @@ def test_issuer_adapter_requires_explicit_disposable_fixture_configuration(
     assert exc_info.value.status_code == 503
 
 
-def test_issuer_adapter_wraps_only_a_compact_jwt_vc() -> None:
-    envelope = adapter._jose_vc_envelope(
-        _valid_w3c_credential(), "header.payload.signature"
-    )
-    assert envelope["type"] == "EnvelopedVerifiableCredential"
-    assert envelope["id"] == "data:application/vc+jwt,header.payload.signature"
-    with pytest.raises(HTTPException):
-        adapter._jose_vc_envelope(_valid_w3c_credential(), "not-a-jwt")
-
-
-def test_issuer_adapter_source_defines_a_jwt_vc_fixture_contract() -> None:
-    source = adapter._issue_jwt_vc.__code__.co_consts
+def test_issuer_adapter_source_defines_a_native_data_integrity_fixture_contract() -> (
+    None
+):
+    source = adapter._issue_data_integrity_credential.__code__.co_consts
     assert (
-        "W3C fixture template must issue JWT VC, not SD-JWT, mdoc, or JSON-LD" in source
+        "W3C fixture template must issue native VCDM v2 Data Integrity credentials"
+        in source
     )
 
 
@@ -303,7 +296,30 @@ async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
                 return Response({"access_token": "access-token"})
             if url.endswith("/nonce"):
                 return Response({"c_nonce": "nonce"})
-            return Response({"credential": "header.payload.signature"})
+            return Response(
+                {
+                    "credentials": [
+                        {
+                            "format": "ldp_vc",
+                            "credential": {
+                                "@context": ["https://www.w3.org/ns/credentials/v2"],
+                                "type": ["VerifiableCredential"],
+                                "issuer": "did:web:issuer.example",
+                                "credentialSubject": credential["credentialSubject"],
+                                "proof": {
+                                    "type": "DataIntegrityProof",
+                                    "cryptosuite": "eddsa-rdfc-2022",
+                                    "verificationMethod": (
+                                        "did:web:issuer.example#data-integrity"
+                                    ),
+                                    "proofPurpose": "assertionMethod",
+                                    "proofValue": "zProof",
+                                },
+                            },
+                        }
+                    ]
+                }
+            )
 
     class Registry:
         @staticmethod
@@ -315,7 +331,7 @@ async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
         return {
             "id": template_id,
             "organization_id": "fixture-org",
-            "credential_payload_format": "w3c_vcdm_v2_jwt_vc",
+            "credential_payload_format": "w3c_vcdm_v2_di",
             "issuer_did": "did:web:issuer.example",
         }
 
@@ -324,6 +340,7 @@ async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
             "issuer_profile_id": "issuer-profile",
             "signing_service_id": "signing-service",
             "issuer_did": "did:web:issuer.example",
+            "algorithm": "EdDSA",
         }
 
     monkeypatch.setattr(adapter, "_load_credential_template", load_template)
@@ -334,10 +351,11 @@ async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
     monkeypatch.setattr(adapter, "get_registry", lambda: Registry())
     monkeypatch.setattr(adapter, "get_http_client", lambda: Client())
 
-    assert (
-        await adapter._issue_jwt_vc(credential, _request())
-        == "header.payload.signature"
+    issued = await adapter._issue_data_integrity_credential(
+        credential,
+        _request(),
     )
+    assert issued["proof"]["cryptosuite"] == "eddsa-rdfc-2022"
     initiate_body = captured[0][1]["json"]
     assert initiate_body["claims"] == {}
     assert initiate_body["credential_subject"] == credential["credentialSubject"]
@@ -349,6 +367,11 @@ async def test_issuer_adapter_sends_exact_subject_set_to_production_issuance(
         "x-signing-service-id",
         "x-signing-key-reference",
     }.isdisjoint(public_headers)
+    credential_request = captured[3][1]["json"]
+    assert credential_request == {
+        "format": "ldp_vc",
+        "proofs": {"jwt": ["proof.jwt.value"]},
+    }
 
 
 def test_adapter_extracts_a_w3c_jose_vc_envelope_without_trusting_it() -> None:

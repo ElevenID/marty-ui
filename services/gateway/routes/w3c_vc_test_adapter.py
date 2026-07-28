@@ -68,7 +68,7 @@ def _enabled_policy_id(*, presentation: bool) -> str:
 
 
 def _issuance_fixture_configuration() -> tuple[str, str]:
-    """Return the explicit disposable organization and JWT-VC template IDs."""
+    """Return the explicit disposable organization and Data Integrity template IDs."""
     _enabled_policy_id(presentation=False)
     organization_id = os.environ.get("W3C_VC_TEST_ORGANIZATION_ID", "").strip()
     template_id = os.environ.get("W3C_VC_TEST_TEMPLATE_ID", "").strip()
@@ -86,11 +86,10 @@ def _issuance_fixture_configuration() -> tuple[str, str]:
 def _claims_from_w3c_credential(
     credential: dict[str, Any],
 ) -> dict[str, Any] | list[dict[str, Any]]:
-    """Validate the supported VC-JWT input subset before real issuance.
+    """Validate the supported VCDM input subset before real issuance.
 
-    The W3C suite is broad enough to include JSON-LD-only structures.  This
-    adapter deliberately accepts the VCDM fields Marty can carry in a JWT VC;
-    it never converts an invalid document into a signed credential.
+    The adapter accepts only structures the production Data Integrity path can
+    carry. It never converts an invalid document into a signed credential.
     """
     _validate_w3c_vcdm_credential(credential)
     subject = credential.get("credentialSubject")
@@ -100,7 +99,7 @@ def _claims_from_w3c_credential(
         raise HTTPException(status_code=422, detail={"error": "invalid_credential"})
     # The credential template controls issuer identity and credential type.
     # The exact subject object/set crosses the boundary separately from flat
-    # claims so the production JWT-VC builder cannot collapse a subject set.
+    # claims so the production Data Integrity builder cannot collapse a subject set.
     return dict(subject)
 
 
@@ -378,23 +377,6 @@ def _create_oid4vci_proof(issuer_url: str, nonce: str) -> str:
         ) from exc
 
 
-def _jose_vc_envelope(credential: dict[str, Any], token: str) -> dict[str, Any]:
-    """Wrap an actual JWT VC in the VCDM v2 JOSE envelope representation."""
-    if token.count(".") != 2 or not all(token.split(".")):
-        raise HTTPException(
-            status_code=502, detail="Marty issuance did not return a JWT VC"
-        )
-    return {
-        "@context": credential["@context"],
-        # The pinned official suite identifies an enveloped credential by the
-        # scalar VCDM envelope type before extracting the signed JWT payload.
-        # A one-element array is schema-valid in other contexts, but the
-        # suite's envelope branch intentionally uses scalar equality.
-        "type": "EnvelopedVerifiableCredential",
-        "id": f"data:application/vc+jwt,{token}",
-    }
-
-
 def _token_or_unsupported(
     value: str | dict[str, Any], field: str
 ) -> str | dict[str, Any]:
@@ -534,7 +516,10 @@ async def _evaluate(
     )
 
 
-async def _issue_jwt_vc(credential: dict[str, Any], request: Request) -> str:
+async def _issue_data_integrity_credential(
+    credential: dict[str, Any],
+    request: Request,
+) -> dict[str, Any]:
     """Issue through Marty's ordinary OID4VCI service path.
 
     The W3C endpoint is only a shape adapter.  It still resolves the template
@@ -556,26 +541,40 @@ async def _issue_jwt_vc(credential: dict[str, Any], request: Request) -> str:
             status_code=403,
             detail="W3C fixture template belongs to another organization",
         )
-    credential_format = template.get("credential_payload_format")
-    if str(credential_format or "").strip().lower() not in {
-        "jwt_vc_json",
-        "vc_jwt",
-        "w3c_vcdm_v2_jwt_vc",
+    template_format = (
+        str(template.get("credential_payload_format") or "").strip().lower()
+    )
+    if template_format not in {
+        "json-ld",
+        "json_ld",
+        "ldp_vc",
+        "w3c_vcdm_v2_di",
     }:
         raise HTTPException(
             status_code=422,
-            detail="W3C fixture template must issue JWT VC, not SD-JWT, mdoc, or JSON-LD",
+            detail="W3C fixture template must issue native VCDM v2 Data Integrity credentials",
         )
     issuer_did = _select_issuer_identity_request(body, template)
     issuer_identity = await _resolve_issuer_identity(
         request,
         organization_id,
         issuer_did,
-        credential_format=credential_format,
+        credential_format="ldp_vc",
+        algorithm="EdDSA",
     )
     if issuer_identity is None:
         raise HTTPException(
             status_code=422, detail="W3C fixture template has no active issuer identity"
+        )
+    if issuer_identity.get("issuer_did") != issuer_did:
+        raise HTTPException(
+            status_code=409,
+            detail="W3C fixture issuer DID resolution returned a different identity",
+        )
+    if issuer_identity.get("algorithm") != "EdDSA":
+        raise HTTPException(
+            status_code=422,
+            detail="W3C Data Integrity fixture requires an EdDSA issuer profile",
         )
     body = body.model_copy(update={"issuer_did": issuer_did})
 
@@ -642,17 +641,33 @@ async def _issue_jwt_vc(credential: dict[str, Any], request: Request) -> str:
     issued = await client.post(
         f"{service_url}/v1/issuance/credential",
         headers={"Authorization": f"Bearer {access_token}"},
-        json={"format": "jwt_vc_json", "proofs": {"jwt": [proof]}},
+        json={"format": "ldp_vc", "proofs": {"jwt": [proof]}},
         timeout=30.0,
     )
     if issued.status_code >= 400:
         raise HTTPException(status_code=issued.status_code, detail=issued.text[:300])
-    token = issued.json().get("credential")
-    if not isinstance(token, str):
+    response = issued.json()
+    credentials = response.get("credentials") if isinstance(response, dict) else None
+    result = (
+        credentials[0]
+        if isinstance(credentials, list) and len(credentials) == 1
+        else None
+    )
+    document = result.get("credential") if isinstance(result, dict) else None
+    if (
+        not isinstance(result, dict)
+        or result.get("format") != "ldp_vc"
+        or not isinstance(document, dict)
+        or document.get("issuer") != issuer_did
+        or not isinstance(document.get("proof"), dict)
+        or document["proof"].get("type") != "DataIntegrityProof"
+        or document["proof"].get("cryptosuite") != "eddsa-rdfc-2022"
+    ):
         raise HTTPException(
-            status_code=502, detail="Marty issuance did not return a credential"
+            status_code=502,
+            detail="Marty issuance did not return a native Data Integrity credential",
         )
-    return token
+    return document
 
 
 @router.post("/credentials/verify")
@@ -684,7 +699,5 @@ async def verify_presentation(
 @router.post("/credentials/issue")
 async def issue_credential(body: IssueCredentialRequest, request: Request) -> Response:
     """VC-API issuer boundary backed by a full Marty OID4VCI issuance flow."""
-    token = await _issue_jwt_vc(body.credential, request)
-    return JSONResponse(
-        {"verifiableCredential": _jose_vc_envelope(body.credential, token)}
-    )
+    credential = await _issue_data_integrity_credential(body.credential, request)
+    return JSONResponse({"verifiableCredential": credential})
