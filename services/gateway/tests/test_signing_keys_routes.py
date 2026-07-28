@@ -94,6 +94,89 @@ async def test_internal_issuer_profile_signing_hides_kms_routing(
 
 
 @pytest.mark.asyncio
+async def test_internal_issuer_did_signing_resolves_profile_without_exposing_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+    profile = {
+        "id": "ip-issuer",
+        "issuer_did": "did:web:issuer.example",
+        "signing_service_id": "managed-openbao-transit",
+        "signing_key_reference": "cred-issuer-es256",
+        "verification_method_id": "did:web:issuer.example#issuer",
+        "key_purpose": "vc_jwt_issuer",
+        "algorithm": "ES256",
+        "status": "active",
+    }
+    identity = {
+        "issuer_profile": profile,
+        "issuer_did": profile["issuer_did"],
+        "verification_method_id": profile["verification_method_id"],
+        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+    }
+    monkeypatch.setattr(
+        signing_keys,
+        "_resolve_org_scoped_issuer_identity",
+        AsyncMock(return_value=identity),
+    )
+    captured = {}
+
+    async def fake_sign_payload_with_service(**kwargs):
+        captured.update(kwargs)
+        return JSONResponse(
+            content={
+                "ok": True,
+                "service_id": "managed-openbao-transit",
+                "algorithm": "ES256",
+                "signature_raw_b64": "signature",
+            }
+        )
+
+    monkeypatch.setattr(signing_keys, "sign_payload_with_service", fake_sign_payload_with_service)
+    response = await signing_keys.internal_sign_payload_with_issuer_did(
+        request=_build_request("org-1"),
+        body={
+            "issuer_did": "did:web:issuer.example",
+            "credential_format": "ldp_vc",
+            "key_purpose": "vc_jwt_issuer",
+            "payload_b64": "cGF5bG9hZA",
+        },
+        organization_id="org-1",
+        x_api_key="test-internal-key",
+    )
+    data = json.loads(response.body)
+
+    assert captured["body"]["key_reference"] == "cred-issuer-es256"
+    assert captured["body"]["key_purpose"] == "vc_jwt_issuer"
+    assert data["issuer_did"] == "did:web:issuer.example"
+    assert "issuer_profile_id" not in data
+    assert "service_id" not in data
+
+
+@pytest.mark.asyncio
+async def test_internal_issuer_did_signing_rejects_profile_and_kms_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys.internal_sign_payload_with_issuer_did(
+            request=_build_request("org-1"),
+            body={
+                "issuer_did": "did:web:issuer.example",
+                "credential_format": "ldp_vc",
+                "payload_b64": "cGF5bG9hZA",
+                "issuer_profile_id": "attacker-selected-profile",
+            },
+            organization_id="org-1",
+            x_api_key="test-internal-key",
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "routing overrides" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_flow_key_envelope_is_bound_to_org_and_flow(
     monkeypatch: pytest.MonkeyPatch,
 ):
