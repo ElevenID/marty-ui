@@ -298,7 +298,7 @@ export function normalizeCredentialTemplate(data = {}) {
     || data.artifact_status
     || (data.hasArtifacts === false
       ? 'missing'
-      : (data.issuer_key_id || data.issuer_certificate_chain_pem || data.remote_signing_config || data.auto_generate_artifacts)
+      : (data.issuer_key_id || data.issuer_certificate_chain_pem || data.remote_signing_config)
         ? 'valid'
         : (data.issuer_did ? 'invalid' : 'missing'));
   const hasArtifacts = data.hasArtifacts ?? artifactsStatus !== 'missing';
@@ -503,6 +503,7 @@ export function buildCredentialTemplatePayload(data = {}) {
     status: _status,
     activate_immediately: _activateImmediately,
     generate_artifacts_automatically: _generateArtifactsAutomatically,
+    auto_generate_artifacts: _autoGenerateArtifacts,
     supported_wallet_ids: _supportedWalletIds,
     issuance_protocol: _issuanceProtocol,
     wallet_configs: _walletConfigs,

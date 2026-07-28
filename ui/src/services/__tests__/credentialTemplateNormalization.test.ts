@@ -52,6 +52,8 @@ describe('credential template normalization', () => {
       credential_type: 'EmployeeBadge',
       issuer_did: 'did:web:issuer.example.com',
       issuer_profile_id: 'ip-1',
+      auto_generate_artifacts: true,
+      generate_artifacts_automatically: true,
       compliance_profile_id: 'compliance-1',
       vct: 'com.example.employee',
       claims: [
@@ -76,6 +78,8 @@ describe('credential template normalization', () => {
     expect(payload.vct).toBe(`${window.location.origin}/vct/com.example.employee`)
     expect(payload.issuer_did).toBe('did:web:issuer.example.com')
     expect(payload).not.toHaveProperty('issuer_profile_id')
+    expect(payload).not.toHaveProperty('auto_generate_artifacts')
+    expect(payload).not.toHaveProperty('generate_artifacts_automatically')
     expect(payload.compliance_profile_id).toBe('compliance-1')
     expect(payload).not.toHaveProperty('compliance_profile')
     expect(payload.claims).toEqual([

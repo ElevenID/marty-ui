@@ -1059,6 +1059,7 @@ class CredentialTemplateResponse(BaseModel):
     credential_type: str
     compliance_profile_id: str | None = None
     vct: str | None = None
+    doctype: str | None = None
     credential_payload_format: str | None = None
     issuer_profile_id: str | None = None
     application_template_id: str | None = None
@@ -1793,12 +1794,21 @@ async def create_credential_template(
         requested_algorithm=body.issuer_algorithm or body.signing_algorithm,
     )
 
-    resolved_vct = body.vct or f"https://credentials.example.com/{body.credential_type}"
+    # Keep the legacy default only for internal SD-JWT callers. Public callers
+    # are validated by the gateway and must provide their VCT explicitly.
+    # ISO mdoc templates use `doctype`; fabricating an SD-JWT VCT for them
+    # creates protocol drift and breaks independent verifier tooling.
+    resolved_vct = (
+        body.vct or f"https://credentials.example.com/{body.credential_type}"
+        if credential_payload_format == CredentialFormat.SD_JWT_VC.value
+        else body.vct or ""
+    )
     _validate_template_protocol_requirements(
         compliance_profile=None,
         compliance_profile_id=body.compliance_profile_id,
         credential_payload_format=credential_payload_format,
         vct=resolved_vct,
+        doctype=body.doctype,
     )
 
     template = CredentialTemplate(
@@ -1984,6 +1994,7 @@ async def update_credential_template(
             candidate.supported_formats,
         ),
         vct=candidate.vct,
+        doctype=candidate.doctype,
     )
 
     issuer_context = await _require_active_issuer_profile(
@@ -2031,6 +2042,7 @@ async def activate_credential_template(
         compliance_profile_id=template.compliance_profile_id,
         credential_payload_format=_extract_template_credential_format(template),
         vct=template.vct,
+        doctype=template.doctype,
     )
 
     await _require_active_revocation_profile(
@@ -2184,6 +2196,7 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
         credential_type=template.credential_type,
         compliance_profile_id=template.compliance_profile_id,
         vct=template.vct or None,
+        doctype=template.doctype or None,
         credential_payload_format=canonical_payload_format,
         issuer_profile_id=template.issuer_profile_id,
         application_template_id=template.application_template_id,
@@ -2300,6 +2313,7 @@ def _validate_template_protocol_requirements(
     compliance_profile_id: str | None,
     credential_payload_format: str,
     vct: str | None,
+    doctype: str | None = None,
 ) -> None:
     if not compliance_profile_id:
         raise HTTPException(
@@ -2311,6 +2325,13 @@ def _validate_template_protocol_requirements(
         raise HTTPException(
             status_code=422,
             detail="vct is required when credential_payload_format resolves to SD_JWT_VC",
+        )
+    if credential_payload_format == CredentialFormat.MDOC.value and not (
+        doctype and str(doctype).strip()
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="doctype is required when credential_payload_format resolves to MDOC",
         )
     # MIP §6.2 — vct MUST be an absolute URI per SD-JWT-VC §3.2.1.
     # An absolute URI is identified by a scheme, not just an HTTP authority:
