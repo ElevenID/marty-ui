@@ -571,6 +571,38 @@ def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
     ]
 
 
+def test_did_resolver_skips_a_candidate_with_the_wrong_document_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    did = "did:web:issuer.example:orgs:tenant-a"
+    candidates = [
+        "http://gateway:8000/orgs/tenant-a/did.json",
+        "https://issuer.example/orgs/tenant-a/did.json",
+    ]
+    requested: list[str] = []
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, document: dict) -> None:
+            self._document = document
+
+        def json(self) -> dict:
+            return self._document
+
+    def get(url: str, **_kwargs) -> Response:
+        requested.append(url)
+        if url == candidates[0]:
+            return Response({"id": "did:web:gateway.example:orgs:tenant-a"})
+        return Response({"id": did, "verificationMethod": []})
+
+    monkeypatch.setattr(pp, "_did_resolution_candidate_urls", lambda _did: candidates)
+    monkeypatch.setattr("httpx.get", get)
+
+    assert pp._resolve_did_document(did)["id"] == did
+    assert requested == candidates
+
+
 def test_vcdm_data_integrity_rejects_cross_tenant_proof_before_rust(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

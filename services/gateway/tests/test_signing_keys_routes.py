@@ -3447,15 +3447,37 @@ async def test_resolve_did_web_by_slug_returns_404_when_no_mapping(
 async def test_resolve_did_web_by_slug_returns_did_document(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """resolve_did_web_by_slug should return the stored DID document."""
+    """The public path must publish the requested DID, not a stored alias."""
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 
+    source_did = "did:web:internal.example:orgs:source"
     did_doc = {
-        "id": "did:web:beta.elevenidllc.com:orgs:acme",
-        "controller": "did:web:beta.elevenidllc.com:orgs:acme",
-        "verificationMethod": [{"id": "#key-1", "type": "JsonWebKey"}],
-        "assertionMethod": ["#key-1"],
+        "id": source_did,
+        "controller": source_did,
+        "verificationMethod": [
+            {
+                "id": f"{source_did}#key-1",
+                "type": "JsonWebKey2020",
+                "controller": source_did,
+                "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "public"},
+            },
+            {
+                "id": f"{source_did}#auth-1",
+                "type": "JsonWebKey2020",
+                "controller": source_did,
+                "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "public"},
+            },
+        ],
+        "assertionMethod": [f"{source_did}#key-1"],
+        "authentication": [
+            {
+                "id": f"{source_did}#auth-1",
+                "type": "JsonWebKey2020",
+                "controller": source_did,
+                "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "public"},
+            }
+        ],
     }
 
     redis_mock = AsyncMock()
@@ -3476,8 +3498,14 @@ async def test_resolve_did_web_by_slug_returns_did_document(
 
     assert response.status_code == 200
     data = json.loads(response.body)
-    assert data["id"] == "did:web:beta.elevenidllc.com:orgs:acme"
-    assert len(data["verificationMethod"]) == 1
+    public_did = "did:web:beta.elevenidllc.com:orgs:acme"
+    assert data["id"] == public_did
+    assert data["controller"] == public_did
+    assert data["verificationMethod"][0]["id"] == f"{public_did}#key-1"
+    assert data["verificationMethod"][0]["controller"] == public_did
+    assert data["assertionMethod"] == [f"{public_did}#key-1"]
+    assert data["authentication"][0]["id"] == f"{public_did}#auth-1"
+    assert data["authentication"][0]["controller"] == public_did
     assert response.headers.get("content-type") == "application/did+json"
     assert "max-age=300" in response.headers.get("cache-control", "")
 
