@@ -12,8 +12,14 @@ def test_w3c_profile_enables_only_the_fixture_adapter() -> None:
     assert 'W3C_VC_TEST_ADAPTER: "1"' in profile
     assert "W3C_VC_TEST_CREDENTIAL_POLICY_ID" in profile
     assert "W3C_VC_TEST_PRESENTATION_POLICY_ID" in profile
+    assert "W3C_VC_TEST_ISSUER_DID" in profile
     assert "disposable JWT credential policy" in profile
     assert "disposable Data Integrity presentation policy" in profile
+    assert (
+        'VCDM_RELATED_RESOURCE_URLS: "https://www.w3.org/ns/credentials/v2"'
+        in profile
+    )
+    assert "W3C_VC_TEST_RELATED_RESOURCE_URLS" not in profile
 
 
 def test_standard_oidf_profile_does_not_enable_w3c_adapter() -> None:

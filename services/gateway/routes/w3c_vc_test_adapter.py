@@ -9,13 +9,8 @@ credential itself or turn a failed verification into a success.
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 import os
-import re
-from datetime import datetime
 from typing import Any
 from urllib.parse import unquote_to_bytes
 
@@ -25,12 +20,7 @@ from pydantic import BaseModel, Field
 
 from gateway.models import IssuanceCreate
 from gateway.proxy import get_http_client, get_registry, proxy_request
-from gateway.routes.issuance import (
-    _ISSUANCE_HEADERS,
-    _load_credential_template,
-    _resolve_issuer_identity,
-    _select_issuer_identity_request,
-)
+from gateway.routes.issuance import create_issuance
 
 
 router = APIRouter(prefix="/__test__/vc-api", tags=["test-only-w3c-vc-api"])
@@ -67,299 +57,21 @@ def _enabled_policy_id(*, presentation: bool) -> str:
     return policy_id
 
 
-def _issuance_fixture_configuration() -> tuple[str, str]:
-    """Return the explicit disposable organization and JWT-VC template IDs."""
+def _issuance_fixture_configuration() -> tuple[str, str, str]:
+    """Return the disposable organization, template, and public issuer DID."""
     _enabled_policy_id(presentation=False)
     organization_id = os.environ.get("W3C_VC_TEST_ORGANIZATION_ID", "").strip()
     template_id = os.environ.get("W3C_VC_TEST_TEMPLATE_ID", "").strip()
-    if not organization_id or not template_id:
+    issuer_did = os.environ.get("W3C_VC_TEST_ISSUER_DID", "").strip()
+    if not organization_id or not template_id or not issuer_did:
         raise HTTPException(
             status_code=503,
             detail=(
                 "W3C VC issuer adapter requires W3C_VC_TEST_ORGANIZATION_ID "
-                "and W3C_VC_TEST_TEMPLATE_ID"
+                "W3C_VC_TEST_TEMPLATE_ID, and W3C_VC_TEST_ISSUER_DID"
             ),
         )
-    return organization_id, template_id
-
-
-def _claims_from_w3c_credential(
-    credential: dict[str, Any],
-) -> dict[str, Any] | list[dict[str, Any]]:
-    """Validate the supported VC-JWT input subset before real issuance.
-
-    The W3C suite is broad enough to include JSON-LD-only structures.  This
-    adapter deliberately accepts the VCDM fields Marty can carry in a JWT VC;
-    it never converts an invalid document into a signed credential.
-    """
-    _validate_w3c_vcdm_credential(credential)
-    subject = credential.get("credentialSubject")
-    if isinstance(subject, list):
-        return [dict(item) for item in subject]
-    if not isinstance(subject, dict) or not subject:
-        raise HTTPException(status_code=422, detail={"error": "invalid_credential"})
-    # The credential template controls issuer identity and credential type.
-    # The exact subject object/set crosses the boundary separately from flat
-    # claims so the production JWT-VC builder cannot collapse a subject set.
-    return dict(subject)
-
-
-_ABSOLUTE_URI = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:[^\s]+$")
-_RFC3339_DATETIME = re.compile(
-    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
-)
-_BASE_CONTEXT = "https://www.w3.org/ns/credentials/v2"
-_EXAMPLES_CONTEXT = "https://www.w3.org/ns/credentials/examples/v2"
-_PROTECTED_VCDM_TERMS = frozenset(
-    {
-        "VerifiableCredential",
-        "VerifiablePresentation",
-        "credentialSubject",
-        "issuer",
-        "proof",
-        "type",
-        "id",
-        "@context",
-    }
-)
-
-
-def _is_absolute_uri(value: Any) -> bool:
-    return isinstance(value, str) and bool(_ABSOLUTE_URI.fullmatch(value))
-
-
-def _context_term_map(context: list[Any]) -> dict[str, str]:
-    terms: dict[str, str] = {}
-    for item in context[1:]:
-        if isinstance(item, str):
-            if not _is_absolute_uri(item):
-                raise HTTPException(
-                    status_code=422, detail={"error": "invalid_context"}
-                )
-            # This pinned W3C context defines an @vocab mapping. Resolve the
-            # term exercised by the official suite without accepting arbitrary
-            # unmapped compact terms.
-            if item == _EXAMPLES_CONTEXT:
-                terms["RelationshipCredential"] = (
-                    "https://www.w3.org/ns/credentials/examples#RelationshipCredential"
-                )
-            continue
-        if not isinstance(item, dict):
-            raise HTTPException(status_code=422, detail={"error": "invalid_context"})
-        for term, target in item.items():
-            if term in _PROTECTED_VCDM_TERMS or not _is_absolute_uri(target):
-                raise HTTPException(
-                    status_code=422, detail={"error": "invalid_context"}
-                )
-            terms[term] = target
-    return terms
-
-
-def _validate_type(
-    value: Any, terms: dict[str, str], required: str | None = None
-) -> None:
-    values = value if isinstance(value, list) else [value]
-    if not values or not all(isinstance(item, str) and item for item in values):
-        raise HTTPException(status_code=422, detail={"error": "invalid_type"})
-    if required and required not in values:
-        raise HTTPException(status_code=422, detail={"error": "invalid_type"})
-    for item in values:
-        if (
-            not _is_absolute_uri(item)
-            and item not in _PROTECTED_VCDM_TERMS
-            and item not in terms
-        ):
-            raise HTTPException(status_code=422, detail={"error": "invalid_type"})
-
-
-def _validate_typed_resource(
-    value: Any, terms: dict[str, str], *, require_id: bool = False
-) -> None:
-    values = value if isinstance(value, list) else [value]
-    if not values or not all(isinstance(item, dict) for item in values):
-        raise HTTPException(status_code=422, detail={"error": "invalid_resource"})
-    for item in values:
-        _validate_type(item.get("type"), terms)
-        if require_id and not _is_absolute_uri(item.get("id")):
-            raise HTTPException(status_code=422, detail={"error": "invalid_resource"})
-
-
-def _validate_language_value(value: Any) -> bool:
-    if isinstance(value, str):
-        return True
-    if isinstance(value, list):
-        return bool(value) and all(
-            not isinstance(item, list) and _validate_language_value(item)
-            for item in value
-        )
-    if not isinstance(value, dict) or not isinstance(value.get("@value"), str):
-        return False
-    return all(
-        key in {"@value", "@language", "@direction"}
-        and (key == "@value" or isinstance(entry, str))
-        for key, entry in value.items()
-    )
-
-
-async def _validate_related_resource_digests(credential: dict[str, Any]) -> None:
-    """Retrieve allowlisted related resources and validate their digests."""
-    resources = credential.get("relatedResource")
-    if resources is None:
-        return
-    values = resources if isinstance(resources, list) else [resources]
-    allowed = {
-        value.strip()
-        for value in os.environ.get(
-            "W3C_VC_TEST_RELATED_RESOURCE_URLS", _BASE_CONTEXT
-        ).split(",")
-        if value.strip()
-    }
-    client = get_http_client()
-    documents: dict[str, bytes] = {}
-    for resource in values:
-        resource_id = resource["id"]
-        if resource_id not in allowed:
-            raise HTTPException(
-                status_code=422, detail={"error": "related_resource_not_allowlisted"}
-            )
-        if resource_id not in documents:
-            response = await client.get(resource_id, timeout=10.0)
-            if response.status_code != 200 or len(response.content) > 2_000_000:
-                raise HTTPException(
-                    status_code=422, detail={"error": "related_resource_unavailable"}
-                )
-            documents[resource_id] = bytes(response.content)
-        content = documents[resource_id]
-        digest_sri = resource.get("digestSRI")
-        if digest_sri:
-            try:
-                algorithm, expected = digest_sri.split("-", 1)
-                if algorithm not in {"sha256", "sha384", "sha512"}:
-                    raise ValueError("unsupported SRI digest")
-                digest = hashlib.new(algorithm, content).digest()
-            except (ValueError, TypeError):
-                raise HTTPException(
-                    status_code=422, detail={"error": "invalid_related_resource"}
-                ) from None
-            actual = base64.b64encode(digest).decode("ascii")
-            if not hmac.compare_digest(actual, expected):
-                raise HTTPException(
-                    status_code=422,
-                    detail={"error": "related_resource_digest_mismatch"},
-                )
-        digest_multibase = resource.get("digestMultibase")
-        if digest_multibase:
-            actual = "u" + base64.urlsafe_b64encode(
-                hashlib.sha256(content).digest()
-            ).decode("ascii").rstrip("=")
-            if not hmac.compare_digest(actual, digest_multibase):
-                raise HTTPException(
-                    status_code=422,
-                    detail={"error": "related_resource_digest_mismatch"},
-                )
-
-
-def _is_rfc3339_datetime(value: Any) -> bool:
-    if not isinstance(value, str) or not _RFC3339_DATETIME.fullmatch(value):
-        return False
-    try:
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-    return True
-
-
-def _validate_w3c_vcdm_credential(credential: dict[str, Any]) -> None:
-    """Enforce the structural VCDM v2 rules exercised by the official suite.
-
-    This is a narrow input gate for the disposable VC-API adapter. It does not
-    verify a proof or issue a synthetic credential: valid input continues into
-    Marty's ordinary OID4VCI remote-signing path.
-    """
-    context = credential.get("@context")
-    if not isinstance(context, list) or not context or context[0] != _BASE_CONTEXT:
-        raise HTTPException(status_code=422, detail={"error": "invalid_context"})
-    terms = _context_term_map(context)
-    _validate_type(credential.get("type"), terms, "VerifiableCredential")
-    if "id" in credential and not _is_absolute_uri(credential["id"]):
-        raise HTTPException(status_code=422, detail={"error": "invalid_id"})
-    # An issuer request may omit issuer and let the configured production
-    # issuer inject it (the official suite's baseline fixture does this).
-    # Explicit issuer values still have to be valid even though the fixture
-    # cannot override Marty's configured issuer identity.
-    if "issuer" in credential:
-        issuer = credential.get("issuer")
-        if isinstance(issuer, dict):
-            issuer = issuer.get("id")
-        if not _is_absolute_uri(issuer):
-            raise HTTPException(status_code=422, detail={"error": "invalid_issuer"})
-    subjects = credential.get("credentialSubject")
-    subject_values = subjects if isinstance(subjects, list) else [subjects]
-    if not subject_values or not all(
-        isinstance(subject, dict) and subject for subject in subject_values
-    ):
-        raise HTTPException(status_code=422, detail={"error": "invalid_subject"})
-    for subject in subject_values:
-        if "id" in subject and not _is_absolute_uri(subject["id"]):
-            raise HTTPException(status_code=422, detail={"error": "invalid_subject"})
-    for key in ("validFrom", "validUntil"):
-        if key in credential and not _is_rfc3339_datetime(credential[key]):
-            raise HTTPException(status_code=422, detail={"error": "invalid_validity"})
-    if "validFrom" in credential and "validUntil" in credential:
-        if datetime.fromisoformat(
-            credential["validFrom"].replace("Z", "+00:00")
-        ) > datetime.fromisoformat(credential["validUntil"].replace("Z", "+00:00")):
-            raise HTTPException(status_code=422, detail={"error": "invalid_validity"})
-    if "credentialStatus" in credential:
-        _validate_typed_resource(credential["credentialStatus"], terms)
-        for status in (
-            credential["credentialStatus"]
-            if isinstance(credential["credentialStatus"], list)
-            else [credential["credentialStatus"]]
-        ):
-            if "id" in status and not _is_absolute_uri(status["id"]):
-                raise HTTPException(status_code=422, detail={"error": "invalid_status"})
-    if "credentialSchema" in credential:
-        _validate_typed_resource(credential["credentialSchema"], terms, require_id=True)
-    for key in ("termsOfUse", "refreshService", "evidence"):
-        if key in credential:
-            _validate_typed_resource(credential[key], terms)
-    if "relatedResource" in credential:
-        resources = credential["relatedResource"]
-        resources = resources if isinstance(resources, list) else [resources]
-        seen_resource_ids: set[str] = set()
-        if not resources or not all(
-            isinstance(resource, dict) for resource in resources
-        ):
-            raise HTTPException(
-                status_code=422, detail={"error": "invalid_related_resource"}
-            )
-        for resource in resources:
-            resource_id = resource.get("id")
-            if not _is_absolute_uri(resource_id) or resource_id in seen_resource_ids:
-                raise HTTPException(
-                    status_code=422, detail={"error": "invalid_related_resource"}
-                )
-            if not isinstance(
-                resource.get("digestSRI") or resource.get("digestMultibase"), str
-            ):
-                raise HTTPException(
-                    status_code=422, detail={"error": "invalid_related_resource"}
-                )
-            seen_resource_ids.add(resource_id)
-    for key in ("name", "description"):
-        if key in credential and not _validate_language_value(credential[key]):
-            raise HTTPException(
-                status_code=422, detail={"error": "invalid_language_value"}
-            )
-    if isinstance(credential.get("issuer"), dict):
-        for key in ("name", "description"):
-            if key in credential["issuer"] and not _validate_language_value(
-                credential["issuer"][key]
-            ):
-                raise HTTPException(
-                    status_code=422, detail={"error": "invalid_language_value"}
-                )
+    return organization_id, template_id, issuer_did
 
 
 def _create_oid4vci_proof(issuer_url: str, nonce: str) -> str:
@@ -376,23 +88,6 @@ def _create_oid4vci_proof(issuer_url: str, nonce: str) -> str:
         raise HTTPException(
             status_code=503, detail="could not generate OID4VCI holder proof"
         ) from exc
-
-
-def _jose_vc_envelope(credential: dict[str, Any], token: str) -> dict[str, Any]:
-    """Wrap an actual JWT VC in the VCDM v2 JOSE envelope representation."""
-    if token.count(".") != 2 or not all(token.split(".")):
-        raise HTTPException(
-            status_code=502, detail="Marty issuance did not return a JWT VC"
-        )
-    return {
-        "@context": credential["@context"],
-        # The pinned official suite identifies an enveloped credential by the
-        # scalar VCDM envelope type before extracting the signed JWT payload.
-        # A one-element array is schema-valid in other contexts, but the
-        # suite's envelope branch intentionally uses scalar equality.
-        "type": "EnvelopedVerifiableCredential",
-        "id": f"data:application/vc+jwt,{token}",
-    }
 
 
 def _token_or_unsupported(
@@ -534,75 +229,48 @@ async def _evaluate(
     )
 
 
-async def _issue_jwt_vc(credential: dict[str, Any], request: Request) -> str:
+async def _issue_data_integrity_credential(
+    credential: dict[str, Any],
+    request: Request,
+) -> dict[str, Any]:
     """Issue through Marty's ordinary OID4VCI service path.
 
     The W3C endpoint is only a shape adapter.  It still resolves the template
     issuer identity, creates a pre-authorized transaction, redeems a token,
     obtains a fresh nonce, and submits a cryptographically valid holder proof.
     """
-    credential_subject = _claims_from_w3c_credential(credential)
-    await _validate_related_resource_digests(credential)
-    organization_id, template_id = _issuance_fixture_configuration()
+    organization_id, template_id, issuer_did = _issuance_fixture_configuration()
     body = IssuanceCreate(
         organization_id=organization_id,
         credential_template_id=template_id,
-        claims={},
-        credential_subject=credential_subject,
+        issuer_did=issuer_did,
+        credential_document=json.loads(json.dumps(credential)),
     )
-    template = await _load_credential_template(template_id, request)
-    if template.get("organization_id") != organization_id:
-        raise HTTPException(
-            status_code=403,
-            detail="W3C fixture template belongs to another organization",
-        )
-    credential_format = template.get("credential_payload_format")
-    if str(credential_format or "").strip().lower() not in {
-        "jwt_vc_json",
-        "vc_jwt",
-        "w3c_vcdm_v2_jwt_vc",
-    }:
-        raise HTTPException(
-            status_code=422,
-            detail="W3C fixture template must issue JWT VC, not SD-JWT, mdoc, or JSON-LD",
-        )
-    issuer_did = _select_issuer_identity_request(body, template)
-    issuer_identity = await _resolve_issuer_identity(
-        request,
-        organization_id,
-        issuer_did,
-        credential_format=credential_format,
-    )
-    if issuer_identity is None:
-        raise HTTPException(
-            status_code=422, detail="W3C fixture template has no active issuer identity"
-        )
-    body = body.model_copy(update={"issuer_did": issuer_did})
-
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    if not service_url:
-        raise HTTPException(status_code=503, detail="Issuance service unavailable")
-    headers = dict(_ISSUANCE_HEADERS or {})
-    client = get_http_client()
-
-    initiated = await client.post(
-        f"{service_url}/v1/issuance/initiate",
-        headers=headers,
-        json=body.model_dump(),
-        timeout=30.0,
-    )
+    initiated = await create_issuance(body, request)
     if initiated.status_code >= 400:
         raise HTTPException(
-            status_code=initiated.status_code, detail=initiated.text[:300]
+            status_code=initiated.status_code,
+            detail=bytes(initiated.body)[:300].decode("utf-8", errors="replace"),
         )
-    transaction = initiated.json()
+    try:
+        transaction = json.loads(bytes(initiated.body))
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+        raise HTTPException(
+            status_code=502,
+            detail="Marty general issuance API returned an invalid response",
+        ) from None
     pre_auth_code = transaction.get("pre_auth_code")
     if not isinstance(pre_auth_code, str) or not pre_auth_code:
         raise HTTPException(
             status_code=502,
             detail="Marty issuance did not return a pre-authorized code",
         )
+
+    registry = get_registry()
+    service_url = registry.get_service_url("issuance")
+    if not service_url:
+        raise HTTPException(status_code=503, detail="Issuance service unavailable")
+    client = get_http_client()
 
     token_response = await client.post(
         f"{service_url}/v1/issuance/token",
@@ -642,17 +310,39 @@ async def _issue_jwt_vc(credential: dict[str, Any], request: Request) -> str:
     issued = await client.post(
         f"{service_url}/v1/issuance/credential",
         headers={"Authorization": f"Bearer {access_token}"},
-        json={"format": "jwt_vc_json", "proofs": {"jwt": [proof]}},
+        json={"format": "ldp_vc", "proofs": {"jwt": [proof]}},
         timeout=30.0,
     )
     if issued.status_code >= 400:
         raise HTTPException(status_code=issued.status_code, detail=issued.text[:300])
-    token = issued.json().get("credential")
-    if not isinstance(token, str):
+    response = issued.json()
+    credentials = response.get("credentials") if isinstance(response, dict) else None
+    result = (
+        credentials[0]
+        if isinstance(credentials, list) and len(credentials) == 1
+        else None
+    )
+    document = result.get("credential") if isinstance(result, dict) else None
+    document_issuer = document.get("issuer") if isinstance(document, dict) else None
+    document_issuer_id = (
+        document_issuer.get("id")
+        if isinstance(document_issuer, dict)
+        else document_issuer
+    )
+    if (
+        not isinstance(result, dict)
+        or result.get("format") != "ldp_vc"
+        or not isinstance(document, dict)
+        or document_issuer_id != issuer_did
+        or not isinstance(document.get("proof"), dict)
+        or document["proof"].get("type") != "DataIntegrityProof"
+        or document["proof"].get("cryptosuite") != "eddsa-rdfc-2022"
+    ):
         raise HTTPException(
-            status_code=502, detail="Marty issuance did not return a credential"
+            status_code=502,
+            detail="Marty issuance did not return a native Data Integrity credential",
         )
-    return token
+    return document
 
 
 @router.post("/credentials/verify")
@@ -684,7 +374,5 @@ async def verify_presentation(
 @router.post("/credentials/issue")
 async def issue_credential(body: IssueCredentialRequest, request: Request) -> Response:
     """VC-API issuer boundary backed by a full Marty OID4VCI issuance flow."""
-    token = await _issue_jwt_vc(body.credential, request)
-    return JSONResponse(
-        {"verifiableCredential": _jose_vc_envelope(body.credential, token)}
-    )
+    credential = await _issue_data_integrity_credential(body.credential, request)
+    return JSONResponse({"verifiableCredential": credential})

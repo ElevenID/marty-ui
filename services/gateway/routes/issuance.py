@@ -508,9 +508,9 @@ application_template_router = APIRouter(
 async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
     """Initiate credential issuance for a subject (directly or via Application).
 
-    The gateway forwards the active DID issuer identity and its bound KMS
-    signing service so downstream issuance signs with the key published for
-    that DID.
+    The gateway forwards only the canonical DID identity. The issuance service
+    resolves the authorized issuer profile and signs through that profile's
+    managed custody configuration.
     """
     credential_template: dict = {}
     if body.credential_template_id:
@@ -524,9 +524,9 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
                 detail="Access denied: credential template belongs to another organization",
             )
 
-    # Resolve the DID issuer identity and its bound remote signing service as a
-    # pair. A format-only KMS resolver can select a key that is not published in
-    # the DID document, which breaks BYOK issuer identity guarantees.
+    # Resolve the public DID to exactly one active profile. Internal profile and
+    # custody details are used only to validate the mapping and never cross the
+    # public request boundary.
     credential_format = _public_signing_credential_format(
         credential_template.get("credential_payload_format"),
         credential_template.get("supported_formats"),
@@ -560,6 +560,8 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
     # Propagate the canonical resolver result in the request body, never by a
     # profile/key header that could act as a hidden selector.
     downstream_body = body.model_dump(exclude_none=True)
+    if not body.claims:
+        downstream_body.pop("claims", None)
     downstream_body["issuer_did"] = issuer_identity["issuer_did"]
 
     registry = get_registry()

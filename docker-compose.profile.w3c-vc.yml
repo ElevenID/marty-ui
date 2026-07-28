@@ -15,6 +15,7 @@ services:
       W3C_VC_TEST_PRESENTATION_POLICY_ID: ${W3C_VC_TEST_PRESENTATION_POLICY_ID:?set a disposable Data Integrity presentation policy}
       W3C_VC_TEST_ORGANIZATION_ID: ${W3C_VC_TEST_ORGANIZATION_ID:?set W3C_VC_TEST_ORGANIZATION_ID to a disposable fixture organization}
       W3C_VC_TEST_TEMPLATE_ID: ${W3C_VC_TEST_TEMPLATE_ID:?set W3C_VC_TEST_TEMPLATE_ID to a disposable JWT-VC fixture template}
+      W3C_VC_TEST_ISSUER_DID: ${W3C_VC_TEST_ISSUER_DID:?set W3C_VC_TEST_ISSUER_DID to the fixture profile's public DID}
       # The upstream W3C suite issues many independent documents in a short
       # burst. This overlay is isolated and enables no production routes, so
       # retain rate limiting in every normal deployment while disabling it for
@@ -23,6 +24,10 @@ services:
 
   issuance:
     environment:
+      # relatedResource digest verification is a production issuance rule.
+      # The isolated official suite currently references this immutable W3C
+      # context; the test adapter itself has no network-validation bypass.
+      VCDM_RELATED_RESOURCE_URLS: "https://www.w3.org/ns/credentials/v2"
       # The official suite obtains a distinct OID4VCI access token for many
       # cases. Keep the service limiter enabled, but make its capacity large
       # enough for this disposable, isolated conformance burst.
