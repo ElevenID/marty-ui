@@ -5288,20 +5288,22 @@ async def _submit_verification_response_internal(
                 isinstance(value, str) and value
                 for value in (mdoc_client_id, mdoc_nonce, mdoc_response_uri)
             ):
-                evaluation_context = {
-                    "mdoc_session_transcript_b64url": _base64url_encode(
-                        _build_openid4vp_mdoc_session_transcript(
-                            client_id=mdoc_client_id,
-                            nonce=mdoc_nonce,
-                            response_uri=mdoc_response_uri,
-                            response_encryption_jwk=instance.context.get(
-                                "oid4vp_response_encryption_jwk"
-                            ),
-                        )
-                    ),
-                    "oid4vp_client_id": mdoc_client_id,
-                    "oid4vp_response_uri": mdoc_response_uri,
-                }
+                evaluation_context.update(
+                    {
+                        "mdoc_session_transcript_b64url": _base64url_encode(
+                            _build_openid4vp_mdoc_session_transcript(
+                                client_id=mdoc_client_id,
+                                nonce=mdoc_nonce,
+                                response_uri=mdoc_response_uri,
+                                response_encryption_jwk=instance.context.get(
+                                    "oid4vp_response_encryption_jwk"
+                                ),
+                            )
+                        ),
+                        "oid4vp_client_id": mdoc_client_id,
+                        "oid4vp_response_uri": mdoc_response_uri,
+                    }
+                )
             eval_resp = await pp_stub.EvaluatePresentation(
                 pp_pb2.EvaluatePresentationRequest(
                     policy_id=policy_id,

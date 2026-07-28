@@ -2284,6 +2284,8 @@ async def test_submit_verification_response_forwards_flow_trust_profile_to_polic
             "presentation_policy_id": "policy-1",
             "trust_profile_id": "trust-1",
             "oid4vp_verifier_context": True,
+            "oid4vp_client_id": "did:web:verifier.example",
+            "oid4vp_response_uri": "https://verifier.example/callback",
         },
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
@@ -2302,11 +2304,15 @@ async def test_submit_verification_response_forwards_flow_trust_profile_to_polic
     )
 
     assert response.result == "passed"
-    assert captured == {
-        "policy_id": "policy-1",
-        "trust_profile_id": "trust-1",
-        "context": {"oid4vp_verifier_context": True},
-    }
+    assert captured["policy_id"] == "policy-1"
+    assert captured["trust_profile_id"] == "trust-1"
+    context = captured["context"]
+    assert isinstance(context, dict)
+    assert context["oid4vp_verifier_context"] is True
+    assert context["oid4vp_client_id"] == "did:web:verifier.example"
+    assert context["oid4vp_response_uri"] == "https://verifier.example/callback"
+    assert isinstance(context["mdoc_session_transcript_b64url"], str)
+    assert context["mdoc_session_transcript_b64url"]
 
 
 @pytest.mark.asyncio
