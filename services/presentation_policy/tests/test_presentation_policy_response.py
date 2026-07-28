@@ -271,6 +271,52 @@ def test_detect_credential_format_recognizes_vcdm_data_integrity_object() -> Non
     assert pp._detect_credential_format(document) == "w3c-vcdm-di"
 
 
+def test_vcdm_candidate_detection_leaves_context_acceptance_to_released_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = {
+        "@context": ["https://example.invalid/not-the-vcdm-context"],
+        "type": ["VerifiableCredential"],
+        "proof": {
+            "type": "DataIntegrityProof",
+            "cryptosuite": "eddsa-rdfc-2022",
+            "proofValue": "zInvalid",
+        },
+    }
+    requests: list[dict] = []
+
+    def reject(request_json: str) -> str:
+        requests.append(json.loads(request_json))
+        return json.dumps(
+            {
+                "valid": False,
+                "kind": "credential",
+                "verified_proofs": 0,
+                "verified_credentials": 0,
+                "errors": ["invalid context"],
+            }
+        )
+
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(verify_vcdm_data_integrity=reject),
+    )
+
+    credential_format = pp._detect_credential_format(document)
+    result = pp._verify_credential_by_format(
+        document,
+        credential_format,
+        None,
+        None,
+    )
+
+    assert credential_format == "w3c-vcdm-di"
+    assert result["verified"] is False
+    assert result["claims"] == {}
+    assert requests == [{"document": document}]
+
+
 def test_detect_credential_format_recognizes_base64url_mdoc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -354,8 +400,7 @@ def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
             {
                 "source_type": "ROOT_CA",
                 "certificate_pem": (
-                    "-----BEGIN CERTIFICATE-----\nanchor\n"
-                    "-----END CERTIFICATE-----"
+                    "-----BEGIN CERTIFICATE-----\nanchor\n-----END CERTIFICATE-----"
                 ),
             }
         ],
@@ -401,9 +446,7 @@ def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
         "nonce": "nonce-1",
         "audience": "did:web:verifier.example",
         "context": context,
-        "anchors": [
-            "-----BEGIN CERTIFICATE-----\nanchor\n-----END CERTIFICATE-----"
-        ],
+        "anchors": ["-----BEGIN CERTIFICATE-----\nanchor\n-----END CERTIFICATE-----"],
     }
 
 
@@ -745,9 +788,7 @@ def test_open_badge_login_policy_format_accepts_sd_jwt_aliases() -> None:
     assert pp._credential_format_satisfies_requirement("w3c-vcdm-di", "w3c_vcdm_v2_di")
     assert pp._credential_format_satisfies_requirement("w3c-vcdm-di", "JSON_LD")
     assert pp._credential_format_satisfies_requirement("w3c-vcdm-di", "ldp_vc")
-    assert pp._credential_format_satisfies_requirement(
-        "w3c-vc", "w3c_vcdm_v2_jwt_vc"
-    )
+    assert pp._credential_format_satisfies_requirement("w3c-vc", "w3c_vcdm_v2_jwt_vc")
     assert pp._credential_format_satisfies_requirement("w3c-vc", "jwt_vc_json")
 
 
