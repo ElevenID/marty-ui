@@ -491,7 +491,7 @@ class CredentialTemplateCreate(BaseModel):
 
     # Schema & Claims
     credential_type: str = Field(min_length=1, max_length=500)
-    vct: str = Field(min_length=1, max_length=2048)
+    vct: str | None = Field(None, min_length=1, max_length=2048)
     doctype: str | None = Field(None, max_length=2048)
     claims: list[ClaimDefinitionModel] = []
     privacy_posture: str = Field(default="selective_disclosure", max_length=50)
@@ -513,7 +513,6 @@ class CredentialTemplateCreate(BaseModel):
     # are resolved internally from this DID.
     signing_algorithm: str | None = Field(None, max_length=50)
     issuer_did: str = Field(pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
-    auto_generate_artifacts: bool = False
 
     derived_attributes: list[dict] = []
     display_style: dict | None = None
@@ -522,6 +521,31 @@ class CredentialTemplateCreate(BaseModel):
     schema_uri: dict | None = None
     # Derived payload format. Wallet compatibility is not client-authored.
     credential_payload_format: str | None = Field(default=None, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_format_identity(self) -> "CredentialTemplateCreate":
+        candidates = [
+            value
+            for value in [self.credential_payload_format, *self.supported_formats]
+            if isinstance(value, str) and value.strip()
+        ]
+        normalized = {
+            value.strip().lower().replace("-", "_")
+            for value in candidates
+        }
+        if normalized & {"mdoc", "mso_mdoc", "iso_mdoc", "zk_mdoc"}:
+            if not (self.doctype and self.doctype.strip()):
+                raise ValueError("doctype is required for an MDOC credential template")
+        if normalized & {
+            "sd_jwt_vc",
+            "dc+sd_jwt",
+            "vc+sd_jwt",
+            "w3c_vcdm_v2_sd_jwt",
+            "ietf_sd_jwt_vc",
+        }:
+            if not (self.vct and self.vct.strip()):
+                raise ValueError("vct is required for an SD_JWT_VC credential template")
+        return self
 
 
 class CredentialTemplateUpdate(BaseModel):
@@ -548,7 +572,6 @@ class CredentialTemplateUpdate(BaseModel):
         pattern=r"^did:[a-z0-9]+:.+",
         max_length=2048,
     )
-    auto_generate_artifacts: bool | None = None
     credential_payload_format: str | None = Field(None, max_length=100)
 
 
@@ -561,7 +584,8 @@ class CredentialTemplateResponse(BaseModel):
 
     # Schema & Claims
     credential_type: str
-    vct: str
+    vct: str | None = None
+    doctype: str | None = None
     claims: list[dict]
     privacy_posture: str
     supported_formats: list[str]

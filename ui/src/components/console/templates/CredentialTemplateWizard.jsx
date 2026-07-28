@@ -80,9 +80,7 @@ const CredentialTemplateWizard = () => {
     const payload = {
       ...data,
       organization_id: effectiveOrganizationId,
-      auto_generate_artifacts: data.generate_artifacts_automatically,
     };
-    delete payload.generate_artifacts_automatically;
     
     const result = await createCredentialTemplate(payload);
     return result;
@@ -106,7 +104,6 @@ const CredentialTemplateWizard = () => {
         max_validity_seconds: 63072000, // 2 years
       },
       revocation_profile_id: null,
-      generate_artifacts_automatically: true,
       activate_immediately: true,
     },
     validateStep,
