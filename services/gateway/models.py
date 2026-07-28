@@ -1415,8 +1415,70 @@ class IssuanceCreate(BaseModel):
     holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
     authorized_client: Oid4vciAuthorizedClient | None = None
     application_id: str | None = None
-    claims: dict = {}
+    claims: dict = Field(default_factory=dict)
     credential_subject: dict[str, Any] | list[dict[str, Any]] | None = None
+    credential_document: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_credential_content(self) -> "IssuanceCreate":
+        for reserved in (
+            "issuer_profile_id",
+            "signing_service_id",
+            "signing_key_reference",
+            "key_reference",
+            "kms_provider",
+            "_application_id",
+            "_credential_subject",
+            "_credential_document",
+        ):
+            if reserved in self.claims:
+                raise ValueError(f"claims.{reserved} is not a public issuance input")
+
+        if self.credential_document is not None:
+            if "claims" in self.model_fields_set or self.credential_subject is not None:
+                raise ValueError(
+                    "credential_document cannot be combined with claims or credential_subject"
+                )
+            if not self.credential_document or "proof" in self.credential_document:
+                raise ValueError("credential_document must be a non-empty unsigned object")
+            context = self.credential_document.get("@context")
+            if (
+                not isinstance(context, list)
+                or not context
+                or context[0] != "https://www.w3.org/ns/credentials/v2"
+            ):
+                raise ValueError(
+                    "credential_document must use the W3C VC Data Model v2 base context first"
+                )
+            types = self.credential_document.get("type")
+            types = types if isinstance(types, list) else [types]
+            if "VerifiableCredential" not in types:
+                raise ValueError(
+                    "credential_document type must include VerifiableCredential"
+                )
+            subjects = self.credential_document.get("credentialSubject")
+            subjects = subjects if isinstance(subjects, list) else [subjects]
+            if not subjects or not all(
+                isinstance(subject, dict) and subject for subject in subjects
+            ):
+                raise ValueError(
+                    "credential_document must contain a non-empty credentialSubject"
+                )
+        elif self.credential_subject is not None:
+            if "claims" in self.model_fields_set:
+                raise ValueError("credential_subject cannot be combined with claims")
+            subjects = (
+                self.credential_subject
+                if isinstance(self.credential_subject, list)
+                else [self.credential_subject]
+            )
+            if not subjects or not all(
+                isinstance(subject, dict) and subject for subject in subjects
+            ):
+                raise ValueError(
+                    "credential_subject must be a non-empty object or list of objects"
+                )
+        return self
 
 
 class DidcommDeliverRequest(BaseModel):
