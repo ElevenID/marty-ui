@@ -17,6 +17,7 @@ to format-specific assemblers.
 from __future__ import annotations
 
 import base64
+import binascii
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -278,17 +279,36 @@ class OpenBaoTransitAdapter:
         keys = data.get("data", {}).get("keys") or {}
         latest = str(data.get("data", {}).get("latest_version", "1"))
         key_meta = keys.get(latest) or {}
-        public_key_pem = key_meta.get("public_key") or ""
-        # Convert provider PEM into the public JWK used by DID publication.
-        if not public_key_pem:
+        public_key_value = key_meta.get("public_key") or ""
+        if not public_key_value:
             raise ValueError(
                 f"OpenBao key '{key_reference}' returned no public key material"
             )
+        key_type = str(
+            key_meta.get("name") or data.get("data", {}).get("type") or ""
+        ).lower()
         try:
-            public_key = serialization.load_pem_public_key(
-                public_key_pem.encode("ascii")
-            )
-        except (TypeError, ValueError, UnicodeEncodeError) as exc:
+            # OpenBao 2 exposes Ed25519 public keys as standard-base64 raw
+            # 32-byte keys. EC and RSA transit keys are returned as PEM.
+            if key_type == "ed25519" and not public_key_value.lstrip().startswith(
+                "-----BEGIN "
+            ):
+                public_key_raw = base64.b64decode(public_key_value, validate=True)
+                if len(public_key_raw) != 32:
+                    raise ValueError(
+                        "OpenBao Ed25519 public key must contain exactly 32 bytes"
+                    )
+                public_key = ed25519.Ed25519PublicKey.from_public_bytes(public_key_raw)
+            else:
+                public_key = serialization.load_pem_public_key(
+                    public_key_value.encode("ascii")
+                )
+        except (
+            binascii.Error,
+            TypeError,
+            ValueError,
+            UnicodeEncodeError,
+        ) as exc:
             raise ValueError(
                 f"OpenBao key '{key_reference}' returned an invalid public key"
             ) from exc

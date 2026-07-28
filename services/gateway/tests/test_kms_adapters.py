@@ -567,6 +567,90 @@ async def test_openbao_get_public_key_converts_ed25519_pem_to_public_jwk():
 
 
 @pytest.mark.asyncio
+async def test_openbao_get_public_key_converts_raw_ed25519_response_to_jwk():
+    adapter = OpenBaoTransitAdapter()
+    config = {
+        "endpoint": "http://openbao:8200",
+        "mount": "transit",
+        "key_reference": "cred-issuer-marty-eddsa",
+        "auth_reference": "root",
+    }
+    public_key_raw = bytes(range(32))
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "data": {
+            "type": "ed25519",
+            "latest_version": 1,
+            "keys": {
+                "1": {
+                    "name": "ed25519",
+                    "public_key": base64.b64encode(public_key_raw).decode(),
+                }
+            },
+        }
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        result = await adapter.get_public_key_jwk(config)
+
+    assert result == {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": base64.urlsafe_b64encode(public_key_raw).decode().rstrip("="),
+        "kid": "cred-issuer-marty-eddsa",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "public_key_value",
+    [
+        "not-base64!",
+        base64.b64encode(b"too short").decode(),
+    ],
+)
+async def test_openbao_get_public_key_rejects_invalid_raw_ed25519(
+    public_key_value: str,
+):
+    adapter = OpenBaoTransitAdapter()
+    config = {
+        "endpoint": "http://openbao:8200",
+        "mount": "transit",
+        "key_reference": "broken-eddsa",
+        "auth_reference": "root",
+    }
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "data": {
+            "type": "ed25519",
+            "latest_version": 1,
+            "keys": {
+                "1": {
+                    "name": "ed25519",
+                    "public_key": public_key_value,
+                }
+            },
+        }
+    }
+    mock_response.raise_for_status = MagicMock()
+
+    with patch("httpx.AsyncClient") as mock_client_cls:
+        mock_client = AsyncMock()
+        mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with pytest.raises(ValueError, match="invalid public key"):
+            await adapter.get_public_key_jwk(config)
+
+
+@pytest.mark.asyncio
 async def test_openbao_get_public_key_converts_p256_pem_to_public_jwk():
     adapter = OpenBaoTransitAdapter()
     config = {
