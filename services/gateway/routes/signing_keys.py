@@ -4522,8 +4522,10 @@ async def sign_payload_with_service(
             detail=f"No adapter found for service type '{service.get('service_type')}'.",
         )
 
+    signing_config = dict(normalized)
+    signing_config["algorithm"] = algorithm
     try:
-        signature_bytes = await adapter.sign(normalized, payload_bytes)
+        signature_bytes = await adapter.sign(signing_config, payload_bytes)
     except httpx.HTTPStatusError as exc:
         status_code = exc.response.status_code if exc.response is not None else 0
         key_reference = (
@@ -4559,7 +4561,7 @@ async def sign_payload_with_service(
             normalized, key_reference, algorithm or service_algorithm
         )
         try:
-            signature_bytes = await adapter.sign(normalized, payload_bytes)
+            signature_bytes = await adapter.sign(signing_config, payload_bytes)
         except Exception as retry_exc:  # noqa: BLE001
             raise HTTPException(
                 status_code=503, detail=f"Signing retry failed: {str(retry_exc)}"
@@ -4570,7 +4572,9 @@ async def sign_payload_with_service(
         ) from exc
 
     # Determine signature encoding from adapter
-    signature_encoding = getattr(adapter, "signature_encoding", "der")
+    signature_encoding = (
+        "raw" if algorithm == "EdDSA" else getattr(adapter, "signature_encoding", "der")
+    )
 
     # If DER-encoded and a raw format is needed, convert (optional transcoding)
     # This is provided as an option in the response; callers can use it if needed
@@ -5166,11 +5170,20 @@ async def internal_sign_payload_with_issuer_did(
             status_code=422,
             detail="credential_format is required for DID-mediated signing.",
         )
-    if key_purpose is not None and (not isinstance(key_purpose, str) or not key_purpose.strip()):
-        raise HTTPException(status_code=422, detail="key_purpose must be a non-empty string.")
+    if key_purpose is not None and (
+        not isinstance(key_purpose, str) or not key_purpose.strip()
+    ):
+        raise HTTPException(
+            status_code=422, detail="key_purpose must be a non-empty string."
+        )
     if any(
         body.get(field)
-        for field in ("issuer_profile_id", "key_reference", "service_id", "signing_service_id")
+        for field in (
+            "issuer_profile_id",
+            "key_reference",
+            "service_id",
+            "signing_service_id",
+        )
     ):
         raise HTTPException(
             status_code=422,
@@ -5187,12 +5200,17 @@ async def internal_sign_payload_with_issuer_did(
     )
     profile = identity.get("issuer_profile")
     if not isinstance(profile, dict):
-        raise HTTPException(status_code=409, detail="Issuer DID resolved without an active profile.")
+        raise HTTPException(
+            status_code=409, detail="Issuer DID resolved without an active profile."
+        )
     service_id = profile.get("signing_service_id")
     key_reference = profile.get("signing_key_reference")
     profile_purpose = profile.get("key_purpose")
     profile_algorithm = profile.get("algorithm")
-    if not all(isinstance(value, str) and value for value in (service_id, key_reference, profile_purpose)):
+    if not all(
+        isinstance(value, str) and value
+        for value in (service_id, key_reference, profile_purpose)
+    ):
         raise HTTPException(
             status_code=409,
             detail="Issuer DID profile has an incomplete signing identity binding.",
@@ -5204,7 +5222,9 @@ async def internal_sign_payload_with_issuer_did(
         )
 
     signing_body = {
-        key: value for key, value in body.items() if key in {"payload_b64", "payload_hex"}
+        key: value
+        for key, value in body.items()
+        if key in {"payload_b64", "payload_hex"}
     }
     signing_body.update(
         {

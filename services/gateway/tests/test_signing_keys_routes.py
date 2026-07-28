@@ -132,7 +132,9 @@ async def test_internal_issuer_did_signing_resolves_profile_without_exposing_it(
             }
         )
 
-    monkeypatch.setattr(signing_keys, "sign_payload_with_service", fake_sign_payload_with_service)
+    monkeypatch.setattr(
+        signing_keys, "sign_payload_with_service", fake_sign_payload_with_service
+    )
     response = await signing_keys.internal_sign_payload_with_issuer_did(
         request=_build_request("org-1"),
         body={
@@ -2651,6 +2653,58 @@ async def test_sign_payload_accepts_base64_payload(monkeypatch: pytest.MonkeyPat
     assert data["payload_length"] == 11  # "Hello World" is 11 bytes
     assert "signature_b64" in data
     assert "signature_hex" in data
+
+
+@pytest.mark.asyncio
+async def test_sign_payload_propagates_eddsa_and_reports_raw_signature(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    test_service = {
+        "id": "svc-bao",
+        "service_type": "openbao-transit",
+        "key_reference": "cred-issuer-marty-eddsa",
+        "algorithms": ["ES256", "EdDSA"],
+    }
+
+    async def fake_load_registry(request, org_id):
+        return {"services": [test_service], "default_service_id": None}
+
+    class FakeAdapter:
+        provider = "openbao"
+        signature_encoding = "der"
+
+        async def sign(self, config: dict, payload: bytes):
+            assert config["algorithm"] == "EdDSA"
+            assert payload == b"canonical proof bytes"
+            return b"\x42" * 64
+
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+    monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
+
+    response = await signing_keys.sign_payload_with_service(
+        request=_build_request("org_123"),
+        service_id="svc-bao",
+        body={
+            "payload_b64": base64.urlsafe_b64encode(b"canonical proof bytes").decode(),
+            "algorithm": "EdDSA",
+        },
+        organization_id=None,
+    )
+
+    assert response.status_code == 200
+    data = json.loads(response.body)
+    assert data["algorithm"] == "EdDSA"
+    assert data["signature_encoding"] == "raw"
+    assert "signature_raw_b64" not in data
+    encoded_signature = data["signature_b64"]
+    assert (
+        base64.urlsafe_b64decode(
+            encoded_signature + "=" * (-len(encoded_signature) % 4)
+        )
+        == b"\x42" * 64
+    )
 
 
 @pytest.mark.asyncio

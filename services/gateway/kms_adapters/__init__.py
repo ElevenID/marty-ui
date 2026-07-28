@@ -13,11 +13,15 @@ DER/ASN.1 encoding rather than the raw IEEE P1363 ``r || s`` form expected by
 JWT/COSE assemblers.  Use :func:`der_to_raw_ecdsa` to transcode before passing
 to format-specific assemblers.
 """
+
 from __future__ import annotations
 
 import base64
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +75,69 @@ def _b64url_decode(encoded: str) -> bytes:
     return base64.urlsafe_b64decode(encoded + padding)
 
 
+def _public_key_to_jwk(public_key: Any, *, kid: str) -> dict[str, Any]:
+    """Convert a supported provider public key to a standards-shaped public JWK."""
+    if isinstance(public_key, ec.EllipticCurvePublicKey):
+        curve_names = {
+            "secp256r1": "P-256",
+            "secp384r1": "P-384",
+            "secp521r1": "P-521",
+        }
+        curve_name = curve_names.get(public_key.curve.name)
+        if curve_name is None:
+            raise ValueError(
+                f"Unsupported OpenBao elliptic curve '{public_key.curve.name}'"
+            )
+        coordinate_size = (public_key.curve.key_size + 7) // 8
+        numbers = public_key.public_numbers()
+        return {
+            "kty": "EC",
+            "crv": curve_name,
+            "x": _b64url_encode(numbers.x.to_bytes(coordinate_size, "big")),
+            "y": _b64url_encode(numbers.y.to_bytes(coordinate_size, "big")),
+            "kid": kid,
+        }
+    if isinstance(public_key, rsa.RSAPublicKey):
+        numbers = public_key.public_numbers()
+        return {
+            "kty": "RSA",
+            "n": _b64url_encode(
+                numbers.n.to_bytes((numbers.n.bit_length() + 7) // 8, "big")
+            ),
+            "e": _b64url_encode(
+                numbers.e.to_bytes((numbers.e.bit_length() + 7) // 8, "big")
+            ),
+            "kid": kid,
+        }
+    if isinstance(public_key, ed25519.Ed25519PublicKey):
+        return {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": _b64url_encode(
+                public_key.public_bytes(
+                    serialization.Encoding.Raw,
+                    serialization.PublicFormat.Raw,
+                )
+            ),
+            "kid": kid,
+        }
+    if isinstance(public_key, ed448.Ed448PublicKey):
+        return {
+            "kty": "OKP",
+            "crv": "Ed448",
+            "x": _b64url_encode(
+                public_key.public_bytes(
+                    serialization.Encoding.Raw,
+                    serialization.PublicFormat.Raw,
+                )
+            ),
+            "kid": kid,
+        }
+    raise ValueError(
+        f"Unsupported OpenBao public key type '{type(public_key).__name__}'"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Capability result
 # ---------------------------------------------------------------------------
@@ -84,8 +151,12 @@ class CapabilityResult:
     checks: list[dict[str, str]] = field(default_factory=list)
     error: str | None = None
 
-    def add_check(self, name: str, status: str, detail: str, source: str = "adapter") -> None:
-        self.checks.append({"name": name, "status": status, "detail": detail, "source": source})
+    def add_check(
+        self, name: str, status: str, detail: str, source: str = "adapter"
+    ) -> None:
+        self.checks.append(
+            {"name": name, "status": status, "detail": detail, "source": source}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -108,17 +179,21 @@ class KmsAdapter(Protocol):
         """
         ...
 
-    async def get_public_key_jwk(self, service_config: dict[str, Any]) -> dict[str, Any]:
+    async def get_public_key_jwk(
+        self, service_config: dict[str, Any]
+    ) -> dict[str, Any]:
         """Return the current signing public key as a JWK dict."""
         ...
 
-    async def verify_connection(self, service_config: dict[str, Any]) -> CapabilityResult:
+    async def verify_connection(
+        self, service_config: dict[str, Any]
+    ) -> CapabilityResult:
         """Probe the provider and return a structured capability report."""
         ...
 
     @property
     def signature_encoding(self) -> str:
-        """``"raw_ieee_p1363"`` or ``"der"``."""
+        """Provider signature encoding (for example ``"raw"`` or ``"der"``)."""
         ...
 
 
@@ -149,13 +224,23 @@ class OpenBaoTransitAdapter:
         auth_reference = service_config.get("auth_reference") or ""
 
         if not endpoint or not key_reference:
-            raise ValueError("OpenBao adapter requires 'endpoint' and 'key_reference' in service_config")
+            raise ValueError(
+                "OpenBao adapter requires 'endpoint' and 'key_reference' in service_config"
+            )
 
-        # Vault Transit sign endpoint expects base64url-encoded input hash
-        digest = base64.b64encode(hashlib.sha256(payload).digest()).decode()
+        algorithm = str(service_config.get("algorithm") or "ES256")
+        # RSA/ECDSA transit keys sign a caller-provided digest. Ed25519 signs
+        # the original message and OpenBao rejects prehashed=true for that key
+        # type.
+        if algorithm == "EdDSA":
+            encoded_input = base64.b64encode(payload).decode()
+            prehashed = False
+        else:
+            encoded_input = base64.b64encode(hashlib.sha256(payload).digest()).decode()
+            prehashed = True
         url = f"{endpoint}/v1/{mount}/sign/{key_reference}"
         headers = {"X-Vault-Token": auth_reference, "Content-Type": "application/json"}
-        body = {"input": digest, "prehashed": True}
+        body = {"input": encoded_input, "prehashed": prehashed}
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(url, json=body, headers=headers)
@@ -167,7 +252,9 @@ class OpenBaoTransitAdapter:
         sig_b64 = sig_raw.split(":")[-1]
         return base64.b64decode(sig_b64 + "==")
 
-    async def get_public_key_jwk(self, service_config: dict[str, Any]) -> dict[str, Any]:
+    async def get_public_key_jwk(
+        self, service_config: dict[str, Any]
+    ) -> dict[str, Any]:
         import httpx
 
         endpoint = (service_config.get("endpoint") or "").rstrip("/")
@@ -176,7 +263,9 @@ class OpenBaoTransitAdapter:
         auth_reference = service_config.get("auth_reference") or ""
 
         if not endpoint or not key_reference:
-            raise ValueError("OpenBao adapter requires 'endpoint' and 'key_reference' in service_config")
+            raise ValueError(
+                "OpenBao adapter requires 'endpoint' and 'key_reference' in service_config"
+            )
 
         url = f"{endpoint}/v1/{mount}/keys/{key_reference}"
         headers = {"X-Vault-Token": auth_reference}
@@ -190,11 +279,24 @@ class OpenBaoTransitAdapter:
         latest = str(data.get("data", {}).get("latest_version", "1"))
         key_meta = keys.get(latest) or {}
         public_key_pem = key_meta.get("public_key") or ""
-        # Return minimal JWK identifying fields; full JWK conversion requires
-        # parsing the PEM — callers can use cryptography.hazmat.primitives.
-        return {"provider": self.provider, "key_reference": key_reference, "public_key_pem": public_key_pem}
+        # Convert provider PEM into the public JWK used by DID publication.
+        if not public_key_pem:
+            raise ValueError(
+                f"OpenBao key '{key_reference}' returned no public key material"
+            )
+        try:
+            public_key = serialization.load_pem_public_key(
+                public_key_pem.encode("ascii")
+            )
+        except (TypeError, ValueError, UnicodeEncodeError) as exc:
+            raise ValueError(
+                f"OpenBao key '{key_reference}' returned an invalid public key"
+            ) from exc
+        return _public_key_to_jwk(public_key, kid=key_reference)
 
-    async def verify_connection(self, service_config: dict[str, Any]) -> CapabilityResult:
+    async def verify_connection(
+        self, service_config: dict[str, Any]
+    ) -> CapabilityResult:
         import httpx
 
         result = CapabilityResult(ok=True)
@@ -223,13 +325,25 @@ class OpenBaoTransitAdapter:
                 )
             elif resp.status_code == 403:
                 result.ok = False
-                result.add_check("Authentication", "fail", "Token is invalid or lacks read permissions.")
+                result.add_check(
+                    "Authentication",
+                    "fail",
+                    "Token is invalid or lacks read permissions.",
+                )
             elif resp.status_code == 404:
                 result.ok = False
-                result.add_check("Key exists", "fail", f"Key '{key_reference}' was not found in mount '{mount}'.")
+                result.add_check(
+                    "Key exists",
+                    "fail",
+                    f"Key '{key_reference}' was not found in mount '{mount}'.",
+                )
             else:
                 result.ok = False
-                result.add_check("Connectivity", "fail", f"Unexpected HTTP {resp.status_code} from transit endpoint.")
+                result.add_check(
+                    "Connectivity",
+                    "fail",
+                    f"Unexpected HTTP {resp.status_code} from transit endpoint.",
+                )
         except httpx.ConnectError as exc:
             result.ok = False
             result.add_check("Connectivity", "fail", f"Cannot reach endpoint: {exc}")
@@ -264,7 +378,9 @@ class AwsKmsAdapter:
 
         key_id = service_config.get("key_reference") or ""
         if not key_id:
-            raise ValueError("aws-kms adapter requires 'key_reference' in service_config")
+            raise ValueError(
+                "aws-kms adapter requires 'key_reference' in service_config"
+            )
 
         algorithm = service_config.get("aws_signing_algorithm") or "ECDSA_SHA_256"
         client = self._build_client(service_config)
@@ -280,25 +396,33 @@ class AwsKmsAdapter:
             raise RuntimeError("AWS KMS sign response did not include binary Signature")
         return bytes(signature)
 
-    async def get_public_key_jwk(self, service_config: dict[str, Any]) -> dict[str, Any]:
+    async def get_public_key_jwk(
+        self, service_config: dict[str, Any]
+    ) -> dict[str, Any]:
         import asyncio
 
         key_id = service_config.get("key_reference") or ""
         if not key_id:
-            raise ValueError("aws-kms adapter requires 'key_reference' in service_config")
+            raise ValueError(
+                "aws-kms adapter requires 'key_reference' in service_config"
+            )
 
         client = self._build_client(service_config)
         response = await asyncio.to_thread(client.get_public_key, KeyId=key_id)
         return {
             "provider": self.provider,
             "key_reference": key_id,
-            "public_key_der_b64": base64.b64encode(response.get("PublicKey") or b"").decode(),
+            "public_key_der_b64": base64.b64encode(
+                response.get("PublicKey") or b""
+            ).decode(),
             "signing_algorithms": response.get("SigningAlgorithms") or [],
             "key_spec": response.get("KeySpec"),
             "key_usage": response.get("KeyUsage"),
         }
 
-    async def verify_connection(self, service_config: dict[str, Any]) -> CapabilityResult:
+    async def verify_connection(
+        self, service_config: dict[str, Any]
+    ) -> CapabilityResult:
         import asyncio
 
         result = CapabilityResult(ok=True)
@@ -311,10 +435,14 @@ class AwsKmsAdapter:
         try:
             client = self._build_client(service_config)
             await asyncio.to_thread(client.describe_key, KeyId=key_id)
-            result.add_check("Key exists", "pass", f"AWS KMS key '{key_id}' is reachable.")
+            result.add_check(
+                "Key exists", "pass", f"AWS KMS key '{key_id}' is reachable."
+            )
         except Exception as exc:  # noqa: BLE001
             result.ok = False
-            result.add_check("Connectivity", "fail", f"AWS KMS verification failed: {exc}")
+            result.add_check(
+                "Connectivity", "fail", f"AWS KMS verification failed: {exc}"
+            )
         return result
 
 
@@ -339,31 +467,44 @@ class AzureKeyVaultAdapter:
         key_reference = service_config.get("key_reference") or ""
         key_version = service_config.get("key_version")
         if not endpoint or not key_reference:
-            raise ValueError("azure-key-vault adapter requires 'endpoint' and 'key_reference' in service_config")
+            raise ValueError(
+                "azure-key-vault adapter requires 'endpoint' and 'key_reference' in service_config"
+            )
 
         key_path = f"{key_reference}/{key_version}" if key_version else key_reference
         url = f"{endpoint}/keys/{key_path}/sign?api-version=7.4"
         digest = hashlib.sha256(payload).digest()
-        body = {"alg": service_config.get("azure_signing_algorithm") or "ES256", "value": _b64url_encode(digest)}
+        body = {
+            "alg": service_config.get("azure_signing_algorithm") or "ES256",
+            "value": _b64url_encode(digest),
+        }
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, json=body, headers=self._base_headers(service_config))
+            resp = await client.post(
+                url, json=body, headers=self._base_headers(service_config)
+            )
             resp.raise_for_status()
             data = resp.json()
 
         value = data.get("value")
         if not isinstance(value, str) or not value:
-            raise RuntimeError("Azure Key Vault sign response did not include signature value")
+            raise RuntimeError(
+                "Azure Key Vault sign response did not include signature value"
+            )
         return _b64url_decode(value)
 
-    async def get_public_key_jwk(self, service_config: dict[str, Any]) -> dict[str, Any]:
+    async def get_public_key_jwk(
+        self, service_config: dict[str, Any]
+    ) -> dict[str, Any]:
         import httpx
 
         endpoint = (service_config.get("endpoint") or "").rstrip("/")
         key_reference = service_config.get("key_reference") or ""
         key_version = service_config.get("key_version")
         if not endpoint or not key_reference:
-            raise ValueError("azure-key-vault adapter requires 'endpoint' and 'key_reference' in service_config")
+            raise ValueError(
+                "azure-key-vault adapter requires 'endpoint' and 'key_reference' in service_config"
+            )
 
         key_path = f"{key_reference}/{key_version}" if key_version else key_reference
         url = f"{endpoint}/keys/{key_path}?api-version=7.4"
@@ -376,7 +517,9 @@ class AzureKeyVaultAdapter:
         jwk = data.get("key") if isinstance(data.get("key"), dict) else {}
         return {"provider": self.provider, "key_reference": key_reference, **jwk}
 
-    async def verify_connection(self, service_config: dict[str, Any]) -> CapabilityResult:
+    async def verify_connection(
+        self, service_config: dict[str, Any]
+    ) -> CapabilityResult:
         import httpx
 
         result = CapabilityResult(ok=True)
@@ -388,18 +531,29 @@ class AzureKeyVaultAdapter:
 
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{endpoint}/keys?api-version=7.4", headers=self._base_headers(service_config))
+                resp = await client.get(
+                    f"{endpoint}/keys?api-version=7.4",
+                    headers=self._base_headers(service_config),
+                )
             if resp.status_code == 200:
-                result.add_check("Connectivity", "pass", "Azure Key Vault endpoint is reachable.")
+                result.add_check(
+                    "Connectivity", "pass", "Azure Key Vault endpoint is reachable."
+                )
             elif resp.status_code in {401, 403}:
                 result.ok = False
-                result.add_check("Authentication", "fail", "Azure token is invalid or unauthorized.")
+                result.add_check(
+                    "Authentication", "fail", "Azure token is invalid or unauthorized."
+                )
             else:
                 result.ok = False
-                result.add_check("Connectivity", "fail", f"Azure returned HTTP {resp.status_code}.")
+                result.add_check(
+                    "Connectivity", "fail", f"Azure returned HTTP {resp.status_code}."
+                )
         except Exception as exc:  # noqa: BLE001
             result.ok = False
-            result.add_check("Connectivity", "fail", f"Azure Key Vault verification failed: {exc}")
+            result.add_check(
+                "Connectivity", "fail", f"Azure Key Vault verification failed: {exc}"
+            )
         return result
 
 
@@ -420,17 +574,23 @@ class GcpCloudKmsAdapter:
         import hashlib
         import httpx
 
-        endpoint = (service_config.get("endpoint") or "https://cloudkms.googleapis.com").rstrip("/")
+        endpoint = (
+            service_config.get("endpoint") or "https://cloudkms.googleapis.com"
+        ).rstrip("/")
         key_reference = service_config.get("key_reference") or ""
         if not key_reference:
-            raise ValueError("gcp-cloud-kms adapter requires 'key_reference' in service_config")
+            raise ValueError(
+                "gcp-cloud-kms adapter requires 'key_reference' in service_config"
+            )
 
         digest = hashlib.sha256(payload).digest()
         url = f"{endpoint}/v1/{key_reference}:asymmetricSign"
         body = {"digest": {"sha256": base64.b64encode(digest).decode()}}
 
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(url, json=body, headers=self._base_headers(service_config))
+            resp = await client.post(
+                url, json=body, headers=self._base_headers(service_config)
+            )
             resp.raise_for_status()
             data = resp.json()
 
@@ -439,13 +599,19 @@ class GcpCloudKmsAdapter:
             raise RuntimeError("GCP Cloud KMS sign response did not include signature")
         return base64.b64decode(signature)
 
-    async def get_public_key_jwk(self, service_config: dict[str, Any]) -> dict[str, Any]:
+    async def get_public_key_jwk(
+        self, service_config: dict[str, Any]
+    ) -> dict[str, Any]:
         import httpx
 
-        endpoint = (service_config.get("endpoint") or "https://cloudkms.googleapis.com").rstrip("/")
+        endpoint = (
+            service_config.get("endpoint") or "https://cloudkms.googleapis.com"
+        ).rstrip("/")
         key_reference = service_config.get("key_reference") or ""
         if not key_reference:
-            raise ValueError("gcp-cloud-kms adapter requires 'key_reference' in service_config")
+            raise ValueError(
+                "gcp-cloud-kms adapter requires 'key_reference' in service_config"
+            )
 
         url = f"{endpoint}/v1/{key_reference}/publicKey"
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -461,11 +627,15 @@ class GcpCloudKmsAdapter:
             "protection_level": data.get("protectionLevel"),
         }
 
-    async def verify_connection(self, service_config: dict[str, Any]) -> CapabilityResult:
+    async def verify_connection(
+        self, service_config: dict[str, Any]
+    ) -> CapabilityResult:
         import httpx
 
         result = CapabilityResult(ok=True)
-        endpoint = (service_config.get("endpoint") or "https://cloudkms.googleapis.com").rstrip("/")
+        endpoint = (
+            service_config.get("endpoint") or "https://cloudkms.googleapis.com"
+        ).rstrip("/")
         key_reference = service_config.get("key_reference") or ""
         if not key_reference:
             result.ok = False
@@ -477,19 +647,29 @@ class GcpCloudKmsAdapter:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(url, headers=self._base_headers(service_config))
             if resp.status_code == 200:
-                result.add_check("Key exists", "pass", f"GCP KMS key '{key_reference}' is reachable.")
+                result.add_check(
+                    "Key exists", "pass", f"GCP KMS key '{key_reference}' is reachable."
+                )
             elif resp.status_code in {401, 403}:
                 result.ok = False
-                result.add_check("Authentication", "fail", "GCP token is invalid or unauthorized.")
+                result.add_check(
+                    "Authentication", "fail", "GCP token is invalid or unauthorized."
+                )
             elif resp.status_code == 404:
                 result.ok = False
-                result.add_check("Key exists", "fail", "Configured GCP key reference was not found.")
+                result.add_check(
+                    "Key exists", "fail", "Configured GCP key reference was not found."
+                )
             else:
                 result.ok = False
-                result.add_check("Connectivity", "fail", f"GCP returned HTTP {resp.status_code}.")
+                result.add_check(
+                    "Connectivity", "fail", f"GCP returned HTTP {resp.status_code}."
+                )
         except Exception as exc:  # noqa: BLE001
             result.ok = False
-            result.add_check("Connectivity", "fail", f"GCP Cloud KMS verification failed: {exc}")
+            result.add_check(
+                "Connectivity", "fail", f"GCP Cloud KMS verification failed: {exc}"
+            )
         return result
 
 
