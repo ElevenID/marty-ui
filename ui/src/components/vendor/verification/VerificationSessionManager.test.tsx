@@ -178,4 +178,58 @@ describe('VerificationSessionManager', () => {
     });
     expect(mockStartVerificationFlow.mock.calls[0][0]).not.toHaveProperty('issuer_profile_id');
   });
+
+  it('selects among multiple public issuer DIDs without exposing profile coordinates', async () => {
+    const user = userEvent.setup();
+    mockListPublicIssuerIdentities.mockResolvedValue({
+      identities: [
+        {
+          issuer_did: 'did:web:verifier.example:standard',
+          key_purpose: 'oid4vp_request_signing',
+          algorithm: 'ES256',
+          status: 'active',
+        },
+        {
+          issuer_did: 'did:web:verifier.example:haip',
+          key_purpose: 'oid4vp_request_signing',
+          algorithm: 'ES256',
+          status: 'active',
+        },
+      ],
+    });
+    mockListPresentationPolicies.mockResolvedValue([
+      { id: 'policy-1', name: 'Employment proof' },
+    ]);
+    mockStartVerificationFlow.mockResolvedValue({
+      instance_id: 'flow-1',
+      request_uri: 'openid4vp://authorize?request_uri=https%3A%2F%2Fexample.test%2Frequest',
+      status: 'AWAITING_WALLET',
+    });
+
+    render(<VerificationSessionManager organizationId="org-1" />);
+
+    const newVerification = await screen.findByRole('button', { name: 'New Verification' });
+    await waitFor(() => expect(newVerification).toBeEnabled());
+    await user.click(newVerification);
+    await user.click(await screen.findByLabelText('Presentation Policy'));
+    await user.click(await screen.findByRole('option', { name: 'Employment proof' }));
+    const next = screen.getByRole('button', { name: 'Next' });
+    await waitFor(() => expect(next).toBeEnabled());
+    await user.click(next);
+    await screen.findByLabelText('Verification Purpose');
+    await user.click(await screen.findByRole('combobox', { name: /Issuer DID/ }));
+    await user.click(await screen.findByRole('option', { name: 'did:web:verifier.example:haip' }));
+    await user.click(screen.getByRole('button', { name: 'Start Session' }));
+
+    await waitFor(() => {
+      expect(mockStartVerificationFlow).toHaveBeenCalledWith(expect.objectContaining({
+        organization_id: 'org-1',
+        issuer_did: 'did:web:verifier.example:haip',
+      }));
+    });
+    const request = mockStartVerificationFlow.mock.calls[0][0];
+    expect(request).not.toHaveProperty('issuer_profile_id');
+    expect(request).not.toHaveProperty('signing_service_id');
+    expect(request).not.toHaveProperty('signing_key_reference');
+  });
 });

@@ -148,6 +148,7 @@ function VerificationSessionManager({ organizationId }) {
   const [wizardLoading, setWizardLoading] = useState(false);
   const [wizardError, setWizardError] = useState(null);
   const [issuerDid, setIssuerDid] = useState(null);
+  const [issuerIdentities, setIssuerIdentities] = useState([]);
   const [issuerIdentityLoading, setIssuerIdentityLoading] = useState(true);
   const [issuerIdentityError, setIssuerIdentityError] = useState(null);
 
@@ -186,6 +187,7 @@ function VerificationSessionManager({ organizationId }) {
   const fetchVerifierIssuerDid = useCallback(async () => {
     if (!organizationId) {
       setIssuerDid(null);
+      setIssuerIdentities([]);
       setIssuerIdentityError(null);
       setIssuerIdentityLoading(false);
       return;
@@ -199,20 +201,21 @@ function VerificationSessionManager({ organizationId }) {
         algorithm: 'ES256',
       });
       const identities = Array.isArray(result) ? result : (result?.identities || []);
-      if (identities.length !== 1) {
-        throw new Error(
-          identities.length === 0
-            ? 'Configure one active OID4VP issuer DID before starting verification.'
-            : 'Multiple OID4VP issuer DIDs are active. Disable the obsolete identity before starting verification.',
-        );
+      const validIdentities = identities.filter((identity) => (
+        String(identity?.issuer_did || '').trim().startsWith('did:')
+      ));
+      if (validIdentities.length === 0) {
+        throw new Error('Configure an active OID4VP issuer DID before starting verification.');
       }
-      const resolvedDid = String(identities[0]?.issuer_did || '').trim();
-      if (!resolvedDid.startsWith('did:')) {
-        throw new Error('The active OID4VP issuer identity has no valid DID.');
-      }
-      setIssuerDid(resolvedDid);
+      setIssuerIdentities(validIdentities);
+      setIssuerDid(
+        validIdentities.length === 1
+          ? String(validIdentities[0].issuer_did).trim()
+          : null,
+      );
     } catch (err) {
       setIssuerDid(null);
+      setIssuerIdentities([]);
       setIssuerIdentityError(err.message || 'Failed to resolve the OID4VP issuer DID');
     } finally {
       setIssuerIdentityLoading(false);
@@ -232,7 +235,7 @@ function VerificationSessionManager({ organizationId }) {
 
   const openWizard = () => {
     setWizardStep(0);
-    setWizardData({});
+    setWizardData(issuerDid ? { issuer_did: issuerDid } : {});
     setPendingSession(null);
     setWizardError(null);
     setWizardOpen(true);
@@ -249,14 +252,15 @@ function VerificationSessionManager({ organizationId }) {
       setWizardLoading(true);
       setWizardError(null);
       try {
-        if (!issuerDid) {
+        const selectedIssuerDid = wizardData.issuer_did || issuerDid;
+        if (!selectedIssuerDid) {
           throw new Error(
-            issuerIdentityError || 'The organization has no active OID4VP issuer DID.',
+            issuerIdentityError || 'Select an active OID4VP issuer DID.',
           );
         }
         let session = await startVerificationFlow({
           organization_id: organizationId,
-          issuer_did: issuerDid,
+          issuer_did: selectedIssuerDid,
           presentation_policy_id: wizardData.policy_id || undefined,
           trust_profile_id: wizardData.trust_profile_id || undefined,
           deployment_profile_id: wizardData.deployment_profile_id || undefined,
@@ -388,7 +392,7 @@ function VerificationSessionManager({ organizationId }) {
             variant="contained"
             startIcon={<AddIcon />}
             onClick={openWizard}
-            disabled={issuerIdentityLoading || !issuerDid}
+            disabled={issuerIdentityLoading || issuerIdentities.length === 0}
           >
             New Verification
           </Button>
@@ -471,6 +475,7 @@ function VerificationSessionManager({ organizationId }) {
             <SessionConfigStep
               value={wizardData}
               onChange={setWizardData}
+              issuerIdentities={issuerIdentities}
             />
           )}
           {wizardStep === 2 && (
@@ -497,7 +502,8 @@ function VerificationSessionManager({ organizationId }) {
               onClick={handleWizardNext}
               disabled={
                 wizardLoading ||
-                (wizardStep === 0 && !wizardData.policy_id)
+                (wizardStep === 0 && !wizardData.policy_id) ||
+                (wizardStep === 1 && !(wizardData.issuer_did || issuerDid))
               }
               startIcon={wizardLoading ? <CircularProgress size={14} /> : null}
             >
