@@ -1230,7 +1230,8 @@ def _verify_credential_by_format(
     audience: str | None,
     issuer_public_jwk: dict[str, Any] | None = None,
     verification_context: dict[str, Any] | None = None,
-    mdoc_trust_anchors_pem: list[str] | None = None,
+    mdoc_root_certs_pem: list[str] | None = None,
+    mdoc_pinned_issuer_certs_pem: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Verify credential based on detected format.
@@ -1265,7 +1266,8 @@ def _verify_credential_by_format(
                 nonce,
                 audience,
                 verification_context or {},
-                mdoc_trust_anchors_pem or [],
+                mdoc_root_certs_pem or [],
+                mdoc_pinned_issuer_certs_pem or [],
             )
         elif credential_format == "openbadge-v2":
             return _verify_open_badge_v2(vp_token)
@@ -1703,7 +1705,8 @@ def _verify_mdoc(
     nonce: str | None,
     audience: str | None,
     verification_context: dict[str, Any],
-    trusted_issuer_certs_pem: list[str],
+    trusted_root_certs_pem: list[str],
+    pinned_issuer_certs_pem: list[str],
 ) -> dict:
     """Verify mDoc/ISO 18013-5 credential via Rust mDoc verification."""
     marty_rs = _load_marty_rs_binding()
@@ -1743,13 +1746,14 @@ def _verify_mdoc(
             and context_client_id != audience
         ):
             raise ValueError("mdoc verifier audience does not match request state")
-        if not trusted_issuer_certs_pem:
+        if not trusted_root_certs_pem and not pinned_issuer_certs_pem:
             raise ValueError("No trusted mdoc issuer certificates are configured")
 
         result = marty_rs.verify_mdoc_presentation(
             cbor_bytes,
             session_transcript_cbor,
-            trusted_issuer_certs_pem,
+            trusted_root_certs_pem,
+            pinned_issuer_certs_pem,
         )
         is_valid = bool(
             result.issuer_signature_valid
@@ -2088,15 +2092,23 @@ def _pinned_issuer_jwk(
     return None
 
 
-def _mdoc_trust_anchors_pem(
+def _mdoc_trust_certificates_pem(
     trust_profile_data: dict[str, Any] | None,
-) -> list[str]:
-    """Extract mdoc certificate anchors from the selected Trust Profile."""
+) -> tuple[list[str], list[str]]:
+    """Separate mdoc PKIX roots from explicitly pinned issuer certificates."""
     if not trust_profile_data:
-        return []
-    anchors: list[str] = []
+        return [], []
+    roots: list[str] = []
+    pinned_issuers: list[str] = []
     for source in trust_profile_data.get("trust_sources") or []:
-        if not isinstance(source, dict):
+        if not isinstance(source, dict) or source.get("enabled") is False:
+            continue
+        source_type = str(source.get("source_type") or "").upper()
+        if source_type == "ROOT_CA":
+            target = roots
+        elif source_type == "PINNED_ISSUER":
+            target = pinned_issuers
+        else:
             continue
         candidates = [source.get("certificate_pem")]
         pinned = source.get("pinned_certificates")
@@ -2106,10 +2118,10 @@ def _mdoc_trust_anchors_pem(
             if (
                 isinstance(candidate, str)
                 and "-----BEGIN CERTIFICATE-----" in candidate
-                and candidate not in anchors
+                and candidate not in target
             ):
-                anchors.append(candidate)
-    return anchors
+                target.append(candidate)
+    return roots, pinned_issuers
 
 
 def _trust_source_issuer_candidates(source: dict[str, Any]) -> set[str]:
@@ -3245,6 +3257,9 @@ async def evaluate_presentation(
         else None,
     )
 
+    mdoc_root_certs_pem, mdoc_pinned_issuer_certs_pem = (
+        _mdoc_trust_certificates_pem(trust_profile_data)
+    )
     verification_result = _verify_credential_by_format(
         request.vp_token,
         credential_format,
@@ -3252,7 +3267,8 @@ async def evaluate_presentation(
         verify_audience,
         pinned_issuer_jwk,
         request.context,
-        _mdoc_trust_anchors_pem(trust_profile_data),
+        mdoc_root_certs_pem,
+        mdoc_pinned_issuer_certs_pem,
     )
     # 4. Check issuer trust using Trust Profile
     # 5. Evaluate claims against policy constraints
