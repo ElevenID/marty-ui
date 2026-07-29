@@ -309,8 +309,6 @@ function CanvasMirrorProvenanceLookup({
 
               <ResultPanel title="Issuer">
                 <Detail label="Issuer DID" value={issuer.issuer_did} mono />
-                <Detail label="Issuer Profile" value={issuer.issuer_profile_id} mono />
-                <Detail label="Issuer Mode" value={issuer.issuer_mode} />
                 <Detail label="Credential Issuer URL" value={issuer.credential_issuer_url} mono />
               </ResultPanel>
 
