@@ -101,10 +101,11 @@ class TestGetTemplate:
         assert resp.claims[1].selectively_disclosable is True
         assert resp.display_style.background_color == "#003366"
         assert resp.validity_rules.default_validity_days == 365
-        assert resp.issuer_profile_id == "issuer-profile-1"
         assert resp.issuer_did == "did:web:issuer.example:orgs:org-1"
-        assert resp.key_access_mode == "REMOTE_SIGNING"
-        assert json.loads(resp.remote_signing_config_json)["signing_service_id"] == "managed-openbao-transit"
+        assert "issuer_profile_id" not in resp.DESCRIPTOR.fields_by_name
+        assert "key_access_mode" not in resp.DESCRIPTOR.fields_by_name
+        assert "issuer_key_id" not in resp.DESCRIPTOR.fields_by_name
+        assert "remote_signing_config_json" not in resp.DESCRIPTOR.fields_by_name
         assert ctx.code is None
 
     async def test_not_found(self, ctx):

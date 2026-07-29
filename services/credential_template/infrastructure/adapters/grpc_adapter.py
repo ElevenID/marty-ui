@@ -131,11 +131,7 @@ def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateRespon
         created_at=resp.created_at,
         updated_at=resp.updated_at,
         wallet_configs_json=getattr(resp, "wallet_configs_json", None) or "[]",
-        key_access_mode=getattr(resp, "key_access_mode", None) or "",
-        issuer_key_id=getattr(resp, "issuer_key_id", None) or "",
         issuer_algorithm=getattr(resp, "issuer_algorithm", None) or "",
-        remote_signing_config_json=json.dumps(getattr(resp, "remote_signing_config", None) or {}),
-        issuer_profile_id=getattr(resp, "issuer_profile_id", None) or "",
         revocation_profile_id=getattr(resp, "revocation_profile_id", None) or "",
         issuer_did=getattr(resp, "issuer_did", None) or "",
     )

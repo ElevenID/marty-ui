@@ -162,7 +162,6 @@ def test_get_credential_template_returns_protocol_shape_only() -> None:
 		"compliance_profile_id",
 		"vct",
 		"credential_payload_format",
-		"issuer_profile_id",
 		"issuer_did",
 		"revocation_profile_id",
 		"claims",
@@ -396,11 +395,11 @@ def test_create_credential_template_persists_artifact_pipeline_fields() -> None:
 	body = response.json()
 	assert body["trust_profile_id"] == "trust-profile-1"
 	assert body["revocation_profile_id"] == "revocation-profile-1"
-	assert body["issuer_profile_id"] == "issuer-profile-1"
-	assert body["issuer_key_id"] == "cred-issuer-test-es256"
+	assert "issuer_profile_id" not in body
+	assert "issuer_key_id" not in body
 	assert body["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:test"
 	assert body["issuer_algorithm"] == "ES256"
-	assert body["key_access_mode"] == "REMOTE_SIGNING"
+	assert "key_access_mode" not in body
 	assert body["artifacts_status"] == "valid"
 	assert body["hasArtifacts"] is True
 	assert body["artifactsValidated"] is True
@@ -526,10 +525,10 @@ def test_update_credential_template_canonicalizes_issuer_metadata() -> None:
 
 	assert response.status_code == 200
 	body = response.json()
-	assert body["issuer_profile_id"] == "issuer-profile-1"
-	assert body["issuer_key_id"] == "cred-issuer-test-es256"
+	assert "issuer_profile_id" not in body
+	assert "issuer_key_id" not in body
 	assert body["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:test"
-	assert body["key_access_mode"] == "REMOTE_SIGNING"
+	assert "key_access_mode" not in body
 	stored = asyncio.run(repo.get(template.id))
 	assert stored.remote_signing_config["signing_service_id"] == "managed-openbao-transit"
 	assert stored.remote_signing_config["signing_key_reference"] == "cred-issuer-test-es256"
