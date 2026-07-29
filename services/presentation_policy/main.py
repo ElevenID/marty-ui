@@ -3125,6 +3125,49 @@ class EvaluateInlineRequest(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+_API_KEY_VERIFICATION_SCOPES = frozenset(
+    {"credentials:read", "flows:execute", "admin:full"}
+)
+
+
+def _authorize_gateway_api_key_evaluation(
+    request: Request,
+    *,
+    user_id: str,
+    organization_id: str,
+) -> bool:
+    """Authorize gateway-validated API keys without inventing a user membership.
+
+    The gateway validates the raw key, binds it to one organization, applies
+    its Cedar route permission, strips caller-supplied internal headers, and
+    forwards the resulting context. A service must validate the complete
+    forwarded context before treating the principal as an API key; a partial
+    or inconsistent context fails closed instead of falling back to user RBAC.
+    """
+    api_key_id = request.headers.get("x-api-key-id", "").strip()
+    if not api_key_id:
+        return False
+
+    forwarded_organization = request.headers.get("x-organization-id", "").strip()
+    required_permission = request.headers.get("x-required-permission", "").strip()
+    scopes = {
+        scope.strip()
+        for scope in request.headers.get("x-api-key-scopes", "").split(",")
+        if scope.strip()
+    }
+    if (
+        user_id != f"api_key:{api_key_id}"
+        or forwarded_organization != organization_id
+        or required_permission != "verification:execute"
+        or not scopes.intersection(_API_KEY_VERIFICATION_SCOPES)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="API key is not authorized to evaluate this presentation policy",
+        )
+    return True
+
+
 @router.post(
     "/{policy_id}/evaluate",
     response_model=PolicyEvaluationResponse,
@@ -3142,9 +3185,14 @@ async def evaluate_presentation_http(
     if not policy:
         raise HTTPException(status_code=404, detail="Presentation Policy not found")
 
-    org_client = await get_organization_client(http_request)
-    membership = await org_client.get_membership(user_id, policy.organization_id)
-    ensure_membership_permission(membership, "presentation-policy", "evaluate")
+    if not _authorize_gateway_api_key_evaluation(
+        http_request,
+        user_id=user_id,
+        organization_id=policy.organization_id,
+    ):
+        org_client = await get_organization_client(http_request)
+        membership = await org_client.get_membership(user_id, policy.organization_id)
+        ensure_membership_permission(membership, "presentation-policy", "evaluate")
     return await evaluate_presentation(
         policy_id=policy_id,
         request=request,
@@ -3257,8 +3305,8 @@ async def evaluate_presentation(
         else None,
     )
 
-    mdoc_root_certs_pem, mdoc_pinned_issuer_certs_pem = (
-        _mdoc_trust_certificates_pem(trust_profile_data)
+    mdoc_root_certs_pem, mdoc_pinned_issuer_certs_pem = _mdoc_trust_certificates_pem(
+        trust_profile_data
     )
     verification_result = _verify_credential_by_format(
         request.vp_token,
@@ -3723,12 +3771,17 @@ async def evaluate_presentation_inline(
     Use this for ad-hoc verification where you don't have a saved policy.
     For production use, prefer saved policies for consistency and auditing.
     """
-    org_client = await get_organization_client(http_request)
-    membership = await org_client.get_membership(
-        user_id,
-        request.organization_id,
-    )
-    ensure_membership_permission(membership, "presentation-policy", "evaluate")
+    if not _authorize_gateway_api_key_evaluation(
+        http_request,
+        user_id=user_id,
+        organization_id=request.organization_id,
+    ):
+        org_client = await get_organization_client(http_request)
+        membership = await org_client.get_membership(
+            user_id,
+            request.organization_id,
+        )
+        ensure_membership_permission(membership, "presentation-policy", "evaluate")
 
     policy = PresentationPolicy(
         id=f"inline-{uuid.uuid4()}",
