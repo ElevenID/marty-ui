@@ -14,9 +14,10 @@ service ID, provider key reference, or private key.
 
 `OID4VP_ISSUER_DID` may configure a service-managed default for SIOPv2 and the
 published DID document. Interactive UI requests always send the organization
-issuer DID. `issuer_profile_id` is accepted only during the compatibility
-window as an assertion that must exactly match the DID resolution result; it
-does not select a key.
+issuer DID. Public requests and responses reject or omit
+`issuer_profile_id`, signing-service IDs, key references, and KMS/provider
+selectors. Issuer-profile identifiers remain private service-to-service
+implementation details used only after DID-first resolution.
 
 HAIP and Digital Credentials API responses require a fresh ECDH recipient key
 for each flow. Marty generates that short-lived protocol key in memory and
