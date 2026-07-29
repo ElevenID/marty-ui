@@ -5,8 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
-from gateway.models import PresentationPolicyCreate
+from gateway.models import EvaluateInlineRequest, PresentationPolicyCreate
 from gateway.routes import verification
 
 
@@ -37,6 +38,36 @@ def _policy_payload() -> dict:
             }
         ],
     }
+
+
+def _inline_payload() -> dict:
+    return {
+        "organization_id": "org-1",
+        "vp_token": "header.payload.signature",
+        "credential_requirements": [
+            {
+                "credential_template_id": "template-vc",
+                "credential_payload_format": "jwt_vc_json",
+                "requested_claims": [{"claim_name": "name"}],
+            }
+        ],
+    }
+
+
+def test_inline_evaluation_requires_organization_scope() -> None:
+    payload = _inline_payload()
+    payload.pop("organization_id")
+
+    with pytest.raises(ValidationError, match="organization_id"):
+        EvaluateInlineRequest.model_validate(payload)
+
+
+def test_inline_evaluation_rejects_private_signing_selectors() -> None:
+    payload = _inline_payload()
+    payload["issuer_profile_id"] = "attacker-profile"
+
+    with pytest.raises(ValidationError, match="issuer_profile_id"):
+        EvaluateInlineRequest.model_validate(payload)
 
 
 @pytest.mark.asyncio
