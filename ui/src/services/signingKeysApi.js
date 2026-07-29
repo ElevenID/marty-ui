@@ -371,6 +371,19 @@ export async function listIssuerProfiles(params = {}) {
 }
 
 /**
+ * List DID-first runtime identities without issuer-profile or KMS coordinates.
+ * @returns {Promise<Object>} { identities: [{ issuer_did, key_purpose, algorithm, status }] }
+ */
+export async function listPublicIssuerIdentities(params = {}) {
+  const organizationId = requireOrganizationId(params, 'loading issuer identities');
+  return get(withQuery(`${BASE_PATH}/issuer-identities`, buildDefinedQueryString({
+    organization_id: organizationId,
+    key_purpose: params?.key_purpose,
+    algorithm: params?.algorithm,
+  })));
+}
+
+/**
  * Get a single issuer profile by ID.
  * @param {string} profileId
  * @returns {Promise<Object>} { profile }
@@ -427,6 +440,7 @@ export default {
   getOrgDidDocument,
   createIssuerProfile,
   listIssuerProfiles,
+  listPublicIssuerIdentities,
   getIssuerProfile,
   updateIssuerProfile,
   deleteIssuerProfile,

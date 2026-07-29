@@ -17,8 +17,11 @@ describe('public index HTML', () => {
 
   it('keeps prerendered markup hidden behind a stable loading surface until styles are ready', () => {
     const html = fs.readFileSync(publicIndexPath, 'utf8');
+    const startup = fs.readFileSync(path.join(projectRoot, 'public', 'startup.js'), 'utf8');
 
-    expect(html).toContain("document.documentElement.classList.add('app-loading')");
+    expect(html).toContain('<script src="/startup.js"></script>');
+    expect(html).not.toContain('<script>document.documentElement');
+    expect(startup).toContain("document.documentElement.classList.add('app-loading')");
     expect(html).toContain('html.app-loading #root');
     expect(html).toContain('<body class="app-loading">');
     expect(html).toContain('class="app-loading-shell"');

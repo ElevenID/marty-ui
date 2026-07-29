@@ -500,10 +500,13 @@ def test_oidf_tls_proxy_refreshes_compose_upstream_addresses() -> None:
     assert "resolver 127.0.0.11 valid=5s ipv6=off;" in config
     assert "set $gateway_upstream http://gateway:8000;" in config
     assert "set $keycloak_upstream http://keycloak:8080;" in config
+    assert "set $ui_upstream http://ui:80;" in config
     assert "proxy_pass $gateway_upstream;" in config
     assert "proxy_pass $keycloak_upstream;" in config
+    assert "proxy_pass $ui_upstream;" in config
     assert "proxy_pass http://gateway:8000;" not in config
     assert "proxy_pass http://keycloak:8080;" not in config
+    assert "proxy_pass http://ui:80;" not in config
 
 
 def test_oidf_tls_proxy_preserves_the_complete_public_authority() -> None:
@@ -512,11 +515,30 @@ def test_oidf_tls_proxy_preserves_the_complete_public_authority() -> None:
     )
 
     # Nginx $host normalizes away a non-default port. DPoP signs the absolute
-    # target URI, so both upstream locations must use the original authority.
-    assert config.count("proxy_set_header Host $http_host;") == 2
-    assert config.count("proxy_set_header X-Forwarded-Host $http_host;") == 2
+    # target URI, so all upstream locations must use the original authority.
+    assert config.count("proxy_set_header Host $http_host;") == 3
+    assert config.count("proxy_set_header X-Forwarded-Host $http_host;") == 3
     assert "proxy_set_header Host $host;" not in config
     assert "proxy_set_header X-Forwarded-Host $host;" not in config
+
+
+def test_released_conformance_stack_serves_the_exact_ui_artifact() -> None:
+    profile = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
+    oidf = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
+    proxy = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(
+        encoding="utf-8"
+    )
+
+    assert "image: ${MARTY_UI_IMAGE:?" in profile
+    assert "condition: service_healthy" in profile.split("  ui:\n", 1)[1].split(
+        "\n  db-migrate:\n", 1
+    )[0]
+    assert "  ui:\n        condition: service_healthy" in oidf
+    assert "console(?:/|$)" in proxy
+    assert "locales/" in proxy
+    assert "config\\.json$" in proxy
+    assert "runtime-config\\.js$" in proxy
+    assert "startup\\.js$" in proxy
 
 
 def test_oidf_tls_proxy_rejects_legacy_tls12_cipher_suites() -> None:

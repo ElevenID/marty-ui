@@ -35,7 +35,7 @@ import HourglassTopIcon from '@mui/icons-material/HourglassTop';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { startVerificationFlow } from '../../../services/zkVerificationApi';
 import { listFlowExecutions } from '../../../services/flowsApi';
-import { listIssuerProfiles } from '../../../services/signingKeysApi';
+import { listPublicIssuerIdentities } from '../../../services/signingKeysApi';
 import PolicySelectStep from './steps/PolicySelectStep';
 import SessionConfigStep from './steps/SessionConfigStep';
 import QRDisplayStep from './steps/QRDisplayStep';
@@ -193,25 +193,24 @@ function VerificationSessionManager({ organizationId }) {
     setIssuerIdentityLoading(true);
     setIssuerIdentityError(null);
     try {
-      const result = await listIssuerProfiles({ organization_id: organizationId });
-      const profiles = Array.isArray(result) ? result : (result?.profiles || []);
-      const issuerDids = [...new Set(
-        profiles
-          .filter((profile) => (
-            String(profile?.status || '').toLowerCase() === 'active'
-            && profile?.key_purpose === 'oid4vp_request_signing'
-            && String(profile?.issuer_did || '').startsWith('did:')
-          ))
-          .map((profile) => String(profile.issuer_did).trim()),
-      )];
-      if (issuerDids.length !== 1) {
+      const result = await listPublicIssuerIdentities({
+        organization_id: organizationId,
+        key_purpose: 'oid4vp_request_signing',
+        algorithm: 'ES256',
+      });
+      const identities = Array.isArray(result) ? result : (result?.identities || []);
+      if (identities.length !== 1) {
         throw new Error(
-          issuerDids.length === 0
+          identities.length === 0
             ? 'Configure one active OID4VP issuer DID before starting verification.'
             : 'Multiple OID4VP issuer DIDs are active. Disable the obsolete identity before starting verification.',
         );
       }
-      setIssuerDid(issuerDids[0]);
+      const resolvedDid = String(identities[0]?.issuer_did || '').trim();
+      if (!resolvedDid.startsWith('did:')) {
+        throw new Error('The active OID4VP issuer identity has no valid DID.');
+      }
+      setIssuerDid(resolvedDid);
     } catch (err) {
       setIssuerDid(null);
       setIssuerIdentityError(err.message || 'Failed to resolve the OID4VP issuer DID');
