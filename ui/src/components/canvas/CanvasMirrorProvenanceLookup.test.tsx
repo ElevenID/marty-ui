@@ -38,8 +38,6 @@ const provenanceResponse = {
   },
   issuer: {
     issuer_did: 'did:web:issuer.example',
-    issuer_profile_id: 'issuer-profile-1',
-    issuer_mode: 'org_managed',
     credential_issuer_url: 'https://issuer.example/org/org-1',
   },
   trust_basis: {
@@ -64,6 +62,7 @@ describe('CanvasMirrorProvenanceLookup', () => {
           externalCredentialId: 'canvas-cred-1',
           canvasAccountId: 'canvas-account-1',
         }}
+        organizationId="org-1"
       />,
     );
 
@@ -72,12 +71,14 @@ describe('CanvasMirrorProvenanceLookup', () => {
     expect(mockGetCanvasMirrorProvenance).toHaveBeenCalledWith({
       externalCredentialId: 'canvas-cred-1',
       canvasAccountId: 'canvas-account-1',
-      organizationId: undefined,
+      organizationId: 'org-1',
     });
     expect(screen.getByText('Canonical issuance found')).toBeInTheDocument();
     expect(screen.getAllByText('did:web:issuer.example').length).toBeGreaterThan(0);
     expect(screen.getByText('canvas-cred-1')).toBeInTheDocument();
     expect(screen.getByText('hash-123')).toBeInTheDocument();
+    expect(screen.queryByText('Issuer Profile')).not.toBeInTheDocument();
+    expect(screen.queryByText('Issuer Mode')).not.toBeInTheDocument();
   });
 
   it('submits a manual lookup by delivery record ID', async () => {
