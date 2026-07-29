@@ -166,8 +166,11 @@ class OrganizationServiceGrpc(organization_service_pb2_grpc.OrganizationServiceS
             return organization_service_pb2.ValidateApiKeyResponse(valid=False)
         return organization_service_pb2.ValidateApiKeyResponse(
             valid=True,
-            api_key_id=api_key.id,
-            organization_id=api_key.organization_id,
+            # Be defensive at the transport boundary as well. A custom
+            # repository implementation must not be able to crash the
+            # authentication hot path by returning UUID value objects.
+            api_key_id=str(api_key.id),
+            organization_id=str(api_key.organization_id),
             key_prefix=api_key.key_prefix,
             scopes=api_key.scopes or [],
         )
