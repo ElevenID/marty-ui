@@ -1701,6 +1701,36 @@ def _verify_sd_jwt(
         return {"verified": False, "error": str(exc), "claims": {}}
 
 
+def _classify_mdoc_verification_error(error: object) -> str:
+    """Return a stable, non-sensitive category for Rust mdoc failures."""
+    if not isinstance(error, str) or not error:
+        return "none"
+
+    normalized = error.casefold()
+    classifications = (
+        ("detached payload", "detached-issuer-auth"),
+        ("could not parse mso", "mso-parse-failed"),
+        ("unable to parse mdoc deviceresponse", "device-response-parse-failed"),
+        ("unable to parse session transcript", "session-transcript-parse-failed"),
+        ("deviceresponse status is not ok", "device-response-status-invalid"),
+        ("deviceresponse contains no documents", "device-response-documents-missing"),
+        ("unsupported deviceresponse version", "device-response-version-unsupported"),
+        ("device key jwk is missing coordinates", "device-key-coordinates-missing"),
+        ("unsupported device_key type", "device-key-type-unsupported"),
+        ("currently unsupported format", "device-auth-method-unsupported"),
+        ("failed verifying device signature", "device-signature-invalid"),
+        ("error verifying device signature", "device-signature-processing-error"),
+        ("malformed signature", "device-signature-malformed"),
+        ("algorithm in protected headers", "device-signature-algorithm-mismatch"),
+        ("cryptographic error", "device-key-invalid"),
+        ("cbor", "device-auth-cbor-error"),
+    )
+    for marker, category in classifications:
+        if marker in normalized:
+            return category
+    return "unclassified"
+
+
 def _verify_mdoc(
     vp_token: str,
     nonce: str | None,
@@ -1773,6 +1803,10 @@ def _verify_mdoc(
             and result.device_authentication_valid
         )
         error = result.error
+        logger.info(
+            "mDoc verification outcome device_auth_error_kind=%s",
+            _classify_mdoc_verification_error(error),
+        )
         claims: dict[str, Any] = {}
         if is_valid:
             extracted = marty_rs.verify_mdoc_cbor(cbor_bytes)
