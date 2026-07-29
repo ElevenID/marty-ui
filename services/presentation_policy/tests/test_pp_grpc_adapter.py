@@ -8,12 +8,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import grpc
-import pytest
 from fastapi import HTTPException
 
 from presentation_policy.infrastructure.adapters.grpc_adapter import (
     PresentationPolicyServiceGrpc,
-    _policy_to_pb,
 )
 from marty_proto.v1 import presentation_policy_service_pb2 as pp_pb2
 
@@ -39,15 +37,22 @@ def _make_policy_response(**overrides):
     )
 
     cred_claim = SimpleNamespace(
-        id="rc-1", claim_name="employee_id", display_name="Employee ID",
-        required=True, selective_disclosure=True, predicate_spec=None,
+        id="rc-1",
+        claim_name="employee_id",
+        display_name="Employee ID",
+        required=True,
+        selective_disclosure=True,
+        predicate_spec=None,
     )
     cred_req = SimpleNamespace(
-        id="cr-1", credential_template_id="EmployeeCredential",
-        display_name="Employee Credential", required=True,
+        id="cr-1",
+        credential_template_id="EmployeeCredential",
+        display_name="Employee Credential",
+        required=True,
         credential_payload_format="w3c_vcdm_v2_sd_jwt",
         requested_claims=[cred_claim],
-        trust_profile_id=None, max_age_seconds=None,
+        trust_profile_id=None,
+        max_age_seconds=None,
     )
 
     defaults = dict(
@@ -103,6 +108,17 @@ class TestGetPolicy:
         assert display["title"] == "Employee Check"
         reqs = json.loads(resp.credential_requirements_json)
         assert reqs[0]["credential_template_id"] == "EmployeeCredential"
+        assert reqs[0]["credential_payload_format"] == "w3c_vcdm_v2_sd_jwt"
+        assert reqs[0]["requested_claims"] == [
+            {
+                "id": "rc-1",
+                "claim_name": "employee_id",
+                "display_name": "Employee ID",
+                "required": True,
+                "selective_disclosure": True,
+                "predicate_spec": None,
+            }
+        ]
         assert ctx.code is None
 
     async def test_not_found(self, ctx):
@@ -111,7 +127,7 @@ class TestGetPolicy:
         servicer = _build_servicer(repo=repo)
 
         req = pp_pb2.GetPolicyRequest(policy_id="missing")
-        resp = await servicer.GetPolicy(req, ctx)
+        await servicer.GetPolicy(req, ctx)
 
         assert ctx.code == grpc.StatusCode.NOT_FOUND
         assert "missing" in ctx.details
@@ -188,9 +204,17 @@ class TestEvaluatePresentation:
             nonce="nonce-abc",
         )
 
-        with patch("presentation_policy.infrastructure.adapters.grpc_adapter.PolicyStatus", _PolicyStatus, create=True), \
-             patch("presentation_policy.main.EvaluatePresentationRequest") as MockEvalReq, \
-             patch("presentation_policy.main.PolicyStatus", _PolicyStatus):
+        with (
+            patch(
+                "presentation_policy.infrastructure.adapters.grpc_adapter.PolicyStatus",
+                _PolicyStatus,
+                create=True,
+            ),
+            patch(
+                "presentation_policy.main.EvaluatePresentationRequest"
+            ) as MockEvalReq,
+            patch("presentation_policy.main.PolicyStatus", _PolicyStatus),
+        ):
             MockEvalReq.side_effect = lambda **kwargs: SimpleNamespace(**kwargs)
             resp = await servicer.EvaluatePresentation(req, ctx)
 
@@ -209,7 +233,7 @@ class TestEvaluatePresentation:
             policy_id="missing",
             vp_token="eyJ...",
         )
-        resp = await servicer.EvaluatePresentation(req, ctx)
+        await servicer.EvaluatePresentation(req, ctx)
 
         assert ctx.code == grpc.StatusCode.NOT_FOUND
 
@@ -227,7 +251,7 @@ class TestEvaluatePresentation:
             vp_token="eyJ...",
         )
         with patch("presentation_policy.main.PolicyStatus", _PolicyStatus):
-            resp = await servicer.EvaluatePresentation(req, ctx)
+            await servicer.EvaluatePresentation(req, ctx)
 
         assert ctx.code == grpc.StatusCode.FAILED_PRECONDITION
         assert "not active" in ctx.details
@@ -246,10 +270,14 @@ class TestEvaluatePresentation:
             policy_id="pol-3",
             vp_token="eyJ...",
         )
-        with patch("presentation_policy.main.EvaluatePresentationRequest") as MockEvalReq, \
-             patch("presentation_policy.main.PolicyStatus", _PolicyStatus):
+        with (
+            patch(
+                "presentation_policy.main.EvaluatePresentationRequest"
+            ) as MockEvalReq,
+            patch("presentation_policy.main.PolicyStatus", _PolicyStatus),
+        ):
             MockEvalReq.side_effect = lambda **kwargs: SimpleNamespace(**kwargs)
-            resp = await servicer.EvaluatePresentation(req, ctx)
+            await servicer.EvaluatePresentation(req, ctx)
 
         assert ctx.code == grpc.StatusCode.INTERNAL
         assert "verification engine failed" in ctx.details
@@ -277,8 +305,12 @@ class TestEvaluatePresentation:
             vp_token="eyJ...",
             trust_profile_id="trust-from-another-org",
         )
-        with patch("presentation_policy.main.EvaluatePresentationRequest") as MockEvalReq, \
-             patch("presentation_policy.main.PolicyStatus", _PolicyStatus):
+        with (
+            patch(
+                "presentation_policy.main.EvaluatePresentationRequest"
+            ) as MockEvalReq,
+            patch("presentation_policy.main.PolicyStatus", _PolicyStatus),
+        ):
             MockEvalReq.side_effect = lambda **kwargs: SimpleNamespace(**kwargs)
             response = await servicer.EvaluatePresentation(req, ctx)
 

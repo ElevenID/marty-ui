@@ -125,9 +125,7 @@ async def test_oid4vp_identity_resolves_did_without_public_profile_selection(
         lambda **_kwargs: _Client(),
     )
 
-    identity = await _PROFILE_IDENTITY_UNDER_TEST(
-        "org-1", issuer_did
-    )
+    identity = await _PROFILE_IDENTITY_UNDER_TEST("org-1", issuer_did)
 
     assert captured == {
         "url": "http://signing.internal/resolve-issuer-did",
@@ -242,6 +240,103 @@ def test_mdoc_dcql_uses_doctype_and_two_element_claim_paths() -> None:
     ]
 
 
+@pytest.mark.asyncio
+async def test_build_presentation_definition_preserves_mdoc_policy_claims(
+    monkeypatch,
+) -> None:
+    class FakePresentationPolicyStub:
+        def __init__(self, _channel):
+            pass
+
+        async def GetPolicy(self, _request):
+            return SimpleNamespace(
+                id="policy-1",
+                credential_requirements_json=json.dumps(
+                    [
+                        {
+                            "id": "mdl",
+                            "credential_template_id": "template-mdl",
+                            "display_name": "ISO mDL",
+                            "credential_payload_format": "MDOC",
+                            "requested_claims": [
+                                {
+                                    "claim_name": "family_name",
+                                    "display_name": "Family Name",
+                                    "required": True,
+                                },
+                                {
+                                    "claim_name": "given_name",
+                                    "display_name": "Given Name",
+                                    "required": True,
+                                },
+                                {
+                                    "claim_name": "birth_date",
+                                    "display_name": "Birth Date",
+                                    "required": True,
+                                },
+                            ],
+                        }
+                    ]
+                ),
+                organization_id="org-1",
+            )
+
+    class FakeCredentialTemplateStub:
+        def __init__(self, _channel):
+            pass
+
+        async def GetTemplate(self, _request):
+            return SimpleNamespace(
+                id="template-mdl",
+                credential_type="org.iso.18013.5.1.mDL",
+                vct="",
+                doctype="org.iso.18013.5.1.mDL",
+                supported_formats=["MDOC"],
+                claims=[
+                    SimpleNamespace(
+                        name=name,
+                        mdoc_namespace="org.iso.18013.5.1",
+                        mdoc_element_identifier=name,
+                    )
+                    for name in ("family_name", "given_name", "birth_date")
+                ],
+            )
+
+    monkeypatch.setattr(
+        "marty_proto.v1.presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub",
+        FakePresentationPolicyStub,
+    )
+    monkeypatch.setattr(
+        "marty_proto.v1.credential_template_service_pb2_grpc.CredentialTemplateServiceStub",
+        FakeCredentialTemplateStub,
+    )
+    monkeypatch.setattr(
+        "flow.main.app.state.pp_grpc_channel",
+        object(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "flow.main.app.state.ct_grpc_channel",
+        object(),
+        raising=False,
+    )
+
+    definition = await _build_presentation_definition("policy-1")
+    [descriptor] = definition["input_descriptors"]
+
+    assert _dcql_meta_for_descriptor(descriptor, "mso_mdoc") == {
+        "doctype_value": "org.iso.18013.5.1.mDL"
+    }
+    assert _dcql_claims_for_descriptor(descriptor, "mso_mdoc") == [
+        {
+            "id": f"claim_{name}",
+            "path": ["org.iso.18013.5.1", name],
+            "intent_to_retain": False,
+        }
+        for name in ("family_name", "given_name", "birth_date")
+    ]
+
+
 def test_mdoc_session_transcript_is_bound_to_verifier_state() -> None:
     public_jwk = {
         "kty": "EC",
@@ -260,7 +355,9 @@ def test_mdoc_session_transcript_is_bound_to_verifier_state() -> None:
         client_id="did:web:verifier.example:oid4vp",
         nonce="nonce-1",
         response_uri="https://verifier.example/submit",
-        response_encryption_jwk={key: public_jwk[key] for key in ("kty", "crv", "x", "y")},
+        response_encryption_jwk={
+            key: public_jwk[key] for key in ("kty", "crv", "x", "y")
+        },
     )
     changed_nonce = _build_openid4vp_mdoc_session_transcript(
         client_id="did:web:verifier.example:oid4vp",
@@ -1240,6 +1337,8 @@ def test_start_verification_rejects_profile_selector_before_runtime() -> None:
                 "issuer_profile_id": "issuer-profile-1",
             }
         )
+
+
 @pytest.mark.asyncio
 async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
     monkeypatch,
@@ -2140,6 +2239,7 @@ def test_select_vp_token_unwraps_exact_dcql_mdoc_transport_shape():
 def test_select_vp_token_rejects_ambiguous_dcql_transport_shape(wrapped):
     assert _select_vp_token_for_evaluation(wrapped) == wrapped
 
+
 def test_dcql_claims_include_required_direct_sd_jwt_paths():
     descriptor = {
         "constraints": {
@@ -2562,8 +2662,7 @@ async def test_two_accepted_presentations_cannot_reuse_one_nonce(monkeypatch):
     for instance in instances:
         await repo.save_instance(instance)
     vp_token = (
-        f"{_jwt_segment({'alg': 'none'})}."
-        f"{_jwt_segment({'nonce': 'nonce-shared'})}."
+        f"{_jwt_segment({'alg': 'none'})}.{_jwt_segment({'nonce': 'nonce-shared'})}."
     )
 
     first = await submit_verification_response(
