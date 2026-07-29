@@ -4524,7 +4524,7 @@ async def test_internal_resolve_issuer_context_resolves_exact_did(
     response = await signing_keys.internal_resolve_issuer_context(
         request=request,
         organization_id="org_issuer",
-        issuer_profile_id=None,
+        issuer_profile_id="ip-selected",
         issuer_did="did:web:beta.elevenidllc.com:orgs:elevenid",
         issuer_mode="org_managed",
         credential_format="dc+sd-jwt",
@@ -4761,6 +4761,7 @@ async def test_internal_resolve_issuer_context_rejects_unknown_explicit_profile(
             request=request,
             organization_id="org_issuer",
             issuer_profile_id="ip-missing",
+            issuer_did="did:web:beta.elevenidllc.com:orgs:missing",
             issuer_mode="org_managed",
             credential_format="dc+sd-jwt",
             key_purpose="vc_jwt_issuer",
@@ -4769,6 +4770,29 @@ async def test_internal_resolve_issuer_context_rejects_unknown_explicit_profile(
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_internal_resolve_issuer_context_rejects_legacy_profile_without_did(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys.internal_resolve_issuer_context(
+            request=_build_request("org_issuer"),
+            organization_id="org_issuer",
+            issuer_profile_id="ip-legacy",
+            issuer_did=None,
+            issuer_mode="org_managed",
+            credential_format="dc+sd-jwt",
+            key_purpose="vc_jwt_issuer",
+            algorithm="ES256",
+            x_api_key="test-internal-key",
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "requires issuer_did" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -4819,6 +4843,7 @@ async def test_internal_resolve_issuer_context_rejects_profile_without_requested
             request=request,
             organization_id="org_issuer",
             issuer_profile_id="ip-unscoped",
+            issuer_did="did:web:beta.elevenidllc.com:orgs:acme",
             issuer_mode="org_managed",
             credential_format="dc+sd-jwt",
             key_purpose="vc_jwt_issuer",
@@ -4912,6 +4937,7 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
         request=request,
         organization_id="org_issuer",
         issuer_did=issuer_did,
+        issuer_profile_id="ip-1",
         verification_method_id=vm_id,
         credential_format="dc+sd-jwt",
         key_purpose="vc_jwt_issuer",
@@ -4931,6 +4957,44 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
     assert data["issuer_x5c"] == ["issuer-leaf-x5c", "issuer-root-x5c"]
     assert data["mdoc_x5c"] == ["issuer-leaf-x5c", "issuer-root-x5c"]
     assert "auth_reference" not in data["signing_service"]
+
+
+@pytest.mark.asyncio
+async def test_internal_resolve_issuer_did_rejects_mismatched_legacy_profile(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+    issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
+
+    async def resolve(*_args, **_kwargs):
+        return {
+            "ok": True,
+            "organization_id": "org_issuer",
+            "issuer_did": issuer_did,
+            "issuer_profile": {"id": "profile-selected-by-did"},
+        }
+
+    monkeypatch.setattr(
+        signing_keys,
+        "_resolve_org_scoped_issuer_identity",
+        resolve,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys.internal_resolve_issuer_did(
+            request=_build_request("org_issuer"),
+            organization_id="org_issuer",
+            issuer_did=issuer_did,
+            issuer_profile_id="profile-stale",
+            verification_method_id=None,
+            credential_format="dc+sd-jwt",
+            key_purpose="vc_jwt_issuer",
+            algorithm="ES256",
+            x_api_key="test-internal-key",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "does not match" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
