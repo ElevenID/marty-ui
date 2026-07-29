@@ -1758,9 +1758,11 @@ def _verify_mdoc(
         )
         logger.info(
             "mDoc verification binding transcript_sha256=%s "
+            "device_response_sha256=%s "
             "issuer_signature_valid=%s issuer_trusted=%s "
             "device_authentication_valid=%s",
             hashlib.sha256(session_transcript_cbor).hexdigest(),
+            hashlib.sha256(cbor_bytes).hexdigest(),
             bool(result.issuer_signature_valid),
             bool(result.issuer_trusted),
             bool(result.device_authentication_valid),

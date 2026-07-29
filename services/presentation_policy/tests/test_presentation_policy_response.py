@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -437,7 +438,9 @@ def test_detect_credential_format_recognizes_base64url_mdoc(
 
 def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level("INFO", logger=pp.logger.name)
     calls: list[tuple[bytes, bytes, list[str], list[str]]] = []
 
     def verify_presentation(
@@ -491,6 +494,10 @@ def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
             ["-----BEGIN CERTIFICATE-----\nissuer\n-----END CERTIFICATE-----"],
         )
     ]
+    assert hashlib.sha256(mdoc_bytes).hexdigest() in caplog.text
+    assert hashlib.sha256(transcript).hexdigest() in caplog.text
+    assert base64.urlsafe_b64encode(mdoc_bytes).decode() not in caplog.text
+    assert "nonce-1" not in caplog.text
 
 
 def test_mdoc_trust_material_preserves_root_and_direct_pin_semantics() -> None:
