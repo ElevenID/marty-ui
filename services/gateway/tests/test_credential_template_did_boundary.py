@@ -218,6 +218,127 @@ async def test_mdoc_template_infers_signing_wire_format_from_supported_formats(
     assert captured["credential_format"] == "mso_mdoc"
 
 
+@pytest.mark.asyncio
+async def test_mdoc_claim_mapping_survives_the_public_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    async def exists(*_args, **_kwargs):
+        return True
+
+    async def owner(*_args, **_kwargs):
+        return "org-1"
+
+    async def resolve(
+        request,
+        organization_id,
+        issuer_did,
+        credential_format=None,
+        key_purpose=None,
+        algorithm=None,
+    ):
+        return {
+            "issuer_profile_id": "internal-mdoc-profile",
+            "issuer_did": issuer_did,
+        }
+
+    class Registry:
+        @staticmethod
+        def get_service_url(_name: str) -> str:
+            return "http://credential-templates"
+
+    async def proxy(_request, _service_url, _path, body_override=None, **_kwargs):
+        captured["internal_body"] = json.loads(body_override)
+        return JSONResponse(
+            {
+                "id": "template-mdoc",
+                "claims": [
+                    {
+                        "name": "family_name",
+                        "type": "STRING",
+                        "required": True,
+                        "namespace": "org.iso.18013.5.1",
+                        "mdoc_namespace": "org.iso.18013.5.1",
+                        "mdoc_element_identifier": "family_name",
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(credentials, "_resource_exists", exists)
+    monkeypatch.setattr(credentials, "_resource_org_id", owner)
+    monkeypatch.setattr(issuance, "_resolve_issuer_identity", resolve)
+    monkeypatch.setattr(credentials, "get_registry", lambda: Registry())
+    monkeypatch.setattr(credentials, "proxy_request", proxy)
+
+    response = await credentials.create_credential_template(
+        _body(
+            credential_type="org.iso.18013.5.1.mDL",
+            vct=None,
+            doctype="org.iso.18013.5.1.mDL",
+            supported_formats=["MDOC"],
+            credential_payload_format="MDOC",
+            claims=[
+                {
+                    "name": "family_name",
+                    "type": "string",
+                    "required": True,
+                    "namespace": "org.iso.18013.5.1",
+                }
+            ],
+        ),
+        _request(),
+    )
+
+    [internal_claim] = captured["internal_body"]["claims"]
+    assert internal_claim["mdoc_namespace"] == "org.iso.18013.5.1"
+    assert internal_claim["mdoc_element_identifier"] == "family_name"
+    assert "namespace" not in internal_claim
+    assert json.loads(response.body)["claims"] == [
+        {
+            "name": "family_name",
+            "type": "STRING",
+            "required": True,
+            "namespace": "org.iso.18013.5.1",
+        }
+    ]
+
+
+def test_mdoc_claim_mapping_accepts_legacy_names_without_silent_loss() -> None:
+    template = _body(
+        credential_type="org.iso.18013.5.1.mDL",
+        vct=None,
+        doctype="org.iso.18013.5.1.mDL",
+        supported_formats=["MDOC"],
+        credential_payload_format="MDOC",
+        claims=[
+            {
+                "name": "birth_date",
+                "mdoc_namespace": "org.iso.18013.5.1",
+                "mdoc_element_identifier": "birth_date",
+            }
+        ],
+    )
+
+    [claim] = template.claims
+    assert claim.namespace == "org.iso.18013.5.1"
+    assert claim.mdoc_element_identifier == "birth_date"
+
+
+def test_claim_contract_rejects_unknown_fields_instead_of_dropping_them() -> None:
+    with pytest.raises(ValidationError, match="unknown_mdoc_field"):
+        _body(
+            claims=[
+                {
+                    "name": "family_name",
+                    "namespace": "org.iso.18013.5.1",
+                    "unknown_mdoc_field": "would-have-been-silently-dropped",
+                }
+            ]
+        )
+
+
 def test_public_template_model_uses_format_specific_identity_fields() -> None:
     mdoc = _body(
         credential_type="org.iso.18013.5.1.mDL",

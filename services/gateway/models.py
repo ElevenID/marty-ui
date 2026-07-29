@@ -443,12 +443,29 @@ class TrustRegistryStatusResponse(BaseModel):
 
 
 class ClaimDefinitionModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     display_name: str | None = None
     claim_type: str = "string"
     type: str | None = Field(None, exclude=True)
     required: bool = True
     selectively_disclosable: bool = True
+    namespace: str | None = Field(None, min_length=1, max_length=255)
+    # Backward-compatible input names used before marty-protocol defined the
+    # canonical mdoc claim fields. They are never emitted publicly.
+    mdoc_namespace: str | None = Field(
+        None,
+        min_length=1,
+        max_length=255,
+        exclude=True,
+    )
+    mdoc_element_identifier: str | None = Field(
+        None,
+        min_length=1,
+        max_length=255,
+        exclude=True,
+    )
 
     @model_validator(mode="after")
     def normalize_claim(self) -> "ClaimDefinitionModel":
@@ -465,6 +482,19 @@ class ClaimDefinitionModel(BaseModel):
             normalized_type = self.type.lower()
             self.claim_type = (
                 "integer" if normalized_type == "number" else normalized_type
+            )
+        if (
+            self.namespace
+            and self.mdoc_namespace
+            and self.namespace != self.mdoc_namespace
+        ):
+            raise ValueError(
+                "namespace and legacy mdoc_namespace must identify the same namespace"
+            )
+        self.namespace = self.namespace or self.mdoc_namespace
+        if self.mdoc_element_identifier and not self.namespace:
+            raise ValueError(
+                "namespace is required when mdoc_element_identifier is provided"
             )
         return self
 
