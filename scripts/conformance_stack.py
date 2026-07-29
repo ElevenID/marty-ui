@@ -23,7 +23,6 @@ BASE_FILES = (
 )
 GHCR_FILE = "docker-compose.profile.ghcr.yml"
 IMMUTABLE_INFRA_FILE = "docker-compose.profile.conformance-images.yml"
-W3C_FILE = "docker-compose.profile.w3c-vc.yml"
 HAIP_FILE = "docker-compose.profile.oidf-haip.yml"
 ISOLATION_FILE = "docker-compose.profile.conformance.yml"
 PUBLIC_PORT_SERVICES = {"oidf-tls-proxy"}
@@ -64,7 +63,6 @@ def compose_command(
     project: str,
     *,
     include_haip: bool = False,
-    include_w3c: bool = False,
     use_ghcr: bool = True,
 ) -> list[str]:
     command = ["docker", "compose", "--project-name", validate_project(project)]
@@ -74,8 +72,6 @@ def compose_command(
         files.insert(2, IMMUTABLE_INFRA_FILE)
     if include_haip:
         files.append(HAIP_FILE)
-    if include_w3c:
-        files.append(W3C_FILE)
     files.append(ISOLATION_FILE)
     for compose_file in files:
         command.extend(["--file", os.fspath(ROOT / compose_file)])
@@ -87,7 +83,6 @@ def rendered_config(
     project: str,
     *,
     include_haip: bool = False,
-    include_w3c: bool = False,
     use_ghcr: bool = True,
 ) -> dict[str, Any]:
     completed = subprocess.run(
@@ -95,7 +90,6 @@ def rendered_config(
             *compose_command(
                 project,
                 include_haip=include_haip,
-                include_w3c=include_w3c,
                 use_ghcr=use_ghcr,
             ),
             "config",
@@ -444,7 +438,6 @@ def main() -> int:
         default=os.environ.get("MARTY_CONFORMANCE_PROJECT", ""),
         help="unique marty-conformance-<run-id> project name",
     )
-    parser.add_argument("--include-w3c", action="store_true")
     parser.add_argument(
         "--haip",
         action="store_true",
@@ -480,7 +473,6 @@ def main() -> int:
     command = compose_command(
         project,
         include_haip=args.haip,
-        include_w3c=args.include_w3c,
         use_ghcr=not args.local_build,
     )
 
@@ -495,7 +487,6 @@ def main() -> int:
     config = rendered_config(
         project,
         include_haip=args.haip,
-        include_w3c=args.include_w3c,
         use_ghcr=not args.local_build,
     )
     ports = validate_isolation(config, project)

@@ -1,10 +1,11 @@
 """Tests for gateway.middleware — SessionCache, AuthMiddleware, RateLimitMiddleware."""
+
 from __future__ import annotations
 
 import asyncio
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -27,6 +28,7 @@ from gateway.middleware import (
 # ---------------------------------------------------------------------------
 # Helpers: fake gRPC response objects
 # ---------------------------------------------------------------------------
+
 
 def _make_grpc_user(**overrides):
     defaults = {
@@ -72,6 +74,7 @@ def _fake_get_route_config(path: str):
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def session_cache():
     return SessionCache(ttl_seconds=5, maxsize=4)
@@ -94,10 +97,12 @@ def auth_app(session_cache, grpc_stub):
 
     @app.get("/v1/organizations")
     async def orgs(request: Request):
-        return JSONResponse({
-            "user_id": request.state.user_id,
-            "email": request.state.user_email,
-        })
+        return JSONResponse(
+            {
+                "user_id": request.state.user_id,
+                "email": request.state.user_email,
+            }
+        )
 
     @app.get("/v1/auth/login")
     async def login():
@@ -199,13 +204,17 @@ async def test_idempotency_middleware_replays_successful_redis_create_and_reject
     async def create_artifact(payload: dict):
         nonlocal creates
         creates += 1
-        return JSONResponse({"id": f"artifact-{creates}", "name": payload["name"]}, status_code=201)
+        return JSONResponse(
+            {"id": f"artifact-{creates}", "name": payload["name"]}, status_code=201
+        )
 
     @app.post("/v1/other-artifacts")
     async def create_other_artifact(payload: dict):
         nonlocal creates
         creates += 1
-        return JSONResponse({"id": f"other-{creates}", "name": payload["name"]}, status_code=201)
+        return JSONResponse(
+            {"id": f"other-{creates}", "name": payload["name"]}, status_code=201
+        )
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -257,15 +266,19 @@ async def test_idempotency_middleware_rejects_concurrent_same_key_redis_create()
         creates += 1
         started.set()
         await finish.wait()
-        return JSONResponse({"id": f"artifact-{creates}", "name": payload["name"]}, status_code=201)
+        return JSONResponse(
+            {"id": f"artifact-{creates}", "name": payload["name"]}, status_code=201
+        )
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        first_task = asyncio.create_task(client.post(
-            "/v1/artifacts",
-            json={"name": "Alpha"},
-            headers={"Idempotency-Key": "create-alpha"},
-        ))
+        first_task = asyncio.create_task(
+            client.post(
+                "/v1/artifacts",
+                json={"name": "Alpha"},
+                headers={"Idempotency-Key": "create-alpha"},
+            )
+        )
         await started.wait()
 
         in_progress = await client.post(
@@ -295,7 +308,9 @@ def test_gateway_idempotency_runs_after_current_authorization_checks():
     app = gateway_main.create_app()
     middleware_names = [middleware.cls.__name__ for middleware in app.user_middleware]
 
-    assert middleware_names.index("GatewayCedarAuthMiddleware") < middleware_names.index("IdempotencyMiddleware")
+    assert middleware_names.index(
+        "GatewayCedarAuthMiddleware"
+    ) < middleware_names.index("IdempotencyMiddleware")
     assert "BillingAuthMiddleware" not in middleware_names
     assert "UsageTrackingMiddleware" not in middleware_names
 
@@ -319,6 +334,65 @@ def test_signing_key_routes_have_exact_cedar_permissions(method: str, permission
     ) == (permission, "signing-key")
 
 
+@pytest.mark.parametrize(
+    ("path", "permission", "resource"),
+    [
+        ("/v1/vc-api/credentials/issue", "issuance:initiate", "issuance"),
+        (
+            "/v1/vc-api/credentials/verify",
+            "verification:execute",
+            "verification",
+        ),
+        (
+            "/v1/vc-api/presentations/verify",
+            "verification:execute",
+            "verification",
+        ),
+    ],
+)
+def test_vc_api_routes_have_exact_cedar_permissions(
+    path: str,
+    permission: str,
+    resource: str,
+):
+    assert cedar_actions.resolve_action_and_resource("POST", path) == (
+        permission,
+        resource,
+    )
+
+
+def test_vc_api_cedar_registration_is_idempotent():
+    before = list(cedar_actions.SPECIAL_ROUTE_RULES)
+
+    gateway_main._register_vc_api_cedar_routes()
+
+    assert cedar_actions.SPECIAL_ROUTE_RULES == before
+
+
+@pytest.mark.parametrize(
+    ("permission", "scopes", "allowed"),
+    [
+        ("issuance:initiate", ["credentials:issue"], True),
+        ("issuance:initiate", ["credentials:read"], False),
+        ("verification:execute", ["credentials:read"], True),
+        ("verification:execute", ["flows:execute"], True),
+        ("verification:execute", ["credentials:issue"], False),
+    ],
+)
+def test_vc_api_uses_least_privilege_api_key_scopes(
+    permission: str,
+    scopes: list[str],
+    allowed: bool,
+):
+    assert (
+        gateway_main.GatewayCedarAuthMiddleware._api_key_allowed(
+            permission,
+            scopes,
+        )
+        is allowed
+    )
+
+
 def test_signing_key_cedar_registration_is_idempotent():
     before = list(cedar_actions.SPECIAL_ROUTE_RULES)
 
@@ -331,7 +405,9 @@ def test_signing_key_cedar_registration_does_not_duplicate_future_upstream_mappi
     monkeypatch: pytest.MonkeyPatch,
 ):
     upstream_rules: list = []
-    monkeypatch.setattr(gateway_main._cedar_actions, "SPECIAL_ROUTE_RULES", upstream_rules)
+    monkeypatch.setattr(
+        gateway_main._cedar_actions, "SPECIAL_ROUTE_RULES", upstream_rules
+    )
     monkeypatch.setattr(
         gateway_main._cedar_actions,
         "resolve_action_and_resource",
@@ -419,7 +495,9 @@ async def test_signing_key_query_org_cannot_cross_session_membership_boundary(
 
     @app.api_route("/v1/signing-keys/services/example", methods=[method])
     async def protected_route(request: Request):
-        reached.append((request.state.organization_id, request.state.required_permission))
+        reached.append(
+            (request.state.organization_id, request.state.required_permission)
+        )
         return JSONResponse({"ok": True})
 
     app.add_middleware(gateway_main.GatewayCedarAuthMiddleware)
@@ -467,10 +545,13 @@ def test_gateway_cedar_maps_only_supported_signing_key_api_scopes(
     scopes: list[str],
     allowed: bool,
 ):
-    assert gateway_main.GatewayCedarAuthMiddleware._api_key_allowed(
-        permission,
-        scopes,
-    ) is allowed
+    assert (
+        gateway_main.GatewayCedarAuthMiddleware._api_key_allowed(
+            permission,
+            scopes,
+        )
+        is allowed
+    )
 
 
 def test_gateway_cedar_delegates_other_api_scope_decisions_to_marty_common():
@@ -534,6 +615,7 @@ async def test_signing_key_api_key_is_org_bound_and_scope_bound():
 # SessionCache tests
 # ---------------------------------------------------------------------------
 
+
 class TestSessionCache:
     def test_cache_set_get(self, session_cache: SessionCache):
         session_cache.set("s1", {"user_id": "u1"})
@@ -571,6 +653,7 @@ class TestSessionCache:
 # ---------------------------------------------------------------------------
 # AuthMiddleware tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 class TestAuthMiddleware:
@@ -632,10 +715,13 @@ class TestAuthMiddleware:
 
     @patch("gateway.middleware.get_route_config", side_effect=_fake_get_route_config)
     async def test_valid_session_from_cache(self, _mock, auth_app, session_cache):
-        session_cache.set("cached-sess", {
-            "user_id": "u-cached",
-            "email": "cached@example.com",
-        })
+        session_cache.set(
+            "cached-sess",
+            {
+                "user_id": "u-cached",
+                "email": "cached@example.com",
+            },
+        )
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=auth_app), base_url="http://test"
         ) as client:
@@ -732,6 +818,7 @@ class TestAuthMiddleware:
 # RateLimitMiddleware tests
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 class TestRateLimitMiddleware:
     async def test_rate_limit_within_budget(self, rate_app):
@@ -745,7 +832,9 @@ class TestRateLimitMiddleware:
 
     async def test_rate_limit_exceeded_local(self, rate_app):
         transport = httpx.ASGITransport(app=rate_app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
             # Burn through the entire budget
             for _ in range(_RATE_LIMIT_RPM):
                 r = await client.get("/v1/test")
@@ -793,7 +882,9 @@ class TestContentTypeEnforcementMiddleware:
         assert resp.status_code == 200
         assert resp.json() == {"ok": True}
 
-    async def test_unknown_media_type_still_rejected_for_non_exempt_paths(self, content_type_app):
+    async def test_unknown_media_type_still_rejected_for_non_exempt_paths(
+        self, content_type_app
+    ):
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=content_type_app), base_url="http://test"
         ) as client:
@@ -852,9 +943,12 @@ class TestMIPCompliance:
 
     def test_mip_error_response_format(self):
         """MIP 17.7 - Error responses MUST include error, error_description, message_id."""
-        resp = mip_error_response(400, "bad_request", "Missing required field", field="email")
+        resp = mip_error_response(
+            400, "bad_request", "Missing required field", field="email"
+        )
         body = resp.body
         import json as _json
+
         data = _json.loads(body)
         assert data["error"] == "bad_request"
         assert data["error_description"] == "Missing required field"
@@ -864,8 +958,11 @@ class TestMIPCompliance:
 
     def test_mip_error_response_503_format(self):
         """MIP 17.7 - Service unavailable errors follow the same envelope."""
-        resp = mip_error_response(503, "service_unavailable", "Auth service unreachable")
+        resp = mip_error_response(
+            503, "service_unavailable", "Auth service unreachable"
+        )
         import json as _json
+
         data = _json.loads(resp.body)
         assert data["error"] == "service_unavailable"
         assert "message_id" in data
@@ -880,10 +977,14 @@ class TestMIPCompliance:
             "Constraint violations",
             details=[
                 {"field": "email", "message": "Email is required"},
-                {"field": "role", "message": "Role must be one of: admin, vendor, applicant"},
+                {
+                    "field": "role",
+                    "message": "Role must be one of: admin, vendor, applicant",
+                },
             ],
         )
         import json as _json
+
         data = _json.loads(resp.body)
         assert data["error"] == "validation_error"
         assert len(data["details"]) == 2

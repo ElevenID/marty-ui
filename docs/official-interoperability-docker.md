@@ -82,11 +82,14 @@ If `up` is interrupted after Compose creates project containers, rerun it with
 `--resume`. Resume accepts only resources carrying that exact project label;
 it does not adopt containers from another stack.
 
-Add `--include-w3c` after assigning both
-`W3C_VC_TEST_CREDENTIAL_POLICY_ID` and
-`W3C_VC_TEST_PRESENTATION_POLICY_ID`. The credential policy verifies issued
-JWT VCs without imposing presentation holder binding; the presentation policy
-verifies `eddsa-rdfc-2022` presentations with challenge and domain binding.
+W3C VC Data Model v2 runners call the ordinary `/v1/vc-api` gateway boundary
+with a disposable organization-scoped API key. Issuance requests name only the
+organization, template, and issuer DID; verification requests name only the
+organization and active presentation policy. The same gateway authentication,
+tenant authorization, issuer-profile resolution, OID4VCI issuance, and
+presentation-policy verification paths used by product clients remain active.
+No test-only Compose overlay or custody selector is accepted.
+
 For EUDI, start
 the pinned `conformance/eudi-reference.compose.yml` from
 `ElevenID/marty-integration-tests` as its own Compose project. Its wallet
