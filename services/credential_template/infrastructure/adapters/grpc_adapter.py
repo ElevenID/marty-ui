@@ -70,6 +70,8 @@ def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateRespon
                 "mdoc_element_identifier",
                 c.get("name", "") if c.get("mdoc_namespace") or c.get("namespace") else "",
             ),
+            derived_from=c.get("derived_from", ""),
+            display_icon=c.get("display", {}).get("icon", ""),
         )
         for c in resp.claims
     ]
@@ -317,11 +319,13 @@ class CredentialTemplateServiceGrpc(
                 claim_type=ClaimType(c.claim_type) if c.claim_type else ClaimType.STRING,
                 required=c.required,
                 selectively_disclosable=c.selectively_disclosable,
-                derivable=c.derivable,
+                derivable=c.derivable or bool(c.derived_from),
+                derived_from=c.derived_from or None,
                 pattern=c.pattern or None,
                 enum_values=list(c.enum_values) if c.enum_values else None,
                 mdoc_namespace=c.mdoc_namespace or None,
                 mdoc_element_identifier=c.mdoc_element_identifier or None,
+                display_icon=c.display_icon or None,
             ))
 
         if request.HasField("display_style"):
@@ -418,7 +422,13 @@ class CredentialTemplateServiceGrpc(
                     claim_type=ClaimType(c.claim_type) if c.claim_type else ClaimType.STRING,
                     required=c.required,
                     selectively_disclosable=c.selectively_disclosable,
-                    derivable=c.derivable,
+                    derivable=c.derivable or bool(c.derived_from),
+                    derived_from=c.derived_from or None,
+                    pattern=c.pattern or None,
+                    enum_values=list(c.enum_values) if c.enum_values else None,
+                    mdoc_namespace=c.mdoc_namespace or None,
+                    mdoc_element_identifier=c.mdoc_element_identifier or None,
+                    display_icon=c.display_icon or None,
                 )
                 for c in request.claims
             ]
