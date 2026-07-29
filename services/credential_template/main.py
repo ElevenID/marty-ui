@@ -1061,15 +1061,12 @@ class CredentialTemplateResponse(BaseModel):
     vct: str | None = None
     doctype: str | None = None
     credential_payload_format: str | None = None
-    issuer_profile_id: str | None = None
     application_template_id: str | None = None
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
     claims: list[dict]
     validity_rules: dict
-    issuer_key_id: str | None = None
     issuer_algorithm: str | None = None
-    key_access_mode: str | None = None
     issuer_certificate_chain_pem: str | None = None
     issuer_did: str | None = None
     auto_generate_artifacts: bool = False
@@ -2198,13 +2195,10 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
         vct=template.vct or None,
         doctype=template.doctype or None,
         credential_payload_format=canonical_payload_format,
-        issuer_profile_id=template.issuer_profile_id,
         application_template_id=template.application_template_id,
         trust_profile_id=template.trust_profile_id,
         revocation_profile_id=template.revocation_profile_id,
-        issuer_key_id=template.issuer_key_id,
         issuer_algorithm=template.issuer_algorithm,
-        key_access_mode=template.key_access_mode,
         issuer_certificate_chain_pem=template.issuer_certificate_chain_pem,
         issuer_did=template.issuer_did,
         auto_generate_artifacts=template.auto_generate_artifacts,
