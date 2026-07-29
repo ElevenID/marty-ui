@@ -508,6 +508,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
                 deployment_profile_id=request.deployment_profile_id or None,
                 external_reference=request.external_reference or None,
                 callback_url=None,
+                request_transport=request.request_transport or "request_uri",
                 expiry_minutes=request.expiry_minutes or 15,
             )
             # Public HTTP verification still rejects internal HTTP callbacks.

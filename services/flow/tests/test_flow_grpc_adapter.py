@@ -64,6 +64,7 @@ class TestStartVerification:
             trust_profile_id="trust-1",
             user_id="user-1",
             callback_url="https://example.com/callback",
+            request_transport="url_query",
         )
         resp = await servicer.StartVerification(req, ctx)
 
@@ -74,6 +75,7 @@ class TestStartVerification:
         assert ctx.code is None
         forwarded = start_verification.call_args.kwargs["request"]
         assert forwarded.trust_profile_id == "trust-1"
+        assert forwarded.request_transport == "url_query"
 
     async def test_internal_http_callback_is_allowed_for_grpc(self, ctx):
         result = SimpleNamespace(
