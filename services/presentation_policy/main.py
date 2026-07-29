@@ -21,6 +21,7 @@ Port: 8009
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -1754,6 +1755,15 @@ def _verify_mdoc(
             session_transcript_cbor,
             trusted_root_certs_pem,
             pinned_issuer_certs_pem,
+        )
+        logger.info(
+            "mDoc verification binding transcript_sha256=%s "
+            "issuer_signature_valid=%s issuer_trusted=%s "
+            "device_authentication_valid=%s",
+            hashlib.sha256(session_transcript_cbor).hexdigest(),
+            bool(result.issuer_signature_valid),
+            bool(result.issuer_trusted),
+            bool(result.device_authentication_valid),
         )
         is_valid = bool(
             result.issuer_signature_valid

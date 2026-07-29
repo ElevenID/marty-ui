@@ -4683,6 +4683,38 @@ def _build_openid4vp_mdoc_session_transcript(
     )
 
 
+def _openid4vp_mdoc_binding_digests(
+    *,
+    session_transcript: bytes,
+    client_id: str,
+    nonce: str,
+    response_uri: str,
+    response_encryption_jwk: dict[str, Any] | None,
+) -> dict[str, str]:
+    """Return non-reversible diagnostics for an mdoc request binding.
+
+    Official interoperability runs can compare these digests with values
+    exported by an unmodified external runner without logging the request
+    nonce, verifier identity, callback URL, response key, or transcript.
+    """
+    response_key_thumbprint = _openid4vp_response_key_thumbprint(
+        response_encryption_jwk
+    )
+    return {
+        "transcript_sha256": hashlib.sha256(session_transcript).hexdigest(),
+        "client_id_sha256": hashlib.sha256(client_id.encode("utf-8")).hexdigest(),
+        "nonce_sha256": hashlib.sha256(nonce.encode("utf-8")).hexdigest(),
+        "response_uri_sha256": hashlib.sha256(
+            response_uri.encode("utf-8")
+        ).hexdigest(),
+        "response_key_thumbprint_sha256": (
+            hashlib.sha256(response_key_thumbprint).hexdigest()
+            if response_key_thumbprint is not None
+            else "none"
+        ),
+    }
+
+
 def _verifier_x509_certificates() -> list[x509.Certificate]:
     """Load the verifier leaf certificate and any issuer chain certificates.
 
@@ -5331,21 +5363,44 @@ async def _submit_verification_response_internal(
                 isinstance(value, str) and value
                 for value in (mdoc_client_id, mdoc_nonce, mdoc_response_uri)
             ):
+                response_encryption_jwk = instance.context.get(
+                    "oid4vp_response_encryption_jwk"
+                )
+                mdoc_session_transcript = (
+                    _build_openid4vp_mdoc_session_transcript(
+                        client_id=mdoc_client_id,
+                        nonce=mdoc_nonce,
+                        response_uri=mdoc_response_uri,
+                        response_encryption_jwk=response_encryption_jwk,
+                    )
+                )
                 evaluation_context.update(
                     {
                         "mdoc_session_transcript_b64url": _base64url_encode(
-                            _build_openid4vp_mdoc_session_transcript(
-                                client_id=mdoc_client_id,
-                                nonce=mdoc_nonce,
-                                response_uri=mdoc_response_uri,
-                                response_encryption_jwk=instance.context.get(
-                                    "oid4vp_response_encryption_jwk"
-                                ),
-                            )
+                            mdoc_session_transcript
                         ),
                         "oid4vp_client_id": mdoc_client_id,
                         "oid4vp_response_uri": mdoc_response_uri,
                     }
+                )
+                binding_digests = _openid4vp_mdoc_binding_digests(
+                    session_transcript=mdoc_session_transcript,
+                    client_id=mdoc_client_id,
+                    nonce=mdoc_nonce,
+                    response_uri=mdoc_response_uri,
+                    response_encryption_jwk=response_encryption_jwk,
+                )
+                logger.info(
+                    "OID4VP mdoc binding "
+                    "flow_instance_sha256=%s transcript_sha256=%s "
+                    "client_id_sha256=%s nonce_sha256=%s "
+                    "response_uri_sha256=%s response_key_thumbprint_sha256=%s",
+                    hashlib.sha256(instance_id.encode("utf-8")).hexdigest(),
+                    binding_digests["transcript_sha256"],
+                    binding_digests["client_id_sha256"],
+                    binding_digests["nonce_sha256"],
+                    binding_digests["response_uri_sha256"],
+                    binding_digests["response_key_thumbprint_sha256"],
                 )
             eval_resp = await pp_stub.EvaluatePresentation(
                 pp_pb2.EvaluatePresentationRequest(
@@ -5476,7 +5531,6 @@ async def _submit_verification_response_internal(
     # -----------------------------------------------------------------------
     callback_url = instance.context.get("callback_url")
     if callback_url:
-        import hashlib
         import hmac as _hmac
 
         callback_payload = {
