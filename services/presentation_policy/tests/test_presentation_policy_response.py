@@ -8,13 +8,14 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from marty_common.org_authorization import (
     OrganizationMembership,
     OrganizationRoleSummary,
 )
 import pytest
+from starlette.requests import Request
 
 from services.presentation_policy import main as pp
 
@@ -77,6 +78,105 @@ def _build_client(
     app.state.org_client = org_client
     pp.app.state.org_client = org_client
     return TestClient(app, headers={"X-User-Id": "user-1"})
+
+
+def _gateway_request(**headers: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/presentation-policies/policy-1/evaluate",
+            "headers": [
+                (name.lower().encode("ascii"), value.encode("ascii"))
+                for name, value in headers.items()
+            ],
+        }
+    )
+
+
+def test_policy_evaluation_recognizes_complete_gateway_api_key_context() -> None:
+    request = _gateway_request(
+        **{
+            "x-api-key-id": "key-1",
+            "x-api-key-scopes": "credentials:read",
+            "x-organization-id": "org-1",
+            "x-required-permission": "verification:execute",
+        }
+    )
+
+    assert pp._authorize_gateway_api_key_evaluation(
+        request,
+        user_id="api_key:key-1",
+        organization_id="org-1",
+    )
+
+
+@pytest.mark.parametrize(
+    ("headers", "user_id", "organization_id"),
+    [
+        (
+            {
+                "x-api-key-id": "key-1",
+                "x-api-key-scopes": "credentials:issue",
+                "x-organization-id": "org-1",
+                "x-required-permission": "verification:execute",
+            },
+            "api_key:key-1",
+            "org-1",
+        ),
+        (
+            {
+                "x-api-key-id": "key-1",
+                "x-api-key-scopes": "credentials:read",
+                "x-organization-id": "org-2",
+                "x-required-permission": "verification:execute",
+            },
+            "api_key:key-1",
+            "org-1",
+        ),
+        (
+            {
+                "x-api-key-id": "key-1",
+                "x-api-key-scopes": "credentials:read",
+                "x-organization-id": "org-1",
+                "x-required-permission": "issuance:initiate",
+            },
+            "api_key:key-1",
+            "org-1",
+        ),
+        (
+            {
+                "x-api-key-id": "key-1",
+                "x-api-key-scopes": "credentials:read",
+                "x-organization-id": "org-1",
+                "x-required-permission": "verification:execute",
+            },
+            "api_key:key-2",
+            "org-1",
+        ),
+    ],
+)
+def test_policy_evaluation_rejects_inconsistent_gateway_api_key_context(
+    headers: dict[str, str],
+    user_id: str,
+    organization_id: str,
+) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        pp._authorize_gateway_api_key_evaluation(
+            _gateway_request(**headers),
+            user_id=user_id,
+            organization_id=organization_id,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+def test_policy_evaluation_keeps_session_principals_on_membership_rbac() -> None:
+    assert not pp._authorize_gateway_api_key_evaluation(
+        _gateway_request(),
+        user_id="user-1",
+        organization_id="org-1",
+    )
 
 
 async def _save_policy(
@@ -1976,3 +2076,45 @@ def test_saved_policy_evaluation_checks_membership_before_verification(
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Cross-tenant policy access denied"
+
+
+def test_saved_policy_evaluation_uses_complete_gateway_api_key_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    client = _build_client(repo)
+    membership = pp.app.state.org_client.get_membership
+
+    async def authorized_evaluation(**_kwargs: object) -> pp.PolicyEvaluationResponse:
+        return pp.PolicyEvaluationResponse(
+            result="passed",
+            policy_id=policy.id,
+            policy_name=policy.name,
+            credential_results=[],
+            total_requirements=0,
+            satisfied_requirements=0,
+            required_satisfied=0,
+            required_total=0,
+            decision="allow",
+            decision_reason="Verified",
+            verified_claims={},
+            evaluation_timestamp="2026-07-28T00:00:00+00:00",
+        )
+
+    monkeypatch.setattr(pp, "evaluate_presentation", authorized_evaluation)
+    response = client.post(
+        f"/v1/presentation-policies/{policy.id}/evaluate",
+        json={"vp_token": "header.payload.signature"},
+        headers={
+            "x-user-id": "api_key:key-1",
+            "x-api-key-id": "key-1",
+            "x-api-key-scopes": "credentials:read",
+            "x-organization-id": "org-1",
+            "x-required-permission": "verification:execute",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["decision"] == "allow"
+    membership.assert_not_awaited()
