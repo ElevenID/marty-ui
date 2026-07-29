@@ -36,7 +36,7 @@ from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, R
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from marty_common.dto import DeleteResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from marty_common import (
     CedarEngine,
@@ -3076,6 +3076,8 @@ class PolicyEvaluationResponse(BaseModel):
 class EvaluatePresentationRequest(BaseModel):
     """Request to evaluate a verifiable presentation against a policy."""
 
+    model_config = ConfigDict(extra="forbid")
+
     # JSON-LD Data Integrity documents remain structured JSON all the way to
     # the Rust verifier. String serializations continue to use the existing
     # JWT, SD-JWT and mdoc path.
@@ -3089,22 +3091,26 @@ class EvaluatePresentationRequest(BaseModel):
     audience: str | None = Field(None, max_length=512)  # Expected audience
 
     # Context for evaluation
-    context: dict[str, Any] = {}
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvaluateInlineRequest(BaseModel):
     """Request to evaluate with inline policy (ad-hoc verification)."""
 
-    vp_token: str = Field(max_length=1_000_000)
+    model_config = ConfigDict(extra="forbid")
 
-    # Inline policy definition
-    required_claims: list[dict] = []  # [{claim_name, constraints}]
-    accepted_credential_types: list[str] = []
+    organization_id: str = Field(min_length=1, max_length=255)
+    vp_token: str | dict[str, Any] = Field(max_length=1_000_000)
+    credential_requirements: list[CredentialRequirementModel] = Field(
+        min_length=1,
+    )
     trust_profile_id: str | None = Field(None, max_length=255)
+    compliance_profile_id: str | None = Field(None, max_length=255)
 
     # Verification options
     nonce: str | None = Field(None, max_length=512)
     audience: str | None = Field(None, max_length=512)
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 @router.post(
@@ -3112,6 +3118,29 @@ class EvaluateInlineRequest(BaseModel):
     response_model=PolicyEvaluationResponse,
     response_model_exclude_none=True,
 )
+async def evaluate_presentation_http(
+    policy_id: str,
+    request: EvaluatePresentationRequest,
+    http_request: Request,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
+) -> PolicyEvaluationResponse:
+    """Authorize the public request before invoking the shared evaluator."""
+    policy = await repo.get(policy_id)
+    if not policy:
+        raise HTTPException(status_code=404, detail="Presentation Policy not found")
+
+    org_client = await get_organization_client(http_request)
+    membership = await org_client.get_membership(user_id, policy.organization_id)
+    ensure_membership_permission(membership, "presentation-policy", "evaluate")
+    return await evaluate_presentation(
+        policy_id=policy_id,
+        request=request,
+        http_request=http_request,
+        repo=repo,
+    )
+
+
 async def evaluate_presentation(
     policy_id: str,
     request: EvaluatePresentationRequest,
@@ -3669,6 +3698,8 @@ async def evaluate_presentation(
 )
 async def evaluate_presentation_inline(
     request: EvaluateInlineRequest,
+    http_request: Request,
+    user_id: str = Depends(get_current_user_id),
 ) -> PolicyEvaluationResponse:
     """
     Evaluate a presentation with inline policy definition.
@@ -3676,56 +3707,38 @@ async def evaluate_presentation_inline(
     Use this for ad-hoc verification where you don't have a saved policy.
     For production use, prefer saved policies for consistency and auditing.
     """
-    # Build inline policy
-    claim_results = []
-    verified_claims: dict[str, Any] = {}
-
-    for claim_def in request.required_claims:
-        claim_name = claim_def.get("claim_name", "unknown")
-        claim_results.append(
-            ClaimEvaluationResult(
-                claim_name=claim_name,
-                satisfied=True,  # Simulated
-                presented_value="[simulated]",
-            )
-        )
-        verified_claims[claim_name] = "[simulated]"
-
-    credential_results = (
-        [
-            CredentialEvaluationResult(
-                credential_template_id=ct,
-                satisfied=True,
-                issuer_did="did:example:issuer",
-                claim_results=claim_results,
-            )
-            for ct in request.accepted_credential_types
-        ]
-        if request.accepted_credential_types
-        else [
-            CredentialEvaluationResult(
-                credential_template_id="inline",
-                satisfied=True,
-                issuer_did="did:example:issuer",
-                claim_results=claim_results,
-            )
-        ]
+    org_client = await get_organization_client(http_request)
+    membership = await org_client.get_membership(
+        user_id,
+        request.organization_id,
     )
+    ensure_membership_permission(membership, "presentation-policy", "evaluate")
 
-    return PolicyEvaluationResponse(
-        result=EvaluationResult.PASSED.value,
-        policy_id="inline",
-        policy_name="Inline Policy",
-        credential_results=credential_results,
-        total_requirements=len(request.required_claims),
-        satisfied_requirements=len(request.required_claims),
-        required_satisfied=len(request.required_claims),
-        required_total=len(request.required_claims),
-        decision="allow",
-        decision_reason="Inline evaluation passed (simulated)",
-        verified_claims=verified_claims,
-        evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
-        nonce=request.nonce,
+    policy = PresentationPolicy(
+        id=f"inline-{uuid.uuid4()}",
+        organization_id=request.organization_id,
+        name="Inline Policy",
+        status=PolicyStatus.ACTIVE,
+        trust_profile_id=request.trust_profile_id,
+        compliance_profile_id=request.compliance_profile_id,
+        credential_requirements=[
+            _build_credential_requirement(requirement)
+            for requirement in request.credential_requirements
+        ],
+    )
+    inline_repo = InMemoryPresentationPolicyRepository()
+    await inline_repo.save(policy)
+    return await evaluate_presentation(
+        policy_id=policy.id,
+        request=EvaluatePresentationRequest(
+            vp_token=request.vp_token,
+            trust_profile_id=request.trust_profile_id,
+            nonce=request.nonce,
+            audience=request.audience,
+            context=request.context,
+        ),
+        http_request=http_request,
+        repo=inline_repo,
     )
 
 
