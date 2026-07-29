@@ -175,7 +175,7 @@ class PostgresOrganizationRepository(OrganizationRepositoryPort):
         async with self.session_factory() as session:
             # Build query with base filters
             query = select(organizations_table).where(
-                organizations_table.c.is_discoverable == True,
+                organizations_table.c.is_discoverable.is_(True),
                 organizations_table.c.status == OrganizationStatus.ACTIVE.value,
             )
             
@@ -506,8 +506,12 @@ class PostgresApiKeyRepository(ApiKeyRepositoryPort):
     def _row_to_entity(self, row: Any) -> ApiKey:
         """Convert database row to entity."""
         return ApiKey(
-            id=row.id,
-            organization_id=row.organization_id,
+            # PostgreSQL UUID columns are returned as ``uuid.UUID`` objects,
+            # while organization domain identifiers are strings. Normalize at
+            # the persistence boundary so every adapter observes the declared
+            # domain type (including protobuf ``string`` fields).
+            id=str(row.id),
+            organization_id=str(row.organization_id),
             name=row.name,
             description=row.description,
             key_prefix=row.key_prefix,
