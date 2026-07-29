@@ -500,6 +500,67 @@ def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
     assert "nonce-1" not in caplog.text
 
 
+def test_mdoc_verification_logs_only_stable_error_category(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level("INFO", logger=pp.logger.name)
+    raw_error = (
+        "Holder device authentication failed for secret-document: "
+        "failed verifying device signature: signature error"
+    )
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_mdoc_presentation=lambda *_args: SimpleNamespace(
+                issuer_signature_valid=True,
+                issuer_trusted=True,
+                device_authentication_valid=False,
+                document_types=["org.iso.18013.5.1.mDL"],
+                error=raw_error,
+            ),
+        ),
+    )
+    mdoc_bytes = b"\xa1aa\x01"
+    transcript = b"\x83\xf6\xf6\x82qOpenID4VPHandoverX"
+
+    result = pp._verify_mdoc(
+        base64.urlsafe_b64encode(mdoc_bytes).rstrip(b"=").decode(),
+        "nonce-secret",
+        "did:web:verifier.example",
+        {
+            "mdoc_session_transcript_b64url": base64.urlsafe_b64encode(transcript)
+            .rstrip(b"=")
+            .decode(),
+            "oid4vp_client_id": "did:web:verifier.example",
+        },
+        ["-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----"],
+        [],
+    )
+
+    assert result["verified"] is False
+    assert result["error"] == raw_error
+    assert "device_auth_error_kind=device-signature-invalid" in caplog.text
+    assert raw_error not in caplog.text
+    assert "secret-document" not in caplog.text
+    assert "nonce-secret" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (None, "none"),
+        ("Currently unsupported format", "device-auth-method-unsupported"),
+        ("device key jwk is missing coordinates", "device-key-coordinates-missing"),
+        ("algorithm in protected headers did not match", "device-signature-algorithm-mismatch"),
+        ("an unfamiliar internal failure", "unclassified"),
+    ],
+)
+def test_classify_mdoc_verification_error(error: object, expected: str) -> None:
+    assert pp._classify_mdoc_verification_error(error) == expected
+
+
 def test_mdoc_trust_material_preserves_root_and_direct_pin_semantics() -> None:
     root = "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----"
     pinned = "-----BEGIN CERTIFICATE-----\npinned\n-----END CERTIFICATE-----"
