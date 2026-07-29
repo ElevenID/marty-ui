@@ -256,8 +256,12 @@ async def test_mdoc_claim_mapping_survives_the_public_gateway(
                 "claims": [
                     {
                         "name": "family_name",
-                        "type": "STRING",
+                        "claim_type": "string",
+                        "display_name": "Family name",
+                        "display_icon": "https://issuer.example/icons/name.svg",
                         "required": True,
+                        "derivable": False,
+                        "pattern": ".+",
                         "namespace": "org.iso.18013.5.1",
                         "mdoc_namespace": "org.iso.18013.5.1",
                         "mdoc_element_identifier": "family_name",
@@ -301,6 +305,10 @@ async def test_mdoc_claim_mapping_survives_the_public_gateway(
             "type": "STRING",
             "required": True,
             "namespace": "org.iso.18013.5.1",
+            "display": {
+                "label": "Family name",
+                "icon": "https://issuer.example/icons/name.svg",
+            },
         }
     ]
 
@@ -337,6 +345,84 @@ def test_claim_contract_rejects_unknown_fields_instead_of_dropping_them() -> Non
                 }
             ]
         )
+
+
+def test_claim_contract_preserves_all_canonical_protocol_fields() -> None:
+    template = _body(
+        claims=[
+            {
+                "name": "birth_date",
+                "type": "DATE",
+                "description": "Date of birth",
+                "required": True,
+                "selectively_disclosable": True,
+                "display": {
+                    "label": "Date of birth",
+                    "icon": "https://issuer.example/icons/birth-date.svg",
+                },
+            },
+            {
+                "name": "age_over_21",
+                "type": "BOOLEAN",
+                "description": "Whether the holder is at least 21",
+                "required": False,
+                "selectively_disclosable": True,
+                "derived_from": "birth_date",
+                "display": {"label": "Age 21 or older"},
+            },
+        ],
+    )
+
+    source, derived = template.claims
+    assert source.claim_type == "date"
+    assert source.description == "Date of birth"
+    assert source.display is not None
+    assert source.display.icon == "https://issuer.example/icons/birth-date.svg"
+    assert derived.claim_type == "boolean"
+    assert derived.derived_from == "birth_date"
+    assert derived.display_name == "Age 21 or older"
+
+    internal = credentials._claims_for_credential_template_service(
+        template.claims
+    )
+    assert internal[0]["description"] == "Date of birth"
+    assert internal[0]["display_name"] == "Date of birth"
+    assert internal[0]["display_icon"] == (
+        "https://issuer.example/icons/birth-date.svg"
+    )
+    assert internal[1]["derived_from"] == "birth_date"
+    assert internal[1]["derivable"] is True
+
+
+@pytest.mark.parametrize(
+    ("claims", "message"),
+    [
+        (
+            [
+                {"name": "birth_date", "type": "DATE"},
+                {
+                    "name": "age_over_21",
+                    "type": "BOOLEAN",
+                    "derived_from": "missing_birth_date",
+                },
+            ],
+            "derives from unknown claim",
+        ),
+        (
+            [
+                {"name": "given_name", "type": "STRING"},
+                {"name": "given_name", "type": "STRING"},
+            ],
+            "claim names must be unique",
+        ),
+    ],
+)
+def test_claim_contract_rejects_invalid_claim_graphs(
+    claims: list[dict],
+    message: str,
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        _body(claims=claims)
 
 
 def test_public_template_model_uses_format_specific_identity_fields() -> None:

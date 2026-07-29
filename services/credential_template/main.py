@@ -32,7 +32,7 @@ from typing import Any, AsyncGenerator
 from urllib.parse import parse_qs, quote, urlparse
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Header, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Annotated
 from marty_common import OrganizationContext, require_org_membership
 from marty_common.service_setup import create_service_app
@@ -203,6 +203,7 @@ class ClaimDefinition:
     # Privacy settings
     selectively_disclosable: bool = True  # Can be disclosed individually
     derivable: bool = False  # Can derive predicates (e.g., age > 21)
+    derived_from: str | None = None  # Canonical source claim for a derived claim
     
     # Validation
     pattern: str | None = None  # Regex for validation
@@ -213,6 +214,7 @@ class ClaimDefinition:
     # Format-specific
     mdoc_namespace: str | None = None  # For mdoc: org.iso.18013.5.1
     mdoc_element_identifier: str | None = None
+    display_icon: str | None = None
 
 
 @dataclass
@@ -957,12 +959,29 @@ class ClaimDefinitionModel(BaseModel):
     required: bool = True
     selectively_disclosable: bool = True
     derivable: bool = False
+    derived_from: str | None = None
     pattern: str | None = None
     enum_values: list[str] | None = None
     min_value: float | None = None
     max_value: float | None = None
     mdoc_namespace: str | None = None
     mdoc_element_identifier: str | None = None
+    display_icon: str | None = None
+
+
+def _validate_claim_definitions(claims: list[ClaimDefinitionModel]) -> None:
+    names = [claim.name for claim in claims]
+    if len(names) != len(set(names)):
+        raise ValueError("claim names must be unique")
+    known_names = set(names)
+    for claim in claims:
+        if claim.derived_from == claim.name:
+            raise ValueError("derived_from must identify a different source claim")
+        if claim.derived_from and claim.derived_from not in known_names:
+            raise ValueError(
+                f"claim {claim.name!r} derives from unknown claim "
+                f"{claim.derived_from!r}"
+            )
 
 
 class DisplayStyleModel(BaseModel):
@@ -1025,6 +1044,11 @@ class CreateCredentialTemplateRequest(BaseModel):
     credential_payload_format: str | None = None
     schema_uri: dict | None = None
 
+    @model_validator(mode="after")
+    def validate_claim_references(self) -> "CreateCredentialTemplateRequest":
+        _validate_claim_definitions(self.claims)
+        return self
+
 
 class UpdateCredentialTemplateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1048,6 +1072,12 @@ class UpdateCredentialTemplateRequest(BaseModel):
     issuer_did: str | None = None
     auto_generate_artifacts: bool | None = None
     credential_payload_format: str | None = None
+
+    @model_validator(mode="after")
+    def validate_claim_references(self) -> "UpdateCredentialTemplateRequest":
+        if self.claims is not None:
+            _validate_claim_definitions(self.claims)
+        return self
 
 
 class CredentialTemplateResponse(BaseModel):
@@ -1848,13 +1878,15 @@ async def create_credential_template(
             claim_type=ClaimType(claim.claim_type),
             required=claim.required,
             selectively_disclosable=claim.selectively_disclosable,
-            derivable=claim.derivable,
+            derivable=claim.derivable or bool(claim.derived_from),
+            derived_from=claim.derived_from,
             pattern=claim.pattern,
             enum_values=claim.enum_values,
             min_value=claim.min_value,
             max_value=claim.max_value,
             mdoc_namespace=claim.mdoc_namespace,
             mdoc_element_identifier=claim.mdoc_element_identifier,
+            display_icon=claim.display_icon,
         ))
     
     # Set derived attributes
@@ -2162,7 +2194,15 @@ async def add_claim(
         claim_type=ClaimType(claim.claim_type),
         required=claim.required,
         selectively_disclosable=claim.selectively_disclosable,
-        derivable=claim.derivable,
+        derivable=claim.derivable or bool(claim.derived_from),
+        derived_from=claim.derived_from,
+        pattern=claim.pattern,
+        enum_values=claim.enum_values,
+        min_value=claim.min_value,
+        max_value=claim.max_value,
+        mdoc_namespace=claim.mdoc_namespace,
+        mdoc_element_identifier=claim.mdoc_element_identifier,
+        display_icon=claim.display_icon,
     ))
     
     template.updated_at = datetime.now(timezone.utc)
@@ -2231,8 +2271,21 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
                     if c.mdoc_element_identifier
                     else {}
                 ),
-                **({"derived_from": c.name} if c.derivable else {}),
-                **({"display": {"label": c.display_name}} if c.display_name else {}),
+                **(
+                    {"derived_from": c.derived_from or c.name}
+                    if c.derived_from or c.derivable
+                    else {}
+                ),
+                **(
+                    {
+                        "display": {
+                            **({"label": c.display_name} if c.display_name else {}),
+                            **({"icon": c.display_icon} if c.display_icon else {}),
+                        }
+                    }
+                    if c.display_name or c.display_icon
+                    else {}
+                ),
             }
             for c in template.claims
         ],

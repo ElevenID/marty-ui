@@ -52,6 +52,25 @@ def _claims_for_credential_template_service(claims) -> list[dict]:
     internal_claims: list[dict] = []
     for claim in claims:
         payload = claim.model_dump(exclude_none=True)
+        display = payload.pop("display", None) or {}
+        if display.get("label"):
+            payload["display_name"] = display["label"]
+        if display.get("icon"):
+            payload["display_icon"] = display["icon"]
+        if claim.derived_from:
+            payload["derived_from"] = claim.derived_from
+            payload["derivable"] = True
+        elif claim.derivable is not None:
+            payload["derivable"] = claim.derivable
+        for compatibility_field in (
+            "pattern",
+            "enum_values",
+            "min_value",
+            "max_value",
+        ):
+            value = getattr(claim, compatibility_field)
+            if value is not None:
+                payload[compatibility_field] = value
         namespace = payload.pop("namespace", None)
         if namespace:
             payload["mdoc_namespace"] = namespace
@@ -85,6 +104,28 @@ def _sanitize_credential_template_response(response: Response) -> Response:
                 public_claims.append(claim)
                 continue
             public_claim = dict(claim)
+            internal_claim_type = public_claim.pop("claim_type", None)
+            if internal_claim_type and not public_claim.get("type"):
+                public_claim["type"] = str(internal_claim_type).upper()
+            display_name = public_claim.pop("display_name", None)
+            display_icon = public_claim.pop("display_icon", None)
+            display = public_claim.get("display")
+            if not isinstance(display, dict):
+                display = {}
+            if display_name and not display.get("label"):
+                display["label"] = display_name
+            if display_icon and not display.get("icon"):
+                display["icon"] = display_icon
+            if display:
+                public_claim["display"] = display
+            public_claim.pop("derivable", None)
+            for internal_field in (
+                "pattern",
+                "enum_values",
+                "min_value",
+                "max_value",
+            ):
+                public_claim.pop(internal_field, None)
             namespace = public_claim.pop("mdoc_namespace", None)
             public_claim.pop("mdoc_element_identifier", None)
             if namespace and not public_claim.get("namespace"):

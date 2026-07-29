@@ -68,12 +68,14 @@ class PostgresCredentialTemplateRepository:
                     "required": claim.required,
                     "selectively_disclosable": claim.selectively_disclosable,
                     "derivable": claim.derivable,
+                    "derived_from": claim.derived_from,
                     "pattern": claim.pattern,
                     "enum_values": claim.enum_values,
                     "min_value": claim.min_value,
                     "max_value": claim.max_value,
                     "mdoc_namespace": claim.mdoc_namespace,
                     "mdoc_element_identifier": claim.mdoc_element_identifier,
+                    "display_icon": claim.display_icon,
                 }
                 for claim in template.claims
             ]
@@ -205,13 +207,15 @@ class PostgresCredentialTemplateRepository:
                     claim_type=ClaimType(self._claim_type_value(c.get("claim_type") or c.get("type"))),
                     required=bool(c.get("required", True)),
                     selectively_disclosable=c.get("selectively_disclosable", True),
-                    derivable=c.get("derivable", False),
+                    derivable=c.get("derivable", False) or bool(c.get("derived_from")),
+                    derived_from=c.get("derived_from"),
                     pattern=c.get("pattern"),
                     enum_values=c.get("enum_values"),
                     min_value=c.get("min_value"),
                     max_value=c.get("max_value"),
                     mdoc_namespace=c.get("mdoc_namespace"),
                     mdoc_element_identifier=c.get("mdoc_element_identifier"),
+                    display_icon=c.get("display_icon"),
                 )
             )
         
