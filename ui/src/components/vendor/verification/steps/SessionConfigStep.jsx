@@ -2,13 +2,14 @@ import {
   Box,
   Typography,
   TextField,
+  MenuItem,
   FormControlLabel,
   Switch,
   Alert,
 } from '@mui/material';
 import SettingsIcon from '@mui/icons-material/Settings';
 
-function SessionConfigStep({ value, onChange }) {
+function SessionConfigStep({ value, onChange, issuerIdentities = [] }) {
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
@@ -29,6 +30,25 @@ function SessionConfigStep({ value, onChange }) {
         sx={{ mb: 3 }}
         helperText="Displayed to the wallet holder when prompted to share credentials."
       />
+
+      {issuerIdentities.length > 1 && (
+        <TextField
+          select
+          required
+          label="Issuer DID"
+          fullWidth
+          value={value?.issuer_did || ''}
+          onChange={(e) => onChange({ ...value, issuer_did: e.target.value })}
+          helperText="Select the public verifier identity for this request."
+          sx={{ mb: 3 }}
+        >
+          {issuerIdentities.map((identity) => (
+            <MenuItem key={identity.issuer_did} value={identity.issuer_did}>
+              {identity.issuer_did}
+            </MenuItem>
+          ))}
+        </TextField>
+      )}
 
       <FormControlLabel
         control={
