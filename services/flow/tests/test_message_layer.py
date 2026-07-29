@@ -279,6 +279,7 @@ def test_mdoc_binding_diagnostics_expose_only_digests() -> None:
     client_id = "x509_hash:private-client-identifier"
     nonce = "high-entropy-private-nonce"
     response_uri = "https://verifier.example/private-flow/submit"
+    presentation = "private-device-response"
     transcript = _build_openid4vp_mdoc_session_transcript(
         client_id=client_id,
         nonce=nonce,
@@ -292,6 +293,7 @@ def test_mdoc_binding_diagnostics_expose_only_digests() -> None:
         nonce=nonce,
         response_uri=response_uri,
         response_encryption_jwk=None,
+        presentation=presentation,
     )
 
     assert digests["response_key_thumbprint_sha256"] == "none"
@@ -301,6 +303,7 @@ def test_mdoc_binding_diagnostics_expose_only_digests() -> None:
         "nonce_sha256",
         "response_uri_sha256",
         "response_key_thumbprint_sha256",
+        "presentation_sha256",
     }
     assert all(
         len(value) == 64
@@ -311,6 +314,7 @@ def test_mdoc_binding_diagnostics_expose_only_digests() -> None:
     assert client_id not in serialized
     assert nonce not in serialized
     assert response_uri not in serialized
+    assert presentation not in serialized
 
 
 @pytest.fixture(autouse=True)
