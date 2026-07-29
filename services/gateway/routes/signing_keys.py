@@ -4658,6 +4658,19 @@ async def internal_resolve_issuer_context(
     # unit calls retain the Query object. Only an actual non-empty string is a
     # DID selector.
     issuer_did = issuer_did.strip() if isinstance(issuer_did, str) else None
+    issuer_profile_id = (
+        issuer_profile_id.strip()
+        if isinstance(issuer_profile_id, str) and issuer_profile_id.strip()
+        else None
+    )
+    if issuer_profile_id and not issuer_did:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Legacy issuer_profile_id requires issuer_did and is accepted "
+                "only as an exact-match assertion."
+            ),
+        )
     requested_issuer_mode = _normalize_issuer_mode(issuer_mode)
 
     profiles_doc = await _load_json_document(
@@ -4824,6 +4837,12 @@ async def internal_resolve_issuer_did(
     request: Request,
     organization_id: str = Query(..., description="Organization ID"),
     issuer_did: str = Query(..., description="Issuer DID from the credential"),
+    issuer_profile_id: str | None = Query(
+        None,
+        description=(
+            "Internal legacy assertion that must match the profile selected by issuer_did"
+        ),
+    ),
     verification_method_id: str | None = Query(
         None, description="Expected DID verification method / kid"
     ),
@@ -4850,6 +4869,20 @@ async def internal_resolve_issuer_did(
         key_purpose=key_purpose,
         algorithm=algorithm,
     )
+    legacy_profile_id = (
+        issuer_profile_id.strip()
+        if isinstance(issuer_profile_id, str) and issuer_profile_id.strip()
+        else None
+    )
+    resolved_profile = resolved.get("issuer_profile")
+    if legacy_profile_id and (
+        not isinstance(resolved_profile, dict)
+        or resolved_profile.get("id") != legacy_profile_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="issuer_profile_id does not match the profile resolved from issuer_did.",
+        )
     return JSONResponse(content=resolved)
 
 
