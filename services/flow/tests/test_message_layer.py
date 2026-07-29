@@ -28,6 +28,7 @@ from flow.main import (
     DigitalCredentialSubmissionRequest,
     InMemoryFlowRepository,
     _build_openid4vp_mdoc_session_transcript,
+    _openid4vp_mdoc_binding_digests,
     _build_presentation_definition,
     _create_oid4vci_artifact,
     _dcql_claims_for_descriptor,
@@ -272,6 +273,44 @@ def test_mdoc_session_transcript_is_bound_to_verifier_state() -> None:
     assert transcript != changed_nonce
     assert transcript.startswith(b"\x83\xf6\xf6\x82qOpenID4VPHandover")
     assert b"nonce-1" not in transcript
+
+
+def test_mdoc_binding_diagnostics_expose_only_digests() -> None:
+    client_id = "x509_hash:private-client-identifier"
+    nonce = "high-entropy-private-nonce"
+    response_uri = "https://verifier.example/private-flow/submit"
+    transcript = _build_openid4vp_mdoc_session_transcript(
+        client_id=client_id,
+        nonce=nonce,
+        response_uri=response_uri,
+        response_encryption_jwk=None,
+    )
+
+    digests = _openid4vp_mdoc_binding_digests(
+        session_transcript=transcript,
+        client_id=client_id,
+        nonce=nonce,
+        response_uri=response_uri,
+        response_encryption_jwk=None,
+    )
+
+    assert digests["response_key_thumbprint_sha256"] == "none"
+    assert set(digests) == {
+        "transcript_sha256",
+        "client_id_sha256",
+        "nonce_sha256",
+        "response_uri_sha256",
+        "response_key_thumbprint_sha256",
+    }
+    assert all(
+        len(value) == 64
+        for name, value in digests.items()
+        if name != "response_key_thumbprint_sha256"
+    )
+    serialized = json.dumps(digests, sort_keys=True)
+    assert client_id not in serialized
+    assert nonce not in serialized
+    assert response_uri not in serialized
 
 
 @pytest.fixture(autouse=True)
