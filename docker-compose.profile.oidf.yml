@@ -7,9 +7,8 @@
 # run may use a test CA (scripts/new-oidf-local-certificate.ps1), while
 # certification uses its registered certificate.
 #
-# For W3C VC Data Model v2, also add docker-compose.profile.w3c-vc.yml. That
-# separate overlay enables the fixture-only VC API adapter and requires an
-# explicit disposable presentation-policy ID.
+# The authenticated /v1/vc-api boundary is part of the ordinary gateway. W3C
+# runners use organization-scoped API keys and need no test-only overlay.
 
 services:
   db-migrate:

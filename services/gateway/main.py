@@ -29,7 +29,7 @@ import re
 from typing import Any, AsyncGenerator
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -49,7 +49,7 @@ from gateway.middleware import (
     SessionCache,
     mip_error_response,
 )
-from gateway.proxy import get_http_client, get_registry, get_session_cache, proxy_request
+from gateway.proxy import get_http_client, get_registry, get_session_cache
 from gateway.extensions import install_gateway_extension
 
 # Route modules
@@ -82,8 +82,16 @@ from gateway.routes.organizations import (
     preferences_router,
     run_hosted_pilot_auto_purge_sweep,
 )
-from gateway.routes.revocation import cascade_revocation_router, revocation_profile_router, status_list_router
-from gateway.routes.signing_keys import did_web_public_router, internal_signing_key_router, signing_key_router
+from gateway.routes.revocation import (
+    cascade_revocation_router,
+    revocation_profile_router,
+    status_list_router,
+)
+from gateway.routes.signing_keys import (
+    did_web_public_router,
+    internal_signing_key_router,
+    signing_key_router,
+)
 from gateway.routes.trust import (
     api_key_router,
     issuer_entity_router,
@@ -93,7 +101,7 @@ from gateway.routes.trust import (
     trust_registry_router,
 )
 from gateway.routes.verification import presentation_policy_router
-from gateway.routes.w3c_vc_test_adapter import router as w3c_vc_test_adapter_router
+from gateway.routes.vc_api import router as vc_api_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -125,6 +133,19 @@ _SIGNING_KEY_ROUTE_PERMISSIONS = {
     "PATCH": "signing-key:create",
     "DELETE": "signing-key:delete",
 }
+
+_VC_API_ROUTE_RULES = (
+    (
+        re.compile(r"^/v1/vc-api/credentials/issue$"),
+        {"POST": "issuance:initiate"},
+        "issuance",
+    ),
+    (
+        re.compile(r"^/v1/vc-api/(?:credentials|presentations)/verify$"),
+        {"POST": "verification:execute"},
+        "verification",
+    ),
+)
 
 
 class GatewayCedarAuthMiddleware(MartyCedarAuthMiddleware):
@@ -172,7 +193,9 @@ def _register_signing_key_cedar_routes() -> None:
     resolver = getattr(_cedar_actions, "resolve_action_and_resource", None)
     rules = getattr(_cedar_actions, "SPECIAL_ROUTE_RULES", None)
     if not callable(resolver) or not isinstance(rules, list):
-        raise RuntimeError("Unsupported marty-common Cedar route registry; refusing to start without signing-key RBAC.")
+        raise RuntimeError(
+            "Unsupported marty-common Cedar route registry; refusing to start without signing-key RBAC."
+        )
 
     try:
         probes = {
@@ -180,7 +203,9 @@ def _register_signing_key_cedar_routes() -> None:
             for method in _SIGNING_KEY_ROUTE_PERMISSIONS
         }
     except Exception as exc:
-        raise RuntimeError("Unable to verify signing-key Cedar authorization; refusing to start.") from exc
+        raise RuntimeError(
+            "Unable to verify signing-key Cedar authorization; refusing to start."
+        ) from exc
     if all(
         probes[method] == (permission, "signing-key")
         for method, permission in _SIGNING_KEY_ROUTE_PERMISSIONS.items()
@@ -188,7 +213,9 @@ def _register_signing_key_cedar_routes() -> None:
         return
 
     if any(result is not None for result in probes.values()):
-        raise RuntimeError("Conflicting marty-common signing-key Cedar mapping; refusing to override it.")
+        raise RuntimeError(
+            "Conflicting marty-common signing-key Cedar mapping; refusing to override it."
+        )
 
     # Prepend the compatibility rule only when the released package has no
     # signing-key mapping. Once upstream supplies the exact mapping, the probe
@@ -204,21 +231,71 @@ def _register_signing_key_cedar_routes() -> None:
     )
     try:
         verified = all(
-            resolver(method, "/v1/signing-keys/services/example") == (permission, "signing-key")
+            resolver(method, "/v1/signing-keys/services/example")
+            == (permission, "signing-key")
             for method, permission in _SIGNING_KEY_ROUTE_PERMISSIONS.items()
         )
     except Exception:
         verified = False
     if not verified:
         rules.remove(compatibility_rule)
-        raise RuntimeError("Signing-key Cedar compatibility mapping did not activate; refusing to start.")
+        raise RuntimeError(
+            "Signing-key Cedar compatibility mapping did not activate; refusing to start."
+        )
+
+
+def _register_vc_api_cedar_routes() -> None:
+    """Protect the public VC-API adapter with existing product permissions."""
+    resolver = getattr(_cedar_actions, "resolve_action_and_resource", None)
+    rules = getattr(_cedar_actions, "SPECIAL_ROUTE_RULES", None)
+    if not callable(resolver) or not isinstance(rules, list):
+        raise RuntimeError(
+            "Unsupported marty-common Cedar route registry; "
+            "refusing to start without VC-API RBAC."
+        )
+
+    probes = {
+        ("POST", "/v1/vc-api/credentials/issue"): ("issuance:initiate", "issuance"),
+        ("POST", "/v1/vc-api/credentials/verify"): (
+            "verification:execute",
+            "verification",
+        ),
+        ("POST", "/v1/vc-api/presentations/verify"): (
+            "verification:execute",
+            "verification",
+        ),
+    }
+    current = {probe: resolver(*probe) for probe in probes}
+    if current == probes:
+        return
+    if any(value is not None for value in current.values()):
+        raise RuntimeError(
+            "Conflicting marty-common VC-API Cedar mapping; refusing to override it."
+        )
+
+    inserted = list(_VC_API_ROUTE_RULES)
+    rules[0:0] = inserted
+    try:
+        verified = all(
+            resolver(*probe) == expected for probe, expected in probes.items()
+        )
+    except Exception:
+        verified = False
+    if not verified:
+        for rule in inserted:
+            rules.remove(rule)
+        raise RuntimeError(
+            "VC-API Cedar compatibility mapping did not activate; refusing to start."
+        )
 
 
 def _required_ready_services() -> tuple[str, ...]:
     configured = os.environ.get("GATEWAY_REQUIRED_READY_SERVICES")
     if configured is None:
         return _DEFAULT_READY_SERVICES
-    return tuple(service.strip() for service in configured.split(",") if service.strip())
+    return tuple(
+        service.strip() for service in configured.split(",") if service.strip()
+    )
 
 
 def _read_bool_env(name: str, default: bool) -> bool:
@@ -239,7 +316,9 @@ def _read_positive_int_env(name: str, default: int) -> int:
     return parsed if parsed > 0 else default
 
 
-HOSTED_PILOT_AUTO_PURGE_ENABLED = _read_bool_env("HOSTED_PILOT_AUTO_PURGE_ENABLED", True)
+HOSTED_PILOT_AUTO_PURGE_ENABLED = _read_bool_env(
+    "HOSTED_PILOT_AUTO_PURGE_ENABLED", True
+)
 HOSTED_PILOT_AUTO_PURGE_INTERVAL_SECONDS = _read_positive_int_env(
     "HOSTED_PILOT_AUTO_PURGE_INTERVAL_SECONDS",
     3600,
@@ -281,7 +360,9 @@ def _issuer_url_with_variant(issuer_url: Any, variant: str) -> str | None:
     return f"{issuer}/{variant}"
 
 
-def _waltid_credentials_supported_entries(configs: dict[str, Any]) -> list[dict[str, Any]]:
+def _waltid_credentials_supported_entries(
+    configs: dict[str, Any],
+) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     for config_id, raw_config in configs.items():
@@ -316,13 +397,14 @@ def _waltid_credentials_supported_entries(configs: dict[str, Any]) -> list[dict[
                 entry["types"] = types
             if isinstance(raw_config.get("display"), list):
                 entry["display"] = raw_config["display"]
-            if isinstance(raw_config.get("cryptographic_binding_methods_supported"), list):
+            if isinstance(
+                raw_config.get("cryptographic_binding_methods_supported"), list
+            ):
                 entry["cryptographic_binding_methods_supported"] = raw_config[
                     "cryptographic_binding_methods_supported"
                 ]
-            suites = (
-                raw_config.get("cryptographic_suites_supported")
-                or raw_config.get("credential_signing_alg_values_supported")
+            suites = raw_config.get("cryptographic_suites_supported") or raw_config.get(
+                "credential_signing_alg_values_supported"
             )
             if isinstance(suites, list):
                 entry["cryptographic_suites_supported"] = suites
@@ -330,7 +412,9 @@ def _waltid_credentials_supported_entries(configs: dict[str, Any]) -> list[dict[
     return entries
 
 
-def _normalize_waltid_oid4vci_issuer_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+def _normalize_waltid_oid4vci_issuer_metadata(
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
     configs = metadata.get("credential_configurations_supported")
     if not isinstance(configs, dict):
         return metadata
@@ -340,7 +424,9 @@ def _normalize_waltid_oid4vci_issuer_metadata(metadata: dict[str, Any]) -> dict[
         for key, value in metadata.items()
         if key != "credential_configurations_supported"
     }
-    credential_issuer = _issuer_url_with_variant(metadata.get("credential_issuer"), "waltid")
+    credential_issuer = _issuer_url_with_variant(
+        metadata.get("credential_issuer"), "waltid"
+    )
     if credential_issuer:
         normalized["credential_issuer"] = credential_issuer
     entries = _waltid_credentials_supported_entries(configs)
@@ -425,7 +511,9 @@ def _normalize_oid4vci_issuer_metadata_content(
     return json.dumps(normalized, separators=(",", ":")).encode("utf-8")
 
 
-async def _hosted_pilot_auto_purge_loop(app: FastAPI, stop_event: asyncio.Event) -> None:
+async def _hosted_pilot_auto_purge_loop(
+    app: FastAPI, stop_event: asyncio.Event
+) -> None:
     while not stop_event.is_set():
         try:
             stats = await run_hosted_pilot_auto_purge_sweep(
@@ -446,7 +534,9 @@ async def _hosted_pilot_auto_purge_loop(app: FastAPI, stop_event: asyncio.Event)
             logger.exception("Hosted Pilot auto-purge sweep failed")
 
         try:
-            await asyncio.wait_for(stop_event.wait(), timeout=HOSTED_PILOT_AUTO_PURGE_INTERVAL_SECONDS)
+            await asyncio.wait_for(
+                stop_event.wait(), timeout=HOSTED_PILOT_AUTO_PURGE_INTERVAL_SECONDS
+            )
         except asyncio.TimeoutError:
             continue
 
@@ -454,6 +544,7 @@ async def _hosted_pilot_auto_purge_loop(app: FastAPI, stop_event: asyncio.Event)
 # =============================================================================
 # Application Lifecycle
 # =============================================================================
+
 
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Starting {SERVICE_NAME}...")
@@ -468,9 +559,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     redis_db = int(os.environ.get("REDIS_DB_GATEWAY", "2"))  # Use DB 2 for gateway
     logger.info(f"Connecting to Redis at {redis_url}/{redis_db}")
     redis_client = aioredis.from_url(
-        f"{redis_url}/{redis_db}",
-        encoding="utf-8",
-        decode_responses=True
+        f"{redis_url}/{redis_db}", encoding="utf-8", decode_responses=True
     )
 
     # Initialize OrganizationClient for membership verification
@@ -487,7 +576,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
     logger.info(
         "Gateway gRPC: auth\u2192%s  org\u2192%s  tls=%s",
-        auth_grpc_target, org_grpc_target, grpc_tls_enabled,
+        auth_grpc_target,
+        org_grpc_target,
+        grpc_tls_enabled,
     )
 
     # Event-stream gRPC channel for SSE bridging
@@ -543,6 +634,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     _register_signing_key_cedar_routes()
+    _register_vc_api_cedar_routes()
     app = FastAPI(
         title="Marty API Gateway",
         description="""
@@ -591,7 +683,7 @@ Verification is handled through two complementary approaches:
     # Cannot use wildcard "*" with credentials per CORS spec
     allowed_origins = os.environ.get(
         "CORS_ORIGINS",
-        "http://localhost:3000,https://beta.elevenidllc.com,http://localhost:5173"
+        "http://localhost:3000,https://beta.elevenidllc.com,http://localhost:5173",
     ).split(",")
 
     app.add_middleware(
@@ -658,14 +750,12 @@ Verification is handled through two complementary approaches:
     app.include_router(organization_router)
     app.include_router(preferences_router)
     app.include_router(credential_metadata_router)
-    # The adapter is excluded from ordinary deployments.  It gives the pinned
-    # W3C suite a VC-API-shaped boundary while still executing Marty’s actual
-    # presentation-policy verifier in a disposable interop stack.
-    if os.environ.get("W3C_VC_TEST_ADAPTER") == "1":
-        app.include_router(w3c_vc_test_adapter_router)
+    app.include_router(vc_api_router)
 
     # Auth service proxy - forward all /v1/auth/* requests to auth service
-    @app.api_route("/v1/auth/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+    @app.api_route(
+        "/v1/auth/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"]
+    )
     async def proxy_auth_requests(request: Request, path: str) -> Response:
         """Proxy auth requests to the auth service.
 
@@ -674,7 +764,11 @@ Verification is handled through two complementary approaches:
         registry = get_registry()
         auth_url = registry.get_service_url("auth")
         if not auth_url:
-            return mip_error_response(status_code=503, error="service_unavailable", message="Auth service unavailable")
+            return mip_error_response(
+                status_code=503,
+                error="service_unavailable",
+                message="Auth service unavailable",
+            )
 
         # Clear session cache on logout to prevent stale sessions
         if path.startswith("logout"):
@@ -699,8 +793,10 @@ Verification is handled through two complementary approaches:
 
         # Forward headers (excluding hop-by-hop headers)
         headers = {
-            k: v for k, v in request.headers.items()
-            if k.lower() not in ("host", "connection", "keep-alive", "transfer-encoding")
+            k: v
+            for k, v in request.headers.items()
+            if k.lower()
+            not in ("host", "connection", "keep-alive", "transfer-encoding")
         }
 
         try:
@@ -719,20 +815,31 @@ Verification is handled through two complementary approaches:
                 content=response.content,
                 status_code=response.status_code,
                 headers={
-                    k: v for k, v in response.headers.items()
+                    k: v
+                    for k, v in response.headers.items()
                     if k.lower() not in ("content-encoding", "transfer-encoding")
                 },
                 media_type=response.headers.get("content-type"),
             )
         except httpx.ConnectError:
             logger.error(f"Auth service unavailable at {auth_url}")
-            return mip_error_response(status_code=503, error="service_unavailable", message="Auth service unavailable")
+            return mip_error_response(
+                status_code=503,
+                error="service_unavailable",
+                message="Auth service unavailable",
+            )
         except httpx.TimeoutException:
             logger.error(f"Auth service timeout at {auth_url}")
-            return mip_error_response(status_code=504, error="service_timeout", message="Auth service timeout")
+            return mip_error_response(
+                status_code=504, error="service_timeout", message="Auth service timeout"
+            )
         except Exception as e:
             logger.error(f"Error proxying auth request: {e}")
-            return mip_error_response(status_code=502, error="auth_service_error", message="Auth service error")
+            return mip_error_response(
+                status_code=502,
+                error="auth_service_error",
+                message="Auth service error",
+            )
 
     @app.get("/health")
     async def health_check() -> dict:
@@ -742,7 +849,11 @@ Verification is handled through two complementary approaches:
         details = {"status": "healthy", "mode": "gateway-local"}
         redis_client = getattr(app.state, "redis_client", None)
         if redis_client is None:
-            return {"status": "unhealthy", "mode": "gateway-local", "error": "redis storage is not configured"}
+            return {
+                "status": "unhealthy",
+                "mode": "gateway-local",
+                "error": "redis storage is not configured",
+            }
         try:
             await redis_client.ping()
         except Exception as exc:
@@ -762,12 +873,20 @@ Verification is handled through two complementary approaches:
             if bao_token:
                 headers["X-Vault-Token"] = bao_token
             try:
-                response = await client.get(f"{bao_addr.rstrip('/')}/v1/sys/health", headers=headers, timeout=3.0)
+                response = await client.get(
+                    f"{bao_addr.rstrip('/')}/v1/sys/health",
+                    headers=headers,
+                    timeout=3.0,
+                )
                 details["openbao_status_code"] = response.status_code
                 if response.status_code not in {200, 429, 472, 473}:
                     details["status"] = "unhealthy"
             except Exception as exc:
-                return {"status": "unreachable", "mode": "gateway-local", "error": f"openbao: {exc}"}
+                return {
+                    "status": "unreachable",
+                    "mode": "gateway-local",
+                    "error": f"openbao: {exc}",
+                }
         return details
 
     async def readiness_check():
@@ -815,7 +934,9 @@ Verification is handled through two complementary approaches:
     app.add_api_route("/ready", readiness_check, methods=["GET"])
     app.add_api_route("/health/ready", readiness_check, methods=["GET"])
 
-    async def _proxy_to_issuance_well_known(path: str, wallet_variant: str | None = None) -> Response:
+    async def _proxy_to_issuance_well_known(
+        path: str, wallet_variant: str | None = None
+    ) -> Response:
         """Proxy a well-known request to the issuance service.
 
         The issuance service is the source of truth for OID4VCI metadata.
@@ -852,7 +973,8 @@ Verification is handled through two complementary approaches:
             headers={
                 k: v
                 for k, v in upstream.headers.items()
-                if k.lower() not in ("content-encoding", "content-length", "transfer-encoding")
+                if k.lower()
+                not in ("content-encoding", "content-length", "transfer-encoding")
             },
         )
 
@@ -860,11 +982,15 @@ Verification is handled through two complementary approaches:
 
     @app.get("/.well-known/openid-credential-issuer/org/{org_id}")
     async def get_org_issuer_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/openid-credential-issuer/org/{org_id}")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/openid-credential-issuer/org/{org_id}"
+        )
 
     @app.get("/.well-known/oauth-authorization-server/org/{org_id}")
     async def get_org_oauth_authorization_server_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/oauth-authorization-server/org/{org_id}"
+        )
 
     # walt.id browser wallet compatibility variants
 
@@ -884,88 +1010,130 @@ Verification is handled through two complementary approaches:
 
     @app.get("/.well-known/oauth-authorization-server/org/{org_id}/waltid")
     async def get_org_waltid_as_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/oauth-authorization-server/org/{org_id}"
+        )
 
     @app.get("/org/{org_id}/waltid/.well-known/oauth-authorization-server")
     async def get_org_waltid_as_metadata_appended(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/oauth-authorization-server/org/{org_id}"
+        )
 
     # SpruceID / SpruceKit wallet variants
 
     @app.get("/.well-known/openid-credential-issuer/org/{org_id}/spruce")
     async def get_org_spruce_issuer_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/openid-credential-issuer/org/{org_id}/spruce")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/openid-credential-issuer/org/{org_id}/spruce"
+        )
 
     @app.get("/org/{org_id}/spruce/.well-known/openid-credential-issuer")
     async def get_org_spruce_issuer_metadata_appended(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/openid-credential-issuer/org/{org_id}/spruce")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/openid-credential-issuer/org/{org_id}/spruce"
+        )
 
     @app.get("/.well-known/oauth-authorization-server/org/{org_id}/spruce")
     async def get_org_spruce_as_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}/spruce")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/oauth-authorization-server/org/{org_id}/spruce"
+        )
 
     @app.get("/org/{org_id}/spruce/.well-known/oauth-authorization-server")
     async def get_org_spruce_as_metadata_appended(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}/spruce")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/oauth-authorization-server/org/{org_id}/spruce"
+        )
 
     # Google Wallet CredentialManager API variants
 
     @app.get("/.well-known/openid-credential-issuer/org/{org_id}/credential-manager")
     async def get_org_credential_manager_issuer_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/openid-credential-issuer/org/{org_id}/credential-manager")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/openid-credential-issuer/org/{org_id}/credential-manager"
+        )
 
     @app.get("/org/{org_id}/credential-manager/.well-known/openid-credential-issuer")
-    async def get_org_credential_manager_issuer_metadata_appended(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/openid-credential-issuer/org/{org_id}/credential-manager")
+    async def get_org_credential_manager_issuer_metadata_appended(
+        org_id: str,
+    ) -> Response:
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/openid-credential-issuer/org/{org_id}/credential-manager"
+        )
 
     @app.get("/.well-known/oauth-authorization-server/org/{org_id}/credential-manager")
     async def get_org_credential_manager_as_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}/credential-manager")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/oauth-authorization-server/org/{org_id}/credential-manager"
+        )
 
     @app.get("/org/{org_id}/credential-manager/.well-known/oauth-authorization-server")
     async def get_org_credential_manager_as_metadata_appended(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}/credential-manager")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/oauth-authorization-server/org/{org_id}/credential-manager"
+        )
+
     # Apple Wallet variants
 
     @app.get("/.well-known/openid-credential-issuer/org/{org_id}/apple-wallet")
     async def get_org_apple_wallet_issuer_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/openid-credential-issuer/org/{org_id}/apple-wallet")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/openid-credential-issuer/org/{org_id}/apple-wallet"
+        )
 
     @app.get("/org/{org_id}/apple-wallet/.well-known/openid-credential-issuer")
     async def get_org_apple_wallet_issuer_metadata_appended(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/openid-credential-issuer/org/{org_id}/apple-wallet")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/openid-credential-issuer/org/{org_id}/apple-wallet"
+        )
 
     @app.get("/.well-known/oauth-authorization-server/org/{org_id}/apple-wallet")
     async def get_org_apple_wallet_as_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}/apple-wallet")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/oauth-authorization-server/org/{org_id}/apple-wallet"
+        )
 
     @app.get("/org/{org_id}/apple-wallet/.well-known/oauth-authorization-server")
     async def get_org_apple_wallet_as_metadata_appended(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}/apple-wallet")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/oauth-authorization-server/org/{org_id}/apple-wallet"
+        )
+
     # OID4VCI \u00a711.2.2 appended-form discovery
 
     @app.get("/org/{org_id}/.well-known/openid-credential-issuer")
     async def get_org_issuer_metadata_oid4vci_style(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/openid-credential-issuer/org/{org_id}")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/openid-credential-issuer/org/{org_id}"
+        )
 
     @app.get("/org/{org_id}/.well-known/oauth-authorization-server")
     async def get_org_oauth_metadata_oid4vci_style(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(f"/.well-known/oauth-authorization-server/org/{org_id}")
+        return await _proxy_to_issuance_well_known(
+            f"/.well-known/oauth-authorization-server/org/{org_id}"
+        )
 
     @app.get("/.well-known/openid-credential-issuer")
     async def get_issuer_metadata() -> Response:
         """OID4VCI Issuer Metadata."""
-        return await _proxy_to_issuance_well_known("/.well-known/openid-credential-issuer")
+        return await _proxy_to_issuance_well_known(
+            "/.well-known/openid-credential-issuer"
+        )
 
     @app.get("/.well-known//openid-credential-issuer")
     async def get_issuer_metadata_double_slash() -> Response:
         """OID4VCI Issuer Metadata (double-slash compat for EUDI wallet tester)."""
-        return await _proxy_to_issuance_well_known("/.well-known/openid-credential-issuer")
+        return await _proxy_to_issuance_well_known(
+            "/.well-known/openid-credential-issuer"
+        )
 
     @app.get("/.well-known/oauth-authorization-server")
     async def get_oauth_authorization_server_metadata() -> Response:
         """OAuth Authorization Server Metadata."""
-        return await _proxy_to_issuance_well_known("/.well-known/oauth-authorization-server")
+        return await _proxy_to_issuance_well_known(
+            "/.well-known/oauth-authorization-server"
+        )
 
     @app.get("/.well-known/openid-configuration")
     async def get_openid_configuration() -> dict:
@@ -1040,7 +1208,11 @@ Verification is handled through two complementary approaches:
                 )
                 if resp.status_code == 200:
                     profiles_data = resp.json()
-                    items = profiles_data if isinstance(profiles_data, list) else profiles_data.get("items", [])
+                    items = (
+                        profiles_data
+                        if isinstance(profiles_data, list)
+                        else profiles_data.get("items", [])
+                    )
                     for p in items:
                         entry: dict[str, Any] = {
                             "compliance_code": p.get("compliance_code"),
@@ -1051,7 +1223,9 @@ Verification is handled through two complementary approaches:
                             entry["api_surface"] = p["api_surface"]
                         active_profiles.append(entry)
             except Exception as exc:
-                logger.warning("Failed to fetch compliance profiles for MIP config: %s", exc)
+                logger.warning(
+                    "Failed to fetch compliance profiles for MIP config: %s", exc
+                )
 
         from gateway.mip_configuration import mip_configuration_document
 
@@ -1090,10 +1264,9 @@ Verification is handled through two complementary approaches:
             status_code=exc.http_status,
             error=exc.code.lower(),
             message=exc.user_message or exc.message,
-            details=[
-                {"field": d.field, "message": d.message}
-                for d in exc.details
-            ] if exc.details else None,
+            details=[{"field": d.field, "message": d.message} for d in exc.details]
+            if exc.details
+            else None,
         )
 
     @app.exception_handler(HTTPException)
@@ -1121,7 +1294,9 @@ Verification is handled through two complementary approaches:
         )
 
     @app.exception_handler(RequestValidationError)
-    async def _request_validation_error_handler(request: Request, exc: RequestValidationError):
+    async def _request_validation_error_handler(
+        request: Request, exc: RequestValidationError
+    ):
         """Wrap Pydantic/FastAPI validation errors in MIP error envelope."""
         details = []
         for err in exc.errors():
@@ -1137,7 +1312,9 @@ Verification is handled through two complementary approaches:
     @app.exception_handler(Exception)
     async def _unhandled_exception_handler(request: Request, exc: Exception):
         """Catch-all: return 500 in MIP envelope, never leak stack traces."""
-        logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+        logger.exception(
+            "Unhandled exception on %s %s", request.method, request.url.path
+        )
         return mip_error_response(
             status_code=500,
             error="server_error",
@@ -1145,6 +1322,7 @@ Verification is handled through two complementary approaches:
         )
 
     from common.metrics import init_otel_tracing, mount_metrics
+
     init_otel_tracing(SERVICE_NAME)
     mount_metrics(app)
 
@@ -1155,4 +1333,5 @@ app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=SERVICE_PORT, reload=False)

@@ -1,10 +1,10 @@
-"""Narrow VC-API adapter used only by the pinned W3C VCDM v2 test suite.
+"""Authenticated W3C VC-API compatibility boundary.
 
-This router intentionally has no production registration.  A disposable
-interop stack may enable it with ``W3C_VC_TEST_ADAPTER=1`` and must provide
-separate active credential and presentation policies. Requests are forwarded to Marty’s
-normal presentation-policy evaluator; this module does not validate a
-credential itself or turn a failed verification into a success.
+The endpoints adapt VC-API request and response shapes to Marty's ordinary
+issuance and presentation-policy APIs. They do not select custody providers,
+resolve private key references, or perform an independent verification.
+Every request is authenticated and organization-authorized by the gateway
+before it reaches this router.
 """
 
 from __future__ import annotations
@@ -14,14 +14,14 @@ import os
 from typing import Any
 from urllib.parse import unquote_to_bytes
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from gateway.models import IssuanceCreate
 from gateway.proxy import get_http_client, get_registry, proxy_request
 from gateway.routes.issuance import create_issuance
 from pydantic import BaseModel, Field, ValidationError
 
-router = APIRouter(prefix="/__test__/vc-api", tags=["test-only-w3c-vc-api"])
+router = APIRouter(prefix="/v1/vc-api", tags=["W3C VC API"])
 
 
 class VerifyCredentialRequest(BaseModel):
@@ -39,37 +39,26 @@ class IssueCredentialRequest(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
-def _enabled_policy_id(*, presentation: bool) -> str:
-    if os.environ.get("W3C_VC_TEST_ADAPTER") != "1":
-        raise HTTPException(status_code=404, detail="W3C VC test adapter is disabled")
-    variable = (
-        "W3C_VC_TEST_PRESENTATION_POLICY_ID"
-        if presentation
-        else "W3C_VC_TEST_CREDENTIAL_POLICY_ID"
-    )
-    policy_id = os.environ.get(variable, "").strip()
-    if not policy_id:
+def _require_organization_authorization(
+    request: Request,
+    organization_id: str,
+) -> None:
+    """Defend the router boundary even if its middleware wiring regresses."""
+    authorized_organization = getattr(request.state, "organization_id", None)
+    if authorized_organization != organization_id:
         raise HTTPException(
-            status_code=503, detail=f"W3C VC test adapter requires {variable}"
+            status_code=403,
+            detail="Request is not authorized for this organization",
         )
-    return policy_id
 
 
-def _issuance_fixture_configuration() -> tuple[str, str, str]:
-    """Return the disposable organization, template, and public issuer DID."""
-    _enabled_policy_id(presentation=False)
-    organization_id = os.environ.get("W3C_VC_TEST_ORGANIZATION_ID", "").strip()
-    template_id = os.environ.get("W3C_VC_TEST_TEMPLATE_ID", "").strip()
-    issuer_did = os.environ.get("W3C_VC_TEST_ISSUER_DID", "").strip()
-    if not organization_id or not template_id or not issuer_did:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "W3C VC issuer adapter requires W3C_VC_TEST_ORGANIZATION_ID "
-                "W3C_VC_TEST_TEMPLATE_ID, and W3C_VC_TEST_ISSUER_DID"
-            ),
-        )
-    return organization_id, template_id, issuer_did
+def _credential_issuer_id(credential: dict[str, Any]) -> str | None:
+    issuer = credential.get("issuer")
+    if isinstance(issuer, str):
+        return issuer
+    if isinstance(issuer, dict) and isinstance(issuer.get("id"), str):
+        return issuer["id"]
+    return None
 
 
 def _create_oid4vci_proof(issuer_url: str, nonce: str) -> str:
@@ -179,9 +168,10 @@ async def _evaluate(
     options: dict[str, Any],
     request: Request,
     *,
-    presentation: bool,
+    organization_id: str,
+    policy_id: str,
 ) -> Response:
-    policy_id = _enabled_policy_id(presentation=presentation)
+    _require_organization_authorization(request, organization_id)
     registry = get_registry()
     service_url = registry.get_service_url("presentation-policies")
     if not service_url:
@@ -230,14 +220,30 @@ async def _evaluate(
 async def _issue_data_integrity_credential(
     credential: dict[str, Any],
     request: Request,
+    *,
+    organization_id: str,
+    template_id: str,
+    issuer_did: str,
 ) -> dict[str, Any]:
     """Issue through Marty's ordinary OID4VCI service path.
 
-    The W3C endpoint is only a shape adapter.  It still resolves the template
-    issuer identity, creates a pre-authorized transaction, redeems a token,
-    obtains a fresh nonce, and submits a cryptographically valid holder proof.
+    The VC-API endpoint is only a shape adapter. It still resolves the supplied
+    issuer DID to the template's authorized active issuer profile, creates a
+    pre-authorized transaction, redeems a token, obtains a fresh nonce, and
+    submits a cryptographically valid holder proof.
     """
-    organization_id, template_id, issuer_did = _issuance_fixture_configuration()
+    _require_organization_authorization(request, organization_id)
+    document_issuer = _credential_issuer_id(credential)
+    if document_issuer is not None and document_issuer != issuer_did:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "issuer_mismatch",
+                "error_description": (
+                    "credential issuer must match the issuer_did selected for signing"
+                ),
+            },
+        )
     try:
         body = IssuanceCreate(
             organization_id=organization_id,
@@ -363,32 +369,52 @@ async def _issue_data_integrity_credential(
 
 @router.post("/credentials/verify")
 async def verify_credential(
-    body: VerifyCredentialRequest, request: Request
+    body: VerifyCredentialRequest,
+    request: Request,
+    organization_id: str = Query(..., min_length=1),
+    presentation_policy_id: str = Query(..., min_length=1),
 ) -> Response:
-    """VC-API-shaped entry point backed by the actual Marty verifier."""
+    """Verify one credential through an active organization policy."""
     return await _evaluate(
         _token_or_unsupported(body.verifiableCredential, "verifiableCredential"),
         body.options,
         request,
-        presentation=False,
+        organization_id=organization_id,
+        policy_id=presentation_policy_id,
     )
 
 
 @router.post("/presentations/verify")
 async def verify_presentation(
-    body: VerifyPresentationRequest, request: Request
+    body: VerifyPresentationRequest,
+    request: Request,
+    organization_id: str = Query(..., min_length=1),
+    presentation_policy_id: str = Query(..., min_length=1),
 ) -> Response:
-    """VC-API-shaped VP entry point backed by the actual Marty verifier."""
+    """Verify one presentation through an active organization policy."""
     return await _evaluate(
         _token_or_unsupported(body.verifiablePresentation, "verifiablePresentation"),
         body.options,
         request,
-        presentation=True,
+        organization_id=organization_id,
+        policy_id=presentation_policy_id,
     )
 
 
 @router.post("/credentials/issue")
-async def issue_credential(body: IssueCredentialRequest, request: Request) -> Response:
-    """VC-API issuer boundary backed by a full Marty OID4VCI issuance flow."""
-    credential = await _issue_data_integrity_credential(body.credential, request)
+async def issue_credential(
+    body: IssueCredentialRequest,
+    request: Request,
+    organization_id: str = Query(..., min_length=1),
+    credential_template_id: str = Query(..., min_length=1),
+    issuer_did: str = Query(..., pattern=r"^did:[a-z0-9]+:.+"),
+) -> Response:
+    """Issue through the normal DID-first, profile-mediated OID4VCI flow."""
+    credential = await _issue_data_integrity_credential(
+        body.credential,
+        request,
+        organization_id=organization_id,
+        template_id=credential_template_id,
+        issuer_did=issuer_did,
+    )
     return JSONResponse({"verifiableCredential": credential})
