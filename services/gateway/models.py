@@ -3,6 +3,7 @@ Pydantic models for the API Gateway.
 
 All request/response schemas used by gateway route modules.
 """
+
 from __future__ import annotations
 
 from enum import Enum
@@ -15,8 +16,10 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 # Base Classes
 # =============================================================================
 
+
 class BaseResourceCreate(BaseModel):
     """Base class for creating organization-scoped resources."""
+
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -24,6 +27,7 @@ class BaseResourceCreate(BaseModel):
 
 class BaseResourceResponse(BaseModel):
     """Base class for resource responses."""
+
     id: str
     organization_id: str
     name: str
@@ -37,6 +41,7 @@ class BaseResourceResponse(BaseModel):
 # Trust Profile
 # =============================================================================
 
+
 class TrustSourceModel(BaseModel):
     name: str = ""
     source_type: str = "TRUST_LIST"
@@ -48,7 +53,9 @@ class TrustSourceModel(BaseModel):
 
 
 class ValidationRulesModel(BaseModel):
-    allowed_algorithms: list[str] = Field(default_factory=lambda: ["ES256", "ES384", "EdDSA"])
+    allowed_algorithms: list[str] = Field(
+        default_factory=lambda: ["ES256", "ES384", "EdDSA"]
+    )
     min_key_size_rsa: int = 2048
     min_key_size_ec: int = 256
     require_key_usage: bool = True
@@ -434,6 +441,7 @@ class TrustRegistryStatusResponse(BaseModel):
 # Credential Template
 # =============================================================================
 
+
 class ClaimDefinitionModel(BaseModel):
     name: str
     display_name: str | None = None
@@ -445,14 +453,19 @@ class ClaimDefinitionModel(BaseModel):
     @model_validator(mode="after")
     def normalize_claim(self) -> "ClaimDefinitionModel":
         if not self.display_name:
-            self.display_name = " ".join(
-                part.capitalize()
-                for part in self.name.replace("-", "_").split("_")
-                if part
-            ) or self.name
+            self.display_name = (
+                " ".join(
+                    part.capitalize()
+                    for part in self.name.replace("-", "_").split("_")
+                    if part
+                )
+                or self.name
+            )
         if self.type:
             normalized_type = self.type.lower()
-            self.claim_type = "integer" if normalized_type == "number" else normalized_type
+            self.claim_type = (
+                "integer" if normalized_type == "number" else normalized_type
+            )
         return self
 
 
@@ -529,10 +542,7 @@ class CredentialTemplateCreate(BaseModel):
             for value in [self.credential_payload_format, *self.supported_formats]
             if isinstance(value, str) and value.strip()
         ]
-        normalized = {
-            value.strip().lower().replace("-", "_")
-            for value in candidates
-        }
+        normalized = {value.strip().lower().replace("-", "_") for value in candidates}
         if normalized & {"mdoc", "mso_mdoc", "iso_mdoc", "zk_mdoc"}:
             if not (self.doctype and self.doctype.strip()):
                 raise ValueError("doctype is required for an MDOC credential template")
@@ -622,6 +632,7 @@ class CredentialTemplateResponse(BaseModel):
 # Compliance Profile
 # =============================================================================
 
+
 class DataRetentionModel(BaseModel):
     retention_period: str = "session"
     retain_metadata_only: bool = False
@@ -653,6 +664,7 @@ class ApiSurfaceEndpointModel(BaseModel):
 
 class ComplianceProfileCreate(BaseModel):
     """Create a Compliance Profile for regulatory rules and format abstraction."""
+
     model_config = ConfigDict(extra="forbid")
 
     organization_id: str | None = Field(None, max_length=255)
@@ -718,6 +730,7 @@ class ComplianceProfileResponse(BaseModel):
 # Device Registration
 # =============================================================================
 
+
 class DevicePreferencesModel(BaseModel):
     credential_notifications: bool = True
     verification_notifications: bool = True
@@ -782,6 +795,7 @@ class DeviceRegistrationResponse(BaseModel):
 # Presentation Policy
 # =============================================================================
 
+
 class RequestedClaimModel(BaseModel):
     claim_name: str
     display_name: str = ""
@@ -806,6 +820,7 @@ class ProtocolRequiredClaimModel(BaseModel):
 
 class HolderBindingModel(BaseModel):
     """How to verify the presenter is the legitimate holder."""
+
     required: bool = False
     binding_methods: list[str] = Field(default_factory=list)
     proof_profiles: list[str] = Field(default_factory=list)
@@ -814,6 +829,7 @@ class HolderBindingModel(BaseModel):
 
 class IssuerConstraintsModel(BaseModel):
     """Constraints on accepted issuers."""
+
     min_trust_level: int | None = None
     required_compliance_statuses: list[str] = Field(default_factory=list)
     required_accreditations: list[str] = Field(default_factory=list)
@@ -821,6 +837,7 @@ class IssuerConstraintsModel(BaseModel):
 
 class FreshnessConstraintsModel(BaseModel):
     """How fresh credentials must be."""
+
     max_age_seconds: int | None = None
     require_not_revoked: bool = False
     revocation_grace_seconds: int | None = None
@@ -828,6 +845,7 @@ class FreshnessConstraintsModel(BaseModel):
 
 class PresentationPolicyCreate(BaseModel):
     """Create a Presentation Policy defining what credentials to request."""
+
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -835,7 +853,9 @@ class PresentationPolicyCreate(BaseModel):
     required_claims: list[ProtocolRequiredClaimModel] = Field(default_factory=list)
     accepted_credential_types: list[str] = Field(default_factory=list)
     trust_profile_id: str | None = Field(None, max_length=255)
-    credential_requirements: list[CredentialRequirementModel] = Field(default_factory=list)
+    credential_requirements: list[CredentialRequirementModel] = Field(
+        default_factory=list
+    )
     compliance_profile_id: str | None = Field(None, max_length=255)
     prefer_predicates: bool = False
     fallback_policy: str | None = Field(None, max_length=100)
@@ -875,6 +895,7 @@ class PresentationPolicyResponse(BaseModel):
 # =============================================================================
 # Deployment Profile
 # =============================================================================
+
 
 class CallbacksModel(BaseModel):
     issuance_complete_url: str | None = None
@@ -927,10 +948,14 @@ class DeploymentProfileUpdate(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def reject_mixed_biometric_aliases(cls, data: Any) -> Any:
-        if isinstance(data, dict) and {
-            "operator_biometric_authentication_required",
-            "biometric_required",
-        } <= data.keys():
+        if (
+            isinstance(data, dict)
+            and {
+                "operator_biometric_authentication_required",
+                "biometric_required",
+            }
+            <= data.keys()
+        ):
             raise ValueError("use only operator_biometric_authentication_required")
         return data
 
@@ -985,6 +1010,7 @@ class DeploymentProfileResponse(BaseModel):
 
 class LaneCreate(BaseModel):
     """Create a Lane (logical device grouping) within a Deployment Profile."""
+
     name: str
     description: str | None = None
     location: str | None = None
@@ -993,6 +1019,7 @@ class LaneCreate(BaseModel):
 
 class LaneResponse(BaseModel):
     """Lane response."""
+
     id: str
     deployment_profile_id: str
     name: str
@@ -1007,6 +1034,7 @@ class LaneResponse(BaseModel):
 
 class DeviceAssignment(BaseModel):
     """Assign a device to a lane."""
+
     device_id: str
     device_name: str | None = None
 
@@ -1014,6 +1042,7 @@ class DeviceAssignment(BaseModel):
 # =============================================================================
 # Flow
 # =============================================================================
+
 
 class FlowExtensionStepModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1063,16 +1092,25 @@ class FlowTriggerModel(BaseModel):
 
 class FlowDefinitionCreate(BaseModel):
     """Create a Flow Definition for orchestrating credential operations."""
+
     model_config = ConfigDict(extra="forbid")
 
     organization_id: str
     name: str
     description: str | None = None
     flow_type: Literal[
-        "oid4vci_pre_authorized", "oid4vci_authorization_code", "mdl_issuance",
-        "oid4vp_presentation", "mdl_presentation", "siopv2",
-        "application_approval_issuance", "credential_renewal", "credential_revocation",
-        "physical_document_issuance", "combined", "custom",
+        "oid4vci_pre_authorized",
+        "oid4vci_authorization_code",
+        "mdl_issuance",
+        "oid4vp_presentation",
+        "mdl_presentation",
+        "siopv2",
+        "application_approval_issuance",
+        "credential_renewal",
+        "credential_revocation",
+        "physical_document_issuance",
+        "combined",
+        "custom",
     ]
     approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] = "AUTO"
     hooks: dict[str, list[FlowHookModel]] = Field(default_factory=dict)
@@ -1151,12 +1189,15 @@ class FlowInstanceResponse(BaseModel):
 # Policy Evaluation
 # =============================================================================
 
+
 class EvaluatePresentationRequest(BaseModel):
-    vp_token: str
+    model_config = ConfigDict(extra="forbid")
+
+    vp_token: str | dict[str, Any]
     trust_profile_id: str | None = None
     nonce: str | None = None
     audience: str | None = None
-    context: dict = {}
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class ClaimEvaluationResult(BaseModel):
@@ -1187,18 +1228,25 @@ class PolicyEvaluationResponse(BaseModel):
 
 class EvaluateInlineRequest(BaseModel):
     """Request to evaluate a VP with an inline (ad-hoc) policy."""
-    vp_token: str
-    credential_requirements: list[CredentialRequirementModel] = []
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(min_length=1, max_length=255)
+    vp_token: str | dict[str, Any]
+    credential_requirements: list[CredentialRequirementModel] = Field(
+        min_length=1,
+    )
     trust_profile_id: str | None = None
     compliance_profile_id: str | None = None
     nonce: str | None = None
     audience: str | None = None
-    context: dict = {}
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 # =============================================================================
 # Verification Flow (async wallet interaction)
 # =============================================================================
+
 
 class StartVerificationFlowRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1249,6 +1297,7 @@ class VerificationResultResponse(BaseModel):
 # Organization
 # =============================================================================
 
+
 class OrganizationCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     display_name: str | None = Field(None, max_length=255)
@@ -1291,7 +1340,9 @@ class PilotRetentionModel(BaseModel):
     cutoff_at: str | None = None
     next_expiry_at: str | None = None
     oldest_retained_record_at: str | None = None
-    eligible_for_purge: RetentionRecordCountsModel = Field(default_factory=RetentionRecordCountsModel)
+    eligible_for_purge: RetentionRecordCountsModel = Field(
+        default_factory=RetentionRecordCountsModel
+    )
     tracked_scope: list[str] = Field(default_factory=list)
 
 
@@ -1316,17 +1367,20 @@ class HostedPilotPurgeResponse(BaseModel):
 
 class JoinByCodeRequest(BaseModel):
     """Request to join an organization by code."""
+
     code: str = Field(description="8-character join code")
 
 
 class JoinByCodeResponse(BaseModel):
     """Response after joining an organization."""
+
     organization: OrganizationResponse
     membership: dict = Field(description="Member information")
 
 
 class ValidateJoinCodeResponse(BaseModel):
     """Response for join code validation."""
+
     valid: bool
     organization_id: str | None = None
     organization_name: str | None = None
@@ -1336,6 +1390,7 @@ class ValidateJoinCodeResponse(BaseModel):
 
 class InvitationValidateResponse(BaseModel):
     """Response for invitation validation."""
+
     valid: bool
     organization_id: str | None = None
     organization_name: str | None = None
@@ -1346,11 +1401,13 @@ class InvitationValidateResponse(BaseModel):
 
 class InvitationAcceptRequest(BaseModel):
     """Request to accept an invitation."""
+
     token: str
 
 
 class InvitationAcceptResponse(BaseModel):
     """Response for invitation acceptance."""
+
     success: bool
     organization_id: str | None = None
     organization_name: str | None = None
@@ -1361,6 +1418,7 @@ class InvitationAcceptResponse(BaseModel):
 # =============================================================================
 # Issuance
 # =============================================================================
+
 
 class Oid4vciAuthorizedClientJwk(BaseModel):
     """Public ES256 key defined by the marty-protocol issuance contract."""
@@ -1464,7 +1522,9 @@ class IssuanceCreate(BaseModel):
                     "credential_document cannot be combined with claims or credential_subject"
                 )
             if not self.credential_document or "proof" in self.credential_document:
-                raise ValueError("credential_document must be a non-empty unsigned object")
+                raise ValueError(
+                    "credential_document must be a non-empty unsigned object"
+                )
             context = self.credential_document.get("@context")
             if (
                 not isinstance(context, list)
@@ -1507,6 +1567,7 @@ class IssuanceCreate(BaseModel):
 
 class DidcommDeliverRequest(BaseModel):
     """Deliver a credential via DIDComm v2 push."""
+
     transaction_id: str
     holder_did: str
     universal_resolver_url: str | None = None
@@ -1514,6 +1575,7 @@ class DidcommDeliverRequest(BaseModel):
 
 class DidcommDeliveryResponse(BaseModel):
     """DIDComm v2 delivery result."""
+
     transaction_id: str
     credential_id: str
     holder_did: str
@@ -1525,6 +1587,7 @@ class DidcommDeliveryResponse(BaseModel):
 
 class IssuanceResponse(BaseModel):
     """Issuance response."""
+
     id: str
     organization_id: str
     credential_template_id: str
@@ -1540,8 +1603,10 @@ class IssuanceResponse(BaseModel):
 # Application Template
 # =============================================================================
 
+
 class EvidenceType(str, Enum):
     """Types of evidence applicants can provide."""
+
     PASSPORT = "passport"
     DRIVERS_LICENSE = "drivers_license"
     ID_CARD = "id_card"
@@ -1556,6 +1621,7 @@ class EvidenceType(str, Enum):
 
 class ApprovalStrategy(str, Enum):
     """How applications are approved."""
+
     AUTO = "auto"
     MANUAL = "manual"
     RULES_BASED = "rules_based"
@@ -1563,6 +1629,7 @@ class ApprovalStrategy(str, Enum):
 
 class FormFieldModel(BaseModel):
     """Form field definition."""
+
     field_id: str
     field_type: str
     label: str
@@ -1583,6 +1650,7 @@ class ClaimCollectionModel(BaseModel):
 
 class NotificationConfigModel(BaseModel):
     """Notification configuration."""
+
     send_confirmation: bool = True
     send_status_updates: bool = True
     email_template_id: str | None = None
@@ -1590,6 +1658,7 @@ class NotificationConfigModel(BaseModel):
 
 class ApplicationUIConfigModel(BaseModel):
     """UI configuration for application."""
+
     theme: str = "default"
     logo_url: str | None = None
     instructions: str | None = None
@@ -1603,8 +1672,16 @@ class ApplicationFormFieldModel(BaseModel):
     field_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     label: str = Field(min_length=1, max_length=256)
     field_type: Literal[
-        "TEXT", "DATE", "DATETIME", "SELECT", "FILE_UPLOAD",
-        "INTEGER", "NUMBER", "BOOLEAN", "EMAIL", "URL",
+        "TEXT",
+        "DATE",
+        "DATETIME",
+        "SELECT",
+        "FILE_UPLOAD",
+        "INTEGER",
+        "NUMBER",
+        "BOOLEAN",
+        "EMAIL",
+        "URL",
     ]
     required: bool
     claim_mapping: str | None = None
@@ -1635,8 +1712,12 @@ class ApplicationEvidenceRequirementModel(BaseModel):
 
     evidence_id: str = Field(min_length=1)
     evidence_type: Literal[
-        "DOCUMENT_SCAN", "BIOMETRIC", "SELFIE", "THIRD_PARTY_VERIFICATION",
-        "EXTERNAL_FACT", "EXTERNAL_API",
+        "DOCUMENT_SCAN",
+        "BIOMETRIC",
+        "SELFIE",
+        "THIRD_PARTY_VERIFICATION",
+        "EXTERNAL_FACT",
+        "EXTERNAL_API",
     ]
     description: str
     required: bool
@@ -1662,6 +1743,7 @@ class ApplicationTemplateCreate(BaseModel):
     This is a PURE USER-FACING entity with NO cryptographic concerns.
     It defines the application workflow, not the credential structure.
     """
+
     model_config = ConfigDict(extra="forbid")
 
     organization_id: str
@@ -1670,7 +1752,9 @@ class ApplicationTemplateCreate(BaseModel):
     credential_template_id: str | None = None
 
     # Evidence collection requirements
-    evidence_requirements: list[ApplicationEvidenceRequirementModel] = Field(default_factory=list)
+    evidence_requirements: list[ApplicationEvidenceRequirementModel] = Field(
+        default_factory=list
+    )
 
     # Form field definitions
     form_fields: list[ApplicationFormFieldModel] = Field(default_factory=list)
@@ -1705,7 +1789,9 @@ class ApplicationTemplatePatch(BaseModel):
     form_fields: list[ApplicationFormFieldModel] | None = None
     required_checks: list[RequiredApplicationCheckModel] | None = None
     claim_collection_rules: list[ClaimCollectionModel] | None = None
-    approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] | None = None
+    approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] | None = (
+        None
+    )
     approval_policy_set_id: str | None = None
     application_validity_days: int | None = Field(default=None, ge=1, le=3650)
     notification_config: dict | None = None
@@ -1714,6 +1800,7 @@ class ApplicationTemplatePatch(BaseModel):
 
 class ApplicationTemplateResponse(BaseModel):
     """Application Template response."""
+
     id: str
     organization_id: str
     name: str
@@ -1753,20 +1840,24 @@ class ApplicationTemplateResponse(BaseModel):
 # Application (Instances of Application Templates)
 # =============================================================================
 
+
 class ApplicationCreate(BaseModel):
     """Create an Application from an Application Template."""
+
     application_template_id: str
     applicant_data: dict = {}
 
 
 class EvidenceSubmission(BaseModel):
     """Submit evidence for an application."""
+
     evidence_type: str
     evidence_data: dict = {}
 
 
 class ApplicationResponse(BaseModel):
     """Application response."""
+
     id: str
     organization_id: str
     application_template_id: str
@@ -1788,8 +1879,10 @@ class ApplicationResponse(BaseModel):
 # Audit Events
 # =============================================================================
 
+
 class AuditEventResponse(BaseModel):
     """Audit event response."""
+
     id: str
     organization_id: str
     timestamp: str
@@ -1807,13 +1900,24 @@ class AuditEventResponse(BaseModel):
 # Preferences
 # =============================================================================
 
+
 class PreferencesResponse(BaseModel):
     """Console context preferences response."""
-    last_view_mode: str = Field(description="Last selected view mode: 'applicant' or 'org_admin'")
-    last_active_org_id: str | None = Field(description="Last active organization ID (null if none)")
+
+    last_view_mode: str = Field(
+        description="Last selected view mode: 'applicant' or 'org_admin'"
+    )
+    last_active_org_id: str | None = Field(
+        description="Last active organization ID (null if none)"
+    )
 
 
 class UpdatePreferencesRequest(BaseModel):
     """Request to update console context preferences (partial update)."""
-    last_view_mode: str | None = Field(None, description="View mode to set: 'applicant' or 'org_admin'")
-    last_active_org_id: str | None = Field(None, description="Organization ID to set as active (explicit null allowed)")
+
+    last_view_mode: str | None = Field(
+        None, description="View mode to set: 'applicant' or 'org_admin'"
+    )
+    last_active_org_id: str | None = Field(
+        None, description="Organization ID to set as active (explicit null allowed)"
+    )

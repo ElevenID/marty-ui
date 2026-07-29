@@ -68,6 +68,7 @@ def _build_client(
                     "presentation-policy:activate",
                     "presentation-policy:suspend",
                     "presentation-policy:version",
+                    "presentation-policy:evaluate",
                 },
                 has_org_console_access=True,
             )
@@ -75,7 +76,7 @@ def _build_client(
     )
     app.state.org_client = org_client
     pp.app.state.org_client = org_client
-    return TestClient(app)
+    return TestClient(app, headers={"X-User-Id": "user-1"})
 
 
 async def _save_policy(
@@ -1830,3 +1831,109 @@ def test_status_lookup_rejects_record_bound_to_different_issuer(monkeypatch) -> 
         issuer_did="did:jwk:presented-issuer",
         credential_ids=["credential-123"],
     ) == (None, None, None)
+
+
+def _inline_evaluation_payload() -> dict:
+    return {
+        "organization_id": "org-1",
+        "vp_token": "header.payload.signature",
+        "credential_requirements": [
+            {
+                "credential_template_id": "inline-vc",
+                "credential_payload_format": "jwt_vc_json",
+                "requested_claims": [
+                    {
+                        "claim_name": "name",
+                        "required": True,
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_inline_evaluation_uses_real_verifier_output(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    client = _build_client(repo)
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "jwt-vc")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "claims": {"name": "Alice"},
+            "issuer_did": "did:web:issuer.example",
+            "format": "jwt-vc",
+            "error": None,
+        },
+    )
+
+    response = client.post(
+        "/v1/presentation-policies/evaluate",
+        json=_inline_evaluation_payload(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"] == "allow"
+    assert body["verified_claims"] == {"name": "Alice"}
+    assert "[simulated]" not in response.text
+
+
+def test_inline_evaluation_rejects_invalid_signature(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    client = _build_client(repo)
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "jwt-vc")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": False,
+            "claims": {},
+            "issuer_did": "did:web:issuer.example",
+            "format": "jwt-vc",
+            "error": "Invalid signature",
+        },
+    )
+
+    response = client.post(
+        "/v1/presentation-policies/evaluate",
+        json=_inline_evaluation_payload(),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision"] == "deny"
+    assert body["result"] == "failed"
+    assert "Invalid signature" in body["decision_reason"]
+
+
+def test_saved_policy_evaluation_checks_membership_before_verification(
+    monkeypatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    client = _build_client(repo)
+    monkeypatch.setattr(
+        pp,
+        "ensure_membership_permission",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            pp.HTTPException(
+                status_code=403,
+                detail="Cross-tenant policy access denied",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        pp,
+        "_detect_credential_format",
+        lambda _token: pytest.fail("verification must not run before authorization"),
+    )
+
+    response = client.post(
+        f"/v1/presentation-policies/{policy.id}/evaluate",
+        json={"vp_token": "header.payload.signature"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Cross-tenant policy access denied"
