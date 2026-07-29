@@ -151,7 +151,7 @@ jobs:
             MARTY_BLOG_DIGEST=${{ needs.validate-stack.outputs.blog_digest }}
           provenance: mode=max
           sbom: true
-      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.build.outputs.digest }}
@@ -212,12 +212,12 @@ jobs:
             MARTY_COMMON_DIGEST=${{ needs.validate-stack.outputs.marty_common_digest }}
           provenance: mode=max
           sbom: true
-      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-name: ${{ env.SERVICES_IMAGE }}
           subject-digest: ${{ steps.services.outputs.digest }}
           push-to-registry: true
-      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-name: ${{ env.MIGRATIONS_IMAGE }}
           subject-digest: ${{ steps.migrations.outputs.digest }}
@@ -455,7 +455,7 @@ jobs:
             cosign sign-blob --yes --bundle "${file}.sigstore.json" "$file"
           done
           sha256sum stack-manifest.json ./*.cdx.json ./*.sigstore.json > SHA256SUMS
-      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+      - uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
         with:
           subject-path: |
             stack-manifest.json
