@@ -241,6 +241,10 @@ def test_release_profile_removes_builds_and_pins_infrastructure() -> None:
         section = infrastructure.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
         assert "@sha256:" in section
 
+    assert "GET /ready HTTP/1.1" in infrastructure
+    assert "Connection: close" in infrastructure
+    assert "HTTP/1.0" not in infrastructure
+
 
 def test_local_build_requires_digest_pinned_bootstrap_artifacts(
     monkeypatch: pytest.MonkeyPatch,
