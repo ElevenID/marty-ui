@@ -5157,6 +5157,100 @@ async def test_internal_resolve_issuer_did_rejects_unknown_org_issuer(
 
 
 @pytest.mark.asyncio
+async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(
+        return_value=json.dumps(
+            {
+                "profiles": [
+                    {
+                        "id": "issuer-profile-internal",
+                        "organization_id": "org_issuer",
+                        "issuer_did": "did:web:issuer.example",
+                        "key_purpose": "oid4vp_request_signing",
+                        "algorithm": "ES256",
+                        "status": "active",
+                        "signing_service_id": "kms-service-internal",
+                        "signing_key_reference": "kms-key-internal",
+                    },
+                    {
+                        "id": "inactive-profile",
+                        "organization_id": "org_issuer",
+                        "issuer_did": "did:web:inactive.example",
+                        "key_purpose": "oid4vp_request_signing",
+                        "algorithm": "ES256",
+                        "status": "inactive",
+                        "signing_service_id": "kms-service-internal",
+                        "signing_key_reference": "inactive-key-internal",
+                    },
+                ]
+            }
+        )
+    )
+    response = await signing_keys.list_public_issuer_identities(
+        request=_build_request("org_issuer", redis_client=redis_mock),
+        organization_id=None,
+        key_purpose="oid4vp_request_signing",
+        algorithm="ES256",
+    )
+
+    data = json.loads(response.body)
+    assert data == {
+        "identities": [
+            {
+                "issuer_did": "did:web:issuer.example",
+                "key_purpose": "oid4vp_request_signing",
+                "algorithm": "ES256",
+                "status": "active",
+            }
+        ]
+    }
+    serialized = json.dumps(data)
+    for forbidden in (
+        "issuer_profile_id",
+        "signing_service_id",
+        "signing_key_reference",
+        "kms",
+        "provider",
+    ):
+        assert forbidden not in serialized
+
+
+@pytest.mark.asyncio
+async def test_public_issuer_identities_fail_closed_on_ambiguous_profiles():
+    profile = {
+        "organization_id": "org_issuer",
+        "issuer_did": "did:web:issuer.example",
+        "key_purpose": "oid4vp_request_signing",
+        "algorithm": "ES256",
+        "status": "active",
+    }
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(
+        return_value=json.dumps(
+            {
+                "profiles": [
+                    {**profile, "id": "profile-one"},
+                    {**profile, "id": "profile-two"},
+                ]
+            }
+        )
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys.list_public_issuer_identities(
+            request=_build_request("org_issuer", redis_client=redis_mock),
+            organization_id=None,
+            key_purpose="oid4vp_request_signing",
+            algorithm="ES256",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "profile-one" not in str(exc_info.value.detail)
+    assert "profile-two" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("route_name", "kwargs"),
     [

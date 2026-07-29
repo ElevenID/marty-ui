@@ -7,13 +7,13 @@ import VerificationSessionManager from './VerificationSessionManager';
 const {
   mockListFlowExecutions,
   mockStartVerificationFlow,
-  mockListIssuerProfiles,
+  mockListPublicIssuerIdentities,
   mockListPresentationPolicies,
   mockListFlows,
 } = vi.hoisted(() => ({
   mockListFlowExecutions: vi.fn(),
   mockStartVerificationFlow: vi.fn(),
-  mockListIssuerProfiles: vi.fn(),
+  mockListPublicIssuerIdentities: vi.fn(),
   mockListPresentationPolicies: vi.fn(),
   mockListFlows: vi.fn(),
 }));
@@ -34,7 +34,7 @@ vi.mock('../../../services/zkVerificationApi', () => ({
 }));
 
 vi.mock('../../../services/signingKeysApi', () => ({
-  listIssuerProfiles: (...args: unknown[]) => mockListIssuerProfiles(...args),
+  listPublicIssuerIdentities: (...args: unknown[]) => mockListPublicIssuerIdentities(...args),
 }));
 
 vi.mock('../../../services/presentationPolicyApi', () => ({
@@ -45,11 +45,11 @@ describe('VerificationSessionManager', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListFlowExecutions.mockResolvedValue([]);
-    mockListIssuerProfiles.mockResolvedValue({
-      profiles: [{
-        id: 'internal-profile-1',
+    mockListPublicIssuerIdentities.mockResolvedValue({
+      identities: [{
         issuer_did: 'did:web:verifier.example:oid4vp',
         key_purpose: 'oid4vp_request_signing',
+        algorithm: 'ES256',
         status: 'active',
       }],
     });
@@ -155,6 +155,11 @@ describe('VerificationSessionManager', () => {
 
     const newVerification = await screen.findByRole('button', { name: 'New Verification' });
     await waitFor(() => expect(newVerification).toBeEnabled());
+    expect(mockListPublicIssuerIdentities).toHaveBeenCalledWith({
+      organization_id: 'org-1',
+      key_purpose: 'oid4vp_request_signing',
+      algorithm: 'ES256',
+    });
     await user.click(newVerification);
     await user.click(await screen.findByLabelText('Presentation Policy'));
     await user.click(await screen.findByRole('option', { name: 'Employment proof' }));

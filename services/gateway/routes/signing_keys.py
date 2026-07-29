@@ -6359,6 +6359,75 @@ async def create_issuer_profile(
 
 
 @signing_key_router.get(
+    "/issuer-identities",
+    summary="List Public Issuer Identities",
+    response_class=JSONResponse,
+)
+async def list_public_issuer_identities(
+    request: Request,
+    organization_id: str | None = Query(None),
+    key_purpose: str | None = Query(None),
+    algorithm: str | None = Query(None),
+):
+    """Return DID-first runtime identities without custody coordinates.
+
+    Issuer profiles are an internal administration and custody abstraction.
+    Runtime callers receive only the public DID and the compatibility
+    dimensions they need to select it. A duplicate matching profile is an
+    ambiguous registry and fails closed rather than being hidden by projection.
+    """
+
+    resolved_org_id = _resolve_org_id(request, organization_id)
+    storage_key = _issuer_profiles_storage_key(resolved_org_id)
+    doc = await _load_json_document(request, storage_key, {"profiles": []})
+    requested_purpose = str(key_purpose or "").strip()
+    requested_algorithm = str(algorithm or "").strip().upper()
+    matches: list[dict[str, Any]] = []
+
+    for profile in doc.get("profiles") or []:
+        if not isinstance(profile, dict):
+            continue
+        if str(profile.get("status") or "").strip().lower() != "active":
+            continue
+        issuer_did = str(profile.get("issuer_did") or "").strip()
+        purpose = str(profile.get("key_purpose") or "vc_jwt_issuer").strip()
+        profile_algorithm = str(profile.get("algorithm") or "ES256").strip().upper()
+        if not issuer_did.startswith("did:"):
+            continue
+        if requested_purpose and purpose != requested_purpose:
+            continue
+        if requested_algorithm and profile_algorithm != requested_algorithm:
+            continue
+        matches.append(
+            {
+                "issuer_did": issuer_did,
+                "key_purpose": purpose,
+                "algorithm": profile_algorithm,
+                "status": "active",
+            }
+        )
+
+    counts: dict[tuple[str, str, str], int] = {}
+    for identity in matches:
+        key = (
+            identity["issuer_did"],
+            identity["key_purpose"],
+            identity["algorithm"],
+        )
+        counts[key] = counts.get(key, 0) + 1
+    if any(count > 1 for count in counts.values()):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Issuer DID resolves to multiple active issuer profiles for "
+                "the requested organization, purpose, and algorithm."
+            ),
+        )
+
+    return JSONResponse(content={"identities": matches})
+
+
+@signing_key_router.get(
     "/issuer-profiles",
     summary="List Issuer Profiles",
     response_class=JSONResponse,

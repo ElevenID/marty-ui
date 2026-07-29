@@ -250,6 +250,8 @@ function buildCanvasLtiQuery(canvasLtiContext = null) {
 export function buildCredentialApplicationNavigationState(credential, options = {}) {
   const serializableCredential = { ...credential };
   delete serializableCredential.icon;
+  const applicationTemplate = serializableCredential.application_template || null;
+  delete serializableCredential.application_template;
   const basePath = resolveCredentialApplicationPath({
     credentialId: credential.id,
     currentPathname: options.currentPathname,
@@ -259,6 +261,9 @@ export function buildCredentialApplicationNavigationState(credential, options = 
   const state = {
     credential: serializableCredential,
   };
+  if (applicationTemplate) {
+    state.applicationTemplate = applicationTemplate;
+  }
   if (options.canvasLtiSession) {
     state.canvasLtiSession = options.canvasLtiSession;
   }

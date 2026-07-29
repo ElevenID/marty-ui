@@ -16,6 +16,7 @@ server {
     resolver_timeout 5s;
     set $keycloak_upstream http://keycloak:8080;
     set $gateway_upstream http://gateway:8000;
+    set $ui_upstream http://ui:80;
 
     # Keycloak must be available at the same public origin used in its issuer
     # metadata; the authenticated gateway flow therefore remains real.
@@ -28,6 +29,19 @@ server {
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host $http_host;
         proxy_set_header X-Forwarded-Port ${OIDF_INTERNAL_TLS_PORT};
+    }
+
+    # Serve the exact released UI artifact on the same public origin as the
+    # gateway and Keycloak. This lets browser conformance tests use the normal
+    # OIDC cookie path while all protocol and API requests continue to reach
+    # the gateway below.
+    location ~ ^/(?:$|console(?:/|$)|assets/|locales/|images/|blog/|demos/|runtime-config\.js$|startup\.js$|config\.json$|favicon[^/]*$|logo[^/]*$|apple-touch-icon\.png$|manifest\.json$|llms\.txt$|openapi\.yaml$) {
+        proxy_pass $ui_upstream;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host $http_host;
+        proxy_set_header X-Forwarded-Port ${OIDF_INTERNAL_TLS_PORT};
+        proxy_set_header X-Real-IP $remote_addr;
     }
 
     location / {
