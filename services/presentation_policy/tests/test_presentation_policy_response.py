@@ -338,14 +338,17 @@ def test_detect_credential_format_recognizes_base64url_mdoc(
 def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[bytes, bytes, list[str]]] = []
+    calls: list[tuple[bytes, bytes, list[str], list[str]]] = []
 
     def verify_presentation(
         mdoc_bytes: bytes,
         transcript_bytes: bytes,
-        anchors: list[str],
+        roots: list[str],
+        pinned_issuers: list[str],
     ) -> SimpleNamespace:
-        calls.append((bytes(mdoc_bytes), bytes(transcript_bytes), anchors))
+        calls.append(
+            (bytes(mdoc_bytes), bytes(transcript_bytes), roots, pinned_issuers)
+        )
         return SimpleNamespace(
             issuer_signature_valid=True,
             issuer_trusted=True,
@@ -374,7 +377,8 @@ def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
             .decode(),
             "oid4vp_client_id": "did:web:verifier.example",
         },
-        ["-----BEGIN CERTIFICATE-----\nanchor\n-----END CERTIFICATE-----"],
+        ["-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----"],
+        ["-----BEGIN CERTIFICATE-----\nissuer\n-----END CERTIFICATE-----"],
     )
 
     assert result["verified"] is True
@@ -383,9 +387,44 @@ def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
         (
             mdoc_bytes,
             transcript,
-            ["-----BEGIN CERTIFICATE-----\nanchor\n-----END CERTIFICATE-----"],
+            ["-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----"],
+            ["-----BEGIN CERTIFICATE-----\nissuer\n-----END CERTIFICATE-----"],
         )
     ]
+
+
+def test_mdoc_trust_material_preserves_root_and_direct_pin_semantics() -> None:
+    root = "-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----"
+    pinned = "-----BEGIN CERTIFICATE-----\npinned\n-----END CERTIFICATE-----"
+    ignored = "-----BEGIN CERTIFICATE-----\nignored\n-----END CERTIFICATE-----"
+
+    roots, pinned_issuers = pp._mdoc_trust_certificates_pem(
+        {
+            "trust_sources": [
+                {
+                    "source_type": "ROOT_CA",
+                    "certificate_pem": root,
+                    "pinned_certificates": [root],
+                },
+                {
+                    "source_type": "PINNED_ISSUER",
+                    "certificate_pem": pinned,
+                },
+                {
+                    "source_type": "TRUST_LIST",
+                    "certificate_pem": ignored,
+                },
+                {
+                    "source_type": "PINNED_ISSUER",
+                    "certificate_pem": ignored,
+                    "enabled": False,
+                },
+            ]
+        }
+    )
+
+    assert roots == [root]
+    assert pinned_issuers == [pinned]
 
 
 def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
