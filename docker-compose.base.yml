@@ -775,6 +775,9 @@ services:
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       TOKEN_HMAC_KEY: ${TOKEN_HMAC_KEY:-dev-only-token-hmac-key-change-me}
+      # Preserve the issuance service's production default while allowing
+      # disposable conformance deployments to exercise dense official suites.
+      TOKEN_RATE_LIMIT: ${TOKEN_RATE_LIMIT:-30}
       ICAO_DOCUMENT_SIGNER_URL: ${ICAO_DOCUMENT_SIGNER_URL:-}
       ICAO_DOCUMENT_SIGNER_API_KEY: ${ICAO_DOCUMENT_SIGNER_API_KEY:-}
       PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED: ${PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED:-false}

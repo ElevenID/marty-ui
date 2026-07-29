@@ -364,6 +364,17 @@ def test_ghcr_profile_keeps_dedicated_issuance_artifact() -> None:
     assert "  issuance-migrations:\n    image: ${MARTY_ISSUANCE_IMAGE" in base
 
 
+def test_issuance_token_limiter_is_configurable_without_weakening_default() -> None:
+    compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+    issuance = re.search(
+        r"(?ms)^  issuance:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        compose,
+    )
+
+    assert issuance is not None
+    assert "TOKEN_RATE_LIMIT: ${TOKEN_RATE_LIMIT:-30}" in issuance.group(1)
+
+
 def test_oidf_profile_propagates_public_origin_to_seeded_and_runtime_urls() -> None:
     profile = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
     public_origin = (
