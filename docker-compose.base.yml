@@ -775,6 +775,10 @@ services:
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       TOKEN_HMAC_KEY: ${TOKEN_HMAC_KEY:-dev-only-token-hmac-key-change-me}
+      # Exact HTTPS resources that VCDM credentials may reference by digest.
+      # Empty remains fail-closed; conformance and production operators must
+      # opt in to every trusted resource URL explicitly.
+      VCDM_RELATED_RESOURCE_URLS: ${VCDM_RELATED_RESOURCE_URLS:-}
       # Preserve the issuance service's production default while allowing
       # disposable conformance deployments to exercise dense official suites.
       TOKEN_RATE_LIMIT: ${TOKEN_RATE_LIMIT:-30}

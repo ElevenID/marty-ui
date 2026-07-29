@@ -375,6 +375,21 @@ def test_issuance_token_limiter_is_configurable_without_weakening_default() -> N
     assert "TOKEN_RATE_LIMIT: ${TOKEN_RATE_LIMIT:-30}" in issuance.group(1)
 
 
+def test_vcdm_related_resource_allowlist_is_forwarded_fail_closed() -> None:
+    compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+    issuance = re.search(
+        r"(?ms)^  issuance:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        compose,
+    )
+
+    assert issuance is not None
+    assert (
+        "VCDM_RELATED_RESOURCE_URLS: ${VCDM_RELATED_RESOURCE_URLS:-}"
+        in issuance.group(1)
+    )
+    assert "https://www.w3.org/ns/credentials/v2" not in issuance.group(1)
+
+
 def test_oidf_profile_propagates_public_origin_to_seeded_and_runtime_urls() -> None:
     profile = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
     public_origin = (
