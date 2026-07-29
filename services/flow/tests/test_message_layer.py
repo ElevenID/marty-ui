@@ -1266,6 +1266,94 @@ async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
 
 
 @pytest.mark.asyncio
+async def test_start_verification_url_query_carries_one_signed_jar_without_claim_rewriting(
+    monkeypatch,
+):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    monkeypatch.setenv("OID4VP_CLIENT_ID_PREFIX", "decentralized_identifier")
+    _install_reference_validation_stubs(
+        monkeypatch,
+        templates={},
+        policies={
+            "policy-1": {
+                "organization_id": "org-1",
+                "status": "active",
+                "credential_requirements_json": "[]",
+            },
+        },
+    )
+
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {
+            "id": "pd-1",
+            "input_descriptors": [
+                {"id": "descriptor-1", "constraints": {"fields": []}},
+            ],
+        }
+
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition", _fake_presentation_definition
+    )
+    repo = InMemoryFlowRepository()
+    started = await start_verification_flow(
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example:oid4vp",
+            request_transport="url_query",
+        ),
+        user_id="auth-service",
+        repo=repo,
+    )
+
+    parsed = urlparse(started.request_uri)
+    parameters = parse_qs(parsed.query)
+    client_identifier = "decentralized_identifier:did:web:verifier.example:oid4vp"
+
+    assert parsed.scheme == "openid4vp"
+    assert set(parameters) == {"client_id", "request"}
+    assert parameters["client_id"] == [client_identifier]
+    assert "request_uri" not in parameters
+    assert "nonce" not in parameters
+    assert "response_uri" not in parameters
+
+    _header, payload, _signature = parameters["request"][0].split(".", 2)
+    signed_claims = _decode_jwt_segment(payload)
+    assert signed_claims["client_id"] == client_identifier
+    assert signed_claims["response_uri"].endswith(
+        f"/v1/flows/instances/{started.instance_id}/submit"
+    )
+    assert signed_claims["state"] == started.instance_id
+
+    instance = await repo.get_instance(started.instance_id)
+    assert instance is not None
+    assert instance.context["request_transport"] == "url_query"
+    assert instance.context["auth_request"] == started.request_uri
+
+
+def test_url_query_transport_rejects_request_uri_post_semantics() -> None:
+    with pytest.raises(ValidationError, match="url_query transport"):
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example:oid4vp",
+            request_transport="url_query",
+            request_uri_method="post",
+        )
+
+
+def test_url_query_transport_rejects_siop_only_flow() -> None:
+    with pytest.raises(ValidationError, match="only for OID4VP"):
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example:oid4vp",
+            response_type="id_token",
+            request_transport="url_query",
+        )
+
+
+@pytest.mark.asyncio
 async def test_started_post_request_uri_transports_wallet_nonce_into_signed_request(
     monkeypatch,
 ):

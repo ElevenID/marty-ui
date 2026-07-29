@@ -346,6 +346,8 @@ message StartVerificationRequest {
   // Public DID that resolves to the managed verifier signing profile. The
   // profile, service, and key reference are intentionally not transportable.
   string issuer_did = 10;
+  // OID4VP outer authorization request transport: request_uri or url_query.
+  string request_transport = 11;
 }
 
 message VerificationRequestResponse {

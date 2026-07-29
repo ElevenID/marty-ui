@@ -22,6 +22,34 @@ def test_gateway_preserves_did_haip_and_post_request_uri_options() -> None:
     assert request.model_dump()["request_uri_method"] == "post"
 
 
+def test_gateway_preserves_native_url_query_transport() -> None:
+    request = StartVerificationFlowRequest(
+        presentation_policy_id="policy-1",
+        organization_id="org-1",
+        issuer_did="did:web:verifier.example",
+        request_transport="url_query",
+    )
+    assert request.model_dump()["request_transport"] == "url_query"
+
+    with pytest.raises(ValueError, match="url_query transport"):
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example",
+            request_transport="url_query",
+            request_uri_method="post",
+        )
+
+    with pytest.raises(ValueError, match="only for OID4VP"):
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example",
+            response_type="id_token",
+            request_transport="url_query",
+        )
+
+
 @pytest.mark.parametrize(
     "direct_kms_field",
     ("signing_service_id", "signing_key_reference", "issuer_key_id"),

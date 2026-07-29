@@ -3312,8 +3312,22 @@ class StartVerificationFlowRequest(BaseModel):
     external_reference: str | None = None
     callback_url: str | None = Field(None, max_length=2048)
     oid4vp_profile: Literal["standard", "haip"] = "standard"
+    request_transport: Literal["request_uri", "url_query"] = "request_uri"
     request_uri_method: Literal["get", "post"] = "get"
     expiry_minutes: int = 15
+
+    @model_validator(mode="after")
+    def validate_oid4vp_transport(self) -> "StartVerificationFlowRequest":
+        """Keep URL-query JARs distinct from request-URI retrieval semantics."""
+        if self.request_transport == "url_query" and self.request_uri_method != "get":
+            raise ValueError(
+                "url_query transport cannot use request_uri_method; use request_uri transport"
+            )
+        if self.request_transport == "url_query" and self.response_type == "id_token":
+            raise ValueError(
+                "url_query transport is supported only for OID4VP vp_token flows"
+            )
+        return self
 
     @field_validator("callback_url")
     @classmethod
@@ -3629,6 +3643,7 @@ async def start_verification_flow(
             "oid4vp_issuer_profile_id": signing_profile_id,
             "oid4vp_issuer_did": signing_identity["issuer_did"],
             "oid4vp_signing_identity": signing_identity,
+            "request_transport": request.request_transport,
             "request_uri_method": request.request_uri_method,
             "protocol_flow_type": FlowType.OID4VP_PRESENTATION.value,
             "current_step_name": "create_request",
@@ -3654,24 +3669,52 @@ async def start_verification_flow(
         response_uri,
         signing_identity=signing_identity,
     )
-    authorization_parameters = [
-        ("client_id", client_identifier),
-        ("request_uri", request_uri),
-    ]
-    if request.request_uri_method == "post":
-        authorization_parameters.append(("request_uri_method", "post"))
-    auth_request = "openid4vp://authorize?" + urllib.parse.urlencode(
-        authorization_parameters,
-        quote_via=urllib.parse.quote,
-        safe="",
-    )
-    qr_code_data = auth_request
-
     instance.context["request_uri"] = request_uri
     instance.context["oid4vp_client_id"] = client_identifier
+    await repo.save_instance(instance)
+
+    if request.request_transport == "url_query":
+        # OID4VP URL-query transport carries the complete signed Request Object
+        # in the standard `request` parameter.  Never unpack JAR claims into
+        # unsigned query parameters: doing so would create an adapter-only path
+        # and allow the outer request to drift from the profile-signed object.
+        signed_response = await get_verification_request_object(instance.id, repo)
+        signed_request = signed_response.body.decode("utf-8")
+        auth_request = "openid4vp://authorize?" + urllib.parse.urlencode(
+            [("client_id", client_identifier), ("request", signed_request)],
+            quote_via=urllib.parse.quote,
+            safe="",
+        )
+        max_length = int(os.environ.get("OID4VP_URL_QUERY_MAX_LENGTH", "8192"))
+        if max_length < 1024:
+            raise HTTPException(
+                status_code=500,
+                detail="OID4VP_URL_QUERY_MAX_LENGTH must be at least 1024",
+            )
+        if len(auth_request) > max_length:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Signed OID4VP request exceeds the configured URL-query limit; "
+                    "use request_uri transport"
+                ),
+            )
+    else:
+        authorization_parameters = [
+            ("client_id", client_identifier),
+            ("request_uri", request_uri),
+        ]
+        if request.request_uri_method == "post":
+            authorization_parameters.append(("request_uri_method", "post"))
+        auth_request = "openid4vp://authorize?" + urllib.parse.urlencode(
+            authorization_parameters,
+            quote_via=urllib.parse.quote,
+            safe="",
+        )
+
+    qr_code_data = auth_request
     instance.context["auth_request"] = auth_request
     instance.context["qr_code_data"] = qr_code_data
-
     await repo.save_instance(instance)
     logger.info(f"Started verification flow: {instance.id}")
 

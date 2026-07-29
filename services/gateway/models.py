@@ -1265,7 +1265,20 @@ class StartVerificationFlowRequest(BaseModel):
     callback_url: str | None = None
     expiry_minutes: int = 15
     oid4vp_profile: Literal["standard", "haip"] = "standard"
+    request_transport: Literal["request_uri", "url_query"] = "request_uri"
     request_uri_method: Literal["get", "post"] = "get"
+
+    @model_validator(mode="after")
+    def validate_oid4vp_transport(self) -> "StartVerificationFlowRequest":
+        if self.request_transport == "url_query" and self.request_uri_method != "get":
+            raise ValueError(
+                "url_query transport cannot use request_uri_method; use request_uri transport"
+            )
+        if self.request_transport == "url_query" and self.response_type == "id_token":
+            raise ValueError(
+                "url_query transport is supported only for OID4VP vp_token flows"
+            )
+        return self
 
 
 class VerificationRequestResponse(BaseModel):
