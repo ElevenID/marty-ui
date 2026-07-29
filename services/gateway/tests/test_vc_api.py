@@ -1,4 +1,4 @@
-"""Tests for the deliberately gated W3C VC v2 interop adapter."""
+"""Tests for the authenticated public W3C VC-API boundary."""
 
 from __future__ import annotations
 
@@ -6,31 +6,26 @@ import json
 import sys
 import types
 
+import httpx
 import pytest
 from fastapi import HTTPException
-from gateway.routes import w3c_vc_test_adapter as adapter
+from gateway import main as gateway_main
+from gateway.routes import vc_api as adapter
 from starlette.requests import Request
 from starlette.responses import Response
 
 
-def _request() -> Request:
-    return Request(
+def _request(organization_id: str = "fixture-org") -> Request:
+    request = Request(
         {
             "type": "http",
             "method": "POST",
-            "path": "/__test__/vc-api/credentials/verify",
+            "path": "/v1/vc-api/credentials/verify",
             "headers": [],
         }
     )
-
-
-def test_adapter_is_disabled_without_explicit_environment(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("W3C_VC_TEST_ADAPTER", raising=False)
-    with pytest.raises(HTTPException) as exc_info:
-        adapter._enabled_policy_id(presentation=False)
-    assert exc_info.value.status_code == 404
+    request.state.organization_id = organization_id
+    return request
 
 
 def test_adapter_rejects_unimplemented_json_ld_proofs() -> None:
@@ -56,17 +51,65 @@ def test_issuer_adapter_has_no_test_owned_credential_semantic_validator() -> Non
     assert not hasattr(adapter, "_validate_related_resource_digests")
 
 
-def test_issuer_adapter_requires_explicit_disposable_fixture_configuration(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
-    monkeypatch.setenv("W3C_VC_TEST_CREDENTIAL_POLICY_ID", "fixture-policy")
-    monkeypatch.delenv("W3C_VC_TEST_ORGANIZATION_ID", raising=False)
-    monkeypatch.delenv("W3C_VC_TEST_TEMPLATE_ID", raising=False)
-    monkeypatch.delenv("W3C_VC_TEST_ISSUER_DID", raising=False)
+def test_adapter_rejects_cross_tenant_request() -> None:
     with pytest.raises(HTTPException) as exc_info:
-        adapter._issuance_fixture_configuration()
-    assert exc_info.value.status_code == 503
+        adapter._require_organization_authorization(_request("org-a"), "org-b")
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_public_vc_api_requires_authentication_and_binds_api_key_tenant() -> None:
+    app = gateway_main.create_app()
+
+    async def validate_api_key(_key: str):
+        return types.SimpleNamespace(
+            api_key_id="key-1",
+            organization_id="org-a",
+            key_prefix="mk_test_",
+            scopes=["credentials:read"],
+        )
+
+    app.state.org_client = types.SimpleNamespace(validate_api_key=validate_api_key)
+    transport = httpx.ASGITransport(app=app)
+    payload = {
+        "verifiableCredential": "header.payload.signature",
+        "options": {},
+    }
+    path = (
+        "/v1/vc-api/credentials/verify?"
+        "organization_id=org-b&presentation_policy_id=policy-b"
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        anonymous = await client.post(path, json=payload)
+        cross_tenant = await client.post(
+            path,
+            headers={"X-API-Key": "mk_test_secret"},
+            json=payload,
+        )
+
+    assert anonymous.status_code == 401
+    assert cross_tenant.status_code == 403
+    assert cross_tenant.json()["detail"] == (
+        "API key does not have access to this organization"
+    )
+
+
+@pytest.mark.asyncio
+async def test_issuer_adapter_rejects_document_issuer_mismatch() -> None:
+    credential = _official_baseline_credential()
+    credential["issuer"] = "did:web:other.example"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await adapter._issue_data_integrity_credential(
+            credential,
+            _request(),
+            organization_id="fixture-org",
+            template_id="fixture-template",
+            issuer_did="did:web:issuer.example",
+        )
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.detail["error"] == "issuer_mismatch"
 
 
 def test_issuer_adapter_calls_the_general_issuance_application_path() -> None:
@@ -103,11 +146,6 @@ def test_issuer_adapter_uses_the_released_oid4vci_proof_binding(
 async def test_issuer_adapter_sends_complete_unsigned_document_to_production_issuance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
-    monkeypatch.setenv("W3C_VC_TEST_CREDENTIAL_POLICY_ID", "fixture-policy")
-    monkeypatch.setenv("W3C_VC_TEST_ORGANIZATION_ID", "fixture-org")
-    monkeypatch.setenv("W3C_VC_TEST_TEMPLATE_ID", "fixture-template")
-    monkeypatch.setenv("W3C_VC_TEST_ISSUER_DID", "did:web:issuer.example")
     credential = _official_baseline_credential()
     credential["credentialSubject"] = [
         {"id": "did:example:subject"},
@@ -185,6 +223,9 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
     issued = await adapter._issue_data_integrity_credential(
         credential,
         _request(),
+        organization_id="fixture-org",
+        template_id="fixture-template",
+        issuer_did="did:web:issuer.example",
     )
     assert issued["proof"]["cryptosuite"] == "eddsa-rdfc-2022"
     initiate_body = captured_issuance["body"].model_dump(
@@ -210,20 +251,18 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
 
 
 @pytest.mark.asyncio
-async def test_issuer_adapter_returns_controlled_validation_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
-    monkeypatch.setenv("W3C_VC_TEST_CREDENTIAL_POLICY_ID", "fixture-policy")
-    monkeypatch.setenv("W3C_VC_TEST_ORGANIZATION_ID", "fixture-org")
-    monkeypatch.setenv("W3C_VC_TEST_TEMPLATE_ID", "fixture-template")
-    monkeypatch.setenv("W3C_VC_TEST_ISSUER_DID", "did:web:issuer.example")
-
+async def test_issuer_adapter_returns_controlled_validation_error() -> None:
     invalid = _official_baseline_credential()
     invalid["credentialSubject"] = {}
 
     with pytest.raises(HTTPException) as exc_info:
-        await adapter._issue_data_integrity_credential(invalid, _request())
+        await adapter._issue_data_integrity_credential(
+            invalid,
+            _request(),
+            organization_id="fixture-org",
+            template_id="fixture-template",
+            issuer_did="did:web:issuer.example",
+        )
 
     assert exc_info.value.status_code == 422
     assert exc_info.value.detail["error"] == "invalid_credential"
@@ -297,9 +336,6 @@ def test_adapter_rejects_invalid_or_unsupported_jose_envelopes(identifier: str) 
 async def test_adapter_forwards_supported_token_to_actual_policy_evaluator(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
-    monkeypatch.setenv("W3C_VC_TEST_CREDENTIAL_POLICY_ID", "fixture-policy")
-
     class Registry:
         @staticmethod
         def get_service_url(name: str) -> str:
@@ -322,7 +358,8 @@ async def test_adapter_forwards_supported_token_to_actual_policy_evaluator(
         "header.payload.signature",
         {"challenge": "n", "domain": "aud"},
         _request(),
-        presentation=False,
+        organization_id="fixture-org",
+        policy_id="fixture-policy",
     )
 
     assert response.status_code == 200
@@ -340,8 +377,6 @@ async def test_adapter_forwards_supported_token_to_actual_policy_evaluator(
 async def test_adapter_forwards_data_integrity_document_without_stringifying_it_twice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
-    monkeypatch.setenv("W3C_VC_TEST_PRESENTATION_POLICY_ID", "fixture-policy")
     document = {
         "@context": ["https://www.w3.org/ns/credentials/v2"],
         "type": ["VerifiablePresentation"],
@@ -369,7 +404,8 @@ async def test_adapter_forwards_data_integrity_document_without_stringifying_it_
         document,
         {"challenge": "n", "domain": "aud"},
         _request(),
-        presentation=True,
+        organization_id="fixture-org",
+        policy_id="fixture-policy",
     )
     assert response.status_code == 200
     assert json.loads(response.body)["verified"] is True
@@ -380,9 +416,6 @@ async def test_adapter_forwards_data_integrity_document_without_stringifying_it_
 async def test_adapter_maps_policy_denial_to_vc_api_rejection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("W3C_VC_TEST_ADAPTER", "1")
-    monkeypatch.setenv("W3C_VC_TEST_CREDENTIAL_POLICY_ID", "fixture-policy")
-
     class Registry:
         @staticmethod
         def get_service_url(name: str) -> str:
@@ -397,7 +430,13 @@ async def test_adapter_maps_policy_denial_to_vc_api_rejection(
     monkeypatch.setattr(adapter, "get_registry", lambda: Registry())
     monkeypatch.setattr(adapter, "proxy_request", fake_proxy)
 
-    response = await adapter._evaluate("a.b.c", {}, _request(), presentation=False)
+    response = await adapter._evaluate(
+        "a.b.c",
+        {},
+        _request(),
+        organization_id="fixture-org",
+        policy_id="fixture-policy",
+    )
     assert response.status_code == 422
     assert json.loads(response.body) == {
         "verified": False,
