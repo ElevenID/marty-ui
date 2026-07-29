@@ -442,10 +442,20 @@ class TrustRegistryStatusResponse(BaseModel):
 # =============================================================================
 
 
+class ClaimDisplayModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str | None = Field(None, min_length=1, max_length=255)
+    icon: str | None = Field(None, min_length=1, max_length=2048)
+
+
 class ClaimDefinitionModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
+    description: str | None = None
+    derived_from: str | None = Field(None, min_length=1, max_length=255)
+    display: ClaimDisplayModel | None = None
     display_name: str | None = None
     claim_type: str = "string"
     type: str | None = Field(None, exclude=True)
@@ -466,9 +476,28 @@ class ClaimDefinitionModel(BaseModel):
         max_length=255,
         exclude=True,
     )
+    # Older internal clients used a capability flag rather than identifying
+    # the source claim. Retain it as input compatibility, but never expose it
+    # as part of the public marty-protocol representation.
+    derivable: bool | None = Field(None, exclude=True)
+    pattern: str | None = Field(None, exclude=True)
+    enum_values: list[str] | None = Field(None, exclude=True)
+    min_value: float | None = Field(None, exclude=True)
+    max_value: float | None = Field(None, exclude=True)
 
     @model_validator(mode="after")
     def normalize_claim(self) -> "ClaimDefinitionModel":
+        if (
+            self.display
+            and self.display.label
+            and self.display_name
+            and self.display.label != self.display_name
+        ):
+            raise ValueError(
+                "display.label and legacy display_name must identify the same label"
+            )
+        if self.display and self.display.label:
+            self.display_name = self.display.label
         if not self.display_name:
             self.display_name = (
                 " ".join(
@@ -496,7 +525,25 @@ class ClaimDefinitionModel(BaseModel):
             raise ValueError(
                 "namespace is required when mdoc_element_identifier is provided"
             )
+        if self.derived_from == self.name:
+            raise ValueError("derived_from must identify a different source claim")
         return self
+
+
+def _validate_claim_set(claims: list[ClaimDefinitionModel]) -> None:
+    names = [claim.name for claim in claims]
+    duplicates = sorted({name for name in names if names.count(name) > 1})
+    if duplicates:
+        raise ValueError(
+            f"claim names must be unique: {', '.join(duplicates)}"
+        )
+    known_names = set(names)
+    for claim in claims:
+        if claim.derived_from and claim.derived_from not in known_names:
+            raise ValueError(
+                f"claim {claim.name!r} derives from unknown claim "
+                f"{claim.derived_from!r}"
+            )
 
 
 class TemplateValidityRules(BaseModel):
@@ -567,6 +614,7 @@ class CredentialTemplateCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_format_identity(self) -> "CredentialTemplateCreate":
+        _validate_claim_set(self.claims)
         candidates = [
             value
             for value in [self.credential_payload_format, *self.supported_formats]
@@ -613,6 +661,12 @@ class CredentialTemplateUpdate(BaseModel):
         max_length=2048,
     )
     credential_payload_format: str | None = Field(None, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_claim_references(self) -> "CredentialTemplateUpdate":
+        if self.claims is not None:
+            _validate_claim_set(self.claims)
+        return self
 
 
 class CredentialTemplateResponse(BaseModel):

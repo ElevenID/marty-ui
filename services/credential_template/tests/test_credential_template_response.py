@@ -273,6 +273,33 @@ def test_create_credential_template_returns_canonical_protocol_fields() -> None:
 	get_membership.assert_awaited_once_with("user-1", "org-1")
 
 
+def test_derived_claim_source_and_display_icon_round_trip() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	template = asyncio.run(_save_template(repo))
+	template.claims.append(
+		credential_template.ClaimDefinition(
+			name="age_over_21",
+			display_name="Age 21 or older",
+			display_icon="https://issuer.example/icons/age.svg",
+			claim_type=credential_template.ClaimType.BOOLEAN,
+			required=False,
+			derivable=True,
+			derived_from="birth_date",
+		)
+	)
+
+	response = credential_template._template_to_response(template)
+	derived = next(
+		claim for claim in response.claims if claim["name"] == "age_over_21"
+	)
+
+	assert derived["derived_from"] == "birth_date"
+	assert derived["display"] == {
+		"label": "Age 21 or older",
+		"icon": "https://issuer.example/icons/age.svg",
+	}
+
+
 def test_create_mdoc_template_uses_doctype_without_fabricating_vct() -> None:
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	client, _ = _build_client(repo)

@@ -153,6 +153,36 @@ class TestGetTemplate:
         assert response.claims[0].mdoc_namespace == "org.iso.18013.5.1"
         assert response.claims[0].mdoc_element_identifier == "given_name"
 
+    async def test_derived_claim_and_display_icon_are_preserved(self, ctx):
+        template = _make_template_response(
+            claims=[
+                {
+                    "name": "age_over_21",
+                    "type": "BOOLEAN",
+                    "required": False,
+                    "derived_from": "birth_date",
+                    "display": {
+                        "label": "Age 21 or older",
+                        "icon": "https://issuer.example/icons/age.svg",
+                    },
+                }
+            ],
+        )
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=template)
+        servicer = _build_servicer(repo=repo)
+
+        response = await servicer.GetTemplate(
+            ct_pb2.GetTemplateRequest(template_id="tpl-1"),
+            ctx,
+        )
+
+        assert response.claims[0].derived_from == "birth_date"
+        assert response.claims[0].display_name == "Age 21 or older"
+        assert response.claims[0].display_icon == (
+            "https://issuer.example/icons/age.svg"
+        )
+
 
 class TestListTemplates:
     async def test_returns_templates(self, ctx):
