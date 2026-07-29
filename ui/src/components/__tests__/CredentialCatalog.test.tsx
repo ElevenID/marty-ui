@@ -186,6 +186,10 @@ describe('CredentialCatalog', () => {
           id: 'cfg-1',
           name: 'Member Login Credential',
         }),
+        applicationTemplate: expect.objectContaining({
+          id: 'app-tpl-1',
+          credential_template_id: 'cfg-1',
+        }),
       },
     });
   });
@@ -210,6 +214,10 @@ describe('CredentialCatalog', () => {
           credential: expect.objectContaining({
             id: 'cfg-1',
             name: 'Member Login Credential',
+          }),
+          applicationTemplate: expect.objectContaining({
+            id: 'app-tpl-1',
+            credential_template_id: 'cfg-1',
           }),
           canvasLtiSession: expect.objectContaining({
             credential_template_id: 'cfg-1',
@@ -253,6 +261,10 @@ describe('CredentialCatalog', () => {
         credential: expect.objectContaining({
           id: 'cfg-1',
           name: 'Member Login Credential',
+        }),
+        applicationTemplate: expect.objectContaining({
+          id: 'app-tpl-1',
+          credential_template_id: 'cfg-1',
         }),
       },
     });

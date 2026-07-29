@@ -243,7 +243,11 @@ export default function ApplicationForm() {
   const [canvasSyncLoading, setCanvasSyncLoading] = useState(false);
   const [canvasSyncError, setCanvasSyncError] = useState(null);
   const [canvasSyncPollVersion, setCanvasSyncPollVersion] = useState(0);
-  const [applicationTemplate, setApplicationTemplate] = useState(initialApplyState?.applicationTemplate || null);
+  const [applicationTemplate, setApplicationTemplate] = useState(
+    initialApplyState?.applicationTemplate
+      || initialApplyState?.credential?.application_template
+      || null
+  );
   const [duplicateConflict, setDuplicateConflict] = useState(null);
 
   // MemberCredential / auto-approve claim dialog state

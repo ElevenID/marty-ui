@@ -124,6 +124,33 @@ describe('credentialCatalog helpers', () => {
     });
   });
 
+  it('promotes the active Application Template into form navigation state', () => {
+    const applicationTemplate = {
+      id: 'app-tpl-1',
+      approval_strategy: 'auto',
+      form_fields: [{ field_id: 'email', required: true }],
+    };
+
+    const payload = buildCredentialApplicationNavigationState({
+      id: 'cfg-1',
+      name: 'Member Login Credential',
+      application_template: applicationTemplate,
+    }, {
+      currentPathname: '/console/applicant/catalog',
+    });
+
+    expect(payload).toEqual({
+      path: '/console/applicant/apply/cfg-1',
+      state: {
+        credential: {
+          id: 'cfg-1',
+          name: 'Member Login Credential',
+        },
+        applicationTemplate,
+      },
+    });
+  });
+
   it('preserves Canvas launch context when navigating from the scoped catalog', () => {
     const payload = buildCredentialApplicationNavigationState({
       id: 'cfg-1',
