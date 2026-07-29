@@ -823,6 +823,7 @@ async def get_canvas_mirror_provenance(request: Request) -> Response:
         request,
         service_url,
         "/v1/issuance/delivery-records/canvas-credentials/provenance",
+        inject_headers=_ISSUANCE_HEADERS,
     )
 
 

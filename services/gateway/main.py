@@ -147,6 +147,15 @@ _VC_API_ROUTE_RULES = (
     ),
 )
 
+_CANVAS_PROVENANCE_ROUTE = (
+    "GET",
+    "/v1/issuance/delivery-records/canvas-credentials/provenance",
+)
+_CANVAS_PROVENANCE_PERMISSION = (
+    "integration-connector:view",
+    "integration-connector",
+)
+
 
 class GatewayCedarAuthMiddleware(MartyCedarAuthMiddleware):
     """Preserve the published API-key contract for signing-key routes.
@@ -286,6 +295,49 @@ def _register_vc_api_cedar_routes() -> None:
             rules.remove(rule)
         raise RuntimeError(
             "VC-API Cedar compatibility mapping did not activate; refusing to start."
+        )
+
+
+def _register_canvas_provenance_cedar_route() -> None:
+    """Bind Canvas provenance lookup to tenant membership and connector RBAC."""
+    resolver = getattr(_cedar_actions, "resolve_action_and_resource", None)
+    rules = getattr(_cedar_actions, "SPECIAL_ROUTE_RULES", None)
+    if not callable(resolver) or not isinstance(rules, list):
+        raise RuntimeError(
+            "Unsupported marty-common Cedar route registry; "
+            "refusing to start without Canvas provenance RBAC."
+        )
+
+    current = resolver(*_CANVAS_PROVENANCE_ROUTE)
+    if current == _CANVAS_PROVENANCE_PERMISSION:
+        return
+    if current is not None:
+        raise RuntimeError(
+            "Conflicting marty-common Canvas provenance Cedar mapping; "
+            "refusing to override it."
+        )
+
+    compatibility_rule = (
+        re.compile(
+            r"^/v1/issuance/delivery-records/"
+            r"canvas-credentials/provenance$"
+        ),
+        {"GET": _CANVAS_PROVENANCE_PERMISSION[0]},
+        _CANVAS_PROVENANCE_PERMISSION[1],
+    )
+    rules.insert(0, compatibility_rule)
+    try:
+        verified = (
+            resolver(*_CANVAS_PROVENANCE_ROUTE)
+            == _CANVAS_PROVENANCE_PERMISSION
+        )
+    except Exception:
+        verified = False
+    if not verified:
+        rules.remove(compatibility_rule)
+        raise RuntimeError(
+            "Canvas provenance Cedar compatibility mapping did not activate; "
+            "refusing to start."
         )
 
 
@@ -635,6 +687,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 def create_app() -> FastAPI:
     _register_signing_key_cedar_routes()
     _register_vc_api_cedar_routes()
+    _register_canvas_provenance_cedar_route()
     app = FastAPI(
         title="Marty API Gateway",
         description="""

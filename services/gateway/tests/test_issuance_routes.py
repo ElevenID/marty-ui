@@ -382,7 +382,7 @@ async def test_state_addressed_canvas_lti_routes_are_retired(handler) -> None:
 
 
 @pytest.mark.asyncio
-async def test_canvas_mirror_provenance_route_proxies_without_management_header(
+async def test_canvas_mirror_provenance_route_proxies_with_management_header(
     monkeypatch: pytest.MonkeyPatch,
 ):
     captured: dict = {}
@@ -414,18 +414,18 @@ async def test_canvas_mirror_provenance_route_proxies_without_management_header(
         captured["path"]
         == "/v1/issuance/delivery-records/canvas-credentials/provenance"
     )
-    assert captured["inject_headers"] is None
+    assert captured["inject_headers"] == {"X-API-Key": "secret"}
     assert body["trust_basis"]["canonical_issuance_backed"] is True
 
 
-def test_canvas_mirror_provenance_route_is_public_for_employer_demo():
+def test_canvas_mirror_provenance_route_requires_authentication():
     route_config = get_route_config(
         "/v1/issuance/delivery-records/canvas-credentials/provenance"
     )
 
     assert route_config is not None
     assert route_config["service"] == "issuance"
-    assert route_config["requires_auth"] is False
+    assert route_config["requires_auth"] is True
 
 
 @pytest.mark.asyncio

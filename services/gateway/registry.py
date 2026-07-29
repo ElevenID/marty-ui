@@ -153,7 +153,7 @@ ROUTE_CONFIG = {
     "/v1/issuance/par": {"service": "issuance", "requires_auth": False},
     "/v1/issuance/delivery-records/canvas-credentials/provenance": {
         "service": "issuance",
-        "requires_auth": False,
+        "requires_auth": True,
     },
     "/v1/issuance/didcomm/deliver": {"service": "issuance", "requires_auth": True},
     "/v1/issuance/didcomm/receive": {"service": "issuance", "requires_auth": False},

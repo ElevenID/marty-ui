@@ -565,6 +565,78 @@ def test_gateway_cedar_delegates_other_api_scope_decisions_to_marty_common():
     )
 
 
+def test_canvas_provenance_is_tenant_scoped_by_connector_view_permission():
+    gateway_main._register_canvas_provenance_cedar_route()
+
+    assert cedar_actions.resolve_action_and_resource(
+        "GET",
+        "/v1/issuance/delivery-records/canvas-credentials/provenance",
+    ) == ("integration-connector:view", "integration-connector")
+
+
+@pytest.mark.asyncio
+async def test_canvas_provenance_rejects_cross_tenant_identifier_scope():
+    gateway_main._register_canvas_provenance_cedar_route()
+
+    class Membership:
+        status = "active"
+        is_owner = False
+        role_names = {"integration-manager"}
+        permissions = {"integration-connector:view"}
+
+        def is_active(self) -> bool:
+            return True
+
+        def has_permission(self, requested: str) -> bool:
+            return requested in self.permissions
+
+    membership_requests: list[tuple[str, str]] = []
+
+    async def get_membership(user_id: str, organization_id: str):
+        membership_requests.append((user_id, organization_id))
+        return Membership() if organization_id == "org-session" else None
+
+    app = FastAPI()
+    app.state.org_client = SimpleNamespace(get_membership=get_membership)
+    reached: list[str] = []
+
+    @app.get("/v1/issuance/delivery-records/canvas-credentials/provenance")
+    async def protected_route(request: Request):
+        reached.append(request.state.organization_id)
+        return JSONResponse({"ok": True})
+
+    app.add_middleware(gateway_main.GatewayCedarAuthMiddleware)
+
+    @app.middleware("http")
+    async def authenticated_session(request: Request, call_next):
+        request.state.user_id = "user-1"
+        request.state.session_organization_id = "org-session"
+        return await call_next(request)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        denied = await client.get(
+            "/v1/issuance/delivery-records/canvas-credentials/provenance"
+            "?organization_id=org-other&delivery_record_id=guessed"
+        )
+        allowed = await client.get(
+            "/v1/issuance/delivery-records/canvas-credentials/provenance"
+            "?organization_id=org-session&delivery_record_id=owned"
+        )
+
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "Not a member of this organization"
+    assert allowed.status_code == 200
+    assert reached == ["org-session"]
+    assert membership_requests == [
+        ("user-1", "org-other"),
+        ("user-1", "org-session"),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_signing_key_api_key_is_org_bound_and_scope_bound():
     app = FastAPI()
