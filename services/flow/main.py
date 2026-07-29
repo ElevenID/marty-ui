@@ -4690,6 +4690,7 @@ def _openid4vp_mdoc_binding_digests(
     nonce: str,
     response_uri: str,
     response_encryption_jwk: dict[str, Any] | None,
+    presentation: str,
 ) -> dict[str, str]:
     """Return non-reversible diagnostics for an mdoc request binding.
 
@@ -4712,6 +4713,9 @@ def _openid4vp_mdoc_binding_digests(
             if response_key_thumbprint is not None
             else "none"
         ),
+        "presentation_sha256": hashlib.sha256(
+            presentation.encode("utf-8")
+        ).hexdigest(),
     }
 
 
@@ -5389,18 +5393,21 @@ async def _submit_verification_response_internal(
                     nonce=mdoc_nonce,
                     response_uri=mdoc_response_uri,
                     response_encryption_jwk=response_encryption_jwk,
+                    presentation=vp_token,
                 )
                 logger.info(
                     "OID4VP mdoc binding "
                     "flow_instance_sha256=%s transcript_sha256=%s "
                     "client_id_sha256=%s nonce_sha256=%s "
-                    "response_uri_sha256=%s response_key_thumbprint_sha256=%s",
+                    "response_uri_sha256=%s response_key_thumbprint_sha256=%s "
+                    "presentation_sha256=%s",
                     hashlib.sha256(instance_id.encode("utf-8")).hexdigest(),
                     binding_digests["transcript_sha256"],
                     binding_digests["client_id_sha256"],
                     binding_digests["nonce_sha256"],
                     binding_digests["response_uri_sha256"],
                     binding_digests["response_key_thumbprint_sha256"],
+                    binding_digests["presentation_sha256"],
                 )
             eval_resp = await pp_stub.EvaluatePresentation(
                 pp_pb2.EvaluatePresentationRequest(
