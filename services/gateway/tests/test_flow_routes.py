@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import Response
 
 from gateway.routes import flows
 from gateway.models import StartVerificationFlowRequest
@@ -94,6 +95,35 @@ def test_verification_flow_rejects_direct_kms_routing(direct_kms_field: str) -> 
         )
 
 
+def test_verification_flow_requires_oid4vp_policy_and_bounded_expiry() -> None:
+    with pytest.raises(ValueError, match="presentation_policy_id"):
+        StartVerificationFlowRequest(
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example",
+        )
+
+    for expiry_minutes in (0, 1441):
+        with pytest.raises(ValueError, match="expiry_minutes"):
+            StartVerificationFlowRequest(
+                presentation_policy_id="policy-1",
+                organization_id="org-1",
+                issuer_did="did:web:verifier.example",
+                expiry_minutes=expiry_minutes,
+            )
+
+
+def test_verification_flow_rejects_unknown_response_type() -> None:
+    with pytest.raises(ValueError, match="response_type"):
+        StartVerificationFlowRequest.model_validate(
+            {
+                "presentation_policy_id": "policy-1",
+                "organization_id": "org-1",
+                "issuer_did": "did:web:verifier.example",
+                "response_type": "vp_token id_token",
+            }
+        )
+
+
 @pytest.mark.asyncio
 async def test_flow_definition_resolves_application_template_from_issuance(monkeypatch: pytest.MonkeyPatch) -> None:
     resource_exists = AsyncMock(return_value=True)
@@ -171,8 +201,22 @@ async def test_start_verification_proxies_same_org_policy_and_trust_profile(
         issuer_did="did:web:verifier.example",
     )
     resource_org_id = AsyncMock(side_effect=["org-1", "org-1"])
-    expected_response = SimpleNamespace(status_code=200)
-    proxy = AsyncMock(return_value=expected_response)
+    internal_response = {
+        "instance_id": "instance-1",
+        "flow_definition_id": "internal-definition",
+        "request_uri": "openid4vp://authorize?request_uri=https%3A%2F%2Fexample.test",
+        "qr_code_data": "openid4vp://authorize?request_uri=https%3A%2F%2Fexample.test",
+        "presentation_policy_id": "policy-1",
+        "nonce": "a-high-entropy-nonce-value",
+        "expires_at": "2026-07-30T20:00:00Z",
+        "status": "AWAITING_WALLET",
+    }
+    proxy = AsyncMock(
+        return_value=Response(
+            content=flows.json.dumps(internal_response),
+            media_type="application/json",
+        )
+    )
     registry = SimpleNamespace(get_service_url=lambda service: "http://flow:8011")
     monkeypatch.setattr(flows, "_resource_org_id", resource_org_id)
     monkeypatch.setattr(flows, "get_registry", lambda: registry)
@@ -180,7 +224,11 @@ async def test_start_verification_proxies_same_org_policy_and_trust_profile(
 
     response = await flows.start_verification_flow(body, request)
 
-    assert response is expected_response
+    assert flows.json.loads(response.body) == {
+        key: value
+        for key, value in internal_response.items()
+        if key != "flow_definition_id"
+    }
     assert resource_org_id.await_args_list[0].args[:2] == (
         "presentation-policies",
         "/v1/presentation-policies/policy-1",
@@ -190,6 +238,21 @@ async def test_start_verification_proxies_same_org_policy_and_trust_profile(
         "/v1/trust-profiles/trust-1",
     )
     proxy.assert_awaited_once_with(request, "http://flow:8011", "/v1/flows/verify")
+
+
+def test_verification_start_response_fails_closed_on_missing_public_field() -> None:
+    response = Response(
+        content=flows.json.dumps(
+            {
+                "instance_id": "instance-1",
+                "flow_definition_id": "internal-definition",
+            }
+        ),
+        media_type="application/json",
+    )
+    with pytest.raises(flows.HTTPException) as exc_info:
+        flows._sanitize_verification_start_response(response)
+    assert exc_info.value.status_code == 502
 
 
 @pytest.mark.asyncio

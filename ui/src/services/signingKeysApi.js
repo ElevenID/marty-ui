@@ -319,15 +319,6 @@ export async function listHolderKeys(filters = {}) {
 }
 
 /**
- * Derive a holder binding key reference from a registered KMS service.
- * @param {Object} params - { service_id, holder_identifier, ... }
- * @returns {Promise<Object>}
- */
-export async function deriveHolderBindingKey(params) {
-  return post(withOrganizationQuery(`${BASE_PATH}/holder-keys/derive`, params), withoutOrganizationFields(params));
-}
-
-/**
  * Get the org JWKS document (published public keys).
  * @param {string} [organizationId]
  * @returns {Promise<Object>} JWKS document
@@ -435,7 +426,6 @@ export default {
   signPayload,
   registerHolderKey,
   listHolderKeys,
-  deriveHolderBindingKey,
   getOrgJwks,
   getOrgDidDocument,
   createIssuerProfile,

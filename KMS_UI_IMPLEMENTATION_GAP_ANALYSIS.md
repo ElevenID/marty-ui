@@ -56,7 +56,6 @@ Policy direction for the next phase is now explicit:
 | `POST /v1/signing-keys/services/{id}/rotate` | Rotate per-service key (OpenBao) |
 | `POST /v1/signing-keys/holder-keys` | Register wallet/holder binding key |
 | `GET /v1/signing-keys/holder-keys` | List registered holder keys |
-| `POST /v1/signing-keys/holder-keys/derive` | Derive holder binding key reference |
 | `GET /v1/signing-keys/jwks` | Get org JWKS document |
 | `GET /v1/signing-keys/did-document` | Get org DID document |
 | `GET /v1/signing-keys/services/{id}/mdoc-x5c` | Get mDoc X.509 header material |
@@ -74,7 +73,6 @@ Policy direction for the next phase is now explicit:
 - [ ] `KMSUI-001-j` Add `rotateServiceKey(serviceId, options?)` → `POST /services/{id}/rotate`
 - [ ] `KMSUI-001-k` Add `registerHolderKey(keyData)` → `POST /holder-keys`
 - [ ] `KMSUI-001-l` Add `listHolderKeys(filters?)` → `GET /holder-keys`
-- [ ] `KMSUI-001-m` Add `deriveHolderBindingKey(serviceId, params)` → `POST /holder-keys/derive`
 - [ ] `KMSUI-001-n` Add `getOrgJwks()` → `GET /jwks`
 - [ ] `KMSUI-001-o` Add `getOrgDidDocument()` → `GET /did-document`
 - [ ] `KMSUI-001-p` Add `getMdocX5cMaterial(serviceId)` → `GET /services/{id}/mdoc-x5c`
@@ -242,20 +240,18 @@ The trust profile wizard has a `KeyLocationSelector` component that accepts `Iss
 
 **Priority:** MEDIUM  
 **File:** `marty-ui/ui/src/` — no holder key UI exists  
-**Status:** ❌ No UI surface for holder key registration, listing, or derivation
+**Status:** ❌ No UI surface for holder key registration or listing
 
 The gateway has:
 - `POST /v1/signing-keys/holder-keys` — register wallet/holder binding key
 - `GET /v1/signing-keys/holder-keys` — list keys
-- `POST /v1/signing-keys/holder-keys/derive` — derive binding key reference from KMS service
 
 Device-bound credentials (`mso_mdoc`, `zk_mdoc`) require holder binding keys. These are currently registered only programmatically.
 
 **Tasks:**
 - [ ] `KMSUI-006-a` Add **Holder keys** sub-page or tab within Deploy / Signing Keys section
 - [ ] `KMSUI-006-b` Show list of registered holder keys with purpose, associated credential format, expiry
-- [ ] `KMSUI-006-c` Add holder key registration form (for server-managed wallets; key material input or derivation from KMS)
-- [ ] `KMSUI-006-d` Add key derivation UI for server-managed holder binding key derivation from registered KMS service
+- [ ] `KMSUI-006-c` Add holder public-key registration for managed wallets; private key material and custody references remain internal
 
 ---
 
