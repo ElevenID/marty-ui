@@ -141,15 +141,11 @@ def _read_secret_value(name: str) -> str:
 def _configured_oid4vp_issuer_did() -> str:
     """Return the deployment's public verifier DID, never a key selector."""
     configured = (
-        os.environ.get("OID4VP_ISSUER_DID")
-        or os.environ.get("MARTY_ISSUER_DID")
-        or ""
+        os.environ.get("OID4VP_ISSUER_DID") or os.environ.get("MARTY_ISSUER_DID") or ""
     ).strip()
     if configured:
         return configured
-    public_base_url = os.environ.get(
-        "PUBLIC_BASE_URL", "https://beta.elevenidllc.com"
-    )
+    public_base_url = os.environ.get("PUBLIC_BASE_URL", "https://beta.elevenidllc.com")
     parsed = urllib.parse.urlparse(public_base_url)
     authority = parsed.netloc.strip().replace(":", "%3A")
     org_slug = (os.environ.get("MARTY_ORG_SLUG") or "marty").strip() or "marty"
@@ -163,10 +159,7 @@ async def _oid4vp_issuer_profile_identity(
     issuer_did: str | None = None,
 ) -> dict[str, Any]:
     """Resolve a public verifier DID to one org-owned issuer profile."""
-    resolved_did = (
-        issuer_did
-        or _configured_oid4vp_issuer_did()
-    ).strip()
+    resolved_did = (issuer_did or _configured_oid4vp_issuer_did()).strip()
     if not resolved_did.startswith("did:"):
         raise HTTPException(
             status_code=422,
@@ -859,17 +852,149 @@ def _require_reference_active(
         )
 
 
-def _require_template_kms_backed_issuer(template_id: str, template: Any) -> None:
-    issuer_profile_id = str(getattr(template, "issuer_profile_id", "") or "").strip()
-    key_access_mode = (
-        str(getattr(template, "key_access_mode", "") or "").strip().upper()
-    )
-    if not issuer_profile_id or key_access_mode != "REMOTE_SIGNING":
+_TEMPLATE_SIGNING_FORMATS = {
+    "sd_jwt_vc": "dc+sd-jwt",
+    "ietf_sd_jwt": "dc+sd-jwt",
+    "w3c_vcdm_v2_sd_jwt": "dc+sd-jwt",
+    "vc+sd-jwt": "dc+sd-jwt",
+    "jwt_vc": "jwt_vc_json",
+    "vc_jwt": "jwt_vc_json",
+    "w3c_vcdm_v2_jwt_vc": "jwt_vc_json",
+    "json_ld": "ldp_vc",
+    "json-ld": "ldp_vc",
+    "mdoc": "mso_mdoc",
+}
+
+
+def _template_signing_format(template: Any) -> str:
+    value = str(getattr(template, "credential_payload_format", "") or "").strip()
+    normalized = value.lower()
+    return _TEMPLATE_SIGNING_FORMATS.get(normalized, normalized)
+
+
+def _template_key_purpose(credential_format: str) -> str:
+    if credential_format in {"mso_mdoc", "zk_mdoc"}:
+        return "mdoc_dsc"
+    if credential_format in {"vds_nc", "vdsnc"}:
+        return "vdsnc_signing"
+    return "vc_jwt_issuer"
+
+
+async def _validate_template_issuer_identity(
+    *,
+    organization_id: str,
+    template_id: str,
+    template: Any,
+) -> None:
+    """Resolve a template's public DID to its private KMS-backed profile.
+
+    Credential templates deliberately do not expose issuer-profile IDs, service
+    IDs, or key references. The flow service validates the public DID and
+    credential capability through the internal organization-scoped resolver.
+    """
+    issuer_did = str(getattr(template, "issuer_did", "") or "").strip()
+    if not issuer_did.startswith("did:"):
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Credential template {template_id} must reference an active KMS-backed "
-                "issuer profile before it can be bound to a flow"
+                f"Credential template {template_id} must provide issuer_did before "
+                "it can be bound to a flow"
+            ),
+        )
+    credential_format = _template_signing_format(template)
+    if not credential_format:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Credential template {template_id} must provide a credential format "
+                "before it can be bound to a flow"
+            ),
+        )
+    key_purpose = _template_key_purpose(credential_format)
+    issuer_algorithm = str(getattr(template, "issuer_algorithm", "") or "").strip()
+    params = {
+        "organization_id": organization_id,
+        "issuer_did": issuer_did,
+        "credential_format": credential_format,
+        "key_purpose": key_purpose,
+    }
+    if issuer_algorithm:
+        params["algorithm"] = issuer_algorithm
+
+    base_url = os.environ.get(
+        "SIGNING_KEYS_INTERNAL_URL",
+        "http://gateway:8000/internal/signing-keys",
+    ).rstrip("/")
+    api_key = _read_secret_value("SIGNING_KEYS_INTERNAL_API_KEY") or _read_secret_value(
+        "ISSUANCE_API_KEY"
+    )
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Issuer-profile signing API is not configured",
+        )
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                f"{base_url}/resolve-issuer-did",
+                params=params,
+                headers={"X-API-Key": api_key},
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Issuer-profile identity service is unavailable",
+        ) from exc
+    if response.status_code in {404, 409, 422}:
+        try:
+            detail = response.json().get("detail")
+        except Exception:  # noqa: BLE001
+            detail = None
+        raise HTTPException(
+            status_code=response.status_code,
+            detail=detail
+            or (
+                f"Credential template {template_id} issuer DID could not be "
+                "resolved to one active KMS-backed issuer profile"
+            ),
+        )
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=503,
+            detail="Issuer-profile identity service is unavailable",
+        )
+
+    resolved = response.json()
+    profile = (
+        resolved.get("issuer_profile")
+        if isinstance(resolved.get("issuer_profile"), dict)
+        else {}
+    )
+    service = (
+        resolved.get("signing_service")
+        if isinstance(resolved.get("signing_service"), dict)
+        else {}
+    )
+    verification_method_id = str(resolved.get("verification_method_id") or "")
+    public_jwk = resolved.get("public_jwk")
+    if (
+        resolved.get("ok") is not True
+        or resolved.get("organization_id") != organization_id
+        or resolved.get("issuer_did") != issuer_did
+        or not str(profile.get("id") or "")
+        or profile.get("status") != "active"
+        or not str(service.get("id") or "")
+        or profile.get("key_purpose") != key_purpose
+        or (issuer_algorithm and profile.get("algorithm") != issuer_algorithm)
+        or not verification_method_id.startswith(f"{issuer_did}#")
+        or not isinstance(public_jwk, dict)
+        or any(secret in public_jwk for secret in ("d", "p", "q", "k"))
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Credential template {template_id} issuer DID resolver returned "
+                "an invalid KMS-backed signing identity"
             ),
         )
 
@@ -956,7 +1081,11 @@ async def _validate_credential_layer_references(
             getattr(template, "status", ""),
             require_active,
         )
-        _require_template_kms_backed_issuer(template_id, template)
+        await _validate_template_issuer_identity(
+            organization_id=organization_id,
+            template_id=template_id,
+            template=template,
+        )
 
     if credential_template_id:
         await _validate_template(credential_template_id)
@@ -4668,7 +4797,9 @@ def _build_openid4vp_mdoc_session_transcript(
 ) -> bytes:
     """Build ISO 18013-7 OpenID4VP SessionTranscript from verifier-owned state."""
     if not client_id or not nonce or not response_uri:
-        raise ValueError("OpenID4VP mdoc handover requires client_id, nonce, and response_uri")
+        raise ValueError(
+            "OpenID4VP mdoc handover requires client_id, nonce, and response_uri"
+        )
     handover_info = [
         client_id,
         nonce,
@@ -4705,17 +4836,13 @@ def _openid4vp_mdoc_binding_digests(
         "transcript_sha256": hashlib.sha256(session_transcript).hexdigest(),
         "client_id_sha256": hashlib.sha256(client_id.encode("utf-8")).hexdigest(),
         "nonce_sha256": hashlib.sha256(nonce.encode("utf-8")).hexdigest(),
-        "response_uri_sha256": hashlib.sha256(
-            response_uri.encode("utf-8")
-        ).hexdigest(),
+        "response_uri_sha256": hashlib.sha256(response_uri.encode("utf-8")).hexdigest(),
         "response_key_thumbprint_sha256": (
             hashlib.sha256(response_key_thumbprint).hexdigest()
             if response_key_thumbprint is not None
             else "none"
         ),
-        "presentation_sha256": hashlib.sha256(
-            presentation.encode("utf-8")
-        ).hexdigest(),
+        "presentation_sha256": hashlib.sha256(presentation.encode("utf-8")).hexdigest(),
     }
 
 
@@ -5370,13 +5497,11 @@ async def _submit_verification_response_internal(
                 response_encryption_jwk = instance.context.get(
                     "oid4vp_response_encryption_jwk"
                 )
-                mdoc_session_transcript = (
-                    _build_openid4vp_mdoc_session_transcript(
-                        client_id=mdoc_client_id,
-                        nonce=mdoc_nonce,
-                        response_uri=mdoc_response_uri,
-                        response_encryption_jwk=response_encryption_jwk,
-                    )
+                mdoc_session_transcript = _build_openid4vp_mdoc_session_transcript(
+                    client_id=mdoc_client_id,
+                    nonce=mdoc_nonce,
+                    response_uri=mdoc_response_uri,
+                    response_encryption_jwk=response_encryption_jwk,
                 )
                 evaluation_context.update(
                     {

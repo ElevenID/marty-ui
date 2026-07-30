@@ -46,6 +46,7 @@ from flow.main import (
 
 _PROFILE_SIGNER_UNDER_TEST = flow_main._sign_request_object_with_issuer_profile
 _PROFILE_IDENTITY_UNDER_TEST = flow_main._oid4vp_issuer_profile_identity
+_TEMPLATE_IDENTITY_UNDER_TEST = flow_main._validate_template_issuer_identity
 
 
 def test_verification_runtime_accepts_public_did_not_kms_coordinates() -> None:
@@ -146,6 +147,207 @@ async def test_oid4vp_identity_resolves_did_without_public_profile_selection(
     with pytest.raises(HTTPException) as cross_tenant:
         await _PROFILE_IDENTITY_UNDER_TEST("org-1", issuer_did)
     assert cross_tenant.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_template_identity_resolves_public_did_without_profile_selector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer_did = "did:web:issuer.example:orgs:org-1"
+    verification_method_id = f"{issuer_did}#credential-issuer-1"
+    captured: dict[str, object] = {}
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {
+                "ok": True,
+                "organization_id": "org-1",
+                "issuer_did": issuer_did,
+                "verification_method_id": verification_method_id,
+                "public_jwk": {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": "x-coordinate",
+                    "y": "y-coordinate",
+                },
+                "issuer_profile": {
+                    "id": "private-profile-1",
+                    "status": "active",
+                    "key_purpose": "vc_jwt_issuer",
+                    "algorithm": "ES256",
+                },
+                "signing_service": {
+                    "id": "private-kms-service-1",
+                    "service_type": "openbao-transit",
+                },
+            }
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, url, *, params, headers):
+            captured.update(url=url, params=params, headers=headers)
+            return _Response()
+
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_URL", "http://signing.internal")
+    monkeypatch.setattr(flow_main, "_read_secret_value", lambda _name: "api-key")
+    monkeypatch.setattr(
+        flow_main.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _Client(),
+    )
+
+    resolved = await _TEMPLATE_IDENTITY_UNDER_TEST(
+        organization_id="org-1",
+        template_id="template-1",
+        template=SimpleNamespace(
+            issuer_did=issuer_did,
+            credential_payload_format="sd_jwt_vc",
+            issuer_algorithm="ES256",
+        ),
+    )
+
+    assert captured == {
+        "url": "http://signing.internal/resolve-issuer-did",
+        "params": {
+            "organization_id": "org-1",
+            "issuer_did": issuer_did,
+            "credential_format": "dc+sd-jwt",
+            "key_purpose": "vc_jwt_issuer",
+            "algorithm": "ES256",
+        },
+        "headers": {"X-API-Key": "api-key"},
+    }
+    assert "issuer_profile_id" not in captured["params"]
+    assert "signing_service_id" not in captured["params"]
+    assert "signing_key_reference" not in captured["params"]
+    assert resolved is None
+
+
+@pytest.mark.asyncio
+async def test_template_identity_rejects_missing_public_did() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        await _TEMPLATE_IDENTITY_UNDER_TEST(
+            organization_id="org-1",
+            template_id="template-1",
+            template=SimpleNamespace(
+                issuer_did="",
+                credential_payload_format="sd_jwt_vc",
+                issuer_algorithm="ES256",
+            ),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "issuer_did" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("resolver_status", [404, 409, 422])
+async def test_template_identity_preserves_fail_closed_resolver_status(
+    monkeypatch: pytest.MonkeyPatch,
+    resolver_status: int,
+) -> None:
+    class _Response:
+        status_code = resolver_status
+
+        @staticmethod
+        def json() -> dict:
+            return {"detail": "Issuer DID did not resolve uniquely."}
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url, *, params, headers):
+            return _Response()
+
+    monkeypatch.setattr(flow_main, "_read_secret_value", lambda _name: "api-key")
+    monkeypatch.setattr(
+        flow_main.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _Client(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _TEMPLATE_IDENTITY_UNDER_TEST(
+            organization_id="org-1",
+            template_id="template-1",
+            template=SimpleNamespace(
+                issuer_did="did:web:issuer.example:orgs:org-1",
+                credential_payload_format="sd_jwt_vc",
+                issuer_algorithm="ES256",
+            ),
+        )
+
+    assert exc_info.value.status_code == resolver_status
+    assert "did not resolve uniquely" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_template_identity_rejects_cross_tenant_or_private_key_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer_did = "did:web:issuer.example:orgs:org-1"
+
+    class _Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {
+                "ok": True,
+                "organization_id": "other-org",
+                "issuer_did": issuer_did,
+                "verification_method_id": f"{issuer_did}#credential-issuer-1",
+                "public_jwk": {"kty": "EC", "crv": "P-256", "d": "private"},
+                "issuer_profile": {
+                    "id": "private-profile-1",
+                    "key_purpose": "vc_jwt_issuer",
+                    "algorithm": "ES256",
+                },
+                "signing_service": {"id": "private-kms-service-1"},
+            }
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def get(self, _url, *, params, headers):
+            return _Response()
+
+    monkeypatch.setattr(flow_main, "_read_secret_value", lambda _name: "api-key")
+    monkeypatch.setattr(
+        flow_main.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _Client(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _TEMPLATE_IDENTITY_UNDER_TEST(
+            organization_id="org-1",
+            template_id="template-1",
+            template=SimpleNamespace(
+                issuer_did=issuer_did,
+                credential_payload_format="sd_jwt_vc",
+                issuer_algorithm="ES256",
+            ),
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "invalid KMS-backed signing identity" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -528,6 +730,20 @@ def _form_request(values: dict[str, str]) -> Request:
 
 
 def _install_reference_validation_stubs(monkeypatch, *, templates, policies):
+    async def validate_template_issuer_identity(
+        *,
+        organization_id,
+        template_id,
+        template,
+    ):
+        issuer_did = getattr(template, "issuer_did", "")
+        if not issuer_did:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Credential template {template_id} must provide issuer_did",
+            )
+        assert organization_id
+
     class FakeCredentialTemplateStub:
         def __init__(self, _channel):
             pass
@@ -537,8 +753,9 @@ def _install_reference_validation_stubs(monkeypatch, *, templates, policies):
             if template is None:
                 return SimpleNamespace(id="")
             template_payload = {
-                "issuer_profile_id": "issuer-profile-1",
-                "key_access_mode": "REMOTE_SIGNING",
+                "issuer_did": "did:web:issuer.example:orgs:org-1",
+                "credential_payload_format": "sd_jwt_vc",
+                "issuer_algorithm": "ES256",
             }
             template_payload.update(template)
             return SimpleNamespace(
@@ -566,6 +783,11 @@ def _install_reference_validation_stubs(monkeypatch, *, templates, policies):
     )
     monkeypatch.setattr("flow.main.app.state.ct_grpc_channel", object(), raising=False)
     monkeypatch.setattr("flow.main.app.state.pp_grpc_channel", object(), raising=False)
+    monkeypatch.setattr(
+        flow_main,
+        "_validate_template_issuer_identity",
+        validate_template_issuer_identity,
+    )
 
 
 def _install_accepting_evaluation_stub(
@@ -730,7 +952,7 @@ async def test_validate_credential_layer_references_requires_active_for_activati
 
 
 @pytest.mark.asyncio
-async def test_validate_credential_layer_references_rejects_template_without_kms_issuer(
+async def test_validate_credential_layer_references_rejects_template_without_issuer_did(
     monkeypatch,
 ):
     _install_reference_validation_stubs(
@@ -739,8 +961,7 @@ async def test_validate_credential_layer_references_rejects_template_without_kms
             "template-legacy": {
                 "organization_id": "org-1",
                 "status": "active",
-                "issuer_profile_id": "",
-                "key_access_mode": "LOCAL",
+                "issuer_did": "",
             }
         },
         policies={},
@@ -753,7 +974,7 @@ async def test_validate_credential_layer_references_rejects_template_without_kms
         )
 
     assert exc_info.value.status_code == 400
-    assert "KMS-backed issuer profile" in exc_info.value.detail
+    assert "issuer_did" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
