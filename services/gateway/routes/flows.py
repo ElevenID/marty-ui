@@ -1,7 +1,10 @@
 """Flow definition, flow instance, verification flow, and SIOPv2 routes."""
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException, Query, Request, Response
+from pydantic import ValidationError
 
 from gateway.models import (
     FlowDefinitionCreate,
@@ -16,6 +19,38 @@ from gateway.proxy import _resource_exists, _resource_org_id, get_registry, prox
 from gateway.routes.issuance import _ISSUANCE_HEADERS
 
 flow_router = APIRouter(prefix="/v1/flows", tags=["Flows"])
+
+
+def _sanitize_verification_start_response(response: Response) -> Response:
+    """Expose only the Marty-Protocol verification-start response."""
+    if response.status_code >= 400 or response.status_code == 204 or not response.body:
+        return response
+    try:
+        payload = json.loads(response.body)
+        if not isinstance(payload, dict):
+            raise ValueError("response is not an object")
+        public_payload = {
+            field: payload[field]
+            for field in VerificationRequestResponse.model_fields
+            if field in payload
+        }
+        validated = VerificationRequestResponse.model_validate(public_payload)
+    except (TypeError, ValueError, UnicodeDecodeError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Flow service returned an invalid public verification response.",
+        ) from exc
+
+    return Response(
+        content=validated.model_dump_json(),
+        status_code=response.status_code,
+        headers={
+            key: value
+            for key, value in response.headers.items()
+            if key.lower() not in {"content-length", "content-type"}
+        },
+        media_type="application/json",
+    )
 
 
 async def _validate_flow_definition_refs(body: FlowDefinitionCreate, request: Request) -> None:
@@ -229,7 +264,8 @@ async def start_verification_flow(body: StartVerificationFlowRequest, request: R
             )
     registry = get_registry()
     service_url = registry.get_service_url("flows")
-    return await proxy_request(request, service_url, "/v1/flows/verify")
+    response = await proxy_request(request, service_url, "/v1/flows/verify")
+    return _sanitize_verification_start_response(response)
 
 
 @flow_router.api_route("/instances/{instance_id}/request", methods=["GET", "POST"], summary="Get Verification Request Object")

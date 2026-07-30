@@ -15,6 +15,11 @@ from starlette.responses import JSONResponse
 from gateway.routes import signing_keys
 
 
+def test_public_holder_key_api_never_exposes_derived_key_references() -> None:
+    paths = {route.path for route in signing_keys.signing_key_router.routes}
+    assert "/v1/signing-keys/holder-keys/derive" not in paths
+
+
 def test_oid4vp_profile_key_is_part_of_managed_signing_inventory() -> None:
     key_name = "oid4vp-verifier-marty-es256"
 
