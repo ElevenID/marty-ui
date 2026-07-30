@@ -128,6 +128,20 @@ async def _load_credential_template(
     return template
 
 
+def _validated_policy_payload(
+    body: PresentationPolicyCreate | PresentationPolicyUpdate,
+    *,
+    include_organization_id: bool = True,
+) -> dict[str, Any]:
+    """Serialize only public validated fields in their canonical wire shape."""
+    payload = body.model_dump(mode="json", exclude_none=True, exclude_unset=True)
+    if body.holder_binding is not None and not body.holder_binding.required:
+        payload["holder_binding"] = {"required": False}
+    if not include_organization_id:
+        payload.pop("organization_id", None)
+    return payload
+
+
 async def _authoritative_policy_body(
     body: PresentationPolicyCreate | PresentationPolicyUpdate,
     request: Request,
@@ -141,7 +155,10 @@ async def _authoritative_policy_body(
     template. Re-serialize only the validated public model and replace each
     format with the credential-template service's canonical value.
     """
-    payload = body.model_dump(mode="json", exclude_none=True, exclude_unset=True)
+    payload = _validated_policy_payload(
+        body,
+        include_organization_id=include_organization_id,
+    )
     organization_id = body.organization_id
 
     requirement_groups = [
@@ -191,9 +208,6 @@ async def _authoritative_policy_body(
                     ),
                 )
             raw_requirement["credential_payload_format"] = credential_format.strip()
-
-    if not include_organization_id:
-        payload.pop("organization_id", None)
 
     return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
 
