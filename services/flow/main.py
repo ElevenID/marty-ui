@@ -3432,7 +3432,11 @@ class StartVerificationFlowRequest(BaseModel):
     issuer_did: str = Field(
         pattern=r"^did:",
         max_length=2048,
-        description="Public DID that signs the OID4VP Request Object.",
+        description=(
+            "Public verifier DID. Signed transports resolve it to the managed "
+            "Request Object signing profile; URL-query uses it only for "
+            "organization-scoped verifier authorization."
+        ),
     )
     # SIOPv2 Draft 13 §9: response_type=id_token selects SIOPv2 authentication.
     response_type: str = "vp_token"
@@ -3441,20 +3445,30 @@ class StartVerificationFlowRequest(BaseModel):
     external_reference: str | None = None
     callback_url: str | None = Field(None, max_length=2048)
     oid4vp_profile: Literal["standard", "haip"] = "standard"
-    request_transport: Literal["request_uri", "url_query"] = "request_uri"
+    request_transport: Literal["request_uri", "request_object", "url_query"] = (
+        "request_uri"
+    )
     request_uri_method: Literal["get", "post"] = "get"
     expiry_minutes: int = 15
 
     @model_validator(mode="after")
     def validate_oid4vp_transport(self) -> "StartVerificationFlowRequest":
-        """Keep URL-query JARs distinct from request-URI retrieval semantics."""
-        if self.request_transport == "url_query" and self.request_uri_method != "get":
+        """Keep signed and unsigned transports distinct and fail closed."""
+        if (
+            self.request_transport in {"request_object", "url_query"}
+            and self.request_uri_method != "get"
+        ):
             raise ValueError(
-                "url_query transport cannot use request_uri_method; use request_uri transport"
+                f"{self.request_transport} transport cannot use request_uri_method; "
+                "use request_uri transport"
             )
         if self.request_transport == "url_query" and self.response_type == "id_token":
             raise ValueError(
                 "url_query transport is supported only for OID4VP vp_token flows"
+            )
+        if self.request_transport == "url_query" and self.oid4vp_profile == "haip":
+            raise ValueError(
+                "url_query transport is unsigned and cannot be used for HAIP"
             )
         return self
 
@@ -3722,7 +3736,7 @@ async def start_verification_flow(
     if not requested_organization_id:
         raise HTTPException(
             status_code=422,
-            detail="organization_id is required to start a signed verification flow.",
+            detail="organization_id is required to start a verification flow.",
         )
     if requested_organization_id != organization_id:
         raise HTTPException(
@@ -3732,7 +3746,7 @@ async def start_verification_flow(
     if not str(request.issuer_did or "").strip():
         raise HTTPException(
             status_code=422,
-            detail="issuer_did is required to start a signed verification flow.",
+            detail="issuer_did is required to start a verification flow.",
         )
 
     # Verify that the requesting user is actually a member of the policy's org
@@ -3788,25 +3802,27 @@ async def start_verification_flow(
     # Generate request URI and QR code data
     # Use gateway URL for Docker networking (Walt.ID wallet needs to access this)
     base_url = os.environ.get("PUBLIC_BASE_URL", "http://marty-gateway:8000")
-    # OID4VP: request_uri points to the signed Request Object. OID4VP 1.0
-    # requires client_id alongside a request_uri, and the value must exactly
-    # match the client_id in the signed JAR returned from that location.
+    # Signed transports use the DID-resolved profile identity. Native
+    # URL-query has no Request Object and derives its redirect-URI client
+    # identifier from the callback endpoint instead.
     request_uri = f"{base_url}/v1/flows/instances/{instance.id}/request"
     response_uri = f"{base_url}/v1/flows/instances/{instance.id}/submit"
-    client_identifier, _, _ = _oid4vp_client_identity(
-        base_url,
-        response_uri,
-        signing_identity=signing_identity,
-    )
+    if request.request_transport == "url_query":
+        client_identifier = f"redirect_uri:{response_uri}"
+    else:
+        client_identifier, _, _ = _oid4vp_client_identity(
+            base_url,
+            response_uri,
+            signing_identity=signing_identity,
+        )
     instance.context["request_uri"] = request_uri
     instance.context["oid4vp_client_id"] = client_identifier
     await repo.save_instance(instance)
 
-    if request.request_transport == "url_query":
-        # OID4VP URL-query transport carries the complete signed Request Object
-        # in the standard `request` parameter.  Never unpack JAR claims into
-        # unsigned query parameters: doing so would create an adapter-only path
-        # and allow the outer request to drift from the profile-signed object.
+    if request.request_transport == "request_object":
+        # Preserve signed by-value functionality under its canonical name.
+        # The compact JAR remains opaque and profile-signed; no claim is
+        # reconstructed into the outer authorization request.
         signed_response = await get_verification_request_object(instance.id, repo)
         signed_request = signed_response.body.decode("utf-8")
         auth_request = "openid4vp://authorize?" + urllib.parse.urlencode(
@@ -3814,20 +3830,32 @@ async def start_verification_flow(
             quote_via=urllib.parse.quote,
             safe="",
         )
-        max_length = int(os.environ.get("OID4VP_URL_QUERY_MAX_LENGTH", "8192"))
+        max_length = int(
+            os.environ.get(
+                "OID4VP_REQUEST_OBJECT_MAX_LENGTH",
+                os.environ.get("OID4VP_URL_QUERY_MAX_LENGTH", "8192"),
+            )
+        )
         if max_length < 1024:
             raise HTTPException(
                 status_code=500,
-                detail="OID4VP_URL_QUERY_MAX_LENGTH must be at least 1024",
+                detail="OID4VP_REQUEST_OBJECT_MAX_LENGTH must be at least 1024",
             )
         if len(auth_request) > max_length:
             raise HTTPException(
                 status_code=422,
                 detail=(
-                    "Signed OID4VP request exceeds the configured URL-query limit; "
+                    "Signed OID4VP request exceeds the configured by-value limit; "
                     "use request_uri transport"
                 ),
             )
+    elif request.request_transport == "url_query":
+        auth_request = await _unsigned_oid4vp_url_query(
+            instance,
+            base_url=base_url,
+            response_uri=response_uri,
+            repo=repo,
+        )
     else:
         authorization_parameters = [
             ("client_id", client_identifier),
@@ -4376,6 +4404,143 @@ def _dcql_claims_for_descriptor(
     return claims
 
 
+async def _oid4vp_credential_query(
+    instance: FlowInstance,
+    *,
+    lissi_compat: bool = False,
+) -> dict[str, Any]:
+    """Build the production credential query shared by every OID4VP transport."""
+    presentation_definition = await _build_presentation_definition(
+        instance.context.get("presentation_policy_id", "")
+    )
+
+    dcql_entries: list[dict[str, Any]] = []
+    for descriptor in presentation_definition.get("input_descriptors", []):
+        format_map = descriptor.get("format", {})
+        first_format = next(iter(format_map), "jwt_vc_json")
+        format_name = _dcql_format_name(first_format)
+        entry: dict[str, Any] = {
+            "id": descriptor["id"],
+            "format": format_name,
+        }
+        metadata = _dcql_meta_for_descriptor(descriptor, format_name)
+        if metadata:
+            entry["meta"] = metadata
+        claims = _dcql_claims_for_descriptor(descriptor, format_name)
+        if claims:
+            entry["claims"] = claims
+        dcql_entries.append(entry)
+
+    if not dcql_entries:
+        dcql_entries = [{"id": "default-credential", "format": "jwt_vc_json"}]
+
+    if lissi_compat:
+        return {
+            "presentation_definition": {
+                **presentation_definition,
+                "input_descriptors": [
+                    {
+                        key: value
+                        for key, value in descriptor.items()
+                        if not key.startswith("_marty_")
+                    }
+                    for descriptor in presentation_definition.get(
+                        "input_descriptors", []
+                    )
+                ],
+            }
+        }
+    return {"dcql_query": {"credentials": dcql_entries}}
+
+
+async def _unsigned_oid4vp_url_query(
+    instance: FlowInstance,
+    *,
+    base_url: str,
+    response_uri: str,
+    repo: InMemoryFlowRepository,
+) -> str:
+    """Build the native OID4VP URL-query authorization request.
+
+    This transport has no Request Object and therefore performs no signing.
+    The redirect-URI client identifier is derived by the product and every
+    structured authorization parameter is encoded as JSON exactly once.
+    """
+    client_identifier = f"redirect_uri:{response_uri}"
+    parameters: dict[str, Any] = {
+        "response_type": "vp_token",
+        "client_id": client_identifier,
+        "nonce": instance.context.get("nonce"),
+        "response_mode": "direct_post",
+        "response_uri": response_uri,
+        "state": instance.id,
+        "client_metadata": _oid4vp_client_metadata(base_url),
+    }
+    parameters.update(await _oid4vp_credential_query(instance))
+
+    instance.context["oid4vp_client_id"] = client_identifier
+    instance.context["oid4vp_response_uri"] = response_uri
+    instance.context["oid4vp_response_encryption_jwk"] = None
+    instance.context["oid4vp_expected_state"] = instance.id
+    instance.context["verification_audience"] = client_identifier
+    instance.context["oid4vp_verifier_context"] = True
+
+    presentation_request_message = MIPMessage(
+        message_type=MessageType.PRESENTATION_REQUEST,
+        correlation_id=instance.id,
+        sender_id=client_identifier,
+        nonce=parameters["nonce"],
+        payload=PresentationRequestPayload(
+            client_id=client_identifier,
+            response_type="vp_token",
+            nonce=parameters["nonce"],
+            presentation_definition=parameters.get("presentation_definition"),
+            dcql_query=parameters.get("dcql_query"),
+            mip_flow_instance_id=instance.id,
+            mip_policy_id=instance.context.get("presentation_policy_id"),
+            response_mode="direct_post",
+            response_uri=response_uri,
+        ),
+    )
+    _record_mip_message(instance, "presentation_request", presentation_request_message)
+    await repo.save_instance(instance)
+
+    query_parameters: list[tuple[str, str]] = []
+    for name, value in parameters.items():
+        if value is None:
+            continue
+        if isinstance(value, (dict, list)):
+            encoded_value = json.dumps(
+                value,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        else:
+            encoded_value = str(value)
+        query_parameters.append((name, encoded_value))
+
+    authorization_request = "openid4vp://authorize?" + urllib.parse.urlencode(
+        query_parameters,
+        quote_via=urllib.parse.quote,
+        safe="",
+    )
+    max_length = int(os.environ.get("OID4VP_URL_QUERY_MAX_LENGTH", "8192"))
+    if max_length < 1024:
+        raise HTTPException(
+            status_code=500,
+            detail="OID4VP_URL_QUERY_MAX_LENGTH must be at least 1024",
+        )
+    if len(authorization_request) > max_length:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "OID4VP authorization parameters exceed the configured URL-query "
+                "limit; use request_uri transport"
+            ),
+        )
+    return authorization_request
+
+
 @router.api_route("/instances/{instance_id}/request", methods=["GET", "POST"])
 async def get_verification_request_object(
     instance_id: str,
@@ -4415,6 +4580,12 @@ async def get_verification_request_object(
     ]:
         raise HTTPException(
             status_code=400, detail="Request already processed or invalid state"
+        )
+
+    if instance.context.get("request_transport") == "url_query":
+        raise HTTPException(
+            status_code=400,
+            detail="url_query transport has no signed Request Object endpoint",
         )
 
     # Resolve the active identity on every fetch so a revoked or rotated issuer
@@ -4593,44 +4764,12 @@ async def get_verification_request_object(
         instance.context["oid4vp_response_uri"] = request_payload.get("response_uri")
         instance.context["oid4vp_response_encryption_jwk"] = response_encryption_jwk
 
-        # OID4VP presentation definition (built from the real policy)
-        pd = await _build_presentation_definition(
-            instance.context.get("presentation_policy_id", "")
+        request_payload.update(
+            await _oid4vp_credential_query(
+                instance,
+                lissi_compat=lissi_compat,
+            )
         )
-
-        # OID4VP Final §6: dcql_query as alternative credential query format.
-        # Derived from the presentation_definition so no extra HTTP calls are needed.
-        dcql_entries: list[dict] = []
-        for descriptor in pd.get("input_descriptors", []):
-            fmt_map = descriptor.get("format", {})
-            first_fmt = next(iter(fmt_map), "jwt_vc_json")
-            # Normalize format key to the DCQL format identifier
-            fmt_name = _dcql_format_name(first_fmt)
-            entry: dict = {"id": descriptor["id"], "format": fmt_name}
-            # Include type filter as meta.type_values if present
-            dcql_meta = _dcql_meta_for_descriptor(descriptor, fmt_name)
-            if dcql_meta:
-                entry["meta"] = dcql_meta
-            claims = _dcql_claims_for_descriptor(descriptor, fmt_name)
-            if claims:
-                entry["claims"] = claims
-            dcql_entries.append(entry)
-        if not dcql_entries:
-            dcql_entries = [{"id": "default-credential", "format": "jwt_vc_json"}]
-        if lissi_compat:
-            request_payload["presentation_definition"] = {
-                **pd,
-                "input_descriptors": [
-                    {
-                        key: value
-                        for key, value in descriptor.items()
-                        if not key.startswith("_marty_")
-                    }
-                    for descriptor in pd.get("input_descriptors", [])
-                ],
-            }
-        else:
-            request_payload["dcql_query"] = {"credentials": dcql_entries}
 
         presentation_request_message = MIPMessage(
             message_type=MessageType.PRESENTATION_REQUEST,
