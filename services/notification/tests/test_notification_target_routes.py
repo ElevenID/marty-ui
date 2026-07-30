@@ -20,6 +20,7 @@ def test_send_notification_supports_structured_target_and_delivery_results():
     response = client.post(
         "/v1/notifications/send",
         json={
+            "organization_id": "org-1",
             "title": "Your credential is ready",
             "body": "Tap to add it to your wallet.",
             "event_type": "credential.offered",
@@ -30,8 +31,8 @@ def test_send_notification_supports_structured_target_and_delivery_results():
             "target": {
                 "user_id": "user-1",
                 "email_addresses": ["holder@example.com"],
-                "channels": ["EMAIL"]
-            }
+                "channels": ["EMAIL"],
+            },
         },
     )
 
@@ -57,6 +58,7 @@ def test_send_notification_supports_structured_target_and_delivery_results():
     assert body["ttl_seconds"] == 3600
     assert body["correlation_id"] == "flow-123"
     assert body["target"] == {
+        "organization_id": "org-1",
         "user_id": "user-1",
         "device_tokens": [],
         "webhook_endpoints": [],
@@ -64,7 +66,10 @@ def test_send_notification_supports_structured_target_and_delivery_results():
         "channels": ["EMAIL"],
     }
 
-    delivery_response = client.get(f"/v1/notifications/{body['id']}/delivery-results")
+    delivery_response = client.get(
+        f"/v1/notifications/{body['id']}/delivery-results",
+        params={"organization_id": "org-1"},
+    )
     assert delivery_response.status_code == 200
     result = delivery_response.json()
     assert len(result) == 1
@@ -84,12 +89,13 @@ def test_send_notification_rejects_non_https_webhook_targets():
     response = client.post(
         "/v1/notifications/send",
         json={
+            "organization_id": "org-1",
             "title": "Webhook test",
             "body": "This should fail validation.",
             "target": {
                 "webhook_endpoints": ["http://example.com/hook"],
-                "channels": ["WEBHOOK"]
-            }
+                "channels": ["WEBHOOK"],
+            },
         },
     )
 
@@ -104,6 +110,7 @@ def test_unread_count_alias_and_mark_unread_round_trip():
     send_response = client.post(
         "/v1/notifications/send",
         json={
+            "organization_id": "org-1",
             "recipient_id": "user-1",
             "recipient_email": "holder@example.com",
             "title": "Read state",
@@ -111,28 +118,43 @@ def test_unread_count_alias_and_mark_unread_round_trip():
             "target": {
                 "user_id": "user-1",
                 "email_addresses": ["holder@example.com"],
-                "channels": ["EMAIL"]
-            }
+                "channels": ["EMAIL"],
+            },
         },
     )
     notification_id = send_response.json()["id"]
 
-    unread_before = client.get("/v1/notifications/unread-count", params={"recipient_id": "user-1"})
+    unread_before = client.get(
+        "/v1/notifications/unread-count",
+        params={"organization_id": "org-1", "recipient_id": "user-1"},
+    )
     assert unread_before.status_code == 200
     assert unread_before.json()["count"] == 1
 
-    mark_read = client.patch(f"/v1/notifications/{notification_id}/read")
+    mark_read = client.patch(
+        f"/v1/notifications/{notification_id}/read",
+        params={"organization_id": "org-1"},
+    )
     assert mark_read.status_code == 200
     assert mark_read.json()["id"] == notification_id
 
-    unread_after_read = client.get("/v1/notifications/unread-count", params={"recipient_id": "user-1"})
+    unread_after_read = client.get(
+        "/v1/notifications/unread-count",
+        params={"organization_id": "org-1", "recipient_id": "user-1"},
+    )
     assert unread_after_read.json()["count"] == 0
 
-    mark_unread = client.delete(f"/v1/notifications/{notification_id}/read")
+    mark_unread = client.delete(
+        f"/v1/notifications/{notification_id}/read",
+        params={"organization_id": "org-1"},
+    )
     assert mark_unread.status_code == 200
     assert mark_unread.json()["id"] == notification_id
 
-    unread_after_unread = client.get("/v1/notifications/unread-count", params={"recipient_id": "user-1"})
+    unread_after_unread = client.get(
+        "/v1/notifications/unread-count",
+        params={"organization_id": "org-1", "recipient_id": "user-1"},
+    )
     assert unread_after_unread.json()["count"] == 1
 
 
@@ -143,6 +165,7 @@ def test_get_notification_returns_protocol_payload_shape_only():
     send_response = client.post(
         "/v1/notifications/send",
         json={
+            "organization_id": "org-1",
             "title": "Credential revoked",
             "body": "A credential was revoked.",
             "event_type": "credential.revoked",
@@ -153,13 +176,16 @@ def test_get_notification_returns_protocol_payload_shape_only():
             "target": {
                 "organization_id": "org-1",
                 "channels": ["EMAIL"],
-                "email_addresses": ["holder@example.com"]
-            }
+                "email_addresses": ["holder@example.com"],
+            },
         },
     )
     notification_id = send_response.json()["id"]
 
-    get_response = client.get(f"/v1/notifications/{notification_id}")
+    get_response = client.get(
+        f"/v1/notifications/{notification_id}",
+        params={"organization_id": "org-1"},
+    )
 
     assert get_response.status_code == 200
     body = get_response.json()

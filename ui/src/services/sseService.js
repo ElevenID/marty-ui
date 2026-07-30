@@ -85,7 +85,7 @@ class SSEService {
     // Build SSE URL with query parameters
     const params = new URLSearchParams();
     if (options.organizationId) {
-      params.append('tenant_id', options.organizationId);
+      params.append('organization_id', options.organizationId);
     }
     if (options.userId) {
       params.append('user_id', options.userId);
