@@ -34,15 +34,27 @@ compliance_profile_router = APIRouter(
     prefix="/v1/compliance-profiles", tags=["Compliance Profiles"]
 )
 
-_PRIVATE_TEMPLATE_RESPONSE_FIELDS = frozenset(
+_PUBLIC_TEMPLATE_RESPONSE_FIELDS = frozenset(
     {
-        "issuer_profile_id",
-        "issuer_key_id",
-        "key_access_mode",
-        "remote_signing_config",
-        "signing_service_id",
-        "signing_key_reference",
-        "issuer_certificate_chain_pem",
+        "id",
+        "organization_id",
+        "name",
+        "description",
+        "status",
+        "credential_type",
+        "compliance_profile_id",
+        "vct",
+        "doctype",
+        "credential_payload_format",
+        "application_template_id",
+        "trust_profile_id",
+        "revocation_profile_id",
+        "claims",
+        "validity_rules",
+        "issuer_did",
+        "privacy_posture",
+        "created_at",
+        "updated_at",
     }
 )
 
@@ -96,7 +108,7 @@ def _sanitize_credential_template_response(response: Response) -> Response:
         sanitized = {
             key: entry
             for key, entry in value.items()
-            if key not in _PRIVATE_TEMPLATE_RESPONSE_FIELDS
+            if key in _PUBLIC_TEMPLATE_RESPONSE_FIELDS
         }
         public_claims: list[dict] = []
         for claim in sanitized.get("claims", []):
@@ -170,7 +182,7 @@ async def create_credential_template(
     - Schema/claims definition
     - Compliance Profile reference (format, framework)
     - Optional Application Template reference (for application-based issuance)
-    - Cryptographic configuration (keys, certs, DIDs)
+    - Public issuer DID; signing custody is resolved internally
     - Validity and revocation settings
     """
     if body.trust_profile_id:
@@ -208,7 +220,6 @@ async def create_credential_template(
         body.organization_id,
         body.issuer_did,
         credential_format=public_format,
-        algorithm=body.signing_algorithm,
     )
     if issuer_identity is None:
         raise HTTPException(

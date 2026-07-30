@@ -283,9 +283,7 @@ describe('ConsoleDashboard', () => {
       const checkmarks = screen.getAllByTestId('CheckCircleIcon')
       expect(checkmarks.length).toBeGreaterThanOrEqual(1)
 
-      // Template is BLOCKED — should have WarningIcon
-      const warnings = screen.getAllByTestId('WarningIcon')
-      expect(warnings.length).toBeGreaterThanOrEqual(1)
+      expect(screen.getByText(/4 of 5 steps complete/i)).toBeInTheDocument()
     })
 
     it('should show quick actions', () => {
@@ -293,10 +291,9 @@ describe('ConsoleDashboard', () => {
       expect(screen.getByText(/Next Step/i)).toBeInTheDocument()
     })
 
-    it('should show blocking issues for blocked template', () => {
+    it('does not treat legacy artifact metadata as a public template blocker', () => {
       render(<ConsoleDashboard />)
-      // Template has artifacts_status: 'missing' — computeBlockers returns blocker
-      expect(screen.getByText(/Blocking Issues/i)).toBeInTheDocument()
+      expect(screen.queryByText(/Blocking Issues/i)).not.toBeInTheDocument()
     })
 
     it('should show team with one member', () => {

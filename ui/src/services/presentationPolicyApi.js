@@ -288,28 +288,37 @@ export function normalizeCredentialTemplateValidityRules(rules = {}) {
 }
 
 export function normalizeCredentialTemplate(data = {}) {
+  const {
+    issuer_profile_id: _issuerProfileId,
+    issuer_key_id: _issuerKeyId,
+    issuer_key_algorithm: _issuerKeyAlgorithm,
+    issuer_algorithm: _issuerAlgorithm,
+    signing_algorithm: _signingAlgorithm,
+    key_access_mode: _keyAccessMode,
+    remote_signing_config: _remoteSigningConfig,
+    issuer_certificate_chain_pem: _issuerCertificateChain,
+    issuer_certificate_chain_configured: _issuerCertificateChainConfigured,
+    auto_generate_artifacts: _autoGenerateArtifacts,
+    artifacts_status: _artifactsStatus,
+    artifact_status: _artifactStatus,
+    hasArtifacts: _hasArtifacts,
+    artifactsValidated: _artifactsValidated,
+    kms_provider: _kmsProvider,
+    kms_key_id: _kmsKeyId,
+    signing_service_id: _signingServiceId,
+    signing_key_reference: _signingKeyReference,
+    ...contractData
+  } = data;
   const claims = Array.isArray(data.claims)
     ? data.claims.map((claim) => ({
         ...claim,
         display_name: claim.display_name || claim.display?.label || claim.name,
       }))
     : [];
-  const artifactsStatus = data.artifacts_status
-    || data.artifact_status
-    || (data.hasArtifacts === false
-      ? 'missing'
-      : (data.issuer_key_id || data.issuer_certificate_chain_pem || data.remote_signing_config)
-        ? 'valid'
-        : (data.issuer_did ? 'invalid' : 'missing'));
-  const hasArtifacts = data.hasArtifacts ?? artifactsStatus !== 'missing';
-  const artifactsValidated = data.artifactsValidated ?? artifactsStatus === 'valid';
 
   return {
-    ...data,
+    ...contractData,
     status: data.status ? String(data.status).toLowerCase() : data.status,
-    artifacts_status: artifactsStatus,
-    hasArtifacts,
-    artifactsValidated,
     usedByFlowsCount: data.usedByFlowsCount ?? data.used_by_flows_count ?? 0,
     claims,
     validity_rules: normalizeCredentialTemplateValidityRules(data.validity_rules || {}),
@@ -501,6 +510,13 @@ function isActiveResource(resource) {
 export function buildCredentialTemplatePayload(data = {}) {
   const {
     status: _status,
+    id: _id,
+    created_at: _createdAt,
+    updated_at: _updatedAt,
+    createdAt: _createdAtAlias,
+    updatedAt: _updatedAtAlias,
+    usedByFlowsCount: _usedByFlowsCount,
+    used_by_flows_count: _usedByFlowsCountAlias,
     activate_immediately: _activateImmediately,
     generate_artifacts_automatically: _generateArtifactsAutomatically,
     auto_generate_artifacts: _autoGenerateArtifacts,
@@ -512,9 +528,19 @@ export function buildCredentialTemplatePayload(data = {}) {
     issuer_key_id: _issuerKeyId,
     issuer_key_algorithm: _issuerKeyAlgorithm,
     issuer_algorithm: _issuerAlgorithm,
+    signing_algorithm: _signingAlgorithm,
     key_access_mode: _keyAccessMode,
     remote_signing_config: _remoteSigningConfig,
     issuer_certificate_chain_pem: _issuerCertificateChain,
+    issuer_certificate_chain_configured: _issuerCertificateChainConfigured,
+    artifacts_status: _artifactsStatus,
+    artifact_status: _artifactStatus,
+    hasArtifacts: _hasArtifacts,
+    artifactsValidated: _artifactsValidated,
+    kms_provider: _kmsProvider,
+    kms_key_id: _kmsKeyId,
+    signing_service_id: _signingServiceId,
+    signing_key_reference: _signingKeyReference,
     ...contractData
   } = data;
   const issuerDid = String(data.issuer_did || '').trim();

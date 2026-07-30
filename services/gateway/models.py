@@ -572,7 +572,7 @@ class CredentialTemplateCreate(BaseModel):
     - Schema/claims definition
     - Compliance Profile (embedded - format, framework rules)
     - Application Template reference (optional - for application-based flows)
-    - Cryptographic configuration (keys, certs, DIDs)
+    - Public issuer DID; signing custody is resolved internally
     - Validity and revocation settings
     """
     organization_id: str = Field(min_length=1, max_length=255)
@@ -599,9 +599,8 @@ class CredentialTemplateCreate(BaseModel):
     # Validity configuration
     validity_rules: TemplateValidityRules | None = None
 
-    # Public signing identity. Profile, provider, key, and certificate routing
-    # are resolved internally from this DID.
-    signing_algorithm: str | None = Field(None, max_length=50)
+    # Public signing identity. Algorithm, profile, provider, key, and
+    # certificate routing are resolved internally from this DID.
     issuer_did: str = Field(pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
 
     derived_attributes: list[dict] = []
@@ -654,7 +653,6 @@ class CredentialTemplateUpdate(BaseModel):
     application_template_id: str | None = Field(None, max_length=255)
     trust_profile_id: str | None = Field(None, max_length=255)
     revocation_profile_id: str | None = Field(None, max_length=255)
-    signing_algorithm: str | None = Field(None, max_length=50)
     issuer_did: str | None = Field(
         None,
         pattern=r"^did:[a-z0-9]+:.+",
@@ -670,46 +668,30 @@ class CredentialTemplateUpdate(BaseModel):
 
 
 class CredentialTemplateResponse(BaseModel):
+    """Marty Protocol public Credential Template representation."""
+
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     name: str
-    description: str | None
+    description: str | None = None
     status: str
 
-    # Schema & Claims
     credential_type: str
     vct: str | None = None
     doctype: str | None = None
     claims: list[dict]
-    privacy_posture: str
-    supported_formats: list[str]
-
-    # Profile references
-    application_template_id: str | None
-    compliance_profile: dict | None = None
+    privacy_posture: dict | None = None
+    application_template_id: str | None = None
     compliance_profile_id: str | None = None
-    trust_profile_id: str | None
-    revocation_profile_id: str | None
-
-    # Validity
-    validity_rules: dict | None
-
-    # Cryptographic status
-    issuer_algorithm: str | None = None
-    issuer_certificate_chain_configured: bool
-    issuer_did: str | None
-    artifacts_status: str
-
-    # ZK-specific fields
-    zk_predicate_claims: list[str] = []
-    # Payload format and wallet deep-link configuration
-    credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
-    wallet_configs: list[dict] = []
-
-    # Metadata
-    version: int
+    trust_profile_id: str | None = None
+    revocation_profile_id: str | None = None
+    validity_rules: dict
+    issuer_did: str | None = None
+    credential_payload_format: str | None = None
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
 
 
 # =============================================================================

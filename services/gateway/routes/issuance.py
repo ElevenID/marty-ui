@@ -19,7 +19,13 @@ from gateway.models import (
     IssuanceResponse,
     IssuedCredentialRecordResponse,
 )
-from gateway.proxy import _resource_org_id, get_http_client, get_registry, proxy_request
+from gateway.proxy import (
+    _forward_headers,
+    _resource_org_id,
+    get_http_client,
+    get_registry,
+    proxy_request,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -226,14 +232,7 @@ async def _load_credential_template(template_id: str, request: Request) -> dict:
     registry = get_registry()
     client = get_http_client()
     url = f"{registry.get_service_url('credential-templates')}/v1/credential-templates/{template_id}"
-    headers: dict[str, str] = {}
-    if getattr(request.state, "user_id", None):
-        headers["X-User-Id"] = request.state.user_id
-    if getattr(request.state, "user_email", None):
-        headers["X-User-Email"] = request.state.user_email
-    auth = request.headers.get("authorization")
-    if auth:
-        headers["Authorization"] = auth
+    headers = _forward_headers(request)
     response = await client.get(url, timeout=10.0, headers=headers)
     if response.status_code == 404:
         raise HTTPException(

@@ -1,11 +1,11 @@
 /**
  * Crypto & Validity Step - Credential Template Wizard
  * 
- * Configure signing algorithm, validity periods, and revocation settings.
+ * Configure validity periods and revocation settings.
+ * Signing capabilities are resolved from the selected issuer DID.
  * This step is optional with sensible defaults.
  */
 
-import { useState } from 'react';
 import {
   Box,
   Typography,
@@ -16,36 +16,20 @@ import {
   TextField,
   FormHelperText,
   Alert,
-  Divider,
   Grid,
   Button,
-  Collapse,
 } from '@mui/material';
 import VpnKeyIcon from '@mui/icons-material/VpnKey';
-import InfoIcon from '@mui/icons-material/Info';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { useTranslation } from 'react-i18next';
 
 import { useAsyncData } from '../../../../hooks/useAsyncData';
-import { useAuth } from '../../../../hooks/useAuth';
 import { useConsole } from '../../../../contexts/ConsoleContext';
 import { listRevocationProfiles } from '../../../../services/presentationPolicyApi';
 
-const getSigningAlgorithms = (t) => [
-  { value: 'ES256', label: t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.labels.ES256') },
-  { value: 'ES384', label: t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.labels.ES384') },
-  { value: 'ES512', label: t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.labels.ES512') },
-  { value: 'EdDSA', label: t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.labels.EdDSA') },
-  { value: 'RS256', label: t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.labels.RS256') },
-];
-
 const CryptoValidityStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
-  const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
   const organizationId = activeOrgId;
-  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const { data: revocationProfilesData, error: revocationProfilesError } = useAsyncData(
     () => {
@@ -203,47 +187,6 @@ const CryptoValidityStep = ({ data, onChange }) => {
           </Button>
         )}
       </FormControl>
-      {/* Advanced Options Toggle */}
-      <Box sx={{ mt: 3 }}>
-        <Button
-          fullWidth
-          variant="outlined"
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          endIcon={showAdvanced ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-        >
-          {t('wizards.credentialTemplate.cryptoValidityStep.advanced.toggle', {
-            action: showAdvanced
-              ? t('wizards.credentialTemplate.cryptoValidityStep.advanced.hide')
-              : t('wizards.credentialTemplate.cryptoValidityStep.advanced.show'),
-          })}
-        </Button>
-
-        <Collapse in={showAdvanced}>
-          <Box sx={{ mt: 3 }}>
-            <Divider sx={{ mb: 3 }} />
-
-            {/* Signing Algorithm */}
-            <FormControl fullWidth sx={{ mb: 3 }}>
-              <InputLabel>{t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.label')}</InputLabel>
-              <Select
-                value={data.signing_algorithm || 'ES256'}
-                onChange={(e) => onChange({ signing_algorithm: e.target.value })}
-                label={t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.label')}
-              >
-                {getSigningAlgorithms(t).map((alg) => (
-                  <MenuItem key={alg.value} value={alg.value}>
-                    {alg.label}
-                  </MenuItem>
-                ))}
-              </Select>
-              <FormHelperText>
-                {t('wizards.credentialTemplate.cryptoValidityStep.signingAlgorithm.helper')}
-              </FormHelperText>
-            </FormControl>
-
-          </Box>
-        </Collapse>
-      </Box>
     </Box>
   );
 };

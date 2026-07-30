@@ -155,7 +155,6 @@ def test_signing_format_uses_managed_service_capability_names(
     assert credential_template.payload_format_to_signing_wire(value) == expected
 
 
-@pytest.mark.asyncio
 def test_public_template_request_rejects_profile_selector() -> None:
     with pytest.raises(ValueError, match="issuer_profile_id"):
         credential_template.CreateCredentialTemplateRequest.model_validate(
