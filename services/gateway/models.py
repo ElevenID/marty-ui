@@ -63,19 +63,6 @@ class ValidationRulesModel(BaseModel):
     allow_self_signed: bool = False
 
 
-class KeyManagementConfigModel(BaseModel):
-    source: Literal["platform_managed", "kms", "signing_agent"]
-    algorithm: str | None = "ES256"
-    kms_arn: str | None = None
-    kms_region: str | None = None
-    signing_agent_url: str | None = None
-    signing_agent_auth: str | None = None
-    managed_key_id: str | None = None
-    key_reference: str | None = None
-    connection_status: str | None = None
-    last_checked_at: str | None = None
-
-
 class TrustProfileCreate(BaseModel):
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
@@ -265,7 +252,49 @@ class TrustFrameworkResponse(BaseModel):
     updated_at: str
 
 
+_PRIVATE_CUSTODY_METADATA_FIELDS = {
+    "key_binding",
+    "key_management",
+    "key_reference",
+    "kms_arn",
+    "kms_region",
+    "managed_key_id",
+    "service_id",
+    "signing_agent_auth",
+    "signing_agent_url",
+    "signing_key_reference",
+    "signing_service_id",
+}
+
+
+def _find_private_custody_metadata(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            if str(key).lower() in _PRIVATE_CUSTODY_METADATA_FIELDS:
+                return str(key)
+            found = _find_private_custody_metadata(nested_value)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _find_private_custody_metadata(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _reject_private_custody_metadata(metadata: dict[str, Any] | None) -> None:
+    field = _find_private_custody_metadata(metadata)
+    if field is not None:
+        raise ValueError(
+            f"Organization Trust Profile metadata cannot contain private custody selector '{field}'; "
+            "signing is resolved from the issuer DID through an issuer profile"
+        )
+
+
 class OrganizationTrustProfileCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     framework_id: str
     name: str
     display_name: str | None = None
@@ -281,11 +310,17 @@ class OrganizationTrustProfileCreate(BaseModel):
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
-    key_management: KeyManagementConfigModel | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> OrganizationTrustProfileCreate:
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
 class OrganizationTrustProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
     display_name: str | None = None
     description: str | None = None
@@ -300,11 +335,17 @@ class OrganizationTrustProfileUpdate(BaseModel):
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
-    key_management: KeyManagementConfigModel | None = None
     metadata: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> OrganizationTrustProfileUpdate:
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
 class OrganizationTrustProfileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     framework_id: str
@@ -322,35 +363,14 @@ class OrganizationTrustProfileResponse(BaseModel):
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
-    key_management: KeyManagementConfigModel | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
 
-
-class KeyConnectionTestRequest(BaseModel):
-    key_management: KeyManagementConfigModel
-
-
-class KeyConnectionTestResponse(BaseModel):
-    success: bool
-    message: str
-    source: str
-
-
-class KeyCreateAssociateRequest(BaseModel):
-    key_management: KeyManagementConfigModel | None = None
-    algorithm: str = "ES256"
-    key_reference: str | None = None
-
-
-class KeyCreateAssociateResponse(BaseModel):
-    success: bool
-    action: str
-    key_id: str
-    source: str
-    message: str
-    key_management: KeyManagementConfigModel
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> OrganizationTrustProfileResponse:
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
 class CreateApiKeyRequest(BaseModel):

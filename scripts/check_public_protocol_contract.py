@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when Marty public template responses drift from marty-protocol."""
+"""Fail when Marty public responses drift from the pinned marty-protocol."""
 
 from __future__ import annotations
 
@@ -17,7 +17,10 @@ from referencing import Registry, Resource
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "services"))
 
-from gateway.models import CredentialTemplateResponse  # noqa: E402
+from gateway.models import (  # noqa: E402
+    CredentialTemplateResponse,
+    OrganizationTrustProfileResponse,
+)
 from gateway.routes.credentials import (  # noqa: E402
     _PUBLIC_TEMPLATE_RESPONSE_FIELDS,
     _sanitize_credential_template_response,
@@ -30,15 +33,22 @@ FORBIDDEN_PUBLIC_FIELDS = {
     "issuer_certificate_chain_pem",
     "issuer_key_id",
     "issuer_profile_id",
+    "key_binding",
     "key_access_mode",
+    "key_management",
     "key_name",
     "key_reference",
     "key_version",
+    "kms_arn",
     "kms_provider",
+    "kms_region",
+    "managed_key_id",
     "provider",
     "remote_key_binding",
     "remote_signing_config",
     "service_id",
+    "signing_agent_auth",
+    "signing_agent_url",
     "signing_key_reference",
     "signing_service_id",
     "transit_mount",
@@ -193,13 +203,76 @@ def check_contract(protocol_root: Path) -> None:
                 f"runtime response exposes custody selectors: {sorted(leaked)}"
             )
 
+    trust_profile_schema_path = (
+        protocol_root / "schemas" / "organization-trust-profile.json"
+    )
+    trust_profile_schema = json.loads(
+        trust_profile_schema_path.read_text(encoding="utf-8")
+    )
+    trust_profile_validator = Draft202012Validator(
+        trust_profile_schema,
+        registry=registry,
+        format_checker=FormatChecker(),
+    )
+    trust_profile_schema_fields = set(trust_profile_schema["properties"])
+    trust_profile_runtime_fields = set(OrganizationTrustProfileResponse.model_fields)
+    if trust_profile_runtime_fields != trust_profile_schema_fields:
+        raise AssertionError(
+            "OrganizationTrustProfileResponse fields drifted from marty-protocol: "
+            f"schema_only={sorted(trust_profile_schema_fields - trust_profile_runtime_fields)}, "
+            f"runtime_only={sorted(trust_profile_runtime_fields - trust_profile_schema_fields)}"
+        )
+
+    trust_profile_schema_required = set(trust_profile_schema["required"])
+    trust_profile_runtime_required = {
+        name
+        for name, field in OrganizationTrustProfileResponse.model_fields.items()
+        if field.is_required()
+    }
+    if trust_profile_runtime_required != trust_profile_schema_required:
+        raise AssertionError(
+            "OrganizationTrustProfileResponse required fields drifted from "
+            "marty-protocol: "
+            f"schema_only={sorted(trust_profile_schema_required - trust_profile_runtime_required)}, "
+            f"runtime_only={sorted(trust_profile_runtime_required - trust_profile_schema_required)}"
+        )
+
+    leaked_schema_fields = FORBIDDEN_PUBLIC_FIELDS & _property_names(
+        trust_profile_schema
+    )
+    if leaked_schema_fields:
+        raise AssertionError(
+            "marty-protocol Organization Trust Profile exposes custody selectors: "
+            f"{sorted(leaked_schema_fields)}"
+        )
+
+    trust_profile_response = OrganizationTrustProfileResponse(
+        id="40000000-0000-4000-8000-000000000001",
+        organization_id="20000000-0000-4000-8000-000000000001",
+        framework_id="50000000-0000-4000-8000-000000000001",
+        name="eudi-verification",
+        display_name="EUDI verification",
+        compliance_status="COMPLIANT",
+        allowed_algorithms=["ES256"],
+        allowed_formats=["SD_JWT_VC", "MDOC"],
+        metadata={"owner": "trust-team"},
+        created_at="2026-01-01T00:00:00Z",
+    ).model_dump(mode="json", exclude_none=True)
+    trust_profile_validator.validate(trust_profile_response)
+    leaked = FORBIDDEN_PUBLIC_FIELDS & _property_names(trust_profile_response)
+    if leaked:
+        raise AssertionError(
+            "runtime Organization Trust Profile response exposes custody selectors: "
+            f"{sorted(leaked)}"
+        )
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--protocol-root", type=Path, required=True)
     args = parser.parse_args()
     check_contract(args.protocol_root.resolve())
-    print("Public credential-template responses match the pinned marty-protocol schema.")
+    print("Public responses match the pinned marty-protocol schemas.")
     return 0
 
 

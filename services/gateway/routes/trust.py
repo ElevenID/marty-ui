@@ -10,10 +10,6 @@ from gateway.models import (
     IssuerEntityCreate,
     IssuerEntityResponse,
     IssuerEntityUpdate,
-    KeyConnectionTestRequest,
-    KeyConnectionTestResponse,
-    KeyCreateAssociateRequest,
-    KeyCreateAssociateResponse,
     OrganizationTrustProfileCreate,
     OrganizationTrustProfileResponse,
     OrganizationTrustProfileUpdate,
@@ -170,46 +166,6 @@ async def update_organization_trust_profile(
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
     return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/trust-profiles/{profile_id}")
-
-
-@organization_trust_profile_router.post(
-    "/{profile_id}/test-key-connection",
-    response_model=KeyConnectionTestResponse,
-    summary="Test Organization Trust Profile Key Connection",
-)
-async def test_organization_trust_profile_key_connection(
-    organization_id: str,
-    profile_id: str,
-    body: KeyConnectionTestRequest,
-    request: Request,
-) -> Response:
-    registry = get_registry()
-    service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(
-        request,
-        service_url,
-        f"/v1/organizations/{organization_id}/trust-profiles/{profile_id}/test-key-connection",
-    )
-
-
-@organization_trust_profile_router.post(
-    "/{profile_id}/create-or-associate-key",
-    response_model=KeyCreateAssociateResponse,
-    summary="Create Or Associate Organization Trust Profile Key",
-)
-async def create_or_associate_organization_trust_profile_key(
-    organization_id: str,
-    profile_id: str,
-    body: KeyCreateAssociateRequest,
-    request: Request,
-) -> Response:
-    registry = get_registry()
-    service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(
-        request,
-        service_url,
-        f"/v1/organizations/{organization_id}/trust-profiles/{profile_id}/create-or-associate-key",
-    )
 
 
 # ── Issuer Entities ──────────────────────────────────────────────────
