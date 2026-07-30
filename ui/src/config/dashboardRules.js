@@ -117,10 +117,10 @@ function getDefaultKeyManagementService(config) {
   return services[0] || null;
 }
 
-function hasManagedIssuerInput(signingKeys, issuerProfiles) {
+function hasManagedIssuerInput(signingKeys, issuerIdentities) {
   const safeSigningKeys = Array.isArray(signingKeys) ? signingKeys : [];
-  const safeIssuerProfiles = Array.isArray(issuerProfiles) ? issuerProfiles : [];
-  return safeSigningKeys.length > 0 || safeIssuerProfiles.length > 0;
+  const safeIssuerIdentities = Array.isArray(issuerIdentities) ? issuerIdentities : [];
+  return safeSigningKeys.length > 0 || safeIssuerIdentities.length > 0;
 }
 
 function safeArray(value) {
@@ -180,20 +180,31 @@ function inferSetupIntent(data) {
   return SETUP_INTENTS.VERIFY;
 }
 
-function hasActiveKmsBackedIssuerProfile(template, issuerProfiles) {
+function hasActiveIssuerIdentity(template, issuerIdentities) {
   const issuerDid = String(template?.issuer_did || '').trim();
   if (!issuerDid.startsWith('did:')) {
     return false;
   }
 
-  if (!Array.isArray(issuerProfiles)) {
+  if (!Array.isArray(issuerIdentities)) {
     return false;
   }
 
-  return issuerProfiles.some((profile) => (
-    String(profile?.issuer_did || profile?.did || '').trim() === issuerDid
-    && String(profile?.status || '').trim().toLowerCase() === 'active'
-    && String(profile?.signing_service_id || profile?.service_id || profile?.metadata?.signing_service_id || '').trim()
+  const templateAlgorithm = String(
+    template?.signing_algorithm
+      || template?.issuer_algorithm
+      || template?.algorithm
+      || '',
+  ).trim().toUpperCase();
+
+  return issuerIdentities.some((identity) => (
+    String(identity?.issuer_did || '').trim() === issuerDid
+    && String(identity?.status || '').trim().toLowerCase() === 'active'
+    && (
+      !templateAlgorithm
+      || !String(identity?.algorithm || '').trim()
+      || String(identity.algorithm).trim().toUpperCase() === templateAlgorithm
+    )
   ));
 }
 
@@ -251,18 +262,18 @@ function evaluateComplianceReadiness(lifecycle, dashboardErrors = {}) {
 }
 
 function evaluateIssuerReadiness(dependencies = {}) {
-  const { signingKeys = [], issuerProfiles = [], keyManagementConfig = null, resourceErrors = {} } = dependencies || {};
+  const { signingKeys = [], issuerIdentities = [], keyManagementConfig = null, resourceErrors = {} } = dependencies || {};
   const loadError = firstResourceError(resourceErrors, [
     'keyManagementConfig',
     'signingKeys',
-    'issuerProfiles',
+    'issuerIdentities',
   ]);
 
   if (loadError) {
     const labels = {
       keyManagementConfig: 'Key management configuration',
       signingKeys: 'Signing keys',
-      issuerProfiles: 'Issuer profiles',
+      issuerIdentities: 'Issuer identities',
     };
     return buildLoadErrorReadiness(labels[loadError.key] || 'Issuer identity', loadError.error);
   }
@@ -277,7 +288,7 @@ function evaluateIssuerReadiness(dependencies = {}) {
     };
   }
 
-  if (!hasManagedIssuerInput(signingKeys, issuerProfiles)) {
+  if (!hasManagedIssuerInput(signingKeys, issuerIdentities)) {
     return {
       state: ReadinessState.BLOCKED,
       message: 'Blocked: add an issuer identity or signing key before production issuance',
@@ -303,7 +314,7 @@ function evaluateTrustReadiness(trustProfiles, dependencies = {}) {
   const safeTrustProfiles = Array.isArray(trustProfiles) ? trustProfiles : [];
   const {
     signingKeys = [],
-    issuerProfiles = [],
+    issuerIdentities = [],
     keyManagementConfig = null,
     resourceErrors = {},
     requiresIssuerIdentity = true,
@@ -312,7 +323,7 @@ function evaluateTrustReadiness(trustProfiles, dependencies = {}) {
     'trustProfiles',
     'keyManagementConfig',
     'signingKeys',
-    'issuerProfiles',
+    'issuerIdentities',
   ]);
 
   if (loadError) {
@@ -320,7 +331,7 @@ function evaluateTrustReadiness(trustProfiles, dependencies = {}) {
       trustProfiles: 'Trust profiles',
       keyManagementConfig: 'Key management configuration',
       signingKeys: 'Signing keys',
-      issuerProfiles: 'Issuer profiles',
+      issuerIdentities: 'Issuer identities',
     };
     return buildLoadErrorReadiness(labels[loadError.key] || 'Setup data', loadError.error);
   }
@@ -336,7 +347,7 @@ function evaluateTrustReadiness(trustProfiles, dependencies = {}) {
       };
     }
 
-    if (requiresIssuerIdentity && !hasManagedIssuerInput(signingKeys, issuerProfiles)) {
+    if (requiresIssuerIdentity && !hasManagedIssuerInput(signingKeys, issuerIdentities)) {
       return {
         state: ReadinessState.BLOCKED,
         message: 'Blocked: add an issuer identity or signing key before creating Trust Profiles',
@@ -408,13 +419,13 @@ function evaluateTemplateReadiness(templates, trustProfiles, trustDependencies =
   }
 
   // Check for artifacts issues
-  const issuerProfiles = trustDependencies.issuerProfiles;
+  const issuerIdentities = trustDependencies.issuerIdentities;
   const blocked = templates.filter((t) => 
     t.status !== 'active' || 
     t.artifacts_status === 'missing' || 
     t.artifacts_status === 'invalid' ||
     !t.trust_profile_id ||
-    !hasActiveKmsBackedIssuerProfile(t, issuerProfiles)
+    !hasActiveIssuerIdentity(t, issuerIdentities)
   );
 
   if (blocked.length > 0) {
@@ -425,8 +436,8 @@ function evaluateTemplateReadiness(templates, trustProfiles, trustDependencies =
     if (blocked.some((t) => !t.trust_profile_id)) {
       reasons.push('missing trust profile');
     }
-    if (blocked.some((t) => !hasActiveKmsBackedIssuerProfile(t, issuerProfiles))) {
-      reasons.push('missing active KMS-backed issuer profile');
+    if (blocked.some((t) => !hasActiveIssuerIdentity(t, issuerIdentities))) {
+      reasons.push('missing compatible active issuer DID');
     }
     if (blocked.some((t) => t.status !== 'active')) {
       reasons.push('inactive status');
@@ -1036,7 +1047,7 @@ export function computeSetupReadiness(data) {
   const {
     trustProfiles,
     signingKeys,
-    issuerProfiles,
+    issuerIdentities,
     keyManagementConfig,
     templates,
     policies,
@@ -1055,7 +1066,7 @@ export function computeSetupReadiness(data) {
 
   const trustDependencies = {
     signingKeys,
-    issuerProfiles,
+    issuerIdentities,
     keyManagementConfig,
     resourceErrors,
   };

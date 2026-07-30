@@ -14,7 +14,7 @@ const {
   mockListDeploymentProfiles,
   mockListFlows,
   mockListSigningKeys,
-  mockListIssuerProfiles,
+  mockListPublicIssuerIdentities,
   mockGetKeyManagementConfig,
   mockListApiKeys,
   mockGetTeamSnapshot,
@@ -36,7 +36,7 @@ const {
   mockListDeploymentProfiles: vi.fn(),
   mockListFlows: vi.fn(),
   mockListSigningKeys: vi.fn(),
-  mockListIssuerProfiles: vi.fn(),
+  mockListPublicIssuerIdentities: vi.fn(),
   mockGetKeyManagementConfig: vi.fn(),
   mockListApiKeys: vi.fn(),
   mockGetTeamSnapshot: vi.fn(),
@@ -85,7 +85,7 @@ vi.mock('../../services/apiKeysApi', () => ({
 
 vi.mock('../../services/signingKeysApi', () => ({
   listSigningKeys: (...args: unknown[]) => mockListSigningKeys(...args),
-  listIssuerProfiles: (...args: unknown[]) => mockListIssuerProfiles(...args),
+  listPublicIssuerIdentities: (...args: unknown[]) => mockListPublicIssuerIdentities(...args),
   getKeyManagementConfig: (...args: unknown[]) => mockGetKeyManagementConfig(...args),
 }))
 
@@ -123,11 +123,12 @@ describe('useDashboardData', () => {
     mockListDeploymentProfiles.mockResolvedValue([])
     mockListFlows.mockResolvedValue([])
     mockListSigningKeys.mockResolvedValue({ keys: [{ id: 'key_1', name: 'Issuer Key' }] })
-    mockListIssuerProfiles.mockResolvedValue({
-      profiles: [{
-        id: 'issuer_1',
+    mockListPublicIssuerIdentities.mockResolvedValue({
+      identities: [{
         issuer_did: 'did:web:issuer.example.com',
-        signing_service_id: 'managed-openbao-transit',
+        key_purpose: 'vc_jwt_issuer',
+        algorithm: 'ES256',
+        status: 'active',
       }],
     })
     mockGetKeyManagementConfig.mockResolvedValue({
@@ -222,14 +223,16 @@ describe('useDashboardData', () => {
     expect(mockListSigningKeys).toHaveBeenCalledWith({ organization_id: 'org_live', limit: 1 })
     expect(mockListApplicationTemplates).toHaveBeenCalledWith('org_live')
     expect(mockListRevocationProfiles).toHaveBeenCalledWith({ organization_id: 'org_live' })
-    expect(mockListIssuerProfiles).toHaveBeenCalledWith({ organization_id: 'org_live' })
+    expect(mockListPublicIssuerIdentities).toHaveBeenCalledWith({ organization_id: 'org_live' })
     expect(mockGetKeyManagementConfig).toHaveBeenCalledWith({ organization_id: 'org_live' })
     expect(result.current.data.signingKeys).toEqual([{ id: 'key_1', name: 'Issuer Key' }])
-    expect(result.current.data.issuerProfiles).toEqual([{
-      id: 'issuer_1',
+    expect(result.current.data.issuerIdentities).toEqual([{
       issuer_did: 'did:web:issuer.example.com',
-      signing_service_id: 'managed-openbao-transit',
+      key_purpose: 'vc_jwt_issuer',
+      algorithm: 'ES256',
+      status: 'active',
     }])
+    expect(result.current.data).not.toHaveProperty('issuerProfiles')
     expect(result.current.data.keyManagementConfig.default_service_id).toBe('managed-openbao-transit')
   })
 
