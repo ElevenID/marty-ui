@@ -1,6 +1,6 @@
 {
   "schema": "marty.stack-lock/v1",
-  "release": "marty-ui@1.1.78",
+  "release": "marty-ui@1.1.79",
   "components": [
     {
       "name": "marty-api-core",
@@ -18,13 +18,13 @@
     {
       "name": "marty-blog",
       "repository": "ElevenID/marty-blog",
-      "version": "0.1.4",
-      "commit": "04c366bae1468437c1b61ce7c915872368fa0aee",
+      "version": "0.1.5",
+      "commit": "31954411673db283510d534d5b8dea37f59eea4e",
       "artifacts": [{
         "type": "npm",
-          "uri": "https://github.com/ElevenID/marty-blog/releases/download/v0.1.4/elevenid-marty-blog-0.1.4.tgz",
-          "digest": "sha256:a71f356655e2d93af797a4bfda96ebee268d609e214cec17a1dbf85575456d0a",
-          "sbom": "https://github.com/ElevenID/marty-blog/releases/download/v0.1.4/marty-blog-sbom.cdx.json",
+          "uri": "https://github.com/ElevenID/marty-blog/releases/download/v0.1.5/elevenid-marty-blog-0.1.5.tgz",
+          "digest": "sha256:37ef3b45e289198022c2ccc83dcb618959a68644ee72366a00d6a4a6f331aaca",
+          "sbom": "https://github.com/ElevenID/marty-blog/releases/download/v0.1.5/marty-blog-sbom.cdx.json",
         "provenance": "https://github.com/ElevenID/marty-blog/attestations"
       }]
     },
