@@ -14,10 +14,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
 import secrets
+import socket
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -28,13 +30,11 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
 from marty_common.dto import DeleteResponse
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 from marty_common.service_setup import create_service_app
 from notification.infrastructure.adapters.postgres_adapter import PostgresNotificationRepository
 from notification.infrastructure.models import mapper_registry
@@ -738,11 +738,10 @@ async def _deliver_direct_webhook(notification: Notification, endpoint: str) -> 
             last_error = f"HTTP_{response.status_code}"
             if response.status_code < 500:
                 break  # Non-retryable client error
-        except httpx.HTTPError as exc:
+        except httpx.HTTPError:
             last_error = "WEBHOOK_DELIVERY_FAILED"
         # Exponential backoff before retry
         if attempt + 1 < max_attempts:
-            import asyncio
             await asyncio.sleep(min(1 * (2 ** attempt), 30))
 
     return DeliveryResult(
@@ -821,10 +820,6 @@ def _apply_delivery_results(notification: Notification, delivery_results: list[D
     if delivery_results:
         notification.status = NotificationStatus.FAILED
         notification.error_message = next((result.error_code for result in delivery_results if result.error_code), None)
-
-
-import ipaddress
-import socket
 
 
 def _validate_webhook_url(url: str) -> None:
@@ -1305,22 +1300,29 @@ async def list_subscriptions(
 @subscription_router.get("/{subscription_id}", response_model=SubscriptionResponse, response_model_exclude_none=True)
 async def get_subscription(
     subscription_id: str,
+    organization_id: str = Query(...),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> SubscriptionResponse:
     subscription = await repo.get_subscription(subscription_id)
-    if not subscription:
+    if not subscription or subscription.organization_id != organization_id:
         raise HTTPException(status_code=404, detail="Subscription not found")
     return _subscription_to_response(subscription)
 
 
-@subscription_router.put("/{subscription_id}", response_model=SubscriptionResponse, response_model_exclude_none=True)
+@subscription_router.api_route(
+    "/{subscription_id}",
+    methods=["PUT", "PATCH"],
+    response_model=SubscriptionResponse,
+    response_model_exclude_none=True,
+)
 async def update_subscription(
     subscription_id: str,
     body: UpdateSubscriptionRequest,
+    organization_id: str = Query(...),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> SubscriptionResponse:
     subscription = await repo.get_subscription(subscription_id)
-    if not subscription:
+    if not subscription or subscription.organization_id != organization_id:
         raise HTTPException(status_code=404, detail="Subscription not found")
     if body.name is not None:
         subscription.name = body.name
@@ -1353,8 +1355,12 @@ async def update_subscription(
 @subscription_router.delete("/{subscription_id}", response_model=DeleteResponse)
 async def delete_subscription(
     subscription_id: str,
+    organization_id: str = Query(...),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> DeleteResponse:
+    subscription = await repo.get_subscription(subscription_id)
+    if not subscription or subscription.organization_id != organization_id:
+        raise HTTPException(status_code=404, detail="Subscription not found")
     deleted = await repo.delete_subscription(subscription_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Subscription not found")
@@ -1393,22 +1399,29 @@ async def list_webhooks(
 @webhook_router.get("/{webhook_id}", response_model=WebhookResponse, response_model_exclude_none=True)
 async def get_webhook(
     webhook_id: str,
+    organization_id: str = Query(...),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> WebhookResponse:
     webhook = await repo.get_webhook(webhook_id)
-    if not webhook:
+    if not webhook or webhook.organization_id != organization_id:
         raise HTTPException(status_code=404, detail="Webhook not found")
     return _webhook_to_response(webhook)
 
 
-@webhook_router.put("/{webhook_id}", response_model=WebhookResponse, response_model_exclude_none=True)
+@webhook_router.api_route(
+    "/{webhook_id}",
+    methods=["PUT", "PATCH"],
+    response_model=WebhookResponse,
+    response_model_exclude_none=True,
+)
 async def update_webhook(
     webhook_id: str,
     body: UpdateWebhookRequest,
+    organization_id: str = Query(...),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> WebhookResponse:
     webhook = await repo.get_webhook(webhook_id)
-    if not webhook:
+    if not webhook or webhook.organization_id != organization_id:
         raise HTTPException(status_code=404, detail="Webhook not found")
     if body.name is not None:
         webhook.name = body.name
@@ -1434,8 +1447,12 @@ async def update_webhook(
 @webhook_router.delete("/{webhook_id}", response_model=DeleteResponse)
 async def delete_webhook(
     webhook_id: str,
+    organization_id: str = Query(...),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> DeleteResponse:
+    webhook = await repo.get_webhook(webhook_id)
+    if not webhook or webhook.organization_id != organization_id:
+        raise HTTPException(status_code=404, detail="Webhook not found")
     deleted = await repo.delete_webhook(webhook_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Webhook not found")
@@ -1445,10 +1462,11 @@ async def delete_webhook(
 @webhook_router.get("/{webhook_id}/deliveries", response_model=list[WebhookDeliveryResponse], response_model_exclude_none=True)
 async def list_webhook_deliveries(
     webhook_id: str,
+    organization_id: str = Query(...),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(get_repo),
 ) -> list[WebhookDeliveryResponse]:
     webhook = await repo.get_webhook(webhook_id)
-    if not webhook:
+    if not webhook or webhook.organization_id != organization_id:
         raise HTTPException(status_code=404, detail="Webhook not found")
     deliveries = await repo.list_webhook_deliveries(webhook_id)
     return [_delivery_to_response(delivery) for delivery in deliveries]

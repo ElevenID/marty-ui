@@ -46,7 +46,6 @@ import EditIcon from '@mui/icons-material/Edit';
 import { ResourcePage } from '../../common';
 import ConfirmDeleteDialog from '../../common/ConfirmDeleteDialog';
 import { useAsyncData } from '../../../hooks/useAsyncData';
-import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import {
   createWebhook,
@@ -143,7 +142,6 @@ async function copyToClipboard(text) {
 
 function WebhooksPage() {
   const { t } = useTranslation('console');
-  const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
   const organizationId = activeOrgId;
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -250,7 +248,7 @@ function WebhooksPage() {
 
     try {
       if (editingWebhook) {
-        await updateWebhook(editingWebhook.id, {
+        await updateWebhook(organizationId, editingWebhook.id, {
           url: formState.url.trim(),
           description: formState.description.trim(),
           eventTypes: formState.eventTypes,
@@ -282,13 +280,13 @@ function WebhooksPage() {
       return;
     }
 
-    await deleteWebhook(pendingDelete.id);
+    await deleteWebhook(organizationId, pendingDelete.id);
     setPendingDelete(null);
     await reload();
   };
 
   const handleTest = async (webhookId) => {
-    await testWebhook(webhookId);
+    await testWebhook(organizationId, webhookId);
     setCopiedMessage('Test delivery requested. Check the receiver for the signed callback.');
   };
 
