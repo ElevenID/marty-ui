@@ -46,7 +46,7 @@ describe('TrustComplianceStep', () => {
     renderWithoutRouter(
       <MemoryRouter>
         <TrustComplianceStep
-          data={{ trust_profile_id: null, signing_algorithm: 'ES256' }}
+          data={{ trust_profile_id: null }}
           onChange={vi.fn()}
         />
       </MemoryRouter>
@@ -87,7 +87,7 @@ describe('TrustComplianceStep', () => {
     renderWithoutRouter(
       <MemoryRouter>
         <TrustComplianceStep
-          data={{ trust_profile_id: 'trust-1', issuer_did: 'did:web:issuer.example.com', signing_algorithm: 'ES256' }}
+          data={{ trust_profile_id: 'trust-1', issuer_did: 'did:web:issuer.example.com' }}
           onChange={onChange}
         />
       </MemoryRouter>
@@ -130,7 +130,7 @@ describe('TrustComplianceStep', () => {
     renderWithoutRouter(
       <MemoryRouter>
         <TrustComplianceStep
-          data={{ trust_profile_id: 'trust-1', signing_algorithm: 'ES256' }}
+          data={{ trust_profile_id: 'trust-1' }}
           onChange={vi.fn()}
         />
       </MemoryRouter>
@@ -171,7 +171,7 @@ describe('TrustComplianceStep', () => {
     renderWithoutRouter(
       <MemoryRouter>
         <TrustComplianceStep
-          data={{ trust_profile_id: 'trust-1', issuer_did: null, signing_algorithm: 'ES256' }}
+          data={{ trust_profile_id: 'trust-1', issuer_did: null }}
           onChange={onChange}
         />
       </MemoryRouter>
@@ -180,9 +180,10 @@ describe('TrustComplianceStep', () => {
     await waitFor(() => {
       expect(onChange).toHaveBeenCalledWith({
         issuer_did: 'did:web:issuer.example.com',
-        signing_algorithm: 'ES256',
       })
     })
-    expect(onChange.mock.calls.flatMap(([patch]) => Object.keys(patch))).not.toContain('issuer_profile_id')
+    const patchKeys = onChange.mock.calls.flatMap(([patch]) => Object.keys(patch))
+    expect(patchKeys).not.toContain('issuer_profile_id')
+    expect(patchKeys).not.toContain('signing_algorithm')
   })
 })

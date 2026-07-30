@@ -7,7 +7,6 @@
 import { useTranslation } from 'react-i18next';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import {
-  Box,
   Paper,
   Typography,
   Table,
@@ -21,7 +20,6 @@ import {
   Tooltip,
   Alert,
   LinearProgress,
-  Button,
 } from '@mui/material';
 import EditIcon from '@mui/icons-material/Edit';
 import VisibilityIcon from '@mui/icons-material/Visibility';
@@ -32,7 +30,6 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { Link } from 'react-router';
 
 import { ResourcePage, EmptyState, EmptyStates, StatusChip } from '../../common';
-import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { listCredentialTemplates, listTrustProfiles } from '../../../services/presentationPolicyApi';
 
@@ -48,39 +45,39 @@ const getBreadcrumbs = (t) => [
 ];
 
 /**
- * Artifacts status indicator
+ * Public issuer-identity status indicator.
+ *
+ * Credential Templates deliberately expose only the issuer DID. Custody,
+ * signing service, key, and certificate readiness stay behind the issuer
+ * identity registry and are checked again when a template is activated.
  */
-function ArtifactsStatus({ hasArtifacts, validated }) {
+function IssuerDidStatus({ issuerDid }) {
   const { t } = useTranslation('console');
-  
-  if (!hasArtifacts) {
+
+  if (!String(issuerDid || '').startsWith('did:')) {
     return (
-      <Tooltip title={t('templates.artifactsStatus.missingArtifactsTooltip')}>
-        <Chip 
-          icon={<WarningIcon />} 
-          label={t('templates.artifactsStatus.missingArtifacts')} 
-          color="warning" 
-          size="small" 
+      <Tooltip title={t('templates.issuerDidStatus.missingTooltip', {
+        defaultValue: 'Select an active organization-owned issuer DID.',
+      })}>
+        <Chip
+          icon={<WarningIcon />}
+          label={t('templates.issuerDidStatus.missing', { defaultValue: 'Missing issuer DID' })}
+          color="warning"
+          size="small"
         />
       </Tooltip>
     );
   }
-  
-  if (!validated) {
-    return (
-      <Tooltip title={t('templates.artifactsStatus.notValidatedTooltip')}>
-        <Chip label={t('templates.artifactsStatus.notValidated')} size="small" variant="outlined" />
-      </Tooltip>
-    );
-  }
-  
+
   return (
-    <Tooltip title={t('templates.artifactsStatus.validTooltip')}>
-      <Chip 
-        icon={<CheckCircleIcon />} 
-        label={t('templates.artifactsStatus.valid')} 
-        color="success" 
-        size="small" 
+    <Tooltip title={t('templates.issuerDidStatus.configuredTooltip', {
+      defaultValue: 'Signing custody is resolved internally from this issuer DID.',
+    })}>
+      <Chip
+        icon={<CheckCircleIcon />}
+        label={t('templates.issuerDidStatus.configured', { defaultValue: 'Issuer DID configured' })}
+        color="success"
+        size="small"
       />
     </Tooltip>
   );
@@ -88,7 +85,6 @@ function ArtifactsStatus({ hasArtifacts, validated }) {
 
 function CredentialTemplatesPage() {
   const { t } = useTranslation('console');
-  const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
   const organizationId = activeOrgId;
   const { data: templatesData, loading, error } = useAsyncData(
@@ -194,9 +190,6 @@ function CredentialTemplatesPage() {
     return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleDateString();
   };
 
-  // Count templates with missing artifacts
-  const missingArtifactsCount = templates.filter((template) => !template?.hasArtifacts).length;
-
   return (
     <ResourcePage
       title={t('templates.credentialTemplates')}
@@ -233,20 +226,6 @@ function CredentialTemplatesPage() {
         </Typography>
       </Alert>
 
-      {missingArtifactsCount > 0 && (
-        <Alert 
-          severity="warning" 
-          sx={{ mb: 3 }}
-          action={
-            <Button color="inherit" size="small">
-              {t('templates.validateAll')}
-            </Button>
-          }
-        >
-          {t('templates.missingArtifactsWarning', { count: missingArtifactsCount })}
-        </Alert>
-      )}
-
       {loading ? (
         <LinearProgress />
       ) : templates.length === 0 ? (
@@ -267,7 +246,7 @@ function CredentialTemplatesPage() {
                 <TableCell>{t('templates.tableHeaders.format')}</TableCell>
                 <TableCell>{t('templates.tableHeaders.version')}</TableCell>
                 <TableCell align="right">{t('templates.tableHeaders.claims')}</TableCell>
-                <TableCell>{t('templates.tableHeaders.artifacts')}</TableCell>
+                <TableCell>{t('templates.tableHeaders.issuerDid', { defaultValue: 'Issuer DID' })}</TableCell>
                 <TableCell>{t('templates.tableHeaders.usedBy')}</TableCell>
                 <TableCell>{t('templates.tableHeaders.status')}</TableCell>
                 <TableCell>{t('templates.tableHeaders.lastUpdated')}</TableCell>
@@ -292,10 +271,7 @@ function CredentialTemplatesPage() {
                     <TableCell>{template.version}</TableCell>
                     <TableCell align="right">{getClaimsCount(template)}</TableCell>
                     <TableCell>
-                      <ArtifactsStatus 
-                        hasArtifacts={template.hasArtifacts} 
-                        validated={template.artifactsValidated} 
-                      />
+                      <IssuerDidStatus issuerDid={template.issuer_did} />
                     </TableCell>
                     <TableCell>
                       <Tooltip title={t('templates.usedByFlowsTooltip')}>

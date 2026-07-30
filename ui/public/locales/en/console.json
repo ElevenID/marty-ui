@@ -517,22 +517,18 @@
     "failedToLoad": "Failed to load credential templates",
     "guardrailTitle": "Credential Templates are not applicant-facing.",
     "guardrailDescription": "They define schemas, application rules, and compliance used by Issuance Flows. To make credentials available to applicants, create an Issuance Flow.",
-    "missingArtifactsWarning": "{{count}} template(s) have missing or unvalidated artifacts.",
-    "validateAll": "Validate All",
-    "artifactsStatus": {
-      "missingArtifacts": "Missing Artifacts",
-      "missingArtifactsTooltip": "Missing required artifacts",
-      "notValidated": "Not Validated",
-      "notValidatedTooltip": "Artifacts not validated",
-      "valid": "Valid",
-      "validTooltip": "All artifacts validated"
+    "issuerDidStatus": {
+      "missing": "Missing issuer DID",
+      "missingTooltip": "Select an active organization-owned issuer DID.",
+      "configured": "Issuer DID configured",
+      "configuredTooltip": "Signing custody is resolved internally from this issuer DID."
     },
     "tableHeaders": {
       "name": "Name",
       "format": "Format",
       "version": "Version",
       "claims": "Claims",
-      "artifacts": "Artifacts",
+      "issuerDid": "Issuer DID",
       "usedBy": "Used By",
       "status": "Status",
       "lastUpdated": "Last Updated",

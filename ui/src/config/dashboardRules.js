@@ -190,21 +190,9 @@ function hasActiveIssuerIdentity(template, issuerIdentities) {
     return false;
   }
 
-  const templateAlgorithm = String(
-    template?.signing_algorithm
-      || template?.issuer_algorithm
-      || template?.algorithm
-      || '',
-  ).trim().toUpperCase();
-
   return issuerIdentities.some((identity) => (
     String(identity?.issuer_did || '').trim() === issuerDid
     && String(identity?.status || '').trim().toLowerCase() === 'active'
-    && (
-      !templateAlgorithm
-      || !String(identity?.algorithm || '').trim()
-      || String(identity.algorithm).trim().toUpperCase() === templateAlgorithm
-    )
   ));
 }
 
@@ -418,21 +406,18 @@ function evaluateTemplateReadiness(templates, trustProfiles, trustDependencies =
     };
   }
 
-  // Check for artifacts issues
+  // Signing custody is intentionally not exposed on Credential Templates.
+  // Readiness is established through the organization-scoped public issuer
+  // identity registry and the selected issuer DID.
   const issuerIdentities = trustDependencies.issuerIdentities;
   const blocked = templates.filter((t) => 
     t.status !== 'active' || 
-    t.artifacts_status === 'missing' || 
-    t.artifacts_status === 'invalid' ||
     !t.trust_profile_id ||
     !hasActiveIssuerIdentity(t, issuerIdentities)
   );
 
   if (blocked.length > 0) {
     const reasons = [];
-    if (blocked.some((t) => t.artifacts_status === 'missing' || t.artifacts_status === 'invalid')) {
-      reasons.push('missing signing artifacts');
-    }
     if (blocked.some((t) => !t.trust_profile_id)) {
       reasons.push('missing trust profile');
     }

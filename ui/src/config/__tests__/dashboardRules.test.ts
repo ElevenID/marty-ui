@@ -21,7 +21,6 @@ const activeIssuerIdentity = {
 }
 const templateIssuerFields = {
   issuer_did: activeIssuerIdentity.issuer_did,
-  signing_algorithm: 'ES256',
 }
 
 const readyTrustDependencies = {
@@ -394,7 +393,7 @@ describe('dashboardRules', () => {
       expect(result.trust.blockReason).toBeNull()
     })
 
-    it('should mark template as BLOCKED when artifacts are missing', () => {
+    it('should ignore legacy artifact metadata when the public issuer DID is active', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
         issuerIdentities: [activeIssuerIdentity],
@@ -415,9 +414,8 @@ describe('dashboardRules', () => {
 
       const result = computeSetupReadiness(data)
 
-      expect(result.template.state).toBe(ReadinessState.BLOCKED)
-      expect(result.template.message).toContain('missing signing artifacts')
-      expect(result.template.blockReason).toContain('missing signing artifacts')
+      expect(result.template.state).toBe(ReadinessState.READY)
+      expect(result.template.message).toContain('1 active template')
     })
 
     it('should mark template as READY when active with valid artifacts', () => {
@@ -497,7 +495,7 @@ describe('dashboardRules', () => {
       expect(result.policy.dependencyBlocked).toBe(true)
     })
 
-    it('should mark template as BLOCKED when the DID-resolved issuer identity has an incompatible algorithm', () => {
+    it('does not use public algorithm selectors to choose issuer custody', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
         issuerIdentities: [{
@@ -523,9 +521,7 @@ describe('dashboardRules', () => {
 
       const result = computeSetupReadiness(data)
 
-      expect(result.template.state).toBe(ReadinessState.BLOCKED)
-      expect(result.template.message).toContain('missing compatible active issuer DID')
-      expect(result.policy.dependencyBlocked).toBe(true)
+      expect(result.template.state).toBe(ReadinessState.READY)
     })
 
     it('should mark policy as BLOCKED when missing required claims', () => {

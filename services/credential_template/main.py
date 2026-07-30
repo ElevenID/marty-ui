@@ -17,7 +17,6 @@ Port: 8003
 from __future__ import annotations
 
 import logging
-import json
 import os
 import re
 import uuid
@@ -1036,11 +1035,7 @@ class CreateCredentialTemplateRequest(BaseModel):
     revocation_profile_id: str | None = None
     # Compliance
     compliance_profile_id: str = Field(min_length=1, max_length=255)
-    issuer_algorithm: str | None = None
-    signing_algorithm: str | None = None
-    issuer_certificate_chain_pem: str | None = None
     issuer_did: str | None = None
-    auto_generate_artifacts: bool = False
     credential_payload_format: str | None = None
     schema_uri: dict | None = None
 
@@ -1066,11 +1061,7 @@ class UpdateCredentialTemplateRequest(BaseModel):
     application_template_id: str | None = None
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
-    issuer_algorithm: str | None = None
-    signing_algorithm: str | None = None
-    issuer_certificate_chain_pem: str | None = None
     issuer_did: str | None = None
-    auto_generate_artifacts: bool | None = None
     credential_payload_format: str | None = None
 
     @model_validator(mode="after")
@@ -1096,51 +1087,14 @@ class CredentialTemplateResponse(BaseModel):
     revocation_profile_id: str | None = None
     claims: list[dict]
     validity_rules: dict
-    issuer_algorithm: str | None = None
-    issuer_certificate_chain_pem: str | None = None
     issuer_did: str | None = None
-    auto_generate_artifacts: bool = False
-    issuer_certificate_chain_configured: bool = False
-    artifacts_status: str = "missing"
-    hasArtifacts: bool = False
-    artifactsValidated: bool = False
-    usedByFlowsCount: int = 0
     privacy_posture: dict | None = None
-    wallet_configs_json: str | None = None  # JSON string of wallet configs for per-wallet offers
     created_at: str
     updated_at: str
 
 
 def _days_from_seconds(seconds: int) -> int:
     return max(1, (int(seconds) + SECONDS_PER_DAY - 1) // SECONDS_PER_DAY)
-
-
-def _resolve_auto_generate_artifacts(
-    auto_generate_artifacts: bool | None,
-) -> bool:
-    """Resolve the canonical auto-generate flag."""
-    return bool(auto_generate_artifacts)
-
-
-def _artifact_material_count(template: CredentialTemplate) -> int:
-    return sum(
-        1
-        for value in (
-            template.issuer_key_id,
-            template.issuer_certificate_chain_pem,
-            template.remote_signing_config,
-        )
-        if value
-    )
-
-
-def _artifacts_status(template: CredentialTemplate) -> str:
-    material_count = _artifact_material_count(template)
-    if template.auto_generate_artifacts or material_count > 0:
-        return "valid"
-    if template.issuer_did:
-        return "invalid"
-    return "missing"
 
 
 def _resolve_validity_rules(
@@ -1431,6 +1385,73 @@ async def get_current_user_id(
     return x_user_id
 
 
+def _authorize_gateway_api_key_org_access(
+    request: Request,
+    *,
+    user_id: str,
+    organization_id: str,
+) -> bool:
+    """Validate the complete gateway-forwarded API-key organization binding.
+
+    The credential-template service is an internal service. The gateway strips
+    caller-supplied identity headers, validates the raw API key and route
+    permission, then forwards this context. A partial or inconsistent API-key
+    context fails closed; it never falls back to human membership checks.
+    """
+    api_key_id = request.headers.get("x-api-key-id", "").strip()
+    if not api_key_id:
+        if user_id.startswith("api_key:"):
+            raise HTTPException(
+                status_code=403,
+                detail="Incomplete gateway API key context",
+            )
+        return False
+
+    forwarded_organization = request.headers.get(
+        "x-organization-id",
+        "",
+    ).strip()
+    required_permission = request.headers.get(
+        "x-required-permission",
+        "",
+    ).strip()
+    scopes = {
+        scope.strip()
+        for scope in request.headers.get("x-api-key-scopes", "").split(",")
+        if scope.strip()
+    }
+    if (
+        user_id != f"api_key:{api_key_id}"
+        or not required_permission
+        or not scopes
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Incomplete gateway API key context",
+        )
+    if forwarded_organization != organization_id:
+        raise HTTPException(
+            status_code=403,
+            detail="API key does not have access to this organization",
+        )
+    return True
+
+
+async def _require_credential_template_org_access(
+    request: Request,
+    *,
+    user_id: str,
+    organization_id: str,
+) -> None:
+    if _authorize_gateway_api_key_org_access(
+        request,
+        user_id=user_id,
+        organization_id=organization_id,
+    ):
+        return
+    await require_org_membership(organization_id, request, user_id)
+
+
 def _read_secret_value(name: str) -> str:
     value = os.environ.get(name)
     if value:
@@ -1474,8 +1495,6 @@ def _compact_dict(value: dict[str, Any]) -> dict[str, Any]:
 
 def _canonical_issuer_fields(
     issuer_context: dict[str, Any],
-    *,
-    requested_algorithm: str | None = None,
 ) -> dict[str, Any]:
     profile = issuer_context.get("issuer_profile")
     if not isinstance(profile, dict):
@@ -1505,7 +1524,6 @@ def _canonical_issuer_fields(
         profile.get("key_purpose"),
     )
     algorithm = _first_non_empty(
-        requested_algorithm,
         issuer_context.get("algorithm"),
         profile.get("algorithm"),
         service.get("algorithm"),
@@ -1779,7 +1797,11 @@ async def create_credential_template(
     Note: This verifies the user is a member of the organization specified
     in the request body. Admin role recommended for production.
     """
-    await require_org_membership(body.organization_id, request, user_id)
+    await _require_credential_template_org_access(
+        request,
+        user_id=user_id,
+        organization_id=body.organization_id,
+    )
 
     # MIP §6.2 — credential_type MUST be PascalCase OR a reverse-domain doctype
     # PascalCase: "EmployeeBadge", "VerifiableId"
@@ -1814,12 +1836,8 @@ async def create_credential_template(
         organization_id=body.organization_id,
         issuer_did=body.issuer_did,
         credential_format=format_to_wire(CredentialFormat(credential_payload_format)),
-        algorithm=body.issuer_algorithm or body.signing_algorithm,
     )
-    issuer_fields = _canonical_issuer_fields(
-        issuer_context,
-        requested_algorithm=body.issuer_algorithm or body.signing_algorithm,
-    )
+    issuer_fields = _canonical_issuer_fields(issuer_context)
 
     # Keep the legacy default only for internal SD-JWT callers. Public callers
     # are validated by the gateway and must provide their VCT explicitly.
@@ -1862,11 +1880,7 @@ async def create_credential_template(
         issuer_algorithm=issuer_fields["issuer_algorithm"],
         key_access_mode=issuer_fields["key_access_mode"],
         remote_signing_config=issuer_fields["remote_signing_config"],
-        issuer_certificate_chain_pem=body.issuer_certificate_chain_pem,
         issuer_did=issuer_fields["issuer_did"],
-        auto_generate_artifacts=_resolve_auto_generate_artifacts(
-            body.auto_generate_artifacts,
-        ),
     )
     
     # Set claims
@@ -1929,7 +1943,11 @@ async def list_credential_templates(
     offset: int = Query(default=0, ge=0),
 ) -> list[CredentialTemplateResponse]:
     """List Credential Templates for an organization. Requires organization membership."""
-    await require_org_membership(organization_id, request, user_id)
+    await _require_credential_template_org_access(
+        request,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
 
     status_filter = TemplateStatus(status) if status else None
     templates = await repo.list(organization_id, status_filter)
@@ -1939,12 +1957,19 @@ async def list_credential_templates(
 @router.get("/{template_id}", response_model=CredentialTemplateResponse, response_model_exclude_none=True)
 async def get_credential_template(
     template_id: str,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryCredentialTemplateRepository = Depends(get_repo),
 ) -> CredentialTemplateResponse:
     """Get a Credential Template by ID."""
     template = await repo.get(template_id)
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
+    await _require_credential_template_org_access(
+        request,
+        user_id=user_id,
+        organization_id=template.organization_id,
+    )
     return _template_to_response(template)
 
 
@@ -1964,7 +1989,11 @@ async def update_credential_template(
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
 
-    await require_org_membership(template.organization_id, fastapi_request, user_id)
+    await _require_credential_template_org_access(
+        fastapi_request,
+        user_id=user_id,
+        organization_id=template.organization_id,
+    )
     
     if template.status != TemplateStatus.DRAFT:
         raise HTTPException(
@@ -1992,14 +2021,6 @@ async def update_credential_template(
         candidate.revocation_profile_id = request.revocation_profile_id
     if request.issuer_did is not None:
         candidate.issuer_did = request.issuer_did
-    if request.issuer_algorithm is not None or request.signing_algorithm is not None:
-        candidate.issuer_algorithm = request.issuer_algorithm or request.signing_algorithm
-    if request.issuer_certificate_chain_pem is not None:
-        candidate.issuer_certificate_chain_pem = request.issuer_certificate_chain_pem
-    if request.auto_generate_artifacts is not None:
-        candidate.auto_generate_artifacts = _resolve_auto_generate_artifacts(
-            request.auto_generate_artifacts,
-        )
     supported_formats = candidate.supported_formats
     if request.supported_formats is not None:
         supported_formats = [normalize_credential_format(f) for f in request.supported_formats]
@@ -2031,12 +2052,8 @@ async def update_credential_template(
         organization_id=candidate.organization_id,
         issuer_did=candidate.issuer_did,
         credential_format=payload_format_to_wire(candidate.credential_payload_format),
-        algorithm=candidate.issuer_algorithm,
     )
-    issuer_fields = _canonical_issuer_fields(
-        issuer_context,
-        requested_algorithm=candidate.issuer_algorithm,
-    )
+    issuer_fields = _canonical_issuer_fields(issuer_context)
     candidate.issuer_profile_id = issuer_fields["issuer_profile_id"]
     candidate.issuer_key_id = issuer_fields["issuer_key_id"]
     candidate.issuer_algorithm = issuer_fields["issuer_algorithm"]
@@ -2061,7 +2078,11 @@ async def activate_credential_template(
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
 
-    await require_org_membership(template.organization_id, fastapi_request, user_id)
+    await _require_credential_template_org_access(
+        fastapi_request,
+        user_id=user_id,
+        organization_id=template.organization_id,
+    )
     
     if not template.claims:
         raise HTTPException(status_code=400, detail="Template must have at least one claim")
@@ -2084,12 +2105,8 @@ async def activate_credential_template(
         organization_id=template.organization_id,
         issuer_did=template.issuer_did,
         credential_format=payload_format_to_wire(template.credential_payload_format),
-        algorithm=template.issuer_algorithm,
     )
-    issuer_fields = _canonical_issuer_fields(
-        issuer_context,
-        requested_algorithm=template.issuer_algorithm,
-    )
+    issuer_fields = _canonical_issuer_fields(issuer_context)
     await _require_trust_profile_accepts_issuer(
         trust_profile_id=template.trust_profile_id,
         issuer_did=issuer_fields["issuer_did"],
@@ -2119,7 +2136,11 @@ async def deprecate_credential_template(
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
 
-    await require_org_membership(template.organization_id, fastapi_request, user_id)
+    await _require_credential_template_org_access(
+        fastapi_request,
+        user_id=user_id,
+        organization_id=template.organization_id,
+    )
 
     template.deprecate()
     await repo.save(template)
@@ -2138,7 +2159,11 @@ async def create_new_version(
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
 
-    await require_org_membership(template.organization_id, fastapi_request, user_id)
+    await _require_credential_template_org_access(
+        fastapi_request,
+        user_id=user_id,
+        organization_id=template.organization_id,
+    )
     
     new_template = template.new_version()
     await repo.save(new_template)
@@ -2157,7 +2182,11 @@ async def delete_credential_template(
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
 
-    await require_org_membership(template.organization_id, fastapi_request, user_id)
+    await _require_credential_template_org_access(
+        fastapi_request,
+        user_id=user_id,
+        organization_id=template.organization_id,
+    )
 
     if template.status != TemplateStatus.DRAFT:
         raise HTTPException(
@@ -2182,7 +2211,11 @@ async def add_claim(
     if not template:
         raise HTTPException(status_code=404, detail="Credential Template not found")
 
-    await require_org_membership(template.organization_id, fastapi_request, user_id)
+    await _require_credential_template_org_access(
+        fastapi_request,
+        user_id=user_id,
+        organization_id=template.organization_id,
+    )
     
     if template.status != TemplateStatus.DRAFT:
         raise HTTPException(status_code=400, detail="Only draft templates can be modified")
@@ -2221,9 +2254,6 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
         "prefer_predicates": bool(template.zk_predicate_claims) or template.privacy_posture == PrivacyPosture.ZERO_KNOWLEDGE,
         "sd_alg": "sha-256",
     }
-    artifacts_status = _artifacts_status(template)
-    has_artifacts = artifacts_status != "missing"
-
     return CredentialTemplateResponse(
         id=template.id,
         organization_id=template.organization_id,
@@ -2238,15 +2268,7 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
         application_template_id=template.application_template_id,
         trust_profile_id=template.trust_profile_id,
         revocation_profile_id=template.revocation_profile_id,
-        issuer_algorithm=template.issuer_algorithm,
-        issuer_certificate_chain_pem=template.issuer_certificate_chain_pem,
         issuer_did=template.issuer_did,
-        auto_generate_artifacts=template.auto_generate_artifacts,
-        issuer_certificate_chain_configured=bool(template.issuer_certificate_chain_pem),
-        artifacts_status=artifacts_status,
-        hasArtifacts=has_artifacts,
-        artifactsValidated=artifacts_status == "valid",
-        usedByFlowsCount=0,
         claims=[
             {
                 "name": c.name,
@@ -2265,12 +2287,6 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
                 "required": c.required,
                 **({"selectively_disclosable": c.selectively_disclosable} if c.selectively_disclosable else {}),
                 **({"namespace": c.mdoc_namespace} if c.mdoc_namespace else {}),
-                **({"mdoc_namespace": c.mdoc_namespace} if c.mdoc_namespace else {}),
-                **(
-                    {"mdoc_element_identifier": c.mdoc_element_identifier}
-                    if c.mdoc_element_identifier
-                    else {}
-                ),
                 **(
                     {"derived_from": c.derived_from or c.name}
                     if c.derived_from or c.derivable
@@ -2296,14 +2312,6 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
             **({"not_before_offset_seconds": template.validity_rules.not_before_offset_seconds} if template.validity_rules.not_before_offset_seconds else {}),
         },
         privacy_posture=privacy_posture,
-        wallet_configs_json=json.dumps([
-            {
-                "wallet_id": wc.wallet_id,
-                "deep_link_scheme": wc.deep_link_scheme,
-                "format_variant": wc.format_variant,
-            }
-            for wc in template.wallet_configs
-        ]) if template.wallet_configs else None,
         created_at=template.created_at.isoformat(),
         updated_at=template.updated_at.isoformat(),
     )
