@@ -21,6 +21,7 @@ from gateway.models import (  # noqa: E402
     CredentialTemplateResponse,
     IssuanceCreate,
     OrganizationTrustProfileResponse,
+    PresentationPolicyResponse,
     PUBLIC_ISSUANCE_RESERVED_CLAIMS,
     StartVerificationFlowRequest,
     VerificationRequestResponse,
@@ -28,6 +29,10 @@ from gateway.models import (  # noqa: E402
 from gateway.routes.credentials import (  # noqa: E402
     _PUBLIC_TEMPLATE_RESPONSE_FIELDS,
     _sanitize_credential_template_response,
+)
+from gateway.routes.verification import (  # noqa: E402
+    _PUBLIC_PRESENTATION_POLICY_FIELDS,
+    _sanitize_presentation_policy_response,
 )
 
 
@@ -377,6 +382,101 @@ def check_contract(protocol_root: Path) -> None:
         status="AWAITING_WALLET",
     ).model_dump(mode="json")
     verification_response_validator.validate(verification_response)
+
+    presentation_schema, presentation_validator = _validator(
+        protocol_root,
+        registry,
+        "presentation-policy.json",
+    )
+    _assert_model_shape(
+        model=PresentationPolicyResponse,
+        schema=presentation_schema,
+        label="PresentationPolicyResponse",
+    )
+    if set(_PUBLIC_PRESENTATION_POLICY_FIELDS) != set(
+        presentation_schema["properties"]
+    ):
+        raise AssertionError(
+            "presentation-policy response allowlist drifted from marty-protocol"
+        )
+    presentation_internal = {
+        "id": "60000000-0000-4000-8000-000000000001",
+        "organization_id": "20000000-0000-4000-8000-000000000001",
+        "name": "Employee verification",
+        "status": "active",
+        "description": "Verify an employee credential.",
+        "purpose": "Workforce access",
+        "required_claims": [
+            {
+                "claim_name": "employee_id",
+                "credential_type": "EmployeeCredential",
+            }
+        ],
+        "accepted_credential_types": ["EmployeeCredential"],
+        "display_metadata": {
+            "title": "Employee verification",
+            "description": "Present an employee credential.",
+            "purpose": "employment_verification",
+            "purpose_description": "Workforce access",
+            "verifier_name": "Example verifier",
+            "verifier_logo_url": None,
+            "privacy_policy_url": None,
+            "terms_of_service_url": None,
+        },
+        "credential_requirements": [
+            {
+                "credential_template_id": "template-employee",
+                "display_name": "Employee credential",
+                "description": None,
+                "required": True,
+                "credential_payload_format": "SD_JWT_VC",
+                "requested_claims": [
+                    {
+                        "claim_name": "employee_id",
+                        "display_name": "Employee ID",
+                        "description": None,
+                        "required": True,
+                        "selective_disclosure": True,
+                        "accept_derived": True,
+                        "predicate_spec": None,
+                        "constraints": [],
+                    }
+                ],
+                "trust_profile_id": None,
+                "max_age_seconds": None,
+                "require_fresh_issuance": False,
+            }
+        ],
+        "alternative_requirements": [],
+        "compliance_profile_id": None,
+        "trust_profile_id": None,
+        "holder_binding": {"required": False},
+        "freshness": {"require_not_revoked": True},
+        "prefer_predicates": False,
+        "supported_circuits": [],
+        "fallback_policy": "ACCEPT_RAW",
+        "issuer_constraints": None,
+        "credential_ranking_strategy": "FRESHEST_FIRST",
+        "credential_ranking_weights": None,
+        "version": 1,
+        "created_at": "2026-07-30T00:00:00Z",
+        "updated_at": "2026-07-30T00:00:00Z",
+        "issuer_profile_id": "must-not-leak",
+        "signing_service_id": "must-not-leak",
+    }
+    presentation_response = _sanitize_presentation_policy_response(
+        Response(
+            content=json.dumps(presentation_internal),
+            media_type="application/json",
+        )
+    )
+    presentation = json.loads(presentation_response.body)
+    presentation_validator.validate(presentation)
+    leaked = FORBIDDEN_PUBLIC_FIELDS & _property_names(presentation)
+    if leaked:
+        raise AssertionError(
+            f"runtime Presentation Policy response exposes custody selectors: {sorted(leaked)}"
+        )
 
     for model in (IssuanceCreate, StartVerificationFlowRequest):
         leaked_runtime_fields = FORBIDDEN_PUBLIC_FIELDS & set(model.model_fields)

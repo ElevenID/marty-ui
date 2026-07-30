@@ -30,6 +30,10 @@ PROTOCOL_KEYS = {
     "purpose",
     "required_claims",
     "accepted_credential_types",
+    "display_metadata",
+    "credential_requirements",
+    "alternative_requirements",
+    "compliance_profile_id",
     "trust_profile_id",
     "holder_binding",
     "freshness",
@@ -39,6 +43,7 @@ PROTOCOL_KEYS = {
     "issuer_constraints",
     "credential_ranking_strategy",
     "credential_ranking_weights",
+    "version",
     "created_at",
     "updated_at",
 }
@@ -270,17 +275,12 @@ def test_get_presentation_policy_returns_protocol_shape_only() -> None:
     assert body["fallback_policy"] == "ACCEPT_RAW"
     assert "ligero_age_over_21" in body["supported_circuits"]
 
-    # Legacy fields must NOT be present
-    for legacy_key in (
-        "display_metadata",
-        "credential_requirements",
-        "alternative_requirements",
-        "compliance_profile_id",
-        "version",
-    ):
-        assert legacy_key not in body, (
-            f"Legacy key {legacy_key!r} must not appear in protocol response"
-        )
+    # Holder-facing metadata, template binding, alternatives, and version are
+    # public policy semantics rather than hidden service implementation fields.
+    assert body["display_metadata"]["purpose"] == "identity_verification"
+    assert body["credential_requirements"] == []
+    assert body["alternative_requirements"] == []
+    assert body["version"] == 1
 
 
 def test_create_presentation_policy_accepts_protocol_required_claims() -> None:
@@ -314,6 +314,29 @@ def test_create_presentation_policy_accepts_protocol_required_claims() -> None:
     assert body["accepted_credential_types"] == ["DriversLicense"]
 
 
+def test_public_response_normalizes_legacy_enum_casing() -> None:
+    policy = pp.PresentationPolicy(
+        organization_id="org-1",
+        name="Legacy policy",
+        fallback_policy="accept_raw",
+        credential_ranking_strategy="freshest_first",
+        issuer_constraints=pp.IssuerConstraints(
+            required_compliance_statuses=["compliant"],
+        ),
+    )
+    policy.required_claims = [pp.RequestedClaim(claim_name="subject_id")]
+
+    response = pp._policy_to_response(policy)
+
+    assert response.fallback_policy == "ACCEPT_RAW"
+    assert response.credential_ranking_strategy == "FRESHEST_FIRST"
+    assert response.issuer_constraints == {
+        "min_trust_level": None,
+        "required_compliance_statuses": ["COMPLIANT"],
+        "required_accreditations": [],
+    }
+
+
 def test_activate_keeps_protocol_shape_stable() -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_policy(repo))
@@ -338,7 +361,9 @@ def test_activate_keeps_protocol_shape_stable() -> None:
     body = response.json()
     assert set(body.keys()) <= PROTOCOL_KEYS
     assert body["status"] == "active"
-    assert "credential_requirements" not in body
+    assert body["credential_requirements"][0]["credential_template_id"] == (
+        "IdentityCredential"
+    )
 
 
 def test_detect_credential_format_recognizes_json_open_badge_v3() -> None:
@@ -553,7 +578,10 @@ def test_mdoc_verification_logs_only_stable_error_category(
         (None, "none"),
         ("Currently unsupported format", "device-auth-method-unsupported"),
         ("device key jwk is missing coordinates", "device-key-coordinates-missing"),
-        ("algorithm in protected headers did not match", "device-signature-algorithm-mismatch"),
+        (
+            "algorithm in protected headers did not match",
+            "device-signature-algorithm-mismatch",
+        ),
         ("an unfamiliar internal failure", "unclassified"),
     ],
 )
