@@ -554,9 +554,7 @@ def _validate_claim_set(claims: list[ClaimDefinitionModel]) -> None:
     names = [claim.name for claim in claims]
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
-        raise ValueError(
-            f"claim names must be unique: {', '.join(duplicates)}"
-        )
+        raise ValueError(f"claim names must be unique: {', '.join(duplicates)}")
     known_names = set(names)
     for claim in claims:
         if claim.derived_from and claim.derived_from not in known_names:
@@ -882,98 +880,311 @@ class DeviceRegistrationResponse(BaseModel):
 # =============================================================================
 
 
+class ClaimConstraintModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    claim_name: str = Field(min_length=1, max_length=255)
+    constraint_type: Literal[
+        "equals",
+        "not_equals",
+        "greater_than",
+        "less_than",
+        "greater_or_equal",
+        "less_or_equal",
+        "in_set",
+        "not_in_set",
+        "presence",
+        "regex",
+        "age_over",
+    ] = "presence"
+    value: Any | None = None
+    description: str | None = Field(None, max_length=2000)
+
+
+class PredicateSpecModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    predicate_type: Literal[
+        "RANGE_PROOF",
+        "MEMBERSHIP",
+        "EQUALITY",
+        "NON_MEMBERSHIP",
+        "INEQUALITY",
+    ]
+    params: dict[str, Any]
+    supported_circuits: list[str] = Field(default_factory=list)
+    fallback_policy: Literal["REQUIRE_PREDICATE", "ACCEPT_RAW", "DENY"] | None = None
+
+
 class RequestedClaimModel(BaseModel):
-    claim_name: str
-    display_name: str = ""
+    model_config = ConfigDict(extra="forbid")
+
+    claim_name: str = Field(min_length=1, max_length=255)
+    display_name: str = Field(default="", max_length=255)
+    description: str | None = Field(None, max_length=2000)
     required: bool = True
     selective_disclosure: bool = True
-    predicate_spec: dict | None = None
+    accept_derived: bool = True
+    predicate_spec: PredicateSpecModel | None = None
+    constraints: list[ClaimConstraintModel] = Field(default_factory=list)
 
 
 class CredentialRequirementModel(BaseModel):
-    credential_template_id: str
-    display_name: str = ""
+    model_config = ConfigDict(extra="forbid")
+
+    credential_template_id: str = Field(min_length=1, max_length=255)
+    display_name: str = Field(default="", max_length=255)
+    description: str | None = Field(None, max_length=2000)
     required: bool = True
-    requested_claims: list[RequestedClaimModel] = Field(default_factory=list)
+    credential_payload_format: str = Field(
+        default="w3c_vcdm_v2_sd_jwt",
+        min_length=1,
+        max_length=100,
+    )
+    requested_claims: list[RequestedClaimModel] = Field(min_length=1)
+    trust_profile_id: str | None = Field(None, max_length=255)
+    max_age_seconds: int | None = Field(None, gt=0)
+    require_fresh_issuance: bool = False
+
+
+class AlternativeRequirementModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    credential_requirements: list[CredentialRequirementModel] = Field(min_length=1)
+    min_satisfied: int = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def validate_min_satisfied(self) -> "AlternativeRequirementModel":
+        if self.min_satisfied > len(self.credential_requirements):
+            raise ValueError(
+                "min_satisfied cannot exceed the number of credential requirements"
+            )
+        return self
+
+
+class PresentationDisplayMetadataModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(default="", max_length=255)
+    description: str = Field(default="", max_length=2000)
+    purpose: Literal[
+        "identity_verification",
+        "age_verification",
+        "employment_verification",
+        "address_verification",
+        "qualification_verification",
+        "authorization",
+        "compliance",
+        "other",
+    ] = "identity_verification"
+    purpose_description: str | None = Field(None, max_length=2000)
+    verifier_name: str = Field(default="", max_length=255)
+    verifier_logo_url: str | None = Field(None, max_length=2000)
+    privacy_policy_url: str | None = Field(None, max_length=2000)
+    terms_of_service_url: str | None = Field(None, max_length=2000)
 
 
 class ProtocolRequiredClaimModel(BaseModel):
-    claim_name: str
+    model_config = ConfigDict(extra="forbid")
+
+    claim_name: str = Field(min_length=1, max_length=255)
     credential_type: str | None = None
     value_constraint: Any | None = None
-    predicate_spec: dict | None = None
+    predicate_spec: PredicateSpecModel | None = None
+
+
+class ProofFreshnessModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    challenge_required: bool = True
+    audience_binding_required: bool = True
+    replay_detection_required: bool = True
+    max_proof_age_seconds: int | None = Field(None, gt=0)
 
 
 class HolderBindingModel(BaseModel):
     """How to verify the presenter is the legitimate holder."""
 
+    model_config = ConfigDict(extra="forbid")
+
     required: bool = False
-    binding_methods: list[str] = Field(default_factory=list)
-    proof_profiles: list[str] = Field(default_factory=list)
-    proof_freshness: dict[str, Any] = Field(default_factory=dict)
+    binding_methods: list[
+        Literal["CREDENTIAL_KEY", "DEVICE_KEY", "SESSION_BINDING"]
+    ] = Field(default_factory=list)
+    proof_profiles: list[
+        Literal[
+            "OID4VP_VERIFIABLE_PRESENTATION",
+            "SD_JWT_KEY_BINDING",
+            "MDOC_DEVICE_AUTHENTICATION",
+            "CUSTOM",
+        ]
+    ] = Field(default_factory=list)
+    proof_freshness: ProofFreshnessModel | None = None
+
+    @model_validator(mode="after")
+    def validate_binding_configuration(self) -> "HolderBindingModel":
+        if self.required:
+            if not self.binding_methods or not self.proof_profiles:
+                raise ValueError(
+                    "required holder binding needs binding_methods and proof_profiles"
+                )
+            if self.proof_freshness is None:
+                raise ValueError(
+                    "required holder binding needs proof_freshness controls"
+                )
+        elif (
+            self.binding_methods
+            or self.proof_profiles
+            or self.proof_freshness is not None
+        ):
+            raise ValueError(
+                "disabled holder binding cannot configure proof requirements"
+            )
+        return self
 
 
 class IssuerConstraintsModel(BaseModel):
     """Constraints on accepted issuers."""
 
-    min_trust_level: int | None = None
-    required_compliance_statuses: list[str] = Field(default_factory=list)
+    model_config = ConfigDict(extra="forbid")
+
+    min_trust_level: int | None = Field(None, ge=0, le=100)
+    required_compliance_statuses: list[Literal["ACCREDITED", "COMPLIANT"]] = Field(
+        default_factory=list
+    )
     required_accreditations: list[str] = Field(default_factory=list)
 
 
 class FreshnessConstraintsModel(BaseModel):
     """How fresh credentials must be."""
 
-    max_age_seconds: int | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    max_age_seconds: int | None = Field(None, gt=0)
     require_not_revoked: bool = False
-    revocation_grace_seconds: int | None = None
+    revocation_grace_seconds: int | None = Field(None, ge=0)
 
 
 class PresentationPolicyCreate(BaseModel):
     """Create a Presentation Policy defining what credentials to request."""
 
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
-    purpose: str | None = Field(None, max_length=500)
+    purpose: str | None = Field(None, max_length=2000)
+    display_metadata: PresentationDisplayMetadataModel | None = None
     required_claims: list[ProtocolRequiredClaimModel] = Field(default_factory=list)
     accepted_credential_types: list[str] = Field(default_factory=list)
     trust_profile_id: str | None = Field(None, max_length=255)
     credential_requirements: list[CredentialRequirementModel] = Field(
         default_factory=list
     )
+    alternative_requirements: list[AlternativeRequirementModel] = Field(
+        default_factory=list
+    )
     compliance_profile_id: str | None = Field(None, max_length=255)
     prefer_predicates: bool = False
-    fallback_policy: str | None = Field(None, max_length=100)
+    fallback_policy: Literal["REQUIRE_PREDICATE", "ACCEPT_RAW", "DENY"] | None = None
     supported_circuits: list[str] = Field(default_factory=list)
-    credential_ranking_strategy: str = Field(default="FRESHEST_FIRST", max_length=50)
+    credential_ranking_strategy: Literal[
+        "FRESHEST_FIRST", "HIGHEST_TRUST_FIRST", "CUSTOM"
+    ] = "FRESHEST_FIRST"
     credential_ranking_weights: dict[str, float] | None = None
     holder_binding: HolderBindingModel | None = None
     issuer_constraints: IssuerConstraintsModel | None = None
     freshness: FreshnessConstraintsModel | None = None
 
+    @model_validator(mode="after")
+    def validate_policy_requirements(self) -> "PresentationPolicyCreate":
+        if not (
+            self.required_claims
+            or self.credential_requirements
+            or self.alternative_requirements
+        ):
+            raise ValueError(
+                "at least one required claim, credential requirement, or "
+                "alternative requirement is required"
+            )
+        if (
+            self.credential_ranking_strategy == "CUSTOM"
+            and not self.credential_ranking_weights
+        ):
+            raise ValueError(
+                "credential_ranking_weights are required for CUSTOM ranking"
+            )
+        return self
+
+
+class PresentationPolicyUpdate(BaseModel):
+    """Update a draft Presentation Policy through its public organization scope."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(min_length=1, max_length=255)
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    purpose: str | None = Field(None, max_length=2000)
+    display_metadata: PresentationDisplayMetadataModel | None = None
+    required_claims: list[ProtocolRequiredClaimModel] | None = None
+    accepted_credential_types: list[str] | None = None
+    trust_profile_id: str | None = Field(None, max_length=255)
+    credential_requirements: list[CredentialRequirementModel] | None = None
+    alternative_requirements: list[AlternativeRequirementModel] | None = None
+    compliance_profile_id: str | None = Field(None, max_length=255)
+    prefer_predicates: bool | None = None
+    fallback_policy: Literal["REQUIRE_PREDICATE", "ACCEPT_RAW", "DENY"] | None = None
+    supported_circuits: list[str] | None = None
+    credential_ranking_strategy: (
+        Literal["FRESHEST_FIRST", "HIGHEST_TRUST_FIRST", "CUSTOM"] | None
+    ) = None
+    credential_ranking_weights: dict[str, float] | None = None
+    holder_binding: HolderBindingModel | None = None
+    issuer_constraints: IssuerConstraintsModel | None = None
+    freshness: FreshnessConstraintsModel | None = None
+
+    @model_validator(mode="after")
+    def validate_custom_ranking(self) -> "PresentationPolicyUpdate":
+        if (
+            self.credential_ranking_strategy == "CUSTOM"
+            and not self.credential_ranking_weights
+        ):
+            raise ValueError(
+                "credential_ranking_weights are required for CUSTOM ranking"
+            )
+        return self
+
 
 class PresentationPolicyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     name: str
-    description: str | None
-    status: str
+    status: Literal["draft", "active", "suspended", "archived"]
+    description: str | None = None
     purpose: str | None = None
-    required_claims: list[dict] = Field(default_factory=list)
-    accepted_credential_types: list[str] = Field(default_factory=list)
+    required_claims: list[ProtocolRequiredClaimModel]
+    accepted_credential_types: list[str]
     trust_profile_id: str | None = None
-    credential_requirements: list[dict] = Field(default_factory=list)
-    compliance_profile_id: str | None
-    holder_binding: dict = Field(default_factory=dict)
-    issuer_constraints: dict | None
-    freshness: dict | None
-    prefer_predicates: bool = False
-    fallback_policy: str | None = None
-    supported_circuits: list[str] = Field(default_factory=list)
-    credential_ranking_strategy: str = "FRESHEST_FIRST"
+    display_metadata: PresentationDisplayMetadataModel | None = None
+    credential_requirements: list[CredentialRequirementModel] | None = None
+    alternative_requirements: list[AlternativeRequirementModel] | None = None
+    compliance_profile_id: str | None = None
+    holder_binding: HolderBindingModel
+    issuer_constraints: IssuerConstraintsModel | None = None
+    freshness: FreshnessConstraintsModel | None = None
+    prefer_predicates: bool
+    fallback_policy: Literal["REQUIRE_PREDICATE", "ACCEPT_RAW", "DENY"] | None = None
+    supported_circuits: list[str]
+    credential_ranking_strategy: Literal[
+        "FRESHEST_FIRST", "HIGHEST_TRUST_FIRST", "CUSTOM"
+    ]
     credential_ranking_weights: dict[str, float] | None = None
-    version: int
+    version: int = Field(ge=1)
     created_at: str
     updated_at: str
 

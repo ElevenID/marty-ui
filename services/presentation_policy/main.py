@@ -442,6 +442,8 @@ class InMemoryPresentationPolicyRepository:
 
 
 class ClaimConstraintModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     claim_name: str
     constraint_type: str = "presence"
     value: Any = None
@@ -449,6 +451,8 @@ class ClaimConstraintModel(BaseModel):
 
 
 class RequestedClaimModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     claim_name: str
     display_name: str = ""
     description: str | None = None
@@ -460,6 +464,8 @@ class RequestedClaimModel(BaseModel):
 
 
 class ProtocolRequiredClaimModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     claim_name: str
     credential_type: str | None = None
     value_constraint: Any = None
@@ -467,27 +473,31 @@ class ProtocolRequiredClaimModel(BaseModel):
 
 
 class CredentialRequirementModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     credential_template_id: str
     display_name: str = ""
     description: str | None = None
     required: bool = True
     credential_payload_format: str = "w3c_vcdm_v2_sd_jwt"
-    requested_claims: list[RequestedClaimModel] = Field(default_factory=list)
+    requested_claims: list[RequestedClaimModel] = Field(min_length=1)
     trust_profile_id: str | None = None
     max_age_seconds: int | None = None
     require_fresh_issuance: bool = False
 
 
 class AlternativeRequirementModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     description: str | None = None
-    credential_requirements: list[CredentialRequirementModel] = Field(
-        default_factory=list
-    )
+    credential_requirements: list[CredentialRequirementModel] = Field(min_length=1)
     min_satisfied: int = 1
 
 
 class DisplayMetadataModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str = ""
     description: str = ""
     purpose: str = "identity_verification"
@@ -499,6 +509,8 @@ class DisplayMetadataModel(BaseModel):
 
 
 class CreatePresentationPolicyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -525,6 +537,8 @@ class CreatePresentationPolicyRequest(BaseModel):
 
 
 class UpdatePresentationPolicyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     purpose: str | None = Field(None, max_length=2000)
@@ -543,26 +557,32 @@ class UpdatePresentationPolicyRequest(BaseModel):
 
 
 class PresentationPolicyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     name: str
-    status: str = "draft"
+    status: str
     description: str | None = None
     purpose: str | None = None
-    required_claims: list[dict] = Field(default_factory=list)
-    accepted_credential_types: list[str] = Field(default_factory=list)
+    required_claims: list[dict]
+    accepted_credential_types: list[str]
+    display_metadata: dict | None = None
     credential_requirements: list[dict] | None = None
+    alternative_requirements: list[dict] | None = None
+    compliance_profile_id: str | None = None
     trust_profile_id: str | None = None
-    holder_binding: dict | None = None
+    holder_binding: dict
     freshness: dict | None = None
-    prefer_predicates: bool = False
-    supported_circuits: list[str] = Field(default_factory=list)
+    prefer_predicates: bool
+    supported_circuits: list[str]
     fallback_policy: str | None = None
     issuer_constraints: dict | None = None
-    credential_ranking_strategy: str = "FRESHEST_FIRST"
+    credential_ranking_strategy: str
     credential_ranking_weights: dict[str, float] | None = None
+    version: int
     created_at: str
-    updated_at: str | None = None
+    updated_at: str
 
 
 # =============================================================================
@@ -2692,10 +2712,17 @@ async def create_presentation_policy(
     membership = await org_client.get_membership(user_id, request.organization_id)
     ensure_membership_permission(membership, "presentation-policy", "create")
 
-    if not request.credential_requirements and not request.required_claims:
+    if (
+        not request.credential_requirements
+        and not request.required_claims
+        and not request.alternative_requirements
+    ):
         raise HTTPException(
             status_code=400,
-            detail="At least one required claim or credential requirement is required",
+            detail=(
+                "At least one required claim, credential requirement, or "
+                "alternative requirement is required"
+            ),
         )
     # MIP §7.2 — each credential_requirement MUST have ≥1 requested_claims
     for i, cr in enumerate(request.credential_requirements):
@@ -3857,7 +3884,90 @@ async def evaluate_presentation_inline(
     )
 
 
+def _claim_constraint_to_public(constraint: ClaimConstraint) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "claim_name": constraint.claim_name,
+        "constraint_type": constraint.constraint_type.value,
+        "value": constraint.value,
+    }
+    if constraint.description is not None:
+        payload["description"] = constraint.description
+    return payload
+
+
+def _requested_claim_to_public(claim: RequestedClaim) -> dict[str, Any]:
+    return {
+        "claim_name": claim.claim_name,
+        "display_name": claim.display_name,
+        "description": claim.description,
+        "required": claim.required,
+        "selective_disclosure": claim.selective_disclosure,
+        "accept_derived": claim.accept_derived,
+        "predicate_spec": claim.predicate_spec,
+        "constraints": [
+            _claim_constraint_to_public(constraint) for constraint in claim.constraints
+        ],
+    }
+
+
+def _credential_requirement_to_public(
+    requirement: CredentialRequirement,
+) -> dict[str, Any]:
+    return {
+        "credential_template_id": requirement.credential_template_id,
+        "display_name": requirement.display_name,
+        "description": requirement.description,
+        "required": requirement.required,
+        "credential_payload_format": requirement.credential_payload_format,
+        "requested_claims": [
+            _requested_claim_to_public(claim) for claim in requirement.requested_claims
+        ],
+        "trust_profile_id": requirement.trust_profile_id,
+        "max_age_seconds": requirement.max_age_seconds,
+        "require_fresh_issuance": requirement.require_fresh_issuance,
+    }
+
+
+def _alternative_requirement_to_public(
+    alternative: AlternativeRequirement,
+) -> dict[str, Any]:
+    return {
+        "name": alternative.name,
+        "description": alternative.description,
+        "credential_requirements": [
+            _credential_requirement_to_public(requirement)
+            for requirement in alternative.credential_requirements
+        ],
+        "min_satisfied": alternative.min_satisfied,
+    }
+
+
+def _holder_binding_to_public(binding: HolderBinding) -> dict[str, Any]:
+    if not binding.required:
+        return {"required": False}
+    return {
+        "required": True,
+        "binding_methods": binding.binding_methods,
+        "proof_profiles": binding.proof_profiles,
+        "proof_freshness": binding.proof_freshness,
+    }
+
+
 def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyResponse:
+    required_claims = [
+        {key: value for key, value in claim.items() if value is not None}
+        for claim in policy.protocol_required_claims
+    ]
+    display_metadata = {
+        "title": policy.display_metadata.title,
+        "description": policy.display_metadata.description,
+        "purpose": policy.display_metadata.purpose.value,
+        "purpose_description": policy.display_metadata.purpose_description,
+        "verifier_name": policy.display_metadata.verifier_name,
+        "verifier_logo_url": policy.display_metadata.verifier_logo_url,
+        "privacy_policy_url": policy.display_metadata.privacy_policy_url,
+        "terms_of_service_url": policy.display_metadata.terms_of_service_url,
+    }
     return PresentationPolicyResponse(
         id=policy.id,
         organization_id=policy.organization_id,
@@ -3867,35 +3977,49 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
         else str(policy.status),
         description=policy.description,
         purpose=policy.purpose or policy.display_metadata.purpose_description,
-        required_claims=policy.protocol_required_claims,
+        required_claims=required_claims,
         accepted_credential_types=policy.effective_accepted_credential_types,
-        credential_requirements=None,
+        display_metadata=display_metadata,
+        credential_requirements=[
+            _credential_requirement_to_public(requirement)
+            for requirement in policy.credential_requirements
+        ],
+        alternative_requirements=[
+            _alternative_requirement_to_public(alternative)
+            for alternative in policy.alternative_requirements
+        ],
+        compliance_profile_id=policy.compliance_profile_id,
         trust_profile_id=policy.trust_profile_id,
-        holder_binding={
-            "required": policy.holder_binding.required,
-            "binding_methods": policy.holder_binding.binding_methods,
-            "proof_profiles": policy.holder_binding.proof_profiles,
-            "proof_freshness": policy.holder_binding.proof_freshness,
-        },
+        holder_binding=_holder_binding_to_public(policy.holder_binding),
         freshness={
-            "max_age_seconds": policy.freshness.max_age_seconds,
-            "require_not_revoked": policy.freshness.require_not_revoked,
-            "revocation_grace_seconds": policy.freshness.revocation_grace_seconds,
+            key: value
+            for key, value in {
+                "max_age_seconds": policy.freshness.max_age_seconds,
+                "require_not_revoked": policy.freshness.require_not_revoked,
+                "revocation_grace_seconds": policy.freshness.revocation_grace_seconds,
+            }.items()
+            if value is not None
         }
         if policy.freshness
         else None,
         prefer_predicates=policy.prefer_predicates,
         supported_circuits=policy.supported_circuits,
-        fallback_policy=policy.fallback_policy,
+        fallback_policy=(
+            policy.fallback_policy.upper() if policy.fallback_policy else None
+        ),
         issuer_constraints={
             "min_trust_level": policy.issuer_constraints.min_trust_level,
-            "required_compliance_statuses": policy.issuer_constraints.required_compliance_statuses,
+            "required_compliance_statuses": [
+                status.upper()
+                for status in policy.issuer_constraints.required_compliance_statuses
+            ],
             "required_accreditations": policy.issuer_constraints.required_accreditations,
         }
         if policy.issuer_constraints
         else None,
-        credential_ranking_strategy=policy.credential_ranking_strategy,
+        credential_ranking_strategy=policy.credential_ranking_strategy.upper(),
         credential_ranking_weights=policy.credential_ranking_weights,
+        version=policy.version,
         created_at=policy.created_at.isoformat(),
         updated_at=policy.updated_at.isoformat(),
     )
