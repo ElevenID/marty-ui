@@ -335,6 +335,33 @@ def test_signing_key_routes_have_exact_cedar_permissions(method: str, permission
 
 
 @pytest.mark.parametrize(
+    ("path", "permission"),
+    [
+        (
+            "/v1/organizations/11111111-1111-1111-1111-111111111111/audit-events",
+            "audit:view",
+        ),
+        (
+            "/v1/organizations/11111111-1111-1111-1111-111111111111/audit-events/event-1",
+            "audit:view",
+        ),
+        (
+            "/v1/organizations/11111111-1111-1111-1111-111111111111/audit-events/export",
+            "audit:export",
+        ),
+    ],
+)
+def test_audit_routes_have_exact_tenant_scoped_permissions(
+    path: str,
+    permission: str,
+) -> None:
+    assert cedar_actions.resolve_action_and_resource("GET", path) == (
+        permission,
+        "audit",
+    )
+
+
+@pytest.mark.parametrize(
     ("path", "permission", "resource"),
     [
         ("/v1/vc-api/credentials/issue", "issuance:initiate", "issuance"),

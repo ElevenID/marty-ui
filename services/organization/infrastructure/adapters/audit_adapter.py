@@ -12,7 +12,8 @@ from datetime import datetime, timedelta, timezone
 from io import StringIO
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from marty_common import OrganizationContext, require_permission
 
 from ...application.ports import AuditEventQuery, AuditEventRepositoryPort
 
@@ -20,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/organizations/audit", tags=["audit"])
 _audit_repo: AuditEventRepositoryPort | None = None
+require_audit_view = require_permission("audit", "view")
+require_audit_export = require_permission("audit", "export")
 
 
 def configure_audit_router(audit_repo: AuditEventRepositoryPort | None) -> None:
@@ -184,6 +187,7 @@ async def list_audit_events(
     ip_address: str | None = Query(None),
     start_date: str | None = Query(None),
     end_date: str | None = Query(None),
+    _org_ctx: OrganizationContext = Depends(require_audit_view),
 ) -> dict:
     """List audit events for an organization."""
     logger.info("List audit events for org: %s, time_range: %s", organization_id, time_range)
@@ -230,6 +234,7 @@ async def export_audit_events(
     ip_address: str | None = Query(None),
     start_date: str | None = Query(None),
     end_date: str | None = Query(None),
+    _org_ctx: OrganizationContext = Depends(require_audit_export),
 ) -> dict:
     """Export audit events for an organization."""
     logger.info("Export audit events for org: %s, format: %s", organization_id, format)
@@ -304,6 +309,7 @@ async def export_audit_events(
 async def get_audit_event(
     event_id: str,
     organization_id: str = Query(...),
+    _org_ctx: OrganizationContext = Depends(require_audit_view),
 ) -> dict:
     """Get a single audit event for an organization."""
     logger.info("Get audit event %s for org: %s", event_id, organization_id)
