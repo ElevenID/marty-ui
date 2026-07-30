@@ -66,7 +66,7 @@ async def sse_events(
                 yield f"event: {event.event_type}\ndata: {json.dumps(payload)}\n\n"
         except Exception as exc:
             logger.warning("SSE stream error for tenant %s: %s", tenant_id, exc)
-            yield f"data: {{\"error\": \"stream_error\"}}\n\n"
+            yield "data: {\"error\": \"stream_error\"}\n\n"
 
     return StreamingResponse(
         generate(),
@@ -96,9 +96,19 @@ async def proxy_notifications(request: Request, subpath: str = "") -> Response:
 # ── Subscriptions ────────────────────────────────────────────────────
 
 @subscription_router.api_route("", methods=["GET", "POST"], summary="Subscriptions")
-@subscription_router.api_route("/{subpath:path}", methods=["GET", "PUT", "DELETE"], summary="Subscriptions")
+@subscription_router.api_route(
+    "/{subpath:path}",
+    methods=["GET", "PUT", "PATCH", "DELETE"],
+    summary="Subscriptions",
+)
 async def proxy_subscriptions(request: Request, subpath: str = "") -> Response:
     """Proxy protocol subscription routes to notification service."""
+    organization_id = str(request.query_params.get("organization_id") or "").strip()
+    if subpath and not organization_id:
+        raise HTTPException(
+            status_code=422,
+            detail="organization_id query parameter is required",
+        )
     registry = get_registry()
     service_url = registry.get_service_url("notifications")
     target_path = "/v1/subscriptions"
@@ -110,9 +120,19 @@ async def proxy_subscriptions(request: Request, subpath: str = "") -> Response:
 # ── Webhooks ─────────────────────────────────────────────────────────
 
 @webhook_router.api_route("", methods=["GET", "POST"], summary="Webhooks")
-@webhook_router.api_route("/{subpath:path}", methods=["GET", "PUT", "DELETE"], summary="Webhooks")
+@webhook_router.api_route(
+    "/{subpath:path}",
+    methods=["GET", "PUT", "PATCH", "DELETE", "POST"],
+    summary="Webhooks",
+)
 async def proxy_webhooks(request: Request, subpath: str = "") -> Response:
     """Proxy protocol webhook routes to notification service."""
+    organization_id = str(request.query_params.get("organization_id") or "").strip()
+    if subpath and not organization_id:
+        raise HTTPException(
+            status_code=422,
+            detail="organization_id query parameter is required",
+        )
     registry = get_registry()
     service_url = registry.get_service_url("notifications")
     target_path = "/v1/webhooks"
