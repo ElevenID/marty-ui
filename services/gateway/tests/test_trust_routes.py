@@ -6,7 +6,9 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
+from gateway.models import OrganizationTrustProfileCreate, OrganizationTrustProfileResponse
 from gateway.routes import trust as trust_routes
 
 
@@ -62,3 +64,53 @@ async def test_update_trust_profile_route_no_longer_accepts_put():
         )
 
     assert response.status_code == 405
+
+
+def test_organization_trust_profile_models_reject_custody_selectors():
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        OrganizationTrustProfileCreate.model_validate(
+            {
+                "framework_id": "eudi",
+                "name": "Public trust profile",
+                "key_management": {"source": "kms"},
+            }
+        )
+
+    with pytest.raises(ValidationError, match="private custody selector"):
+        OrganizationTrustProfileCreate.model_validate(
+            {
+                "framework_id": "eudi",
+                "name": "Public trust profile",
+                "metadata": {"nested": {"signing_agent_url": "https://signer.invalid"}},
+            }
+        )
+
+    with pytest.raises(ValidationError, match="private custody selector"):
+        OrganizationTrustProfileResponse.model_validate(
+            {
+                "id": "profile-1",
+                "organization_id": "org-1",
+                "framework_id": "eudi",
+                "name": "Public trust profile",
+                "compliance_status": "COMPLIANT",
+                "metadata": {"key_binding": {"key_id": "private"}},
+                "created_at": "2026-07-30T00:00:00Z",
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_organization_trust_profile_key_utility_routes_are_not_public():
+    app = FastAPI()
+    app.include_router(trust_routes.organization_trust_profile_router)
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+    ) as client:
+        for suffix in ("test-key-connection", "create-or-associate-key"):
+            response = await client.post(
+                f"/v1/organizations/org-1/trust-profiles/profile-1/{suffix}",
+                json={},
+            )
+            assert response.status_code in {404, 405}

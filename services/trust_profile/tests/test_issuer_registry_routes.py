@@ -474,7 +474,7 @@ def test_update_organization_trust_profile_requires_admin_membership():
     assert response.json()["detail"] == "Missing required permission: trust-profile:edit"
 
 
-def test_organization_trust_profile_key_management_round_trip_and_connection_test():
+def test_organization_trust_profile_rejects_public_key_management_selector():
     repo = trust_profile.InMemoryTrustProfileRepository()
     asyncio.run(trust_profile._seed_system_frameworks(repo))
     framework = asyncio.run(repo.get_framework_by_code("ICAO"))
@@ -486,7 +486,7 @@ def test_organization_trust_profile_key_management_round_trip_and_connection_tes
         headers={"x-user-id": "user-1"},
         json={
             "framework_id": framework.id,
-            "name": "Org ICAO Key Overlay",
+            "name": "Org ICAO Overlay",
             "key_management": {
                 "source": "kms",
                 "kms_arn": "arn:aws:kms:us-east-1:123456789012:key/test",
@@ -496,30 +496,32 @@ def test_organization_trust_profile_key_management_round_trip_and_connection_tes
         },
     )
 
-    assert create_response.status_code == 200
-    created = create_response.json()
-    assert created["key_management"]["source"] == "kms"
-    assert created["metadata"]["key_management"]["kms_arn"].startswith("arn:aws:kms")
+    assert create_response.status_code == 422
+    assert create_response.json()["detail"][0]["type"] == "extra_forbidden"
 
-    connection_response = client.post(
-        f"/v1/organizations/org-1/trust-profiles/{created['id']}/test-key-connection",
+
+def test_organization_trust_profile_rejects_nested_custody_metadata():
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    asyncio.run(trust_profile._seed_system_frameworks(repo))
+    framework = asyncio.run(repo.get_framework_by_code("EUDI"))
+    assert framework is not None
+    client, _ = _build_client(repo)
+
+    response = client.post(
+        "/v1/organizations/org-1/trust-profiles",
         headers={"x-user-id": "user-1"},
         json={
-            "key_management": {
-                "source": "kms",
-                "kms_arn": "arn:aws:kms:us-east-1:123456789012:key/test",
-                "kms_region": "us-east-1",
-            }
+            "framework_id": framework.id,
+            "name": "No Custody Metadata",
+            "metadata": {"integration": {"kms_arn": "arn:aws:kms:example"}},
         },
     )
 
-    assert connection_response.status_code == 200
-    connection = connection_response.json()
-    assert connection["success"] is True
-    assert connection["source"] == "kms"
+    assert response.status_code == 422
+    assert "cannot contain private custody selector" in response.json()["detail"][0]["msg"]
 
 
-def test_organization_trust_profile_create_or_associate_key_sets_binding_metadata():
+def test_organization_trust_profile_removes_deprecated_key_utility_routes():
     repo = trust_profile.InMemoryTrustProfileRepository()
     asyncio.run(trust_profile._seed_system_frameworks(repo))
     framework = asyncio.run(repo.get_framework_by_code("EUDI"))
@@ -531,33 +533,49 @@ def test_organization_trust_profile_create_or_associate_key_sets_binding_metadat
         headers={"x-user-id": "user-1"},
         json={
             "framework_id": framework.id,
-            "name": "Org EUDI Key Overlay",
-            "key_management": {
-                "source": "signing_agent",
-                "signing_agent_url": "https://signer.example",
-                "signing_agent_auth": "mtls",
-            },
+            "name": "Org EUDI Overlay",
         },
     )
     assert create_response.status_code == 200
     profile_id = create_response.json()["id"]
 
-    key_action_response = client.post(
-        f"/v1/organizations/org-1/trust-profiles/{profile_id}/create-or-associate-key",
-        headers={"x-user-id": "user-1"},
-        json={
-            "algorithm": "EdDSA",
-            "key_reference": "agent-key-123",
+    for suffix in ("test-key-connection", "create-or-associate-key"):
+        response = client.post(
+            f"/v1/organizations/org-1/trust-profiles/{profile_id}/{suffix}",
+            headers={"x-user-id": "user-1"},
+            json={},
+        )
+        assert response.status_code in {404, 405}
+
+
+def test_organization_trust_profile_sanitizes_legacy_custody_metadata():
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    asyncio.run(trust_profile._seed_system_frameworks(repo))
+    framework = asyncio.run(repo.get_framework_by_code("EUDI"))
+    assert framework is not None
+    profile = trust_profile.OrganizationTrustProfile(
+        organization_id="org-1",
+        framework_id=framework.id,
+        name="Legacy Overlay",
+        metadata={
+            "safe": {"owner": "trust-team"},
+            "key_management": {"kms_arn": "arn:aws:kms:example"},
+            "nested": {
+                "key_binding": {"key_id": "legacy"},
+                "purpose": "verification",
+            },
         },
     )
+    asyncio.run(repo.save_organization_trust_profile(profile))
+    client, _ = _build_client(repo)
 
-    assert key_action_response.status_code == 200
-    payload = key_action_response.json()
-    assert payload["success"] is True
-    assert payload["action"] == "associated"
-    assert payload["source"] == "signing_agent"
-    assert payload["key_id"].startswith("key_")
+    response = client.get(
+        f"/v1/organizations/org-1/trust-profiles/{profile.id}",
+        headers={"x-user-id": "user-1"},
+    )
 
-    saved_profile = asyncio.run(repo.get_organization_trust_profile(profile_id))
-    assert saved_profile is not None
-    assert saved_profile.metadata["key_binding"]["associated_reference"] == "agent-key-123"
+    assert response.status_code == 200
+    assert response.json()["metadata"] == {
+        "safe": {"owner": "trust-team"},
+        "nested": {"purpose": "verification"},
+    }

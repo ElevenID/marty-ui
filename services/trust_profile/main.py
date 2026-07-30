@@ -28,7 +28,7 @@ from typing import Any, AsyncGenerator
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from marty_common.dto import DeleteResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from typing import Annotated
@@ -322,7 +322,6 @@ class OrganizationTrustProfile:
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
-    key_management: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -944,54 +943,56 @@ def _validate_jurisdiction_filter(values: list[str] | None) -> None:
             raise HTTPException(status_code=422, detail=f"Invalid jurisdiction code: {value}")
 
 
-def _normalize_key_management(value: dict[str, Any] | None) -> dict[str, Any] | None:
-    if value is None:
-        return None
+_PRIVATE_CUSTODY_METADATA_FIELDS = {
+    "key_binding",
+    "key_management",
+    "key_reference",
+    "kms_arn",
+    "kms_region",
+    "managed_key_id",
+    "service_id",
+    "signing_agent_auth",
+    "signing_agent_url",
+    "signing_key_reference",
+    "signing_service_id",
+}
 
-    source = str(value.get("source", "")).strip().lower()
-    allowed_sources = {"platform_managed", "kms", "signing_agent"}
-    if source not in allowed_sources:
-        raise HTTPException(
-            status_code=422,
-            detail="key_management.source must be one of: platform_managed, kms, signing_agent",
+
+def _find_private_custody_metadata(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            if str(key).lower() in _PRIVATE_CUSTODY_METADATA_FIELDS:
+                return str(key)
+            found = _find_private_custody_metadata(nested_value)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for item in value:
+            found = _find_private_custody_metadata(item)
+            if found is not None:
+                return found
+    return None
+
+
+def _reject_private_custody_metadata(metadata: dict[str, Any] | None) -> None:
+    field_name = _find_private_custody_metadata(metadata)
+    if field_name is not None:
+        raise ValueError(
+            f"Organization Trust Profile metadata cannot contain private custody selector '{field_name}'; "
+            "signing is resolved from the issuer DID through an issuer profile"
         )
 
-    normalized: dict[str, Any] = {
-        "source": source,
-        "algorithm": str(value.get("algorithm") or "ES256"),
-    }
 
-    if source == "kms":
-        kms_arn = str(value.get("kms_arn") or value.get("key_reference") or "").strip()
-        if not kms_arn:
-            raise HTTPException(status_code=422, detail="key_management.kms_arn is required when source=kms")
-        normalized["kms_arn"] = kms_arn
-        if value.get("kms_region"):
-            normalized["kms_region"] = str(value.get("kms_region"))
-    elif source == "signing_agent":
-        signing_agent_url = str(value.get("signing_agent_url") or "").strip()
-        if not signing_agent_url:
-            raise HTTPException(status_code=422, detail="key_management.signing_agent_url is required when source=signing_agent")
-        normalized["signing_agent_url"] = signing_agent_url
-        normalized["signing_agent_auth"] = str(value.get("signing_agent_auth") or "mtls")
-
-    for optional_key in ("managed_key_id", "key_reference", "connection_status", "last_checked_at"):
-        if optional_key in value and value.get(optional_key) is not None:
-            normalized[optional_key] = value.get(optional_key)
-
-    return normalized
-
-
-def _metadata_with_key_management(
-    metadata: dict[str, Any] | None,
-    key_management: dict[str, Any] | None,
-) -> dict[str, Any]:
-    merged = dict(metadata or {})
-    if key_management is None:
-        merged.pop("key_management", None)
-    else:
-        merged["key_management"] = key_management
-    return merged
+def _sanitize_private_custody_metadata(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_private_custody_metadata(nested_value)
+            for key, nested_value in value.items()
+            if str(key).lower() not in _PRIVATE_CUSTODY_METADATA_FIELDS
+        }
+    if isinstance(value, list):
+        return [_sanitize_private_custody_metadata(item) for item in value]
+    return value
 
 
 def _normalize_jurisdiction_filter(values: list[str] | None) -> list[str] | None:
@@ -1179,6 +1180,8 @@ class TrustRegistryStatusResponse(BaseModel):
 
 
 class CreateOrganizationTrustProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     framework_id: str
     name: str
     display_name: str | None = None
@@ -1194,11 +1197,17 @@ class CreateOrganizationTrustProfileRequest(BaseModel):
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
-    key_management: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> CreateOrganizationTrustProfileRequest:
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
 class UpdateOrganizationTrustProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
     display_name: str | None = None
     description: str | None = None
@@ -1213,11 +1222,17 @@ class UpdateOrganizationTrustProfileRequest(BaseModel):
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
-    key_management: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> UpdateOrganizationTrustProfileRequest:
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
 class OrganizationTrustProfileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     framework_id: str
@@ -1235,35 +1250,14 @@ class OrganizationTrustProfileResponse(BaseModel):
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
     jurisdiction_filter: list[str] | None = None
-    key_management: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
 
-
-class KeyConnectionTestRequest(BaseModel):
-    key_management: dict[str, Any]
-
-
-class KeyConnectionTestResponse(BaseModel):
-    success: bool
-    message: str
-    source: str
-
-
-class KeyCreateAssociateRequest(BaseModel):
-    key_management: dict[str, Any] | None = None
-    algorithm: str = "ES256"
-    key_reference: str | None = None
-
-
-class KeyCreateAssociateResponse(BaseModel):
-    success: bool
-    action: str
-    key_id: str
-    source: str
-    message: str
-    key_management: dict[str, Any]
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> OrganizationTrustProfileResponse:
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
 # =============================================================================
@@ -1429,8 +1423,6 @@ async def create_organization_trust_profile(
     if not framework:
         raise HTTPException(status_code=422, detail="Trust Framework not found")
 
-    normalized_key_management = _normalize_key_management(request.key_management)
-
     profile = OrganizationTrustProfile(
         organization_id=organization_id,
         framework_id=request.framework_id,
@@ -1448,8 +1440,7 @@ async def create_organization_trust_profile(
         allowed_issuers=request.allowed_issuers,
         denied_issuers=request.denied_issuers,
         jurisdiction_filter=_normalize_jurisdiction_filter(request.jurisdiction_filter),
-        key_management=normalized_key_management,
-        metadata=_metadata_with_key_management(request.metadata, normalized_key_management),
+        metadata=request.metadata,
     )
     await repo.save_organization_trust_profile(profile)
     return _organization_trust_profile_to_response(profile)
@@ -1524,94 +1515,12 @@ async def update_organization_trust_profile(
         profile.denied_issuers = request.denied_issuers
     if request.jurisdiction_filter is not None:
         profile.jurisdiction_filter = _normalize_jurisdiction_filter(request.jurisdiction_filter)
-    if request.key_management is not None:
-        profile.key_management = _normalize_key_management(request.key_management)
     if request.metadata is not None:
         profile.metadata = request.metadata
-
-    profile.metadata = _metadata_with_key_management(profile.metadata, profile.key_management)
 
     profile.updated_at = datetime.now(timezone.utc)
     await repo.save_organization_trust_profile(profile)
     return _organization_trust_profile_to_response(profile)
-
-
-@organization_trust_profile_router.post("/{profile_id}/test-key-connection", response_model=KeyConnectionTestResponse)
-async def test_organization_trust_profile_key_connection(
-    organization_id: str,
-    profile_id: str,
-    request: KeyConnectionTestRequest,
-    user_id: str = Depends(get_current_user_id),
-    repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
-) -> KeyConnectionTestResponse:
-    profile = await _get_organization_trust_profile_or_404(repo, profile_id)
-    if profile.organization_id != organization_id:
-        raise HTTPException(status_code=404, detail="Organization Trust Profile not found")
-    membership = await app.state.org_client.get_membership(user_id, organization_id)
-    ensure_membership_permission(membership, "trust-profile", "edit")
-
-    key_management = _normalize_key_management(request.key_management)
-    if key_management is None:
-        raise HTTPException(status_code=422, detail="key_management is required")
-
-    source = str(key_management.get("source"))
-    if source == "platform_managed":
-        message = "Platform-managed key service is available"
-    elif source == "kms":
-        message = "KMS key reference accepted"
-    else:
-        message = "Signing agent URL accepted"
-
-    return KeyConnectionTestResponse(success=True, message=message, source=source)
-
-
-@organization_trust_profile_router.post("/{profile_id}/create-or-associate-key", response_model=KeyCreateAssociateResponse)
-async def create_or_associate_organization_trust_profile_key(
-    organization_id: str,
-    profile_id: str,
-    request: KeyCreateAssociateRequest,
-    user_id: str = Depends(get_current_user_id),
-    repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
-) -> KeyCreateAssociateResponse:
-    profile = await _get_organization_trust_profile_or_404(repo, profile_id)
-    if profile.organization_id != organization_id:
-        raise HTTPException(status_code=404, detail="Organization Trust Profile not found")
-
-    membership = await app.state.org_client.get_membership(user_id, organization_id)
-    ensure_membership_permission(membership, "trust-profile", "edit")
-
-    effective_key_management = _normalize_key_management(request.key_management or profile.key_management)
-    if effective_key_management is None:
-        raise HTTPException(status_code=422, detail="key_management must be configured before key creation/association")
-
-    source = str(effective_key_management.get("source"))
-    key_id = str(effective_key_management.get("managed_key_id") or f"key_{uuid.uuid4().hex[:12]}")
-    effective_key_management["managed_key_id"] = key_id
-    effective_key_management["algorithm"] = request.algorithm or str(effective_key_management.get("algorithm") or "ES256")
-
-    action = "associated" if request.key_reference else "created"
-    profile.key_management = effective_key_management
-    profile.metadata = _metadata_with_key_management(profile.metadata, effective_key_management)
-    profile.metadata["key_binding"] = {
-        "key_id": key_id,
-        "action": action,
-        "source": source,
-        "associated_reference": request.key_reference,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    profile.updated_at = datetime.now(timezone.utc)
-    await repo.save_organization_trust_profile(profile)
-
-    return KeyCreateAssociateResponse(
-        success=True,
-        action=action,
-        key_id=key_id,
-        source=source,
-        message=(
-            "Key associated to trust profile" if action == "associated" else "Key created for trust profile"
-        ),
-        key_management=effective_key_management,
-    )
 
 
 # Trust Profile endpoints
@@ -2377,10 +2286,6 @@ def _framework_to_response(framework: TrustFramework) -> TrustFrameworkResponse:
 
 
 def _organization_trust_profile_to_response(profile: OrganizationTrustProfile) -> OrganizationTrustProfileResponse:
-    response_key_management = profile.key_management
-    if response_key_management is None:
-        response_key_management = (profile.metadata or {}).get("key_management")
-
     return OrganizationTrustProfileResponse(
         id=profile.id,
         organization_id=profile.organization_id,
@@ -2399,8 +2304,7 @@ def _organization_trust_profile_to_response(profile: OrganizationTrustProfile) -
         allowed_issuers=profile.allowed_issuers,
         denied_issuers=profile.denied_issuers,
         jurisdiction_filter=profile.jurisdiction_filter,
-        key_management=response_key_management,
-        metadata=profile.metadata,
+        metadata=_sanitize_private_custody_metadata(profile.metadata),
         created_at=profile.created_at.isoformat(),
         updated_at=profile.updated_at.isoformat(),
     )
