@@ -59,7 +59,9 @@ members_table = Table(
     mapper_registry.metadata,
     Column("id", PostgresUUID(as_uuid=True), primary_key=True),
     Column("organization_id", PostgresUUID(as_uuid=True), ForeignKey(f"{SCHEMA}.organizations.id"), nullable=False),
-    Column("user_id", String(36)),
+    # SCIM externalId values are provisioning-system identifiers, not UUIDs.
+    # Keep room for common IdP subjects and opaque external identifiers.
+    Column("user_id", String(255)),
     Column("email", String(255)),
     Column("status", String(50), nullable=False, default="DRAFT"),
     Column("invited_by", String(36)),
