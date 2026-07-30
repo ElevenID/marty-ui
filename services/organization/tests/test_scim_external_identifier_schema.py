@@ -48,6 +48,7 @@ def test_migration_expands_existing_member_identifier_column(
         migration.op,
         "alter_column",
         lambda *args, **kwargs: calls.append((args, kwargs)),
+        raising=False,
     )
 
     migration.upgrade()
