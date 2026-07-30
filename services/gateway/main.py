@@ -156,6 +156,85 @@ _CANVAS_PROVENANCE_PERMISSION = (
     "integration-connector",
 )
 
+_NOTIFICATION_ROUTE_RULES = (
+    (
+        re.compile(r"^/v1/webhooks/[^/]+/test$"),
+        {"POST": "webhook:test"},
+        "webhook",
+    ),
+    (
+        re.compile(r"^/v1/webhooks(?:/|$)"),
+        {
+            "GET": "webhook:view",
+            "HEAD": "webhook:view",
+            "OPTIONS": "webhook:view",
+            "POST": "webhook:create",
+            "PUT": "webhook:edit",
+            "PATCH": "webhook:edit",
+            "DELETE": "webhook:delete",
+        },
+        "webhook",
+    ),
+    (
+        re.compile(r"^/v1/subscriptions(?:/|$)"),
+        {
+            "GET": "notification:view",
+            "HEAD": "notification:view",
+            "OPTIONS": "notification:view",
+            "POST": "notification:send",
+            "PUT": "notification:send",
+            "PATCH": "notification:send",
+            "DELETE": "notification:send",
+        },
+        "notification",
+    ),
+    (
+        re.compile(r"^/v1/notifications/send$"),
+        {"POST": "notification:send"},
+        "notification",
+    ),
+    (
+        re.compile(r"^/v1/notifications(?:/|$)"),
+        {
+            "GET": "notification:view",
+            "HEAD": "notification:view",
+            "OPTIONS": "notification:view",
+            "POST": "notification:view",
+            "PUT": "notification:view",
+            "PATCH": "notification:view",
+            "DELETE": "notification:view",
+        },
+        "notification",
+    ),
+)
+
+_NOTIFICATION_RESOURCE_LOOKUPS = {
+    "webhooks": (
+        "notifications",
+        "/v1/webhooks/{resource_id}",
+        set(),
+    ),
+    "subscriptions": (
+        "notifications",
+        "/v1/subscriptions/{resource_id}",
+        set(),
+    ),
+    "notifications": (
+        "notifications",
+        "/v1/notifications/{resource_id}",
+        {
+            "events",
+            "preferences",
+            "read-all",
+            "rules",
+            "send",
+            "templates",
+            "unread",
+            "unread-count",
+        },
+    ),
+}
+
 
 class GatewayCedarAuthMiddleware(MartyCedarAuthMiddleware):
     """Preserve the published API-key contract for signing-key routes.
@@ -169,6 +248,13 @@ class GatewayCedarAuthMiddleware(MartyCedarAuthMiddleware):
     @staticmethod
     def _api_key_allowed(required_permission: str, scopes: list[str]) -> bool:
         resource, separator, action = required_permission.partition(":")
+        scope_set = set(scopes or [])
+        if "admin:full" in scope_set:
+            return True
+        if required_permission == "webhook:test":
+            return "webhooks:write" in scope_set
+        if required_permission == "notification:send":
+            return "notifications:send" in scope_set
         if resource != "signing-key":
             return MartyCedarAuthMiddleware._api_key_allowed(
                 required_permission,
@@ -177,9 +263,6 @@ class GatewayCedarAuthMiddleware(MartyCedarAuthMiddleware):
         if separator != ":":
             return False
 
-        scope_set = set(scopes or [])
-        if "admin:full" in scope_set:
-            return True
         if action == "view":
             return bool(scope_set & {"keys:read", "keys:write"})
         if action in {
@@ -327,10 +410,7 @@ def _register_canvas_provenance_cedar_route() -> None:
     )
     rules.insert(0, compatibility_rule)
     try:
-        verified = (
-            resolver(*_CANVAS_PROVENANCE_ROUTE)
-            == _CANVAS_PROVENANCE_PERMISSION
-        )
+        verified = resolver(*_CANVAS_PROVENANCE_ROUTE) == _CANVAS_PROVENANCE_PERMISSION
     except Exception:
         verified = False
     if not verified:
@@ -339,6 +419,92 @@ def _register_canvas_provenance_cedar_route() -> None:
             "Canvas provenance Cedar compatibility mapping did not activate; "
             "refusing to start."
         )
+
+
+def _register_notification_cedar_routes() -> None:
+    """Protect notification resources until marty-common ships the same boundary."""
+    resolver = getattr(_cedar_actions, "resolve_action_and_resource", None)
+    lookup_resolver = getattr(_cedar_actions, "resolve_resource_lookup", None)
+    rules = getattr(_cedar_actions, "SPECIAL_ROUTE_RULES", None)
+    lookups = getattr(_cedar_actions, "RESOURCE_LOOKUP_MAP", None)
+    if (
+        not callable(resolver)
+        or not callable(lookup_resolver)
+        or not isinstance(rules, list)
+        or not isinstance(lookups, dict)
+    ):
+        raise RuntimeError(
+            "Unsupported marty-common Cedar registry; refusing to start "
+            "without notification tenant authorization."
+        )
+
+    probes = {
+        ("GET", "/v1/webhooks"): ("webhook:view", "webhook"),
+        ("POST", "/v1/webhooks"): ("webhook:create", "webhook"),
+        ("PATCH", "/v1/webhooks/example"): ("webhook:edit", "webhook"),
+        ("DELETE", "/v1/webhooks/example"): ("webhook:delete", "webhook"),
+        ("POST", "/v1/webhooks/example/test"): ("webhook:test", "webhook"),
+        ("GET", "/v1/subscriptions"): ("notification:view", "notification"),
+        ("POST", "/v1/subscriptions"): ("notification:send", "notification"),
+        ("GET", "/v1/notifications"): ("notification:view", "notification"),
+        ("POST", "/v1/notifications/send"): ("notification:send", "notification"),
+        ("GET", "/v1/notifications/events/push"): (
+            "notification:view",
+            "notification",
+        ),
+    }
+    current = {probe: resolver(*probe) for probe in probes}
+    if any(
+        value is not None and value != probes[probe] for probe, value in current.items()
+    ):
+        raise RuntimeError(
+            "Conflicting marty-common notification Cedar mapping; "
+            "refusing to override it."
+        )
+
+    inserted_rules: list[tuple] = []
+    if any(value is None for value in current.values()):
+        if any(value is not None for value in current.values()):
+            raise RuntimeError(
+                "Partial marty-common notification Cedar mapping; "
+                "refusing to extend an ambiguous boundary."
+            )
+        inserted_rules = list(_NOTIFICATION_ROUTE_RULES)
+        rules[0:0] = inserted_rules
+
+    inserted_lookup_keys: list[str] = []
+    try:
+        for resource, expected in _NOTIFICATION_RESOURCE_LOOKUPS.items():
+            current_lookup = lookups.get(resource)
+            if current_lookup is not None and current_lookup != expected:
+                raise RuntimeError(
+                    f"Conflicting marty-common {resource} tenant lookup; "
+                    "refusing to override it."
+                )
+            if current_lookup is None:
+                lookups[resource] = expected
+                inserted_lookup_keys.append(resource)
+
+        verified_routes = all(
+            resolver(*probe) == expected for probe, expected in probes.items()
+        )
+        verified_lookups = all(
+            lookup_resolver(f"/v1/{resource}/example")
+            == (expected[0], expected[1].format(resource_id="example"))
+            for resource, expected in _NOTIFICATION_RESOURCE_LOOKUPS.items()
+        )
+        if not verified_routes or not verified_lookups:
+            raise RuntimeError(
+                "Notification Cedar compatibility mapping did not activate; "
+                "refusing to start."
+            )
+    except Exception:
+        for rule in inserted_rules:
+            if rule in rules:
+                rules.remove(rule)
+        for resource in inserted_lookup_keys:
+            lookups.pop(resource, None)
+        raise
 
 
 def _required_ready_services() -> tuple[str, ...]:
@@ -688,6 +854,7 @@ def create_app() -> FastAPI:
     _register_signing_key_cedar_routes()
     _register_vc_api_cedar_routes()
     _register_canvas_provenance_cedar_route()
+    _register_notification_cedar_routes()
     app = FastAPI(
         title="Marty API Gateway",
         description="""
