@@ -684,7 +684,7 @@ class CredentialTemplateResponse(BaseModel):
     claims: list[dict]
     privacy_posture: dict | None = None
     application_template_id: str | None = None
-    compliance_profile_id: str | None = None
+    compliance_profile_id: str
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
     validity_rules: dict
