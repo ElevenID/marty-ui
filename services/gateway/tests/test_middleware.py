@@ -458,6 +458,203 @@ def test_every_signing_key_management_endpoint_uses_protected_prefix_and_mapping
             )
 
 
+@pytest.mark.parametrize(
+    ("method", "path", "expected"),
+    [
+        ("GET", "/v1/webhooks", ("webhook:view", "webhook")),
+        ("POST", "/v1/webhooks", ("webhook:create", "webhook")),
+        ("PATCH", "/v1/webhooks/id", ("webhook:edit", "webhook")),
+        ("DELETE", "/v1/webhooks/id", ("webhook:delete", "webhook")),
+        ("POST", "/v1/webhooks/id/test", ("webhook:test", "webhook")),
+        (
+            "GET",
+            "/v1/subscriptions",
+            ("notification:view", "notification"),
+        ),
+        (
+            "POST",
+            "/v1/subscriptions",
+            ("notification:send", "notification"),
+        ),
+        (
+            "GET",
+            "/v1/notifications",
+            ("notification:view", "notification"),
+        ),
+        (
+            "POST",
+            "/v1/notifications/send",
+            ("notification:send", "notification"),
+        ),
+        (
+            "GET",
+            "/v1/notifications/events/push",
+            ("notification:view", "notification"),
+        ),
+    ],
+)
+def test_notification_routes_have_exact_cedar_permissions(
+    method: str,
+    path: str,
+    expected: tuple[str, str],
+):
+    assert cedar_actions.resolve_action_and_resource(method, path) == expected
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (
+            "/v1/webhooks/webhook-1",
+            ("notifications", "/v1/webhooks/webhook-1"),
+        ),
+        (
+            "/v1/subscriptions/subscription-1",
+            ("notifications", "/v1/subscriptions/subscription-1"),
+        ),
+        (
+            "/v1/notifications/notification-1",
+            ("notifications", "/v1/notifications/notification-1"),
+        ),
+        ("/v1/notifications/events/push", None),
+        ("/v1/notifications/send", None),
+    ],
+)
+def test_notification_resource_lookups_resolve_real_tenant(
+    path: str,
+    expected: tuple[str, str] | None,
+):
+    assert cedar_actions.resolve_resource_lookup(path) == expected
+
+
+@pytest.mark.parametrize(
+    ("permission", "scopes", "allowed"),
+    [
+        ("webhook:view", ["webhooks:read"], True),
+        ("webhook:create", ["webhooks:write"], True),
+        ("webhook:test", ["webhooks:write"], True),
+        ("webhook:test", ["webhooks:read"], False),
+        ("notification:view", ["notifications:read"], True),
+        ("notification:send", ["notifications:send"], True),
+        ("notification:send", ["notifications:read"], False),
+    ],
+)
+def test_notification_routes_use_published_api_key_scopes(
+    permission: str,
+    scopes: list[str],
+    allowed: bool,
+):
+    assert (
+        gateway_main.GatewayCedarAuthMiddleware._api_key_allowed(
+            permission,
+            scopes,
+        )
+        is allowed
+    )
+
+
+@pytest.mark.asyncio
+async def test_webhook_list_rejects_cross_tenant_query_scope():
+    class Membership:
+        status = "active"
+        is_owner = False
+        role_names = {"access-admin"}
+        permissions = {"webhook:view"}
+
+        def is_active(self) -> bool:
+            return True
+
+        def has_permission(self, requested: str) -> bool:
+            return requested in self.permissions
+
+    membership_requests: list[tuple[str, str]] = []
+
+    async def get_membership(user_id: str, organization_id: str):
+        membership_requests.append((user_id, organization_id))
+        return Membership() if organization_id == "org-a" else None
+
+    app = FastAPI()
+    app.state.org_client = SimpleNamespace(get_membership=get_membership)
+    reached: list[str] = []
+
+    @app.get("/v1/webhooks")
+    async def protected_route(request: Request):
+        reached.append(request.state.organization_id)
+        return JSONResponse({"ok": True})
+
+    app.add_middleware(gateway_main.GatewayCedarAuthMiddleware)
+
+    @app.middleware("http")
+    async def authenticated_session(request: Request, call_next):
+        request.state.user_id = "user-a"
+        request.state.session_organization_id = "org-a"
+        return await call_next(request)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        denied = await client.get("/v1/webhooks?organization_id=org-b")
+        allowed = await client.get("/v1/webhooks?organization_id=org-a")
+
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "Not a member of this organization"
+    assert allowed.status_code == 200
+    assert reached == ["org-a"]
+    assert membership_requests == [
+        ("user-a", "org-b"),
+        ("user-a", "org-a"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_webhook_resource_id_uses_owning_tenant_before_query_scope():
+    async def get_membership(_user_id: str, organization_id: str):
+        assert organization_id == "org-b"
+        return None
+
+    resource_response = httpx.Response(
+        200,
+        json={"id": "webhook-b", "organization_id": "org-b"},
+    )
+    http_client = SimpleNamespace(get=AsyncMock(return_value=resource_response))
+    app = FastAPI()
+    app.state.org_client = SimpleNamespace(get_membership=get_membership)
+    app.state.service_registry = SimpleNamespace(
+        get_service_url=lambda service: (
+            "http://notifications" if service == "notifications" else None
+        )
+    )
+    app.state.http_client = http_client
+
+    @app.get("/v1/webhooks/webhook-b")
+    async def protected_route():
+        return JSONResponse({"unexpected": True})
+
+    app.add_middleware(gateway_main.GatewayCedarAuthMiddleware)
+
+    @app.middleware("http")
+    async def authenticated_session(request: Request, call_next):
+        request.state.user_id = "user-a"
+        request.state.session_organization_id = "org-a"
+        return await call_next(request)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/v1/webhooks/webhook-b?organization_id=org-a")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Not a member of this organization"
+    http_client.get.assert_awaited_once()
+    assert http_client.get.await_args.args[0] == (
+        "http://notifications/v1/webhooks/webhook-b"
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "permission"),

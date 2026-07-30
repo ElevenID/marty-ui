@@ -46,4 +46,21 @@ describe('sseService', () => {
 
     expect(consoleErrorSpy).not.toHaveBeenCalled()
   })
+
+  it('uses organization_id instead of the legacy tenant_id selector', () => {
+    sseService.connect({
+      organizationId: 'org-a',
+      userId: 'user-a',
+      subscriptions: ['credential.issued'],
+    })
+
+    expect(MockEventSource.instances).toHaveLength(1)
+    expect(MockEventSource.instances[0].url).toBe(
+      '/v1/notifications/events/push'
+        + '?organization_id=org-a'
+        + '&user_id=user-a'
+        + '&subscriptions=credential.issued',
+    )
+    expect(MockEventSource.instances[0].url).not.toContain('tenant_id')
+  })
 })
