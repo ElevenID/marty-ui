@@ -6,7 +6,7 @@ and trusted issuer persistence.
 """
 
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -23,6 +23,33 @@ from trust_profile.infrastructure.models import (
 
 if TYPE_CHECKING:
     from trust_profile.main import IssuerEntity, OrganizationTrustProfile, TrustFramework, TrustProfile, TrustProfileIssuer, TrustRegistryEntry, TrustedIssuer
+
+
+_DEPRECATED_CUSTODY_METADATA_FIELDS = {
+    "key_binding",
+    "key_management",
+    "key_reference",
+    "kms_arn",
+    "kms_region",
+    "managed_key_id",
+    "service_id",
+    "signing_agent_auth",
+    "signing_agent_url",
+    "signing_key_reference",
+    "signing_service_id",
+}
+
+
+def _without_deprecated_custody_metadata(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _without_deprecated_custody_metadata(nested_value)
+            for key, nested_value in value.items()
+            if str(key).lower() not in _DEPRECATED_CUSTODY_METADATA_FIELDS
+        }
+    if isinstance(value, list):
+        return [_without_deprecated_custody_metadata(item) for item in value]
+    return value
 
 
 class PostgresTrustProfileRepository:
@@ -47,11 +74,7 @@ class PostgresTrustProfileRepository:
             )
             existing = result.first()
 
-            metadata = dict(profile.metadata or {})
-            if profile.key_management is not None:
-                metadata["key_management"] = profile.key_management
-            else:
-                metadata.pop("key_management", None)
+            metadata = _without_deprecated_custody_metadata(profile.metadata or {})
 
             profile_data = {
                 "id": profile.id,
@@ -117,8 +140,7 @@ class PostgresTrustProfileRepository:
                 allowed_issuers=row.allowed_issuers,
                 denied_issuers=row.denied_issuers,
                 jurisdiction_filter=row.jurisdiction_filter,
-                key_management=(row.metadata or {}).get("key_management"),
-                metadata=row.metadata or {},
+                metadata=_without_deprecated_custody_metadata(row.metadata or {}),
                 created_at=row.created_at,
                 updated_at=row.updated_at,
             )
@@ -153,8 +175,7 @@ class PostgresTrustProfileRepository:
                 allowed_issuers=row.allowed_issuers,
                 denied_issuers=row.denied_issuers,
                 jurisdiction_filter=row.jurisdiction_filter,
-                key_management=(row.metadata or {}).get("key_management"),
-                metadata=row.metadata or {},
+                metadata=_without_deprecated_custody_metadata(row.metadata or {}),
                 created_at=row.created_at,
                 updated_at=row.updated_at,
             )
