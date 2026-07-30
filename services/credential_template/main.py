@@ -1078,7 +1078,7 @@ class CredentialTemplateResponse(BaseModel):
     description: str | None
     status: str
     credential_type: str
-    compliance_profile_id: str | None = None
+    compliance_profile_id: str
     vct: str | None = None
     doctype: str | None = None
     credential_payload_format: str | None = None
