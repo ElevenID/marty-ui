@@ -14,7 +14,25 @@ from services.credential_template import main as credential_template
 from services.credential_template.infrastructure.models import credential_templates_table
 
 
-@pytest.mark.parametrize("removed_field", ["issuer_requirements", "artifacts_auto_generate"])
+@pytest.mark.parametrize(
+	"removed_field",
+	[
+		"issuer_requirements",
+		"artifacts_auto_generate",
+		"issuer_profile_id",
+		"issuer_key_id",
+		"issuer_algorithm",
+		"signing_algorithm",
+		"issuer_certificate_chain_pem",
+		"key_access_mode",
+		"remote_signing_config",
+		"auto_generate_artifacts",
+		"kms_provider",
+		"kms_key_id",
+		"signing_service_id",
+		"signing_key_reference",
+	],
+)
 def test_credential_template_requests_reject_removed_fields(removed_field: str) -> None:
 	payload = {
 		"organization_id": "org-1",
@@ -148,7 +166,10 @@ def test_get_credential_template_returns_protocol_shape_only() -> None:
 	template = asyncio.run(_save_template(repo))
 	client, _ = _build_client(repo)
 
-	response = client.get(f"/v1/credential-templates/{template.id}")
+	response = client.get(
+		f"/v1/credential-templates/{template.id}",
+		headers={"X-User-Id": "user-1"},
+	)
 
 	assert response.status_code == 200
 	body = response.json()
@@ -166,13 +187,7 @@ def test_get_credential_template_returns_protocol_shape_only() -> None:
 		"revocation_profile_id",
 		"claims",
 		"validity_rules",
-		"issuer_certificate_chain_configured",
-		"artifacts_status",
-		"hasArtifacts",
-		"artifactsValidated",
-		"usedByFlowsCount",
 		"privacy_posture",
-		"auto_generate_artifacts",
 		"created_at",
 		"updated_at",
 	}
@@ -206,9 +221,6 @@ def test_get_credential_template_returns_protocol_shape_only() -> None:
 		"prefer_predicates": True,
 		"sd_alg": "sha-256",
 	}
-	assert body["artifacts_status"] == "invalid"
-	assert body["hasArtifacts"] is True
-	assert body["artifactsValidated"] is False
 	assert "doctype" not in body
 	assert "supported_formats" not in body
 	assert "wallet_configs" not in body
@@ -333,6 +345,9 @@ def test_create_mdoc_template_uses_doctype_without_fabricating_vct() -> None:
 	body = response.json()
 	assert body["credential_payload_format"] == "MDOC"
 	assert body["doctype"] == "org.iso.18013.5.1.mDL"
+	assert body["claims"][0]["namespace"] == "org.iso.18013.5.1"
+	assert "mdoc_namespace" not in body["claims"][0]
+	assert "mdoc_element_identifier" not in body["claims"][0]
 	assert "vct" not in body
 	stored = asyncio.run(repo.get(body["id"]))
 	assert stored is not None
@@ -390,7 +405,7 @@ def test_create_credential_template_rejects_missing_issuer_did() -> None:
 	assert "issuer_did is required" in response.json()["detail"]
 
 
-def test_create_credential_template_persists_artifact_pipeline_fields() -> None:
+def test_create_credential_template_resolves_private_custody_fields_from_did() -> None:
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	client, _ = _build_client(repo)
 
@@ -414,7 +429,6 @@ def test_create_credential_template_persists_artifact_pipeline_fields() -> None:
 			"trust_profile_id": "trust-profile-1",
 			"revocation_profile_id": "revocation-profile-1",
 			"issuer_did": "did:web:beta.elevenidllc.com:orgs:test",
-			"auto_generate_artifacts": False,
 		},
 	)
 
@@ -425,12 +439,16 @@ def test_create_credential_template_persists_artifact_pipeline_fields() -> None:
 	assert "issuer_profile_id" not in body
 	assert "issuer_key_id" not in body
 	assert body["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:test"
-	assert body["issuer_algorithm"] == "ES256"
+	assert "issuer_algorithm" not in body
 	assert "key_access_mode" not in body
-	assert body["artifacts_status"] == "valid"
-	assert body["hasArtifacts"] is True
-	assert body["artifactsValidated"] is True
+	assert "remote_signing_config" not in body
+	assert "issuer_certificate_chain_pem" not in body
+	assert "auto_generate_artifacts" not in body
 	stored = asyncio.run(repo.get(body["id"]))
+	assert stored is not None
+	assert stored.issuer_profile_id == "issuer-profile-1"
+	assert stored.issuer_algorithm == "ES256"
+	assert stored.key_access_mode == "REMOTE_SIGNING"
 	assert stored.remote_signing_config == {
 		"provider": "managed-signing-service",
 		"signing_service_id": "managed-openbao-transit",

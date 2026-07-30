@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -23,6 +24,7 @@ def _api_key_headers(organization_id: str) -> dict[str, str]:
         "X-User-Id": "api_key:key-b",
         "X-Organization-ID": organization_id,
         "X-Api-Key-Id": "key-b",
+        "X-Api-Key-Scopes": "templates:read",
         "X-Required-Permission": "credential-template:view",
     }
 
@@ -54,4 +56,41 @@ def test_bound_api_key_cannot_select_another_organization() -> None:
     assert response.json()["detail"] == (
         "API key does not have access to this organization"
     )
+    get_membership.assert_not_awaited()
+
+
+def test_bound_api_key_cannot_substitute_cross_tenant_template_id() -> None:
+    client, get_membership = _client()
+    template = credential_template.CredentialTemplate(
+        organization_id="org-a",
+        name="Organization A template",
+        credential_type="OrganizationACredential",
+    )
+    repo = credential_template._repo
+    assert repo is not None
+    asyncio.run(repo.save(template))
+
+    response = client.get(
+        f"/v1/credential-templates/{template.id}",
+        headers=_api_key_headers("org-b"),
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "API key does not have access to this organization"
+    )
+    get_membership.assert_not_awaited()
+
+
+def test_api_key_principal_without_complete_gateway_context_fails_closed() -> None:
+    client, get_membership = _client()
+
+    response = client.get(
+        "/v1/credential-templates",
+        params={"organization_id": "org-b"},
+        headers={"X-User-Id": "api_key:key-b"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Incomplete gateway API key context"
     get_membership.assert_not_awaited()

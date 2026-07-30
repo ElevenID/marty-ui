@@ -167,13 +167,6 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
           <Grid container spacing={2}>
             <Grid item xs={12} md={6}>
               <ReviewField
-                label={t('wizards.credentialTemplate.reviewStep.fields.signingAlgorithm')}
-                value={data.signing_algorithm || 'ES256'}
-              />
-            </Grid>
-
-            <Grid item xs={12} md={6}>
-              <ReviewField
                 label={t('wizards.credentialTemplate.reviewStep.fields.defaultValidity')}
                 value={`${secondsToDays(data.validity_rules?.ttl_seconds || 31536000)} ${t('wizards.credentialTemplate.reviewStep.values.days')}`}
               />

@@ -52,6 +52,15 @@ describe('credential template normalization', () => {
       credential_type: 'EmployeeBadge',
       issuer_did: 'did:web:issuer.example.com',
       issuer_profile_id: 'ip-1',
+      issuer_algorithm: 'ES256',
+      signing_algorithm: 'ES256',
+      issuer_certificate_chain_pem: 'private certificate material',
+      key_access_mode: 'REMOTE_SIGNING',
+      remote_signing_config: { signing_service_id: 'service-1' },
+      signing_service_id: 'service-1',
+      signing_key_reference: 'key-1',
+      kms_provider: 'openbao',
+      kms_key_id: 'key-1',
       auto_generate_artifacts: true,
       generate_artifacts_automatically: true,
       compliance_profile_id: 'compliance-1',
@@ -77,9 +86,22 @@ describe('credential template normalization', () => {
     })
     expect(payload.vct).toBe(`${window.location.origin}/vct/com.example.employee`)
     expect(payload.issuer_did).toBe('did:web:issuer.example.com')
-    expect(payload).not.toHaveProperty('issuer_profile_id')
-    expect(payload).not.toHaveProperty('auto_generate_artifacts')
-    expect(payload).not.toHaveProperty('generate_artifacts_automatically')
+    for (const privateField of [
+      'issuer_profile_id',
+      'issuer_algorithm',
+      'signing_algorithm',
+      'issuer_certificate_chain_pem',
+      'key_access_mode',
+      'remote_signing_config',
+      'signing_service_id',
+      'signing_key_reference',
+      'kms_provider',
+      'kms_key_id',
+      'auto_generate_artifacts',
+      'generate_artifacts_automatically',
+    ]) {
+      expect(payload).not.toHaveProperty(privateField)
+    }
     expect(payload.compliance_profile_id).toBe('compliance-1')
     expect(payload).not.toHaveProperty('compliance_profile')
     expect(payload.claims).toEqual([
@@ -119,6 +141,50 @@ describe('credential template normalization', () => {
     expect(payload.compliance_profile_id).toBe('compliance-2')
     expect(payload).not.toHaveProperty('compliance_profile')
     expect(payload).not.toHaveProperty('wallet_configs')
+  })
+
+  it('does not expose legacy custody metadata returned by an older service', () => {
+    const template = normalizeCredentialTemplate({
+      id: 'ct-legacy',
+      organization_id: 'org-1',
+      issuer_did: 'did:web:issuer.example.com',
+      issuer_profile_id: 'profile-1',
+      issuer_key_id: 'key-1',
+      issuer_algorithm: 'ES256',
+      signing_algorithm: 'ES256',
+      key_access_mode: 'REMOTE_SIGNING',
+      remote_signing_config: { signing_service_id: 'service-1' },
+      issuer_certificate_chain_pem: 'private certificate material',
+      auto_generate_artifacts: true,
+      artifacts_status: 'valid',
+      hasArtifacts: true,
+      artifactsValidated: true,
+      kms_provider: 'openbao',
+      kms_key_id: 'key-1',
+      signing_service_id: 'service-1',
+      signing_key_reference: 'key-1',
+    })
+
+    expect(template.issuer_did).toBe('did:web:issuer.example.com')
+    for (const privateField of [
+      'issuer_profile_id',
+      'issuer_key_id',
+      'issuer_algorithm',
+      'signing_algorithm',
+      'key_access_mode',
+      'remote_signing_config',
+      'issuer_certificate_chain_pem',
+      'auto_generate_artifacts',
+      'artifacts_status',
+      'hasArtifacts',
+      'artifactsValidated',
+      'kms_provider',
+      'kms_key_id',
+      'signing_service_id',
+      'signing_key_reference',
+    ]) {
+      expect(template).not.toHaveProperty(privateField)
+    }
   })
 
   it('rejects payloads without an active issuer DID', () => {

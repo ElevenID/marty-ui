@@ -72,6 +72,9 @@ def _forward_headers(request: Request | None) -> dict[str, str]:
         headers["X-Api-Key-Id"] = request.state.api_key_id
     if hasattr(request.state, "api_key_scopes") and request.state.api_key_scopes:
         headers["X-Api-Key-Scopes"] = ",".join(str(scope) for scope in request.state.api_key_scopes)
+    required_permission = getattr(request.state, "required_permission", None)
+    if required_permission:
+        headers["X-Required-Permission"] = str(required_permission)
     if hasattr(request.state, "org_plan") and request.state.org_plan:
         headers["X-Org-Plan"] = request.state.org_plan
     # Forward auth header if present

@@ -47,19 +47,15 @@ const isActiveIssuerIdentity = (identity) => {
   );
 };
 
-const buildIssuerIdentityPatch = (identity, currentAlgorithm = 'ES256') => {
+const buildIssuerIdentityPatch = (identity) => {
   if (!identity) {
     return {
       issuer_did: null,
-      signing_algorithm: currentAlgorithm || null,
     };
   }
 
-  const algorithm = firstNonEmpty(identity.algorithm, currentAlgorithm, 'ES256');
-
   return {
     issuer_did: firstNonEmpty(identity.issuer_did) || null,
-    signing_algorithm: algorithm || currentAlgorithm || null,
   };
 };
 
@@ -139,7 +135,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
 
   useEffect(() => {
     if (issuerIdentities.length === 1 && !data.issuer_did) {
-      onChange(buildIssuerIdentityPatch(issuerIdentities[0], data.signing_algorithm));
+      onChange(buildIssuerIdentityPatch(issuerIdentities[0]));
     }
   }, [issuerIdentities]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -330,7 +326,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
             const selectedIdentity = issuerIdentities.find(
               (identity) => firstNonEmpty(identity.issuer_did) === e.target.value
             );
-            onChange(buildIssuerIdentityPatch(selectedIdentity, data.signing_algorithm));
+            onChange(buildIssuerIdentityPatch(selectedIdentity));
           }}
           label="Issuer DID"
           disabled={issuerIdentitiesLoading}
