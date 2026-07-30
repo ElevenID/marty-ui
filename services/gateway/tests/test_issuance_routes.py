@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 from starlette.responses import JSONResponse
 
+from gateway.models import PUBLIC_ISSUANCE_RESERVED_CLAIMS
 from gateway.routes import applicants
 from gateway.routes import canvas_integrations
 from gateway.routes import issuance
@@ -428,21 +429,12 @@ def test_canvas_mirror_provenance_route_requires_authentication():
     assert route_config["requires_auth"] is True
 
 
-@pytest.mark.asyncio
-async def test_create_issuance_rejects_missing_issuer_did():
-    request = _build_request(session_org_id="org_123")
-
-    with pytest.raises(issuance.HTTPException) as exc_info:
-        await issuance.create_issuance(
-            issuance.IssuanceCreate(
-                organization_id="org_123",
-                claims={"credential_format": "sd_jwt_vc"},
-            ),
-            request,
+def test_issuance_model_rejects_missing_public_signing_identity():
+    with pytest.raises(ValidationError, match="credential_template_id or issuer_did"):
+        issuance.IssuanceCreate(
+            organization_id="org_123",
+            claims={"credential_format": "sd_jwt_vc"},
         )
-
-    assert exc_info.value.status_code == 422
-    assert "issuer_did is required" in exc_info.value.detail
 
 
 def test_issuance_model_rejects_claims_only_issuer_profile_id():
@@ -837,6 +829,21 @@ def test_issuance_model_rejects_claims_issuer_profile_override_for_template():
             organization_id="org_123",
             credential_template_id="template-1",
             claims={"issuer_profile_id": "ip-other"},
+        )
+
+
+@pytest.mark.parametrize(
+    "reserved_claim",
+    sorted(PUBLIC_ISSUANCE_RESERVED_CLAIMS),
+)
+def test_issuance_model_rejects_every_reserved_custody_claim(
+    reserved_claim: str,
+) -> None:
+    with pytest.raises(ValidationError, match="not a public issuance input"):
+        issuance.IssuanceCreate(
+            organization_id="org_123",
+            issuer_did="did:web:issuer.example",
+            claims={reserved_claim: "must-not-cross-public-boundary"},
         )
 
 

@@ -3439,7 +3439,7 @@ class StartVerificationFlowRequest(BaseModel):
         ),
     )
     # SIOPv2 Draft 13 §9: response_type=id_token selects SIOPv2 authentication.
-    response_type: str = "vp_token"
+    response_type: Literal["vp_token", "id_token"] = "vp_token"
     trust_profile_id: str | None = None
     deployment_profile_id: str | None = None
     external_reference: str | None = None
@@ -3449,11 +3449,15 @@ class StartVerificationFlowRequest(BaseModel):
         "request_uri"
     )
     request_uri_method: Literal["get", "post"] = "get"
-    expiry_minutes: int = 15
+    expiry_minutes: int = Field(default=15, ge=1, le=1440)
 
     @model_validator(mode="after")
     def validate_oid4vp_transport(self) -> "StartVerificationFlowRequest":
         """Keep signed and unsigned transports distinct and fail closed."""
+        if self.response_type == "vp_token" and not self.presentation_policy_id:
+            raise ValueError(
+                "presentation_policy_id is required for OID4VP vp_token flows"
+            )
         if (
             self.request_transport in {"request_object", "url_query"}
             and self.request_uri_method != "get"

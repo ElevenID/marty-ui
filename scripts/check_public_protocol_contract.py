@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail when Marty public responses drift from the pinned marty-protocol."""
+"""Fail when Marty public operations drift from the pinned marty-protocol."""
 
 from __future__ import annotations
 
@@ -19,7 +19,11 @@ sys.path.insert(0, str(REPO_ROOT / "services"))
 
 from gateway.models import (  # noqa: E402
     CredentialTemplateResponse,
+    IssuanceCreate,
     OrganizationTrustProfileResponse,
+    PUBLIC_ISSUANCE_RESERVED_CLAIMS,
+    StartVerificationFlowRequest,
+    VerificationRequestResponse,
 )
 from gateway.routes.credentials import (  # noqa: E402
     _PUBLIC_TEMPLATE_RESPONSE_FIELDS,
@@ -82,6 +86,48 @@ def _property_names(value: object) -> set[str]:
             result.update(_property_names(child))
         return result
     return set()
+
+
+def _assert_model_shape(
+    *,
+    model: Any,
+    schema: dict[str, Any],
+    label: str,
+) -> None:
+    schema_fields = set(schema["properties"])
+    runtime_fields = set(model.model_fields)
+    if runtime_fields != schema_fields:
+        raise AssertionError(
+            f"{label} fields drifted from marty-protocol: "
+            f"schema_only={sorted(schema_fields - runtime_fields)}, "
+            f"runtime_only={sorted(runtime_fields - schema_fields)}"
+        )
+
+    schema_required = set(schema.get("required", []))
+    runtime_required = {
+        name for name, field in model.model_fields.items() if field.is_required()
+    }
+    if runtime_required != schema_required:
+        raise AssertionError(
+            f"{label} required fields drifted from marty-protocol: "
+            f"schema_only={sorted(schema_required - runtime_required)}, "
+            f"runtime_only={sorted(runtime_required - schema_required)}"
+        )
+
+
+def _validator(
+    protocol_root: Path,
+    registry: Registry,
+    filename: str,
+) -> tuple[dict[str, Any], Draft202012Validator]:
+    schema = json.loads(
+        (protocol_root / "schemas" / filename).read_text(encoding="utf-8")
+    )
+    return schema, Draft202012Validator(
+        schema,
+        registry=registry,
+        format_checker=FormatChecker(),
+    )
 
 
 def _public_response(
@@ -266,13 +312,87 @@ def check_contract(protocol_root: Path) -> None:
             f"{sorted(leaked)}"
         )
 
+    issuance_schema, issuance_validator = _validator(
+        protocol_root,
+        registry,
+        "issuance-request.json",
+    )
+    _assert_model_shape(
+        model=IssuanceCreate,
+        schema=issuance_schema,
+        label="IssuanceCreate",
+    )
+    schema_reserved_claims = set(
+        issuance_schema["properties"]["claims"]["propertyNames"]["not"]["enum"]
+    )
+    if schema_reserved_claims != set(PUBLIC_ISSUANCE_RESERVED_CLAIMS):
+        raise AssertionError(
+            "Issuance reserved-claim boundary drifted from marty-protocol: "
+            f"schema_only={sorted(schema_reserved_claims - PUBLIC_ISSUANCE_RESERVED_CLAIMS)}, "
+            f"runtime_only={sorted(PUBLIC_ISSUANCE_RESERVED_CLAIMS - schema_reserved_claims)}"
+        )
+    issuance = IssuanceCreate(
+        organization_id="20000000-0000-4000-8000-000000000001",
+        issuer_did="did:web:issuer.example.test",
+        subject_did="did:example:holder",
+        claims={"given_name": "Ada"},
+    ).model_dump(mode="json", exclude_none=True)
+    issuance_validator.validate(issuance)
+
+    verification_request_schema, verification_request_validator = _validator(
+        protocol_root,
+        registry,
+        "verification-flow-start-request.json",
+    )
+    _assert_model_shape(
+        model=StartVerificationFlowRequest,
+        schema=verification_request_schema,
+        label="StartVerificationFlowRequest",
+    )
+    verification_request = StartVerificationFlowRequest(
+        presentation_policy_id="30000000-0000-4000-8000-000000000001",
+        organization_id="20000000-0000-4000-8000-000000000001",
+        issuer_did="did:web:verifier.example.test",
+        request_uri_method="post",
+    ).model_dump(mode="json", exclude_none=True)
+    verification_request_validator.validate(verification_request)
+
+    verification_response_schema, verification_response_validator = _validator(
+        protocol_root,
+        registry,
+        "verification-flow-start-response.json",
+    )
+    _assert_model_shape(
+        model=VerificationRequestResponse,
+        schema=verification_response_schema,
+        label="VerificationRequestResponse",
+    )
+    verification_response = VerificationRequestResponse(
+        instance_id="flow-instance",
+        request_uri="openid4vp://authorize?request_uri=https%3A%2F%2Fexample.test",
+        qr_code_data="openid4vp://authorize?request_uri=https%3A%2F%2Fexample.test",
+        presentation_policy_id="30000000-0000-4000-8000-000000000001",
+        nonce="a-high-entropy-nonce-value",
+        expires_at="2026-07-30T20:00:00Z",
+        status="AWAITING_WALLET",
+    ).model_dump(mode="json")
+    verification_response_validator.validate(verification_response)
+
+    for model in (IssuanceCreate, StartVerificationFlowRequest):
+        leaked_runtime_fields = FORBIDDEN_PUBLIC_FIELDS & set(model.model_fields)
+        if leaked_runtime_fields:
+            raise AssertionError(
+                f"{model.__name__} exposes custody selectors: "
+                f"{sorted(leaked_runtime_fields)}"
+            )
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--protocol-root", type=Path, required=True)
     args = parser.parse_args()
     check_contract(args.protocol_root.resolve())
-    print("Public responses match the pinned marty-protocol schemas.")
+    print("Public operations match the pinned marty-protocol schemas.")
     return 0
 
 

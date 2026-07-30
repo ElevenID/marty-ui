@@ -1348,12 +1348,12 @@ class StartVerificationFlowRequest(BaseModel):
             "organization-scoped verifier authorization."
         ),
     )
-    response_type: str = "vp_token"
+    response_type: Literal["vp_token", "id_token"] = "vp_token"
     trust_profile_id: str | None = None
     deployment_profile_id: str | None = None
     external_reference: str | None = None
     callback_url: str | None = None
-    expiry_minutes: int = 15
+    expiry_minutes: int = Field(default=15, ge=1, le=1440)
     oid4vp_profile: Literal["standard", "haip"] = "standard"
     request_transport: Literal["request_uri", "request_object", "url_query"] = (
         "request_uri"
@@ -1362,6 +1362,10 @@ class StartVerificationFlowRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_oid4vp_transport(self) -> "StartVerificationFlowRequest":
+        if self.response_type == "vp_token" and not self.presentation_policy_id:
+            raise ValueError(
+                "presentation_policy_id is required for OID4VP vp_token flows"
+            )
         if (
             self.request_transport in {"request_object", "url_query"}
             and self.request_uri_method != "get"
@@ -1382,6 +1386,8 @@ class StartVerificationFlowRequest(BaseModel):
 
 
 class VerificationRequestResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     instance_id: str
     request_uri: str
     qr_code_data: str
@@ -1592,12 +1598,38 @@ class Oid4vciAuthorizedClient(BaseModel):
         return self
 
 
+PUBLIC_ISSUANCE_RESERVED_CLAIMS = frozenset(
+    {
+        "issuer_profile_id",
+        "issuer_key_id",
+        "issuer_algorithm",
+        "key_access_mode",
+        "verification_method_id",
+        "signing_service_id",
+        "signing_key_reference",
+        "key_reference",
+        "kms_provider",
+        "provider",
+        "key_name",
+        "key_version",
+        "transit_mount",
+        "_application_id",
+        "_credential_subject",
+        "_credential_document",
+    }
+)
+
+
 class IssuanceCreate(BaseModel):
     """Create an issuance request."""
 
     model_config = ConfigDict(extra="forbid")
-    organization_id: str
-    credential_template_id: str | None = None
+    organization_id: str = Field(min_length=1, max_length=255)
+    credential_template_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+    )
     issuer_did: str | None = Field(
         default=None,
         pattern=r"^did:[a-z0-9]+:.+",
@@ -1606,8 +1638,12 @@ class IssuanceCreate(BaseModel):
             "resolves this DID to the sole authorized active issuer profile."
         ),
     )
-    subject_did: str | None = None
-    holder_did: str | None = None  # DIDComm v2: holder's DID for push delivery
+    subject_did: str | None = Field(default=None, pattern=r"^did:", max_length=2048)
+    holder_did: str | None = Field(  # DIDComm v2: holder's DID for push delivery
+        default=None,
+        pattern=r"^did:",
+        max_length=2048,
+    )
     authorized_client: Oid4vciAuthorizedClient | None = None
     application_id: str | None = None
     claims: dict = Field(default_factory=dict)
@@ -1616,18 +1652,15 @@ class IssuanceCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_credential_content(self) -> "IssuanceCreate":
-        for reserved in (
-            "issuer_profile_id",
-            "signing_service_id",
-            "signing_key_reference",
-            "key_reference",
-            "kms_provider",
-            "_application_id",
-            "_credential_subject",
-            "_credential_document",
-        ):
+        for reserved in PUBLIC_ISSUANCE_RESERVED_CLAIMS:
             if reserved in self.claims:
                 raise ValueError(f"claims.{reserved} is not a public issuance input")
+
+        if not self.credential_template_id and not self.issuer_did:
+            raise ValueError(
+                "credential_template_id or issuer_did is required to select "
+                "the public signing identity"
+            )
 
         if self.credential_document is not None:
             if "claims" in self.model_fields_set or self.credential_subject is not None:

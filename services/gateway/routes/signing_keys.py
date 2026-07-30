@@ -5542,44 +5542,6 @@ async def list_holder_keys(
 
 
 @signing_key_router.post(
-    "/holder-keys/derive", summary="Derive Holder Binding Key Reference"
-)
-async def derive_holder_key_reference(
-    request: Request,
-    body: dict = Body(default_factory=dict),
-    organization_id: str | None = Query(None),
-):
-    """Expose deterministic holder-binding key derivation for server-managed wallet flows."""
-    _resolve_org_id(request, organization_id)
-    device_id = body.get("device_id") if isinstance(body.get("device_id"), str) else ""
-    credential_id = (
-        body.get("credential_id") if isinstance(body.get("credential_id"), str) else ""
-    )
-    if not device_id or not credential_id:
-        raise HTTPException(
-            status_code=422, detail="device_id and credential_id are required"
-        )
-
-    try:
-        from marty_common.crypto.credential_kms import CredentialKeyPrefix  # type: ignore
-
-        key_reference = CredentialKeyPrefix.holder_key_id(device_id, credential_id)
-    except Exception:
-        key_reference = f"cred:holder:{device_id}:{credential_id}"
-
-    return JSONResponse(
-        content={
-            "ok": True,
-            "device_id": device_id,
-            "credential_id": credential_id,
-            "key_purpose": "holder_binding",
-            "derived_key_reference": key_reference,
-            "derived_at": _utcnow_iso(),
-        }
-    )
-
-
-@signing_key_router.post(
     "/services/vdsnc/register", summary="Register VDS-NC Signing Service"
 )
 async def register_vdsnc_service(
