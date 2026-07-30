@@ -37,7 +37,7 @@
   "demo_application_revision": "cb3fdb0d7adcd29f3693b5a1832ab4a4333f4294",
   "component_revisions": [
     { "component": "longfellow-zk", "repository": "https://github.com/ElevenID/longfellow-zk", "revision": "37f0c08c891c84503e63e33c7a9ab3e3229561c6" },
-    { "component": "marty-blog", "repository": "https://github.com/ElevenID/marty-blog", "revision": "37aca6de1639db9eb67102d6996b95e4ab2f035c" },
+    { "component": "marty-blog", "repository": "https://github.com/ElevenID/marty-blog", "revision": "31954411673db283510d534d5b8dea37f59eea4e" },
     { "component": "marty-cli", "repository": "https://github.com/ElevenID/marty-cli", "revision": "0dba9e79127062c2bd4258b622a6c0a5067324b9" },
     { "component": "marty-core", "repository": "https://github.com/ElevenID/marty-core", "revision": "d4bbfb9c3093efff719ba405ef58667b3f826fd8" },
     { "component": "marty-credentials", "repository": "https://github.com/ElevenID/marty-credentials", "revision": "7cf179644893583412895d3c34263f9e2a101501" },

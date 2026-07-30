@@ -62,7 +62,7 @@ export const DEMO_MANIFESTS = {
       {
         "component": "marty-blog",
         "repository": "https://github.com/ElevenID/marty-blog",
-        "revision": "37aca6de1639db9eb67102d6996b95e4ab2f035c"
+        "revision": "31954411673db283510d534d5b8dea37f59eea4e"
       },
       {
         "component": "marty-cli",
