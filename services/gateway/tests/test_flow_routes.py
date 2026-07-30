@@ -49,6 +49,34 @@ def test_gateway_preserves_native_url_query_transport() -> None:
             request_transport="url_query",
         )
 
+    with pytest.raises(ValueError, match="cannot be used for HAIP"):
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example",
+            oid4vp_profile="haip",
+            request_transport="url_query",
+        )
+
+
+def test_gateway_preserves_signed_request_object_transport() -> None:
+    request = StartVerificationFlowRequest(
+        presentation_policy_id="policy-1",
+        organization_id="org-1",
+        issuer_did="did:web:verifier.example",
+        request_transport="request_object",
+    )
+    assert request.model_dump()["request_transport"] == "request_object"
+
+    with pytest.raises(ValueError, match="request_object transport"):
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example",
+            request_transport="request_object",
+            request_uri_method="post",
+        )
+
 
 @pytest.mark.parametrize(
     "direct_kms_field",
