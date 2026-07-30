@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from marty_common import OrganizationContext
 
 from services.organization.application.ports import AuditEventQuery
 from services.organization.domain.entities import AuditEvent
+from services.organization.infrastructure.adapters import audit_adapter
 from services.organization.infrastructure.adapters.audit_adapter import (
     configure_audit_router,
     router,
@@ -52,10 +54,35 @@ class FakeAuditRepo:
         return self.events, len(self.events)
 
 
-def _client() -> TestClient:
+def _client(*, authorize: bool = True) -> TestClient:
     app = FastAPI()
     app.include_router(router)
+    if authorize:
+        context = OrganizationContext(
+            user_id="user-1",
+            organization_id="22222222-2222-2222-2222-222222222222",
+            permissions={"audit:view", "audit:export"},
+        )
+        app.dependency_overrides[audit_adapter.require_audit_view] = lambda: context
+        app.dependency_overrides[audit_adapter.require_audit_export] = lambda: context
     return TestClient(app)
+
+
+def test_audit_routes_require_authenticated_organization_context() -> None:
+    configure_audit_router(FakeAuditRepo())
+    client = _client(authorize=False)
+
+    try:
+        for path in (
+            "/v1/organizations/audit/events?organization_id=org-1",
+            "/v1/organizations/audit/events/export?organization_id=org-1",
+            "/v1/organizations/audit/events/event-1?organization_id=org-1",
+        ):
+            response = client.get(path)
+
+            assert response.status_code == 401
+    finally:
+        configure_audit_router(None)
 
 
 def test_audit_routes_report_unavailable_when_storage_is_not_configured() -> None:
