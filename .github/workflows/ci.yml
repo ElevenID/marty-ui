@@ -5,8 +5,8 @@ env:
   MARTY_API_CORE_DIGEST: sha256:c048d482faee350e984bc647c7e99948d894bae5c3355c976909ffe2a62c3dcc
   MARTY_BLOG_URI: https://github.com/ElevenID/marty-blog/releases/download/v0.1.3/elevenid-marty-blog-0.1.3.tgz
   MARTY_BLOG_DIGEST: sha256:ae68d11b38fc0387c07eb6629197ba226cbca9cfe65efc23e6a97cce81a20a57
-  MARTY_COMMON_URI: https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.0/marty_common-0.2.0-py3-none-any.whl
-  MARTY_COMMON_DIGEST: sha256:123452b401144ff2c7b13c4c8f2eea1370a34a60c259e49795d5dfe295747a2f
+  MARTY_COMMON_URI: https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.2/marty_common-0.2.2-py3-none-any.whl
+  MARTY_COMMON_DIGEST: sha256:f5809a96434f2b5f81926861463276fce3501e7aae98e7c0d1e52454d3a6411e
 
 on:
   push:
@@ -78,10 +78,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$RUNNER_TEMP/marty_common-0.2.0-py3-none-any.whl"
-          echo "${MARTY_COMMON_DIGEST#sha256:}  $RUNNER_TEMP/marty_common-0.2.0-py3-none-any.whl" | sha256sum --check --strict
+          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$RUNNER_TEMP/marty_common-0.2.2-py3-none-any.whl"
+          echo "${MARTY_COMMON_DIGEST#sha256:}  $RUNNER_TEMP/marty_common-0.2.2-py3-none-any.whl" | sha256sum --check --strict
           pip install -r requirements-services.txt
-          pip install "$RUNNER_TEMP/marty_common-0.2.0-py3-none-any.whl"
+          pip install "$RUNNER_TEMP/marty_common-0.2.2-py3-none-any.whl"
       - name: Run tests
         working-directory: services
         run: python -m pytest -v --tb=short -x
@@ -100,9 +100,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$RUNNER_TEMP/marty_common-0.2.0-py3-none-any.whl"
-          echo "${MARTY_COMMON_DIGEST#sha256:}  $RUNNER_TEMP/marty_common-0.2.0-py3-none-any.whl" | sha256sum --check --strict
-          pip install pytest pyyaml jsonschema cryptography playwright "$RUNNER_TEMP/marty_common-0.2.0-py3-none-any.whl"
+          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$RUNNER_TEMP/marty_common-0.2.2-py3-none-any.whl"
+          echo "${MARTY_COMMON_DIGEST#sha256:}  $RUNNER_TEMP/marty_common-0.2.2-py3-none-any.whl" | sha256sum --check --strict
+          pip install pytest pyyaml jsonschema cryptography playwright "$RUNNER_TEMP/marty_common-0.2.2-py3-none-any.whl"
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
       - name: Run repository release checks
