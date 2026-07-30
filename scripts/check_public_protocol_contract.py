@@ -21,7 +21,9 @@ from gateway.models import (  # noqa: E402
     CredentialTemplateResponse,
     IssuanceCreate,
     OrganizationTrustProfileResponse,
+    PresentationPolicyCreate,
     PresentationPolicyResponse,
+    PresentationPolicyUpdate,
     PUBLIC_ISSUANCE_RESERVED_CLAIMS,
     StartVerificationFlowRequest,
     VerificationRequestResponse,
@@ -33,6 +35,7 @@ from gateway.routes.credentials import (  # noqa: E402
 from gateway.routes.verification import (  # noqa: E402
     _PUBLIC_PRESENTATION_POLICY_FIELDS,
     _sanitize_presentation_policy_response,
+    _validated_policy_payload,
 )
 
 
@@ -478,7 +481,64 @@ def check_contract(protocol_root: Path) -> None:
             f"runtime Presentation Policy response exposes custody selectors: {sorted(leaked)}"
         )
 
-    for model in (IssuanceCreate, StartVerificationFlowRequest):
+    presentation_create_schema, presentation_create_validator = _validator(
+        protocol_root,
+        registry,
+        "presentation-policy-create-request.json",
+    )
+    _assert_model_shape(
+        model=PresentationPolicyCreate,
+        schema=presentation_create_schema,
+        label="PresentationPolicyCreate",
+    )
+    presentation_create_model = PresentationPolicyCreate(
+        organization_id="20000000-0000-4000-8000-000000000001",
+        name="Employee verification",
+        purpose="Workforce access",
+        required_claims=[
+            {
+                "claim_name": "employee_id",
+                "credential_type": "EmployeeCredential",
+            }
+        ],
+        accepted_credential_types=["EmployeeCredential"],
+        holder_binding={"required": False},
+    )
+    presentation_create = _validated_policy_payload(presentation_create_model)
+    presentation_create_validator.validate(presentation_create)
+
+    presentation_update_schema, presentation_update_validator = _validator(
+        protocol_root,
+        registry,
+        "presentation-policy-update-request.json",
+    )
+    _assert_model_shape(
+        model=PresentationPolicyUpdate,
+        schema=presentation_update_schema,
+        label="PresentationPolicyUpdate",
+    )
+    presentation_update = PresentationPolicyUpdate(
+        organization_id="20000000-0000-4000-8000-000000000001",
+        name="Updated employee verification",
+        freshness={"require_not_revoked": True},
+    )
+    presentation_update = _validated_policy_payload(presentation_update)
+    presentation_update_validator.validate(presentation_update)
+
+    for schema in (presentation_create_schema, presentation_update_schema):
+        leaked_schema_fields = FORBIDDEN_PUBLIC_FIELDS & _property_names(schema)
+        if leaked_schema_fields:
+            raise AssertionError(
+                "marty-protocol Presentation Policy operation exposes custody "
+                f"selectors: {sorted(leaked_schema_fields)}"
+            )
+
+    for model in (
+        IssuanceCreate,
+        PresentationPolicyCreate,
+        PresentationPolicyUpdate,
+        StartVerificationFlowRequest,
+    ):
         leaked_runtime_fields = FORBIDDEN_PUBLIC_FIELDS & set(model.model_fields)
         if leaked_runtime_fields:
             raise AssertionError(
