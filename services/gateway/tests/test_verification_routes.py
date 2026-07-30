@@ -186,6 +186,19 @@ def test_policy_request_rejects_unmodeled_raw_fields() -> None:
         PresentationPolicyCreate.model_validate(payload)
 
 
+def test_disabled_holder_binding_serializes_to_canonical_shape() -> None:
+    body = PresentationPolicyCreate.model_validate(
+        {
+            **_policy_payload(),
+            "holder_binding": {"required": False},
+        }
+    )
+
+    payload = verification._validated_policy_payload(body)
+
+    assert payload["holder_binding"] == {"required": False}
+
+
 @pytest.mark.asyncio
 async def test_authoritative_body_is_serialized_from_validated_model(
     monkeypatch: pytest.MonkeyPatch,
