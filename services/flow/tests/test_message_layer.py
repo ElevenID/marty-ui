@@ -1629,7 +1629,7 @@ async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
 
 
 @pytest.mark.asyncio
-async def test_start_verification_url_query_carries_one_signed_jar_without_claim_rewriting(
+async def test_start_verification_request_object_carries_one_signed_jar_without_claim_rewriting(
     monkeypatch,
 ):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
@@ -1663,7 +1663,7 @@ async def test_start_verification_url_query_carries_one_signed_jar_without_claim
             presentation_policy_id="policy-1",
             organization_id="org-1",
             issuer_did="did:web:verifier.example:oid4vp",
-            request_transport="url_query",
+            request_transport="request_object",
         ),
         user_id="auth-service",
         repo=repo,
@@ -1690,8 +1690,104 @@ async def test_start_verification_url_query_carries_one_signed_jar_without_claim
 
     instance = await repo.get_instance(started.instance_id)
     assert instance is not None
-    assert instance.context["request_transport"] == "url_query"
+    assert instance.context["request_transport"] == "request_object"
     assert instance.context["auth_request"] == started.request_uri
+
+
+@pytest.mark.asyncio
+async def test_start_verification_url_query_uses_direct_unsigned_parameters(
+    monkeypatch,
+):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    monkeypatch.setenv("OID4VP_CLIENT_ID_PREFIX", "x509_hash")
+    _install_reference_validation_stubs(
+        monkeypatch,
+        templates={},
+        policies={
+            "policy-1": {
+                "organization_id": "org-1",
+                "status": "active",
+                "credential_requirements_json": "[]",
+            },
+        },
+    )
+
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {
+            "id": "pd-1",
+            "input_descriptors": [
+                {
+                    "id": "descriptor-1",
+                    "format": {"dc+sd-jwt": {"alg": ["ES256"]}},
+                    "constraints": {"fields": []},
+                },
+            ],
+        }
+
+    async def _fail_if_signed(**_kwargs):
+        pytest.fail("native URL-query transport must not sign a Request Object")
+
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition", _fake_presentation_definition
+    )
+    monkeypatch.setattr(
+        "flow.main._sign_request_object_with_issuer_profile",
+        _fail_if_signed,
+    )
+    repo = InMemoryFlowRepository()
+    started = await start_verification_flow(
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example:oid4vp",
+            request_transport="url_query",
+        ),
+        user_id="auth-service",
+        repo=repo,
+    )
+
+    parsed = urlparse(started.request_uri)
+    parameters = parse_qs(parsed.query)
+    response_uri = (
+        f"https://verifier.example/v1/flows/instances/{started.instance_id}/submit"
+    )
+
+    assert parsed.scheme == "openid4vp"
+    assert set(parameters) == {
+        "client_id",
+        "client_metadata",
+        "dcql_query",
+        "nonce",
+        "response_mode",
+        "response_type",
+        "response_uri",
+        "state",
+    }
+    assert parameters["client_id"] == [f"redirect_uri:{response_uri}"]
+    assert parameters["response_uri"] == [response_uri]
+    assert parameters["response_mode"] == ["direct_post"]
+    assert parameters["response_type"] == ["vp_token"]
+    assert parameters["state"] == [started.instance_id]
+    assert "request" not in parameters
+    assert "request_uri" not in parameters
+    assert "iss" not in parameters
+    assert "aud" not in parameters
+    assert "iat" not in parameters
+    assert "exp" not in parameters
+    assert json.loads(parameters["dcql_query"][0]) == {
+        "credentials": [{"format": "dc+sd-jwt", "id": "descriptor-1"}]
+    }
+    assert json.loads(parameters["client_metadata"][0])["vp_formats_supported"]
+
+    instance = await repo.get_instance(started.instance_id)
+    assert instance is not None
+    assert instance.context["request_transport"] == "url_query"
+    assert instance.context["oid4vp_client_id"] == f"redirect_uri:{response_uri}"
+    assert instance.context["verification_audience"] == f"redirect_uri:{response_uri}"
+    assert instance.context["auth_request"] == started.request_uri
+
+    with pytest.raises(HTTPException, match="no signed Request Object"):
+        await get_verification_request_object(started.instance_id, repo)
 
 
 def test_url_query_transport_rejects_request_uri_post_semantics() -> None:
@@ -1713,6 +1809,28 @@ def test_url_query_transport_rejects_siop_only_flow() -> None:
             issuer_did="did:web:verifier.example:oid4vp",
             response_type="id_token",
             request_transport="url_query",
+        )
+
+
+def test_url_query_transport_rejects_haip() -> None:
+    with pytest.raises(ValidationError, match="cannot be used for HAIP"):
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example:oid4vp",
+            oid4vp_profile="haip",
+            request_transport="url_query",
+        )
+
+
+def test_request_object_transport_rejects_request_uri_post_semantics() -> None:
+    with pytest.raises(ValidationError, match="request_object transport"):
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example:oid4vp",
+            request_transport="request_object",
+            request_uri_method="post",
         )
 
 

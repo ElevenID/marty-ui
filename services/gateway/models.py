@@ -1340,7 +1340,11 @@ class StartVerificationFlowRequest(BaseModel):
     issuer_did: str = Field(
         pattern=r"^did:",
         max_length=2048,
-        description="Public DID that signs the OID4VP Request Object.",
+        description=(
+            "Public verifier DID. Signed transports resolve it to the managed "
+            "Request Object signing profile; URL-query uses it only for "
+            "organization-scoped verifier authorization."
+        ),
     )
     response_type: str = "vp_token"
     trust_profile_id: str | None = None
@@ -1349,18 +1353,28 @@ class StartVerificationFlowRequest(BaseModel):
     callback_url: str | None = None
     expiry_minutes: int = 15
     oid4vp_profile: Literal["standard", "haip"] = "standard"
-    request_transport: Literal["request_uri", "url_query"] = "request_uri"
+    request_transport: Literal["request_uri", "request_object", "url_query"] = (
+        "request_uri"
+    )
     request_uri_method: Literal["get", "post"] = "get"
 
     @model_validator(mode="after")
     def validate_oid4vp_transport(self) -> "StartVerificationFlowRequest":
-        if self.request_transport == "url_query" and self.request_uri_method != "get":
+        if (
+            self.request_transport in {"request_object", "url_query"}
+            and self.request_uri_method != "get"
+        ):
             raise ValueError(
-                "url_query transport cannot use request_uri_method; use request_uri transport"
+                f"{self.request_transport} transport cannot use request_uri_method; "
+                "use request_uri transport"
             )
         if self.request_transport == "url_query" and self.response_type == "id_token":
             raise ValueError(
                 "url_query transport is supported only for OID4VP vp_token flows"
+            )
+        if self.request_transport == "url_query" and self.oid4vp_profile == "haip":
+            raise ValueError(
+                "url_query transport is unsigned and cannot be used for HAIP"
             )
         return self
 
