@@ -53,7 +53,7 @@ vi.mock('react-router', async () => {
 const emptyDashboardData = {
   trustProfiles: [],
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
-  issuerProfiles: [],
+  issuerIdentities: [],
   keyManagementConfig: {
     default_service_id: 'managed-openbao-transit',
     services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
@@ -74,10 +74,10 @@ const emptyDashboardData = {
 const partialDashboardData = {
   trustProfiles: [{ id: 1, name: 'Active Profile', status: 'active' }],
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
-  issuerProfiles: [{
-    id: 'issuer_1',
+  issuerIdentities: [{
     issuer_did: 'did:web:issuer.example.com',
-    signing_service_id: 'managed-openbao-transit',
+    key_purpose: 'vc_jwt_issuer',
+    algorithm: 'ES256',
     status: 'active',
   }],
   keyManagementConfig: {
@@ -107,10 +107,10 @@ const partialDashboardData = {
 const fullDashboardData = {
   trustProfiles: [{ id: 1, name: 'Active Profile', status: 'active' }],
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
-  issuerProfiles: [{
-    id: 'issuer_1',
+  issuerIdentities: [{
     issuer_did: 'did:web:issuer.example.com',
-    signing_service_id: 'managed-openbao-transit',
+    key_purpose: 'vc_jwt_issuer',
+    algorithm: 'ES256',
     status: 'active',
   }],
   keyManagementConfig: {
@@ -569,7 +569,7 @@ describe('ConsoleDashboard', () => {
           ...emptyDashboardData,
           setupIntent: 'issue',
           signingKeys: [],
-          issuerProfiles: [],
+          issuerIdentities: [],
           keyManagementConfig: {
             default_service_id: null,
             services: [],
@@ -592,7 +592,7 @@ describe('ConsoleDashboard', () => {
           ...emptyDashboardData,
           setupIntent: 'issue',
           signingKeys: [],
-          issuerProfiles: [],
+          issuerIdentities: [],
         },
         loading: false,
         error: null,

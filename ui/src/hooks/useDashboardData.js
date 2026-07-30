@@ -20,7 +20,11 @@ import { listApplicationTemplates } from '../services/applicationTemplatesApi';
 import { listDeliveryDestinations } from '../services/deliveryDestinationsApi';
 import { listPolicySets } from '../services/policySetsApi';
 import { getPhysicalDocumentCapabilities } from '../services/physicalDocumentsApi';
-import { getKeyManagementConfig, listIssuerProfiles, listSigningKeys } from '../services/signingKeysApi';
+import {
+  getKeyManagementConfig,
+  listPublicIssuerIdentities,
+  listSigningKeys,
+} from '../services/signingKeysApi';
 import { 
   getTeamSnapshot, 
   getRuntimeStatus, 
@@ -47,7 +51,7 @@ function createEmptyDashboardData() {
   return {
     trustProfiles: [],
     signingKeys: [],
-    issuerProfiles: [],
+    issuerIdentities: [],
     keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG,
     templates: [],
     applicationTemplates: [],
@@ -115,7 +119,7 @@ export function useDashboardData() {
           deploymentsRes,
           flowsRes,
           signingKeysRes,
-          issuerProfilesRes,
+          issuerIdentitiesRes,
           keyManagementConfigRes,
           apiKeysRes,
           healthRes,
@@ -136,7 +140,7 @@ export function useDashboardData() {
           listDeploymentProfiles({ organization_id: organizationId }),
           listFlows({ organization_id: organizationId }),
           listSigningKeys({ organization_id: organizationId, limit: 1 }),
-          listIssuerProfiles({ organization_id: organizationId }),
+          listPublicIssuerIdentities({ organization_id: organizationId }),
           getKeyManagementConfig({ organization_id: organizationId }),
           listApiKeys(organizationId),
           fetch('/health').then((r) => (r.ok ? r.json() : { status: 'error' })),
@@ -150,7 +154,9 @@ export function useDashboardData() {
         if (!mounted) return;
 
         const rawSigningKeys = signingKeysRes.status === 'fulfilled' ? signingKeysRes.value : [];
-        const rawIssuerProfiles = issuerProfilesRes.status === 'fulfilled' ? issuerProfilesRes.value : { profiles: [] };
+        const rawIssuerIdentities = issuerIdentitiesRes.status === 'fulfilled'
+          ? issuerIdentitiesRes.value
+          : { identities: [] };
         const rawKeyManagementConfig = keyManagementConfigRes.status === 'fulfilled'
           ? keyManagementConfigRes.value
           : DEFAULT_KEY_MANAGEMENT_CONFIG;
@@ -175,7 +181,7 @@ export function useDashboardData() {
           flows: rejectedReason(flowsRes),
           apiKeys: rejectedReason(apiKeysRes),
           signingKeys: rejectedReason(signingKeysRes),
-          issuerProfiles: rejectedReason(issuerProfilesRes),
+          issuerIdentities: rejectedReason(issuerIdentitiesRes),
           keyManagementConfig: rejectedReason(keyManagementConfigRes),
         };
 
@@ -184,7 +190,9 @@ export function useDashboardData() {
           signingKeys: Array.isArray(rawSigningKeys)
             ? rawSigningKeys
             : (Array.isArray(rawSigningKeys?.keys) ? rawSigningKeys.keys : []),
-          issuerProfiles: Array.isArray(rawIssuerProfiles?.profiles) ? rawIssuerProfiles.profiles : [],
+          issuerIdentities: Array.isArray(rawIssuerIdentities?.identities)
+            ? rawIssuerIdentities.identities
+            : [],
           keyManagementConfig: normalizeKeyManagementConfig(rawKeyManagementConfig || DEFAULT_KEY_MANAGEMENT_CONFIG),
           templates: templatesRes.status === 'fulfilled' ? templatesRes.value : [],
           applicationTemplates: applicationTemplatesRes.status === 'fulfilled' ? applicationTemplatesRes.value : [],

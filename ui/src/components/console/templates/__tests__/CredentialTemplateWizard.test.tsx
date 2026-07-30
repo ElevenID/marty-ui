@@ -150,8 +150,13 @@ describe('CredentialTemplateWizard', () => {
     it('creates the template in the active console organization', async () => {
       let createdPayload: Record<string, unknown> | undefined
       let activationRequested = false
+      let internalIssuerProfileFetches = 0
 
       server.use(
+        http.get('*/v1/signing-keys/issuer-profiles', () => {
+          internalIssuerProfileFetches += 1
+          return HttpResponse.json({ profiles: [] })
+        }),
         http.get('*/v1/trust-profiles', ({ request }) => {
           expect(new URL(request.url).searchParams.get('organization_id')).toBe('console-org')
           return HttpResponse.json([
@@ -163,16 +168,14 @@ describe('CredentialTemplateWizard', () => {
             },
           ])
         }),
-        http.get('*/v1/signing-keys/issuer-profiles', ({ request }) => {
+        http.get('*/v1/signing-keys/issuer-identities', ({ request }) => {
           expect(new URL(request.url).searchParams.get('organization_id')).toBe('console-org')
           return HttpResponse.json({
-            profiles: [
+            identities: [
               {
-                id: 'issuer-1',
-                name: 'Production Issuer',
                 issuer_did: 'did:web:issuer.example.com',
-                signing_service_id: 'managed-openbao-transit',
-                signing_key_reference: 'issuer-key',
+                key_purpose: 'vc_jwt_issuer',
+                algorithm: 'ES256',
                 status: 'active',
               },
             ],
@@ -257,6 +260,7 @@ describe('CredentialTemplateWizard', () => {
         expect(createdPayload).not.toHaveProperty('activate_immediately')
         expect(createdPayload).not.toHaveProperty('supported_wallet_ids')
         expect(createdPayload).not.toHaveProperty('issuance_protocol')
+        expect(internalIssuerProfileFetches).toBe(0)
         expect(activationRequested).toBe(true)
         expect(screen.getByText(/now active/i)).toBeInTheDocument()
       })
