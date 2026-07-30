@@ -10,6 +10,13 @@ import { buildDefinedQueryString, requireOrganizationId, withQuery } from './que
 
 const BASE_PATH = '/v1/webhooks';
 
+function scopedWebhookPath(organizationId, webhookId, suffix = '') {
+  const queryString = buildDefinedQueryString({
+    organization_id: requireOrganizationId(organizationId, 'accessing a webhook'),
+  });
+  return withQuery(`${BASE_PATH}/${webhookId}${suffix}`, queryString);
+}
+
 /**
  * List webhooks for an organization
  * @param {string} organizationId - Organization ID
@@ -47,8 +54,8 @@ export async function createWebhook(organizationId, { url, eventTypes, descripti
  * @param {string} webhookId - Webhook ID
  * @returns {Promise<Object>} - Webhook object
  */
-export async function getWebhook(webhookId) {
-  return get(`${BASE_PATH}/${webhookId}`);
+export async function getWebhook(organizationId, webhookId) {
+  return get(scopedWebhookPath(organizationId, webhookId));
 }
 
 /**
@@ -61,13 +68,13 @@ export async function getWebhook(webhookId) {
  * @param {boolean} updates.enabled - Enable/disable webhook
  * @returns {Promise<Object>} - Updated webhook object
  */
-export async function updateWebhook(webhookId, { url, eventTypes, description, enabled }) {
+export async function updateWebhook(organizationId, webhookId, { url, eventTypes, description, enabled }) {
   const body = {};
   if (url !== undefined) body.url = url;
   if (eventTypes !== undefined) body.event_types = eventTypes;
   if (description !== undefined) body.description = description;
   if (enabled !== undefined) body.enabled = enabled;
-  return patch(`${BASE_PATH}/${webhookId}`, body);
+  return patch(scopedWebhookPath(organizationId, webhookId), body);
 }
 
 /**
@@ -75,8 +82,8 @@ export async function updateWebhook(webhookId, { url, eventTypes, description, e
  * @param {string} webhookId - Webhook ID
  * @returns {Promise<null>} - Empty response on success
  */
-export async function deleteWebhook(webhookId) {
-  return del(`${BASE_PATH}/${webhookId}`);
+export async function deleteWebhook(organizationId, webhookId) {
+  return del(scopedWebhookPath(organizationId, webhookId));
 }
 
 /**
@@ -84,8 +91,8 @@ export async function deleteWebhook(webhookId) {
  * @param {string} webhookId - Webhook ID
  * @returns {Promise<Object>} - Test delivery result with status code and response
  */
-export async function testWebhook(webhookId) {
-  return post(`${BASE_PATH}/${webhookId}/test`, {});
+export async function testWebhook(organizationId, webhookId) {
+  return post(scopedWebhookPath(organizationId, webhookId, '/test'), {});
 }
 
 /**
@@ -96,8 +103,12 @@ export async function testWebhook(webhookId) {
  * @param {number} options.offset - Pagination offset (default: 0)
  * @returns {Promise<Array>} - Array of delivery attempt objects
  */
-export async function getWebhookDeliveryAttempts(webhookId, { limit = 100, offset = 0 } = {}) {
-  const queryString = buildDefinedQueryString({ limit, offset });
+export async function getWebhookDeliveryAttempts(organizationId, webhookId, { limit = 100, offset = 0 } = {}) {
+  const queryString = buildDefinedQueryString({
+    organization_id: requireOrganizationId(organizationId, 'loading webhook deliveries'),
+    limit,
+    offset,
+  });
   const response = await get(withQuery(`${BASE_PATH}/${webhookId}/deliveries`, queryString));
   return response?.deliveries || [];
 }
@@ -107,8 +118,8 @@ export async function getWebhookDeliveryAttempts(webhookId, { limit = 100, offse
  * @param {string} webhookId - Webhook ID
  * @returns {Promise<Object>} - Updated webhook with new secret
  */
-export async function regenerateWebhookSecret(webhookId) {
-  return post(`${BASE_PATH}/${webhookId}/regenerate-secret`, {});
+export async function regenerateWebhookSecret(organizationId, webhookId) {
+  return post(scopedWebhookPath(organizationId, webhookId, '/regenerate-secret'), {});
 }
 
 /**

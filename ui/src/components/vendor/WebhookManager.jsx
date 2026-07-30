@@ -323,7 +323,7 @@ export default function WebhookManager() {
       };
 
       if (editingWebhook) {
-        await updateWebhook(editingWebhook.id, webhookData);
+        await updateWebhook(organizationId, editingWebhook.id, webhookData);
         showSuccess('Webhook updated successfully');
       } else {
         const result = await createWebhook(organizationId, webhookData);
@@ -355,7 +355,7 @@ export default function WebhookManager() {
     }
 
     try {
-      await deleteWebhook(webhookId);
+      await deleteWebhook(organizationId, webhookId);
       showSuccess('Webhook deleted successfully');
       await loadWebhooks();
     } catch (err) {
@@ -365,7 +365,7 @@ export default function WebhookManager() {
 
   const handleTest = async (webhookId) => {
     try {
-      await testWebhook(webhookId);
+      await testWebhook(organizationId, webhookId);
       showSuccess('Test event sent successfully!');
     } catch (err) {
       setError(getErrorMessage(err));
