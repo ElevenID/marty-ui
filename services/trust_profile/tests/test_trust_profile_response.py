@@ -35,6 +35,7 @@ def _build_client(
     app = FastAPI()
     app.include_router(trust_profile.router)
     app.include_router(trust_profile.internal_router)
+    app.include_router(trust_profile.resource_owner_router)
 
     trust_profile._repo = repo
     get_membership = AsyncMock(return_value=membership or FakeMembership())
@@ -206,6 +207,39 @@ def test_internal_get_trust_profile_skips_user_membership() -> None:
     assert response.status_code == 200
     assert response.json()["id"] == profile.id
     assert get_membership.await_count == 0
+
+
+def test_resource_owner_lookup_is_minimal_and_service_authenticated(monkeypatch) -> None:
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "gateway-service-key")
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = asyncio.run(_save_profile(repo))
+    client, get_membership = _build_client(repo)
+
+    unauthorized = client.get(
+        f"/internal/v1/resource-owners/trust-profiles/{profile.id}"
+    )
+    response = client.get(
+        f"/internal/v1/resource-owners/trust-profiles/{profile.id}",
+        headers={"X-API-Key": "gateway-service-key"},
+    )
+
+    assert unauthorized.status_code == 401
+    assert response.status_code == 200
+    assert response.json() == {"organization_id": profile.organization_id}
+    assert get_membership.await_count == 0
+
+
+def test_resource_owner_lookup_hides_missing_resources(monkeypatch) -> None:
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "gateway-service-key")
+    client, _ = _build_client(trust_profile.InMemoryTrustProfileRepository())
+
+    response = client.get(
+        "/internal/v1/resource-owners/trust-profiles/missing",
+        headers={"X-API-Key": "gateway-service-key"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Resource not found"}
 
 
 def test_create_trust_profile_returns_canonical_fields() -> None:

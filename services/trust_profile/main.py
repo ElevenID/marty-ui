@@ -16,6 +16,7 @@ Port: 8004
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import uuid
@@ -23,14 +24,12 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, AsyncGenerator, Literal
+from typing import Annotated, Any, AsyncGenerator, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from marty_common.dto import DeleteResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import text
-from typing import Annotated
-
 from marty_common import ensure_membership_permission
 from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
@@ -1299,6 +1298,10 @@ class OrganizationTrustProfileResponse(BaseModel):
 
 router = APIRouter(prefix="/v1/trust-profiles", tags=["trust-profiles"])
 internal_router = APIRouter(prefix="/internal/v1/trust-profiles", tags=["internal-trust-profiles"])
+resource_owner_router = APIRouter(
+    prefix="/internal/v1/resource-owners",
+    tags=["internal-resource-owners"],
+)
 organization_trust_profile_router = APIRouter(prefix="/v1/organizations/{organization_id}/trust-profiles", tags=["organization-trust-profiles"])
 framework_router = APIRouter(prefix="/v1/trust-frameworks", tags=["trust-frameworks"])
 registry_router = APIRouter(prefix="/v1/trust-registry", tags=["trust-registry"])
@@ -1324,6 +1327,31 @@ def get_repo() -> InMemoryTrustProfileRepository | PostgresTrustProfileRepositor
     if _repo is None:
         raise RuntimeError("Service not configured")
     return _repo
+
+
+def _read_internal_api_key() -> str:
+    direct = os.environ.get("SIGNING_KEYS_INTERNAL_API_KEY")
+    if direct:
+        return direct
+    file_path = os.environ.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE")
+    if not file_path:
+        return ""
+    try:
+        with open(file_path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
+def _verify_internal_api_key(
+    x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+) -> str:
+    expected = _read_internal_api_key()
+    if not expected:
+        raise HTTPException(status_code=503, detail="Internal API key is not configured")
+    if not x_api_key or not hmac.compare_digest(x_api_key, expected):
+        raise HTTPException(status_code=401, detail="Invalid internal API key")
+    return x_api_key
 
 
 async def _seed_system_frameworks(repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository) -> None:
@@ -1690,6 +1718,24 @@ async def internal_get_trust_profile(
     if not profile:
         raise HTTPException(status_code=404, detail="Trust Profile not found")
     return _profile_to_response(profile)
+
+
+@resource_owner_router.get(
+    "/trust-profiles/{profile_id}",
+    response_model=dict[str, str],
+    dependencies=[Depends(_verify_internal_api_key)],
+    include_in_schema=False,
+)
+async def get_trust_profile_owner(
+    profile_id: str,
+    repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
+) -> dict[str, str]:
+    """Return only the tenant owner needed for gateway authorization."""
+
+    profile = await repo.get_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return {"organization_id": profile.organization_id}
 
 
 @router.patch("/{profile_id}", response_model=TrustProfileResponse, response_model_exclude_none=True)
@@ -2406,7 +2452,7 @@ def create_app() -> FastAPI:
         description="Manages Trust Profiles - who is trusted and how validation happens",
         service_name=SERVICE_NAME,
         lifespan=lifespan,
-        routers=[router, internal_router, organization_trust_profile_router, framework_router, registry_router, issuer_router, registry_imports_router],
+        routers=[router, internal_router, resource_owner_router, organization_trust_profile_router, framework_router, registry_router, issuer_router, registry_imports_router],
     )
 
 
