@@ -78,10 +78,12 @@ def test_stack_release_is_tag_only_and_targets_the_validated_tag() -> None:
     assert "tag_name: v${{ needs.validate-stack.outputs.version }}" in workflow
     assert "Reject any existing release" in workflow
     assert "python scripts/check_release_absent.py" in workflow
-    assert "draft: true" in workflow
     assert "overwrite_files: false" in workflow
-    assert 'gh release edit "$RELEASE_TAG"' in workflow
-    assert "--draft=false" in workflow
+    # action-gh-release v3 stages assets before finalizing a standard release.
+    # A second API edit is incompatible with GitHub immutable releases.
+    assert "draft: true" not in workflow
+    assert 'gh release edit "$RELEASE_TAG"' not in workflow
+    assert "--draft=false" not in workflow
     assert "inputs.lock_file" not in workflow
 
 
