@@ -15,6 +15,144 @@ from starlette.responses import JSONResponse
 from gateway.routes import signing_keys
 
 
+def _key_attestation_root_pem() -> str:
+    from datetime import timedelta
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Wallet Provider Root")])
+    now = datetime.now(timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode()
+
+
+def test_issuer_profile_key_attestation_policy_is_provider_neutral_and_fail_closed() -> (
+    None
+):
+    root_pem = _key_attestation_root_pem()
+    profile = signing_keys._normalize_issuer_profile(
+        {
+            "issuer_did": "did:web:issuer.example",
+            "signing_service_id": "managed-openbao-transit",
+            "key_attestation_policy": {
+                "mode": "required",
+                "trusted_root_certificates_pem": [root_pem],
+                "allowed_algorithms": ["ES256"],
+                "required_key_storage": ["iso_18045_high"],
+                "required_user_authentication": ["iso_18045_high"],
+                "max_age_seconds": 600,
+                "require_nonce": True,
+                "status_validation": "required",
+                "status_list_allowed_origins": ["https://status.wallet-provider.example/"],
+                "status_list_trusted_root_certificates_pem": [root_pem],
+                "status_list_allowed_algorithms": ["ES256"],
+                "status_list_max_age_seconds": 43200,
+                "status_list_allow_private_hosts": False,
+                "status_list_tls_ca_certificates_pem": [],
+            },
+        },
+        org_id="org-a",
+    )
+
+    assert profile["organization_id"] == "org-a"
+    assert profile["key_attestation_policy"] == {
+        "mode": "required",
+        "trusted_root_certificates_pem": [root_pem.strip()],
+        "allowed_algorithms": ["ES256"],
+        "required_key_storage": ["iso_18045_high"],
+        "required_user_authentication": ["iso_18045_high"],
+        "max_age_seconds": 600,
+        "require_nonce": True,
+        "status_validation": "required",
+        "status_list_allowed_origins": ["https://status.wallet-provider.example"],
+        "status_list_trusted_root_certificates_pem": [root_pem.strip()],
+        "status_list_allowed_algorithms": ["ES256"],
+        "status_list_max_age_seconds": 43200,
+        "status_list_allow_private_hosts": False,
+        "status_list_tls_ca_certificates_pem": [],
+    }
+    serialized = json.dumps(profile)
+    assert "signing_key_reference" in profile
+    assert "private_key" not in serialized
+    assert "kms_key" not in serialized
+
+
+def test_issuer_profile_key_attestation_policy_defaults_disabled() -> None:
+    profile = signing_keys._normalize_issuer_profile(
+        {
+            "issuer_did": "did:web:issuer.example",
+            "signing_service_id": "managed-openbao-transit",
+        },
+        org_id="org-a",
+    )
+
+    assert profile["key_attestation_policy"]["mode"] == "disabled"
+    assert profile["key_attestation_policy"]["trusted_root_certificates_pem"] == []
+
+
+@pytest.mark.parametrize(
+    ("policy", "message"),
+    [
+        (
+            {"mode": "required", "allowed_algorithms": ["ES256"]},
+            "requires trusted roots",
+        ),
+        (
+            {
+                "mode": "required",
+                "trusted_root_certificates_pem": ["not a certificate"],
+                "allowed_algorithms": ["ES256"],
+            },
+            "invalid trusted root certificate",
+        ),
+        (
+            {
+                "mode": "required",
+                "trusted_root_certificates_pem": ["unused"],
+                "allowed_algorithms": ["HS256"],
+            },
+            "Unsupported key attestation algorithms",
+        ),
+        (
+            {
+                "mode": "required",
+                "trusted_root_certificates_pem": [_key_attestation_root_pem()],
+                "allowed_algorithms": ["ES256"],
+                "status_validation": "required",
+            },
+            "requires at least one status-list allowed origin",
+        ),
+        ({"mode": "bypass"}, "Invalid key attestation mode"),
+    ],
+)
+def test_issuer_profile_rejects_unsafe_key_attestation_policy(
+    policy: dict[str, object], message: str
+) -> None:
+    with pytest.raises(HTTPException, match=message):
+        signing_keys._normalize_issuer_profile(
+            {
+                "issuer_did": "did:web:issuer.example",
+                "signing_service_id": "managed-openbao-transit",
+                "key_attestation_policy": policy,
+            },
+            org_id="org-a",
+        )
+
+
 def test_public_holder_key_api_never_exposes_derived_key_references() -> None:
     paths = {route.path for route in signing_keys.signing_key_router.routes}
     assert "/v1/signing-keys/holder-keys/derive" not in paths
