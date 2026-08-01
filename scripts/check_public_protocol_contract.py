@@ -20,7 +20,10 @@ sys.path.insert(0, str(REPO_ROOT / "services"))
 from gateway.models import (  # noqa: E402
     CredentialTemplateResponse,
     IssuanceCreate,
+    OrganizationCreate,
+    OrganizationResponse,
     OrganizationTrustProfileResponse,
+    OrganizationUpdate,
     PresentationPolicyCreate,
     PresentationPolicyResponse,
     PresentationPolicyUpdate,
@@ -31,6 +34,10 @@ from gateway.models import (  # noqa: E402
 from gateway.routes.credentials import (  # noqa: E402
     _PUBLIC_TEMPLATE_RESPONSE_FIELDS,
     _sanitize_credential_template_response,
+)
+from gateway.routes.organizations import (  # noqa: E402
+    _sanitize_organization_response,
+    _validated_organization_payload,
 )
 from gateway.routes.verification import (  # noqa: E402
     _PUBLIC_PRESENTATION_POLICY_FIELDS,
@@ -64,6 +71,12 @@ FORBIDDEN_PUBLIC_FIELDS = {
     "signing_key_reference",
     "signing_service_id",
     "transit_mount",
+}
+
+FORBIDDEN_ORGANIZATION_FIELDS = FORBIDDEN_PUBLIC_FIELDS | {
+    "settings",
+    "plan",
+    "plan_expires_at",
 }
 
 
@@ -195,6 +208,114 @@ def check_contract(protocol_root: Path) -> None:
     schema_path = protocol_root / "schemas" / "credential-template.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     registry = _load_registry(protocol_root)
+
+    organization_schema, organization_validator = _validator(
+        protocol_root,
+        registry,
+        "organization.json",
+    )
+    _assert_model_shape(
+        model=OrganizationResponse,
+        schema=organization_schema,
+        label="OrganizationResponse",
+    )
+    organization_internal = {
+        "id": "20000000-0000-4000-8000-000000000001",
+        "name": "example-issuer",
+        "display_name": "Example Issuer",
+        "description": "Example tenant",
+        "join_code": None,
+        "visibility": "PUBLIC",
+        "owner_id": "owner-subject",
+        "status": "active",
+        "org_type": "enterprise",
+        "join_mechanism": "open",
+        "requires_approval": True,
+        "is_discoverable": True,
+        "contact_email": "operator@example.com",
+        "contact_phone": None,
+        "website": "https://example.com",
+        "membership": None,
+        "created_at": "2026-07-31T00:00:00Z",
+        "updated_at": "2026-07-31T00:00:00Z",
+    }
+    organization_response = _sanitize_organization_response(
+        Response(
+            content=json.dumps(organization_internal),
+            media_type="application/json",
+        )
+    )
+    if organization_response.status_code != 200:
+        raise AssertionError("valid Organization response failed runtime sanitization")
+    organization_validator.validate(json.loads(organization_response.body))
+
+    private_organization = {**organization_internal, "settings": {"private": True}}
+    rejected_private_organization = _sanitize_organization_response(
+        Response(
+            content=json.dumps(private_organization),
+            media_type="application/json",
+        )
+    )
+    if rejected_private_organization.status_code != 502:
+        raise AssertionError("private Organization state did not fail closed")
+
+    organization_create_schema, organization_create_validator = _validator(
+        protocol_root,
+        registry,
+        "organization-create-request.json",
+    )
+    _assert_model_shape(
+        model=OrganizationCreate,
+        schema=organization_create_schema,
+        label="OrganizationCreate",
+    )
+    organization_create = OrganizationCreate(
+        name="example-issuer",
+        display_name="Example Issuer",
+        org_type="healthcare",
+        visibility="PUBLIC",
+        join_mechanism="open",
+        requires_approval=True,
+    )
+    organization_create_validator.validate(
+        json.loads(_validated_organization_payload(organization_create))
+    )
+
+    organization_update_schema, organization_update_validator = _validator(
+        protocol_root,
+        registry,
+        "organization-update-request.json",
+    )
+    _assert_model_shape(
+        model=OrganizationUpdate,
+        schema=organization_update_schema,
+        label="OrganizationUpdate",
+    )
+    organization_update = OrganizationUpdate(
+        organization_id="20000000-0000-4000-8000-000000000001",
+        display_name="Updated Example Issuer",
+    )
+    organization_update_validator.validate(
+        json.loads(_validated_organization_payload(organization_update))
+    )
+
+    for document in (
+        organization_schema,
+        organization_create_schema,
+        organization_update_schema,
+    ):
+        leaked = FORBIDDEN_ORGANIZATION_FIELDS & _property_names(document)
+        if leaked:
+            raise AssertionError(
+                f"marty-protocol Organization boundary exposes private fields: {sorted(leaked)}"
+            )
+    for model in (OrganizationCreate, OrganizationUpdate, OrganizationResponse):
+        leaked = FORBIDDEN_ORGANIZATION_FIELDS & set(model.model_fields)
+        if leaked:
+            raise AssertionError(
+                f"runtime Organization boundary exposes private fields: {sorted(leaked)}"
+            )
+
     validator = Draft202012Validator(
         schema,
         registry=registry,

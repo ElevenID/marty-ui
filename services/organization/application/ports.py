@@ -13,6 +13,7 @@ from ..domain.entities import (
     AuditEvent,
     ConsoleContextPreference,
     JoinCode,
+    JoinMechanism,
     Member,
     Organization,
     OrganizationType,
@@ -26,32 +27,45 @@ from ..domain.entities import (
 # Commands & Queries
 # =============================================================================
 
+
 @dataclass
 class CreateOrganizationCommand:
     """Command to create an organization."""
+
     name: str
     owner_id: str
     org_type: OrganizationType = OrganizationType.STARTUP
     display_name: str | None = None
     description: str | None = None
     contact_email: str | None = None
+    visibility: str = "PRIVATE"
+    join_mechanism: JoinMechanism = JoinMechanism.INVITE
+    requires_approval: bool = False
 
 
 @dataclass
 class UpdateOrganizationCommand:
     """Command to update an organization."""
+
     organization_id: str
     name: str | None = None
+    display_name: str | None = None
+    org_type: OrganizationType | None = None
     description: str | None = None
     contact_email: str | None = None
     contact_phone: str | None = None
     website: str | None = None
+    visibility: str | None = None
+    join_mechanism: JoinMechanism | None = None
+    requires_approval: bool | None = None
     settings: dict[str, Any] | None = None
+    fields_set: frozenset[str] = frozenset()
 
 
 @dataclass
 class InviteMemberCommand:
     """Command to invite a member."""
+
     organization_id: str
     email: str
     role_ids: list[str]
@@ -61,6 +75,7 @@ class InviteMemberCommand:
 @dataclass
 class SetMemberRolesCommand:
     """Command to replace a member's roles."""
+
     member_id: str
     organization_id: str
     role_ids: list[str]
@@ -70,6 +85,7 @@ class SetMemberRolesCommand:
 @dataclass
 class CreateApiKeyCommand:
     """Command to create an API key."""
+
     organization_id: str
     name: str
     created_by: str
@@ -81,6 +97,7 @@ class CreateApiKeyCommand:
 @dataclass
 class RevokeApiKeyCommand:
     """Command to revoke an API key."""
+
     api_key_id: str
     revoked_by: str
 
@@ -88,6 +105,7 @@ class RevokeApiKeyCommand:
 @dataclass
 class UpsertConsoleContextPreferenceCommand:
     """Command to upsert console context preference."""
+
     user_id: str
     last_view_mode: ViewMode | None = None
     last_active_org_id: str | None = None
@@ -96,6 +114,7 @@ class UpsertConsoleContextPreferenceCommand:
 @dataclass
 class JoinByCodeCommand:
     """Command to join an organization by code."""
+
     user_id: str
     code: str
     email: str  # User email for membership record
@@ -104,12 +123,14 @@ class JoinByCodeCommand:
 @dataclass
 class JoinOrganizationCommand:
     """Command to join/request to join an organization directly by ID."""
+
     user_id: str
     organization_id: str
     email: str  # User email for membership record
 
 
 # ── RBAC Commands ────────────────────────────────────────────────────────────
+
 
 @dataclass
 class AuditEventQuery:
@@ -133,6 +154,7 @@ class AuditEventQuery:
 @dataclass
 class CreateRoleCommand:
     """Command to create a custom role."""
+
     organization_id: str
     name: str
     created_by: str
@@ -145,6 +167,7 @@ class CreateRoleCommand:
 @dataclass
 class UpdateRoleCommand:
     """Command to update an existing role."""
+
     role_id: str
     organization_id: str
     updated_by: str
@@ -157,6 +180,7 @@ class UpdateRoleCommand:
 @dataclass
 class DeleteRoleCommand:
     """Command to delete a custom role."""
+
     role_id: str
     organization_id: str
     deleted_by: str
@@ -166,6 +190,7 @@ class DeleteRoleCommand:
 @dataclass
 class AddMemberRoleCommand:
     """Command to add a single role to a member."""
+
     member_id: str
     organization_id: str
     role_id: str
@@ -175,6 +200,7 @@ class AddMemberRoleCommand:
 @dataclass
 class RemoveMemberRoleCommand:
     """Command to remove a single role from a member."""
+
     member_id: str
     organization_id: str
     role_id: str
@@ -185,29 +211,30 @@ class RemoveMemberRoleCommand:
 # Outbound Ports
 # =============================================================================
 
+
 class OrganizationRepositoryPort(ABC):
     """Port for organization persistence."""
-    
+
     @abstractmethod
     async def save(self, organization: Organization) -> None:
         """Save an organization."""
         ...
-    
+
     @abstractmethod
     async def get_by_id(self, org_id: str) -> Organization | None:
         """Get organization by ID."""
         ...
-    
+
     @abstractmethod
     async def get_by_slug(self, slug: str) -> Organization | None:
         """Get organization by slug."""
         ...
-    
+
     @abstractmethod
     async def list_all(self, limit: int = 100, offset: int = 0) -> list[Organization]:
         """List all organizations."""
         ...
-    
+
     @abstractmethod
     async def list_discoverable(
         self,
@@ -219,7 +246,7 @@ class OrganizationRepositoryPort(ABC):
     ) -> list[Organization]:
         """List discoverable organizations with optional filters."""
         ...
-    
+
     @abstractmethod
     async def delete(self, org_id: str) -> None:
         """Delete an organization."""
@@ -228,37 +255,37 @@ class OrganizationRepositoryPort(ABC):
 
 class MemberRepositoryPort(ABC):
     """Port for member persistence."""
-    
+
     @abstractmethod
     async def save(self, member: Member) -> None:
         """Save a member."""
         ...
-    
+
     @abstractmethod
     async def get_by_id(self, member_id: str) -> Member | None:
         """Get member by ID."""
         ...
-    
+
     @abstractmethod
     async def get_by_user_and_org(self, user_id: str, org_id: str) -> Member | None:
         """Get member by user ID and organization ID."""
         ...
-    
+
     @abstractmethod
     async def list_by_organization(self, org_id: str) -> list[Member]:
         """List all members of an organization."""
         ...
-    
+
     @abstractmethod
     async def list_by_user(self, user_id: str) -> list[Member]:
         """List all memberships for a user."""
         ...
-    
+
     @abstractmethod
     async def get_by_email_and_org(self, email: str, org_id: str) -> Member | None:
         """Get member invitation by email."""
         ...
-    
+
     @abstractmethod
     async def delete(self, member_id: str) -> None:
         """Delete a member."""
@@ -267,27 +294,27 @@ class MemberRepositoryPort(ABC):
 
 class ApiKeyRepositoryPort(ABC):
     """Port for API key persistence."""
-    
+
     @abstractmethod
     async def save(self, api_key: ApiKey) -> None:
         """Save an API key."""
         ...
-    
+
     @abstractmethod
     async def get_by_id(self, key_id: str) -> ApiKey | None:
         """Get API key by ID."""
         ...
-    
+
     @abstractmethod
     async def get_by_hash(self, key_hash: str) -> ApiKey | None:
         """Get API key by hash (for validation)."""
         ...
-    
+
     @abstractmethod
     async def list_by_organization(self, org_id: str) -> list[ApiKey]:
         """List all API keys for an organization."""
         ...
-    
+
     @abstractmethod
     async def delete(self, key_id: str) -> None:
         """Delete an API key."""
@@ -296,12 +323,12 @@ class ApiKeyRepositoryPort(ABC):
 
 class ConsoleContextPreferenceRepositoryPort(ABC):
     """Port for console context preference persistence."""
-    
+
     @abstractmethod
     async def get_by_user_id(self, user_id: str) -> ConsoleContextPreference | None:
         """Get preference by user ID."""
         ...
-    
+
     @abstractmethod
     async def save(self, preference: ConsoleContextPreference) -> None:
         """Save a preference (insert or update)."""
@@ -310,22 +337,22 @@ class ConsoleContextPreferenceRepositoryPort(ABC):
 
 class JoinCodeRepositoryPort(ABC):
     """Port for join code persistence."""
-    
+
     @abstractmethod
     async def save(self, join_code: JoinCode) -> None:
         """Save a join code (insert or update)."""
         ...
-    
+
     @abstractmethod
     async def get_by_code(self, code: str) -> JoinCode | None:
         """Get join code by code string."""
         ...
-    
+
     @abstractmethod
     async def list_by_organization(self, org_id: str) -> list[JoinCode]:
         """List all join codes for an organization."""
         ...
-    
+
     @abstractmethod
     async def delete(self, code_id: str) -> None:
         """Delete a join code."""
@@ -333,6 +360,7 @@ class JoinCodeRepositoryPort(ABC):
 
 
 # ── RBAC Repository Ports ────────────────────────────────────────────────────
+
 
 class RoleRepositoryPort(ABC):
     """Port for role persistence."""
@@ -438,7 +466,7 @@ class AuditEventRepositoryPort(ABC):
 
 class EventPublisherPort(ABC):
     """Port for publishing domain events."""
-    
+
     @abstractmethod
     async def publish(self, event: Any) -> None:
         """Publish a domain event."""

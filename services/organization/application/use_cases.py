@@ -12,7 +12,15 @@ from datetime import datetime, timezone
 from typing import Any
 from marty_common.system_ids import MARTY_DEFAULT_ORG_ID
 
-from ..domain.entities import ApiKey, ConsoleContextPreference, JoinMechanism, Member, MemberStatus, Organization, ViewMode
+from ..domain.entities import (
+    ApiKey,
+    ConsoleContextPreference,
+    JoinMechanism,
+    Member,
+    MemberStatus,
+    Organization,
+    ViewMode,
+)
 from ..domain.events import (
     ApiKeyCreatedEvent,
     ApiKeyRevokedEvent,
@@ -44,8 +52,12 @@ logger = logging.getLogger(__name__)
 
 MARTY_ORG_ID = os.environ.get("MARTY_ORG_ID", MARTY_DEFAULT_ORG_ID)
 MARTY_ORG_ADMIN_EMAIL = os.environ.get("MARTY_ORG_ADMIN_EMAIL", "").strip().lower()
-CANVAS_DEMO_ADMIN_ENABLED = os.environ.get("CANVAS_DEMO_ADMIN_ENABLED", "true").strip().lower()
-CANVAS_DEMO_ADMIN_EMAIL = os.environ.get("CANVAS_DEMO_ADMIN_EMAIL", "canvas.admin@marty.demo").strip().lower()
+CANVAS_DEMO_ADMIN_ENABLED = (
+    os.environ.get("CANVAS_DEMO_ADMIN_ENABLED", "true").strip().lower()
+)
+CANVAS_DEMO_ADMIN_EMAIL = (
+    os.environ.get("CANVAS_DEMO_ADMIN_EMAIL", "canvas.admin@marty.demo").strip().lower()
+)
 
 
 def _is_enabled(value: str) -> bool:
@@ -57,6 +69,7 @@ def _marty_org_admin_emails() -> set[str]:
     if _is_enabled(CANVAS_DEMO_ADMIN_ENABLED) and CANVAS_DEMO_ADMIN_EMAIL:
         emails.add(CANVAS_DEMO_ADMIN_EMAIL)
     return emails
+
 
 _ORG_TYPE_ALIASES: dict[str, str] = {
     "vendor": "enterprise",
@@ -79,14 +92,16 @@ def _normalize_org_type(value: str | None) -> str | None:
 @dataclass
 class OrganizationUseCase:
     """Use cases for organization management."""
-    
+
     organization_repo: OrganizationRepositoryPort
     member_repo: MemberRepositoryPort
     event_publisher: EventPublisherPort
     role_use_case: Any = None  # Optional[RoleUseCase] — avoids circular import
     redis_client: Any = None  # Optional[aioredis.Redis] — for plan key sync
-    
-    async def create_organization(self, command: CreateOrganizationCommand) -> Organization:
+
+    async def create_organization(
+        self, command: CreateOrganizationCommand
+    ) -> Organization:
         """Create a new organization with owner."""
         # Create organization and owner membership
         org, owner = Organization.create(
@@ -95,22 +110,25 @@ class OrganizationUseCase:
             org_type=command.org_type,
             display_name=command.display_name,
             description=command.description,
+            join_mechanism=command.join_mechanism,
+            requires_approval=command.requires_approval,
+            is_discoverable=command.visibility == "PUBLIC",
         )
-        
+
         if command.contact_email:
             org.contact_email = command.contact_email
-        
+
         # Save both
         await self.organization_repo.save(org)
         await self.member_repo.save(owner)
-        
+
         # Write default plan tier to Redis so gateway can enforce immediately
         if self.redis_client:
             try:
                 await self.redis_client.set(f"org:{org.id}:plan", "free")
             except Exception as e:
                 logger.warning(f"Failed to write plan key for org {org.id}: {e}")
-        
+
         # Seed default RBAC roles and assign owner role
         if self.role_use_case is not None:
             try:
@@ -118,6 +136,7 @@ class OrganizationUseCase:
                 # Assign the "owner" role to the creating user
                 if "owner" in created_roles:
                     from .ports import AddMemberRoleCommand
+
                     await self.role_use_case.add_member_role(
                         AddMemberRoleCommand(
                             organization_id=org.id,
@@ -128,7 +147,7 @@ class OrganizationUseCase:
                     )
             except Exception as e:
                 logger.warning(f"Failed to seed RBAC roles for org {org.id}: {e}")
-        
+
         # Publish event
         await self.event_publisher.publish(
             OrganizationCreatedEvent(
@@ -137,74 +156,117 @@ class OrganizationUseCase:
                 owner_user_id=command.owner_id,
             )
         )
-        
+
         logger.info(f"Organization {org.name} created with owner {command.owner_id}")
         return org
-    
-    async def update_organization(self, command: UpdateOrganizationCommand) -> Organization:
+
+    async def update_organization(
+        self, command: UpdateOrganizationCommand
+    ) -> Organization:
         """Update an organization."""
         org = await self.organization_repo.get_by_id(command.organization_id)
         if not org:
             raise ValueError(f"Organization {command.organization_id} not found")
-        
+
         updated_fields = []
-        
-        if command.name is not None:
+
+        def selected(field: str, value: Any) -> bool:
+            return (
+                field in command.fields_set if command.fields_set else value is not None
+            )
+
+        if selected("name", command.name):
+            assert command.name is not None
             org.name = command.name
             updated_fields.append("name")
-        if command.description is not None:
+        if selected("display_name", command.display_name):
+            assert command.display_name is not None
+            org.display_name = command.display_name
+            updated_fields.append("display_name")
+        if selected("org_type", command.org_type):
+            assert command.org_type is not None
+            org.org_type = command.org_type
+            updated_fields.append("org_type")
+        if selected("description", command.description):
             org.description = command.description
             updated_fields.append("description")
-        if command.contact_email is not None:
+        if selected("contact_email", command.contact_email):
             org.contact_email = command.contact_email
             updated_fields.append("contact_email")
-        if command.contact_phone is not None:
+        if selected("contact_phone", command.contact_phone):
             org.contact_phone = command.contact_phone
             updated_fields.append("contact_phone")
-        if command.website is not None:
+        if selected("website", command.website):
             org.website = command.website
             updated_fields.append("website")
-        if command.settings is not None:
+        if selected("visibility", command.visibility):
+            assert command.visibility is not None
+            org.visibility = command.visibility
+            org.is_discoverable = command.visibility == "PUBLIC"
+            updated_fields.extend(["visibility", "is_discoverable"])
+        if selected("join_mechanism", command.join_mechanism):
+            assert command.join_mechanism is not None
+            org.join_mechanism = command.join_mechanism
+            updated_fields.append("join_mechanism")
+        if selected("requires_approval", command.requires_approval):
+            assert command.requires_approval is not None
+            org.requires_approval = command.requires_approval
+            updated_fields.append("requires_approval")
+        if selected("settings", command.settings):
+            assert command.settings is not None
             org.update_settings(command.settings)
             updated_fields.append("settings")
-        
+
+        if org.join_mechanism.value == "open" and not org.is_discoverable:
+            raise ValueError("open join requires PUBLIC visibility")
+
         await self.organization_repo.save(org)
-        
+
         await self.event_publisher.publish(
             OrganizationUpdatedEvent(
                 organization_id=org.id,
                 updated_fields=updated_fields,
             )
         )
-        
+
         return org
-    
+
     async def get_organization(self, org_id: str) -> Organization | None:
         """Get organization by ID."""
         return await self.organization_repo.get_by_id(org_id)
-    
-    async def list_organizations(self, limit: int = 100, offset: int = 0) -> list[Organization]:
+
+    async def list_organizations(
+        self, limit: int = 100, offset: int = 0
+    ) -> list[Organization]:
         """List all organizations."""
         return await self.organization_repo.list_all(limit, offset)
-    
+
     async def get_user_organizations(self, user_id: str) -> list[Organization]:
         """Get all organizations a user belongs to."""
         memberships = await self.member_repo.list_by_user(user_id)
-        active_ids = [m.organization_id for m in memberships if m.status == MemberStatus.ACTIVE]
+        active_ids = [
+            m.organization_id for m in memberships if m.status == MemberStatus.ACTIVE
+        ]
         if not active_ids:
             return []
-        fetched = await asyncio.gather(*(self.organization_repo.get_by_id(oid) for oid in active_ids))
+        fetched = await asyncio.gather(
+            *(self.organization_repo.get_by_id(oid) for oid in active_ids)
+        )
         return [org for org in fetched if org is not None]
-    
-    async def get_user_organizations_with_memberships(self, user_id: str) -> list[tuple[Organization, Member]]:
+
+    async def get_user_organizations_with_memberships(
+        self, user_id: str
+    ) -> list[tuple[Organization, Member]]:
         """Get all organizations a user belongs to with membership details."""
         memberships = await self.member_repo.list_by_user(user_id)
         active = [m for m in memberships if m.status == MemberStatus.ACTIVE]
         if not active:
             return []
-        fetched = await asyncio.gather(*(self.organization_repo.get_by_id(m.organization_id) for m in active))
+        fetched = await asyncio.gather(
+            *(self.organization_repo.get_by_id(m.organization_id) for m in active)
+        )
         return [(org, m) for org, m in zip(fetched, active) if org is not None]
-    
+
     async def discover_organizations(
         self,
         search: str | None = None,
@@ -215,7 +277,7 @@ class OrganizationUseCase:
     ) -> list[Organization]:
         """Discover publicly available organizations with optional filters."""
         from ..domain.entities import OrganizationType
-        
+
         # Convert org_type string/alias to enum if provided
         org_type_enum = None
         normalized_org_type = _normalize_org_type(org_type)
@@ -224,7 +286,7 @@ class OrganizationUseCase:
                 org_type_enum = OrganizationType(normalized_org_type)
             except ValueError:
                 raise ValueError(f"Invalid organization type: {org_type}")
-        
+
         return await self.organization_repo.list_discoverable(
             search=search,
             org_type=org_type_enum,
@@ -237,7 +299,7 @@ class OrganizationUseCase:
 @dataclass
 class MemberUseCase:
     """Use cases for member management."""
-    
+
     member_repo: MemberRepositoryPort
     organization_repo: OrganizationRepositoryPort
     event_publisher: EventPublisherPort
@@ -323,14 +385,14 @@ class MemberUseCase:
         if resolved_role_ids:
             return list(dict.fromkeys(resolved_role_ids))
         return await self._resolve_default_role_ids(organization_id)
-    
+
     async def invite_member(self, command: InviteMemberCommand) -> Member:
         """Invite a new member to an organization."""
         # Verify organization exists
         org = await self.organization_repo.get_by_id(command.organization_id)
         if not org:
             raise ValueError(f"Organization {command.organization_id} not found")
-        
+
         # Check for existing invitation
         existing = await self.member_repo.get_by_email_and_org(
             command.email, command.organization_id
@@ -355,7 +417,7 @@ class MemberUseCase:
             command.invited_by,
         )
         member.roles = list(assigned_roles)
-        
+
         await self.event_publisher.publish(
             MemberInvitedEvent(
                 organization_id=command.organization_id,
@@ -364,20 +426,20 @@ class MemberUseCase:
                 invited_by=command.invited_by,
             )
         )
-        
+
         logger.info(f"Invited {command.email} to organization {org.name}")
         return member
-    
+
     async def accept_invitation(self, member_id: str, user_id: str) -> Member:
         """Accept an invitation."""
         member = await self.member_repo.get_by_id(member_id)
         if not member:
             raise ValueError(f"Invitation {member_id} not found")
-        
+
         member.accept_invitation(user_id)
         await self.member_repo.save(member)
         member = await self.member_repo.get_by_id(member.id) or member
-        
+
         await self.event_publisher.publish(
             MemberAddedEvent(
                 organization_id=member.organization_id,
@@ -386,9 +448,9 @@ class MemberUseCase:
                 roles=sorted(member.role_names),
             )
         )
-        
+
         return member
-    
+
     async def set_member_roles(self, command: SetMemberRolesCommand) -> Member:
         """Replace a member's role assignments."""
         if not command.role_ids:
@@ -405,7 +467,11 @@ class MemberUseCase:
         if organization.owner_id and member.user_id == organization.owner_id:
             roles = []
             for role_id in command.role_ids:
-                role = await self.role_use_case.get_role(role_id) if self.role_use_case is not None else None
+                role = (
+                    await self.role_use_case.get_role(role_id)
+                    if self.role_use_case is not None
+                    else None
+                )
                 if role is None:
                     raise ValueError(f"Role {role_id} not found")
                 roles.append(role)
@@ -423,7 +489,7 @@ class MemberUseCase:
         member.updated_at = datetime.now(timezone.utc)
         await self.member_repo.save(member)
         return await self.member_repo.get_by_id(member.id) or member
-    
+
     async def remove_member(self, member_id: str, removed_by: str) -> None:
         """Remove a member from an organization."""
         member = await self.member_repo.get_by_id(member_id)
@@ -431,11 +497,15 @@ class MemberUseCase:
             raise ValueError(f"Member {member_id} not found")
 
         organization = await self.organization_repo.get_by_id(member.organization_id)
-        if organization and organization.owner_id and member.user_id == organization.owner_id:
+        if (
+            organization
+            and organization.owner_id
+            and member.user_id == organization.owner_id
+        ):
             raise ValueError("Cannot remove the organization owner")
-        
+
         await self.member_repo.delete(member_id)
-        
+
         await self.event_publisher.publish(
             MemberRemovedEvent(
                 organization_id=member.organization_id,
@@ -443,11 +513,11 @@ class MemberUseCase:
                 user_id=member.user_id,
             )
         )
-    
+
     async def list_members(self, org_id: str) -> list[Member]:
         """List all members of an organization."""
         return await self.member_repo.list_by_organization(org_id)
-    
+
     async def get_membership(self, user_id: str, org_id: str) -> Member | None:
         """Get a user's membership in an organization."""
         return await self.member_repo.get_by_user_and_org(user_id, org_id)
@@ -497,7 +567,9 @@ class MemberUseCase:
 
         # 2. Check by email for a pre-seeded row (e.g. admin seeded by migration)
         if email:
-            email_match = await self.member_repo.get_by_email_and_org(email, organization_id)
+            email_match = await self.member_repo.get_by_email_and_org(
+                email, organization_id
+            )
             if email_match and not email_match.user_id:
                 # Link the authenticated user to the pre-seeded record and
                 # preserve its assigned roles unless explicit role IDs were provided.
@@ -566,15 +638,15 @@ class MemberUseCase:
 @dataclass
 class ApiKeyUseCase:
     """Use cases for API key management."""
-    
+
     api_key_repo: ApiKeyRepositoryPort
     organization_repo: OrganizationRepositoryPort
     event_publisher: EventPublisherPort
-    
+
     async def create_api_key(self, command: CreateApiKeyCommand) -> tuple[ApiKey, str]:
         """
         Create a new API key.
-        
+
         Returns the API key and the raw key value.
         The raw key is only returned once at creation.
         """
@@ -582,24 +654,42 @@ class ApiKeyUseCase:
         org = await self.organization_repo.get_by_id(command.organization_id)
         if not org:
             raise ValueError(f"Organization {command.organization_id} not found")
-        
+
         # MIP §21 — validate scopes against allowed set
         _MIP_VALID_SCOPES = {
-            "credentials:issue", "credentials:revoke", "credentials:read",
-            "flows:read", "flows:write", "flows:execute",
-            "applications:read", "applications:write", "applications:approve",
-            "trust:read", "trust:write", "trust:admin",
-            "compliance:read", "compliance:write",
-            "templates:read", "templates:write",
-            "wallet:read", "wallet:write",
-            "keys:read", "keys:write",
-            "users:read", "users:invite",
-            "roles:read", "roles:write",
+            "credentials:issue",
+            "credentials:revoke",
+            "credentials:read",
+            "flows:read",
+            "flows:write",
+            "flows:execute",
+            "applications:read",
+            "applications:write",
+            "applications:approve",
+            "trust:read",
+            "trust:write",
+            "trust:admin",
+            "compliance:read",
+            "compliance:write",
+            "templates:read",
+            "templates:write",
+            "wallet:read",
+            "wallet:write",
+            "keys:read",
+            "keys:write",
+            "users:read",
+            "users:invite",
+            "roles:read",
+            "roles:write",
             "audit:read",
-            "webhooks:read", "webhooks:write",
-            "notifications:send", "notifications:read",
-            "deployment:read", "deployment:write",
-            "integrations:read", "integrations:write",
+            "webhooks:read",
+            "webhooks:write",
+            "notifications:send",
+            "notifications:read",
+            "deployment:read",
+            "deployment:write",
+            "integrations:read",
+            "integrations:write",
             "admin:full",
         }
         if command.scopes:
@@ -612,8 +702,10 @@ class ApiKeyUseCase:
             # admin:full restricted to ORGANIZATION scope_type
             scope_type = getattr(command, "scope_type", "ORGANIZATION")
             if "admin:full" in command.scopes and scope_type != "ORGANIZATION":
-                raise ValueError("admin:full scope is restricted to ORGANIZATION scope_type keys")
-        
+                raise ValueError(
+                    "admin:full scope is restricted to ORGANIZATION scope_type keys"
+                )
+
         # Create API key
         api_key, raw_key = ApiKey.create(
             organization_id=command.organization_id,
@@ -623,9 +715,9 @@ class ApiKeyUseCase:
             description=command.description,
             is_test=command.is_test,
         )
-        
+
         await self.api_key_repo.save(api_key)
-        
+
         await self.event_publisher.publish(
             ApiKeyCreatedEvent(
                 organization_id=command.organization_id,
@@ -634,19 +726,19 @@ class ApiKeyUseCase:
                 created_by=command.created_by,
             )
         )
-        
+
         logger.info(f"Created API key {api_key.name} for organization {org.name}")
         return api_key, raw_key
-    
+
     async def revoke_api_key(self, command: RevokeApiKeyCommand) -> ApiKey:
         """Revoke an API key."""
         api_key = await self.api_key_repo.get_by_id(command.api_key_id)
         if not api_key:
             raise ValueError(f"API key {command.api_key_id} not found")
-        
+
         api_key.revoke()
         await self.api_key_repo.save(api_key)
-        
+
         await self.event_publisher.publish(
             ApiKeyRevokedEvent(
                 organization_id=api_key.organization_id,
@@ -654,23 +746,23 @@ class ApiKeyUseCase:
                 revoked_by=command.revoked_by,
             )
         )
-        
+
         return api_key
-    
+
     async def validate_api_key(self, raw_key: str) -> ApiKey | None:
         """Validate an API key and return it if valid."""
         key_hash = ApiKey.hash_key(raw_key)
         api_key = await self.api_key_repo.get_by_hash(key_hash)
-        
+
         if not api_key or not api_key.is_valid:
             return None
-        
+
         return api_key
-    
+
     async def list_api_keys(self, org_id: str) -> list[ApiKey]:
         """List all API keys for an organization."""
         return await self.api_key_repo.list_by_organization(org_id)
-    
+
     async def get_api_key(self, key_id: str) -> ApiKey | None:
         """Get API key by ID."""
         return await self.api_key_repo.get_by_id(key_id)
@@ -679,13 +771,13 @@ class ApiKeyUseCase:
 @dataclass
 class ConsoleContextPreferenceUseCase:
     """Use cases for console context preferences."""
-    
+
     preference_repo: ConsoleContextPreferenceRepositoryPort
-    
+
     async def get_preferences(self, user_id: str) -> ConsoleContextPreference:
         """Get user's console context preferences, return defaults if none exist."""
         preference = await self.preference_repo.get_by_user_id(user_id)
-        
+
         if not preference:
             # Return default preferences
             preference = ConsoleContextPreference(
@@ -693,9 +785,9 @@ class ConsoleContextPreferenceUseCase:
                 last_view_mode=ViewMode.APPLICANT,
                 last_active_org_id=None,
             )
-        
+
         return preference
-    
+
     async def upsert_preferences(
         self,
         command: UpsertConsoleContextPreferenceCommand,
@@ -703,32 +795,33 @@ class ConsoleContextPreferenceUseCase:
         """Upsert user's console context preferences."""
         # Get existing or create new
         preference = await self.preference_repo.get_by_user_id(command.user_id)
-        
+
         if not preference:
             preference = ConsoleContextPreference(
                 user_id=command.user_id,
                 last_view_mode=ViewMode.APPLICANT,
                 last_active_org_id=None,
             )
-        
+
         # Apply updates (partial update semantics)
         if command.last_view_mode is not None:
             preference.last_view_mode = command.last_view_mode
-        
+
         # Explicit None handling for last_active_org_id
-        if hasattr(command, 'last_active_org_id'):
+        if hasattr(command, "last_active_org_id"):
             preference.last_active_org_id = command.last_active_org_id
-        
+
         # Save
         await self.preference_repo.save(preference)
-        
+
         logger.info(f"Console context preferences updated for user {command.user_id}")
         return preference
+
 
 @dataclass
 class JoinUseCase:
     """Use cases for joining organizations."""
-    
+
     join_code_repo: JoinCodeRepositoryPort
     organization_repo: OrganizationRepositoryPort
     member_repo: MemberRepositoryPort
@@ -743,14 +836,16 @@ class JoinUseCase:
         if defaults:
             return defaults
         raise ValueError("Organization has no default role configured")
-    
-    async def join_by_code(self, command: JoinByCodeCommand) -> tuple[Organization, Member]:
+
+    async def join_by_code(
+        self, command: JoinByCodeCommand
+    ) -> tuple[Organization, Member]:
         """Join an organization using a join code."""
         # Find the join code
         join_code = await self.join_code_repo.get_by_code(command.code)
         if not join_code:
             raise ValueError("Invalid join code")
-        
+
         # Validate the code
         if not join_code.is_valid():
             if not join_code.is_active:
@@ -760,17 +855,17 @@ class JoinUseCase:
             if join_code.max_uses is not None:
                 raise ValueError("Join code has reached maximum uses")
             raise ValueError("Invalid join code")
-        
+
         # Get the organization
         org = await self.organization_repo.get_by_id(join_code.organization_id)
         if not org:
             raise ValueError("Organization not found")
-        
+
         # Check if user is already a member
         existing = await self.member_repo.get_by_user_and_org(command.user_id, org.id)
         if existing:
             raise ValueError("You are already a member of this organization")
-        
+
         # Create membership
         # If org requires approval, create as PENDING, otherwise ACTIVE
         status = MemberStatus.PENDING if org.requires_approval else MemberStatus.ACTIVE
@@ -780,10 +875,10 @@ class JoinUseCase:
             email=command.email,
             status=status,
         )
-        
+
         # Increment join code usage
         join_code.increment_usage()
-        
+
         # Save both
         await self.member_repo.save(member)
         default_role_ids = await self._resolve_default_role_ids(org.id)
@@ -798,7 +893,7 @@ class JoinUseCase:
             )
         )
         await self.join_code_repo.save(join_code)
-        
+
         # Publish event
         await self.event_publisher.publish(
             MemberAddedEvent(
@@ -808,14 +903,16 @@ class JoinUseCase:
                 roles=sorted(member.role_names),
             )
         )
-        
+
         logger.info(
             f"User {command.user_id} joined organization {org.id} via code {command.code} "
             f"with status {status.value}"
         )
         return org, member
 
-    async def validate_join_code(self, code: str) -> tuple[bool, Organization | None, str, bool]:
+    async def validate_join_code(
+        self, code: str
+    ) -> tuple[bool, Organization | None, str, bool]:
         """Validate a join code and return org context if valid.
 
         Returns:
@@ -835,7 +932,12 @@ class JoinUseCase:
             if join_code.expires_at:
                 return False, None, "This invitation has expired", True
             if join_code.max_uses is not None:
-                return False, None, "This invitation has reached its maximum uses", False
+                return (
+                    False,
+                    None,
+                    "This invitation has reached its maximum uses",
+                    False,
+                )
             return False, None, "Invalid invitation code", False
 
         org = await self.organization_repo.get_by_id(join_code.organization_id)
@@ -844,14 +946,18 @@ class JoinUseCase:
 
         return True, org, f"Valid invitation to join {org.name}", False
 
-    async def join_organization(self, command: JoinOrganizationCommand) -> tuple[Organization, Member]:
+    async def join_organization(
+        self, command: JoinOrganizationCommand
+    ) -> tuple[Organization, Member]:
         """Join/request to join an organization directly by ID (open join only)."""
         org = await self.organization_repo.get_by_id(command.organization_id)
         if not org:
             raise ValueError("Organization not found")
 
         if org.join_mechanism != JoinMechanism.OPEN:
-            raise ValueError("This organization does not support direct join. Use an invite code or invitation")
+            raise ValueError(
+                "This organization does not support direct join. Use an invite code or invitation"
+            )
 
         existing = await self.member_repo.get_by_user_and_org(command.user_id, org.id)
         if existing:

@@ -1,7 +1,9 @@
 """Organization, membership, RBAC, invites, SCIM, and preferences routes."""
+
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import logging
 import os
 import httpx
@@ -20,6 +22,7 @@ from gateway.models import (
     OrganizationLifecycleResponse,
     OrganizationCreate,
     OrganizationResponse,
+    OrganizationUpdate,
     PreferencesResponse,
     UpdatePreferencesRequest,
     ValidateJoinCodeResponse,
@@ -32,49 +35,148 @@ preferences_router = APIRouter(prefix="/v1/me", tags=["User Preferences"])
 logger = logging.getLogger(__name__)
 
 
+def _validated_organization_payload(
+    body: OrganizationCreate | OrganizationUpdate,
+    *,
+    include_organization_id: bool = True,
+) -> bytes:
+    """Serialize only fields accepted by the public Organization contract."""
+    payload = body.model_dump(
+        mode="json",
+        exclude_unset=isinstance(body, OrganizationUpdate),
+    )
+    if not include_organization_id:
+        payload.pop("organization_id", None)
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+
+
+def _sanitize_organization_response(
+    response: Response, *, many: bool = False
+) -> Response:
+    """Validate successful downstream responses before returning public data."""
+    if response.status_code >= 400:
+        return response
+
+    try:
+        raw = json.loads(bytes(response.body))
+        if many:
+            if not isinstance(raw, list):
+                raise ValueError("expected an organization list")
+            public = [
+                OrganizationResponse.model_validate(item).model_dump(
+                    mode="json", exclude_none=True
+                )
+                for item in raw
+            ]
+        else:
+            public = OrganizationResponse.model_validate(raw).model_dump(
+                mode="json", exclude_none=True
+            )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        logger.warning(
+            "Organization service returned a response outside the public contract"
+        )
+        return mip_error_response(
+            status_code=502,
+            error="invalid_service_response",
+            message="Organization service returned an invalid public response",
+        )
+
+    return Response(
+        content=json.dumps(public, separators=(",", ":")),
+        status_code=response.status_code,
+        headers={
+            key: value
+            for key, value in response.headers.items()
+            if key.lower()
+            not in {
+                "content-encoding",
+                "transfer-encoding",
+                "content-length",
+                "content-type",
+            }
+        },
+        media_type="application/json",
+    )
+
+
 # ── Organizations CRUD ───────────────────────────────────────────────
 
-@organization_router.post("", response_model=OrganizationResponse, summary="Create Organization")
+
+@organization_router.post(
+    "", response_model=OrganizationResponse, summary="Create Organization"
+)
 async def create_organization(body: OrganizationCreate, request: Request) -> Response:
     """Create a new Organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, "/v1/organizations")
+    response = await proxy_request(
+        request,
+        service_url,
+        "/v1/organizations",
+        body_override=_validated_organization_payload(body),
+    )
+    return _sanitize_organization_response(response)
 
 
-@organization_router.get("", response_model=list[OrganizationResponse], summary="List Organizations")
+@organization_router.get(
+    "", response_model=list[OrganizationResponse], summary="List Organizations"
+)
 async def list_organizations(request: Request) -> Response:
     """List Organizations."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, "/v1/organizations")
+    response = await proxy_request(request, service_url, "/v1/organizations")
+    return _sanitize_organization_response(response, many=True)
 
 
-@organization_router.get("/discover", response_model=list[OrganizationResponse], summary="Discover Organizations")
+@organization_router.get(
+    "/discover",
+    response_model=list[OrganizationResponse],
+    summary="Discover Organizations",
+)
 async def discover_organizations(request: Request) -> Response:
     """Discover publicly available organizations."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, "/v1/organizations/discover")
+    response = await proxy_request(request, service_url, "/v1/organizations/discover")
+    return _sanitize_organization_response(response, many=True)
 
 
-@organization_router.get("/mine", response_model=list[dict], summary="My Organizations")
+@organization_router.get(
+    "/mine",
+    response_model=list[OrganizationResponse],
+    summary="My Organizations",
+)
 async def get_my_organizations(request: Request) -> Response:
     """Get organizations the current user belongs to with membership details."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, "/v1/organizations/mine")
+    response = await proxy_request(request, service_url, "/v1/organizations/mine")
+    return _sanitize_organization_response(response, many=True)
 
 
-@organization_router.get("/{org_id}", response_model=OrganizationResponse, summary="Get Organization")
+@organization_router.get(
+    "/{org_id}", response_model=OrganizationResponse, summary="Get Organization"
+)
 async def get_organization(org_id: str, request: Request) -> Response:
     """Get an Organization by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}", inject_params={"organization_id": org_id})
+    response = await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}",
+        inject_params={"organization_id": org_id},
+    )
+    return _sanitize_organization_response(response)
 
 
-@organization_router.get("/{org_id}/lifecycle", response_model=OrganizationLifecycleResponse, summary="Get Organization Lifecycle")
+@organization_router.get(
+    "/{org_id}/lifecycle",
+    response_model=OrganizationLifecycleResponse,
+    summary="Get Organization Lifecycle",
+)
 async def get_organization_lifecycle(org_id: str, request: Request) -> Response | dict:
     """Get aggregated lifecycle metadata for dashboard retention surfaces."""
     lifecycle_payload, error_response = await _load_organization_lifecycle_payload(
@@ -86,8 +188,12 @@ async def get_organization_lifecycle(org_id: str, request: Request) -> Response 
     return lifecycle_payload
 
 
-@organization_router.get("/{org_id}/runtime/status", summary="Runtime Status", response_model=None)
-async def get_runtime_status(org_id: str, request: Request) -> Response | dict[str, Any]:
+@organization_router.get(
+    "/{org_id}/runtime/status", summary="Runtime Status", response_model=None
+)
+async def get_runtime_status(
+    org_id: str, request: Request
+) -> Response | dict[str, Any]:
     """Return conservative runtime readiness derived from live org artifacts."""
     payload, error_response = await _load_runtime_status_payload(
         org_id,
@@ -103,19 +209,37 @@ async def get_organization_environment(org_id: str, request: Request) -> Respons
     """Return the dashboard environment setting from the organization service."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/environment", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/environment",
+        inject_params={"organization_id": org_id},
+    )
 
 
-@organization_router.patch("/{org_id}/environment", summary="Update Organization Environment")
+@organization_router.patch(
+    "/{org_id}/environment", summary="Update Organization Environment"
+)
 async def update_organization_environment(org_id: str, request: Request) -> Response:
     """Update the dashboard environment setting through the organization service."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/environment", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/environment",
+        inject_params={"organization_id": org_id},
+    )
 
 
-@organization_router.get("/{org_id}/dashboard/applicant-stats", summary="Applicant Stats", response_model=None)
-async def get_dashboard_applicant_stats(org_id: str, request: Request) -> Response | dict[str, int]:
+@organization_router.get(
+    "/{org_id}/dashboard/applicant-stats",
+    summary="Applicant Stats",
+    response_model=None,
+)
+async def get_dashboard_applicant_stats(
+    org_id: str, request: Request
+) -> Response | dict[str, int]:
     """Return applicant lifecycle counts from the applicant service."""
     payload, error_response = await _load_applicant_stats_payload(
         org_id,
@@ -127,15 +251,17 @@ async def get_dashboard_applicant_stats(org_id: str, request: Request) -> Respon
 
 
 @organization_router.get("/{org_id}/integration-info", summary="Integration Info")
-async def get_organization_integration_info(org_id: str, request: Request) -> dict[str, str]:
+async def get_organization_integration_info(
+    org_id: str, request: Request
+) -> dict[str, str]:
     """Return real request/deployment-derived developer quick-start metadata."""
     base_url = _public_api_base_url(request)
     example_request = (
-        f"curl -sS -X POST \"{base_url}/flows/instances\" \\\n"
-        "  -H \"Content-Type: application/json\" \\\n"
-        "  -H \"X-API-Key: <api-key>\" \\\n"
-        f"  -H \"X-Organization-ID: {org_id}\" \\\n"
-        "  -d '{\"flow_definition_id\":\"<flow-definition-id>\",\"subject_id\":\"<subject-id>\",\"initial_context\":{}}'"
+        f'curl -sS -X POST "{base_url}/flows/instances" \\\n'
+        '  -H "Content-Type: application/json" \\\n'
+        '  -H "X-API-Key: <api-key>" \\\n'
+        f'  -H "X-Organization-ID: {org_id}" \\\n'
+        '  -d \'{"flow_definition_id":"<flow-definition-id>","subject_id":"<subject-id>","initial_context":{}}\''
     )
     return {
         "org_id": org_id,
@@ -144,25 +270,43 @@ async def get_organization_integration_info(org_id: str, request: Request) -> di
     }
 
 
-@organization_router.put("/{org_id}", response_model=OrganizationResponse, summary="Update Organization")
-async def update_organization(org_id: str, body: OrganizationCreate, request: Request) -> Response:
+@organization_router.patch(
+    "/{org_id}", response_model=OrganizationResponse, summary="Update Organization"
+)
+async def update_organization(
+    org_id: str, body: OrganizationUpdate, request: Request
+) -> Response:
     """Update an Organization."""
+    if body.organization_id != org_id:
+        return mip_error_response(
+            status_code=404,
+            error="organization_not_found",
+            message="Organization not found",
+        )
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}", inject_params={"organization_id": org_id})
-
-
-@organization_router.delete("/{org_id}", summary="Delete Organization")
-async def delete_organization(org_id: str, request: Request) -> Response:
-    """Delete an Organization."""
-    registry = get_registry()
-    service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}", inject_params={"organization_id": org_id})
+    response = await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}",
+        inject_params={"organization_id": org_id},
+        body_override=_validated_organization_payload(
+            body,
+            include_organization_id=False,
+        ),
+    )
+    return _sanitize_organization_response(response)
 
 
 # ── Join by Code ─────────────────────────────────────────────────────
 
-@organization_router.post("/join/code", response_model=JoinByCodeResponse, summary="Join Organization by Code", status_code=201)
+
+@organization_router.post(
+    "/join/code",
+    response_model=JoinByCodeResponse,
+    summary="Join Organization by Code",
+    status_code=201,
+)
 async def join_by_code(body: JoinByCodeRequest, request: Request) -> Response:
     """Join an organization using a join code."""
     registry = get_registry()
@@ -170,41 +314,73 @@ async def join_by_code(body: JoinByCodeRequest, request: Request) -> Response:
     return await proxy_request(request, service_url, "/v1/organizations/join/code")
 
 
-@organization_router.get("/join/code/validate", response_model=ValidateJoinCodeResponse, summary="Validate Join Code")
+@organization_router.get(
+    "/join/code/validate",
+    response_model=ValidateJoinCodeResponse,
+    summary="Validate Join Code",
+)
 async def validate_join_code(request: Request) -> Response:
     """Validate join/invitation code without joining."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, "/v1/organizations/join/code/validate")
+    return await proxy_request(
+        request, service_url, "/v1/organizations/join/code/validate"
+    )
 
 
-@organization_router.post("/{org_id}/join", response_model=JoinByCodeResponse, summary="Join Organization", status_code=201)
+@organization_router.post(
+    "/{org_id}/join",
+    response_model=JoinByCodeResponse,
+    summary="Join Organization",
+    status_code=201,
+)
 async def join_organization(org_id: str, request: Request) -> Response:
     """Join/request to join an organization by ID (open join organizations)."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/join", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/join",
+        inject_params={"organization_id": org_id},
+    )
 
 
 # ── Invitations ──────────────────────────────────────────────────────
 
-@organization_router.get("/invitations/validate", response_model=InvitationValidateResponse, summary="Validate Invitation")
+
+@organization_router.get(
+    "/invitations/validate",
+    response_model=InvitationValidateResponse,
+    summary="Validate Invitation",
+)
 async def validate_organization_invitation(request: Request) -> Response:
     """Validate invitation token (public endpoint)."""
     registry = get_registry()
     service_url = registry.get_service_url("auth")
-    return await proxy_request(request, service_url, "/api/onboarding/invitations/validate")
+    return await proxy_request(
+        request, service_url, "/api/onboarding/invitations/validate"
+    )
 
 
-@organization_router.post("/invitations/accept", response_model=InvitationAcceptResponse, summary="Accept Invitation")
-async def accept_organization_invitation(body: InvitationAcceptRequest, request: Request) -> Response:
+@organization_router.post(
+    "/invitations/accept",
+    response_model=InvitationAcceptResponse,
+    summary="Accept Invitation",
+)
+async def accept_organization_invitation(
+    body: InvitationAcceptRequest, request: Request
+) -> Response:
     """Accept invitation and join organization."""
     registry = get_registry()
     service_url = registry.get_service_url("auth")
-    return await proxy_request(request, service_url, "/api/onboarding/invitations/accept")
+    return await proxy_request(
+        request, service_url, "/api/onboarding/invitations/accept"
+    )
 
 
 # ── Audit Events ─────────────────────────────────────────────────────
+
 
 @organization_router.get("/{org_id}/audit-events", summary="List Audit Events")
 async def list_audit_events(
@@ -252,7 +428,12 @@ async def list_audit_events(
     if search:
         inject_params["search"] = search
 
-    return await proxy_request(request, service_url, "/v1/organizations/audit/events", inject_params=inject_params)
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/organizations/audit/events",
+        inject_params=inject_params,
+    )
 
 
 @organization_router.get("/{org_id}/audit-events/export", summary="Export Audit Events")
@@ -298,35 +479,61 @@ async def export_audit_events(
     if search:
         inject_params["search"] = search
 
-    return await proxy_request(request, service_url, "/v1/organizations/audit/events/export", inject_params=inject_params)
+    return await proxy_request(
+        request,
+        service_url,
+        "/v1/organizations/audit/events/export",
+        inject_params=inject_params,
+    )
 
 
-@organization_router.get("/{org_id}/audit-events/{event_id}", response_model=AuditEventResponse, summary="Get Audit Event")
+@organization_router.get(
+    "/{org_id}/audit-events/{event_id}",
+    response_model=AuditEventResponse,
+    summary="Get Audit Event",
+)
 async def get_audit_event(org_id: str, event_id: str, request: Request) -> Response:
     """Get an Audit Event by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/audit/events/{event_id}", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/audit/events/{event_id}",
+        inject_params={"organization_id": org_id},
+    )
 
 
 # ── RBAC: Permissions ────────────────────────────────────────────────
+
 
 @organization_router.get("/{org_id}/permissions", summary="List Permissions")
 async def list_permissions(org_id: str, request: Request) -> Response:
     """List the available permission catalog for this organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/permissions", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/permissions",
+        inject_params={"organization_id": org_id},
+    )
 
 
 # ── RBAC: Roles ──────────────────────────────────────────────────────
+
 
 @organization_router.get("/{org_id}/roles", summary="List Roles")
 async def list_roles(org_id: str, request: Request) -> Response:
     """List roles in this organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/roles",
+        inject_params={"organization_id": org_id},
+    )
 
 
 @organization_router.post("/{org_id}/roles", summary="Create Role", status_code=201)
@@ -334,7 +541,12 @@ async def create_role(org_id: str, request: Request) -> Response:
     """Create a custom role in this organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/roles",
+        inject_params={"organization_id": org_id},
+    )
 
 
 @organization_router.get("/{org_id}/roles/{role_id}", summary="Get Role")
@@ -342,7 +554,12 @@ async def get_role(org_id: str, role_id: str, request: Request) -> Response:
     """Get a role by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles/{role_id}", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/roles/{role_id}",
+        inject_params={"organization_id": org_id},
+    )
 
 
 @organization_router.patch("/{org_id}/roles/{role_id}", summary="Update Role")
@@ -350,7 +567,12 @@ async def update_role(org_id: str, role_id: str, request: Request) -> Response:
     """Update a custom role."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles/{role_id}", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/roles/{role_id}",
+        inject_params={"organization_id": org_id},
+    )
 
 
 @organization_router.delete("/{org_id}/roles/{role_id}", summary="Delete Role")
@@ -358,17 +580,28 @@ async def delete_role(org_id: str, role_id: str, request: Request) -> Response:
     """Delete a custom role."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/roles/{role_id}", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/roles/{role_id}",
+        inject_params={"organization_id": org_id},
+    )
 
 
 # ── Members CRUD ─────────────────────────────────────────────────────
+
 
 @organization_router.get("/{org_id}/members", summary="List Members")
 async def list_members(org_id: str, request: Request) -> Response:
     """List members of an organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/members",
+        inject_params={"organization_id": org_id},
+    )
 
 
 @organization_router.post("/{org_id}/members", summary="Add Member", status_code=201)
@@ -376,7 +609,12 @@ async def add_member(org_id: str, request: Request) -> Response:
     """Add a member to an organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/members",
+        inject_params={"organization_id": org_id},
+    )
 
 
 @organization_router.patch("/{org_id}/members/{member_id}", summary="Update Member")
@@ -384,7 +622,12 @@ async def update_member(org_id: str, member_id: str, request: Request) -> Respon
     """Update a member (e.g. change role)."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/members/{member_id}",
+        inject_params={"organization_id": org_id},
+    )
 
 
 @organization_router.delete("/{org_id}/members/{member_id}", summary="Remove Member")
@@ -392,17 +635,28 @@ async def remove_member(org_id: str, member_id: str, request: Request) -> Respon
     """Remove a member from an organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/members/{member_id}",
+        inject_params={"organization_id": org_id},
+    )
 
 
 # ── Invites (pending invitations) ────────────────────────────────────
+
 
 @organization_router.get("/{org_id}/invites", summary="List Invites")
 async def list_invites(org_id: str, request: Request) -> Response:
     """List pending invites for an organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/invites", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/invites",
+        inject_params={"organization_id": org_id},
+    )
 
 
 @organization_router.post("/{org_id}/invites", summary="Create Invite", status_code=201)
@@ -410,15 +664,27 @@ async def create_invite(org_id: str, request: Request) -> Response:
     """Create an invite for an organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/invites", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/invites",
+        inject_params={"organization_id": org_id},
+    )
 
 
-@organization_router.post("/{org_id}/invites/{invite_id}/resend", summary="Resend Invite")
+@organization_router.post(
+    "/{org_id}/invites/{invite_id}/resend", summary="Resend Invite"
+)
 async def resend_invite(org_id: str, invite_id: str, request: Request) -> Response:
     """Resend an invite."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/invites/{invite_id}/resend", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/invites/{invite_id}/resend",
+        inject_params={"organization_id": org_id},
+    )
 
 
 @organization_router.delete("/{org_id}/invites/{invite_id}", summary="Revoke Invite")
@@ -426,20 +692,35 @@ async def revoke_invite(org_id: str, invite_id: str, request: Request) -> Respon
     """Revoke a pending invite."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/invites/{invite_id}", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/invites/{invite_id}",
+        inject_params={"organization_id": org_id},
+    )
 
 
 # ── Transfer ownership ──────────────────────────────────────────────
+
 
 @organization_router.post("/{org_id}/transfer-ownership", summary="Transfer Ownership")
 async def transfer_ownership(org_id: str, request: Request) -> Response:
     """Transfer organization ownership to another member."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/transfer-ownership", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/transfer-ownership",
+        inject_params={"organization_id": org_id},
+    )
 
 
-@organization_router.post("/{org_id}/lifecycle/purge", response_model=HostedPilotPurgeResponse, summary="Purge Hosted Pilot Data")
+@organization_router.post(
+    "/{org_id}/lifecycle/purge",
+    response_model=HostedPilotPurgeResponse,
+    summary="Purge Hosted Pilot Data",
+)
 async def purge_hosted_pilot_data(org_id: str, request: Request) -> Response | dict:
     """Manually purge Hosted Pilot data that has aged past the retention window."""
     purge_payload, error_response = await run_hosted_pilot_purge(
@@ -453,51 +734,92 @@ async def purge_hosted_pilot_data(org_id: str, request: Request) -> Response | d
 
 # ── Team snapshot ────────────────────────────────────────────────────
 
+
 @organization_router.get("/{org_id}/team/snapshot", summary="Team Snapshot")
 async def get_team_snapshot(org_id: str, request: Request) -> Response:
     """Get a team snapshot for dashboards."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/team/snapshot", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/team/snapshot",
+        inject_params={"organization_id": org_id},
+    )
 
 
 # ── RBAC: Member role assignments ────────────────────────────────────
 
-@organization_router.put("/{org_id}/members/{member_id}/roles", summary="Set Member Roles")
+
+@organization_router.put(
+    "/{org_id}/members/{member_id}/roles", summary="Set Member Roles"
+)
 async def set_member_roles(org_id: str, member_id: str, request: Request) -> Response:
     """Replace all roles for a member."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}/roles", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/members/{member_id}/roles",
+        inject_params={"organization_id": org_id},
+    )
 
 
-@organization_router.post("/{org_id}/members/{member_id}/roles/{role_id}", summary="Add Role to Member")
-async def add_member_role(org_id: str, member_id: str, role_id: str, request: Request) -> Response:
+@organization_router.post(
+    "/{org_id}/members/{member_id}/roles/{role_id}", summary="Add Role to Member"
+)
+async def add_member_role(
+    org_id: str, member_id: str, role_id: str, request: Request
+) -> Response:
     """Add a role to a member."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}/roles/{role_id}", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/members/{member_id}/roles/{role_id}",
+        inject_params={"organization_id": org_id},
+    )
 
 
-@organization_router.delete("/{org_id}/members/{member_id}/roles/{role_id}", summary="Remove Role from Member")
-async def remove_member_role(org_id: str, member_id: str, role_id: str, request: Request) -> Response:
+@organization_router.delete(
+    "/{org_id}/members/{member_id}/roles/{role_id}", summary="Remove Role from Member"
+)
+async def remove_member_role(
+    org_id: str, member_id: str, role_id: str, request: Request
+) -> Response:
     """Remove a role from a member."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/{member_id}/roles/{role_id}", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/members/{member_id}/roles/{role_id}",
+        inject_params={"organization_id": org_id},
+    )
 
 
 # ── RBAC: Current user permissions ───────────────────────────────────
 
-@organization_router.get("/{org_id}/members/me/permissions", summary="Get My Permissions")
+
+@organization_router.get(
+    "/{org_id}/members/me/permissions", summary="Get My Permissions"
+)
 async def get_my_permissions(org_id: str, request: Request) -> Response:
     """Get the current user's permissions in this organization."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{org_id}/members/me/permissions", inject_params={"organization_id": org_id})
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{org_id}/members/me/permissions",
+        inject_params={"organization_id": org_id},
+    )
 
 
 # ── SCIM 2.0 Proxy ──────────────────────────────────────────────────
+
 
 @organization_router.api_route(
     "/{org_id}/scim/v2/{scim_path:path}",
@@ -508,13 +830,24 @@ async def proxy_scim(org_id: str, scim_path: str, request: Request) -> Response:
     """Proxy org-scoped SCIM 2.0 requests to the organization service."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    upstream_path = f"/v1/organizations/{org_id}/scim/v2/{scim_path}" if scim_path else f"/v1/organizations/{org_id}/scim/v2"
-    return await proxy_request(request, service_url, upstream_path, inject_params={"organization_id": org_id})
+    upstream_path = (
+        f"/v1/organizations/{org_id}/scim/v2/{scim_path}"
+        if scim_path
+        else f"/v1/organizations/{org_id}/scim/v2"
+    )
+    return await proxy_request(
+        request, service_url, upstream_path, inject_params={"organization_id": org_id}
+    )
 
 
 # ── Preferences (Console Context) ───────────────────────────────────
 
-@preferences_router.get("/preferences", response_model=PreferencesResponse, summary="Get Console Context Preferences")
+
+@preferences_router.get(
+    "/preferences",
+    response_model=PreferencesResponse,
+    summary="Get Console Context Preferences",
+)
 async def get_preferences(request: Request) -> Response:
     """
     Get current user's console context preferences.
@@ -526,8 +859,14 @@ async def get_preferences(request: Request) -> Response:
     return await proxy_request(request, service_url, "/v1/me/preferences")
 
 
-@preferences_router.put("/preferences", response_model=PreferencesResponse, summary="Update Console Context Preferences")
-async def update_preferences(body: UpdatePreferencesRequest, request: Request) -> Response:
+@preferences_router.put(
+    "/preferences",
+    response_model=PreferencesResponse,
+    summary="Update Console Context Preferences",
+)
+async def update_preferences(
+    body: UpdatePreferencesRequest, request: Request
+) -> Response:
     """
     Update (upsert) current user's console context preferences.
 
@@ -550,10 +889,22 @@ def _public_api_base_url(request: Request) -> str:
     if configured:
         origin = configured.strip().rstrip("/")
     else:
-        forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get("host")
-        forwarded_proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
-        host = forwarded_host.split(",", 1)[0].strip() if forwarded_host else request.url.netloc
-        proto = forwarded_proto.split(",", 1)[0].strip().lower() if forwarded_proto else "https"
+        forwarded_host = request.headers.get("x-forwarded-host") or request.headers.get(
+            "host"
+        )
+        forwarded_proto = (
+            request.headers.get("x-forwarded-proto") or request.url.scheme or "https"
+        )
+        host = (
+            forwarded_host.split(",", 1)[0].strip()
+            if forwarded_host
+            else request.url.netloc
+        )
+        proto = (
+            forwarded_proto.split(",", 1)[0].strip().lower()
+            if forwarded_proto
+            else "https"
+        )
         origin = f"{proto}://{host}".rstrip("/")
 
     return origin if origin.endswith("/v1") else f"{origin}/v1"
@@ -573,7 +924,9 @@ def _forward_context_headers(request: Request) -> dict[str, str]:
         headers["X-Organization-ID"] = request.state.organization_id
     org_permissions = getattr(request.state, "org_permissions", None)
     if org_permissions:
-        headers["X-Org-Permissions"] = ",".join(sorted(str(value) for value in org_permissions))
+        headers["X-Org-Permissions"] = ",".join(
+            sorted(str(value) for value in org_permissions)
+        )
     org_roles = getattr(request.state, "org_roles", None)
     if org_roles:
         headers["X-Org-Roles"] = ",".join(sorted(str(value) for value in org_roles))
@@ -588,8 +941,10 @@ def _proxy_error_response(response: httpx.Response) -> Response:
         content=response.content,
         status_code=response.status_code,
         headers={
-            k: v for k, v in response.headers.items()
-            if k.lower() not in ("content-encoding", "transfer-encoding", "content-length")
+            k: v
+            for k, v in response.headers.items()
+            if k.lower()
+            not in ("content-encoding", "transfer-encoding", "content-length")
         },
         media_type=response.headers.get("content-type"),
     )
@@ -614,7 +969,11 @@ def _parse_iso_timestamp(value: str | None) -> datetime | None:
 
 def _retention_window_days(lifecycle_payload: dict[str, Any]) -> int:
     pilot_retention = lifecycle_payload.get("pilot_retention") or {}
-    raw_value = pilot_retention.get("window_days") or lifecycle_payload.get("audit_retention_days") or 30
+    raw_value = (
+        pilot_retention.get("window_days")
+        or lifecycle_payload.get("audit_retention_days")
+        or 30
+    )
     try:
         parsed = int(raw_value)
     except (TypeError, ValueError):
@@ -655,9 +1014,17 @@ async def _request_service_json_with_headers(
             timeout=30.0,
         )
     except httpx.ConnectError:
-        return {}, mip_error_response(status_code=503, error="service_unavailable", message=f"{service_name} service unavailable")
+        return {}, mip_error_response(
+            status_code=503,
+            error="service_unavailable",
+            message=f"{service_name} service unavailable",
+        )
     except httpx.TimeoutException:
-        return {}, mip_error_response(status_code=504, error="service_timeout", message=f"{service_name} service timed out")
+        return {}, mip_error_response(
+            status_code=504,
+            error="service_timeout",
+            message=f"{service_name} service timed out",
+        )
     except httpx.HTTPError as exc:
         return {}, mip_error_response(
             status_code=502,
@@ -783,8 +1150,10 @@ async def _load_runtime_status_payload(
     active_deployments = [item for item in deployments if _is_active_artifact(item)]
     active_flows = [item for item in flows if _is_active_artifact(item)]
     kms_backed_templates = [
-        item for item in active_templates
-        if item.get("issuer_profile_id") and str(item.get("key_access_mode") or "").upper() == "REMOTE_SIGNING"
+        item
+        for item in active_templates
+        if item.get("issuer_profile_id")
+        and str(item.get("key_access_mode") or "").upper() == "REMOTE_SIGNING"
     ]
 
     issuer_active = bool(kms_backed_templates)
@@ -792,12 +1161,18 @@ async def _load_runtime_status_payload(
     deployment_active = bool(active_deployments)
     policy_reachable = bool(active_policies)
     issuance_flow_active = any(
-        item.get("credential_template_id") and _status_value(item) in {"active", "enabled", "ready", ""}
+        item.get("credential_template_id")
+        and _status_value(item) in {"active", "enabled", "ready", ""}
         for item in active_flows
     )
 
     return {
-        "can_issue": bool(issuer_active and issuer_keys_valid and deployment_active and issuance_flow_active),
+        "can_issue": bool(
+            issuer_active
+            and issuer_keys_valid
+            and deployment_active
+            and issuance_flow_active
+        ),
         "can_verify": bool(policy_reachable and deployment_active),
         "issuer_keys_valid": issuer_keys_valid,
         "issuer_active": issuer_active,
@@ -839,9 +1214,15 @@ async def _load_applicant_stats_payload(
     issuable_statuses = {"approved", "offered"}
 
     return {
-        "pending": sum(1 for item in applications if _status_value(item) in pending_statuses),
-        "approved": sum(1 for item in applications if _status_value(item) in approved_statuses),
-        "issuable": sum(1 for item in applications if _status_value(item) in issuable_statuses),
+        "pending": sum(
+            1 for item in applications if _status_value(item) in pending_statuses
+        ),
+        "approved": sum(
+            1 for item in applications if _status_value(item) in approved_statuses
+        ),
+        "issuable": sum(
+            1 for item in applications if _status_value(item) in issuable_statuses
+        ),
         "total": len(applications),
     }, None
 
@@ -882,7 +1263,10 @@ async def _load_organization_lifecycle_payload(
         registry=registry,
     )
     if summary_error is not None:
-        logger.warning("Retention summary unavailable for org %s; preserving upstream error", org_id)
+        logger.warning(
+            "Retention summary unavailable for org %s; preserving upstream error",
+            org_id,
+        )
         return {}, summary_error
 
     lifecycle_payload["pilot_retention"] = {
@@ -992,7 +1376,10 @@ async def run_hosted_pilot_auto_purge_sweep(
     now = datetime.now(timezone.utc)
 
     while True:
-        organizations_payload, error_response = await _request_service_json_with_headers(
+        (
+            organizations_payload,
+            error_response,
+        ) = await _request_service_json_with_headers(
             "organizations",
             "/v1/organizations",
             params={"limit": page_size, "offset": offset},
@@ -1003,7 +1390,9 @@ async def run_hosted_pilot_auto_purge_sweep(
             logger.warning("Hosted Pilot auto-purge sweep could not list organizations")
             return stats
 
-        organizations = organizations_payload if isinstance(organizations_payload, list) else []
+        organizations = (
+            organizations_payload if isinstance(organizations_payload, list) else []
+        )
         if not organizations:
             return stats
 
@@ -1013,14 +1402,20 @@ async def run_hosted_pilot_auto_purge_sweep(
             if not org_id:
                 continue
 
-            lifecycle_payload, lifecycle_error = await _load_organization_lifecycle_payload(
+            (
+                lifecycle_payload,
+                lifecycle_error,
+            ) = await _load_organization_lifecycle_payload(
                 org_id,
                 internal=True,
                 client=client,
                 registry=registry,
             )
             if lifecycle_error is not None:
-                logger.warning("Hosted Pilot auto-purge sweep could not load lifecycle for org %s", org_id)
+                logger.warning(
+                    "Hosted Pilot auto-purge sweep could not load lifecycle for org %s",
+                    org_id,
+                )
                 continue
 
             pilot_retention = lifecycle_payload.get("pilot_retention") or {}
@@ -1028,7 +1423,9 @@ async def run_hosted_pilot_auto_purge_sweep(
                 continue
 
             stats["hosted_pilot_orgs"] += 1
-            eligible_total = int((pilot_retention.get("eligible_for_purge") or {}).get("total") or 0)
+            eligible_total = int(
+                (pilot_retention.get("eligible_for_purge") or {}).get("total") or 0
+            )
             next_expiry_at = _parse_iso_timestamp(pilot_retention.get("next_expiry_at"))
             if eligible_total <= 0 and (next_expiry_at is None or next_expiry_at > now):
                 continue
@@ -1040,11 +1437,15 @@ async def run_hosted_pilot_auto_purge_sweep(
                 lifecycle_payload=lifecycle_payload,
             )
             if purge_error is not None:
-                logger.warning("Hosted Pilot auto-purge sweep failed for org %s", org_id)
+                logger.warning(
+                    "Hosted Pilot auto-purge sweep failed for org %s", org_id
+                )
                 continue
 
             stats["purge_requests"] += 1
-            stats["purged_records"] += int((purge_payload.get("purged_records") or {}).get("total") or 0)
+            stats["purged_records"] += int(
+                (purge_payload.get("purged_records") or {}).get("total") or 0
+            )
 
         if len(organizations) < page_size:
             return stats
