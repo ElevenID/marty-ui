@@ -191,87 +191,28 @@ class TrustedIssuerResponse(BaseModel):
     updated_at: str
 
 
-class IssuerEntityCreate(BaseModel):
-    organization_id: str | None = None
-    issuer_id: str
-    issuer_type: str = "ORGANIZATION"
-    display_name: str
-    description: str | None = None
-    is_system_issuer: bool = False
-    compliance_status: str = "COMPLIANT"
-    accreditation_body: str | None = None
-    accreditation_date: str | None = None
-    valid_from: str | None = None
-    valid_until: str | None = None
-    trust_anchor_id: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class IssuerEntityUpdate(BaseModel):
-    display_name: str | None = None
-    description: str | None = None
-    issuer_type: str | None = None
-    is_system_issuer: bool | None = None
-    compliance_status: str | None = None
-    accreditation_body: str | None = None
-    accreditation_date: str | None = None
-    valid_from: str | None = None
-    valid_until: str | None = None
-    trust_anchor_id: str | None = None
-    metadata: dict[str, Any] | None = None
-    revocation_reason: str | None = None
-    revoked_by: str | None = None
-
-
-class IssuerEntityResponse(BaseModel):
-    id: str
-    organization_id: str | None = None
-    issuer_id: str
-    issuer_type: str
-    display_name: str
-    description: str | None = None
-    is_system_issuer: bool = False
-    compliance_status: str
-    accreditation_body: str | None = None
-    accreditation_date: str | None = None
-    valid_from: str
-    valid_until: str | None = None
-    trust_anchor_id: str | None = None
-    revoked_at: str | None = None
-    revocation_reason: str | None = None
-    revoked_by: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    created_at: str
-    updated_at: str
-
-
-class TrustFrameworkResponse(BaseModel):
-    id: str
-    code: str
-    display_name: str
-    description: str | None = None
-    pkd_endpoints: list[str] = Field(default_factory=list)
-    default_algorithms: list[str] = Field(default_factory=list)
-    default_formats: list[str] = Field(default_factory=list)
-    validation_ruleset: dict = Field(default_factory=dict)
-    sync_config: dict = Field(default_factory=dict)
-    is_system: bool = True
-    created_at: str
-    updated_at: str
-
-
 _PRIVATE_CUSTODY_METADATA_FIELDS = {
+    "issuer_algorithm",
+    "issuer_profile_id",
+    "issuer_key_id",
+    "key_access_mode",
     "key_binding",
     "key_management",
+    "key_name",
     "key_reference",
+    "key_version",
     "kms_arn",
+    "kms_provider",
     "kms_region",
     "managed_key_id",
+    "provider",
     "service_id",
     "signing_agent_auth",
     "signing_agent_url",
     "signing_key_reference",
     "signing_service_id",
+    "transit_mount",
+    "verification_method_id",
 }
 
 
@@ -295,9 +236,144 @@ def _reject_private_custody_metadata(metadata: dict[str, Any] | None) -> None:
     field = _find_private_custody_metadata(metadata)
     if field is not None:
         raise ValueError(
-            f"Organization Trust Profile metadata cannot contain private custody selector '{field}'; "
+            f"Public metadata cannot contain private custody selector '{field}'; "
             "signing is resolved from the issuer DID through an issuer profile"
         )
+
+
+class IssuerEntityCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str
+    issuer_id: str = Field(min_length=1, max_length=512)
+    issuer_type: Literal["ORGANIZATION", "GOVERNMENT", "DEVICE"] = "ORGANIZATION"
+    display_name: str = Field(min_length=1, max_length=256)
+    description: str | None = Field(None, max_length=1024)
+    compliance_status: Literal["ACCREDITED", "COMPLIANT", "SUSPENDED"] = (
+        "COMPLIANT"
+    )
+    accreditation_body: str | None = Field(None, max_length=256)
+    accreditation_date: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    trust_anchor_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> "IssuerEntityCreate":
+        _reject_private_custody_metadata(self.metadata)
+        return self
+
+
+class IssuerEntityUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str
+    display_name: str | None = Field(None, min_length=1, max_length=256)
+    description: str | None = Field(None, max_length=1024)
+    issuer_type: Literal["ORGANIZATION", "GOVERNMENT", "DEVICE"] | None = None
+    compliance_status: (
+        Literal["ACCREDITED", "COMPLIANT", "SUSPENDED", "REVOKED"] | None
+    ) = None
+    accreditation_body: str | None = Field(None, max_length=256)
+    accreditation_date: str | None = None
+    valid_from: str | None = None
+    valid_until: str | None = None
+    trust_anchor_id: str | None = None
+    metadata: dict[str, Any] | None = None
+    revocation_reason: str | None = Field(None, max_length=512)
+
+    @model_validator(mode="after")
+    def validate_update(self) -> "IssuerEntityUpdate":
+        if not (self.model_fields_set - {"organization_id"}):
+            raise ValueError("at least one issuer entity field is required")
+        for field_name in (
+            "display_name",
+            "issuer_type",
+            "compliance_status",
+            "valid_from",
+            "metadata",
+        ):
+            if field_name in self.model_fields_set and getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} cannot be null")
+        if self.compliance_status == "REVOKED" and not self.revocation_reason:
+            raise ValueError("revocation_reason is required when revoking an issuer")
+        if self.revocation_reason is not None and self.compliance_status != "REVOKED":
+            raise ValueError("revocation_reason is valid only for a revocation")
+        _reject_private_custody_metadata(self.metadata)
+        return self
+
+
+class IssuerEntityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    organization_id: str | None = None
+    issuer_id: str
+    issuer_type: str
+    display_name: str
+    description: str | None = None
+    is_system_issuer: bool
+    compliance_status: str
+    accreditation_body: str | None = None
+    accreditation_date: str | None = None
+    valid_from: str
+    valid_until: str | None = None
+    trust_anchor_id: str | None = None
+    revoked_at: str | None = None
+    revocation_reason: str | None = None
+    revoked_by: str | None = None
+    metadata: dict[str, Any]
+    created_at: str
+    updated_at: str
+
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> "IssuerEntityResponse":
+        _reject_private_custody_metadata(self.metadata)
+        return self
+
+
+class IssuerIdentityResponse(BaseModel):
+    """DID-only projection of an active organization issuer profile."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issuer_did: str = Field(pattern=r"^did:", max_length=2048)
+    key_purpose: Literal[
+        "vc_jwt_issuer",
+        "mdoc_dsc",
+        "x509_doc_signer",
+        "holder_binding",
+        "presentation_signing",
+        "oid4vp_request_signing",
+        "vdsnc_signing",
+        "csca",
+        "jwks_signing",
+        "lti_tool_signing",
+    ]
+    algorithm: Literal["ES256", "ES384", "RS256", "EdDSA"]
+    status: Literal["active"]
+
+
+class IssuerIdentityListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    identities: list[IssuerIdentityResponse]
+
+
+class TrustFrameworkResponse(BaseModel):
+    id: str
+    code: str
+    display_name: str
+    description: str | None = None
+    pkd_endpoints: list[str] = Field(default_factory=list)
+    default_algorithms: list[str] = Field(default_factory=list)
+    default_formats: list[str] = Field(default_factory=list)
+    validation_ruleset: dict = Field(default_factory=dict)
+    sync_config: dict = Field(default_factory=dict)
+    is_system: bool = True
+    created_at: str
+    updated_at: str
 
 
 class OrganizationTrustProfileCreate(BaseModel):

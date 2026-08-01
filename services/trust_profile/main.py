@@ -23,22 +23,16 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
 from marty_common.dto import DeleteResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from typing import Annotated
 
-from marty_common import (
-    OrganizationContext,
-    ensure_membership_permission,
-)
+from marty_common import ensure_membership_permission
 from marty_common.org_authorization import get_organization_client
-from marty_common.middleware import RequestIdMiddleware, RequestLoggingMiddleware
 from marty_common.service_setup import create_service_app
 from marty_common.system_ids import (
     MARTY_DEFAULT_ORG_ID,
@@ -59,15 +53,6 @@ logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "trust-profile-service"
 SERVICE_PORT = int(os.environ.get("TRUST_PROFILE_SERVICE_PORT", "8004"))
-
-
-def get_config() -> dict:
-    """Get service configuration from environment."""
-    return {
-        "database_url": os.environ.get(
-            "DATABASE_URL",
-        ),
-    }
 
 
 # =============================================================================
@@ -783,35 +768,66 @@ def _field_was_provided(model: BaseModel, field_name: str) -> bool:
 
 
 class CreateIssuerEntityRequest(BaseModel):
-    organization_id: str | None = Field(None, max_length=255)
-    issuer_id: str = Field(..., min_length=1, max_length=255)
-    issuer_type: str = Field(IssuerEntityType.ORGANIZATION.value, max_length=50)
-    display_name: str = Field(..., min_length=1, max_length=255)
-    description: str | None = Field(None, max_length=2000)
-    is_system_issuer: bool = False
-    compliance_status: str = Field(IssuerEntityComplianceStatus.COMPLIANT.value, max_length=50)
-    accreditation_body: str | None = Field(None, max_length=255)
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(max_length=255)
+    issuer_id: str = Field(..., min_length=1, max_length=512)
+    issuer_type: Literal["ORGANIZATION", "GOVERNMENT", "DEVICE"] = "ORGANIZATION"
+    display_name: str = Field(..., min_length=1, max_length=256)
+    description: str | None = Field(None, max_length=1024)
+    compliance_status: Literal["ACCREDITED", "COMPLIANT", "SUSPENDED"] = (
+        "COMPLIANT"
+    )
+    accreditation_body: str | None = Field(None, max_length=256)
     accreditation_date: str | None = Field(None, max_length=50)
     valid_from: str | None = Field(None, max_length=50)
     valid_until: str | None = Field(None, max_length=50)
     trust_anchor_id: str | None = Field(None, max_length=255)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> CreateIssuerEntityRequest:
+        _reject_private_custody_metadata(self.metadata)
+        return self
+
 
 class UpdateIssuerEntityRequest(BaseModel):
-    display_name: str | None = Field(None, min_length=1, max_length=255)
-    description: str | None = Field(None, max_length=2000)
-    issuer_type: str | None = Field(None, max_length=50)
-    is_system_issuer: bool | None = None
-    compliance_status: str | None = Field(None, max_length=50)
-    accreditation_body: str | None = Field(None, max_length=255)
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(max_length=255)
+    display_name: str | None = Field(None, min_length=1, max_length=256)
+    description: str | None = Field(None, max_length=1024)
+    issuer_type: Literal["ORGANIZATION", "GOVERNMENT", "DEVICE"] | None = None
+    compliance_status: (
+        Literal["ACCREDITED", "COMPLIANT", "SUSPENDED", "REVOKED"] | None
+    ) = None
+    accreditation_body: str | None = Field(None, max_length=256)
     accreditation_date: str | None = Field(None, max_length=50)
     valid_from: str | None = Field(None, max_length=50)
     valid_until: str | None = Field(None, max_length=50)
     trust_anchor_id: str | None = Field(None, max_length=255)
     metadata: dict[str, Any] | None = None
-    revocation_reason: str | None = Field(None, max_length=500)
-    revoked_by: str | None = Field(None, max_length=255)
+    revocation_reason: str | None = Field(None, max_length=512)
+
+    @model_validator(mode="after")
+    def validate_update(self) -> UpdateIssuerEntityRequest:
+        if not (self.model_fields_set - {"organization_id"}):
+            raise ValueError("at least one issuer entity field is required")
+        for field_name in (
+            "display_name",
+            "issuer_type",
+            "compliance_status",
+            "valid_from",
+            "metadata",
+        ):
+            if field_name in self.model_fields_set and getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} cannot be null")
+        if self.compliance_status == "REVOKED" and not self.revocation_reason:
+            raise ValueError("revocation_reason is required when revoking an issuer")
+        if self.revocation_reason is not None and self.compliance_status != "REVOKED":
+            raise ValueError("revocation_reason is valid only for a revocation")
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
 class CreateTrustProfileIssuerRequest(BaseModel):
@@ -944,17 +960,27 @@ def _validate_jurisdiction_filter(values: list[str] | None) -> None:
 
 
 _PRIVATE_CUSTODY_METADATA_FIELDS = {
+    "issuer_algorithm",
+    "issuer_key_id",
+    "issuer_profile_id",
+    "key_access_mode",
     "key_binding",
     "key_management",
     "key_reference",
+    "key_name",
+    "key_version",
     "kms_arn",
+    "kms_provider",
     "kms_region",
     "managed_key_id",
+    "provider",
     "service_id",
     "signing_agent_auth",
     "signing_agent_url",
     "signing_key_reference",
     "signing_service_id",
+    "transit_mount",
+    "verification_method_id",
 }
 
 
@@ -978,7 +1004,7 @@ def _reject_private_custody_metadata(metadata: dict[str, Any] | None) -> None:
     field_name = _find_private_custody_metadata(metadata)
     if field_name is not None:
         raise ValueError(
-            f"Organization Trust Profile metadata cannot contain private custody selector '{field_name}'; "
+            f"Public metadata cannot contain private custody selector '{field_name}'; "
             "signing is resolved from the issuer DID through an issuer profile"
         )
 
@@ -1026,7 +1052,7 @@ def _build_issuer_entity_from_request(request: CreateIssuerEntityRequest) -> Iss
         issuer_type=IssuerEntityType(request.issuer_type.upper()),
         display_name=request.display_name,
         description=request.description,
-        is_system_issuer=request.is_system_issuer,
+        is_system_issuer=False,
         compliance_status=IssuerEntityComplianceStatus(request.compliance_status.upper()),
         accreditation_body=request.accreditation_body,
         accreditation_date=_parse_optional_datetime(request.accreditation_date),
@@ -1113,13 +1139,15 @@ class TrustedIssuerResponse(BaseModel):
 
 
 class IssuerEntityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str | None = None
     issuer_id: str
     issuer_type: str
     display_name: str
     description: str | None = None
-    is_system_issuer: bool = False
+    is_system_issuer: bool
     compliance_status: str
     accreditation_body: str | None = None
     accreditation_date: str | None = None
@@ -1129,9 +1157,14 @@ class IssuerEntityResponse(BaseModel):
     revoked_at: str | None = None
     revocation_reason: str | None = None
     revoked_by: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any]
     created_at: str
     updated_at: str
+
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> IssuerEntityResponse:
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
 class TrustFrameworkResponse(BaseModel):
@@ -2063,11 +2096,10 @@ async def create_issuer_entity(
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
 ) -> IssuerEntityResponse:
-    if request.organization_id is None and not request.is_system_issuer:
-        raise HTTPException(status_code=400, detail="organization_id is required for non-system issuers")
-    if request.organization_id is not None:
-        membership = await app.state.org_client.get_membership(user_id, request.organization_id)
-        ensure_membership_permission(membership, "trusted-issuer", "create")
+    membership = await app.state.org_client.get_membership(
+        user_id, request.organization_id
+    )
+    ensure_membership_permission(membership, "trusted-issuer", "create")
     await _ensure_unique_issuer_identifier(repo, request.organization_id, request.issuer_id)
     issuer_entity = _build_issuer_entity_from_request(request)
     await repo.save_issuer_entity(issuer_entity)
@@ -2106,7 +2138,7 @@ async def get_issuer_entity(
     return _issuer_entity_to_response(issuer_entity)
 
 
-@issuer_router.put("/{issuer_entity_id}", response_model=IssuerEntityResponse, response_model_exclude_none=True)
+@issuer_router.patch("/{issuer_entity_id}", response_model=IssuerEntityResponse, response_model_exclude_none=True)
 async def update_issuer_entity(
     issuer_entity_id: str,
     request: UpdateIssuerEntityRequest,
@@ -2114,38 +2146,44 @@ async def update_issuer_entity(
     repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
 ) -> IssuerEntityResponse:
     issuer_entity = await _get_issuer_entity_or_404(repo, issuer_entity_id)
-    if issuer_entity.organization_id is not None:
-        membership = await app.state.org_client.get_membership(user_id, issuer_entity.organization_id)
-        ensure_membership_permission(membership, "trusted-issuer", "edit")
+    if issuer_entity.organization_id is None or issuer_entity.is_system_issuer:
+        raise HTTPException(
+            status_code=403,
+            detail="Global and system issuers cannot be mutated through the public API",
+        )
+    if request.organization_id != issuer_entity.organization_id:
+        raise HTTPException(status_code=404, detail="Issuer Entity not found")
+    membership = await app.state.org_client.get_membership(
+        user_id, issuer_entity.organization_id
+    )
+    ensure_membership_permission(membership, "trusted-issuer", "edit")
     if issuer_entity.compliance_status == IssuerEntityComplianceStatus.REVOKED and request.compliance_status not in {None, IssuerEntityComplianceStatus.REVOKED.value}:
         raise HTTPException(status_code=400, detail="Revoked issuer cannot be reinstated; create a new IssuerEntity instead")
     if request.display_name is not None:
         issuer_entity.display_name = request.display_name
-    if request.description is not None:
+    if _field_was_provided(request, "description"):
         issuer_entity.description = request.description
     if request.issuer_type is not None:
         issuer_entity.issuer_type = IssuerEntityType(request.issuer_type.upper())
-    if request.is_system_issuer is not None:
-        issuer_entity.is_system_issuer = request.is_system_issuer
-    if request.accreditation_body is not None:
+    if _field_was_provided(request, "accreditation_body"):
         issuer_entity.accreditation_body = request.accreditation_body
-    if request.accreditation_date is not None:
+    if _field_was_provided(request, "accreditation_date"):
         issuer_entity.accreditation_date = _parse_optional_datetime(request.accreditation_date)
     if request.valid_from is not None:
         issuer_entity.valid_from = _parse_optional_datetime(request.valid_from) or issuer_entity.valid_from
-    if request.valid_until is not None:
+    if _field_was_provided(request, "valid_until"):
         issuer_entity.valid_until = _parse_optional_datetime(request.valid_until)
-    if request.trust_anchor_id is not None:
+    if _field_was_provided(request, "trust_anchor_id"):
         issuer_entity.trust_anchor_id = request.trust_anchor_id
-    if request.metadata is not None:
-        issuer_entity.metadata = request.metadata
+    if _field_was_provided(request, "metadata"):
+        issuer_entity.metadata = request.metadata or {}
     if request.compliance_status is not None:
         next_status = IssuerEntityComplianceStatus(request.compliance_status.upper())
         issuer_entity.compliance_status = next_status
         if next_status == IssuerEntityComplianceStatus.REVOKED:
             issuer_entity.revoked_at = datetime.now(timezone.utc)
             issuer_entity.revocation_reason = request.revocation_reason
-            issuer_entity.revoked_by = request.revoked_by or user_id
+            issuer_entity.revoked_by = user_id
     issuer_entity.updated_at = datetime.now(timezone.utc)
     await repo.save_issuer_entity(issuer_entity)
     return _issuer_entity_to_response(issuer_entity)
@@ -2158,9 +2196,15 @@ async def delete_issuer_entity(
     repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(get_repo),
 ) -> dict[str, bool]:
     issuer_entity = await _get_issuer_entity_or_404(repo, issuer_entity_id)
-    if issuer_entity.organization_id is not None:
-        membership = await app.state.org_client.get_membership(user_id, issuer_entity.organization_id)
-        ensure_membership_permission(membership, "trusted-issuer", "delete")
+    if issuer_entity.organization_id is None or issuer_entity.is_system_issuer:
+        raise HTTPException(
+            status_code=403,
+            detail="Global and system issuers cannot be deleted through the public API",
+        )
+    membership = await app.state.org_client.get_membership(
+        user_id, issuer_entity.organization_id
+    )
+    ensure_membership_permission(membership, "trusted-issuer", "delete")
     await repo.delete_issuer_entity(issuer_entity_id)
     return {"success": True}
 
@@ -2332,8 +2376,6 @@ def _registry_entry_to_response(entry: TrustRegistryEntry) -> TrustRegistryEntry
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
-    
-    config = get_config()
     
     # Initialize database
     from marty_common.database import DatabaseManager, DatabaseConfig

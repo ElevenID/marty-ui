@@ -1,6 +1,9 @@
 """Trust Profile, Issuer Entity, Trust Framework, Trust Registry, and API Key routes."""
 from __future__ import annotations
 
+import json
+import logging
+
 from fastapi import APIRouter, Query, Request, Response
 
 from gateway.models import (
@@ -24,6 +27,7 @@ from gateway.models import (
     TrustRegistryStatusResponse,
     TrustRegistrySyncResponse,
 )
+from gateway.middleware import mip_error_response
 from gateway.proxy import get_registry, proxy_request
 
 trust_profile_router = APIRouter(prefix="/v1/trust-profiles", tags=["Trust Profiles"])
@@ -32,6 +36,69 @@ issuer_entity_router = APIRouter(prefix="/v1/issuer-entities", tags=["Issuer Ent
 trust_framework_router = APIRouter(prefix="/v1/trust-frameworks", tags=["Trust Frameworks"])
 api_key_router = APIRouter(prefix="/v1/api-keys", tags=["API Keys"])
 trust_registry_router = APIRouter(prefix="/v1/trust-registry", tags=["Trust Registry"])
+
+logger = logging.getLogger(__name__)
+
+
+def _validated_issuer_entity_payload(
+    body: IssuerEntityCreate | IssuerEntityUpdate,
+) -> bytes:
+    """Serialize only fields accepted by the public IssuerEntity operation."""
+    payload = body.model_dump(
+        mode="json",
+        exclude_unset=isinstance(body, IssuerEntityUpdate),
+    )
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+
+
+def _sanitize_issuer_entity_response(
+    response: Response, *, many: bool = False
+) -> Response:
+    """Validate successful trust-service responses before returning public data."""
+    if response.status_code >= 400:
+        return response
+
+    try:
+        raw = json.loads(bytes(response.body))
+        if many:
+            if not isinstance(raw, list):
+                raise ValueError("expected an issuer entity list")
+            public = [
+                IssuerEntityResponse.model_validate(item).model_dump(
+                    mode="json", exclude_none=True
+                )
+                for item in raw
+            ]
+        else:
+            public = IssuerEntityResponse.model_validate(raw).model_dump(
+                mode="json", exclude_none=True
+            )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        logger.warning(
+            "Trust service returned an IssuerEntity response outside the public contract"
+        )
+        return mip_error_response(
+            status_code=502,
+            error="invalid_service_response",
+            message="Trust service returned an invalid public IssuerEntity response",
+        )
+
+    return Response(
+        content=json.dumps(public, separators=(",", ":")),
+        status_code=response.status_code,
+        headers={
+            key: value
+            for key, value in response.headers.items()
+            if key.lower()
+            not in {
+                "content-encoding",
+                "transfer-encoding",
+                "content-length",
+                "content-type",
+            }
+        },
+        media_type="application/json",
+    )
 
 
 # ── Trust Profile ────────────────────────────────────────────────────
@@ -175,7 +242,13 @@ async def create_issuer_entity(body: IssuerEntityCreate, request: Request) -> Re
     """Create a protocol-aligned issuer registry entry."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, "/v1/issuer-entities")
+    response = await proxy_request(
+        request,
+        service_url,
+        "/v1/issuer-entities",
+        body_override=_validated_issuer_entity_payload(body),
+    )
+    return _sanitize_issuer_entity_response(response)
 
 
 @issuer_entity_router.get("", response_model=list[IssuerEntityResponse], summary="List Issuer Entities")
@@ -186,7 +259,8 @@ async def list_issuer_entities(
     """List issuer registry entities, optionally scoped to an organization."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, "/v1/issuer-entities")
+    response = await proxy_request(request, service_url, "/v1/issuer-entities")
+    return _sanitize_issuer_entity_response(response, many=True)
 
 
 @issuer_entity_router.get("/{issuer_entity_id}", response_model=IssuerEntityResponse, summary="Get Issuer Entity")
@@ -194,15 +268,24 @@ async def get_issuer_entity(issuer_entity_id: str, request: Request) -> Response
     """Get a single issuer registry entity."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/issuer-entities/{issuer_entity_id}")
+    response = await proxy_request(
+        request, service_url, f"/v1/issuer-entities/{issuer_entity_id}"
+    )
+    return _sanitize_issuer_entity_response(response)
 
 
-@issuer_entity_router.put("/{issuer_entity_id}", response_model=IssuerEntityResponse, summary="Update Issuer Entity")
+@issuer_entity_router.patch("/{issuer_entity_id}", response_model=IssuerEntityResponse, summary="Update Issuer Entity")
 async def update_issuer_entity(issuer_entity_id: str, body: IssuerEntityUpdate, request: Request) -> Response:
     """Update an issuer registry entity."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/issuer-entities/{issuer_entity_id}")
+    response = await proxy_request(
+        request,
+        service_url,
+        f"/v1/issuer-entities/{issuer_entity_id}",
+        body_override=_validated_issuer_entity_payload(body),
+    )
+    return _sanitize_issuer_entity_response(response)
 
 
 @issuer_entity_router.delete("/{issuer_entity_id}", summary="Delete Issuer Entity")

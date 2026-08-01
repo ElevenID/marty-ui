@@ -240,10 +240,11 @@ def test_revoked_issuer_entity_cannot_be_reinstated():
     issuer_entity = _save_issuer_entity(repo, "org-1", "did:example:issuer-1")
     client, _ = _build_client(repo)
 
-    revoke_response = client.put(
+    revoke_response = client.patch(
         f"/v1/issuer-entities/{issuer_entity.id}",
         headers={"x-user-id": "user-1"},
         json={
+            "organization_id": "org-1",
             "compliance_status": "REVOKED",
             "revocation_reason": "Key compromise",
         },
@@ -256,16 +257,109 @@ def test_revoked_issuer_entity_cannot_be_reinstated():
     assert revoke_body["revoked_by"] == "user-1"
     assert revoke_body["revoked_at"] is not None
 
-    reinstate_response = client.put(
+    reinstate_response = client.patch(
         f"/v1/issuer-entities/{issuer_entity.id}",
         headers={"x-user-id": "user-1"},
-        json={"compliance_status": "COMPLIANT"},
+        json={"organization_id": "org-1", "compliance_status": "COMPLIANT"},
     )
 
     assert reinstate_response.status_code == 400
     assert reinstate_response.json()["detail"] == (
         "Revoked issuer cannot be reinstated; create a new IssuerEntity instead"
     )
+
+
+def test_public_issuer_entity_input_rejects_system_claims_and_custody_metadata():
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    client, _ = _build_client(repo)
+    base = {
+        "organization_id": "org-1",
+        "issuer_id": "did:example:issuer-1",
+        "display_name": "Acme Issuer",
+    }
+
+    system_claim = client.post(
+        "/v1/issuer-entities",
+        headers={"x-user-id": "user-1"},
+        json={**base, "is_system_issuer": True},
+    )
+    assert system_claim.status_code == 422
+
+    custody = client.post(
+        "/v1/issuer-entities",
+        headers={"x-user-id": "user-1"},
+        json={**base, "metadata": {"public": [{"signing_service_id": "private"}]}},
+    )
+    assert custody.status_code == 422
+
+
+def test_global_and_system_issuer_mutation_fails_closed():
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    global_issuer = _save_issuer_entity(
+        repo,
+        None,
+        "did:example:system",
+        is_system_issuer=True,
+    )
+    client, get_membership = _build_client(repo)
+
+    update = client.patch(
+        f"/v1/issuer-entities/{global_issuer.id}",
+        headers={"x-user-id": "user-1"},
+        json={
+            "organization_id": "org-1",
+            "display_name": "Must not change",
+        },
+    )
+    delete = client.delete(
+        f"/v1/issuer-entities/{global_issuer.id}",
+        headers={"x-user-id": "user-1"},
+    )
+
+    assert update.status_code == 403
+    assert delete.status_code == 403
+    get_membership.assert_not_awaited()
+
+
+def test_cross_tenant_issuer_update_fails_before_membership_lookup():
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    issuer = _save_issuer_entity(repo, "org-2", "did:example:issuer-2")
+    client, get_membership = _build_client(repo)
+
+    response = client.patch(
+        f"/v1/issuer-entities/{issuer.id}",
+        headers={"x-user-id": "user-1"},
+        json={
+            "organization_id": "org-1",
+            "display_name": "Wrong tenant",
+        },
+    )
+
+    assert response.status_code == 404
+    get_membership.assert_not_awaited()
+
+
+def test_partial_issuer_update_can_clear_nullable_public_fields():
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    issuer = _save_issuer_entity(repo, "org-1", "did:example:issuer-1")
+    issuer.description = "Old description"
+    issuer.accreditation_body = "Old authority"
+    asyncio.run(repo.save_issuer_entity(issuer))
+    client, _ = _build_client(repo)
+
+    response = client.patch(
+        f"/v1/issuer-entities/{issuer.id}",
+        headers={"x-user-id": "user-1"},
+        json={
+            "organization_id": "org-1",
+            "description": None,
+            "accreditation_body": None,
+        },
+    )
+
+    assert response.status_code == 200
+    assert "description" not in response.json()
+    assert "accreditation_body" not in response.json()
 
 
 def test_list_trust_frameworks_returns_seeded_system_frameworks():
