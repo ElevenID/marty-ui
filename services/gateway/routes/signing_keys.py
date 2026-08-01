@@ -1942,11 +1942,7 @@ def _managed_openbao_service(
     bindings = _normalize_key_reference_purposes(key_reference_purposes)
     managed_bindings = bindings.get(MANAGED_OPENBAO_SERVICE_ID, {})
     managed_purposes = sorted(
-        {
-            purpose
-            for purposes in managed_bindings.values()
-            for purpose in purposes
-        }
+        {purpose for purposes in managed_bindings.values() for purpose in purposes}
         | {
             purpose
             for key in keys
@@ -5869,6 +5865,8 @@ async def get_keys_compliance_summary(
 
 _ISSUER_PROFILE_STATUSES = {"draft", "active", "revoked"}
 _ISSUER_MODES = {"org_managed", "elevenid_managed", "elevenid_alias_for_org"}
+_KEY_ATTESTATION_MODES = {"disabled", "optional", "required"}
+_KEY_ATTESTATION_STATUS_POLICIES = {"disabled", "if_present", "required"}
 
 
 def _normalize_issuer_mode(value: Any) -> str:
@@ -5879,6 +5877,108 @@ def _normalize_issuer_mode(value: Any) -> str:
             detail=f"Invalid issuer_mode '{mode}'. Must be one of {sorted(_ISSUER_MODES)}.",
         )
     return mode
+
+
+def _normalize_key_attestation_policy(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {
+            "mode": "disabled",
+            "trusted_root_certificates_pem": [],
+            "allowed_algorithms": [],
+            "required_key_storage": [],
+            "required_user_authentication": [],
+            "max_age_seconds": 300,
+            "require_nonce": True,
+            "status_validation": "required",
+        }
+    if not isinstance(value, dict):
+        raise HTTPException(
+            status_code=422, detail="key_attestation_policy must be an object."
+        )
+
+    mode = str(value.get("mode") or "disabled")
+    if mode not in _KEY_ATTESTATION_MODES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid key attestation mode '{mode}'. Must be one of {sorted(_KEY_ATTESTATION_MODES)}.",
+        )
+    status_validation = str(value.get("status_validation") or "required")
+    if status_validation not in _KEY_ATTESTATION_STATUS_POLICIES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Invalid key attestation status_validation '{status_validation}'. "
+                f"Must be one of {sorted(_KEY_ATTESTATION_STATUS_POLICIES)}."
+            ),
+        )
+
+    def string_list(name: str) -> list[str]:
+        raw = value.get(name, [])
+        if not isinstance(raw, list) or any(
+            not isinstance(item, str) or not item.strip() for item in raw
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"key_attestation_policy.{name} must be an array of non-empty strings.",
+            )
+        return [item.strip() for item in raw]
+
+    roots = string_list("trusted_root_certificates_pem")
+    algorithms = string_list("allowed_algorithms")
+    unsupported_algorithms = sorted(set(algorithms) - set(SUPPORTED_SIGNING_ALGORITHMS))
+    if unsupported_algorithms:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported key attestation algorithms: {unsupported_algorithms}.",
+        )
+    if mode != "disabled" and (not roots or not algorithms):
+        raise HTTPException(
+            status_code=422,
+            detail="Enabled key attestation policy requires trusted roots and allowed algorithms.",
+        )
+    if roots:
+        if not _CRYPTOGRAPHY_AVAILABLE:
+            raise HTTPException(
+                status_code=503,
+                detail="Certificate validation support is unavailable.",
+            )
+        from cryptography import x509
+
+        try:
+            for root in roots:
+                x509.load_pem_x509_certificate(root.encode("utf-8"))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="key_attestation_policy contains an invalid trusted root certificate.",
+            ) from exc
+
+    max_age_seconds = value.get("max_age_seconds", 300)
+    if (
+        isinstance(max_age_seconds, bool)
+        or not isinstance(max_age_seconds, int)
+        or not 1 <= max_age_seconds <= 86400
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="key_attestation_policy.max_age_seconds must be from 1 through 86400.",
+        )
+    require_nonce = value.get("require_nonce", True)
+    if not isinstance(require_nonce, bool):
+        raise HTTPException(
+            status_code=422,
+            detail="key_attestation_policy.require_nonce must be a boolean.",
+        )
+    return {
+        "mode": mode,
+        "trusted_root_certificates_pem": roots,
+        "allowed_algorithms": algorithms,
+        "required_key_storage": string_list("required_key_storage"),
+        "required_user_authentication": string_list("required_user_authentication"),
+        "max_age_seconds": max_age_seconds,
+        "require_nonce": require_nonce,
+        "status_validation": status_validation,
+    }
 
 
 def _normalize_issuer_profile(
@@ -5936,6 +6036,9 @@ def _normalize_issuer_profile(
     issuer_mode = _normalize_issuer_mode(
         body.get("issuer_mode", base.get("issuer_mode", "org_managed"))
     )
+    key_attestation_policy = _normalize_key_attestation_policy(
+        body.get("key_attestation_policy", base.get("key_attestation_policy"))
+    )
 
     return {
         "id": profile_id,
@@ -5952,6 +6055,7 @@ def _normalize_issuer_profile(
         ),
         "key_purpose": key_purpose,
         "algorithm": algorithm,
+        "key_attestation_policy": key_attestation_policy,
         "status": status,
         "created_at": base.get("created_at", now),
         "updated_at": now,
@@ -6075,7 +6179,10 @@ async def _complete_issuer_profile_algorithm(
                                 f"provisioned for key_purpose '{key_purpose}'."
                             ),
                         )
-                    if requested_algorithm and requested_algorithm != candidate_algorithm:
+                    if (
+                        requested_algorithm
+                        and requested_algorithm != candidate_algorithm
+                    ):
                         raise HTTPException(
                             status_code=422,
                             detail=(
