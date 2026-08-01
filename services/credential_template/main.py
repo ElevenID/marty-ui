@@ -1078,7 +1078,9 @@ class CredentialTemplateResponse(BaseModel):
     description: str | None
     status: str
     credential_type: str
-    compliance_profile_id: str
+    # Older persisted templates predate compliance profiles. Keep reads
+    # backwards compatible while requiring the field for every new template.
+    compliance_profile_id: str | None = None
     vct: str | None = None
     doctype: str | None = None
     credential_payload_format: str | None = None
