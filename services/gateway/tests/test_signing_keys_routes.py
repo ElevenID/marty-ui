@@ -966,6 +966,74 @@ async def test_resolve_endpoint_returns_matching_service(
 
 
 @pytest.mark.asyncio
+async def test_resolve_endpoint_discovers_managed_service_for_clean_organization(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A tenant without copied registry rows resolves live managed KMS inventory."""
+
+    async def fake_registry(request, org_id):
+        assert org_id == "org_new"
+        return {
+            "services": [],
+            "default_service_id": None,
+            "format_defaults": {},
+            "type_defaults": {},
+            "key_reference_purposes": {},
+        }
+
+    snapshot = {
+        "keys": [
+            {
+                "provider_key_name": "cred-issuer-marty-es256",
+                "algorithm": "ES256",
+            }
+        ]
+    }
+
+    async def fake_snapshot(org_id):
+        assert org_id == "org_new"
+        return snapshot
+
+    async def fake_build_config(request, org_id, received_snapshot, registry_override):
+        assert org_id == "org_new"
+        assert received_snapshot is snapshot
+        assert registry_override["services"] == []
+        return {
+            "services": [
+                {
+                    "id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+                    "key_reference": "cred-issuer-marty-es256",
+                    "key_aliases": ["cred-issuer-marty-es256"],
+                    "algorithms": ["ES256"],
+                    "key_purposes": [],
+                    "credential_formats": [],
+                }
+            ],
+            "default_service_id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        }
+
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_registry
+    )
+    monkeypatch.setattr(signing_keys, "_load_signing_key_snapshot", fake_snapshot)
+    monkeypatch.setattr(signing_keys, "_build_key_management_config", fake_build_config)
+
+    response = await signing_keys.resolve_signing_service(
+        request=_build_request("org_new"),
+        body={
+            "credential_format": "dc+sd-jwt",
+            "key_purpose": "vc_jwt_issuer",
+            "algorithm": "ES256",
+        },
+        organization_id=None,
+    )
+
+    data = json.loads(response.body)
+    assert data["service"]["id"] == signing_keys.MANAGED_OPENBAO_SERVICE_ID
+    assert data["service"]["key_reference"] == "cred-issuer-marty-es256"
+
+
+@pytest.mark.asyncio
 async def test_resolve_endpoint_returns_404_when_no_service(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -3781,7 +3849,11 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
         return (
             {"services": []},
             {"id": "svc-bao"},
-            {"id": "svc-bao", "key_reference": "cred-issuer-test-es256"},
+            {
+                "id": "svc-bao",
+                "key_reference": "cred-issuer-test-es256",
+                "algorithms": ["ES256"],
+            },
             True,
         )
 
@@ -3823,10 +3895,17 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
     assert profile["signing_service_id"] == "svc-bao"
     assert profile["issuer_mode"] == "org_managed"
     assert profile["status"] == "active"
+    assert profile["algorithm"] == "ES256"
     assert profile["id"].startswith("ip-")
 
     # Verify stored in Redis
     assert "org:org_issuer:issuer-profiles" in stored
+    registry = json.loads(stored["org:org_issuer:signing-key-services"])
+    assert registry["key_reference_purposes"] == {
+        "svc-bao": {"cred-issuer-test-es256": ["vc_jwt_issuer"]}
+    }
+    assert registry["type_defaults"]["vc_jwt_issuer"] == "svc-bao"
+    assert registry["format_defaults"]["dc+sd-jwt"] == "svc-bao"
     assert published_body["org_slug"] == "acme"
 
 
@@ -3841,7 +3920,11 @@ async def test_create_issuer_profile_requires_local_path_did_only_for_auto_publi
         return (
             {"services": []},
             {"id": "svc-bao"},
-            {"id": "svc-bao", "key_reference": "cred-issuer-test-es256"},
+            {
+                "id": "svc-bao",
+                "key_reference": "cred-issuer-test-es256",
+                "algorithms": ["ES256"],
+            },
             True,
         )
 
@@ -4037,7 +4120,11 @@ async def test_create_issuer_profile_duplicate_tuple_returns_existing_without_re
         return (
             {"services": []},
             {"id": "svc-bao"},
-            {"id": "svc-bao", "key_reference": "cred-issuer-test-es256"},
+            {
+                "id": "svc-bao",
+                "key_reference": "cred-issuer-test-es256",
+                "algorithms": ["ES256"],
+            },
             True,
         )
 
@@ -4136,7 +4223,11 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
         return (
             {"services": []},
             {"id": "svc-bao"},
-            {"id": "svc-bao", "key_reference": "cred-issuer-test-es256"},
+            {
+                "id": "svc-bao",
+                "key_reference": "cred-issuer-test-es256",
+                "algorithms": ["ES256"],
+            },
             True,
         )
 

@@ -3522,6 +3522,25 @@ async def resolve_signing_service(
     """
     resolved_org_id = _resolve_org_id(request, organization_id)
     registry = await _load_registered_service_registry(request, resolved_org_id)
+    # A newly-created organization has no copied service rows.  Managed KMS
+    # inventory is nevertheless available to it and must be resolved from the
+    # live stack configuration rather than by accidentally falling back to the
+    # operator's/default organization's registry.
+    snapshot = await _load_signing_key_snapshot(resolved_org_id)
+    effective_config = await _build_key_management_config(
+        request,
+        resolved_org_id,
+        snapshot,
+        registry_override=registry,
+    )
+    effective_registry = {
+        **registry,
+        "services": effective_config.get("services") or [],
+        "default_service_id": (
+            registry.get("default_service_id")
+            or effective_config.get("default_service_id")
+        ),
+    }
 
     credential_format = (
         body.get("credential_format")
@@ -3536,7 +3555,7 @@ async def resolve_signing_service(
     )
 
     service = _resolve_service_for_format(
-        registry, credential_format, key_purpose, algorithm
+        effective_registry, credential_format, key_purpose, algorithm
     )
     if service is None:
         raise HTTPException(
@@ -3547,10 +3566,9 @@ async def resolve_signing_service(
             ),
         )
 
-    snapshot = await _load_signing_key_snapshot(resolved_org_id)
     keys = [key for key in (snapshot.get("keys") or []) if isinstance(key, dict)]
     resolved_key_reference = _resolve_key_reference_for_purpose(
-        registry,
+        effective_registry,
         service,
         keys,
         key_purpose=key_purpose,
@@ -5957,6 +5975,108 @@ def _assert_issuer_profile_key_compatible(
         )
 
 
+async def _complete_issuer_profile_algorithm(
+    request: Request,
+    *,
+    organization_id: str,
+    profile: dict[str, Any],
+    service: dict[str, Any],
+) -> None:
+    """Persist the algorithm selected by the profile's KMS key.
+
+    Runtime callers identify an issuer by DID, not by a KMS selector.  The
+    administrative profile therefore needs a complete, immutable binding from
+    DID to service, key, purpose, and algorithm.  Prefer the selected key's
+    live KMS inventory record; a single-algorithm service is an unambiguous
+    fallback.  Multi-algorithm services fail closed when the selected key
+    cannot be identified.
+    """
+
+    if profile.get("algorithm"):
+        return
+
+    key_reference = str(profile.get("signing_key_reference") or "").strip()
+    if key_reference:
+        snapshot = await _load_signing_key_snapshot(organization_id)
+        for key in snapshot.get("keys") or []:
+            if not isinstance(key, dict):
+                continue
+            candidate_reference = str(
+                key.get("provider_key_name") or key.get("id") or ""
+            ).strip()
+            candidate_algorithm = str(key.get("algorithm") or "").strip()
+            if (
+                candidate_reference == key_reference
+                and candidate_algorithm in SUPPORTED_SIGNING_ALGORITHMS
+            ):
+                profile["algorithm"] = candidate_algorithm
+                return
+
+    service_algorithms = _normalize_algorithm_list(service.get("algorithms"))
+    if len(service_algorithms) == 1:
+        profile["algorithm"] = service_algorithms[0]
+        return
+
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "Issuer profile algorithm could not be determined from the selected "
+            "KMS key. Specify an algorithm that matches the key binding."
+        ),
+    )
+
+
+async def _persist_issuer_profile_registry_binding(
+    request: Request,
+    *,
+    organization_id: str,
+    profile: dict[str, Any],
+) -> None:
+    """Authorize the selected KMS key for this tenant and profile purpose.
+
+    Clean organizations do not inherit another tenant's registry.  Creating an
+    issuer profile is the explicit administrative action that establishes the
+    organization-local purpose binding.  Only registry metadata is persisted;
+    key material and provider credentials remain in KMS/service configuration.
+    """
+
+    service_id = str(profile.get("signing_service_id") or "").strip()
+    key_reference = str(profile.get("signing_key_reference") or "").strip()
+    key_purpose = str(profile.get("key_purpose") or "").strip()
+    if not service_id or not key_reference or not key_purpose:
+        raise HTTPException(
+            status_code=422,
+            detail="Issuer profile has an incomplete KMS purpose binding.",
+        )
+
+    registry = await _load_registered_service_registry(request, organization_id)
+    bindings = _normalize_key_reference_purposes(registry.get("key_reference_purposes"))
+    service_bindings = dict(bindings.get(service_id, {}))
+    purposes = list(service_bindings.get(key_reference, []))
+    if "lti_tool_signing" in purposes or key_purpose == "lti_tool_signing":
+        raise HTTPException(
+            status_code=422,
+            detail=("LTI tool signing keys cannot be assigned to an issuer profile."),
+        )
+    if key_purpose not in purposes:
+        purposes.append(key_purpose)
+    service_bindings[key_reference] = sorted(set(purposes))
+    bindings[service_id] = service_bindings
+    _validate_lti_key_reference_bindings(bindings)
+
+    type_defaults = dict(registry.get("type_defaults") or {})
+    type_defaults.setdefault(key_purpose, service_id)
+    format_defaults = dict(registry.get("format_defaults") or {})
+    for credential_format in KEY_PURPOSE_CREDENTIAL_FORMATS.get(key_purpose, ()):
+        format_defaults.setdefault(credential_format, service_id)
+
+    registry["key_reference_purposes"] = bindings
+    registry["type_defaults"] = type_defaults
+    registry["format_defaults"] = format_defaults
+    registry["default_service_id"] = registry.get("default_service_id") or service_id
+    await _save_registered_service_registry(request, organization_id, registry)
+
+
 async def _resolve_org_scoped_issuer_identity(
     request: Request,
     *,
@@ -6203,6 +6323,13 @@ async def create_issuer_profile(
         "key_reference"
     ):
         profile["signing_key_reference"] = normalized_service["key_reference"]
+    await _complete_issuer_profile_algorithm(
+        request,
+        organization_id=resolved_org_id,
+        profile=profile,
+        service=normalized_service,
+    )
+    _assert_issuer_profile_service_compatible(profile, normalized_service)
     _assert_issuer_profile_key_compatible(profile, registry)
 
     storage_key = _issuer_profiles_storage_key(resolved_org_id)
@@ -6294,10 +6421,17 @@ async def create_issuer_profile(
             repaired_profile["signing_key_reference"] = profile["signing_key_reference"]
         if not repaired_profile.get("key_purpose") and profile.get("key_purpose"):
             repaired_profile["key_purpose"] = profile["key_purpose"]
+        if not repaired_profile.get("algorithm") and profile.get("algorithm"):
+            repaired_profile["algorithm"] = profile["algorithm"]
         if not repaired_profile.get("name") and profile.get("name"):
             repaired_profile["name"] = profile["name"]
 
         repaired_profile = await ensure_did_web_verification_method(repaired_profile)
+        await _persist_issuer_profile_registry_binding(
+            request,
+            organization_id=resolved_org_id,
+            profile=repaired_profile,
+        )
         if repaired_profile != existing_profile:
             repaired_profile["updated_at"] = _utcnow_iso()
             profiles[existing_profile_index] = repaired_profile
@@ -6313,6 +6447,12 @@ async def create_issuer_profile(
         # convention. If the KMS key cannot publish a DID verification method,
         # the issuer profile should not be created.
         profile = await ensure_did_web_verification_method(profile)
+
+    await _persist_issuer_profile_registry_binding(
+        request,
+        organization_id=resolved_org_id,
+        profile=profile,
+    )
 
     profiles.append(profile)
     doc["profiles"] = profiles
