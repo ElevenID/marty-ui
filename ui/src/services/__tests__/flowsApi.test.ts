@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '@test/mocks/server'
 
-import { createFlow, getFlowInstance, listFlowInstances, listFlows } from '../flowsApi'
+import {
+  createFlow,
+  getFlowInstance,
+  listFlowInstances,
+  listFlows,
+  startFlowExecution,
+  updateFlow,
+} from '../flowsApi'
 
 describe('flowsApi', () => {
   it('creates flows with organization context and an idempotency key', async () => {
@@ -121,5 +128,51 @@ describe('flowsApi', () => {
     )
 
     await expect(getFlowInstance('instance-1')).resolves.toMatchObject({ id: 'instance-1' })
+  })
+
+  it('patches a flow with its selected organization', async () => {
+    let requestBody: any
+    let requestMethod = ''
+    server.use(
+      http.patch('http://localhost:8000/v1/flows/definitions/flow-1', async ({ request }) => {
+        requestMethod = request.method
+        requestBody = await request.json()
+        return HttpResponse.json({ id: 'flow-1', ...requestBody })
+      })
+    )
+
+    await updateFlow('flow-1', {
+      organization_id: ' org-123 ',
+      name: 'Updated employee flow',
+    })
+
+    expect(requestMethod).toBe('PATCH')
+    expect(requestBody).toEqual({
+      organization_id: 'org-123',
+      name: 'Updated employee flow',
+    })
+  })
+
+  it('starts a flow using the selected organization and public context only', async () => {
+    let requestBody: any
+    server.use(
+      http.post('http://localhost:8000/v1/flows/instances', async ({ request }) => {
+        requestBody = await request.json()
+        return HttpResponse.json({ id: 'instance-1', ...requestBody })
+      })
+    )
+
+    await startFlowExecution('flow-1', ' org-123 ', { purpose: 'onboarding' })
+
+    expect(requestBody).toEqual({
+      organization_id: 'org-123',
+      flow_definition_id: 'flow-1',
+      initial_context: { purpose: 'onboarding' },
+    })
+  })
+
+  it('requires an organization for flow updates and starts', async () => {
+    await expect(updateFlow('flow-1', { name: 'No tenant' })).rejects.toThrow(/organization/i)
+    await expect(startFlowExecution('flow-1', '', {})).rejects.toThrow(/organization/i)
   })
 })

@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from gateway.models import IssuanceCreate
 from gateway.proxy import get_http_client, get_registry, proxy_request
-from gateway.routes.issuance import create_issuance
+from gateway.routes.issuance import _create_issuance_service_response
 from pydantic import BaseModel, Field, ValidationError
 
 router = APIRouter(prefix="/v1/vc-api", tags=["W3C VC API"])
@@ -268,7 +268,9 @@ async def _issue_data_integrity_credential(
                 ),
             },
         ) from None
-    initiated = await create_issuance(body, request)
+    # The VC-API adapter redeems the code immediately inside the trusted
+    # service path. Public issuance responses deliberately omit this secret.
+    initiated = await _create_issuance_service_response(body, request)
     if initiated.status_code >= 400:
         raise HTTPException(
             status_code=initiated.status_code,
