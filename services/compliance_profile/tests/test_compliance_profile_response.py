@@ -208,7 +208,19 @@ def test_system_seed_is_active_and_available_to_every_organization() -> None:
 
     assert response.status_code == 200
     assert discovery.status_code == 200
-    assert response.json()[0]["compliance_code"] == "OID4VC"
-    assert response.json()[0]["status"] == "ACTIVE"
+    profiles = response.json()
+    assert [profile["compliance_code"] for profile in profiles] == [
+        "OID4VC",
+        "ISO_18013_5",
+        "OPEN_BADGES_3",
+        "ICAO_VDS_NC",
+    ]
+    assert {profile["credential_format"] for profile in profiles} == {
+        "SD_JWT_VC",
+        "MDOC",
+        "VDS_NC",
+    }
+    assert all(profile["status"] == "ACTIVE" for profile in profiles)
+    assert all(profile["is_system"] is True for profile in profiles)
     assert discovery.json() == response.json()
     get_membership.assert_awaited_once_with("user-1", "org-1")

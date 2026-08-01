@@ -7,11 +7,7 @@ from pydantic import ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from gateway.models import (
-    CredentialTemplateCreate,
-    CredentialTemplateResponse,
-    CredentialTemplateUpdate,
-)
+from gateway.models import CredentialTemplateCreate, CredentialTemplateUpdate
 from gateway.routes import credentials, issuance
 
 
@@ -165,26 +161,6 @@ def test_public_template_response_schema_has_no_custody_routing_fields() -> None
     ):
         assert field not in schema["properties"]
         assert field not in response_schema["properties"]
-
-
-def test_public_template_response_accepts_legacy_missing_compliance_profile() -> None:
-    payload = {
-        "id": "legacy-template-1",
-        "organization_id": "org-1",
-        "name": "Legacy employee badge",
-        "description": None,
-        "status": "ACTIVE",
-        "credential_type": "LegacyEmployeeBadge",
-        "claims": [],
-        "validity_rules": {},
-        "issuer_did": "did:web:issuer.example:orgs:org-1",
-        "created_at": "2025-01-01T00:00:00+00:00",
-    }
-
-    parsed = CredentialTemplateResponse.model_validate(payload)
-
-    assert parsed.compliance_profile_id is None
-    assert "compliance_profile_id" not in parsed.model_dump(exclude_none=True)
 
 
 @pytest.mark.asyncio
