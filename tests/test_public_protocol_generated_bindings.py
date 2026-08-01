@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from scripts.check_public_protocol_contract import (
-    _assert_generated_bindings_current,
+from scripts.check_generated_protocol_bindings import (
+    assert_generated_bindings_current,
 )
 
 
@@ -25,7 +25,7 @@ print(\"Generated bindings are current.\")
 """,
     )
 
-    _assert_generated_bindings_current(tmp_path)
+    assert_generated_bindings_current(tmp_path)
 
 
 def test_generated_binding_check_rejects_stale_clients(tmp_path: Path) -> None:
@@ -38,9 +38,9 @@ raise SystemExit(1)
     )
 
     with pytest.raises(AssertionError, match="generated bindings are stale"):
-        _assert_generated_bindings_current(tmp_path)
+        assert_generated_bindings_current(tmp_path)
 
 
 def test_generated_binding_check_rejects_missing_generator(tmp_path: Path) -> None:
     with pytest.raises(AssertionError, match="missing scripts/codegen.py"):
-        _assert_generated_bindings_current(tmp_path)
+        assert_generated_bindings_current(tmp_path)
