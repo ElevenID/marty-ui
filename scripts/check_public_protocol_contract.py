@@ -20,6 +20,11 @@ sys.path.insert(0, str(REPO_ROOT / "services"))
 from gateway.models import (  # noqa: E402
     CredentialTemplateResponse,
     IssuanceCreate,
+    IssuerEntityCreate,
+    IssuerEntityResponse,
+    IssuerEntityUpdate,
+    IssuerIdentityListResponse,
+    IssuerIdentityResponse,
     OrganizationCreate,
     OrganizationResponse,
     OrganizationTrustProfileResponse,
@@ -38,6 +43,10 @@ from gateway.routes.credentials import (  # noqa: E402
 from gateway.routes.organizations import (  # noqa: E402
     _sanitize_organization_response,
     _validated_organization_payload,
+)
+from gateway.routes.trust import (  # noqa: E402
+    _sanitize_issuer_entity_response,
+    _validated_issuer_entity_payload,
 )
 from gateway.routes.verification import (  # noqa: E402
     _PUBLIC_PRESENTATION_POLICY_FIELDS,
@@ -71,6 +80,7 @@ FORBIDDEN_PUBLIC_FIELDS = {
     "signing_key_reference",
     "signing_service_id",
     "transit_mount",
+    "verification_method_id",
 }
 
 FORBIDDEN_ORGANIZATION_FIELDS = FORBIDDEN_PUBLIC_FIELDS | {
@@ -314,6 +324,152 @@ def check_contract(protocol_root: Path) -> None:
         if leaked:
             raise AssertionError(
                 f"runtime Organization boundary exposes private fields: {sorted(leaked)}"
+            )
+
+    issuer_entity_schema, issuer_entity_validator = _validator(
+        protocol_root,
+        registry,
+        "issuer-entity.json",
+    )
+    _assert_model_shape(
+        model=IssuerEntityResponse,
+        schema=issuer_entity_schema,
+        label="IssuerEntityResponse",
+    )
+    issuer_entity_internal = {
+        "id": "10000000-0000-4000-8000-000000000001",
+        "organization_id": "20000000-0000-4000-8000-000000000001",
+        "issuer_id": "did:web:issuer.example",
+        "issuer_type": "ORGANIZATION",
+        "display_name": "Example Issuer",
+        "description": "Tenant trust-registry entry",
+        "is_system_issuer": False,
+        "compliance_status": "COMPLIANT",
+        "accreditation_body": None,
+        "accreditation_date": None,
+        "valid_from": "2026-08-01T00:00:00Z",
+        "valid_until": None,
+        "trust_anchor_id": None,
+        "revoked_at": None,
+        "revocation_reason": None,
+        "revoked_by": None,
+        "metadata": {"jurisdiction": "US"},
+        "created_at": "2026-08-01T00:00:00Z",
+        "updated_at": "2026-08-01T00:00:00Z",
+    }
+    issuer_entity_response = _sanitize_issuer_entity_response(
+        Response(
+            content=json.dumps(issuer_entity_internal),
+            media_type="application/json",
+        )
+    )
+    if issuer_entity_response.status_code != 200:
+        raise AssertionError("valid IssuerEntity failed runtime sanitization")
+    issuer_entity_validator.validate(json.loads(issuer_entity_response.body))
+
+    private_issuer_entity = {
+        **issuer_entity_internal,
+        "metadata": {"nested": {"signing_service_id": "must-not-leak"}},
+    }
+    rejected_private_issuer = _sanitize_issuer_entity_response(
+        Response(
+            content=json.dumps(private_issuer_entity),
+            media_type="application/json",
+        )
+    )
+    if rejected_private_issuer.status_code != 502:
+        raise AssertionError("private IssuerEntity metadata did not fail closed")
+
+    issuer_entity_create_schema, issuer_entity_create_validator = _validator(
+        protocol_root,
+        registry,
+        "issuer-entity-create-request.json",
+    )
+    _assert_model_shape(
+        model=IssuerEntityCreate,
+        schema=issuer_entity_create_schema,
+        label="IssuerEntityCreate",
+    )
+    issuer_entity_create = IssuerEntityCreate(
+        organization_id="20000000-0000-4000-8000-000000000001",
+        issuer_id="did:web:issuer.example",
+        display_name="Example Issuer",
+        metadata={"jurisdiction": "US"},
+    )
+    issuer_entity_create_validator.validate(
+        json.loads(_validated_issuer_entity_payload(issuer_entity_create))
+    )
+
+    issuer_entity_update_schema, issuer_entity_update_validator = _validator(
+        protocol_root,
+        registry,
+        "issuer-entity-update-request.json",
+    )
+    _assert_model_shape(
+        model=IssuerEntityUpdate,
+        schema=issuer_entity_update_schema,
+        label="IssuerEntityUpdate",
+    )
+    issuer_entity_update = IssuerEntityUpdate(
+        organization_id="20000000-0000-4000-8000-000000000001",
+        display_name="Updated Example Issuer",
+    )
+    issuer_entity_update_validator.validate(
+        json.loads(_validated_issuer_entity_payload(issuer_entity_update))
+    )
+
+    issuer_identity_schema, issuer_identity_validator = _validator(
+        protocol_root,
+        registry,
+        "issuer-identity.json",
+    )
+    _assert_model_shape(
+        model=IssuerIdentityResponse,
+        schema=issuer_identity_schema,
+        label="IssuerIdentityResponse",
+    )
+    issuer_identity_list_schema, issuer_identity_list_validator = _validator(
+        protocol_root,
+        registry,
+        "issuer-identity-list-response.json",
+    )
+    _assert_model_shape(
+        model=IssuerIdentityListResponse,
+        schema=issuer_identity_list_schema,
+        label="IssuerIdentityListResponse",
+    )
+    issuer_identity = IssuerIdentityResponse(
+        issuer_did="did:web:issuer.example",
+        key_purpose="vc_jwt_issuer",
+        algorithm="ES256",
+        status="active",
+    ).model_dump(mode="json")
+    issuer_identity_validator.validate(issuer_identity)
+    issuer_identity_list_validator.validate({"identities": [issuer_identity]})
+
+    for document in (
+        issuer_entity_schema,
+        issuer_entity_create_schema,
+        issuer_entity_update_schema,
+        issuer_identity_schema,
+        issuer_identity_list_schema,
+    ):
+        leaked = FORBIDDEN_PUBLIC_FIELDS & set(document.get("properties", {}))
+        if leaked:
+            raise AssertionError(
+                f"marty-protocol issuer boundary exposes custody selectors: {sorted(leaked)}"
+            )
+    for model in (
+        IssuerEntityCreate,
+        IssuerEntityUpdate,
+        IssuerEntityResponse,
+        IssuerIdentityResponse,
+        IssuerIdentityListResponse,
+    ):
+        leaked = FORBIDDEN_PUBLIC_FIELDS & set(model.model_fields)
+        if leaked:
+            raise AssertionError(
+                f"runtime issuer boundary exposes custody selectors: {sorted(leaked)}"
             )
 
     validator = Draft202012Validator(

@@ -38,6 +38,7 @@ from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from gateway.middleware import mip_error_response
+from gateway.models import IssuerIdentityListResponse
 from gateway.proxy import get_registry, proxy_request
 
 signing_key_router = APIRouter(prefix="/v1/signing-keys", tags=["Signing Keys"])
@@ -6323,14 +6324,14 @@ async def create_issuer_profile(
 @signing_key_router.get(
     "/issuer-identities",
     summary="List Public Issuer Identities",
-    response_class=JSONResponse,
+    response_model=IssuerIdentityListResponse,
 )
 async def list_public_issuer_identities(
     request: Request,
     organization_id: str | None = Query(None),
     key_purpose: str | None = Query(None),
     algorithm: str | None = Query(None),
-):
+) -> IssuerIdentityListResponse:
     """Return DID-first runtime identities without custody coordinates.
 
     Issuer profiles are an internal administration and custody abstraction.
@@ -6386,7 +6387,7 @@ async def list_public_issuer_identities(
             ),
         )
 
-    return JSONResponse(content={"identities": matches})
+    return IssuerIdentityListResponse(identities=matches)
 
 
 @signing_key_router.get(
