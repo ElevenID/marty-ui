@@ -5199,7 +5199,7 @@ async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
         algorithm="ES256",
     )
 
-    data = json.loads(response.body)
+    data = response.model_dump(mode="json")
     assert data == {
         "identities": [
             {
