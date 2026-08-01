@@ -405,9 +405,33 @@ def _display_name_for_key(key_name: str) -> str:
 def _openbao_key_prefix_for_purpose(key_purpose: str | None) -> str:
     if key_purpose == "lti_tool_signing":
         return "lti-tool-"
+    if key_purpose == "oid4vp_request_signing":
+        return "oid4vp-verifier-"
     if key_purpose in {"mdoc_dsc", "x509_doc_signer", "vdsnc_signing", "csca"}:
         return "cred-dsc-"
     return "cred-issuer-"
+
+
+def _managed_key_purposes_for_reference(key_reference: Any) -> tuple[str, ...]:
+    """Return protocol capabilities encoded by a managed KMS key namespace.
+
+    Tenant registry bindings record authorization decisions.  They are not a
+    complete capability catalogue: a clean organization has no bindings, and
+    creating its first profile must not make the shared managed service appear
+    incapable of every other supported purpose.  Managed key namespaces are
+    provisioned by Marty and therefore provide the stable capability source.
+    """
+
+    reference = str(key_reference or "").strip()
+    if reference.startswith("oid4vp-verifier-"):
+        return ("oid4vp_request_signing",)
+    if reference.startswith("lti-tool-"):
+        return ("lti_tool_signing",)
+    if reference.startswith("cred-dsc-"):
+        return ("mdoc_dsc", "x509_doc_signer", "vdsnc_signing", "csca")
+    if reference.startswith("cred-issuer-"):
+        return ("vc_jwt_issuer", "jwks_signing")
+    return ()
 
 
 def _normalize_requested_openbao_key_name(
@@ -1754,9 +1778,6 @@ def _resolve_key_reference_for_purpose(
         return current_reference
     bindings = _normalize_key_reference_purposes(registry.get("key_reference_purposes"))
     service_bindings = bindings.get(service_id, {})
-    if not service_bindings:
-        return current_reference
-
     aliases = set(_dedupe_strings(service.get("key_aliases")))
     if current_reference:
         aliases.add(current_reference)
@@ -1765,6 +1786,26 @@ def _resolve_key_reference_for_purpose(
         for reference, purposes in service_bindings.items()
         if key_purpose in purposes and (not aliases or reference in aliases)
     ]
+    if not candidates and service_id == MANAGED_OPENBAO_SERVICE_ID:
+        # A new tenant has not authorized any KMS key yet.  Resolve the
+        # purpose-specific managed key from live inventory so profile creation
+        # can establish that tenant-local binding without borrowing another
+        # organization's registry.
+        candidates = [
+            str(key.get("provider_key_name") or key.get("id"))
+            for key in keys
+            if isinstance(key, dict)
+            and key_purpose
+            in _managed_key_purposes_for_reference(
+                key.get("provider_key_name") or key.get("id")
+            )
+            and (
+                not aliases
+                or str(key.get("provider_key_name") or key.get("id")) in aliases
+            )
+        ]
+    if not candidates:
+        return current_reference if not service_bindings else None
     if algorithm:
         algorithm_by_reference = {
             str(key.get("provider_key_name") or key.get("id")): key.get("algorithm")
@@ -1901,7 +1942,18 @@ def _managed_openbao_service(
     bindings = _normalize_key_reference_purposes(key_reference_purposes)
     managed_bindings = bindings.get(MANAGED_OPENBAO_SERVICE_ID, {})
     managed_purposes = sorted(
-        {purpose for purposes in managed_bindings.values() for purpose in purposes}
+        {
+            purpose
+            for purposes in managed_bindings.values()
+            for purpose in purposes
+        }
+        | {
+            purpose
+            for key in keys
+            for purpose in _managed_key_purposes_for_reference(
+                key.get("provider_key_name") or key.get("id")
+            )
+        }
     )
     return {
         "id": MANAGED_OPENBAO_SERVICE_ID,
@@ -5992,10 +6044,11 @@ async def _complete_issuer_profile_algorithm(
     cannot be identified.
     """
 
-    if profile.get("algorithm"):
-        return
-
+    requested_algorithm = str(profile.get("algorithm") or "").strip()
     key_reference = str(profile.get("signing_key_reference") or "").strip()
+    managed_service = service.get("id") == MANAGED_OPENBAO_SERVICE_ID
+    if requested_algorithm and not managed_service:
+        return
     if key_reference:
         snapshot = await _load_signing_key_snapshot(organization_id)
         for key in snapshot.get("keys") or []:
@@ -6009,8 +6062,42 @@ async def _complete_issuer_profile_algorithm(
                 candidate_reference == key_reference
                 and candidate_algorithm in SUPPORTED_SIGNING_ALGORITHMS
             ):
+                if managed_service:
+                    key_purpose = str(profile.get("key_purpose") or "").strip()
+                    supported_purposes = _managed_key_purposes_for_reference(
+                        candidate_reference
+                    )
+                    if key_purpose not in supported_purposes:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=(
+                                f"Managed KMS key '{candidate_reference}' is not "
+                                f"provisioned for key_purpose '{key_purpose}'."
+                            ),
+                        )
+                    if requested_algorithm and requested_algorithm != candidate_algorithm:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=(
+                                f"Managed KMS key '{candidate_reference}' uses "
+                                f"algorithm '{candidate_algorithm}', not "
+                                f"'{requested_algorithm}'."
+                            ),
+                        )
                 profile["algorithm"] = candidate_algorithm
                 return
+
+        if managed_service:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Managed KMS key '{key_reference}' was not found in the live "
+                    "KMS inventory."
+                ),
+            )
+
+    if requested_algorithm:
+        return
 
     service_algorithms = _normalize_algorithm_list(service.get("algorithms"))
     if len(service_algorithms) == 1:

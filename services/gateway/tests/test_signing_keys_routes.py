@@ -37,6 +37,13 @@ def test_oid4vp_profile_key_is_part_of_managed_signing_inventory() -> None:
     assert normalized["provider_key_name"] == key_name
     assert normalized["algorithm"] == "ES256"
     assert normalized["name"] == "Marty OID4VP verifier request key"
+    assert (
+        signing_keys._openbao_key_prefix_for_purpose("oid4vp_request_signing")
+        == "oid4vp-verifier-"
+    )
+    assert signing_keys._managed_key_purposes_for_reference(key_name) == (
+        "oid4vp_request_signing",
+    )
 
 
 @pytest.mark.asyncio
@@ -884,6 +891,74 @@ def test_resolve_key_reference_selects_mdoc_dsc_in_multi_key_service():
         )
         == "cred-dsc-marty-primary"
     )
+
+
+def test_managed_inventory_resolves_unbound_oid4vp_key_after_issuer_binding():
+    """A first tenant binding must not hide other managed KMS capabilities."""
+
+    service = {
+        "id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        "key_reference": "cred-issuer-marty-es256",
+        "key_aliases": [
+            "cred-issuer-marty-es256",
+            "oid4vp-verifier-marty-es256",
+        ],
+    }
+    registry = {
+        "key_reference_purposes": {
+            signing_keys.MANAGED_OPENBAO_SERVICE_ID: {
+                "cred-issuer-marty-es256": ["vc_jwt_issuer"],
+            }
+        }
+    }
+    keys = [
+        {"provider_key_name": "cred-issuer-marty-es256", "algorithm": "ES256"},
+        {
+            "provider_key_name": "oid4vp-verifier-marty-es256",
+            "algorithm": "ES256",
+        },
+    ]
+
+    assert (
+        signing_keys._resolve_key_reference_for_purpose(
+            registry,
+            service,
+            keys,
+            key_purpose="oid4vp_request_signing",
+            algorithm="ES256",
+        )
+        == "oid4vp-verifier-marty-es256"
+    )
+
+
+def test_managed_service_capabilities_come_from_inventory_and_tenant_bindings():
+    snapshot = {
+        "config": {
+            "hsm_enabled": True,
+            "hsm_settings": {"service_url": "http://openbao", "mount": "transit"},
+        },
+        "keys": [
+            {"provider_key_name": "cred-issuer-marty-es256", "algorithm": "ES256"},
+            {
+                "provider_key_name": "oid4vp-verifier-marty-es256",
+                "algorithm": "ES256",
+            },
+        ],
+        "provider_metadata": {"status": "configured"},
+    }
+    service = signing_keys._managed_openbao_service(
+        snapshot,
+        "org-new",
+        {
+            signing_keys.MANAGED_OPENBAO_SERVICE_ID: {
+                "cred-issuer-marty-es256": ["vc_jwt_issuer"]
+            }
+        },
+    )
+
+    assert service is not None
+    assert "vc_jwt_issuer" in service["key_purposes"]
+    assert "oid4vp_request_signing" in service["key_purposes"]
 
 
 def test_resolve_key_reference_honors_requested_algorithm():
@@ -3828,6 +3903,76 @@ async def test_publish_service_to_did_rejects_malformed_or_mismatched_local_iden
 # =============================================================================
 # Issuer Profile CRUD
 # =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_managed_profile_algorithm_uses_purpose_specific_live_kms_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        signing_keys,
+        "_load_signing_key_snapshot",
+        AsyncMock(
+            return_value={
+                "keys": [
+                    {
+                        "provider_key_name": "oid4vp-verifier-marty-es256",
+                        "algorithm": "ES256",
+                    }
+                ]
+            }
+        ),
+    )
+    profile = {
+        "signing_key_reference": "oid4vp-verifier-marty-es256",
+        "key_purpose": "oid4vp_request_signing",
+        "algorithm": "",
+    }
+
+    await signing_keys._complete_issuer_profile_algorithm(
+        _build_request("org-new"),
+        organization_id="org-new",
+        profile=profile,
+        service={"id": signing_keys.MANAGED_OPENBAO_SERVICE_ID},
+    )
+
+    assert profile["algorithm"] == "ES256"
+
+
+@pytest.mark.asyncio
+async def test_managed_profile_rejects_key_from_another_protocol_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        signing_keys,
+        "_load_signing_key_snapshot",
+        AsyncMock(
+            return_value={
+                "keys": [
+                    {
+                        "provider_key_name": "cred-issuer-marty-es256",
+                        "algorithm": "ES256",
+                    }
+                ]
+            }
+        ),
+    )
+    profile = {
+        "signing_key_reference": "cred-issuer-marty-es256",
+        "key_purpose": "oid4vp_request_signing",
+        "algorithm": "",
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys._complete_issuer_profile_algorithm(
+            _build_request("org-new"),
+            organization_id="org-new",
+            profile=profile,
+            service={"id": signing_keys.MANAGED_OPENBAO_SERVICE_ID},
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "not provisioned for key_purpose" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
