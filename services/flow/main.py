@@ -1804,14 +1804,60 @@ class CreateFlowDefinitionRequest(BaseModel):
         return self
 
 
+class UpdateFlowDefinitionRequest(BaseModel):
+    """Partial public Flow update bound to the immutable owning organization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(min_length=1, max_length=255)
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    flow_type: FlowType | None = None
+    approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] | None = (
+        None
+    )
+    hooks: dict[str, list[FlowHookModel]] | None = None
+    trigger: FlowTriggerModel | None = None
+    extension: FlowExtensionModel | None = None
+    credential_template_id: str | None = Field(None, max_length=255)
+    application_template_id: str | None = Field(None, max_length=255)
+    presentation_policy_id: str | None = Field(None, max_length=255)
+    delivery_destination_profile_id: str | None = Field(None, max_length=128)
+    deployment_profile_ids: list[str] | None = None
+    trust_profile_id: str | None = Field(None, max_length=255)
+
+    @model_validator(mode="after")
+    def require_a_change(self) -> "UpdateFlowDefinitionRequest":
+        if self.model_fields_set <= {"organization_id"}:
+            raise ValueError("at least one mutable Flow field is required")
+        return self
+
+
+PublicFlowInstanceStatus = Literal[
+    "PENDING",
+    "IN_PROGRESS",
+    "AWAITING_APPROVAL",
+    "AWAITING_WALLET",
+    "AWAITING_EVIDENCE",
+    "COMPLETED",
+    "FAILED",
+    "EXPIRED",
+    "CANCELLED",
+]
+
+
 class FlowDefinitionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     name: str
     description: str | None = None
-    flow_type: str
-    flow_category: str
-    resolved_steps: list[str] = Field(default_factory=list)
+    flow_type: FlowType
+    flow_category: Literal[
+        "ISSUANCE", "VERIFICATION", "RENEWAL", "REVOCATION", "COMBINED"
+    ]
+    resolved_steps: list[str]
     extension: dict[str, Any] | None = None
     trust_profile_id: str | None = None
     credential_template_id: str | None = None
@@ -1819,42 +1865,70 @@ class FlowDefinitionResponse(BaseModel):
     presentation_policy_id: str | None = None
     delivery_destination_profile_id: str | None = None
     deployment_profile_ids: list[str] = Field(default_factory=list)
-    approval_strategy: str
+    approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"]
     hooks: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     trigger: dict[str, Any] | None = None
     version: int
-    status: str
+    status: FlowStatus
     created_at: str
     updated_at: str
 
 
 class StartFlowRequest(BaseModel):
-    flow_definition_id: str = Field(max_length=255)
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(min_length=1, max_length=255)
+    flow_definition_id: str = Field(min_length=1, max_length=255)
     subject_id: str | None = Field(None, max_length=255)
     subject_type: str = Field("applicant", max_length=50)
     external_reference: str | None = Field(None, max_length=500)
     initial_context: dict = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def reject_private_context(self) -> "StartFlowRequest":
+        forbidden_path = _private_flow_context_path(self.initial_context)
+        if forbidden_path:
+            raise ValueError(
+                f"initial_context.{forbidden_path} is private service state and cannot be supplied"
+            )
+        return self
+
 
 class FlowInstanceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
-    flow_id: str | None = None
-    flow_type: str | None = None
+    flow_id: str | None
+    flow_type: FlowType | None
     organization_id: str
-    status: str
+    status: PublicFlowInstanceStatus
     current_step: str | None = None
     current_step_index: int | None = None
-    context_data: dict = Field(default_factory=dict)
-    step_results: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    context_data: dict
+    step_results: dict[str, dict[str, Any]]
     issued_credential_id: str | None = None
     started_at: str | None
     completed_at: str | None
     expires_at: str | None
     error_code: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    state_history: list[dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any]
+    state_history: list[dict[str, Any]]
     created_at: str
     updated_at: str
+
+
+class VerificationResultResponse(BaseModel):
+    """Public result from polling or completing a verification flow."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    instance_id: str
+    status: PublicFlowInstanceStatus
+    result: str | None = None  # passed, failed, partial
+    decision: str | None = None  # allow, deny, manual_review
+    decision_reason: str | None = None
+    verified_claims: dict
+    evaluation_timestamp: str | None = None
 
 
 class AdvanceFlowRequest(BaseModel):
@@ -1970,6 +2044,68 @@ def _protocol_status_for_instance(status: FlowInstanceStatus) -> str:
     return mapping.get(status, status.value.upper())
 
 
+_PRIVATE_FLOW_CONTEXT_KEYS = frozenset(
+    {
+        "issuer_profile_id",
+        "issuer_key_id",
+        "issuer_algorithm",
+        "key_access_mode",
+        "verification_method_id",
+        "signing_service_id",
+        "signing_key_reference",
+        "key_reference",
+        "kms_provider",
+        "provider",
+        "key_name",
+        "key_version",
+        "transit_mount",
+        "pre_auth_code",
+        "pre_authorized_code",
+        "pre-authorized_code",
+        "access_token",
+        "refresh_token",
+        "client_secret",
+        "private_key",
+        "private_key_jwk",
+        "session_token",
+        "api_key",
+    }
+)
+
+
+def _private_flow_context_path(value: Any, prefix: str = "") -> str | None:
+    """Return the first public-context path containing private service state."""
+    if isinstance(value, dict):
+        for key, entry in value.items():
+            key_text = str(key)
+            path = f"{prefix}.{key_text}" if prefix else key_text
+            if key_text.casefold() in _PRIVATE_FLOW_CONTEXT_KEYS:
+                return path
+            nested = _private_flow_context_path(entry, path)
+            if nested:
+                return nested
+    elif isinstance(value, list):
+        for index, entry in enumerate(value):
+            path = f"{prefix}[{index}]" if prefix else f"[{index}]"
+            nested = _private_flow_context_path(entry, path)
+            if nested:
+                return nested
+    return None
+
+
+def _public_flow_value(value: Any) -> Any:
+    """Recursively project persisted execution state onto the public contract."""
+    if isinstance(value, dict):
+        return {
+            str(key): _public_flow_value(entry)
+            for key, entry in value.items()
+            if str(key).casefold() not in _PRIVATE_FLOW_CONTEXT_KEYS
+        }
+    if isinstance(value, list):
+        return [_public_flow_value(entry) for entry in value]
+    return value
+
+
 def _response_flow_type(instance: FlowInstance) -> str | None:
     protocol_flow_type = instance.context.get("protocol_flow_type")
     if protocol_flow_type:
@@ -2067,6 +2203,32 @@ def _definition_to_response(flow: FlowDefinition) -> FlowDefinitionResponse:
     )
 
 
+def _merged_flow_definition_request(
+    flow: FlowDefinition,
+    request: UpdateFlowDefinitionRequest,
+) -> CreateFlowDefinitionRequest:
+    """Validate a partial public patch as one complete Flow definition."""
+    current: dict[str, Any] = {
+        "organization_id": flow.organization_id,
+        "name": flow.name,
+        "description": flow.description,
+        "flow_type": flow.flow_type.value,
+        "approval_strategy": flow.approval_strategy,
+        "hooks": flow.hooks,
+        "trigger": flow.trigger,
+        "extension": flow.extension,
+        "credential_template_id": flow.credential_template_id,
+        "application_template_id": flow.application_template_id,
+        "presentation_policy_id": flow.presentation_policy_id,
+        "delivery_destination_profile_id": flow.delivery_destination_profile_id,
+        "deployment_profile_ids": flow.deployment_profile_ids,
+        "trust_profile_id": flow.trust_profile_id,
+    }
+    patch = request.model_dump(mode="json", exclude_unset=True)
+    patch.pop("organization_id", None)
+    return CreateFlowDefinitionRequest.model_validate({**current, **patch})
+
+
 def _instance_to_response(instance: FlowInstance) -> FlowInstanceResponse:
     """Convert FlowInstance to response model."""
     flow_type = _response_flow_type(instance)
@@ -2074,17 +2236,23 @@ def _instance_to_response(instance: FlowInstance) -> FlowInstanceResponse:
     flow_definition_reference = instance.context.get(
         "flow_definition_reference", instance.flow_definition_id
     )
-    metadata = {
-        "runtime_status": instance.status.value,
-        "flow_definition_reference": flow_definition_reference,
-        "subject_type": instance.subject_type,
-        **({"subject_id": instance.subject_id} if instance.subject_id else {}),
-        **(
-            {"external_reference": instance.external_reference}
-            if instance.external_reference
-            else {}
-        ),
-    }
+    metadata = _public_flow_value(
+        {
+            "runtime_status": instance.status.value,
+            "flow_definition_reference": flow_definition_reference,
+            "subject_type": instance.subject_type,
+            **({"subject_id": instance.subject_id} if instance.subject_id else {}),
+            **(
+                {"external_reference": instance.external_reference}
+                if instance.external_reference
+                else {}
+            ),
+        }
+    )
+    public_context = _public_flow_value(instance.context)
+    public_step_results = public_context.get("step_results", {})
+    if not isinstance(public_step_results, dict):
+        public_step_results = {}
     return FlowInstanceResponse(
         id=instance.id,
         flow_id=None
@@ -2095,19 +2263,40 @@ def _instance_to_response(instance: FlowInstance) -> FlowInstanceResponse:
         status=protocol_status,
         current_step=instance.context.get("current_step_name"),
         current_step_index=instance.context.get("current_step_index"),
-        context_data=instance.context,
-        step_results=instance.context.get("step_results", {}),
-        issued_credential_id=instance.context.get("issued_credential_id"),
+        context_data=public_context,
+        step_results=public_step_results,
+        issued_credential_id=public_context.get("issued_credential_id"),
         started_at=instance.started_at.isoformat() if instance.started_at else None,
         completed_at=instance.completed_at.isoformat()
         if instance.completed_at
         else None,
         expires_at=instance.expires_at.isoformat() if instance.expires_at else None,
-        error_code=instance.context.get("error_code"),
+        error_code=public_context.get("error_code"),
         metadata=metadata,
-        state_history=instance.state_history,
+        state_history=_public_flow_value(instance.state_history),
         created_at=instance.created_at.isoformat(),
         updated_at=instance.updated_at.isoformat(),
+    )
+
+
+def _verification_result_to_response(
+    instance: FlowInstance,
+) -> VerificationResultResponse:
+    """Return one strict result shape for polling and completed submissions."""
+    raw_result = instance.result if isinstance(instance.result, dict) else {}
+    verified_claims = _public_flow_value(raw_result.get("verified_claims", {}))
+    if not isinstance(verified_claims, dict):
+        verified_claims = {}
+    return VerificationResultResponse(
+        instance_id=instance.id,
+        status=_protocol_status_for_instance(instance.status),
+        result=raw_result.get("evaluation_result"),
+        decision=raw_result.get("decision"),
+        decision_reason=raw_result.get("decision_reason") or instance.error,
+        verified_claims=verified_claims,
+        evaluation_timestamp=(
+            instance.completed_at.isoformat() if instance.completed_at else None
+        ),
     )
 
 
@@ -2830,19 +3019,19 @@ async def get_flow_definition(
     return _definition_to_response(flow)
 
 
-@router.put(
+@router.patch(
     "/definitions/{flow_id}",
     response_model=FlowDefinitionResponse,
     response_model_exclude_none=True,
 )
 async def update_flow_definition(
     flow_id: str,
-    request: CreateFlowDefinitionRequest,
+    request: UpdateFlowDefinitionRequest,
     fastapi_request: Request,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> FlowDefinitionResponse:
-    """Replace a Flow Definition with a validated full definition payload."""
+    """Patch a Flow Definition and validate the complete merged definition."""
     flow = await repo.get_definition(flow_id)
     if not flow:
         raise HTTPException(status_code=404, detail="Flow Definition not found")
@@ -2861,17 +3050,18 @@ async def update_flow_definition(
             detail="organization_id cannot be changed for an existing flow definition",
         )
 
-    flow_type = _parse_flow_type(request.flow_type)
-    _validate_flow_request(request, flow_type)
+    merged_request = _merged_flow_definition_request(flow, request)
+    flow_type = _parse_flow_type(merged_request.flow_type)
+    _validate_flow_request(merged_request, flow_type)
     await _validate_credential_layer_references(
-        organization_id=request.organization_id,
-        credential_template_id=request.credential_template_id,
-        presentation_policy_id=request.presentation_policy_id,
+        organization_id=merged_request.organization_id,
+        credential_template_id=merged_request.credential_template_id,
+        presentation_policy_id=merged_request.presentation_policy_id,
         require_active=False,
     )
 
     flow.version += 1
-    _replace_flow_definition_content(flow, request, flow_type)
+    _replace_flow_definition_content(flow, merged_request, flow_type)
     flow.status = FlowStatus.DRAFT
     flow.updated_at = datetime.now(timezone.utc)
 
@@ -2992,6 +3182,11 @@ async def start_flow(
     if not flow_def:
         raise HTTPException(status_code=404, detail="Flow Definition not found")
 
+    if request.organization_id != flow_def.organization_id:
+        # Bind the public request to its selected tenant without confirming a
+        # guessed cross-tenant Flow identifier exists.
+        raise HTTPException(status_code=404, detail="Flow Definition not found")
+
     membership = await app.state.org_client.get_membership(
         user_id, flow_def.organization_id
     )
@@ -3104,12 +3299,16 @@ async def get_flow_instance(
     return _instance_to_response(instance)
 
 
-@router.get("/instances/{instance_id}/result")
+@router.get(
+    "/instances/{instance_id}/result",
+    response_model=VerificationResultResponse,
+    response_model_exclude_none=True,
+)
 async def get_flow_instance_result(
     instance_id: str,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryFlowRepository = Depends(get_repo),
-) -> dict:
+) -> VerificationResultResponse:
     """OID4VP-1FINAL §8.7 — Relying-party result polling endpoint.
 
     Returns the current verification state and any verified claims for the
@@ -3123,16 +3322,7 @@ async def get_flow_instance_result(
         user_id, instance.organization_id
     )
     ensure_membership_permission(membership, "flow-instance", "view")
-    return {
-        "instance_id": instance.id,
-        "status": instance.status.value,
-        "state": instance.status.value,
-        "result": instance.result,
-        "error": instance.error,
-        "completed_at": instance.completed_at.isoformat()
-        if instance.completed_at
-        else None,
-    }
+    return _verification_result_to_response(instance)
 
 
 @router.post(
@@ -3554,18 +3744,6 @@ class DigitalCredentialSubmissionRequest(BaseModel):
     protocol: str | None = Field(None, max_length=128)
     origin: str | None = Field(None, max_length=512)
     data: dict[str, Any] = Field(default_factory=dict)
-
-
-class VerificationResultResponse(BaseModel):
-    """Response from completing a verification flow."""
-
-    instance_id: str
-    status: str
-    result: str  # passed, failed, partial
-    decision: str  # allow, deny, manual_review
-    decision_reason: str
-    verified_claims: dict
-    evaluation_timestamp: str
 
 
 def _oid4vp_client_identity(
@@ -5844,7 +6022,7 @@ async def _submit_verification_response_internal(
 
     return VerificationResultResponse(
         instance_id=instance.id,
-        status=instance.status.value,
+        status=_protocol_status_for_instance(instance.status),
         result=evaluation_result,
         decision=evaluation_decision,
         decision_reason=decision_reason,

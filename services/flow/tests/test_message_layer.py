@@ -2380,7 +2380,7 @@ async def test_oid4vp_direct_post_callback_returns_only_the_standard_empty_objec
         called["kwargs"] = kwargs
         return flow_main.VerificationResultResponse(
             instance_id="flow-1",
-            status="completed",
+            status="COMPLETED",
             result="passed",
             decision="allow",
             decision_reason="internal result",
@@ -2413,7 +2413,7 @@ async def test_haip_direct_post_callback_returns_public_result_redirect(monkeypa
     async def _fake_submit(*_args, **_kwargs):
         return flow_main.VerificationResultResponse(
             instance_id=instance.id,
-            status="completed",
+            status="COMPLETED",
             result="passed",
             decision="allow",
             decision_reason="verified",
@@ -2440,7 +2440,7 @@ async def test_oid4vp_direct_post_callback_rejects_a_denied_presentation(monkeyp
     async def _fake_submit(*_args, **_kwargs):
         return flow_main.VerificationResultResponse(
             instance_id="flow-1",
-            status="completed",
+            status="COMPLETED",
             result="failed",
             decision="deny",
             decision_reason="signature invalid",

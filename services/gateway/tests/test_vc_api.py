@@ -114,7 +114,7 @@ async def test_issuer_adapter_rejects_document_issuer_mismatch() -> None:
 
 def test_issuer_adapter_calls_the_general_issuance_application_path() -> None:
     names = adapter._issue_data_integrity_credential.__code__.co_names
-    assert "create_issuance" in names
+    assert "_create_issuance_service_response" in names
     assert "_resolve_issuer_identity" not in names
     assert "_load_credential_template" not in names
 
@@ -205,7 +205,7 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
 
     captured_issuance: dict[str, object] = {}
 
-    async def create_issuance(body, request: Request) -> Response:
+    async def create_issuance_service_response(body, request: Request) -> Response:
         captured_issuance["body"] = body
         captured_issuance["request"] = request
         return Response(
@@ -213,7 +213,11 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
             media_type="application/json",
         )
 
-    monkeypatch.setattr(adapter, "create_issuance", create_issuance)
+    monkeypatch.setattr(
+        adapter,
+        "_create_issuance_service_response",
+        create_issuance_service_response,
+    )
     monkeypatch.setattr(
         adapter, "_create_oid4vci_proof", lambda issuer, nonce: "proof.jwt.value"
     )

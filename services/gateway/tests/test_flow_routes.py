@@ -7,7 +7,12 @@ import pytest
 from fastapi import Response
 
 from gateway.routes import flows
-from gateway.models import StartVerificationFlowRequest
+from gateway.models import (
+    FlowDefinitionUpdate,
+    FlowInstanceCreate,
+    FlowInstanceResponse,
+    StartVerificationFlowRequest,
+)
 
 
 def test_gateway_preserves_did_haip_and_post_request_uri_options() -> None:
@@ -124,8 +129,86 @@ def test_verification_flow_rejects_unknown_response_type() -> None:
         )
 
 
+def test_flow_start_rejects_nested_private_service_state() -> None:
+    with pytest.raises(ValueError, match="pre_auth_code"):
+        FlowInstanceCreate(
+            organization_id="org-1",
+            flow_definition_id="flow-1",
+            initial_context={"wallet": {"pre_auth_code": "must-not-enter"}},
+        )
+
+
+def test_flow_instance_response_rejects_nested_private_service_state() -> None:
+    response = Response(
+        content=flows.json.dumps(
+            {
+                "id": "instance-1",
+                "flow_id": "flow-1",
+                "flow_type": "oid4vci_pre_authorized",
+                "organization_id": "org-1",
+                "status": "IN_PROGRESS",
+                "context_data": {"wallet": {"pre_auth_code": "must-not-leak"}},
+                "step_results": {},
+                "metadata": {},
+                "state_history": [],
+                "created_at": "2026-07-31T00:00:00Z",
+                "updated_at": "2026-07-31T00:00:00Z",
+            }
+        ),
+        media_type="application/json",
+    )
+
+    with pytest.raises(flows.HTTPException) as exc_info:
+        flows._sanitize_public_response(response, FlowInstanceResponse)
+
+    assert exc_info.value.status_code == 502
+
+
+def test_flow_patch_serializes_only_validated_public_fields() -> None:
+    body = FlowDefinitionUpdate(
+        organization_id="org-1",
+        name="Updated flow",
+    )
+
+    assert flows.json.loads(flows._validated_flow_body(body, patch=True)) == {
+        "name": "Updated flow",
+        "organization_id": "org-1",
+    }
+
+
+def test_flow_definition_update_is_patch_only() -> None:
+    route = next(
+        route
+        for route in flows.flow_router.routes
+        if getattr(route, "path", "") == "/v1/flows/definitions/{flow_id}"
+        and "PATCH" in getattr(route, "methods", set())
+    )
+    assert route.methods == {"PATCH"}
+
+
 @pytest.mark.asyncio
-async def test_flow_definition_resolves_application_template_from_issuance(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_flow_start_rejects_selected_organization_mismatch_before_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proxy = AsyncMock()
+    monkeypatch.setattr(flows, "proxy_request", proxy)
+    request = SimpleNamespace(state=SimpleNamespace(organization_id="org-2"))
+    body = FlowInstanceCreate(
+        organization_id="org-1",
+        flow_definition_id="flow-1",
+    )
+
+    with pytest.raises(flows.HTTPException) as exc_info:
+        await flows.start_flow_instance(body, request)
+
+    assert exc_info.value.status_code == 403
+    proxy.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_flow_definition_resolves_application_template_from_issuance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     resource_exists = AsyncMock(return_value=True)
     monkeypatch.setattr(flows, "_resource_exists", resource_exists)
     body = SimpleNamespace(
@@ -148,7 +231,9 @@ async def test_flow_definition_resolves_application_template_from_issuance(monke
 
 
 @pytest.mark.asyncio
-async def test_cancel_flow_instance_proxies_canonical_route(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cancel_flow_instance_proxies_canonical_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     request = SimpleNamespace()
     proxy = AsyncMock(return_value=SimpleNamespace(status_code=200))
     registry = SimpleNamespace(get_service_url=lambda service: "http://flow:8011")
