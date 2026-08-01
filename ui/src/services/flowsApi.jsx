@@ -172,7 +172,11 @@ export const testFlow = async (flowId) => {
  */
 export const updateFlow = async (flowId, updates) => {
   try {
-    const response = await apiClient.put(`${FLOW_DEFINITIONS_PATH}/${flowId}`, updates);
+    const payload = {
+      ...updates,
+      organization_id: requireOrganizationId(updates?.organization_id),
+    };
+    const response = await apiClient.patch(`${FLOW_DEFINITIONS_PATH}/${flowId}`, payload);
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -195,12 +199,14 @@ export const deleteFlow = async (flowId) => {
 /**
  * Start a flow execution
  * @param {string} flowId - Flow ID
+ * @param {string} organizationId - Owning organization selected by the operator
  * @param {Object} context - Execution context data
  * @returns {Promise<Object>} Flow execution
  */
-export const startFlowExecution = async (flowId, context = {}) => {
+export const startFlowExecution = async (flowId, organizationId, context = {}) => {
   try {
     const response = await apiClient.post(FLOW_INSTANCES_PATH, {
+      organization_id: requireOrganizationId(organizationId),
       flow_definition_id: flowId,
       initial_context: context,
     });

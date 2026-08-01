@@ -18,8 +18,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "services"))
 
 from gateway.models import (  # noqa: E402
+    CredentialRenewalOfferResponse,
     CredentialTemplateResponse,
+    FlowDefinitionCreate,
+    FlowDefinitionResponse,
+    FlowDefinitionUpdate,
+    FlowInstanceCreate,
+    FlowInstanceResponse,
     IssuanceCreate,
+    IssuanceResponse,
+    IssuanceTransactionResponse,
+    IssuedCredentialLifecycleRequest,
+    IssuedCredentialRecordResponse,
     IssuerEntityCreate,
     IssuerEntityResponse,
     IssuerEntityUpdate,
@@ -34,6 +44,7 @@ from gateway.models import (  # noqa: E402
     PresentationPolicyUpdate,
     PUBLIC_ISSUANCE_RESERVED_CLAIMS,
     StartVerificationFlowRequest,
+    VerificationResultResponse,
     VerificationRequestResponse,
 )
 from gateway.routes.credentials import (  # noqa: E402
@@ -87,6 +98,19 @@ FORBIDDEN_ORGANIZATION_FIELDS = FORBIDDEN_PUBLIC_FIELDS | {
     "settings",
     "plan",
     "plan_expires_at",
+}
+
+FORBIDDEN_FLOW_FIELDS = FORBIDDEN_PUBLIC_FIELDS | {
+    "access_token",
+    "api_key",
+    "client_secret",
+    "pre-auth_code",
+    "pre-authorized_code",
+    "pre_auth_code",
+    "private_key",
+    "private_key_jwk",
+    "refresh_token",
+    "session_token",
 }
 
 
@@ -623,6 +647,176 @@ def check_contract(protocol_root: Path) -> None:
         claims={"given_name": "Ada"},
     ).model_dump(mode="json", exclude_none=True)
     issuance_validator.validate(issuance)
+
+    # Flow and issuance-management operations are public product contracts,
+    # not loose pass-throughs. Keep their required fields, tenant selectors,
+    # and response projections exactly aligned with marty-protocol.
+    operation_models = (
+        ("flow-create-request.json", FlowDefinitionCreate),
+        ("flow-update-request.json", FlowDefinitionUpdate),
+        ("flow-execution-start-request.json", FlowInstanceCreate),
+        ("flow.json", FlowDefinitionResponse),
+        ("flow-execution.json", FlowInstanceResponse),
+        ("verification-result-response.json", VerificationResultResponse),
+        ("issuance-response.json", IssuanceResponse),
+        ("issuance.json", IssuanceTransactionResponse),
+        ("issued-credential.json", IssuedCredentialRecordResponse),
+        ("issued-credential-lifecycle-request.json", IssuedCredentialLifecycleRequest),
+        ("credential-renewal-offer-response.json", CredentialRenewalOfferResponse),
+    )
+    operation_validators: dict[str, Draft202012Validator] = {}
+    for filename, model in operation_models:
+        operation_schema, operation_validator = _validator(
+            protocol_root,
+            registry,
+            filename,
+        )
+        _assert_model_shape(
+            model=model,
+            schema=operation_schema,
+            label=model.__name__,
+        )
+        leaked = FORBIDDEN_FLOW_FIELDS & _property_names(operation_schema)
+        if leaked:
+            raise AssertionError(
+                f"marty-protocol {filename} exposes private service state: "
+                f"{sorted(leaked)}"
+            )
+        leaked_runtime_fields = FORBIDDEN_FLOW_FIELDS & set(model.model_fields)
+        if leaked_runtime_fields:
+            raise AssertionError(
+                f"{model.__name__} exposes private service state: "
+                f"{sorted(leaked_runtime_fields)}"
+            )
+        operation_validators[filename] = operation_validator
+
+    flow_create = FlowDefinitionCreate(
+        organization_id="20000000-0000-4000-8000-000000000001",
+        name="Employee issuance",
+        flow_type="oid4vci_pre_authorized",
+        credential_template_id="template-employee",
+    ).model_dump(mode="json", exclude_none=True)
+    operation_validators["flow-create-request.json"].validate(flow_create)
+    flow_update = FlowDefinitionUpdate(
+        organization_id="20000000-0000-4000-8000-000000000001",
+        name="Updated employee issuance",
+    ).model_dump(mode="json", exclude_unset=True)
+    operation_validators["flow-update-request.json"].validate(flow_update)
+    flow_start = FlowInstanceCreate(
+        organization_id="20000000-0000-4000-8000-000000000001",
+        flow_definition_id="flow-employee",
+        initial_context={"purpose": "employee onboarding"},
+    ).model_dump(mode="json")
+    operation_validators["flow-execution-start-request.json"].validate(flow_start)
+
+    try:
+        FlowInstanceCreate(
+            organization_id="20000000-0000-4000-8000-000000000001",
+            flow_definition_id="flow-employee",
+            initial_context={"nested": {"pre_auth_code": "must-not-enter"}},
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "private service state was accepted in Flow initial_context"
+        )
+
+    public_documents = {
+        "flow.json": FlowDefinitionResponse(
+            id="flow-employee",
+            organization_id="20000000-0000-4000-8000-000000000001",
+            name="Employee issuance",
+            flow_type="oid4vci_pre_authorized",
+            flow_category="ISSUANCE",
+            resolved_steps=[
+                "create_offer",
+                "token_exchange",
+                "credential_request",
+                "issue_credential",
+            ],
+            credential_template_id="template-employee",
+            approval_strategy="AUTO",
+            status="ACTIVE",
+            version=1,
+            created_at="2026-07-31T00:00:00Z",
+            updated_at="2026-07-31T00:00:00Z",
+        ),
+        "flow-execution.json": FlowInstanceResponse(
+            id="execution-employee",
+            flow_id="flow-employee",
+            flow_type="oid4vci_pre_authorized",
+            organization_id="20000000-0000-4000-8000-000000000001",
+            status="IN_PROGRESS",
+            context_data={"purpose": "employee onboarding"},
+            step_results={},
+            metadata={},
+            state_history=[],
+            created_at="2026-07-31T00:00:00Z",
+            updated_at="2026-07-31T00:00:00Z",
+        ),
+        "verification-result-response.json": VerificationResultResponse(
+            instance_id="execution-verification",
+            status="COMPLETED",
+            result="passed",
+            decision="allow",
+            verified_claims={"employee_id": "E-123"},
+        ),
+        "issuance-response.json": IssuanceResponse(
+            id="issuance-employee",
+            organization_id="20000000-0000-4000-8000-000000000001",
+            credential_template_id="template-employee",
+            status="pending",
+            credential_offer_uri="openid-credential-offer://example",
+            credential_offer_uris={},
+            credential_offer_labels={},
+            expires_at="2026-08-01T00:00:00Z",
+        ),
+        "issuance.json": IssuanceTransactionResponse(
+            id="issuance-employee",
+            organization_id="20000000-0000-4000-8000-000000000001",
+            credential_template_id="template-employee",
+            status="pending",
+            created_at="2026-07-31T00:00:00Z",
+        ),
+        "issued-credential.json": IssuedCredentialRecordResponse(
+            id="credential-employee",
+            organization_id="20000000-0000-4000-8000-000000000001",
+            credential_id="credential-employee",
+            credential_type="EmployeeCredential",
+            credential_format="SD_JWT_VC",
+            flow_execution_id="issuance-employee",
+            credential_template_id="template-employee",
+            subject_id="did:example:holder",
+            issued_at="2026-07-31T00:00:00Z",
+            status="ACTIVE",
+            status_list_entries=[],
+            created_at="2026-07-31T00:00:00Z",
+        ),
+        "credential-renewal-offer-response.json": CredentialRenewalOfferResponse(
+            source_credential_id="credential-employee",
+            transaction_id="issuance-renewal",
+            credential_offer_uri="openid-credential-offer://renewal",
+            credential_offer_uris={},
+            credential_offer_labels={},
+            expires_at="2026-08-01T00:00:00Z",
+        ),
+    }
+    for filename, runtime_document in public_documents.items():
+        document = runtime_document.model_dump(mode="json", exclude_none=True)
+        operation_validators[filename].validate(document)
+        leaked = FORBIDDEN_FLOW_FIELDS & _property_names(document)
+        if leaked:
+            raise AssertionError(
+                f"runtime {filename} exposes private service state: {sorted(leaked)}"
+            )
+
+    lifecycle_request = IssuedCredentialLifecycleRequest(
+        reason="Credential superseded",
+    ).model_dump(mode="json", exclude_none=True)
+    operation_validators["issued-credential-lifecycle-request.json"].validate(
+        lifecycle_request
+    )
 
     verification_request_schema, verification_request_validator = _validator(
         protocol_root,

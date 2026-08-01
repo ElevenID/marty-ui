@@ -249,9 +249,7 @@ class IssuerEntityCreate(BaseModel):
     issuer_type: Literal["ORGANIZATION", "GOVERNMENT", "DEVICE"] = "ORGANIZATION"
     display_name: str = Field(min_length=1, max_length=256)
     description: str | None = Field(None, max_length=1024)
-    compliance_status: Literal["ACCREDITED", "COMPLIANT", "SUSPENDED"] = (
-        "COMPLIANT"
-    )
+    compliance_status: Literal["ACCREDITED", "COMPLIANT", "SUSPENDED"] = "COMPLIANT"
     accreditation_body: str | None = Field(None, max_length=256)
     accreditation_date: str | None = None
     valid_from: str | None = None
@@ -294,7 +292,10 @@ class IssuerEntityUpdate(BaseModel):
             "valid_from",
             "metadata",
         ):
-            if field_name in self.model_fields_set and getattr(self, field_name) is None:
+            if (
+                field_name in self.model_fields_set
+                and getattr(self, field_name) is None
+            ):
                 raise ValueError(f"{field_name} cannot be null")
         if self.compliance_status == "REVOKED" and not self.revocation_reason:
             raise ValueError("revocation_reason is required when revoking an issuer")
@@ -481,11 +482,13 @@ class ApiKeyCreatedResponse(ApiKeyResponse):
 
 
 class IssuedCredentialRecordResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     credential_id: str
     credential_type: str
-    credential_format: str
+    credential_format: Literal["MDOC", "SD_JWT_VC", "VC_JWT", "JSON_LD"]
     flow_execution_id: str
     credential_template_id: str
     application_id: str | None = None
@@ -500,8 +503,8 @@ class IssuedCredentialRecordResponse(BaseModel):
     issued_at: str
     valid_from: str | None = None
     valid_until: str | None = None
-    status: str
-    status_list_entries: list[dict] = Field(default_factory=list)
+    status: Literal["ACTIVE", "SUSPENDED", "REVOKED", "EXPIRED"]
+    status_list_entries: list[dict]
     credential_hash: str | None = None
     revoked_at: str | None = None
     revocation_reason: str | None = None
@@ -1425,6 +1428,34 @@ class DeviceAssignment(BaseModel):
 # =============================================================================
 
 
+FlowTypeValue = Literal[
+    "oid4vci_pre_authorized",
+    "oid4vci_authorization_code",
+    "mdl_issuance",
+    "oid4vp_presentation",
+    "mdl_presentation",
+    "siopv2",
+    "application_approval_issuance",
+    "credential_renewal",
+    "credential_revocation",
+    "physical_document_issuance",
+    "combined",
+    "custom",
+]
+FlowDefinitionStatusValue = Literal["DRAFT", "ACTIVE", "PAUSED", "ARCHIVED"]
+FlowInstanceStatusValue = Literal[
+    "PENDING",
+    "IN_PROGRESS",
+    "AWAITING_APPROVAL",
+    "AWAITING_WALLET",
+    "AWAITING_EVIDENCE",
+    "COMPLETED",
+    "FAILED",
+    "EXPIRED",
+    "CANCELLED",
+]
+
+
 class FlowExtensionStepModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1476,23 +1507,10 @@ class FlowDefinitionCreate(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    organization_id: str
-    name: str
-    description: str | None = None
-    flow_type: Literal[
-        "oid4vci_pre_authorized",
-        "oid4vci_authorization_code",
-        "mdl_issuance",
-        "oid4vp_presentation",
-        "mdl_presentation",
-        "siopv2",
-        "application_approval_issuance",
-        "credential_renewal",
-        "credential_revocation",
-        "physical_document_issuance",
-        "combined",
-        "custom",
-    ]
+    organization_id: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    flow_type: FlowTypeValue
     approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] = "AUTO"
     hooks: dict[str, list[FlowHookModel]] = Field(default_factory=dict)
     trigger: FlowTriggerModel | None = None
@@ -1513,57 +1531,167 @@ class FlowDefinitionCreate(BaseModel):
         return self
 
 
+class FlowDefinitionUpdate(BaseModel):
+    """Partial public Flow patch bound to the owning organization."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(min_length=1, max_length=255)
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = Field(None, max_length=2000)
+    flow_type: FlowTypeValue | None = None
+    approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"] | None = (
+        None
+    )
+    hooks: dict[str, list[FlowHookModel]] | None = None
+    trigger: FlowTriggerModel | None = None
+    extension: FlowExtensionModel | None = None
+    trust_profile_id: str | None = None
+    credential_template_id: str | None = None
+    application_template_id: str | None = None
+    presentation_policy_id: str | None = None
+    delivery_destination_profile_id: str | None = None
+    deployment_profile_ids: list[str] | None = None
+
+    @model_validator(mode="after")
+    def require_a_change(self) -> "FlowDefinitionUpdate":
+        if self.model_fields_set <= {"organization_id"}:
+            raise ValueError("at least one mutable Flow field is required")
+        return self
+
+
 class FlowDefinitionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     name: str
-    description: str | None
-    status: str
-    flow_type: str
-    flow_category: str | None = None
-    resolved_steps: list[str] = Field(default_factory=list)
+    description: str | None = None
+    status: FlowDefinitionStatusValue
+    flow_type: FlowTypeValue
+    flow_category: Literal[
+        "ISSUANCE", "VERIFICATION", "RENEWAL", "REVOCATION", "COMBINED"
+    ]
+    resolved_steps: list[str]
     extension: dict[str, Any] | None = None
-    trust_profile_id: str | None
-    credential_template_id: str | None
-    application_template_id: str | None
-    presentation_policy_id: str | None
+    trust_profile_id: str | None = None
+    credential_template_id: str | None = None
+    application_template_id: str | None = None
+    presentation_policy_id: str | None = None
     delivery_destination_profile_id: str | None = None
-    approval_strategy: str | None = None
+    approval_strategy: Literal["AUTO", "MANUAL", "RULES_BASED", "EXTERNAL"]
     hooks: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     trigger: dict[str, Any] | None = None
-    deployment_profile_ids: list[str]
+    deployment_profile_ids: list[str] = Field(default_factory=list)
     version: int
     created_at: str
     updated_at: str
 
 
+_PRIVATE_FLOW_CONTEXT_KEYS = frozenset(
+    {
+        "issuer_profile_id",
+        "issuer_key_id",
+        "issuer_algorithm",
+        "key_access_mode",
+        "verification_method_id",
+        "signing_service_id",
+        "signing_key_reference",
+        "key_reference",
+        "kms_provider",
+        "provider",
+        "key_name",
+        "key_version",
+        "transit_mount",
+        "pre_auth_code",
+        "pre_authorized_code",
+        "pre-authorized_code",
+        "access_token",
+        "refresh_token",
+        "client_secret",
+        "private_key",
+        "private_key_jwk",
+        "session_token",
+        "api_key",
+    }
+)
+
+
+def _private_flow_context_path(value: Any, prefix: str = "") -> str | None:
+    if isinstance(value, dict):
+        for key, entry in value.items():
+            key_text = str(key)
+            path = f"{prefix}.{key_text}" if prefix else key_text
+            if key_text.casefold() in _PRIVATE_FLOW_CONTEXT_KEYS:
+                return path
+            nested = _private_flow_context_path(entry, path)
+            if nested:
+                return nested
+    elif isinstance(value, list):
+        for index, entry in enumerate(value):
+            path = f"{prefix}[{index}]" if prefix else f"[{index}]"
+            nested = _private_flow_context_path(entry, path)
+            if nested:
+                return nested
+    return None
+
+
 class FlowInstanceCreate(BaseModel):
-    flow_definition_id: str
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(min_length=1, max_length=255)
+    flow_definition_id: str = Field(min_length=1, max_length=255)
     subject_id: str | None = None
     subject_type: str = "applicant"
     external_reference: str | None = None
     initial_context: dict = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def reject_private_context(self) -> "FlowInstanceCreate":
+        forbidden_path = _private_flow_context_path(self.initial_context)
+        if forbidden_path:
+            raise ValueError(
+                f"initial_context.{forbidden_path} is private service state and cannot be supplied"
+            )
+        return self
+
 
 class FlowInstanceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
-    flow_id: str | None = None
-    flow_type: str | None = None
+    flow_id: str | None
+    flow_type: FlowTypeValue | None
     organization_id: str
-    status: str
+    status: FlowInstanceStatusValue
     current_step: str | None = None
     current_step_index: int | None = None
-    context_data: dict = Field(default_factory=dict)
-    step_results: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    context_data: dict
+    step_results: dict[str, dict[str, Any]]
     issued_credential_id: str | None = None
     started_at: str | None = None
     completed_at: str | None = None
     expires_at: str | None = None
     error_code: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    state_history: list[dict[str, Any]] = Field(default_factory=list)
+    metadata: dict[str, Any]
+    state_history: list[dict[str, Any]]
     created_at: str
     updated_at: str
+
+    @model_validator(mode="after")
+    def reject_private_service_state(self) -> "FlowInstanceResponse":
+        for field_name, value in (
+            ("context_data", self.context_data),
+            ("step_results", self.step_results),
+            ("metadata", self.metadata),
+            ("state_history", self.state_history),
+        ):
+            forbidden_path = _private_flow_context_path(value)
+            if forbidden_path:
+                raise ValueError(
+                    f"{field_name}.{forbidden_path} contains private service state"
+                )
+        return self
 
 
 # =============================================================================
@@ -1698,13 +1826,15 @@ class SubmitVerificationRequest(BaseModel):
 
 
 class VerificationResultResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     instance_id: str
-    status: str
-    result: str
-    decision: str
-    decision_reason: str
+    status: FlowInstanceStatusValue
+    result: str | None = None
+    decision: str | None = None
+    decision_reason: str | None = None
     verified_claims: dict
-    evaluation_timestamp: str
+    evaluation_timestamp: str | None = None
 
 
 # =============================================================================
@@ -2123,17 +2253,56 @@ class DidcommDeliveryResponse(BaseModel):
 
 
 class IssuanceResponse(BaseModel):
-    """Issuance response."""
+    """Public issuance initiation response; reusable authorization secrets are absent."""
+
+    model_config = ConfigDict(extra="forbid")
 
     id: str
     organization_id: str
     credential_template_id: str
-    subject_did: str | None
-    application_id: str | None
-    status: str
-    credential_offer_uri: str | None
-    issued_credential: dict | None = None
+    status: Literal[
+        "pending", "authorized", "signing", "issued", "failed", "expired", "revoked"
+    ]
+    credential_offer_uri: str
+    credential_offer_uris: dict[str, str]
+    credential_offer_labels: dict[str, str]
+    expires_at: str
+
+
+class IssuanceTransactionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    organization_id: str
+    credential_template_id: str
+    applicant_id: str | None = None
+    application_id: str | None = None
+    subject_did: str | None = None
+    status: Literal[
+        "pending", "authorized", "signing", "issued", "failed", "expired", "revoked"
+    ]
     created_at: str
+    expires_at: str | None = None
+    issued_at: str | None = None
+    revoked_at: str | None = None
+    revocation_reason: str | None = None
+
+
+class IssuedCredentialLifecycleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str | None = Field(None, max_length=2000)
+
+
+class CredentialRenewalOfferResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_credential_id: str
+    transaction_id: str
+    credential_offer_uri: str
+    credential_offer_uris: dict[str, str]
+    credential_offer_labels: dict[str, str]
+    expires_at: str
 
 
 # =============================================================================

@@ -46,6 +46,7 @@ def _build_request(
 
     request = Request(scope, receive)
     request.state.session_organization_id = session_org_id
+    request.state.organization_id = session_org_id
     return request
 
 
@@ -477,13 +478,24 @@ async def test_create_issuance_resolves_did_without_forwarding_profile_selectors
             "algorithm": "ES256",
         }
 
-    async def _proxy(request, service_url, path, body_override=None, inject_headers=None):
+    async def _proxy(
+        request, service_url, path, body_override=None, inject_headers=None
+    ):
         captured["service_url"] = service_url
         captured["path"] = path
         captured["body"] = json.loads(body_override)
         captured["inject_headers"] = inject_headers
         return JSONResponse(
-            {"id": "iss-1", "organization_id": "org_123", "status": "PENDING"}
+            {
+                "id": "iss-1",
+                "organization_id": "org_123",
+                "credential_template_id": "default",
+                "status": "pending",
+                "credential_offer_uri": "openid-credential-offer://example",
+                "credential_offer_uris": {},
+                "credential_offer_labels": {},
+                "expires_at": "2026-08-01T00:00:00Z",
+            }
         )
 
     monkeypatch.setattr(issuance, "_resolve_issuer_identity", fake_resolve_identity)
@@ -559,7 +571,16 @@ async def test_create_issuance_registers_public_wallet_key_and_binds_offer(
         captured["body"] = json.loads(body_override)
         captured["inject_headers"] = inject_headers
         return JSONResponse(
-            {"id": "iss-1", "organization_id": "org_123", "status": "PENDING"}
+            {
+                "id": "iss-1",
+                "organization_id": "org_123",
+                "credential_template_id": "default",
+                "status": "pending",
+                "credential_offer_uri": "openid-credential-offer://example",
+                "credential_offer_uris": {},
+                "credential_offer_labels": {},
+                "expires_at": "2026-08-01T00:00:00Z",
+            }
         )
 
     monkeypatch.setattr(issuance, "_resolve_issuer_identity", fake_resolve_identity)
@@ -709,11 +730,22 @@ async def test_create_issuance_uses_template_bound_issuer_did(
             "signing_service_id": "svc-bao",
         }
 
-    async def _proxy(request, service_url, path, body_override=None, inject_headers=None):
+    async def _proxy(
+        request, service_url, path, body_override=None, inject_headers=None
+    ):
         captured["body"] = json.loads(body_override)
         captured["inject_headers"] = inject_headers
         return JSONResponse(
-            {"id": "iss-1", "organization_id": "org_123", "status": "PENDING"}
+            {
+                "id": "iss-1",
+                "organization_id": "org_123",
+                "credential_template_id": "template-1",
+                "status": "pending",
+                "credential_offer_uri": "openid-credential-offer://example",
+                "credential_offer_uris": {},
+                "credential_offer_labels": {},
+                "expires_at": "2026-08-01T00:00:00Z",
+            }
         )
 
     monkeypatch.setattr(issuance, "_load_credential_template", fake_load_template)
@@ -741,6 +773,69 @@ async def test_create_issuance_uses_template_bound_issuer_did(
     assert captured["inject_headers"] == {"X-API-Key": "secret"}
     assert captured["body"]["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:acme"
     assert "X-Signing-Service-Id" not in captured["inject_headers"]
+
+
+def test_public_issuance_response_removes_internal_redemption_and_custody_state() -> (
+    None
+):
+    response = JSONResponse(
+        {
+            "id": "iss-1",
+            "organization_id": "org_123",
+            "credential_template_id": "template-1",
+            "status": "pending",
+            "credential_offer_uri": "openid-credential-offer://example",
+            "credential_offer_uris": {},
+            "credential_offer_labels": {},
+            "expires_at": "2026-08-01T00:00:00Z",
+            "pre_auth_code": "must-not-leak",
+            "issuer_profile_id": "must-not-leak",
+            "signing_key_reference": "must-not-leak",
+        }
+    )
+
+    public = issuance._sanitize_management_response(
+        response,
+        issuance.IssuanceResponse,
+    )
+    payload = json.loads(public.body)
+
+    assert "pre_auth_code" not in payload
+    assert "issuer_profile_id" not in payload
+    assert "signing_key_reference" not in payload
+    assert payload["credential_offer_uri"] == "openid-credential-offer://example"
+
+
+def test_public_issued_credential_response_removes_delivery_routing_state() -> None:
+    response = JSONResponse(
+        {
+            "id": "credential-1",
+            "organization_id": "org_123",
+            "credential_id": "credential-1",
+            "credential_type": "EmployeeCredential",
+            "credential_format": "SD_JWT_VC",
+            "flow_execution_id": "iss-1",
+            "credential_template_id": "template-1",
+            "subject_id": "did:example:holder",
+            "issued_at": "2026-07-31T00:00:00Z",
+            "status": "ACTIVE",
+            "status_list_entries": [],
+            "created_at": "2026-07-31T00:00:00Z",
+            "deliveries": [
+                {
+                    "delivery_target": "canvas_credentials",
+                    "external_credential_id": "private-routing-id",
+                }
+            ],
+        }
+    )
+
+    public = issuance._sanitize_management_response(
+        response,
+        issuance.IssuedCredentialRecordResponse,
+    )
+
+    assert "deliveries" not in json.loads(public.body)
 
 
 @pytest.mark.asyncio
@@ -1132,9 +1227,7 @@ async def test_resolve_issuer_identity_uses_org_scoped_did(
     request = _build_request(session_org_id="org_acme")
     assert await issuance._resolve_issuer_identity(request, "org_acme", None) is None
 
-    identity = await issuance._resolve_issuer_identity(
-        request, "org_acme", issuer_did
-    )
+    identity = await issuance._resolve_issuer_identity(request, "org_acme", issuer_did)
     assert identity == {
         "issuer_profile_id": "ip-2",
         "issuer_did": issuer_did,
