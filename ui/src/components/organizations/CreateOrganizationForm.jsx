@@ -28,7 +28,6 @@ const DEFAULT_VALUES = {
   name: '',
   displayName: '',
   orgType: 'enterprise',
-  jurisdiction: 'US',
   description: '',
   contactEmail: '',
   isDiscoverable: false,
@@ -36,18 +35,18 @@ const DEFAULT_VALUES = {
 };
 
 function buildPayload(values) {
-  const isDiscoverable = Boolean(values.isDiscoverable);
+  const isOpenAdmission = values.membershipMode === 'open' || values.membershipMode === 'approval';
+  const isDiscoverable = isOpenAdmission || Boolean(values.isDiscoverable);
 
   return {
     name: values.name.trim(),
     display_name: values.displayName.trim(),
     org_type: values.orgType || undefined,
-    jurisdiction: values.jurisdiction || undefined,
     description: values.description.trim() || undefined,
     contact_email: values.contactEmail.trim() || undefined,
-    is_discoverable: isDiscoverable,
     visibility: isDiscoverable ? 'PUBLIC' : 'PRIVATE',
-    membership_mode: values.membershipMode,
+    join_mechanism: isOpenAdmission ? 'open' : 'invite',
+    requires_approval: values.membershipMode === 'approval',
   };
 }
 
@@ -127,27 +126,6 @@ function CreateOrganizationForm({
               <MenuItem value="healthcare">Healthcare Provider</MenuItem>
               <MenuItem value="financial">Financial Services</MenuItem>
               <MenuItem value="other">Other</MenuItem>
-            </Select>
-          </FormControl>
-        </Grid>
-        <Grid item xs={12} sm={6}>
-          <FormControl fullWidth>
-            <InputLabel id="create-org-jurisdiction-label">Jurisdiction</InputLabel>
-            <Select
-              labelId="create-org-jurisdiction-label"
-              value={values.jurisdiction}
-              label="Jurisdiction"
-              onChange={updateValue('jurisdiction')}
-            >
-              <MenuItem value="US">United States</MenuItem>
-              <MenuItem value="US-CA">United States - California</MenuItem>
-              <MenuItem value="US-TX">United States - Texas</MenuItem>
-              <MenuItem value="US-NY">United States - New York</MenuItem>
-              <MenuItem value="US-FL">United States - Florida</MenuItem>
-              <MenuItem value="CA">Canada</MenuItem>
-              <MenuItem value="UK">United Kingdom</MenuItem>
-              <MenuItem value="EU">European Union</MenuItem>
-              <MenuItem value="OTHER">Other</MenuItem>
             </Select>
           </FormControl>
         </Grid>

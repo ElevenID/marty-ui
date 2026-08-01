@@ -27,10 +27,9 @@ export async function getOrganization(organizationId) {
  * @param {string} data.org_type - Organization type (e.g., 'enterprise', 'startup')
  * @param {string} [data.description] - Optional description
  * @param {string} [data.contact_email] - Optional contact email
- * @param {string} [data.jurisdiction] - Optional jurisdiction code
- * @param {boolean} [data.is_discoverable] - Whether the organization appears in discovery
  * @param {string} [data.visibility] - PUBLIC or PRIVATE discovery visibility
- * @param {string} [data.membership_mode] - invite_only, approval, or open
+ * @param {string} [data.join_mechanism] - open, code, invite, or domain
+ * @param {boolean} [data.requires_approval] - Whether direct admission requires approval
  * @returns {Promise<Object>} - Created organization object
  */
 export async function createOrganization(data) {
@@ -172,18 +171,22 @@ export async function acceptOrganizationInvitation(token) {
  * @param {string} organizationId - Organization ID
  * @param {Object} updates - Fields to update
  * @param {string} updates.name - Organization name
- * @param {string} updates.logoUrl - Logo URL
  * @param {string} updates.websiteUrl - Website URL
  * @param {string} updates.contactEmail - Contact email
  * @returns {Promise<Object>} - Updated organization object
  */
 export async function updateOrganization(organizationId, updates) {
   const orgId = requireOrganizationId(organizationId, 'updating organization');
-  const body = {};
+  const body = { organization_id: orgId };
   if (updates.name !== undefined) body.name = updates.name;
-  if (updates.logoUrl !== undefined) body.logo_url = updates.logoUrl;
-  if (updates.websiteUrl !== undefined) body.website_url = updates.websiteUrl;
+  if (updates.displayName !== undefined) body.display_name = updates.displayName;
+  if (updates.description !== undefined) body.description = updates.description;
+  if (updates.websiteUrl !== undefined) body.website = updates.websiteUrl;
   if (updates.contactEmail !== undefined) body.contact_email = updates.contactEmail;
+  if (updates.contactPhone !== undefined) body.contact_phone = updates.contactPhone;
+  if (updates.visibility !== undefined) body.visibility = updates.visibility;
+  if (updates.joinMechanism !== undefined) body.join_mechanism = updates.joinMechanism;
+  if (updates.requiresApproval !== undefined) body.requires_approval = updates.requiresApproval;
   return patch(`${BASE_PATH}/${encodeURIComponent(orgId)}`, body);
 }
 
