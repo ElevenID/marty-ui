@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -129,6 +130,37 @@ def _load_registry(protocol_root: Path) -> Registry:
     return registry
 
 
+def _assert_generated_bindings_current(protocol_root: Path) -> None:
+    """Verify every checked-in protocol binding was generated from this exact pin."""
+
+    generator = protocol_root / "scripts" / "codegen.py"
+    if not generator.is_file():
+        raise AssertionError(
+            "pinned marty-protocol is missing scripts/codegen.py; cannot verify "
+            "the Python, Rust, and TypeScript bindings"
+        )
+
+    completed = subprocess.run(
+        [sys.executable, str(generator), "--check"],
+        cwd=protocol_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if completed.returncode != 0:
+        output = "\n".join(
+            part.strip()
+            for part in (completed.stdout, completed.stderr)
+            if part.strip()
+        )
+        raise AssertionError(
+            "pinned marty-protocol generated bindings are stale; public clients "
+            "must be regenerated from the exact reviewed schema commit"
+            + (f":\n{output}" if output else "")
+        )
+
+
 def _property_names(value: object) -> set[str]:
     if isinstance(value, dict):
         result = set(value.get("properties", {}))
@@ -239,6 +271,7 @@ def _public_response(
 
 
 def check_contract(protocol_root: Path) -> None:
+    _assert_generated_bindings_current(protocol_root)
     schema_path = protocol_root / "schemas" / "credential-template.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     registry = _load_registry(protocol_root)
