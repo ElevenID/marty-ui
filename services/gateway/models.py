@@ -9,7 +9,15 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    model_validator,
+)
 
 
 # =============================================================================
@@ -1629,26 +1637,122 @@ class VerificationResultResponse(BaseModel):
 
 
 class OrganizationCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=255)
-    display_name: str | None = Field(None, max_length=255)
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(
+        min_length=2, max_length=64, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$"
+    )
+    display_name: str = Field(min_length=1, max_length=128)
+    description: str | None = Field(None, max_length=1024)
+    org_type: Literal[
+        "enterprise",
+        "startup",
+        "individual",
+        "government",
+        "education",
+        "healthcare",
+        "financial",
+        "other",
+    ] = "startup"
+    contact_email: EmailStr | None = None
+    visibility: Literal["PUBLIC", "PRIVATE"] = "PRIVATE"
+    join_mechanism: Literal["open", "code", "invite", "domain"] = "invite"
+    requires_approval: bool = False
+
+    @model_validator(mode="after")
+    def validate_admission(self) -> "OrganizationCreate":
+        if self.join_mechanism == "open" and self.visibility != "PUBLIC":
+            raise ValueError("open join requires PUBLIC visibility")
+        return self
+
+
+class OrganizationUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str
+    name: str | None = Field(
+        None, min_length=2, max_length=64, pattern=r"^[a-z0-9][a-z0-9-]*[a-z0-9]$"
+    )
+    display_name: str | None = Field(None, min_length=1, max_length=128)
+    description: str | None = Field(None, max_length=1024)
+    org_type: (
+        Literal[
+            "enterprise",
+            "startup",
+            "individual",
+            "government",
+            "education",
+            "healthcare",
+            "financial",
+            "other",
+        ]
+        | None
+    ) = None
+    contact_email: EmailStr | None = None
+    contact_phone: str | None = Field(None, max_length=50)
+    website: AnyHttpUrl | None = None
+    visibility: Literal["PUBLIC", "PRIVATE"] | None = None
+    join_mechanism: Literal["open", "code", "invite", "domain"] | None = None
+    requires_approval: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_update(self) -> "OrganizationUpdate":
+        if not (self.model_fields_set - {"organization_id"}):
+            raise ValueError("at least one organization field is required")
+        if self.join_mechanism == "open" and self.visibility != "PUBLIC":
+            raise ValueError("open join requires PUBLIC visibility")
+        return self
+
+
+class OrganizationRoleSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    display_name: str | None = None
+
+
+class OrganizationMembershipSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    roles: list[OrganizationRoleSummary]
+    status: Literal["active", "pending", "invited", "deactivated"]
+    permissions: list[str]
+    has_org_console_access: bool
+    is_owner: bool
+    joined_at: str | None
 
 
 class OrganizationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     name: str
-    display_name: str | None
-    slug: str | None = None
+    display_name: str
     description: str | None = None
-    org_type: str | None = None
-    status: str | None = None
+    join_code: str | None = None
+    visibility: Literal["PUBLIC", "PRIVATE"]
+    owner_id: str
+    status: Literal["active", "suspended", "pending"]
+    org_type: Literal[
+        "enterprise",
+        "startup",
+        "individual",
+        "government",
+        "education",
+        "healthcare",
+        "financial",
+        "other",
+    ]
+    join_mechanism: Literal["open", "code", "invite", "domain"]
+    requires_approval: bool
+    is_discoverable: bool
     contact_email: str | None = None
     contact_phone: str | None = None
     website: str | None = None
-    join_mechanism: str | None = None
-    requires_approval: bool | None = None
-    is_discoverable: bool | None = None
+    membership: OrganizationMembershipSummary | None = None
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
 
 
 class RetentionRecordCountsModel(BaseModel):
