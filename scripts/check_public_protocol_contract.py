@@ -13,6 +13,8 @@ from fastapi import Response
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
+from check_generated_protocol_bindings import assert_generated_bindings_current
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "services"))
@@ -239,6 +241,7 @@ def _public_response(
 
 
 def check_contract(protocol_root: Path) -> None:
+    assert_generated_bindings_current(protocol_root)
     schema_path = protocol_root / "schemas" / "credential-template.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     registry = _load_registry(protocol_root)
