@@ -226,6 +226,34 @@ def test_get_credential_template_returns_protocol_shape_only() -> None:
 	assert "wallet_configs" not in body
 
 
+def test_list_templates_preserves_legacy_rows_without_compliance_profiles() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	legacy = credential_template.CredentialTemplate(
+		organization_id="org-1",
+		name="Legacy employee badge",
+		credential_type="LegacyEmployeeBadge",
+		issuer_did="did:web:beta.elevenidllc.com:orgs:test",
+		compliance_profile_id=None,
+	)
+	asyncio.run(repo.save(legacy))
+	modern = asyncio.run(_save_template(repo))
+	client, _ = _build_client(repo)
+
+	response = client.get(
+		"/v1/credential-templates",
+		params={"organization_id": "org-1"},
+		headers={"X-User-Id": "user-1"},
+	)
+
+	assert response.status_code == 200
+	by_id = {template["id"]: template for template in response.json()}
+	assert legacy.id in by_id
+	assert "compliance_profile_id" not in by_id[legacy.id]
+	assert by_id[modern.id]["compliance_profile_id"] == (
+		"123e4567-e89b-12d3-a456-426614174000"
+	)
+
+
 def test_issuer_profile_validation_uses_format_specific_key_purpose() -> None:
 	assert credential_template._key_purpose_for_credential_format("SD_JWT_VC") == "vc_jwt_issuer"
 	assert credential_template._key_purpose_for_credential_format("mso_mdoc") == "mdoc_dsc"
