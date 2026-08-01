@@ -12,7 +12,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 try:
     from cryptography.hazmat.primitives.asymmetric.ec import (
@@ -5890,6 +5890,12 @@ def _normalize_key_attestation_policy(value: Any) -> dict[str, Any]:
             "max_age_seconds": 300,
             "require_nonce": True,
             "status_validation": "required",
+            "status_list_allowed_origins": [],
+            "status_list_trusted_root_certificates_pem": [],
+            "status_list_allowed_algorithms": [],
+            "status_list_max_age_seconds": 86400,
+            "status_list_allow_private_hosts": False,
+            "status_list_tls_ca_certificates_pem": [],
         }
     if not isinstance(value, dict):
         raise HTTPException(
@@ -5936,7 +5942,9 @@ def _normalize_key_attestation_policy(value: Any) -> dict[str, Any]:
             status_code=422,
             detail="Enabled key attestation policy requires trusted roots and allowed algorithms.",
         )
-    if roots:
+    status_roots = string_list("status_list_trusted_root_certificates_pem")
+    status_tls_roots = string_list("status_list_tls_ca_certificates_pem")
+    if roots or status_roots or status_tls_roots:
         if not _CRYPTOGRAPHY_AVAILABLE:
             raise HTTPException(
                 status_code=503,
@@ -5945,7 +5953,7 @@ def _normalize_key_attestation_policy(value: Any) -> dict[str, Any]:
         from cryptography import x509
 
         try:
-            for root in roots:
+            for root in [*roots, *status_roots, *status_tls_roots]:
                 x509.load_pem_x509_certificate(root.encode("utf-8"))
         except ValueError as exc:
             raise HTTPException(
@@ -5969,6 +5977,73 @@ def _normalize_key_attestation_policy(value: Any) -> dict[str, Any]:
             status_code=422,
             detail="key_attestation_policy.require_nonce must be a boolean.",
         )
+    status_list_allowed_algorithms = string_list("status_list_allowed_algorithms")
+    unsupported_status_algorithms = sorted(
+        set(status_list_allowed_algorithms) - set(SUPPORTED_SIGNING_ALGORITHMS)
+    )
+    if unsupported_status_algorithms:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported status-list algorithms: {unsupported_status_algorithms}.",
+        )
+    status_list_max_age_seconds = value.get("status_list_max_age_seconds", 86400)
+    if (
+        isinstance(status_list_max_age_seconds, bool)
+        or not isinstance(status_list_max_age_seconds, int)
+        or not 1 <= status_list_max_age_seconds <= 604800
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "key_attestation_policy.status_list_max_age_seconds must be "
+                "from 1 through 604800."
+            ),
+        )
+    status_list_allow_private_hosts = value.get("status_list_allow_private_hosts", False)
+    if not isinstance(status_list_allow_private_hosts, bool):
+        raise HTTPException(
+            status_code=422,
+            detail="key_attestation_policy.status_list_allow_private_hosts must be a boolean.",
+        )
+    status_list_allowed_origins: list[str] = []
+    for origin in string_list("status_list_allowed_origins"):
+        parsed = urlparse(origin)
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "key_attestation_policy.status_list_allowed_origins must contain "
+                    "HTTPS origins without paths or credentials."
+                ),
+            )
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="key_attestation_policy contains a status-list origin with an invalid port.",
+            ) from exc
+        host = parsed.hostname.lower()
+        host_display = f"[{host}]" if ":" in host else host
+        status_list_allowed_origins.append(
+            f"https://{host_display}{f':{port}' if port and port != 443 else ''}"
+        )
+    if mode != "disabled" and status_validation != "disabled" and not status_list_allowed_origins:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Enabled key attestation status validation requires at least one "
+                "status-list allowed origin."
+            ),
+        )
     return {
         "mode": mode,
         "trusted_root_certificates_pem": roots,
@@ -5978,6 +6053,12 @@ def _normalize_key_attestation_policy(value: Any) -> dict[str, Any]:
         "max_age_seconds": max_age_seconds,
         "require_nonce": require_nonce,
         "status_validation": status_validation,
+        "status_list_allowed_origins": status_list_allowed_origins,
+        "status_list_trusted_root_certificates_pem": status_roots,
+        "status_list_allowed_algorithms": status_list_allowed_algorithms,
+        "status_list_max_age_seconds": status_list_max_age_seconds,
+        "status_list_allow_private_hosts": status_list_allow_private_hosts,
+        "status_list_tls_ca_certificates_pem": status_tls_roots,
     }
 
 

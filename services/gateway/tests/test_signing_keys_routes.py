@@ -57,6 +57,12 @@ def test_issuer_profile_key_attestation_policy_is_provider_neutral_and_fail_clos
                 "max_age_seconds": 600,
                 "require_nonce": True,
                 "status_validation": "required",
+                "status_list_allowed_origins": ["https://status.wallet-provider.example/"],
+                "status_list_trusted_root_certificates_pem": [root_pem],
+                "status_list_allowed_algorithms": ["ES256"],
+                "status_list_max_age_seconds": 43200,
+                "status_list_allow_private_hosts": False,
+                "status_list_tls_ca_certificates_pem": [],
             },
         },
         org_id="org-a",
@@ -72,6 +78,12 @@ def test_issuer_profile_key_attestation_policy_is_provider_neutral_and_fail_clos
         "max_age_seconds": 600,
         "require_nonce": True,
         "status_validation": "required",
+        "status_list_allowed_origins": ["https://status.wallet-provider.example"],
+        "status_list_trusted_root_certificates_pem": [root_pem.strip()],
+        "status_list_allowed_algorithms": ["ES256"],
+        "status_list_max_age_seconds": 43200,
+        "status_list_allow_private_hosts": False,
+        "status_list_tls_ca_certificates_pem": [],
     }
     serialized = json.dumps(profile)
     assert "signing_key_reference" in profile
@@ -114,6 +126,15 @@ def test_issuer_profile_key_attestation_policy_defaults_disabled() -> None:
                 "allowed_algorithms": ["HS256"],
             },
             "Unsupported key attestation algorithms",
+        ),
+        (
+            {
+                "mode": "required",
+                "trusted_root_certificates_pem": [_key_attestation_root_pem()],
+                "allowed_algorithms": ["ES256"],
+                "status_validation": "required",
+            },
+            "requires at least one status-list allowed origin",
         ),
         ({"mode": "bypass"}, "Invalid key attestation mode"),
     ],
