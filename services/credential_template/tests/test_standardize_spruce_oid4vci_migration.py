@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+from sqlalchemy.sql.elements import TextClause
 
 
 MIGRATION_PATH = (
@@ -25,9 +26,10 @@ def _load_migration():
 
 class _Connection:
     def __init__(self) -> None:
-        self.statements: list[str] = []
+        self.statements: list[TextClause] = []
 
-    def exec_driver_sql(self, statement: str) -> None:
+    def execute(self, statement: TextClause) -> None:
+        assert isinstance(statement, TextClause)
         self.statements.append(statement)
 
 
@@ -39,12 +41,16 @@ def test_upgrade_normalizes_registry_and_template_wallet_data(monkeypatch) -> No
     migration.upgrade()
 
     assert len(connection.statements) == 2
-    registry, templates = connection.statements
+    registry, templates = map(str, connection.statements)
     assert "credential_template_service.wallet_registry" in registry
     assert "dc+sd-jwt" in registry
     assert "mso_mdoc" in registry
     assert "wr-spruce-001" in registry
     assert "credential_template_service.credential_templates" in templates
+    assert "WITH normalized AS" in templates
+    assert "CROSS JOIN LATERAL" in templates
+    assert "HAVING bool_or" in templates
+    assert "template.id = normalized.id" in templates
     assert "- 'format_variant'" in templates
     assert "- 'credential_configuration_id'" in templates
     assert "- 'issuer_url_suffix'" in templates

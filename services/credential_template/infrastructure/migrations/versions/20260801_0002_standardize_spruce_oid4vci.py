@@ -12,6 +12,7 @@ path, and credential-configuration suffix from current data.
 from __future__ import annotations
 
 from alembic import op
+from sqlalchemy import text
 
 
 revision = "20260801_0002"
@@ -22,21 +23,22 @@ depends_on = None
 
 def upgrade() -> None:
     connection = op.get_bind()
-    connection.exec_driver_sql(
-        """
+    connection.execute(
+        text(
+            """
         UPDATE credential_template_service.wallet_registry
         SET supported_formats = '["dc+sd-jwt", "mso_mdoc"]'::jsonb,
             updated_at = CURRENT_TIMESTAMP
         WHERE id IN ('wr-spruce-001', 'wr-marty-001')
         """
+        )
     )
-    connection.exec_driver_sql(
-        """
-        UPDATE credential_template_service.credential_templates AS template
-        SET wallet_configs = normalized.wallet_configs,
-            updated_at = CURRENT_TIMESTAMP
-        FROM LATERAL (
-            SELECT jsonb_agg(
+    connection.execute(
+        text(
+            """
+        WITH normalized AS (
+            SELECT template.id,
+                jsonb_agg(
                 CASE
                     WHEN config->>'format_variant' = 'spruce-vc+sd-jwt'
                       OR config->>'credential_configuration_id' LIKE '%#spruce-sd-jwt'
@@ -49,18 +51,24 @@ def upgrade() -> None:
                 END
                 ORDER BY ordinal
             ) AS wallet_configs
-            FROM jsonb_array_elements(CAST(template.wallet_configs AS jsonb))
+            FROM credential_template_service.credential_templates AS template
+            CROSS JOIN LATERAL jsonb_array_elements(CAST(template.wallet_configs AS jsonb))
                 WITH ORDINALITY AS entry(config, ordinal)
-        ) AS normalized
-        WHERE jsonb_typeof(CAST(template.wallet_configs AS jsonb)) = 'array'
-          AND EXISTS (
-              SELECT 1
-              FROM jsonb_array_elements(CAST(template.wallet_configs AS jsonb)) AS entry(config)
-              WHERE config->>'format_variant' = 'spruce-vc+sd-jwt'
-                 OR config->>'credential_configuration_id' LIKE '%#spruce-sd-jwt'
-                 OR config->>'issuer_url_suffix' = '/spruce'
-          )
+            WHERE jsonb_typeof(CAST(template.wallet_configs AS jsonb)) = 'array'
+            GROUP BY template.id
+            HAVING bool_or(
+                config->>'format_variant' = 'spruce-vc+sd-jwt'
+                OR config->>'credential_configuration_id' LIKE '%#spruce-sd-jwt'
+                OR config->>'issuer_url_suffix' = '/spruce'
+            )
+        )
+        UPDATE credential_template_service.credential_templates AS template
+        SET wallet_configs = normalized.wallet_configs,
+            updated_at = CURRENT_TIMESTAMP
+        FROM normalized
+        WHERE template.id = normalized.id
         """
+        )
     )
 
 
