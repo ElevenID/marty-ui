@@ -57,7 +57,9 @@ def test_issuer_profile_key_attestation_policy_is_provider_neutral_and_fail_clos
                 "max_age_seconds": 600,
                 "require_nonce": True,
                 "status_validation": "required",
-                "status_list_allowed_origins": ["https://status.wallet-provider.example/"],
+                "status_list_allowed_origins": [
+                    "https://status.wallet-provider.example/"
+                ],
                 "status_list_trusted_root_certificates_pem": [root_pem],
                 "status_list_allowed_algorithms": ["ES256"],
                 "status_list_max_age_seconds": 43200,
@@ -382,6 +384,7 @@ def _format_iso_datetime(dt: datetime) -> str:
 def _build_request(
     session_org_id: str | None = "org_123",
     redis_client: AsyncMock | None = None,
+    query_string: bytes = b"",
 ) -> Request:
     scope = {
         "type": "http",
@@ -389,7 +392,7 @@ def _build_request(
         "method": "GET",
         "path": "/v1/signing-keys",
         "headers": [],
-        "query_string": b"",
+        "query_string": query_string,
         "scheme": "http",
         "client": ("testclient", 1234),
         "server": ("testserver", 80),
@@ -4903,7 +4906,6 @@ async def test_internal_resolve_issuer_context_resolves_exact_did(
     response = await signing_keys.internal_resolve_issuer_context(
         request=request,
         organization_id="org_issuer",
-        issuer_profile_id="ip-selected",
         issuer_did="did:web:beta.elevenidllc.com:orgs:elevenid",
         issuer_mode="org_managed",
         credential_format="dc+sd-jwt",
@@ -4919,7 +4921,7 @@ async def test_internal_resolve_issuer_context_resolves_exact_did(
     assert data["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:elevenid"
     assert data["signing_service_id"] == "svc-selected"
     assert data["issuer_x5c"] == ["issuer-leaf-x5c", "issuer-intermediate-x5c"]
-    assert data["mdoc_x5c"] == ["issuer-leaf-x5c", "issuer-intermediate-x5c"]
+    assert "mdoc_x5c" not in data
 
 
 @pytest.mark.asyncio
@@ -5109,7 +5111,6 @@ async def test_internal_resolve_issuer_context_defaults_to_org_managed_mode(
     response = await signing_keys.internal_resolve_issuer_context(
         request=request,
         organization_id="org_issuer",
-        issuer_profile_id=None,
         issuer_mode="org_managed",
         credential_format="dc+sd-jwt",
         key_purpose="vc_jwt_issuer",
@@ -5125,44 +5126,20 @@ async def test_internal_resolve_issuer_context_defaults_to_org_managed_mode(
 
 
 @pytest.mark.asyncio
-async def test_internal_resolve_issuer_context_rejects_unknown_explicit_profile(
+async def test_internal_resolve_issuer_context_rejects_removed_profile_selector(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
-    redis_mock = AsyncMock()
-    redis_mock.get = AsyncMock(return_value=json.dumps({"profiles": []}))
-    request = _build_request("org_issuer", redis_client=redis_mock)
-
-    from fastapi import HTTPException as FastAPIHTTPException
-
-    with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.internal_resolve_issuer_context(
-            request=request,
-            organization_id="org_issuer",
-            issuer_profile_id="ip-missing",
-            issuer_did="did:web:beta.elevenidllc.com:orgs:missing",
-            issuer_mode="org_managed",
-            credential_format="dc+sd-jwt",
-            key_purpose="vc_jwt_issuer",
-            algorithm="ES256",
-            x_api_key="test-internal-key",
-        )
-
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_internal_resolve_issuer_context_rejects_legacy_profile_without_did(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+    request = _build_request(
+        "org_issuer",
+        query_string=b"organization_id=org_issuer&issuer_profile_id=ip-removed",
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await signing_keys.internal_resolve_issuer_context(
-            request=_build_request("org_issuer"),
+            request=request,
             organization_id="org_issuer",
-            issuer_profile_id="ip-legacy",
-            issuer_did=None,
+            issuer_did="did:web:beta.elevenidllc.com:orgs:acme",
             issuer_mode="org_managed",
             credential_format="dc+sd-jwt",
             key_purpose="vc_jwt_issuer",
@@ -5171,7 +5148,7 @@ async def test_internal_resolve_issuer_context_rejects_legacy_profile_without_di
         )
 
     assert exc_info.value.status_code == 422
-    assert "requires issuer_did" in str(exc_info.value.detail)
+    assert "issuer_profile_id is not accepted" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -5221,7 +5198,6 @@ async def test_internal_resolve_issuer_context_rejects_profile_without_requested
         await signing_keys.internal_resolve_issuer_context(
             request=request,
             organization_id="org_issuer",
-            issuer_profile_id="ip-unscoped",
             issuer_did="did:web:beta.elevenidllc.com:orgs:acme",
             issuer_mode="org_managed",
             credential_format="dc+sd-jwt",
@@ -5230,7 +5206,7 @@ async def test_internal_resolve_issuer_context_rejects_profile_without_requested
             x_api_key="test-internal-key",
         )
 
-    assert exc_info.value.status_code == 409
+    assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -5316,7 +5292,6 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
         request=request,
         organization_id="org_issuer",
         issuer_did=issuer_did,
-        issuer_profile_id="ip-1",
         verification_method_id=vm_id,
         credential_format="dc+sd-jwt",
         key_purpose="vc_jwt_issuer",
@@ -5334,37 +5309,26 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
     assert data["issuer_profile"]["algorithm"] == "ES256"
     assert data["signing_service"]["id"] == "svc-bao"
     assert data["issuer_x5c"] == ["issuer-leaf-x5c", "issuer-root-x5c"]
-    assert data["mdoc_x5c"] == ["issuer-leaf-x5c", "issuer-root-x5c"]
+    assert "mdoc_x5c" not in data
     assert "auth_reference" not in data["signing_service"]
 
 
 @pytest.mark.asyncio
-async def test_internal_resolve_issuer_did_rejects_mismatched_legacy_profile(
+async def test_internal_resolve_issuer_did_rejects_removed_profile_selector(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
     issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
-
-    async def resolve(*_args, **_kwargs):
-        return {
-            "ok": True,
-            "organization_id": "org_issuer",
-            "issuer_did": issuer_did,
-            "issuer_profile": {"id": "profile-selected-by-did"},
-        }
-
-    monkeypatch.setattr(
-        signing_keys,
-        "_resolve_org_scoped_issuer_identity",
-        resolve,
+    request = _build_request(
+        "org_issuer",
+        query_string=b"organization_id=org_issuer&issuer_profile_id=profile-stale",
     )
 
     with pytest.raises(HTTPException) as exc_info:
         await signing_keys.internal_resolve_issuer_did(
-            request=_build_request("org_issuer"),
+            request=request,
             organization_id="org_issuer",
             issuer_did=issuer_did,
-            issuer_profile_id="profile-stale",
             verification_method_id=None,
             credential_format="dc+sd-jwt",
             key_purpose="vc_jwt_issuer",
@@ -5372,8 +5336,8 @@ async def test_internal_resolve_issuer_did_rejects_mismatched_legacy_profile(
             x_api_key="test-internal-key",
         )
 
-    assert exc_info.value.status_code == 409
-    assert "does not match" in str(exc_info.value.detail)
+    assert exc_info.value.status_code == 422
+    assert "issuer_profile_id is not accepted" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
