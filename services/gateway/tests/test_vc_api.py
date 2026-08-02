@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import types
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -208,8 +209,24 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
     async def create_issuance_service_response(body, request: Request) -> Response:
         captured_issuance["body"] = body
         captured_issuance["request"] = request
+        offer = {
+            "credential_issuer": "http://gateway:8000/org/fixture-org",
+            "credential_configuration_ids": ["EmployeeCredential#ldp-vc"],
+            "grants": {
+                "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                    "pre-authorized_code": "pre-auth"
+                }
+            },
+        }
         return Response(
-            content=json.dumps({"pre_auth_code": "pre-auth"}),
+            content=json.dumps(
+                {
+                    "credential_offer_uri": (
+                        "openid-credential-offer://?credential_offer="
+                        f"{quote(json.dumps(offer, separators=(',', ':')))}"
+                    )
+                }
+            ),
             media_type="application/json",
         )
 
@@ -249,9 +266,31 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
     }.isdisjoint(initiate_body)
     credential_request = captured[2][1]["json"]
     assert credential_request == {
-        "format": "ldp_vc",
+        "credential_configuration_id": "EmployeeCredential#ldp-vc",
         "proofs": {"jwt": ["proof.jwt.value"]},
     }
+
+
+def test_issuer_adapter_rejects_an_offer_for_another_tenant() -> None:
+    offer = {
+        "credential_issuer": "https://issuer.example/org/other",
+        "credential_configuration_ids": ["EmployeeCredential#ldp-vc"],
+        "grants": {
+            "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                "pre-authorized_code": "pre-auth"
+            }
+        },
+    }
+    offer_uri = (
+        "openid-credential-offer://?credential_offer="
+        f"{quote(json.dumps(offer, separators=(',', ':')))}"
+    )
+
+    with pytest.raises(ValueError, match="issuer does not match"):
+        adapter._parse_inline_credential_offer(
+            offer_uri,
+            expected_issuer="https://issuer.example/org/fixture-org",
+        )
 
 
 @pytest.mark.asyncio
