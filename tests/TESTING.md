@@ -614,7 +614,7 @@ The job starts the deterministic Marty browser wallet and fails unless:
   `active_compliance_profiles` array and without removed `api_base_url`, endpoint
   maps, or authorization extensions;
 - canonical and appended SpruceKit issuer metadata match, identify `ElevenID LLC`,
-  include `MemberCredential#spruce-sd-jwt`, and point to the canonical public VCT;
+  include the standard `MemberCredential#sd-jwt`, and point to the canonical public VCT;
 - that VCT document identifies `Marty Verified Member Badge`, uses only supported
   SpruceKit formats, and no active configuration uses `marty.example`;
 - canonical applicant, application, and holder-inventory routes succeed;

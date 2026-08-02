@@ -566,7 +566,7 @@ async def _seed_canvas_open_badge_templates_async(
         "wallet_configs": json.dumps(
             [
                 {"wallet_id": "waltid", "deep_link_scheme": "openid-credential-offer://", "format_variant": None},
-                {"wallet_id": "spruceid", "deep_link_scheme": "spruceid://", "format_variant": "spruce-vc+sd-jwt"},
+                {"wallet_id": "spruceid", "deep_link_scheme": "spruceid://", "format_variant": "dc+sd-jwt"},
             ],
             separators=(",", ":"),
         ),

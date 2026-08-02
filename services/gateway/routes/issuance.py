@@ -60,7 +60,6 @@ _ISSUANCE_HEADERS: dict[str, str] | None = (
 _FORMAT_KEY_PURPOSE: dict[str, str] = {
     "jwt_vc_json": "vc_jwt_issuer",
     "vc+sd-jwt": "vc_jwt_issuer",
-    "spruce-vc+sd-jwt": "vc_jwt_issuer",
     "dc+sd-jwt": "vc_jwt_issuer",
     "w3c_vcdm_v2_sd_jwt": "vc_jwt_issuer",
     "w3c_vcdm_v2_di": "vc_jwt_issuer",

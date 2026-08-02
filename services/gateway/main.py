@@ -1240,32 +1240,6 @@ Verification is handled through two complementary approaches:
             f"/.well-known/oauth-authorization-server/org/{org_id}"
         )
 
-    # SpruceID / SpruceKit wallet variants
-
-    @app.get("/.well-known/openid-credential-issuer/org/{org_id}/spruce")
-    async def get_org_spruce_issuer_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(
-            f"/.well-known/openid-credential-issuer/org/{org_id}/spruce"
-        )
-
-    @app.get("/org/{org_id}/spruce/.well-known/openid-credential-issuer")
-    async def get_org_spruce_issuer_metadata_appended(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(
-            f"/.well-known/openid-credential-issuer/org/{org_id}/spruce"
-        )
-
-    @app.get("/.well-known/oauth-authorization-server/org/{org_id}/spruce")
-    async def get_org_spruce_as_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(
-            f"/.well-known/oauth-authorization-server/org/{org_id}/spruce"
-        )
-
-    @app.get("/org/{org_id}/spruce/.well-known/oauth-authorization-server")
-    async def get_org_spruce_as_metadata_appended(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(
-            f"/.well-known/oauth-authorization-server/org/{org_id}/spruce"
-        )
-
     # Google Wallet CredentialManager API variants
 
     @app.get("/.well-known/openid-credential-issuer/org/{org_id}/credential-manager")

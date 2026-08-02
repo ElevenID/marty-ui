@@ -3,7 +3,7 @@
   "mip_version": "0.3.1",
   "sprucekit_login": {
     "wallet_id": "wr-spruce-001",
-    "expected_configuration_id": "MemberCredential#spruce-sd-jwt",
+    "expected_configuration_id": "MemberCredential#sd-jwt",
     "expected_vct_path": "/credentials/marty-verified-member-badge",
     "expected_badge_name": "Marty Verified Member Badge",
     "expected_issuer_display_name": "ElevenID LLC",

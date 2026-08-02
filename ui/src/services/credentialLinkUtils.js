@@ -1,13 +1,6 @@
 const OID4VCI_SCHEMES = new Set(['openid-credential-offer', 'haip-vci']);
 const OID4VP_SCHEMES = new Set(['openid4vp', 'haip-vp']);
 const ROUTING_PLACEHOLDER_PATTERN = /\{(?:inner_uri|uri|offer_uri|offer|credential_offer_uri|request_uri)(?:_encoded)?\}/;
-const OID4VCI_PROFILE_BY_FORMAT = {
-  'spruce-vc+sd-jwt': {
-    formatVariant: 'spruce-vc+sd-jwt',
-    issuerPath: 'spruce',
-    credentialConfigurationSuffix: 'spruce-sd-jwt',
-  },
-};
 const OID4VCI_PROFILE_BY_WALLET_ID = {
   'wr-waltid-001': {
     issuerPath: 'waltid',
@@ -151,11 +144,6 @@ export function resolveWalletOid4vciProfile(wallet) {
     };
   }
 
-  const profileFormat = walletFormatValues(wallet)
-    .map(normalizeFormatToken)
-    .find((format) => OID4VCI_PROFILE_BY_FORMAT[format]);
-  if (profileFormat) return OID4VCI_PROFILE_BY_FORMAT[profileFormat];
-
   const knownProfile = OID4VCI_PROFILE_BY_WALLET_ID[wallet.id] || OID4VCI_PROFILE_BY_WALLET_ID[wallet.wallet_id];
   return knownProfile || null;
 }
@@ -164,7 +152,7 @@ function issuerUrlWithProfilePath(issuerUrl, profile) {
   const issuer = normalizeUri(issuerUrl).replace(/\/+$/, '');
   const issuerPath = normalizeUri(profile?.issuerPath || profile?.issuer_path).replace(/^\/+|\/+$/g, '');
   if (!issuer || !issuerPath || issuer.endsWith(`/${issuerPath}`)) return issuer;
-  return `${issuer.replace(/\/(credential-manager|apple-wallet|spruce|waltid)$/, '')}/${issuerPath}`;
+  return `${issuer.replace(/\/(credential-manager|apple-wallet|waltid)$/, '')}/${issuerPath}`;
 }
 
 function credentialConfigurationIdForProfile(configId, profile) {

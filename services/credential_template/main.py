@@ -277,13 +277,7 @@ class WalletConfig:
     """
 
     format_variant: str | None = None
-    """Optional credential format variant for SDK-specific compatibility.
-
-    Set to ``"spruce-vc+sd-jwt"`` for the SpruceID mobile SDK, which requires
-    a dedicated metadata document emitting ``spruce-vc+sd-jwt`` entries instead
-    of the standard ``vc+sd-jwt`` format accepted by Walt.id and other wallets.
-    Leave ``None`` (or unset) for all other wallets.
-    """
+    """Optional current-standard credential format variant."""
 
 
 class MergeStrategy(str, Enum):
@@ -502,7 +496,7 @@ SYSTEM_WALLET_CATALOG: tuple[WalletRegistryEntry, ...] = (
         wallet_apps=["SpruceKit"],
         specifications=["OID4VCI"],
         logo_url="https://spruceid.com/favicon.ico",
-        supported_formats=["spruce-vc+sd-jwt"],
+        supported_formats=["dc+sd-jwt", "mso_mdoc"],
         platforms=["ios", "android"],
         routing_templates={
             "generic": "openid-credential-offer://?{credential_offer_param}={offer_encoded}",
@@ -521,7 +515,7 @@ SYSTEM_WALLET_CATALOG: tuple[WalletRegistryEntry, ...] = (
         description="Marty-branded authenticator wallet.",
         wallet_apps=["Marty Authenticator"],
         specifications=["OID4VCI"],
-        supported_formats=["spruce-vc+sd-jwt"],
+        supported_formats=["dc+sd-jwt", "mso_mdoc"],
         platforms=["ios", "android"],
         routing_templates={
             "generic": "marty-authenticator://open?inner={inner_uri_encoded}",
@@ -2659,13 +2653,7 @@ def _delivery_destination_to_response(entry: DeliveryDestinationEntry) -> Delive
 
 
 def _wallet_oid4vci_profile(w: WalletRegistryEntry) -> dict[str, str] | None:
-    formats = {str(fmt).strip().lower().replace("_", "-") for fmt in (w.supported_formats or [])}
-    if "spruce-vc+sd-jwt" in formats:
-        return {
-            "format_variant": "spruce-vc+sd-jwt",
-            "issuer_path": "spruce",
-            "credential_configuration_suffix": "spruce-sd-jwt",
-        }
+    """Return only a non-standard issuer-routing profile when one is required."""
     return None
 
 

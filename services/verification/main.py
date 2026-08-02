@@ -614,7 +614,6 @@ CT_GRPC_TARGET = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
 _WALLET_FORMATS_FALLBACK: dict[str, dict[str, Any]] = {
     "vc+sd-jwt":        {"sd-jwt_alg_values": ["ES256", "EdDSA"], "kb-jwt_alg_values": ["ES256", "EdDSA"]},
     "dc+sd-jwt":        {"sd-jwt_alg_values": ["ES256", "EdDSA"], "kb-jwt_alg_values": ["ES256", "EdDSA"]},
-    "spruce-vc+sd-jwt": {"sd-jwt_alg_values": ["ES256", "EdDSA"], "kb-jwt_alg_values": ["ES256", "EdDSA"]},
     "mso_mdoc":         {"alg": ["ES256", "ES384"]},
     "jwt_vp":           {"alg": ["ES256", "EdDSA"]},
     "ldp_vp":           {"proof_type": ["Ed25519Signature2020"]},
@@ -641,7 +640,7 @@ def _oid4vp_wallet_registry_formats() -> dict[str, dict[str, Any]]:
 def _oid4vp_format_alg(fmt: str) -> dict[str, Any]:
     """Return algorithm constraints for a given OID4VP format identifier."""
     fmt_n = (fmt or "").strip().lower()
-    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc", "spruce-vc+sd-jwt"}:
+    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc"}:
         return dict(_SD_JWT_PRESENTATION_ALGS)
     if fmt_n in {"mso_mdoc", "mdoc"}:
         return {"alg": ["ES256", "ES384"]}
@@ -654,7 +653,7 @@ def _oid4vp_format_alg(fmt: str) -> dict[str, Any]:
 
 def _oid4vp_presentation_formats(template_supported_formats: list[str]) -> dict[str, Any]:
     """Derive OID4VP format identifiers from template formats × wallet registry."""
-    _SD_FAMILY = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt", "spruce-vc+sd-jwt"}
+    _SD_FAMILY = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt"}
     _DOC_FAMILY = {"mso_mdoc", "mdoc"}
     _JWTVP_FAMILY = {"jwt_vc", "jwt_vc_json", "jwt_vp"}
 
@@ -687,7 +686,7 @@ def _oid4vp_presentation_formats(template_supported_formats: list[str]) -> dict[
 
 def _is_sd_jwt_format(supported_formats: list[str]) -> bool:
     """Return True if any supported format is in the SD-JWT family."""
-    _SD = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt", "spruce-vc+sd-jwt"}
+    _SD = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt"}
     return any((f or "").strip().lower() in _SD for f in supported_formats)
 
 
@@ -720,7 +719,7 @@ def _dcql_format_name(fmt: str) -> str:
         return "jwt_vc_json"
     if fmt_n == "ldp_vp":
         return "ldp_vc"
-    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc", "spruce-vc+sd-jwt"}:
+    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc"}:
         return "dc+sd-jwt"
     if fmt_n in {"mso_mdoc", "mdoc"}:
         return "mso_mdoc"
@@ -762,7 +761,7 @@ def _json_schema_const_values(schema: dict[str, Any] | None) -> list[str]:
 
 def _dcql_meta_for_descriptor(descriptor: dict[str, Any], fmt_name: str) -> dict[str, Any]:
     """Derive DCQL meta from Presentation Exchange type/vct filters."""
-    sd_jwt_formats = {"dc+sd-jwt", "vc+sd-jwt", "spruce-vc+sd-jwt", "sd_jwt_vc"}
+    sd_jwt_formats = {"dc+sd-jwt", "vc+sd-jwt", "sd_jwt_vc"}
     for field in descriptor.get("constraints", {}).get("fields", []):
         values = _json_schema_const_values(field.get("filter"))
         if not values:

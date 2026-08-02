@@ -64,7 +64,7 @@ function credentialConfigurationIdForWaltid(configId) {
   if (typeof configId !== 'string' || !configId.trim()) return configId;
   const id = configId.trim();
   if (id.endsWith('#sd-jwt') || id.endsWith('#mdoc') || id.endsWith('#vds-nc')) return id;
-  if (id.endsWith('#credential-manager') || id.endsWith('#apple-wallet') || id.endsWith('#spruce-sd-jwt')) {
+  if (id.endsWith('#credential-manager') || id.endsWith('#apple-wallet')) {
     return `${id.split('#')[0]}#sd-jwt`;
   }
   if (id.includes('#')) return id;

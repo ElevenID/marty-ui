@@ -2023,7 +2023,7 @@ async def test_get_verification_request_object_uses_dcql_vct_values(monkeypatch)
             "input_descriptors": [
                 {
                     "id": "req-marty-open-badge-login",
-                    "format": {"spruce-vc+sd-jwt": {"sd-jwt_alg_values": ["ES256"]}},
+                    "format": {"dc+sd-jwt": {"sd-jwt_alg_values": ["ES256"]}},
                     "constraints": {
                         "fields": [
                             {
