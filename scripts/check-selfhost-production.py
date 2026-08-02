@@ -256,7 +256,7 @@ def validate_selfhost_catalog_templates(env_file: Path, compose_file: Path) -> s
     return f"active_template={active_templates[0][0]}:{active_templates[0][1]}"
 
 
-def validate_issuer_profile_signing(env_file: Path, compose_file: Path) -> str:
+def validate_issuer_did_signing(env_file: Path, compose_file: Path) -> str:
     command = r"""
 python - <<'PY'
 import json
@@ -274,17 +274,21 @@ except OSError as exc:
     raise SystemExit(20) from exc
 
 organization_id = os.environ.get("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "").strip()
-issuer_profile_id = os.environ.get("CANVAS_LTI_TOOL_ISSUER_PROFILE_ID", "").strip()
 issuer_did = os.environ.get("CANVAS_LTI_TOOL_ISSUER_DID", "").strip()
-if not organization_id or not issuer_profile_id or not issuer_did:
-    print("Canvas LTI issuer profile/DID signing configuration is incomplete", file=sys.stderr)
+if not organization_id or not issuer_did:
+    print("Canvas LTI issuer DID signing configuration is incomplete", file=sys.stderr)
     raise SystemExit(22)
 
-payload = {"payload_b64": "dGVzdA", "algorithm": "RS256"}
+payload = {
+    "issuer_did": issuer_did,
+    "credential_format": "lti_tool_jwt",
+    "key_purpose": "lti_tool_signing",
+    "payload_b64": "dGVzdA",
+    "algorithm": "RS256",
+}
 query = urllib.parse.urlencode({"organization_id": organization_id})
 request = urllib.request.Request(
-    "http://127.0.0.1:8000/internal/signing-keys/issuer-profiles/"
-    f"{urllib.parse.quote(issuer_profile_id, safe='')}/sign?{query}",
+    f"http://127.0.0.1:8000/internal/signing-keys/issuer-dids/sign?{query}",
     data=json.dumps(payload).encode("utf-8"),
     headers={"X-API-Key": api_key, "Content-Type": "application/json"},
     method="POST",
@@ -298,7 +302,7 @@ except urllib.error.HTTPError as exc:
     print(f"HTTP {exc.code}: {body}", file=sys.stderr)
     raise SystemExit(exc.code) from exc
 except OSError as exc:
-    print(f"Issuer-profile signing endpoint is unreachable: {exc}", file=sys.stderr)
+    print(f"Issuer DID signing endpoint is unreachable: {exc}", file=sys.stderr)
     raise SystemExit(21) from exc
 PY
 """.strip()
@@ -314,26 +318,30 @@ PY
     )
     if result.returncode != 0:
         error_output = (result.stderr or result.stdout).strip()
-        raise CheckError(f"Issuer-profile signing check failed: {error_output}")
+        raise CheckError(f"Issuer DID signing check failed: {error_output}")
 
     try:
         payload_doc = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        raise CheckError(f"Issuer-profile signing check returned non-JSON output: {result.stdout.strip()}") from exc
+        raise CheckError(
+            "Issuer DID signing check returned non-JSON output: "
+            f"{result.stdout.strip()}"
+        ) from exc
 
     if (
         payload_doc.get("ok") is not True
         or not payload_doc.get("signature_b64")
-        or not payload_doc.get("issuer_profile_id")
         or not payload_doc.get("issuer_did")
         or not payload_doc.get("verification_method_id")
         or payload_doc.get("service_id")
     ):
-        raise CheckError(f"Issuer-profile signing check returned an invalid payload: {payload_doc}")
+        raise CheckError(
+            f"Issuer DID signing check returned an invalid payload: {payload_doc}"
+        )
 
     return (
-        f"issuer_profile_id={payload_doc.get('issuer_profile_id')} "
-        f"issuer_did={payload_doc.get('issuer_did')} algorithm={payload_doc.get('algorithm')}"
+        f"issuer_did={payload_doc.get('issuer_did')} "
+        f"algorithm={payload_doc.get('algorithm')}"
     )
 
 
@@ -573,7 +581,6 @@ def validate_selfhost_canvas_public_config(env_values: dict[str, str]) -> str:
             )
         signer_keys = (
             "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
-            "CANVAS_LTI_TOOL_ISSUER_PROFILE_ID",
             "CANVAS_LTI_TOOL_ISSUER_DID",
             "CANVAS_LTI_TOOL_ACTIVE_KID",
             "CANVAS_LTI_TOOL_PUBLIC_JWKS",
@@ -584,7 +591,6 @@ def validate_selfhost_canvas_public_config(env_values: dict[str, str]) -> str:
                 "Portable Canvas requires the dedicated RS256 tool signer configuration: "
                 + ", ".join(missing_signer_keys)
             )
-        issuer_profile_id = env_values["CANVAS_LTI_TOOL_ISSUER_PROFILE_ID"].strip()
         issuer_did = env_values["CANVAS_LTI_TOOL_ISSUER_DID"].strip()
         if not issuer_did.startswith("did:"):
             raise CheckError(
@@ -602,12 +608,6 @@ def validate_selfhost_canvas_public_config(env_values: dict[str, str]) -> str:
             raise CheckError(
                 "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS must inventory credential "
                 "issuer profile IDs when portable Canvas is enabled."
-            )
-        if issuer_profile_id in credential_profile_ids:
-            raise CheckError(
-                "CANVAS_LTI_TOOL_ISSUER_PROFILE_ID is also listed in "
-                "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS; LTI and credential issuance profiles "
-                "must be distinct."
             )
         try:
             public_jwks = json.loads(env_values["CANVAS_LTI_TOOL_PUBLIC_JWKS"])
@@ -1164,7 +1164,10 @@ def main() -> int:
         run_check("credential-login-config", lambda: validate_credential_login_config(env_values)),
         run_check("marty-login-trust-profile", lambda: validate_marty_login_trust_profile(env_file, prod_compose_file, env_values)),
         run_check("selfhost-catalog-templates", lambda: validate_selfhost_catalog_templates(env_file, prod_compose_file)),
-        run_check("issuer-profile-signing", lambda: validate_issuer_profile_signing(env_file, prod_compose_file)),
+        run_check(
+            "issuer-did-signing",
+            lambda: validate_issuer_did_signing(env_file, prod_compose_file),
+        ),
         run_check("ui-origin-config", lambda: validate_ui_origin_config(env_values)),
         run_check("selfhost-ui-bundle-origins", lambda: validate_selfhost_ui_bundle_origins(env_values)),
         run_check("selfhost-canvas-frame-ancestors", validate_selfhost_canvas_frame_ancestors),

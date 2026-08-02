@@ -565,7 +565,6 @@ try {
         $env:CANVAS_LTI_EXPERIENCE_BASE_URL = $BetaOrigin
         $env:CANVAS_OAUTH_COMPLETION_REDIRECT_URL = "$BetaOrigin/console/org/deploy/canvas"
         $env:CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID = $PilotOrganizationId
-        $env:CANVAS_LTI_TOOL_ISSUER_PROFILE_ID = "ip-marty-canvas-lti-tool"
         $env:CANVAS_LTI_TOOL_ISSUER_DID = $canvasLtiIssuerDid
         $env:CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS = "ip-marty-vc-jwt-issuer,ip-marty-mdoc-dsc,ip-marty-vdsnc-issuer"
         $env:CANVAS_LTI_TOOL_ACTIVE_KID = $canvasLtiActiveKid

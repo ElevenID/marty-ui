@@ -16,8 +16,10 @@ service ID, provider key reference, or private key.
 published DID document. Interactive UI requests always send the organization
 issuer DID. Public requests and responses reject or omit
 `issuer_profile_id`, signing-service IDs, key references, and KMS/provider
-selectors. Issuer-profile identifiers remain private service-to-service
-implementation details used only after DID-first resolution.
+selectors. Issuer-profile identifiers remain gateway-private implementation
+details used only after DID-first resolution.
+Protocol services sign only through `/internal/signing-keys/issuer-dids/sign`;
+the former profile-ID signing route has been removed.
 
 HAIP and Digital Credentials API responses require a fresh ECDH recipient key
 for each flow. Marty generates that short-lived protocol key in memory and

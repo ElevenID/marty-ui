@@ -119,7 +119,7 @@ MARTY_KMS_KEY_SPECS: list[dict[str, Any]] = [
         "type": "rsa-2048",
         "algorithm": "RS256",
         "key_purposes": ["lti_tool_signing"],
-        "credential_formats": [],
+        "credential_formats": ["lti_tool_jwt"],
     },
     {
         "id": "oid4vp-verifier-marty-es256",
@@ -127,7 +127,7 @@ MARTY_KMS_KEY_SPECS: list[dict[str, Any]] = [
         "type": "ecdsa-p256",
         "algorithm": "ES256",
         "key_purposes": ["oid4vp_request_signing"],
-        "credential_formats": [],
+        "credential_formats": ["oauth-authz-req+jwt"],
     },
     {
         "id": "cred-issuer-marty-eddsa",
@@ -630,6 +630,8 @@ def _seed_signing_registry(
         "ldp_vc",
         "mso_mdoc",
         "vds_nc",
+        "lti_tool_jwt",
+        "oauth-authz-req+jwt",
     ):
         format_defaults.setdefault(credential_format, MANAGED_OPENBAO_SERVICE_ID)
 
@@ -743,12 +745,12 @@ def _seed_did_and_jwks(
             "controller": issuer_did,
             "publicKeyJwk": public_jwk,
         }
-        # The LTI client-assertion key is controlled by the issuer profile and
-        # its DID verification method, but is not a credential assertion method
-        # and is not exposed through the credential-issuer JWKS collection.
+        # Every DID-mediated signer is an assertion method. The LTI key remains
+        # excluded from the credential-issuer JWKS collection, while Canvas can
+        # publish active and retiring LTI assertion methods from the DID document.
+        if vm_id not in assertion:
+            assertion.append(vm_id)
         if "lti_tool_signing" not in (record.get("key_purposes") or []):
-            if vm_id not in assertion:
-                assertion.append(vm_id)
             jwks.append(public_jwk)
 
     did_doc["verificationMethod"] = list(methods_by_id.values())

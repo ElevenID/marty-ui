@@ -42,7 +42,6 @@ def test_compose_stacks_run_canvas_worker_outside_issuance_web_process() -> None
         assert {"TOKEN_HMAC_KEY", "TOKEN_HMAC_KEY_FILE"}.intersection(environment)
         assert "CANVAS_LEGACY_EVENT_INGEST_ENABLED" in environment
         assert "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID" in environment
-        assert "CANVAS_LTI_TOOL_ISSUER_PROFILE_ID" in environment
         assert "CANVAS_LTI_TOOL_ISSUER_DID" in environment
         assert "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS" in environment
         assert "CANVAS_LTI_TOOL_ACTIVE_KID" in environment
@@ -57,7 +56,6 @@ def test_compose_stacks_run_canvas_worker_outside_issuance_web_process() -> None
         assert {"SIGNING_KEYS_INTERNAL_API_KEY", "SIGNING_KEYS_INTERNAL_API_KEY_FILE"}.intersection(environment)
         for key in (
             "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
-            "CANVAS_LTI_TOOL_ISSUER_PROFILE_ID",
             "CANVAS_LTI_TOOL_ISSUER_DID",
             "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
             "CANVAS_LTI_TOOL_ACTIVE_KID",
@@ -185,7 +183,6 @@ def test_kubernetes_canvas_worker_configuration_includes_safe_defaults() -> None
         "CANVAS_PILOT_ORGANIZATION_IDS",
         "CANVAS_LEGACY_EVENT_INGEST_ENABLED",
         "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
-        "CANVAS_LTI_TOOL_ISSUER_PROFILE_ID",
         "CANVAS_LTI_TOOL_ISSUER_DID",
         "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
         "CANVAS_LTI_TOOL_ACTIVE_KID",
@@ -227,7 +224,6 @@ def test_production_preflight_requires_a_configured_canvas_worker_processor() ->
         "CANVAS_PILOT_ORGANIZATION_IDS": "org-pilot",
         "CANVAS_LEGACY_EVENT_INGEST_ENABLED": "false",
         "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID": "system-tools",
-        "CANVAS_LTI_TOOL_ISSUER_PROFILE_ID": "ip-marty-canvas-lti-tool",
         "CANVAS_LTI_TOOL_ISSUER_DID": "did:web:marty.example.com:orgs:system-tools",
         "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS": "ip-marty-vc-jwt-issuer",
         "CANVAS_LTI_TOOL_ACTIVE_KID": "did:web:marty.example.com:orgs:system-tools#lti-tool-rs256",
@@ -274,13 +270,6 @@ def test_production_preflight_requires_a_configured_canvas_worker_processor() ->
             **enabled,
             "CANVAS_SYNC_PROCESSOR": PROCESSOR,
             "CANVAS_LTI_TOOL_ISSUER_DID": "kms://canvas-lti-key",
-        })
-
-    with pytest.raises(check_error, match="also listed"):
-        validate({
-            **enabled,
-            "CANVAS_SYNC_PROCESSOR": PROCESSOR,
-            "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS": "ip-credential,ip-marty-canvas-lti-tool",
         })
 
     with pytest.raises(check_error, match="verification method"):

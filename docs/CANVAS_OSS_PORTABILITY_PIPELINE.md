@@ -78,7 +78,6 @@ CANVAS_PILOT_ORGANIZATION_IDS=<exact pilot organization ID; no wildcard>
 CANVAS_LTI_EXPERIENCE_BASE_URL=https://beta.elevenidllc.com
 CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST=https://canvas-test.elevenidllc.com
 CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID=<system signing organization>
-CANVAS_LTI_TOOL_ISSUER_PROFILE_ID=ip-marty-canvas-lti-tool
 CANVAS_LTI_TOOL_ISSUER_DID=did:web:beta.elevenidllc.com:orgs:marty
 CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS=<separate credential issuer profile inventory>
 CANVAS_LTI_TOOL_ACTIVE_KID=<issuer DID>#<active verification-method fragment>
