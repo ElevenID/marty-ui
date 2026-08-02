@@ -186,63 +186,15 @@ def test_oid4vp_profile_key_is_part_of_managed_signing_inventory() -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_internal_issuer_profile_signing_hides_kms_routing(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
-    profile = {
-        "id": "ip-verifier",
-        "issuer_did": "did:web:verifier.example",
-        "signing_service_id": "managed-openbao-transit",
-        "signing_key_reference": "oid4vp-verifier-marty-es256",
-        "verification_method_id": "did:web:verifier.example#oid4vp",
-        "key_purpose": "oid4vp_request_signing",
-        "algorithm": "ES256",
-        "status": "active",
+def test_internal_signing_router_exposes_only_did_mediated_identity_signing() -> None:
+    paths = {
+        route.path
+        for route in signing_keys.internal_signing_key_router.routes
+        if "sign" in route.path
     }
-    identity = {
-        "issuer_profile": profile,
-        "issuer_did": profile["issuer_did"],
-        "verification_method_id": profile["verification_method_id"],
-        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
-    }
-    monkeypatch.setattr(
-        signing_keys,
-        "_resolve_exact_issuer_profile_identity",
-        AsyncMock(return_value=(profile, identity)),
-    )
-    captured = {}
 
-    async def fake_sign_payload_with_service(**kwargs):
-        captured.update(kwargs)
-        return JSONResponse(
-            content={
-                "ok": True,
-                "service_id": "managed-openbao-transit",
-                "algorithm": "ES256",
-                "signature_encoding": "raw_ieee_p1363",
-                "signature_b64": "signature",
-            }
-        )
-
-    monkeypatch.setattr(
-        signing_keys, "sign_payload_with_service", fake_sign_payload_with_service
-    )
-    response = await signing_keys.internal_sign_payload_with_issuer_profile(
-        request=_build_request("org-1"),
-        issuer_profile_id="ip-verifier",
-        body={"payload_b64": "cGF5bG9hZA", "algorithm": "ES256"},
-        organization_id="org-1",
-        x_api_key="test-internal-key",
-    )
-    data = json.loads(response.body)
-
-    assert captured["body"]["key_reference"] == "oid4vp-verifier-marty-es256"
-    assert captured["body"]["key_purpose"] == "oid4vp_request_signing"
-    assert data["issuer_profile_id"] == "ip-verifier"
-    assert data["issuer_did"] == "did:web:verifier.example"
-    assert "service_id" not in data
+    assert any(path.endswith("/issuer-dids/sign") for path in paths)
+    assert not any("issuer-profiles" in path and path.endswith("/sign") for path in paths)
 
 
 @pytest.mark.asyncio
@@ -1363,7 +1315,56 @@ def test_lti_tool_signing_is_distinct_and_rs256_only():
     assert signing_keys.KEY_PURPOSE_ALGORITHM_CONSTRAINTS[
         "lti_tool_signing"
     ] == frozenset({"RS256"})
-    assert signing_keys.KEY_PURPOSE_CREDENTIAL_FORMATS["lti_tool_signing"] == ()
+    assert signing_keys.KEY_PURPOSE_CREDENTIAL_FORMATS["lti_tool_signing"] == (
+        "lti_tool_jwt",
+    )
+
+
+def test_lti_tool_signing_profile_is_did_resolvable_but_key_is_exclusive() -> None:
+    profile = signing_keys._normalize_issuer_profile(
+        {
+            "issuer_did": "did:web:canvas.example:tool",
+            "signing_service_id": "shared-kms",
+            "signing_key_reference": "lti-tool-canvas-rs256",
+            "verification_method_id": (
+                "did:web:canvas.example:tool#lti-tool-canvas-rs256"
+            ),
+            "key_purpose": "lti_tool_signing",
+            "algorithm": "RS256",
+            "status": "active",
+        },
+        org_id="org-1",
+    )
+
+    signing_keys._assert_issuer_profile_key_compatible(
+        profile,
+        {
+            "key_reference_purposes": {
+                "shared-kms": {
+                    "lti-tool-canvas-rs256": ["lti_tool_signing"],
+                }
+            }
+        },
+    )
+    signing_keys._assert_issuer_profile_key_compatible(
+        profile,
+        {"key_reference_purposes": {}},
+    )
+
+    with pytest.raises(HTTPException, match="exclusively"):
+        signing_keys._assert_issuer_profile_key_compatible(
+            profile,
+            {
+                "key_reference_purposes": {
+                    "shared-kms": {
+                        "lti-tool-canvas-rs256": [
+                            "lti_tool_signing",
+                            "vc_jwt_issuer",
+                        ],
+                    }
+                }
+            },
+        )
 
 
 def test_normalize_requested_registry_persists_format_and_type_defaults():
@@ -5217,6 +5218,7 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
     issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
     vm_id = f"{issuer_did}#cred-issuer-acme-es256"
+    lti_vm_id = f"{issuer_did}#lti-tool-acme-rs256"
     docs = {
         "org:org_issuer:issuer-profiles": {
             "profiles": [
@@ -5230,7 +5232,18 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
                     "key_purpose": "vc_jwt_issuer",
                     "algorithm": "ES256",
                     "status": "active",
-                }
+                },
+                {
+                    "id": "ip-lti",
+                    "organization_id": "org_issuer",
+                    "issuer_did": issuer_did,
+                    "signing_service_id": "svc-lti",
+                    "signing_key_reference": "lti-tool-acme-rs256",
+                    "verification_method_id": lti_vm_id,
+                    "key_purpose": "lti_tool_signing",
+                    "algorithm": "RS256",
+                    "status": "active",
+                },
             ]
         },
         "org:org_issuer:signing-key-services": {
@@ -5245,7 +5258,16 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
                     "key_purposes": ["vc_jwt_issuer"],
                     "credential_formats": ["dc+sd-jwt"],
                     "algorithms": ["ES256"],
-                }
+                },
+                {
+                    "id": "svc-lti",
+                    "name": "Acme Canvas LTI signer",
+                    "service_type": "custom-transit-compatible",
+                    "key_reference": "lti-tool-acme-rs256",
+                    "key_purposes": ["lti_tool_signing"],
+                    "credential_formats": ["lti_tool_jwt"],
+                    "algorithms": ["RS256"],
+                },
             ],
             "default_service_id": "svc-bao",
         },
@@ -5263,9 +5285,19 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
                         "x": "abc",
                         "y": "def",
                     },
-                }
+                },
+                {
+                    "id": lti_vm_id,
+                    "type": "JsonWebKey",
+                    "controller": issuer_did,
+                    "publicKeyJwk": {
+                        "kty": "RSA",
+                        "n": "abc",
+                        "e": "AQAB",
+                    },
+                },
             ],
-            "assertionMethod": [vm_id],
+            "assertionMethod": [vm_id, lti_vm_id],
         },
     }
 
@@ -5306,11 +5338,30 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
     assert data["verification_method_id"] == vm_id
     assert data["public_jwk"]["kid"] == vm_id
     assert data["public_jwk"]["kty"] == "EC"
+    assert data["key_purpose"] == "vc_jwt_issuer"
+    assert data["algorithm"] == "ES256"
     assert data["issuer_profile"]["algorithm"] == "ES256"
     assert data["signing_service"]["id"] == "svc-bao"
     assert data["issuer_x5c"] == ["issuer-leaf-x5c", "issuer-root-x5c"]
     assert "mdoc_x5c" not in data
     assert "auth_reference" not in data["signing_service"]
+
+    lti_response = await signing_keys.internal_resolve_issuer_did(
+        request=request,
+        organization_id="org_issuer",
+        issuer_did=issuer_did,
+        verification_method_id=None,
+        credential_format="lti_tool_jwt",
+        key_purpose="lti_tool_signing",
+        algorithm="RS256",
+        x_api_key="test-internal-key",
+    )
+    lti_data = json.loads(lti_response.body)
+    assert lti_data["verification_method_id"] == lti_vm_id
+    assert lti_data["public_jwk"]["kty"] == "RSA"
+    assert lti_data["key_purpose"] == "lti_tool_signing"
+    assert lti_data["algorithm"] == "RS256"
+    assert lti_data["issuer_profile"]["key_purpose"] == "lti_tool_signing"
 
 
 @pytest.mark.asyncio

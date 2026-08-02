@@ -91,7 +91,7 @@ def test_seed_signing_registry_preserves_custom_managed_key_bindings() -> None:
     assert bindings["lti-tool-marty-rs256"] == ["lti_tool_signing"]
 
 
-def test_seed_issuer_did_and_jwks_excludes_lti_protocol_key() -> None:
+def test_seed_issuer_did_publishes_lti_assertion_but_credential_jwks_excludes_it() -> None:
     redis = FakeRedis()
     organization_id = "00000000-0000-0000-0000-000000000001"
     issuer_did = "did:web:issuer.example"
@@ -130,7 +130,10 @@ def test_seed_issuer_did_and_jwks_excludes_lti_protocol_key() -> None:
     serialized_did = json.dumps(did_document)
     assert "cred-issuer-marty-rs256" in serialized_did
     assert "lti-tool-marty-rs256" in serialized_did
-    assert all("lti-tool-marty-rs256" not in method for method in did_document["assertionMethod"])
+    assert any(
+        "lti-tool-marty-rs256" in method
+        for method in did_document["assertionMethod"]
+    )
     assert [key["kid"] for key in issuer_jwks["keys"]] == ["cred-issuer-marty-rs256"]
 
 

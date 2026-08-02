@@ -153,12 +153,12 @@ KEY_PURPOSE_CREDENTIAL_FORMATS: dict[str, tuple[str, ...]] = {
     "mdoc_dsc": ("mso_mdoc", "zk_mdoc"),
     "x509_doc_signer": ("mso_mdoc", "zk_mdoc"),
     "holder_binding": ("mso_mdoc", "zk_mdoc", "dc+sd-jwt"),
-    "oid4vp_request_signing": (),
+    "oid4vp_request_signing": ("oauth-authz-req+jwt",),
     "presentation_signing": ("jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc"),
     "vdsnc_signing": ("mso_mdoc",),
     "csca": ("mso_mdoc", "zk_mdoc"),
     "jwks_signing": ("jwt_vc_json", "dc+sd-jwt"),
-    "lti_tool_signing": (),
+    "lti_tool_signing": ("lti_tool_jwt",),
 }
 
 #: Per-service-type static capability metadata (GAP-007-a).
@@ -1467,7 +1467,11 @@ async def _credential_issuer_key_references(
 
     references: set[str] = set()
     for profile in profiles:
-        if not isinstance(profile, dict) or profile.get("status") == "archived":
+        if (
+            not isinstance(profile, dict)
+            or profile.get("status") == "archived"
+            or profile.get("key_purpose") == "lti_tool_signing"
+        ):
             continue
         service_id = profile.get("signing_service_id")
         reference = profile.get("signing_key_reference")
@@ -5119,78 +5123,6 @@ async def internal_unwrap_flow_key(
 
 
 @internal_signing_key_router.post(
-    "/issuer-profiles/{issuer_profile_id}/sign",
-    summary="Sign Payload Through Issuer Profile Identity",
-)
-async def internal_sign_payload_with_issuer_profile(
-    request: Request,
-    issuer_profile_id: str,
-    body: dict = Body(default_factory=dict),
-    organization_id: str = Query(..., description="Organization scope"),
-    x_api_key: str | None = Header(default=None),
-):
-    """Sign through an active issuer profile and its published DID.
-
-    Callers select an identity profile, never a KMS service or provider key.
-    The gateway owns profile-to-KMS resolution and returns the DID verification
-    method used for the signature.  A caller cannot override the service, key
-    reference, purpose, or algorithm bound to the profile.
-    """
-    _require_internal_signing_key_api_key(x_api_key)
-    profile, identity = await _resolve_exact_issuer_profile_identity(
-        request,
-        organization_id=organization_id,
-        issuer_profile_id=issuer_profile_id,
-    )
-    service_id = str(profile.get("signing_service_id") or "")
-    key_reference = str(profile.get("signing_key_reference") or "")
-    key_purpose = str(profile.get("key_purpose") or "")
-    algorithm = str(profile.get("algorithm") or body.get("algorithm") or "ES256")
-
-    requested_algorithm = body.get("algorithm")
-    if requested_algorithm and requested_algorithm != algorithm:
-        raise HTTPException(
-            status_code=409,
-            detail="Signing algorithm must match the issuer profile binding.",
-        )
-    if body.get("key_reference") or body.get("key_purpose") or body.get("service_id"):
-        raise HTTPException(
-            status_code=422,
-            detail="Issuer-profile signing does not accept KMS routing overrides.",
-        )
-
-    signing_body = {
-        key: value
-        for key, value in body.items()
-        if key in {"payload_b64", "payload_hex"}
-    }
-    signing_body.update(
-        {
-            "algorithm": algorithm,
-            "key_reference": key_reference,
-            "key_purpose": key_purpose,
-        }
-    )
-    signed_response = await sign_payload_with_service(
-        request=request,
-        service_id=service_id,
-        body=signing_body,
-        organization_id=organization_id,
-    )
-    signed = json.loads(signed_response.body)
-    signed.update(
-        {
-            "issuer_profile_id": issuer_profile_id,
-            "issuer_did": identity["issuer_did"],
-            "verification_method_id": identity["verification_method_id"],
-            "public_jwk": identity["public_jwk"],
-        }
-    )
-    signed.pop("service_id", None)
-    return JSONResponse(content=signed)
-
-
-@internal_signing_key_router.post(
     "/issuer-dids/sign",
     summary="Sign Payload Through a Resolved Issuer DID",
 )
@@ -6048,12 +5980,6 @@ def _normalize_issuer_profile(
             status_code=422,
             detail=f"Invalid key_purpose '{key_purpose}'. Must be one of {list(KEY_PURPOSES)}.",
         )
-    if key_purpose == "lti_tool_signing":
-        raise HTTPException(
-            status_code=422,
-            detail="lti_tool_signing is a protocol-key purpose and cannot be used by an issuer profile.",
-        )
-
     algorithm = body.get("algorithm", base.get("algorithm", ""))
     if algorithm and algorithm not in SUPPORTED_SIGNING_ALGORITHMS:
         raise HTTPException(
@@ -6126,11 +6052,6 @@ def _assert_issuer_profile_key_compatible(
     service_id = str(profile.get("signing_service_id") or "").strip()
     key_reference = str(profile.get("signing_key_reference") or "").strip()
     key_purpose = str(profile.get("key_purpose") or "vc_jwt_issuer").strip()
-    if key_purpose == "lti_tool_signing":
-        raise HTTPException(
-            status_code=422,
-            detail="LTI tool signing keys cannot be assigned to issuer profiles.",
-        )
     if not service_id or not key_reference:
         raise HTTPException(
             status_code=422,
@@ -6141,12 +6062,24 @@ def _assert_issuer_profile_key_compatible(
         service_id=service_id,
         key_reference=key_reference,
     )
-    if "lti_tool_signing" in reference_purposes:
+    if "lti_tool_signing" in reference_purposes and key_purpose != "lti_tool_signing":
         raise HTTPException(
             status_code=422,
             detail=(
                 f"Key reference '{key_reference}' is reserved for LTI tool signing "
                 "and cannot be assigned to an issuer profile."
+            ),
+        )
+    if (
+        key_purpose == "lti_tool_signing"
+        and reference_purposes
+        and reference_purposes != ["lti_tool_signing"]
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Key reference '{key_reference}' must be registered exclusively "
+                "for lti_tool_signing."
             ),
         )
     if reference_purposes and key_purpose not in reference_purposes:
@@ -6275,11 +6208,6 @@ async def _persist_issuer_profile_registry_binding(
     bindings = _normalize_key_reference_purposes(registry.get("key_reference_purposes"))
     service_bindings = dict(bindings.get(service_id, {}))
     purposes = list(service_bindings.get(key_reference, []))
-    if "lti_tool_signing" in purposes or key_purpose == "lti_tool_signing":
-        raise HTTPException(
-            status_code=422,
-            detail=("LTI tool signing keys cannot be assigned to an issuer profile."),
-        )
     if key_purpose not in purposes:
         purposes.append(key_purpose)
     service_bindings[key_reference] = sorted(set(purposes))
@@ -6478,6 +6406,8 @@ async def _resolve_org_scoped_issuer_identity(
                 "public_jwk": public_jwk,
                 "verification_method": method,
                 "did_document": did_doc,
+                "key_purpose": profile_with_vm.get("key_purpose"),
+                "algorithm": profile_with_vm.get("algorithm"),
                 "issuer_profile": profile_with_vm,
                 # Public certificate material is part of the issuer profile's
                 # DID identity. Preserve it on the DID-first resolution path

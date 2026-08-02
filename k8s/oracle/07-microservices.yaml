@@ -654,12 +654,6 @@ spec:
                   name: marty-config
                   key: CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID
                   optional: true
-            - name: CANVAS_LTI_TOOL_ISSUER_PROFILE_ID
-              valueFrom:
-                configMapKeyRef:
-                  name: marty-config
-                  key: CANVAS_LTI_TOOL_ISSUER_PROFILE_ID
-                  optional: true
             - name: CANVAS_LTI_TOOL_ISSUER_DID
               valueFrom:
                 configMapKeyRef:
