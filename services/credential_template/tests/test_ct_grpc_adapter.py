@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import grpc
+import pytest
 
 
 # Pre-inject a lightweight stub for credential_template.main so the deferred
@@ -283,6 +284,23 @@ class TestGetCredentialConfigurations:
 
         configs = json.loads(resp.configurations_json)
         assert configs == {}
+
+
+class TestMutationBoundary:
+    @pytest.mark.parametrize(
+        "method_name",
+        [
+            "CreateTemplate",
+            "UpdateTemplate",
+            "ActivateTemplate",
+            "DeprecateTemplate",
+            "NewVersion",
+            "DeleteTemplate",
+        ],
+    )
+    def test_grpc_adapter_does_not_implement_template_mutations(self, method_name):
+        """Template writes must traverse gateway REST authorization and RBAC."""
+        assert method_name not in CredentialTemplateServiceGrpc.__dict__
 
 
 # ── HealthCheck ──────────────────────────────────────────────────────

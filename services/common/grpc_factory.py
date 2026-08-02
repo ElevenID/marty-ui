@@ -31,11 +31,52 @@ correlation_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
 
 # Environment names where insecure gRPC is permitted without explicit opt-in.
 _DEV_ENVIRONMENTS = {"development", "dev", "local", "test"}
+_PLACEHOLDER_SECRET_PREFIXES = (
+    "change-me",
+    "change_me",
+    "changeme",
+    "replace-me",
+    "replace_me",
+)
 
 
 def _is_dev_environment() -> bool:
     """Return True when the service is running in a development-like environment."""
     return os.environ.get("ENVIRONMENT", "development").lower() in _DEV_ENVIRONMENTS
+
+
+def _read_service_token() -> str:
+    """Resolve the gRPC token and require a strong secret in production."""
+    token = os.environ.get("GRPC_SERVICE_TOKEN", "").strip()
+    token_file = os.environ.get("GRPC_SERVICE_TOKEN_FILE", "").strip()
+    if token and token_file:
+        raise RuntimeError(
+            "Both GRPC_SERVICE_TOKEN and GRPC_SERVICE_TOKEN_FILE are set; choose one."
+        )
+
+    if token_file:
+        try:
+            with open(token_file, encoding="utf-8") as handle:
+                token = handle.read().strip()
+        except OSError as exc:
+            raise RuntimeError(
+                f"Unable to read GRPC_SERVICE_TOKEN_FILE: {token_file}"
+            ) from exc
+
+    if _is_dev_environment():
+        return token
+    if not token:
+        raise RuntimeError(
+            "GRPC_SERVICE_TOKEN or GRPC_SERVICE_TOKEN_FILE is required outside "
+            "development environments."
+        )
+    if token.lower().startswith(_PLACEHOLDER_SECRET_PREFIXES):
+        raise RuntimeError("GRPC_SERVICE_TOKEN must not be a placeholder in production.")
+    if len(token) < 32:
+        raise RuntimeError(
+            "GRPC_SERVICE_TOKEN must contain at least 32 characters in production."
+        )
+    return token
 
 
 # ---------------------------------------------------------------------------
@@ -129,19 +170,41 @@ class CorrelationIdClientInterceptor(grpc_aio.UnaryUnaryClientInterceptor):
         return await continuation(client_call_details, request)
 
 
-class ServiceTokenClientInterceptor(grpc_aio.UnaryUnaryClientInterceptor):
-    """Attaches ``x-service-token`` metadata on outbound gRPC calls
-    so the receiving ``ServiceAuthInterceptor`` can authenticate them.
-    """
+class ServiceTokenClientInterceptor(
+    grpc_aio.UnaryUnaryClientInterceptor,
+    grpc_aio.UnaryStreamClientInterceptor,
+    grpc_aio.StreamUnaryClientInterceptor,
+    grpc_aio.StreamStreamClientInterceptor,
+):
+    """Attach ``x-service-token`` metadata to every outbound RPC shape."""
 
     def __init__(self, token: str) -> None:
         self._token = token
 
-    async def intercept_unary_unary(self, continuation, client_call_details, request):
+    def _authenticated_details(self, client_call_details):
         metadata = list(client_call_details.metadata or [])
         metadata.append((_SERVICE_TOKEN_HEADER, self._token))
-        client_call_details = client_call_details._replace(metadata=metadata)
-        return await continuation(client_call_details, request)
+        return client_call_details._replace(metadata=metadata)
+
+    async def intercept_unary_unary(self, continuation, client_call_details, request):
+        return await continuation(self._authenticated_details(client_call_details), request)
+
+    async def intercept_unary_stream(self, continuation, client_call_details, request):
+        return await continuation(self._authenticated_details(client_call_details), request)
+
+    async def intercept_stream_unary(
+        self, continuation, client_call_details, request_iterator
+    ):
+        return await continuation(
+            self._authenticated_details(client_call_details), request_iterator
+        )
+
+    async def intercept_stream_stream(
+        self, continuation, client_call_details, request_iterator
+    ):
+        return await continuation(
+            self._authenticated_details(client_call_details), request_iterator
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -326,23 +389,42 @@ class ServiceAuthInterceptor(grpc_aio.ServerInterceptor):
         if any(method.startswith(p) for p in self._EXEMPT_PREFIXES):
             return await continuation(handler_call_details)
 
+        handler = await continuation(handler_call_details)
+        if handler is None:
+            return None
         metadata = dict(handler_call_details.invocation_metadata)
         token = metadata.get(_SERVICE_TOKEN_HEADER, "")
 
-        if not self._hmac.compare_digest(token, self._expected_token):
-            logger.warning(
-                "Rejected unauthenticated gRPC call to %s", method
+        if self._hmac.compare_digest(token, self._expected_token):
+            return handler
+
+        logger.warning("Rejected unauthenticated gRPC call to %s", method)
+
+        async def abort_unary(request, context):
+            await context.abort(
+                grpc.StatusCode.UNAUTHENTICATED,
+                "Missing or invalid service token",
             )
 
-            async def _abort(request, context):
-                await context.abort(
-                    grpc.StatusCode.UNAUTHENTICATED,
-                    "Missing or invalid service token",
-                )
+        async def abort_stream(request, context):
+            await context.abort(
+                grpc.StatusCode.UNAUTHENTICATED,
+                "Missing or invalid service token",
+            )
+            if False:  # pragma: no cover - keeps this an async generator
+                yield None
 
-            return grpc.unary_unary_rpc_method_handler(_abort)
-
-        return await continuation(handler_call_details)
+        handler_kwargs = {
+            "request_deserializer": handler.request_deserializer,
+            "response_serializer": handler.response_serializer,
+        }
+        if handler.unary_unary:
+            return grpc.unary_unary_rpc_method_handler(abort_unary, **handler_kwargs)
+        if handler.unary_stream:
+            return grpc.unary_stream_rpc_method_handler(abort_stream, **handler_kwargs)
+        if handler.stream_unary:
+            return grpc.stream_unary_rpc_method_handler(abort_unary, **handler_kwargs)
+        return grpc.stream_stream_rpc_method_handler(abort_stream, **handler_kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -441,15 +523,11 @@ def create_grpc_server(
         LoggingMetricsInterceptor(service_name),
     ]
 
-    # Service-to-service authentication when GRPC_SERVICE_TOKEN is set.
-    service_token = os.environ.get("GRPC_SERVICE_TOKEN", "")
+    # Production service-to-service calls must authenticate. Development may
+    # omit the token for isolated local work.
+    service_token = _read_service_token()
     if service_token:
         all_interceptors.insert(0, ServiceAuthInterceptor(service_token))
-    elif not _is_dev_environment():
-        logger.warning(
-            "GRPC_SERVICE_TOKEN is not set in a non-dev environment — "
-            "inter-service gRPC calls are unauthenticated"
-        )
 
     if interceptors:
         all_interceptors = list(interceptors) + all_interceptors
@@ -555,8 +633,8 @@ def create_grpc_channel(
         all_interceptors.append(CorrelationIdClientInterceptor())
         all_interceptors.append(MetricsClientInterceptor(service_name))
 
-    # Attach service token for inter-service authentication.
-    service_token = os.environ.get("GRPC_SERVICE_TOKEN", "")
+    # Attach the same mandatory production token used by the server interceptor.
+    service_token = _read_service_token()
     if service_token:
         all_interceptors.append(ServiceTokenClientInterceptor(service_token))
 
