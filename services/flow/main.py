@@ -878,7 +878,7 @@ async def _validate_template_issuer_identity(
     template_id: str,
     template: Any,
 ) -> None:
-    """Resolve a template's public DID to its private KMS-backed profile.
+    """Resolve a template's public DID to an organization-owned signing identity.
 
     Credential templates deliberately do not expose issuer-profile IDs, service
     IDs, or key references. The flow service validates the public DID and
@@ -923,7 +923,7 @@ async def _validate_template_issuer_identity(
     if not api_key:
         raise HTTPException(
             status_code=503,
-            detail="Issuer-profile signing API is not configured",
+            detail="Issuer DID resolver is not configured",
         )
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -935,7 +935,7 @@ async def _validate_template_issuer_identity(
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=503,
-            detail="Issuer-profile identity service is unavailable",
+            detail="Issuer DID resolver is unavailable",
         ) from exc
     if response.status_code in {404, 409, 422}:
         try:
@@ -947,37 +947,25 @@ async def _validate_template_issuer_identity(
             detail=detail
             or (
                 f"Credential template {template_id} issuer DID could not be "
-                "resolved to one active KMS-backed issuer profile"
+                "resolved to one active organization-owned signing identity"
             ),
         )
     if response.status_code >= 400:
         raise HTTPException(
             status_code=503,
-            detail="Issuer-profile identity service is unavailable",
+            detail="Issuer DID resolver is unavailable",
         )
 
     resolved = response.json()
-    profile = (
-        resolved.get("issuer_profile")
-        if isinstance(resolved.get("issuer_profile"), dict)
-        else {}
-    )
-    service = (
-        resolved.get("signing_service")
-        if isinstance(resolved.get("signing_service"), dict)
-        else {}
-    )
     verification_method_id = str(resolved.get("verification_method_id") or "")
     public_jwk = resolved.get("public_jwk")
     if (
         resolved.get("ok") is not True
         or resolved.get("organization_id") != organization_id
         or resolved.get("issuer_did") != issuer_did
-        or not str(profile.get("id") or "")
-        or profile.get("status") != "active"
-        or not str(service.get("id") or "")
-        or profile.get("key_purpose") != key_purpose
-        or (issuer_algorithm and profile.get("algorithm") != issuer_algorithm)
+        or resolved.get("key_purpose") != key_purpose
+        or (issuer_algorithm and resolved.get("algorithm") != issuer_algorithm)
+        or not str(resolved.get("algorithm") or "")
         or not verification_method_id.startswith(f"{issuer_did}#")
         or not isinstance(public_jwk, dict)
         or any(secret in public_jwk for secret in ("d", "p", "q", "k"))
@@ -986,7 +974,7 @@ async def _validate_template_issuer_identity(
             status_code=503,
             detail=(
                 f"Credential template {template_id} issuer DID resolver returned "
-                "an invalid KMS-backed signing identity"
+                "an invalid public signing identity"
             ),
         )
 

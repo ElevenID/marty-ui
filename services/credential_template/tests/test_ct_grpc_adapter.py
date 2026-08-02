@@ -55,12 +55,8 @@ def _make_template_response(**overrides):
         version=1,
         created_at="2026-01-01T00:00:00Z",
         updated_at="2026-01-02T00:00:00Z",
-        issuer_profile_id="issuer-profile-1",
         issuer_did="did:web:issuer.example:orgs:org-1",
-        key_access_mode="REMOTE_SIGNING",
-        issuer_key_id="issuer-key-1",
         issuer_algorithm="ES256",
-        remote_signing_config={"signing_service_id": "managed-openbao-transit"},
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -220,14 +216,12 @@ class TestGetCredentialConfigurations:
         t1 = SimpleNamespace(
             credential_type="EmployeeCredential",
             name="Employee Badge",
-            issuer_profile_id="issuer-profile-1",
-            key_access_mode="REMOTE_SIGNING",
+            issuer_did="did:web:issuer.example:orgs:org-1",
         )
         t2 = SimpleNamespace(
             credential_type="MemberCredential",
             name="Member Badge",
-            issuer_profile_id="issuer-profile-2",
-            key_access_mode="REMOTE_SIGNING",
+            issuer_did="did:web:issuer.example:orgs:org-1",
         )
         repo = MagicMock()
         repo.list_all = AsyncMock(return_value=[t1, t2])
@@ -245,14 +239,12 @@ class TestGetCredentialConfigurations:
         valid = SimpleNamespace(
             credential_type="EmployeeCredential",
             name="Employee Badge",
-            issuer_profile_id="issuer-profile-1",
-            key_access_mode="REMOTE_SIGNING",
+            issuer_did="did:web:issuer.example:orgs:org-1",
         )
         legacy = SimpleNamespace(
             credential_type="LegacyCredential",
             name="Legacy Badge",
-            issuer_profile_id="",
-            key_access_mode="LOCAL",
+            issuer_did="",
         )
         repo = MagicMock()
         repo.list_all = AsyncMock(return_value=[valid, legacy])
@@ -269,8 +261,7 @@ class TestGetCredentialConfigurations:
         t = SimpleNamespace(
             credential_type="",
             name="No Type",
-            issuer_profile_id="issuer-profile-1",
-            key_access_mode="REMOTE_SIGNING",
+            issuer_did="did:web:issuer.example:orgs:org-1",
         )
         repo = MagicMock()
         repo.list_all = AsyncMock(return_value=[t])

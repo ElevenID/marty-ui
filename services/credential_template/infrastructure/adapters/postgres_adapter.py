@@ -4,7 +4,6 @@ PostgreSQL adapter for Credential Template Repository.
 Implements the repository pattern for credential template persistence.
 """
 
-import json
 import uuid
 from typing import Any, TYPE_CHECKING
 from datetime import datetime, timezone
@@ -20,9 +19,7 @@ from credential_template.infrastructure.models import (
 
 if TYPE_CHECKING:
     from credential_template.main import (
-        CredentialTemplate, ClaimDefinition, DisplayStyle, ValidityRules,
-        IssuerRequirements, DerivedAttribute, TemplateStatus, CredentialFormat,
-        PrivacyPosture, ClaimType, WalletConfig,
+        CredentialTemplate, TemplateStatus,
         WalletRegistryEntry, DeliveryDestinationEntry,
     )
 
@@ -54,8 +51,6 @@ class PostgresCredentialTemplateRepository:
     
     async def save(self, template: "CredentialTemplate") -> None:
         """Save or update a credential template."""
-        from credential_template.main import ClaimDefinition, DisplayStyle, ValidityRules, IssuerRequirements, DerivedAttribute
-        
         async with self._session_factory() as session:
             # Convert domain objects to JSON-serializable dicts
             claims_json = [
@@ -147,14 +142,8 @@ class PostgresCredentialTemplateRepository:
                 "application_template_id": template.application_template_id,
                 "trust_profile_id": template.trust_profile_id,
                 "revocation_profile_id": template.revocation_profile_id,
-                "issuer_profile_id": template.issuer_profile_id,
-                "key_access_mode": template.key_access_mode,
-                "issuer_key_id": template.issuer_key_id,
                 "issuer_algorithm": template.issuer_algorithm,
-                "remote_signing_config": template.remote_signing_config,
-                "issuer_certificate_chain_pem": template.issuer_certificate_chain_pem,
                 "issuer_did": template.issuer_did,
-                "auto_generate_artifacts": template.auto_generate_artifacts,
                 "version": template.version,
                 "updated_at": template.updated_at,
             }
@@ -285,14 +274,8 @@ class PostgresCredentialTemplateRepository:
             application_template_id=getattr(row, "application_template_id", None),
             trust_profile_id=getattr(row, "trust_profile_id", None),
             revocation_profile_id=getattr(row, "revocation_profile_id", None),
-            issuer_profile_id=getattr(row, "issuer_profile_id", None),
-            key_access_mode=getattr(row, "key_access_mode", None),
-            issuer_key_id=getattr(row, "issuer_key_id", None),
             issuer_algorithm=getattr(row, "issuer_algorithm", None),
-            remote_signing_config=getattr(row, "remote_signing_config", None),
-            issuer_certificate_chain_pem=getattr(row, "issuer_certificate_chain_pem", None),
             issuer_did=getattr(row, "issuer_did", None),
-            auto_generate_artifacts=bool(getattr(row, "auto_generate_artifacts", False)),
             version=row.version,
             created_at=row.created_at,
             updated_at=row.updated_at,
@@ -304,8 +287,6 @@ class PostgresCredentialTemplateRepository:
         status: "TemplateStatus | None" = None
     ) -> list["CredentialTemplate"]:
         """List credential templates for an organization."""
-        from credential_template.main import TemplateStatus
-        
         async with self._session_factory() as session:
             conditions = [credential_templates_table.c.organization_id == org_id]
             if status:
@@ -329,8 +310,6 @@ class PostgresCredentialTemplateRepository:
         status: "TemplateStatus | None" = None,
     ) -> "list[CredentialTemplate]":
         """List all credential templates across all organizations (internal use only)."""
-        from credential_template.main import TemplateStatus
-
         async with self._session_factory() as session:
             conditions = []
             if status:
@@ -368,7 +347,6 @@ class PostgresWalletRegistryRepository:
         self._session_factory = session_factory
 
     async def save(self, entry: "WalletRegistryEntry") -> None:
-        from credential_template.main import WalletRegistryEntry  # avoid circular at module level
         entry.updated_at = datetime.now(timezone.utc)
         async with self._session_factory() as session:
             row = {
@@ -428,7 +406,7 @@ class PostgresWalletRegistryRepository:
         async with self._session_factory() as session:
             stmt = select(wallet_registry_table)
             if active_only:
-                stmt = stmt.where(wallet_registry_table.c.is_active == True)
+                stmt = stmt.where(wallet_registry_table.c.is_active.is_(True))
             result = await session.execute(stmt)
             return [self._row_to_entry(row) for row in result.all()]
 
@@ -542,11 +520,11 @@ class PostgresDeliveryDestinationRepository:
         async with self._session_factory() as session:
             conditions = []
             if active_only:
-                conditions.append(delivery_destinations_table.c.is_enabled == True)
+                conditions.append(delivery_destinations_table.c.is_enabled.is_(True))
             if organization_id is not None:
                 conditions.append(
                     (delivery_destinations_table.c.organization_id == organization_id)
-                    | (delivery_destinations_table.c.is_system == True)
+                    | delivery_destinations_table.c.is_system.is_(True)
                 )
             if provider:
                 conditions.append(delivery_destinations_table.c.provider == provider)

@@ -339,17 +339,11 @@ class CredentialTemplate:
     compliance_profile_id: str | None = None
 
     # Protocol schema fields
-    issuer_profile_id: str | None = None
     application_template_id: str | None = None
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
-    issuer_key_id: str | None = None
     issuer_algorithm: str | None = None
-    key_access_mode: str | None = None
-    remote_signing_config: dict[str, Any] | None = None
-    issuer_certificate_chain_pem: str | None = None
     issuer_did: str | None = None
-    auto_generate_artifacts: bool = False
     
     # Wallet compatibility
     wallet_configs: list[WalletConfig] = field(default_factory=list)
@@ -391,17 +385,11 @@ class CredentialTemplate:
             supported_formats=self.supported_formats.copy(),
             compliance_profile=self.compliance_profile.copy() if isinstance(self.compliance_profile, dict) else self.compliance_profile,
             compliance_profile_id=self.compliance_profile_id,
-            issuer_profile_id=self.issuer_profile_id,
             application_template_id=self.application_template_id,
             trust_profile_id=self.trust_profile_id,
             revocation_profile_id=self.revocation_profile_id,
-            issuer_key_id=self.issuer_key_id,
             issuer_algorithm=self.issuer_algorithm,
-            key_access_mode=self.key_access_mode,
-            remote_signing_config=self.remote_signing_config.copy() if isinstance(self.remote_signing_config, dict) else self.remote_signing_config,
-            issuer_certificate_chain_pem=self.issuer_certificate_chain_pem,
             issuer_did=self.issuer_did,
-            auto_generate_artifacts=self.auto_generate_artifacts,
             wallet_configs=[WalletConfig(wallet_id=wc.wallet_id, deep_link_scheme=wc.deep_link_scheme, format_variant=wc.format_variant) for wc in self.wallet_configs],
             issuance_protocol=self.issuance_protocol,
             credential_payload_format=self.credential_payload_format,
@@ -1479,73 +1467,21 @@ def _first_non_empty(*values: Any) -> str | None:
     return None
 
 
-def _compact_dict(value: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: entry
-        for key, entry in value.items()
-        if entry is not None and entry != ""
-    }
-
-
-def _canonical_issuer_fields(
+def _canonical_issuer_identity(
     issuer_context: dict[str, Any],
+    *,
+    requested_algorithm: str | None = None,
 ) -> dict[str, Any]:
-    profile = issuer_context.get("issuer_profile")
-    if not isinstance(profile, dict):
-        profile = {}
-    service = issuer_context.get("service")
-    if not isinstance(service, dict):
-        service = issuer_context.get("signing_service")
-    if not isinstance(service, dict):
-        service = {}
-
-    signing_service_id = _first_non_empty(
-        issuer_context.get("signing_service_id"),
-        profile.get("signing_service_id"),
-        service.get("id"),
-    )
-    signing_key_reference = _first_non_empty(
-        issuer_context.get("signing_key_reference"),
-        profile.get("signing_key_reference"),
-        service.get("key_reference"),
-    )
-    verification_method_id = _first_non_empty(
-        issuer_context.get("verification_method_id"),
-        profile.get("verification_method_id"),
-    )
-    key_purpose = _first_non_empty(
-        issuer_context.get("key_purpose"),
-        profile.get("key_purpose"),
-    )
-    algorithm = _first_non_empty(
-        issuer_context.get("algorithm"),
-        profile.get("algorithm"),
-        service.get("algorithm"),
-    )
-
+    """Keep only protocol selectors; custody routing stays inside the gateway."""
     return {
-        "issuer_profile_id": _first_non_empty(
-            issuer_context.get("issuer_profile_id"),
-            profile.get("id"),
+        "issuer_algorithm": _first_non_empty(
+            issuer_context.get("algorithm"), requested_algorithm
         ),
-        "issuer_key_id": signing_key_reference or verification_method_id or signing_service_id,
-        "issuer_algorithm": algorithm,
-        "key_access_mode": "REMOTE_SIGNING",
-        "remote_signing_config": _compact_dict({
-            "provider": "managed-signing-service",
-            "signing_service_id": signing_service_id,
-            "signing_key_reference": signing_key_reference,
-            "verification_method_id": verification_method_id,
-            "key_purpose": key_purpose,
-        }),
-        "issuer_did": _first_non_empty(
-            issuer_context.get("issuer_did"),
-            profile.get("issuer_did"),
-        ),
+        "issuer_did": _first_non_empty(issuer_context.get("issuer_did")),
     }
 
 
-async def _require_active_issuer_profile(
+async def _require_active_issuer_did(
     request: Request,
     *,
     organization_id: str,
@@ -1600,7 +1536,7 @@ async def _require_active_issuer_profile(
         raise HTTPException(
             status_code=422,
             detail=(
-                "issuer_did is not an active managed-custody issuer identity for "
+                "issuer_did is not an active organization-owned signing identity for "
                 "this organization, format, purpose, and algorithm."
             ),
         )
@@ -1608,7 +1544,7 @@ async def _require_active_issuer_profile(
         raise HTTPException(
             status_code=409,
             detail=(
-                "issuer_did does not resolve to exactly one active issuer profile "
+                "issuer_did does not resolve to exactly one active signing identity "
                 "for this organization, format, purpose, and algorithm."
             ),
         )
@@ -1628,36 +1564,28 @@ async def _require_active_issuer_profile(
             detail="Signing-keys issuer DID resolution returned an invalid response.",
         ) from exc
 
-    profile = payload.get("issuer_profile")
-    if not isinstance(profile, dict):
-        profile = {}
-    service = payload.get("signing_service")
-    if not isinstance(service, dict):
-        service = {}
-    resolved_profile_id = str(profile.get("id") or "").strip()
-    resolved_service_id = str(
-        profile.get("signing_service_id") or service.get("id") or ""
+    resolved_verification_method = str(
+        payload.get("verification_method_id") or ""
     ).strip()
-    resolved_key_reference = str(
-        profile.get("signing_key_reference") or service.get("key_reference") or ""
-    ).strip()
-    profile_status = str(profile.get("status") or "active").strip().lower()
-    profile_issuer_did = str(profile.get("issuer_did") or requested_did).strip()
+    resolved_public_jwk = payload.get("public_jwk")
+    requested_purpose = params["key_purpose"]
+    resolved_algorithm = str(payload.get("algorithm") or "").strip()
     if (
-        not payload.get("ok")
+        payload.get("ok") is not True
         or payload.get("organization_id") != organization_id
         or payload.get("issuer_did") != requested_did
-        or profile_issuer_did != requested_did
-        or profile_status != "active"
-        or not resolved_profile_id
-        or not resolved_service_id
-        or not resolved_key_reference
+        or payload.get("key_purpose") != requested_purpose
+        or (algorithm and resolved_algorithm != algorithm)
+        or not resolved_algorithm
+        or not resolved_verification_method.startswith(f"{requested_did}#")
+        or not isinstance(resolved_public_jwk, dict)
+        or any(secret in resolved_public_jwk for secret in ("d", "p", "q", "k"))
     ):
         raise HTTPException(
             status_code=422,
             detail=(
                 "issuer_did did not resolve to a complete organization-owned "
-                "managed-custody issuer identity."
+                "public signing identity."
             ),
         )
     return payload
@@ -1825,23 +1753,17 @@ async def create_credential_template(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
-    issuer_context = await _require_active_issuer_profile(
+    issuer_context = await _require_active_issuer_did(
         request,
         organization_id=body.organization_id,
         issuer_did=body.issuer_did,
         credential_format=format_to_wire(CredentialFormat(credential_payload_format)),
     )
-    issuer_fields = _canonical_issuer_fields(issuer_context)
+    issuer_identity = _canonical_issuer_identity(issuer_context)
 
-    # Keep the legacy default only for internal SD-JWT callers. Public callers
-    # are validated by the gateway and must provide their VCT explicitly.
-    # ISO mdoc templates use `doctype`; fabricating an SD-JWT VCT for them
-    # creates protocol drift and breaks independent verifier tooling.
-    resolved_vct = (
-        body.vct or f"https://credentials.example.com/{body.credential_type}"
-        if credential_payload_format == CredentialFormat.SD_JWT_VC.value
-        else body.vct or ""
-    )
+    # Every caller follows the same protocol contract. Never fabricate a VCT
+    # inside the service to make an incomplete internal request appear valid.
+    resolved_vct = body.vct or ""
     _validate_template_protocol_requirements(
         compliance_profile=None,
         compliance_profile_id=body.compliance_profile_id,
@@ -1869,12 +1791,8 @@ async def create_credential_template(
         credential_payload_format=credential_payload_format,
         compliance_profile=None,
         compliance_profile_id=body.compliance_profile_id,
-        issuer_profile_id=issuer_fields["issuer_profile_id"],
-        issuer_key_id=issuer_fields["issuer_key_id"],
-        issuer_algorithm=issuer_fields["issuer_algorithm"],
-        key_access_mode=issuer_fields["key_access_mode"],
-        remote_signing_config=issuer_fields["remote_signing_config"],
-        issuer_did=issuer_fields["issuer_did"],
+        issuer_algorithm=issuer_identity["issuer_algorithm"],
+        issuer_did=issuer_identity["issuer_did"],
     )
     
     # Set claims
@@ -2041,19 +1959,15 @@ async def update_credential_template(
         doctype=candidate.doctype,
     )
 
-    issuer_context = await _require_active_issuer_profile(
+    issuer_context = await _require_active_issuer_did(
         fastapi_request,
         organization_id=candidate.organization_id,
         issuer_did=candidate.issuer_did,
         credential_format=payload_format_to_wire(candidate.credential_payload_format),
     )
-    issuer_fields = _canonical_issuer_fields(issuer_context)
-    candidate.issuer_profile_id = issuer_fields["issuer_profile_id"]
-    candidate.issuer_key_id = issuer_fields["issuer_key_id"]
-    candidate.issuer_algorithm = issuer_fields["issuer_algorithm"]
-    candidate.key_access_mode = issuer_fields["key_access_mode"]
-    candidate.remote_signing_config = issuer_fields["remote_signing_config"]
-    candidate.issuer_did = issuer_fields["issuer_did"]
+    issuer_identity = _canonical_issuer_identity(issuer_context)
+    candidate.issuer_algorithm = issuer_identity["issuer_algorithm"]
+    candidate.issuer_did = issuer_identity["issuer_did"]
     
     candidate.updated_at = datetime.now(timezone.utc)
     await repo.save(candidate)
@@ -2094,24 +2008,20 @@ async def activate_credential_template(
         revocation_profile_id=template.revocation_profile_id,
     )
 
-    issuer_context = await _require_active_issuer_profile(
+    issuer_context = await _require_active_issuer_did(
         fastapi_request,
         organization_id=template.organization_id,
         issuer_did=template.issuer_did,
         credential_format=payload_format_to_wire(template.credential_payload_format),
     )
-    issuer_fields = _canonical_issuer_fields(issuer_context)
+    issuer_identity = _canonical_issuer_identity(issuer_context)
     await _require_trust_profile_accepts_issuer(
         trust_profile_id=template.trust_profile_id,
-        issuer_did=issuer_fields["issuer_did"],
+        issuer_did=issuer_identity["issuer_did"],
     )
 
-    template.issuer_profile_id = issuer_fields["issuer_profile_id"]
-    template.issuer_key_id = issuer_fields["issuer_key_id"]
-    template.issuer_algorithm = issuer_fields["issuer_algorithm"]
-    template.key_access_mode = issuer_fields["key_access_mode"]
-    template.remote_signing_config = issuer_fields["remote_signing_config"]
-    template.issuer_did = issuer_fields["issuer_did"]
+    template.issuer_algorithm = issuer_identity["issuer_algorithm"]
+    template.issuer_did = issuer_identity["issuer_did"]
     
     template.activate()
     await repo.save(template)
@@ -3267,12 +3177,8 @@ async def delete_delivery_destination(
 internal_router = APIRouter(prefix="/internal", tags=["internal"])
 
 
-def _has_profile_backed_issuer(template: Any) -> bool:
-    issuer_profile_id = str(getattr(template, "issuer_profile_id", "") or "").strip()
-    key_access_mode = (
-        str(getattr(template, "key_access_mode", "") or "").strip().upper()
-    )
-    return bool(issuer_profile_id and key_access_mode == "REMOTE_SIGNING")
+def _has_managed_issuer_did(template: Any) -> bool:
+    return str(getattr(template, "issuer_did", "") or "").strip().startswith("did:")
 
 
 def _oid4vci_configuration(template: CredentialTemplate) -> dict[str, Any] | None:
@@ -3361,7 +3267,7 @@ async def get_credential_configurations(request: Request) -> dict:
 
     advertised_templates: list[CredentialTemplate] = []
     for t in templates:
-        if not _has_profile_backed_issuer(t):
+        if not _has_managed_issuer_did(t):
             logger.warning(
                 "Skipping active credential template %s in issuer metadata because "
                 "it lacks an active managed issuer profile",

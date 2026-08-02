@@ -38,10 +38,8 @@ def _payload_format_to_wire(value: str | None) -> str:
     return _PAYLOAD_FORMAT_WIRE_NAMES.get(normalized.upper(), normalized)
 
 
-def _has_kms_backed_issuer(template: Any) -> bool:
-    issuer_profile_id = str(getattr(template, "issuer_profile_id", "") or "").strip()
-    key_access_mode = str(getattr(template, "key_access_mode", "") or "").strip().upper()
-    return bool(issuer_profile_id and key_access_mode == "REMOTE_SIGNING")
+def _has_managed_issuer_did(template: Any) -> bool:
+    return str(getattr(template, "issuer_did", "") or "").strip().startswith("did:")
 
 
 def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateResponse:
@@ -148,13 +146,13 @@ async def _resolve_grpc_issuer_fields(
     issuer_algorithm: str | None,
 ) -> dict[str, Any] | None:
     from credential_template.main import (  # noqa: PLC0415
-        _canonical_issuer_fields,
-        _require_active_issuer_profile,
+        _canonical_issuer_identity,
+        _require_active_issuer_did,
         payload_format_to_wire,
     )
 
     try:
-        issuer_context = await _require_active_issuer_profile(
+        issuer_context = await _require_active_issuer_did(
             SimpleNamespace(state=SimpleNamespace()),
             organization_id=organization_id,
             issuer_did=issuer_did,
@@ -173,7 +171,7 @@ async def _resolve_grpc_issuer_fields(
         context.set_details(str(getattr(exc, "detail", exc)))
         return None
 
-    return _canonical_issuer_fields(
+    return _canonical_issuer_identity(
         issuer_context,
         requested_algorithm=issuer_algorithm or None,
     )
@@ -225,9 +223,9 @@ class CredentialTemplateServiceGrpc(
 
         configs: dict[str, Any] = {}
         for t in templates:
-            if not _has_kms_backed_issuer(t):
+            if not _has_managed_issuer_did(t):
                 logger.warning(
-                    "Skipping active credential template %s in credential configurations because it lacks a KMS-backed issuer profile",
+                    "Skipping active credential template %s in credential configurations because it lacks a managed issuer DID",
                     getattr(t, "id", None) or getattr(t, "name", None) or "unknown",
                 )
                 continue
@@ -303,11 +301,7 @@ class CredentialTemplateServiceGrpc(
             credential_payload_format=credential_payload_format,
             selective_disclosure_fields=list(request.selective_disclosure_fields),
             zk_predicate_claims=list(request.zk_predicate_claims),
-            issuer_profile_id=issuer_fields["issuer_profile_id"],
-            issuer_key_id=issuer_fields["issuer_key_id"],
             issuer_algorithm=issuer_fields["issuer_algorithm"],
-            key_access_mode=issuer_fields["key_access_mode"],
-            remote_signing_config=issuer_fields["remote_signing_config"],
             issuer_did=issuer_fields["issuer_did"],
         )
 
@@ -467,11 +461,7 @@ class CredentialTemplateServiceGrpc(
         )
         if issuer_fields is None:
             return ct_pb2.TemplateResponse()
-        template.issuer_profile_id = issuer_fields["issuer_profile_id"]
-        template.issuer_key_id = issuer_fields["issuer_key_id"]
         template.issuer_algorithm = issuer_fields["issuer_algorithm"]
-        template.key_access_mode = issuer_fields["key_access_mode"]
-        template.remote_signing_config = issuer_fields["remote_signing_config"]
         template.issuer_did = issuer_fields["issuer_did"]
 
         from datetime import datetime, timezone
@@ -502,11 +492,7 @@ class CredentialTemplateServiceGrpc(
         )
         if issuer_fields is None:
             return ct_pb2.TemplateResponse()
-        template.issuer_profile_id = issuer_fields["issuer_profile_id"]
-        template.issuer_key_id = issuer_fields["issuer_key_id"]
         template.issuer_algorithm = issuer_fields["issuer_algorithm"]
-        template.key_access_mode = issuer_fields["key_access_mode"]
-        template.remote_signing_config = issuer_fields["remote_signing_config"]
         template.issuer_did = issuer_fields["issuer_did"]
 
         template.activate()

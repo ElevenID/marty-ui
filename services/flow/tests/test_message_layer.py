@@ -169,16 +169,8 @@ async def test_template_identity_resolves_public_did_without_profile_selector(
                     "x": "x-coordinate",
                     "y": "y-coordinate",
                 },
-                "issuer_profile": {
-                    "id": "private-profile-1",
-                    "status": "active",
-                    "key_purpose": "vc_jwt_issuer",
-                    "algorithm": "ES256",
-                },
-                "signing_service": {
-                    "id": "private-kms-service-1",
-                    "service_type": "openbao-transit",
-                },
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256",
             }
 
     class _Client:
@@ -306,12 +298,8 @@ async def test_template_identity_rejects_cross_tenant_or_private_key_response(
                 "issuer_did": issuer_did,
                 "verification_method_id": f"{issuer_did}#credential-issuer-1",
                 "public_jwk": {"kty": "EC", "crv": "P-256", "d": "private"},
-                "issuer_profile": {
-                    "id": "private-profile-1",
-                    "key_purpose": "vc_jwt_issuer",
-                    "algorithm": "ES256",
-                },
-                "signing_service": {"id": "private-kms-service-1"},
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256",
             }
 
     class _Client:
@@ -343,7 +331,7 @@ async def test_template_identity_rejects_cross_tenant_or_private_key_response(
         )
 
     assert exc_info.value.status_code == 503
-    assert "invalid KMS-backed signing identity" in exc_info.value.detail
+    assert "invalid public signing identity" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
