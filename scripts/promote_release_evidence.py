@@ -172,7 +172,7 @@ def validate_beta_lifecycle(
     organization_id = str(metadata.get("organization_id") or "")
     _require(bool(organization_id), "Spruce metadata report organization is missing")
     _require(
-        metadata.get("credential_issuer") == f"{beta_origin}/org/{organization_id}/spruce",
+        metadata.get("credential_issuer") == f"{beta_origin}/org/{organization_id}",
         "Spruce credential issuer mismatch",
     )
     _require(

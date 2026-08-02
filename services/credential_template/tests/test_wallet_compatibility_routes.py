@@ -537,7 +537,7 @@ def test_wallet_open_link_preserves_inline_credential_offer_param_for_stale_temp
 	)
 	asyncio.run(wallet_repo.save(entry))
 	client, _ = _build_client(repo, wallet_repo)
-	offer_json = '{"credential_issuer":"https://issuer.example/org/org-1/spruce","credential_configuration_ids":["open_badge#spruce-sd-jwt"],"grants":{}}'
+	offer_json = '{"credential_issuer":"https://issuer.example/org/org-1","credential_configuration_ids":["open_badge#sd-jwt"],"grants":{}}'
 	inner_uri = "openid-credential-offer://?credential_offer=" + quote(offer_json, safe="")
 
 	response = client.get(
@@ -556,7 +556,7 @@ def test_wallet_open_link_preserves_inline_credential_offer_param_for_stale_temp
 	)
 
 
-def test_wallet_registry_response_exposes_oid4vci_profile_from_supported_formats():
+def test_wallet_registry_response_uses_standard_oid4vci_profile():
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
 	client, _ = _build_client(repo, wallet_repo)
@@ -565,11 +565,8 @@ def test_wallet_registry_response_exposes_oid4vci_profile_from_supported_formats
 
 	assert response.status_code == 200
 	body = response.json()
-	assert body["oid4vci_profile"] == {
-		"format_variant": "spruce-vc+sd-jwt",
-		"issuer_path": "spruce",
-		"credential_configuration_suffix": "spruce-sd-jwt",
-	}
+	assert body["supported_formats"] == ["dc+sd-jwt", "mso_mdoc"]
+	assert "oid4vci_profile" not in body
 
 
 def test_wallet_open_link_rejects_unsafe_inner_uri_scheme():
