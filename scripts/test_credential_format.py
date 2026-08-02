@@ -32,11 +32,10 @@ token_data = token_resp.json()
 token = token_data.get("access_token", "")
 print(f"Got access token: {token[:20]}...")
 
-# Step 3: Request credential with spruce-sd-jwt format
+# Step 3: Request the current OID4VCI SD-JWT credential configuration
 cred_resp = httpx.post("http://localhost:8005/v1/issuance/credential", 
     json={
-        "format": "spruce-vc+sd-jwt",
-        "credential_configuration_id": "MemberCredential#spruce-sd-jwt",
+        "credential_configuration_id": "MemberCredential#sd-jwt",
     },
     headers={"Authorization": f"Bearer {token}"},
     timeout=10,

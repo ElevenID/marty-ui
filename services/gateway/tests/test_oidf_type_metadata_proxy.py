@@ -32,3 +32,15 @@ def test_gateway_proxies_public_sd_jwt_type_metadata(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["vct"] == "https://issuer.example.test/credentials/default"
+
+
+def test_gateway_does_not_publish_obsolete_spruce_discovery_routes() -> None:
+    client = TestClient(gateway_main.create_app())
+
+    for path in (
+        "/.well-known/openid-credential-issuer/org/org-a/spruce",
+        "/org/org-a/spruce/.well-known/openid-credential-issuer",
+        "/.well-known/oauth-authorization-server/org/org-a/spruce",
+        "/org/org-a/spruce/.well-known/oauth-authorization-server",
+    ):
+        assert client.get(path).status_code == 404

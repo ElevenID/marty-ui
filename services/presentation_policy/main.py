@@ -688,7 +688,6 @@ _SD_JWT_FORMAT_ALIASES = {
     "sd_jwt_vc",
     "dc+sd-jwt",
     "vc+sd-jwt",
-    "spruce-vc+sd-jwt",
     "ietf_sd_jwt",
     "w3c_vcdm_v2_sd_jwt",
 }

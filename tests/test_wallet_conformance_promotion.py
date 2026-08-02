@@ -166,10 +166,10 @@ def _beta_evidence(root: Path) -> None:
     _write_json(root / "spruce-metadata.json", {
         "base": BETA_ORIGIN,
         "organization_id": "00000000-0000-0000-0000-000000000001",
-        "credential_issuer": f"{BETA_ORIGIN}/org/00000000-0000-0000-0000-000000000001/spruce",
+        "credential_issuer": f"{BETA_ORIGIN}/org/00000000-0000-0000-0000-000000000001",
         "issuer_display_name": "ElevenID LLC",
         "configuration_count": 17,
-        "member_configuration": "MemberCredential#spruce-sd-jwt",
+        "member_configuration": "MemberCredential#sd-jwt",
         "member_vct": f"{BETA_ORIGIN}/credentials/marty-verified-member-badge",
         "member_badge_name": "Marty Verified Member Badge",
     })

@@ -12,7 +12,7 @@
  *   "<WalletName>" — uses `credential_offer_uris[wallet_id]` for that wallet
  *
  * The SpruceID / Marty wallet tab is important because its offer URI points to
- * the `/org/{id}/spruce` issuer metadata endpoint which uses `spruce-vc+sd-jwt`
+ * the standard organization-scoped OID4VCI issuer metadata endpoint
  * format — required by the SpruceID SDK.  The default endpoint uses `vc+sd-jwt`
  * which the SpruceID SDK cannot parse.
  *

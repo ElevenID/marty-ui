@@ -46,8 +46,8 @@ describe('credential link utilities', () => {
 
   it('preserves inline credential_offer parameters when rendering Spruce routes', () => {
     const offerJson = JSON.stringify({
-      credential_issuer: 'https://issuer.example/org/org-1/spruce',
-      credential_configuration_ids: ['EmployeeBadge#spruce-sd-jwt'],
+      credential_issuer: 'https://issuer.example/org/org-1',
+      credential_configuration_ids: ['EmployeeBadge#sd-jwt'],
       grants: {},
     })
     const innerUri = `openid-credential-offer://?credential_offer=${encodeURIComponent(offerJson)}`
@@ -59,7 +59,7 @@ describe('credential link utilities', () => {
     ).toBe(`openid-credential-offer://?credential_offer=${encodeURIComponent(offerJson)}`)
   })
 
-  it('adapts generic inline offers using the wallet OID4VCI profile', () => {
+  it('leaves current-standard Spruce inline offers unchanged', () => {
     const offerJson = JSON.stringify({
       credential_issuer: 'https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001',
       credential_configuration_ids: ['open_badge#sd-jwt'],
@@ -74,13 +74,11 @@ describe('credential link utilities', () => {
       `openid-credential-offer://?credential_offer=${encodeURIComponent(offerJson)}`,
       {
         id: 'wr-spruce-001',
-        supported_formats: ['spruce-vc+sd-jwt'],
+        supported_formats: ['dc+sd-jwt', 'mso_mdoc'],
       },
     )
 
-    expect(decodeURIComponent(adapted)).toContain('https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001/spruce')
-    expect(decodeURIComponent(adapted)).toContain('open_badge#spruce-sd-jwt')
-    expect(decodeURIComponent(adapted)).not.toContain('open_badge#sd-jwt')
+    expect(adapted).toBe(`openid-credential-offer://?credential_offer=${encodeURIComponent(offerJson)}`)
   })
 
   it('does not adapt offers from wallet id alone without profile data', () => {
@@ -228,8 +226,8 @@ describe('wallet transport service', () => {
 
   it('does not mislabel Spruce inline offers as credential_offer_uri values', () => {
     const offerJson = JSON.stringify({
-      credential_issuer: 'https://issuer.example/org/org-1/spruce',
-      credential_configuration_ids: ['EmployeeBadge#spruce-sd-jwt'],
+      credential_issuer: 'https://issuer.example/org/org-1',
+      credential_configuration_ids: ['EmployeeBadge#sd-jwt'],
       grants: {},
     })
     const inlineOffer = `openid-credential-offer://?credential_offer=${encodeURIComponent(offerJson)}`
@@ -249,7 +247,7 @@ describe('wallet transport service', () => {
     expect(transport.openUri).not.toContain('credential_offer_uri=')
   })
 
-  it('routes selected Spruce wallets through Spruce-specific inline offers when no wallet-specific offer exists', () => {
+  it('routes selected Spruce wallets through standard inline offers when no wallet-specific offer exists', () => {
     const offerJson = JSON.stringify({
       credential_issuer: 'https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001',
       credential_configuration_ids: ['open_badge#sd-jwt'],
@@ -262,14 +260,14 @@ describe('wallet transport service', () => {
       offerData: {
         offer_url: `openid-credential-offer://?credential_offer=${encodeURIComponent(offerJson)}`,
         wallet_registry: {
-          'wr-spruce-001': { id: 'wr-spruce-001', name: 'SpruceKit', supported_formats: ['spruce-vc+sd-jwt'] },
+          'wr-spruce-001': { id: 'wr-spruce-001', name: 'SpruceKit', supported_formats: ['dc+sd-jwt', 'mso_mdoc'] },
         },
       },
     })
 
     expect(resolved.walletId).toBe('wr-spruce-001')
-    expect(decodeURIComponent(resolved.transport.innerUri)).toContain('/spruce')
-    expect(decodeURIComponent(resolved.transport.innerUri)).toContain('open_badge#spruce-sd-jwt')
+    expect(decodeURIComponent(resolved.transport.innerUri)).toContain('/org/00000000-0000-0000-0000-000000000001')
+    expect(decodeURIComponent(resolved.transport.innerUri)).toContain('open_badge#sd-jwt')
   })
 
   it('uses preferred wallet order without wallet-specific hardcoding', () => {

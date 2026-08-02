@@ -2488,7 +2488,6 @@ async def _build_wallet_offers_from_template(
             # Build per-wallet offers
             from issuance.infrastructure.api.application_routes import (
                 org_issuer_url,
-                org_issuer_url_spruce,
             )
             from issuance.application.rust_integration import (
                 oid4vci_create_credential_offer,
@@ -2506,12 +2505,9 @@ async def _build_wallet_offers_from_template(
                     continue
 
                 # Select credential_configuration_id based on format variant
-                if fmt_variant == "spruce-vc+sd-jwt":
-                    config_id = f"{credential_type}#spruce-sd-jwt"
-                    issuer_url = org_issuer_url_spruce(org_id)
-                elif fmt_variant == "mso_mdoc":
+                if fmt_variant == "mso_mdoc":
                     config_id = f"{credential_type}#mdoc"
-                    issuer_url = org_issuer_url_spruce(org_id)
+                    issuer_url = org_issuer_url(org_id)
                 else:
                     config_id = f"{credential_type}#sd-jwt"
                     issuer_url = org_issuer_url(org_id)
@@ -4314,10 +4310,6 @@ _WALLET_FORMATS_FALLBACK: dict[str, dict[str, Any]] = {
         "sd-jwt_alg_values": ["ES256", "EdDSA"],
         "kb-jwt_alg_values": ["ES256", "EdDSA"],
     },
-    "spruce-vc+sd-jwt": {
-        "sd-jwt_alg_values": ["ES256", "EdDSA"],
-        "kb-jwt_alg_values": ["ES256", "EdDSA"],
-    },
     "mso_mdoc": {"alg": ["ES256", "ES384"]},
     "jwt_vp": {"alg": ["ES256", "EdDSA"]},
     "ldp_vp": {"proof_type": ["Ed25519Signature2020"]},
@@ -4354,7 +4346,7 @@ def _oid4vp_wallet_registry_formats() -> dict[str, dict[str, Any]]:
 def _oid4vp_format_alg(fmt: str) -> dict[str, Any]:
     """Return algorithm constraints for a given OID4VP format identifier."""
     fmt_n = (fmt or "").strip().lower()
-    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc", "spruce-vc+sd-jwt"}:
+    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc"}:
         return dict(_SD_JWT_PRESENTATION_ALGS)
     if fmt_n in {"mso_mdoc", "mdoc"}:
         return {"alg": ["ES256", "ES384"]}
@@ -4376,7 +4368,7 @@ def _oid4vp_presentation_formats(
     template's format families, so the presentation request works for every
     registered wallet without hardcoding format strings.
     """
-    _SD_FAMILY = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt", "spruce-vc+sd-jwt"}
+    _SD_FAMILY = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt"}
     _DOC_FAMILY = {"mso_mdoc", "mdoc"}
     _JWTVP_FAMILY = {"jwt_vc", "jwt_vc_json", "jwt_vp"}
 
@@ -4414,7 +4406,7 @@ def _oid4vp_presentation_formats(
 
 
 def _is_sd_jwt_format(supported_formats: list[str]) -> bool:
-    _SD = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt", "spruce-vc+sd-jwt"}
+    _SD = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt"}
     return any((f or "").strip().lower() in _SD for f in supported_formats)
 
 
@@ -4466,7 +4458,7 @@ def _dcql_format_name(fmt: str) -> str:
         return "jwt_vc_json"
     if fmt_n == "ldp_vp":
         return "ldp_vc"
-    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc", "spruce-vc+sd-jwt"}:
+    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc"}:
         return "dc+sd-jwt"
     if fmt_n in {"mso_mdoc", "mdoc"}:
         return "mso_mdoc"
@@ -4515,7 +4507,7 @@ def _dcql_meta_for_descriptor(
         doctype = mdoc.get("doctype") if isinstance(mdoc, dict) else None
         if isinstance(doctype, str) and doctype:
             return {"doctype_value": doctype}
-    sd_jwt_formats = {"dc+sd-jwt", "vc+sd-jwt", "spruce-vc+sd-jwt", "sd_jwt_vc"}
+    sd_jwt_formats = {"dc+sd-jwt", "vc+sd-jwt", "sd_jwt_vc"}
     for constraint_field in descriptor.get("constraints", {}).get("fields", []):
         values = _json_schema_const_values(constraint_field.get("filter"))
         if not values:
