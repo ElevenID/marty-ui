@@ -44,8 +44,8 @@ from flow.main import (
     update_flow_definition,
 )
 
-_PROFILE_SIGNER_UNDER_TEST = flow_main._sign_request_object_with_issuer_profile
-_PROFILE_IDENTITY_UNDER_TEST = flow_main._oid4vp_issuer_profile_identity
+_DID_SIGNER_UNDER_TEST = flow_main._sign_request_object_with_issuer_did
+_DID_IDENTITY_UNDER_TEST = flow_main._oid4vp_issuer_identity
 _TEMPLATE_IDENTITY_UNDER_TEST = flow_main._validate_template_issuer_identity
 
 
@@ -99,12 +99,8 @@ async def test_oid4vp_identity_resolves_did_without_public_profile_selection(
                     "id": issuer_did,
                     "verificationMethod": [{"id": verification_method_id}],
                 },
-                "issuer_profile": {
-                    "id": "internal-profile-1",
-                    "key_purpose": "oid4vp_request_signing",
-                    "algorithm": "ES256",
-                },
-                "signing_service": {"id": "internal-service-1"},
+                "key_purpose": "oid4vp_request_signing",
+                "algorithm": "ES256",
             }
 
     class _Client:
@@ -126,7 +122,7 @@ async def test_oid4vp_identity_resolves_did_without_public_profile_selection(
         lambda **_kwargs: _Client(),
     )
 
-    identity = await _PROFILE_IDENTITY_UNDER_TEST("org-1", issuer_did)
+    identity = await _DID_IDENTITY_UNDER_TEST("org-1", issuer_did)
 
     assert captured == {
         "url": "http://signing.internal/resolve-issuer-did",
@@ -138,14 +134,14 @@ async def test_oid4vp_identity_resolves_did_without_public_profile_selection(
         },
         "headers": {"X-API-Key": "api-key"},
     }
-    assert identity["issuer_profile_id"] == "internal-profile-1"
     assert identity["issuer_did"] == issuer_did
+    assert "issuer_profile_id" not in identity
     assert "signing_service_id" not in identity
     assert "signing_key_reference" not in identity
 
     _Response.organization_id = "other-org"
     with pytest.raises(HTTPException) as cross_tenant:
-        await _PROFILE_IDENTITY_UNDER_TEST("org-1", issuer_did)
+        await _DID_IDENTITY_UNDER_TEST("org-1", issuer_did)
     assert cross_tenant.value.status_code == 409
 
 
@@ -351,13 +347,12 @@ async def test_template_identity_rejects_cross_tenant_or_private_key_response(
 
 
 @pytest.mark.asyncio
-async def test_request_object_signing_uses_profile_scoped_api_only(
+async def test_request_object_signing_uses_did_scoped_api_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer_did = "did:web:verifier.example:oid4vp"
     verification_method_id = f"{issuer_did}#request-signing-1"
     identity = {
-        "issuer_profile_id": "issuer-profile-1",
         "issuer_did": issuer_did,
         "verification_method_id": verification_method_id,
     }
@@ -393,9 +388,8 @@ async def test_request_object_signing_uses_profile_scoped_api_only(
         lambda **_kwargs: _Client(),
     )
 
-    token = await _PROFILE_SIGNER_UNDER_TEST(
+    token = await _DID_SIGNER_UNDER_TEST(
         organization_id="org-1",
-        issuer_profile_id="issuer-profile-1",
         identity=identity,
         protected_header={
             "alg": "ES256",
@@ -404,11 +398,16 @@ async def test_request_object_signing_uses_profile_scoped_api_only(
         claims={"iss": issuer_did, "sub": issuer_did},
     )
 
-    assert captured["url"] == (
-        "http://issuer-profile.internal/issuer-profiles/issuer-profile-1/sign"
-    )
+    assert captured["url"] == "http://issuer-profile.internal/issuer-dids/sign"
     assert captured["params"] == {"organization_id": "org-1"}
-    assert set(captured["json"]) == {"payload_b64", "algorithm"}
+    assert captured["json"] == {
+        "issuer_did": issuer_did,
+        "credential_format": "oauth-authz-req+jwt",
+        "key_purpose": "oid4vp_request_signing",
+        "payload_b64": captured["json"]["payload_b64"],
+        "algorithm": "ES256",
+    }
+    assert "issuer_profile_id" not in captured["json"]
     assert "signing_service_id" not in captured["json"]
     assert "signing_key_reference" not in captured["json"]
     assert token.endswith(".AQ")
@@ -626,8 +625,8 @@ def clear_nonce_replay_cache(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def issuer_profile_signer(monkeypatch):
-    """Model the profile API without giving production code a private key."""
+def issuer_did_signer(monkeypatch):
+    """Model the DID-mediated API without giving production code a private key."""
     private_key = jwcrypto_jwk.JWK.generate(kty="EC", crv="P-256")
     public_jwk = json.loads(private_key.export_public())
     issuer_did = "did:web:verifier.example:oid4vp"
@@ -647,7 +646,6 @@ def issuer_profile_signer(monkeypatch):
         "assertionMethod": [verification_method_id],
     }
     identity = {
-        "issuer_profile_id": flow_main._DEFAULT_OID4VP_ISSUER_PROFILE_ID,
         "issuer_did": issuer_did,
         "verification_method_id": verification_method_id,
         "public_jwk": public_jwk,
@@ -687,8 +685,8 @@ def issuer_profile_signer(monkeypatch):
         encoded = envelope.rsplit(":", 1)[-1]
         return json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
 
-    monkeypatch.setattr(flow_main, "_oid4vp_issuer_profile_identity", _identity)
-    monkeypatch.setattr(flow_main, "_sign_request_object_with_issuer_profile", _sign)
+    monkeypatch.setattr(flow_main, "_oid4vp_issuer_identity", _identity)
+    monkeypatch.setattr(flow_main, "_sign_request_object_with_issuer_did", _sign)
     monkeypatch.setattr(flow_main, "_wrap_flow_private_jwk", _wrap)
     monkeypatch.setattr(flow_main, "_unwrap_flow_private_jwk", _unwrap)
     return {"private_key": private_key, "identity": identity}
@@ -1590,10 +1588,7 @@ async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
     )
     instance = await repo.get_instance(started.instance_id)
     assert instance is not None
-    assert (
-        instance.context["oid4vp_issuer_profile_id"]
-        == flow_main._DEFAULT_OID4VP_ISSUER_PROFILE_ID
-    )
+    assert "oid4vp_issuer_profile_id" not in instance.context
     assert instance.context["oid4vp_issuer_did"] == "did:web:verifier.example:oid4vp"
     parsed = urlparse(started.request_uri)
     parameters = parse_qs(parsed.query)
@@ -1731,7 +1726,7 @@ async def test_start_verification_url_query_uses_direct_unsigned_parameters(
         "flow.main._build_presentation_definition", _fake_presentation_definition
     )
     monkeypatch.setattr(
-        "flow.main._sign_request_object_with_issuer_profile",
+        "flow.main._sign_request_object_with_issuer_did",
         _fail_if_signed,
     )
     repo = InMemoryFlowRepository()
@@ -1894,7 +1889,7 @@ async def test_started_post_request_uri_transports_wallet_nonce_into_signed_requ
 @pytest.mark.asyncio
 async def test_get_verification_request_object_records_presentation_request_message(
     monkeypatch,
-    issuer_profile_signer,
+    issuer_did_signer,
 ):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
 
@@ -1930,7 +1925,7 @@ async def test_get_verification_request_object_records_presentation_request_mess
     decoded_header = _decode_jwt_segment(header)
     decoded_payload = _decode_jwt_segment(payload)
     verification_key = jwcrypto_jwk.JWK.from_json(
-        json.dumps(issuer_profile_signer["identity"]["public_jwk"])
+        json.dumps(issuer_did_signer["identity"]["public_jwk"])
     )
     verified_request = jwcrypto_jwt.JWT(
         key=verification_key, jwt=response.body.decode()
@@ -2532,11 +2527,11 @@ async def test_get_verification_request_object_supports_dc_api(monkeypatch):
 
 
 def test_oid4vp_did_web_document_exposes_verifier_key(
-    monkeypatch, issuer_profile_signer
+    monkeypatch, issuer_did_signer
 ):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
 
-    document = _oid4vp_did_web_document(issuer_profile_signer["identity"])
+    document = _oid4vp_did_web_document(issuer_did_signer["identity"])
 
     assert document["id"] == "did:web:verifier.example:oid4vp"
     verification_method = document["verificationMethod"][0]

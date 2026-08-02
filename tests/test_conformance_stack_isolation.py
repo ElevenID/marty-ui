@@ -20,7 +20,7 @@ stack = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(stack)
 
 
-def test_issuer_profile_identity_returns_only_public_did_material(
+def test_issuer_did_identity_returns_only_public_did_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = {
@@ -41,7 +41,7 @@ def test_issuer_profile_identity_returns_only_public_did_material(
         )()
 
     monkeypatch.setattr(stack.subprocess, "run", fake_run)
-    assert stack.issuer_profile_identity(["docker", "compose"]) == payload
+    assert stack.issuer_did_identity(["docker", "compose"]) == payload
     rendered = " ".join(captured)
     assert "exec -T gateway python -c" in rendered
     assert "SIGNING_KEYS_INTERNAL_API_KEY" in rendered
@@ -50,7 +50,7 @@ def test_issuer_profile_identity_returns_only_public_did_material(
     assert "/resolve-issuer-did" in rendered
 
 
-def test_issuer_profile_identity_rejects_private_jwk_material(
+def test_issuer_did_identity_rejects_private_jwk_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = {
@@ -70,7 +70,7 @@ def test_issuer_profile_identity_rejects_private_jwk_material(
         )(),
     )
     with pytest.raises(ValueError, match="public ES256 identity"):
-        stack.issuer_profile_identity(["docker", "compose"])
+        stack.issuer_did_identity(["docker", "compose"])
 
 
 def test_project_name_is_narrowly_scoped() -> None:

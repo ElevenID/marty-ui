@@ -79,9 +79,8 @@ SERVICE_PORT = int(os.environ.get("FLOW_SERVICE_PORT", "8011"))
 ISSUANCE_SERVICE_URL = os.environ.get("ISSUANCE_SERVICE_URL", "http://issuance:8005")
 ISSUANCE_GRPC_TARGET = os.environ.get("ISSUANCE_GRPC_TARGET", "issuance:9005")
 
-# OID4VP Request Objects are signed through an active issuer profile. The flow
-# service never receives or selects the profile's underlying KMS key.
-_DEFAULT_OID4VP_ISSUER_PROFILE_ID = "ip-marty-oid4vp-verifier"
+# OID4VP Request Objects are signed through an issuer DID. The gateway resolves
+# its active profile and the flow service never receives KMS coordinates.
 _OID4VP_DID_WEB_PATH = "oid4vp"
 _SD_JWT_PRESENTATION_ALGS = {
     "sd-jwt_alg_values": ["ES256", "EdDSA"],
@@ -154,11 +153,11 @@ def _configured_oid4vp_issuer_did() -> str:
     return f"did:web:{authority}:orgs:{org_slug}"
 
 
-async def _oid4vp_issuer_profile_identity(
+async def _oid4vp_issuer_identity(
     organization_id: str,
     issuer_did: str | None = None,
 ) -> dict[str, Any]:
-    """Resolve a public verifier DID to one org-owned issuer profile."""
+    """Resolve a public verifier DID to one org-owned signing identity."""
     resolved_did = (issuer_did or _configured_oid4vp_issuer_did()).strip()
     if not resolved_did.startswith("did:"):
         raise HTTPException(
@@ -177,7 +176,7 @@ async def _oid4vp_issuer_profile_identity(
     )
     if not api_key:
         raise HTTPException(
-            status_code=503, detail="Issuer-profile signing API is not configured"
+            status_code=503, detail="Issuer DID signing API is not configured"
         )
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -209,32 +208,24 @@ async def _oid4vp_issuer_profile_identity(
             status_code=503, detail="OID4VP issuer DID resolver is unavailable"
         )
     resolved = response.json()
-    profile = (
-        resolved.get("issuer_profile")
-        if isinstance(resolved.get("issuer_profile"), dict)
-        else {}
-    )
     if resolved.get("organization_id") != organization_id:
         raise HTTPException(
             status_code=409,
             detail="Issuer DID resolver returned an identity outside the requested organization.",
         )
-    profile_id = str(profile.get("id") or "")
     identity = {
-        "issuer_profile_id": profile_id,
         "organization_id": resolved.get("organization_id"),
         "issuer_did": resolved.get("issuer_did"),
         "verification_method_id": resolved.get("verification_method_id"),
         "public_jwk": resolved.get("public_jwk"),
         "did_document": resolved.get("did_document"),
-        "key_purpose": profile.get("key_purpose"),
-        "algorithm": profile.get("algorithm"),
+        "key_purpose": resolved.get("key_purpose"),
+        "algorithm": resolved.get("algorithm"),
     }
     public_jwk = identity.get("public_jwk")
     identity_issuer_did = str(identity.get("issuer_did") or "")
     if (
-        not profile_id
-        or identity.get("key_purpose") != "oid4vp_request_signing"
+        identity.get("key_purpose") != "oid4vp_request_signing"
         or identity.get("algorithm") != "ES256"
         or not identity_issuer_did.startswith("did:")
         or not str(identity.get("verification_method_id") or "").startswith(
@@ -247,7 +238,7 @@ async def _oid4vp_issuer_profile_identity(
     ):
         raise HTTPException(
             status_code=503,
-            detail="OID4VP issuer profile returned an invalid DID signing identity",
+            detail="OID4VP issuer DID returned an invalid signing identity",
         )
     if identity_issuer_did != resolved_did:
         raise HTTPException(
@@ -257,15 +248,14 @@ async def _oid4vp_issuer_profile_identity(
     return identity
 
 
-async def _sign_request_object_with_issuer_profile(
+async def _sign_request_object_with_issuer_did(
     *,
     organization_id: str,
-    issuer_profile_id: str,
     identity: dict[str, Any],
     protected_header: dict[str, Any],
     claims: dict[str, Any],
 ) -> str:
-    """Create compact JWS while the private operation remains behind the profile."""
+    """Create compact JWS through the tenant-scoped issuer DID resolver."""
     protected = _base64url_encode(
         json.dumps(protected_header, separators=(",", ":"), sort_keys=True).encode(
             "utf-8"
@@ -285,33 +275,35 @@ async def _sign_request_object_with_issuer_profile(
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(
-                f"{base_url}/issuer-profiles/{issuer_profile_id}/sign",
+                f"{base_url}/issuer-dids/sign",
                 params={"organization_id": organization_id},
                 headers={"X-API-Key": api_key},
                 json={
+                    "issuer_did": identity["issuer_did"],
+                    "credential_format": "oauth-authz-req+jwt",
+                    "key_purpose": "oid4vp_request_signing",
                     "payload_b64": _base64url_encode(signing_input),
                     "algorithm": "ES256",
                 },
             )
     except httpx.HTTPError as exc:
         raise HTTPException(
-            status_code=503, detail="Issuer-profile signing service is unavailable"
+            status_code=503, detail="Issuer DID signing service is unavailable"
         ) from exc
     if response.status_code >= 400:
         raise HTTPException(
-            status_code=503, detail="Issuer-profile request signing failed"
+            status_code=503, detail="Issuer DID request signing failed"
         )
     signed = response.json()
     if (
-        signed.get("issuer_profile_id") != issuer_profile_id
-        or signed.get("issuer_did") != identity.get("issuer_did")
+        signed.get("issuer_did") != identity.get("issuer_did")
         or signed.get("verification_method_id")
         != identity.get("verification_method_id")
         or signed.get("algorithm") != "ES256"
     ):
         raise HTTPException(
             status_code=503,
-            detail="Issuer-profile signer returned a mismatched identity",
+            detail="Issuer DID signer returned a mismatched identity",
         )
     signature = signed.get("signature_raw_b64") or (
         signed.get("signature_b64")
@@ -321,7 +313,7 @@ async def _sign_request_object_with_issuer_profile(
     if not isinstance(signature, str) or not signature:
         raise HTTPException(
             status_code=503,
-            detail="Issuer-profile signer did not return an ES256 JWS signature",
+            detail="Issuer DID signer did not return an ES256 JWS signature",
         )
     return f"{protected}.{payload}.{signature}"
 
@@ -3821,7 +3813,7 @@ async def start_verification_flow(
                 status_code=422,
                 detail="issuer_did is required to start a signed verification flow.",
             )
-        signing_identity = await _oid4vp_issuer_profile_identity(
+        signing_identity = await _oid4vp_issuer_identity(
             organization_id,
             request.issuer_did,
         )
@@ -3840,7 +3832,6 @@ async def start_verification_flow(
                 "step_results": {},
                 "response_type": "id_token",
                 "callback_url": request.callback_url,
-                "oid4vp_issuer_profile_id": signing_identity["issuer_profile_id"],
                 "oid4vp_issuer_did": signing_identity["issuer_did"],
                 "oid4vp_signing_identity": signing_identity,
             },
@@ -3942,11 +3933,10 @@ async def start_verification_flow(
         ensure_membership_permission(membership, "verification", "execute")
 
     # Create a verification flow instance directly
-    signing_identity = await _oid4vp_issuer_profile_identity(
+    signing_identity = await _oid4vp_issuer_identity(
         organization_id,
         request.issuer_did,
     )
-    signing_profile_id = str(signing_identity["issuer_profile_id"])
     flow_definition_id = str(uuid.uuid4())
     instance = FlowInstance(
         flow_definition_id=flow_definition_id,
@@ -3961,7 +3951,6 @@ async def start_verification_flow(
             "nonce": nonce,
             "flow_type": "verification",
             "oid4vp_profile": request.oid4vp_profile,
-            "oid4vp_issuer_profile_id": signing_profile_id,
             "oid4vp_issuer_did": signing_identity["issuer_did"],
             "oid4vp_signing_identity": signing_identity,
             "request_transport": request.request_transport,
@@ -4764,14 +4753,10 @@ async def get_verification_request_object(
 
     # Resolve the active identity on every fetch so a revoked or rotated issuer
     # profile cannot continue signing from stale flow state.
-    signing_identity = await _oid4vp_issuer_profile_identity(
+    signing_identity = await _oid4vp_issuer_identity(
         instance.organization_id,
         instance.context.get("oid4vp_issuer_did"),
     )
-    # This profile ID is resolver-produced internal routing state. It is never
-    # accepted from the public request or stale flow context.
-    signing_profile_id = str(signing_identity["issuer_profile_id"])
-
     # Build base URL for response_uri (where wallet posts the VP)
     base_url = os.environ.get("PUBLIC_BASE_URL", "http://marty-gateway:8000")
     client_id = os.environ.get("VERIFIER_CLIENT_ID", f"{base_url}/verifier")
@@ -4977,13 +4962,12 @@ async def get_verification_request_object(
             jwt_headers.pop("kid", None)
             jwt_headers["x5c"] = request_x5c
 
-    # Sign the Request Object through the issuer profile. The flow service has
-    # only the DID and public key; it never receives KMS provider coordinates
-    # or private key material.
+    # Sign the Request Object through the issuer DID. The flow service has only
+    # the DID and public key; it never receives KMS coordinates or private key
+    # material.
     try:
-        signed_request_jwt = await _sign_request_object_with_issuer_profile(
+        signed_request_jwt = await _sign_request_object_with_issuer_did(
             organization_id=instance.organization_id,
-            issuer_profile_id=signing_profile_id,
             identity=signing_identity,
             protected_header=jwt_headers,
             claims=request_payload,
@@ -5014,7 +4998,7 @@ async def get_oid4vp_did_web_document(request: Request) -> JSONResponse:
         "MARTY_ORG_ID",
         "00000000-0000-0000-0000-000000000001",
     )
-    signing_identity = await _oid4vp_issuer_profile_identity(organization_id)
+    signing_identity = await _oid4vp_issuer_identity(organization_id)
     return JSONResponse(
         content=_oid4vp_did_web_document(signing_identity),
         media_type="application/did+json",
