@@ -34,12 +34,11 @@ def _build_client(
 	)
 	app.state.org_client = SimpleNamespace(get_membership=get_membership)
 
-	async def fake_require_active_issuer_profile(
+	async def fake_require_active_issuer_did(
 		request,
 		*,
 		organization_id: str,
 		issuer_did: str | None,
-		issuer_profile_id: str | None,
 		credential_format: str | None = None,
 		algorithm: str | None = None,
 	) -> dict:
@@ -53,23 +52,13 @@ def _build_client(
 			"organization_id": organization_id,
 			"issuer_did": issuer_did,
 			"verification_method_id": "did:web:beta.elevenidllc.com:orgs:test#cred-issuer-test-es256",
-			"issuer_profile": {
-				"id": issuer_profile_id or "issuer-profile-1",
-				"issuer_did": issuer_did,
-				"signing_service_id": "managed-openbao-transit",
-				"signing_key_reference": "cred-issuer-test-es256",
-				"key_purpose": "vc_jwt_issuer",
-				"algorithm": "ES256",
-			},
-			"signing_service": {
-				"id": "managed-openbao-transit",
-				"algorithm": "ES256",
-				"key_reference": "cred-issuer-test-es256",
-			},
+			"public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+			"key_purpose": "mdoc_dsc" if credential_format == "mso_mdoc" else "vc_jwt_issuer",
+			"algorithm": algorithm or "ES256",
 		}
 
-	credential_template._require_active_issuer_profile = AsyncMock(
-		side_effect=fake_require_active_issuer_profile
+	credential_template._require_active_issuer_did = AsyncMock(
+		side_effect=fake_require_active_issuer_did
 	)
 	return TestClient(app), get_membership
 

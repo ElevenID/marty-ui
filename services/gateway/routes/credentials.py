@@ -225,8 +225,8 @@ async def create_credential_template(
         raise HTTPException(
             status_code=422,
             detail=(
-                "issuer_did must resolve to exactly one active KMS-backed issuer "
-                "profile for this template."
+                "issuer_did must resolve to exactly one active organization-owned "
+                "signing identity for this template."
             ),
         )
     internal_body = body.model_dump(exclude_none=True)

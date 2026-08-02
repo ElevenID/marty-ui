@@ -179,7 +179,6 @@ async def test_mdoc_template_infers_signing_wire_format_from_supported_formats(
         request,
         organization_id,
         issuer_did,
-        legacy_issuer_profile_id=None,
         credential_format=None,
         key_purpose=None,
         algorithm=None,

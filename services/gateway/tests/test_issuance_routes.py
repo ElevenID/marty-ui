@@ -1210,12 +1210,10 @@ async def test_resolve_issuer_identity_uses_org_scoped_did(
                 "ok": True,
                 "organization_id": "org_acme",
                 "issuer_did": issuer_did,
-                "verification_method_id": "",
-                "issuer_profile": {
-                    "id": "ip-2",
-                    "key_purpose": "vc_jwt_issuer",
-                },
-                "signing_service": {"id": "svc-2"},
+                "verification_method_id": f"{issuer_did}#key-2",
+                "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256",
             }
         )
 
@@ -1229,13 +1227,11 @@ async def test_resolve_issuer_identity_uses_org_scoped_did(
 
     identity = await issuance._resolve_issuer_identity(request, "org_acme", issuer_did)
     assert identity == {
-        "issuer_profile_id": "ip-2",
         "issuer_did": issuer_did,
-        "signing_service_id": "svc-2",
-        "signing_key_reference": "",
-        "verification_method_id": "",
+        "verification_method_id": f"{issuer_did}#key-2",
+        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
         "key_purpose": "vc_jwt_issuer",
-        "algorithm": "",
+        "algorithm": "ES256",
     }
 
 
@@ -1256,13 +1252,9 @@ async def test_resolve_issuer_identity_prefers_format_scoped_profile(
                 "organization_id": "org_acme",
                 "issuer_did": issuer_did,
                 "verification_method_id": "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary",
-                "issuer_profile": {
-                    "id": "ip-mdoc",
-                    "signing_key_reference": "cred-dsc-acme-primary",
-                    "key_purpose": "mdoc_dsc",
-                    "algorithm": "ES256",
-                },
-                "signing_service": {"id": "svc-mdoc"},
+                "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+                "key_purpose": "mdoc_dsc",
+                "algorithm": "ES256",
             }
         )
 
@@ -1279,8 +1271,6 @@ async def test_resolve_issuer_identity_prefers_format_scoped_profile(
         credential_format="mso_mdoc",
     )
 
-    assert identity["signing_service_id"] == "svc-mdoc"
-    assert identity["signing_key_reference"] == "cred-dsc-acme-primary"
     assert (
         identity["verification_method_id"]
         == "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary"
@@ -1318,10 +1308,10 @@ def test_public_signing_format_normalizes_template_and_wire_names(
 
 
 @pytest.mark.asyncio
-async def test_resolve_issuer_identity_returns_internal_profile_only(
+async def test_resolve_issuer_identity_returns_public_identity_only(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """The resolver returns a profile only as trusted internal routing state."""
+    """The gateway caller never receives private custody routing state."""
     issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
 
     async def fake_resolve_issuer_did(**kwargs):
@@ -1331,8 +1321,9 @@ async def test_resolve_issuer_identity_returns_internal_profile_only(
                 "organization_id": "org_x",
                 "issuer_did": issuer_did,
                 "verification_method_id": f"{issuer_did}#key-1",
-                "issuer_profile": {"id": "resolved-profile"},
-                "signing_service": {"id": "svc-1"},
+                "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256",
             }
         )
 
@@ -1345,8 +1336,10 @@ async def test_resolve_issuer_identity_returns_internal_profile_only(
     identity = await issuance._resolve_issuer_identity(request, "org_x", issuer_did)
 
     assert identity is not None
-    assert identity["issuer_profile_id"] == "resolved-profile"
     assert identity["issuer_did"] == issuer_did
+    assert "issuer_profile_id" not in identity
+    assert "signing_service_id" not in identity
+    assert "signing_key_reference" not in identity
 
 
 @pytest.mark.asyncio
