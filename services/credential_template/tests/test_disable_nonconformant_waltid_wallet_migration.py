@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
-import sys
 from types import SimpleNamespace
 
 
@@ -21,7 +20,6 @@ class _Connection:
 
 
 def _load_migration(connection):
-    sys.modules["alembic"] = SimpleNamespace(op=SimpleNamespace(get_bind=lambda: connection))
     path = (
         pathlib.Path(__file__).parents[1]
         / "infrastructure"
@@ -32,6 +30,7 @@ def _load_migration(connection):
     spec = importlib.util.spec_from_file_location("disable_nonconformant_waltid_wallet", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module.op = SimpleNamespace(get_bind=lambda: connection)
     return module
 
 
