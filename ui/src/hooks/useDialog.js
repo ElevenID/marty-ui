@@ -1,4 +1,6 @@
-import { useState, useCallback } from 'react';
+import {
+  useCallback, useEffect, useRef, useState,
+} from 'react';
 
 /**
  * useDialog — manages the open/close state and optional associated data for a
@@ -48,6 +50,16 @@ import { useState, useCallback } from 'react';
 export function useDialog(initialData = null) {
   const [isOpen, setIsOpen] = useState(false);
   const [data, setData] = useState(initialData);
+  const resetTimer = useRef(null);
+
+  const cancelPendingReset = useCallback(() => {
+    if (resetTimer.current !== null) {
+      clearTimeout(resetTimer.current);
+      resetTimer.current = null;
+    }
+  }, []);
+
+  useEffect(() => cancelPendingReset, [cancelPendingReset]);
 
   /**
    * Open the dialog, optionally associating arbitrary data (e.g. the item
@@ -58,21 +70,26 @@ export function useDialog(initialData = null) {
    */
   const open = useCallback(
     (newData = initialData) => {
+      cancelPendingReset();
       setData(newData);
       setIsOpen(true);
     },
-    [initialData],
+    [cancelPendingReset, initialData],
   );
 
   /**
    * Close the dialog and reset associated data to the initial value.
    */
   const close = useCallback(() => {
+    cancelPendingReset();
     setIsOpen(false);
     // Delay the data reset until after the close animation completes so that
     // dialog content doesn't flicker during the exit transition.
-    setTimeout(() => setData(initialData), 150);
-  }, [initialData]);
+    resetTimer.current = setTimeout(() => {
+      resetTimer.current = null;
+      setData(initialData);
+    }, 150);
+  }, [cancelPendingReset, initialData]);
 
   return { isOpen, data, open, close };
 }

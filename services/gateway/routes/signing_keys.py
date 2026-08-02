@@ -4697,17 +4697,13 @@ async def sign_payload_with_service(
 async def internal_resolve_issuer_context(
     request: Request,
     organization_id: str = Query(..., description="Organization ID"),
-    issuer_profile_id: str | None = Query(
-        None,
-        description="Internal legacy issuer-profile selector; public callers resolve by issuer DID",
-    ),
     issuer_did: str | None = Query(
         None,
         description="Published issuer DID that must resolve to exactly one active profile",
     ),
     issuer_mode: str = Query(
         "org_managed",
-        description="Issuer mode to select when issuer_profile_id is omitted",
+        description="Issuer mode to select when issuer_did is omitted",
     ),
     credential_format: str | None = Query(None),
     key_purpose: str | None = Query(None),
@@ -4721,23 +4717,15 @@ async def internal_resolve_issuer_context(
     service that should sign credentials later.
     """
     _require_internal_signing_key_api_key(x_api_key)
+    if "issuer_profile_id" in request.query_params:
+        raise HTTPException(
+            status_code=422,
+            detail="issuer_profile_id is not accepted; resolve the issuer by issuer_did.",
+        )
     # FastAPI substitutes query defaults during HTTP handling, while direct
     # unit calls retain the Query object. Only an actual non-empty string is a
     # DID selector.
     issuer_did = issuer_did.strip() if isinstance(issuer_did, str) else None
-    issuer_profile_id = (
-        issuer_profile_id.strip()
-        if isinstance(issuer_profile_id, str) and issuer_profile_id.strip()
-        else None
-    )
-    if issuer_profile_id and not issuer_did:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Legacy issuer_profile_id requires issuer_did and is accepted "
-                "only as an exact-match assertion."
-            ),
-        )
     requested_issuer_mode = _normalize_issuer_mode(issuer_mode)
 
     profiles_doc = await _load_json_document(
@@ -4755,48 +4743,19 @@ async def internal_resolve_issuer_context(
         and profile.get("signing_service_id")
     ]
 
-    if issuer_profile_id:
-        selected = next(
-            (
-                profile
-                for profile in active_profiles
-                if profile.get("id") == issuer_profile_id
-            ),
-            None,
-        )
-        if selected is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Requested issuer profile is not active for this organization.",
-            )
-        if issuer_did and selected.get("issuer_did") != issuer_did:
-            raise HTTPException(
-                status_code=409,
-                detail="issuer_profile_id does not match the requested issuer_did.",
-            )
-        if key_purpose and selected.get("key_purpose") != key_purpose:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Requested issuer profile '{issuer_profile_id}' is configured for "
-                    f"key_purpose '{selected.get('key_purpose')}', not '{key_purpose}'."
-                ),
-            )
-        active_profiles = [selected]
+    if issuer_did:
+        active_profiles = [
+            profile
+            for profile in active_profiles
+            if profile.get("issuer_did") == issuer_did
+        ]
     else:
-        if issuer_did:
-            active_profiles = [
-                profile
-                for profile in active_profiles
-                if profile.get("issuer_did") == issuer_did
-            ]
-        else:
-            active_profiles = [
-                profile
-                for profile in active_profiles
-                if _normalize_issuer_mode(profile.get("issuer_mode"))
-                == requested_issuer_mode
-            ]
+        active_profiles = [
+            profile
+            for profile in active_profiles
+            if _normalize_issuer_mode(profile.get("issuer_mode"))
+            == requested_issuer_mode
+        ]
 
     if key_purpose:
         preferred = [
@@ -4888,9 +4847,6 @@ async def internal_resolve_issuer_context(
             or requested_purpose
             or "vc_jwt_issuer",
             "issuer_x5c": issuer_x5c,
-            # Compatibility for marty-credentials releases predating the
-            # profile-wide issuer_x5c name.
-            "mdoc_x5c": issuer_x5c,
             "issuer_profile": profile,
             "service": normalized,
         }
@@ -4904,12 +4860,6 @@ async def internal_resolve_issuer_did(
     request: Request,
     organization_id: str = Query(..., description="Organization ID"),
     issuer_did: str = Query(..., description="Issuer DID from the credential"),
-    issuer_profile_id: str | None = Query(
-        None,
-        description=(
-            "Internal legacy assertion that must match the profile selected by issuer_did"
-        ),
-    ),
     verification_method_id: str | None = Query(
         None, description="Expected DID verification method / kid"
     ),
@@ -4924,6 +4874,11 @@ async def internal_resolve_issuer_did(
     remote KMS keys remain behind organization-scoped DID issuer identities.
     """
     _require_internal_signing_key_api_key(x_api_key)
+    if "issuer_profile_id" in request.query_params:
+        raise HTTPException(
+            status_code=422,
+            detail="issuer_profile_id is not accepted; resolve the issuer by issuer_did.",
+        )
     if not issuer_did.startswith("did:"):
         raise HTTPException(status_code=422, detail="issuer_did must be a DID string.")
 
@@ -4936,20 +4891,6 @@ async def internal_resolve_issuer_did(
         key_purpose=key_purpose,
         algorithm=algorithm,
     )
-    legacy_profile_id = (
-        issuer_profile_id.strip()
-        if isinstance(issuer_profile_id, str) and issuer_profile_id.strip()
-        else None
-    )
-    resolved_profile = resolved.get("issuer_profile")
-    if legacy_profile_id and (
-        not isinstance(resolved_profile, dict)
-        or resolved_profile.get("id") != legacy_profile_id
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="issuer_profile_id does not match the profile resolved from issuer_did.",
-        )
     return JSONResponse(content=resolved)
 
 
@@ -5999,7 +5940,9 @@ def _normalize_key_attestation_policy(value: Any) -> dict[str, Any]:
                 "from 1 through 604800."
             ),
         )
-    status_list_allow_private_hosts = value.get("status_list_allow_private_hosts", False)
+    status_list_allow_private_hosts = value.get(
+        "status_list_allow_private_hosts", False
+    )
     if not isinstance(status_list_allow_private_hosts, bool):
         raise HTTPException(
             status_code=422,
@@ -6036,7 +5979,11 @@ def _normalize_key_attestation_policy(value: Any) -> dict[str, Any]:
         status_list_allowed_origins.append(
             f"https://{host_display}{f':{port}' if port and port != 443 else ''}"
         )
-    if mode != "disabled" and status_validation != "disabled" and not status_list_allowed_origins:
+    if (
+        mode != "disabled"
+        and status_validation != "disabled"
+        and not status_list_allowed_origins
+    ):
         raise HTTPException(
             status_code=422,
             detail=(
@@ -6537,7 +6484,6 @@ async def _resolve_org_scoped_issuer_identity(
                 # so SD-JWT JOSE and mDoc COSE issuance do not fall back to a
                 # profile-ID-only context or lose the chain before signing.
                 "issuer_x5c": issuer_x5c,
-                "mdoc_x5c": issuer_x5c,
                 "signing_service": _safe_signing_service_metadata(normalized_service),
                 "resolver": {
                     "type": "organization_issuer_profile",
