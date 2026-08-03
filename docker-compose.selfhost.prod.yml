@@ -220,6 +220,7 @@ services:
         SERVICE_NAME: gateway
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       GATEWAY_PORT: "8000"
       AUTH_SERVICE_URL: http://auth:8001
       ORGANIZATION_SERVICE_URL: http://organization:8002
@@ -249,6 +250,7 @@ services:
     secrets:
       - issuance_api_key
       - openbao_service_token
+      - grpc_service_token
     ports:
       - "127.0.0.1:${SELFHOST_GATEWAY_HOST_PORT:-18000}:8000"
     depends_on:
@@ -295,6 +297,7 @@ services:
         SERVICE_NAME: auth
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       AUTH_SERVICE_PORT: "8001"
       UI_BASE_URL: ${UI_BASE_URL:?UI_BASE_URL must be set}
       UI_ADDITIONAL_BASE_URLS: ${UI_ADDITIONAL_BASE_URLS:-}
@@ -331,6 +334,7 @@ services:
       AUTH_GRPC_PORT: "9001"
     secrets:
       - marty_api_client_secret
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -355,6 +359,7 @@ services:
         SERVICE_NAME: organization
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       ORGANIZATION_SERVICE_PORT: "8002"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -364,6 +369,7 @@ services:
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
     secrets:
       - marty_db_password
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -384,6 +390,7 @@ services:
         SERVICE_NAME: credential-template
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       CREDENTIAL_TEMPLATE_SERVICE_PORT: "8003"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -394,6 +401,7 @@ services:
     secrets:
       - marty_db_password
       - issuance_api_key
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -413,6 +421,7 @@ services:
     entrypoint: ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       TRUST_PROFILE_SERVICE_PORT: "8004"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -422,6 +431,7 @@ services:
     secrets:
       - marty_db_password
       - openbao_service_token
+      - grpc_service_token
     volumes:
       - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
     depends_on:
@@ -440,6 +450,7 @@ services:
     command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8005"]
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       ISSUANCE_SERVICE_PORT: "8005"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -495,6 +506,7 @@ services:
       - integration_secret_master_key
       - token_hmac_key
       - canvas_credentials_shared_secret
+      - grpc_service_token
     volumes:
       - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
     depends_on:
@@ -574,6 +586,7 @@ services:
         SERVICE_NAME: applicant
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       APPLICANT_SERVICE_PORT: "8006"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -584,6 +597,7 @@ services:
       FLOW_GRPC_TARGET: flow:9011
     secrets:
       - marty_db_password
+      - grpc_service_token
     volumes:
       - type: bind
         source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/applicant
@@ -607,6 +621,7 @@ services:
         SERVICE_NAME: notification
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       NOTIFICATION_SERVICE_PORT: "8007"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -617,6 +632,7 @@ services:
       SMTP_PASSWORD_FILE: /run/secrets/smtp_password
     secrets:
       - marty_db_password
+      - grpc_service_token
       - smtp_password
     depends_on:
       db-migrate:
@@ -636,12 +652,14 @@ services:
         SERVICE_NAME: compliance-profile
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
     secrets:
       - marty_db_password
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -660,6 +678,7 @@ services:
         SERVICE_NAME: presentation-policy
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       PRESENTATION_POLICY_SERVICE_PORT: "8009"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -674,6 +693,7 @@ services:
       ISSUANCE_SERVICE_URL: http://issuance:8005
     secrets:
       - marty_db_password
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -692,12 +712,14 @@ services:
         SERVICE_NAME: deployment-profile
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       DEPLOYMENT_PROFILE_SERVICE_PORT: "8010"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
     secrets:
       - marty_db_password
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -716,6 +738,7 @@ services:
         SERVICE_NAME: flow
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       FLOW_SERVICE_PORT: "8011"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -730,6 +753,7 @@ services:
       FLOW_GRPC_PORT: "9011"
     secrets:
       - marty_db_password
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -756,6 +780,7 @@ services:
         SERVICE_NAME: verification
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       VERIFICATION_SERVICE_PORT: "8012"
       PP_GRPC_TARGET: presentation-policy:9009
       VERIF_GRPC_PORT: "9017"
@@ -766,6 +791,7 @@ services:
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
     secrets:
       - issuance_api_key
+      - grpc_service_token
     depends_on:
       presentation-policy:
         condition: service_healthy
@@ -786,6 +812,7 @@ services:
         SERVICE_NAME: revocation-profile
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       REVOCATION_PROFILE_SERVICE_PORT: "8013"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -794,6 +821,7 @@ services:
       RP_GRPC_PORT: "9013"
     secrets:
       - marty_db_password
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -814,12 +842,14 @@ services:
         SERVICE_NAME: device_registration
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
     secrets:
       - marty_db_password
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -838,8 +868,11 @@ services:
         SERVICE_NAME: event_stream
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       EVENT_STREAM_GRPC_ENABLED: "true"
       EVENT_STREAM_GRPC_PORT: "9015"
+    secrets:
+      - grpc_service_token
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8015/health"]
       interval: 30s
@@ -963,6 +996,8 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/marty_api_client_secret
   issuance_api_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/issuance_api_key
+  grpc_service_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/grpc_service_token
   integration_secret_master_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/integration_secret_master_key
   token_hmac_key:
