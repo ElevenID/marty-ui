@@ -43,6 +43,11 @@ spec:
           ports:
             - containerPort: 8000
           env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
             - name: GATEWAY_PORT
               value: "8000"
             - name: AUTH_SERVICE_URL
@@ -199,7 +204,13 @@ spec:
                 name: marty-config
           ports:
             - containerPort: 8001
+            - containerPort: 9001
           env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
             - name: AUTH_SERVICE_PORT
               value: "8001"
             - name: UI_BASE_URL
@@ -314,6 +325,9 @@ spec:
     - port: 8001
       targetPort: 8001
       name: http
+    - port: 9001
+      targetPort: 9001
+      name: grpc
   selector:
     app: auth
 ---
@@ -350,7 +364,13 @@ spec:
                 name: marty-config
           ports:
             - containerPort: 8002
+            - containerPort: 9002
           env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
             - name: ORGANIZATION_SERVICE_PORT
               value: "8002"
             - name: DATABASE_URL
@@ -408,6 +428,9 @@ spec:
     - port: 8002
       targetPort: 8002
       name: http
+    - port: 9002
+      targetPort: 9002
+      name: grpc
   selector:
     app: organization
 ---
@@ -444,7 +467,13 @@ spec:
                 name: marty-config
           ports:
             - containerPort: 8003
+            - containerPort: 9003
           env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
             - name: CREDENTIAL_TEMPLATE_SERVICE_PORT
               value: "8003"
             - name: DATABASE_URL
@@ -487,6 +516,9 @@ spec:
     - port: 8003
       targetPort: 8003
       name: http
+    - port: 9003
+      targetPort: 9003
+      name: grpc
   selector:
     app: credential-template
 ---
@@ -524,6 +556,11 @@ spec:
           ports:
             - containerPort: 8004
           env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
             - name: TRUST_PROFILE_SERVICE_PORT
               value: "8004"
             - name: DATABASE_URL
@@ -602,9 +639,19 @@ spec:
                 name: marty-config
           ports:
             - containerPort: 8005
+            - containerPort: 9005
           env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
             - name: ISSUANCE_SERVICE_PORT
               value: "8005"
+            - name: ORG_GRPC_TARGET
+              value: "organization:9002"
+            - name: CT_GRPC_TARGET
+              value: "credential-template:9003"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -788,6 +835,9 @@ spec:
     - port: 8005
       targetPort: 8005
       name: http
+    - port: 9005
+      targetPort: 9005
+      name: grpc
   selector:
     app: issuance
 ---
@@ -886,6 +936,11 @@ spec:
             - containerPort: 8012
             - containerPort: 9017
           env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
             - name: VERIFICATION_SERVICE_PORT
               value: "8012"
             - name: PP_GRPC_TARGET
@@ -980,6 +1035,11 @@ spec:
           ports:
             - containerPort: 8006
           env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
             - name: APPLICANT_SERVICE_PORT
               value: "8006"
             - name: DATABASE_URL
@@ -1083,7 +1143,13 @@ spec:
                 name: marty-config
           ports:
             - containerPort: 8007
+            - containerPort: 9007
           env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
             - name: NOTIFICATION_SERVICE_PORT
               value: "8007"
             - name: DATABASE_URL
@@ -1146,6 +1212,9 @@ spec:
     - port: 8007
       targetPort: 8007
       name: http
+    - port: 9007
+      targetPort: 9007
+      name: grpc
   selector:
     app: notification
 ---
@@ -1183,6 +1252,11 @@ spec:
           ports:
             - containerPort: 8008
           env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
             - name: COMPLIANCE_PROFILE_SERVICE_PORT
               value: "8008"
             - name: DATABASE_URL
@@ -1261,7 +1335,13 @@ spec:
                 name: marty-config
           ports:
             - containerPort: 8009
+            - containerPort: 9009
           env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
             - name: PRESENTATION_POLICY_SERVICE_PORT
               value: "8009"
             - name: DID_RESOLUTION_BASE_URL
@@ -1306,6 +1386,9 @@ spec:
     - port: 8009
       targetPort: 8009
       name: http
+    - port: 9009
+      targetPort: 9009
+      name: grpc
   selector:
     app: presentation-policy
 ---
@@ -1343,6 +1426,11 @@ spec:
           ports:
             - containerPort: 8010
           env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
             - name: DEPLOYMENT_PROFILE_SERVICE_PORT
               value: "8010"
             - name: DATABASE_URL
@@ -1421,7 +1509,13 @@ spec:
                 name: marty-config
           ports:
             - containerPort: 8011
+            - containerPort: 9011
           env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
             - name: FLOW_SERVICE_PORT
               value: "8011"
             - name: DATABASE_URL
@@ -1474,5 +1568,8 @@ spec:
     - port: 8011
       targetPort: 8011
       name: http
+    - port: 9011
+      targetPort: 9011
+      name: grpc
   selector:
     app: flow

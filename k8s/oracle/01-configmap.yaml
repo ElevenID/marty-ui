@@ -13,6 +13,9 @@ metadata:
 data:
   ENVIRONMENT: "production"
   LOG_LEVEL: "INFO"
+  # Internal traffic is confined to the cluster network and authenticated with
+  # GRPC_SERVICE_TOKEN. Configure GRPC TLS certificates to remove this override.
+  GRPC_INSECURE_ALLOWED: "true"
 
   PUBLIC_DOMAIN: "${PUBLIC_DOMAIN}"
   UI_BASE_URL: "${UI_BASE_URL}"

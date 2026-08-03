@@ -17,6 +17,7 @@
     "keycloak_admin_password",
     "marty_api_client_secret",
     "issuance_api_key",
+    "grpc_service_token",
     "integration_secret_master_key",
     "token_hmac_key",
     "openbao_service_token",
