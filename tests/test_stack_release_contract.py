@@ -72,8 +72,12 @@ def test_stack_release_allows_only_successful_one_shot_exits() -> None:
 def test_stack_release_is_tag_only_and_targets_the_validated_tag() -> None:
     workflow = _text(".github/workflows/cd.yml")
 
-    assert "workflow_dispatch:" not in workflow
-    assert 'test "$GITHUB_EVENT_NAME" = "push"' in workflow
+    assert "workflow_dispatch:" in workflow
+    assert (
+        'test "$GITHUB_EVENT_NAME" = "push" || '
+        'test "$GITHUB_EVENT_NAME" = "workflow_dispatch"'
+    ) in workflow
+    assert 'test "$GITHUB_REF_TYPE" = "tag"' in workflow
     assert 'test "$GITHUB_REF_NAME" = "v$version"' in workflow
     assert "tag_name: v${{ needs.validate-stack.outputs.version }}" in workflow
     assert "Reject any existing release" in workflow

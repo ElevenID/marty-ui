@@ -3,6 +3,9 @@ name: Stack release
 on:
   push:
     tags: ["v*"]
+  # Recovery for a lost/delayed tag event. Dispatch this workflow with the
+  # immutable tag selected as the ref; validation below rejects branches.
+  workflow_dispatch:
 
 concurrency:
   group: stack-release-${{ github.ref }}
@@ -63,7 +66,8 @@ jobs:
           release="$(jq -r .release "$LOCK_FILE")"
           version="${release#marty-ui@}"
           test "$release" = "marty-ui@$version"
-          test "$GITHUB_EVENT_NAME" = "push"
+          test "$GITHUB_EVENT_NAME" = "push" || test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$GITHUB_REF_TYPE" = "tag"
           test "$GITHUB_REF_NAME" = "v$version"
           {
             echo "version=$version"
