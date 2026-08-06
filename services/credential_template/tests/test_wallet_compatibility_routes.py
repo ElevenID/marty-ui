@@ -118,6 +118,19 @@ def _save_override(
 	return entry
 
 
+def _wallet_api_key_headers(
+	organization_id: str,
+	permission: str,
+) -> dict[str, str]:
+	return {
+		"X-User-Id": "api_key:wallet-key",
+		"X-Organization-ID": organization_id,
+		"X-Api-Key-Id": "wallet-key",
+		"X-Api-Key-Scopes": "wallet:read,wallet:write",
+		"X-Required-Permission": permission,
+	}
+
+
 def test_get_wallet_compatibility_derives_profile_from_template_fields():
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	template = _save_template(
@@ -326,6 +339,68 @@ def test_wallet_registry_scoped_list_requires_membership_and_returns_only_own_ov
 	)
 	assert foreign_list.status_code == 403
 	assert foreign.id not in foreign_list.text
+
+
+def test_wallet_api_key_reads_only_its_bound_organization_without_membership():
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
+	owned = _save_override(wallet_repo, organization_id="org-1")
+	foreign = _save_override(wallet_repo, organization_id="org-2")
+	client, get_membership = _build_client(repo, wallet_repo)
+
+	response = client.get(
+		"/v1/wallet-registry",
+		params={"organization_id": "org-1"},
+		headers=_wallet_api_key_headers("org-1", "wallet:view"),
+	)
+	direct = client.get(
+		f"/v1/wallet-registry/{owned.id}",
+		headers=_wallet_api_key_headers("org-1", "wallet:view"),
+	)
+	foreign_direct = client.get(
+		f"/v1/wallet-registry/{foreign.id}",
+		headers=_wallet_api_key_headers("org-1", "wallet:view"),
+	)
+
+	assert response.status_code == 200
+	assert owned.id in {wallet["id"] for wallet in response.json()}
+	assert foreign.id not in {wallet["id"] for wallet in response.json()}
+	assert direct.status_code == 200
+	assert foreign_direct.status_code == 403
+	assert foreign.id not in foreign_direct.text
+	get_membership.assert_not_awaited()
+
+
+def test_wallet_api_key_write_permission_manages_only_its_bound_organization():
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
+	client, get_membership = _build_client(repo, wallet_repo)
+	headers = _wallet_api_key_headers("org-1", "wallet:write")
+
+	created = client.post(
+		"/v1/wallet-registry",
+		headers=headers,
+		json={
+			"organization_id": "org-1",
+			"name": "Machine-managed wallet",
+			"wallet_apps": ["Machine-managed wallet"],
+		},
+	)
+	foreign_create = client.post(
+		"/v1/wallet-registry",
+		headers=headers,
+		json={
+			"organization_id": "org-2",
+			"name": "Foreign wallet",
+			"wallet_apps": ["Foreign wallet"],
+		},
+	)
+
+	assert created.status_code == 201
+	assert created.json()["organization_id"] == "org-1"
+	assert foreign_create.status_code == 403
+	assert "does not have access" in foreign_create.json()["detail"]
+	get_membership.assert_not_awaited()
 
 
 def test_foreign_wallet_ids_cannot_be_read_or_used_to_build_open_links():
