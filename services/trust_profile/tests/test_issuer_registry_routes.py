@@ -95,6 +95,13 @@ def _save_registry_entry(
     return entry
 
 
+def test_service_does_not_publish_placeholder_registry_import_routes():
+    assert all(
+        not route.path.startswith("/v1/registries")
+        for route in trust_profile.app.routes
+    )
+
+
 def test_create_issuer_entity_creates_protocol_record():
     repo = trust_profile.InMemoryTrustProfileRepository()
     client, get_membership = _build_client(repo)
