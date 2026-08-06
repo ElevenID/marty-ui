@@ -1,6 +1,8 @@
 # OIDF verifier conformance profile.
 #
-# Combine this with docker-compose.base.yml and docker-compose.profile.ghcr.yml.
+# Combine this with docker-compose.base.yml and either the immutable GHCR
+# profile or the source-only local-build profile selected by
+# scripts/conformance_stack.py.
 # It exercises the same gateway, Keycloak, flow, and verification services as a
 # deployment, while making their protocol URLs HTTPS. The certificate directory
 # is intentionally supplied by the invoking environment: a local disposable
