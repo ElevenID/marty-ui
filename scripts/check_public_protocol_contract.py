@@ -46,6 +46,9 @@ from gateway.models import (  # noqa: E402
     PresentationPolicyResponse,
     PresentationPolicyUpdate,
     StartVerificationFlowRequest,
+    TrustProfileIssuerCreate,
+    TrustProfileIssuerResponse,
+    TrustProfileIssuerUpdate,
     VerificationRequestResponse,
     VerificationResultResponse,
 )
@@ -59,7 +62,9 @@ from gateway.routes.organizations import (  # noqa: E402
 )
 from gateway.routes.trust import (  # noqa: E402
     _sanitize_issuer_entity_response,
+    _sanitize_trust_profile_issuer_response,
     _validated_issuer_entity_payload,
+    _validated_trust_profile_issuer_payload,
 )
 from gateway.routes.verification import (  # noqa: E402
     _PUBLIC_PRESENTATION_POLICY_FIELDS,
@@ -114,6 +119,21 @@ FORBIDDEN_FLOW_FIELDS = FORBIDDEN_PUBLIC_FIELDS | {
     "private_key_jwk",
     "refresh_token",
     "session_token",
+}
+
+TRUST_CONFIGURATION_UI_PATHS = (
+    "ui/src/components/console/trust/TrustProfileWizard.jsx",
+    "ui/src/components/console/trust/steps/TrustSourcesStep.jsx",
+)
+
+FORBIDDEN_TRUST_CONFIGURATION_TOKENS = {
+    "issuer_profile_id",
+    "issuer_key_id",
+    "kms_key_id",
+    "kms_provider",
+    "signing_key_reference",
+    "signing_service_id",
+    "verification_keys",
 }
 
 
@@ -243,6 +263,18 @@ def _public_response(
 
 def check_contract(protocol_root: Path) -> None:
     assert_generated_bindings_current(protocol_root)
+
+    for relative_path in TRUST_CONFIGURATION_UI_PATHS:
+        source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        leaked_tokens = {
+            token for token in FORBIDDEN_TRUST_CONFIGURATION_TOKENS if token in source
+        }
+        if leaked_tokens:
+            raise AssertionError(
+                f"{relative_path} bypasses the DID-only trust boundary with: "
+                f"{sorted(leaked_tokens)}"
+            )
+
     schema_path = protocol_root / "schemas" / "credential-template.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     registry = _load_registry(protocol_root)
@@ -446,6 +478,76 @@ def check_contract(protocol_root: Path) -> None:
         json.loads(_validated_issuer_entity_payload(issuer_entity_update))
     )
 
+    trust_profile_issuer_schema, trust_profile_issuer_validator = _validator(
+        protocol_root,
+        registry,
+        "trust-profile-issuer.json",
+    )
+    _assert_model_shape(
+        model=TrustProfileIssuerResponse,
+        schema=trust_profile_issuer_schema,
+        label="TrustProfileIssuerResponse",
+    )
+    trust_profile_issuer_internal = {
+        "id": "30000000-0000-4000-8000-000000000001",
+        "trust_profile_id": "40000000-0000-4000-8000-000000000001",
+        "issuer_id": issuer_entity_internal["id"],
+        "trust_level": 100,
+        "relationship_status": "TRUSTED",
+        "cascade_revocation_policy": "NOTIFY_ONLY",
+        "metadata": {"credential_template_ids": ["template-1"]},
+        "created_at": "2026-08-01T00:00:00Z",
+        "updated_at": "2026-08-01T00:00:00Z",
+    }
+    trust_profile_issuer_response = _sanitize_trust_profile_issuer_response(
+        Response(
+            content=json.dumps(trust_profile_issuer_internal),
+            media_type="application/json",
+        )
+    )
+    if trust_profile_issuer_response.status_code != 200:
+        raise AssertionError("valid TrustProfileIssuer failed runtime sanitization")
+    trust_profile_issuer_validator.validate(
+        json.loads(trust_profile_issuer_response.body)
+    )
+
+    trust_profile_issuer_create_schema, trust_profile_issuer_create_validator = (
+        _validator(
+            protocol_root,
+            registry,
+            "trust-profile-issuer-create-request.json",
+        )
+    )
+    _assert_model_shape(
+        model=TrustProfileIssuerCreate,
+        schema=trust_profile_issuer_create_schema,
+        label="TrustProfileIssuerCreate",
+    )
+    trust_profile_issuer_create = TrustProfileIssuerCreate(
+        issuer_id=issuer_entity_internal["id"],
+        metadata={"credential_template_ids": ["template-1"]},
+    )
+    trust_profile_issuer_create_validator.validate(
+        json.loads(_validated_trust_profile_issuer_payload(trust_profile_issuer_create))
+    )
+
+    trust_profile_issuer_update_schema, trust_profile_issuer_update_validator = (
+        _validator(
+            protocol_root,
+            registry,
+            "trust-profile-issuer-update-request.json",
+        )
+    )
+    _assert_model_shape(
+        model=TrustProfileIssuerUpdate,
+        schema=trust_profile_issuer_update_schema,
+        label="TrustProfileIssuerUpdate",
+    )
+    trust_profile_issuer_update = TrustProfileIssuerUpdate(trust_level=80)
+    trust_profile_issuer_update_validator.validate(
+        json.loads(_validated_trust_profile_issuer_payload(trust_profile_issuer_update))
+    )
+
     issuer_identity_schema, issuer_identity_validator = _validator(
         protocol_root,
         registry,
@@ -479,6 +581,9 @@ def check_contract(protocol_root: Path) -> None:
         issuer_entity_schema,
         issuer_entity_create_schema,
         issuer_entity_update_schema,
+        trust_profile_issuer_schema,
+        trust_profile_issuer_create_schema,
+        trust_profile_issuer_update_schema,
         issuer_identity_schema,
         issuer_identity_list_schema,
     ):
@@ -491,6 +596,9 @@ def check_contract(protocol_root: Path) -> None:
         IssuerEntityCreate,
         IssuerEntityUpdate,
         IssuerEntityResponse,
+        TrustProfileIssuerCreate,
+        TrustProfileIssuerUpdate,
+        TrustProfileIssuerResponse,
         IssuerIdentityResponse,
         IssuerIdentityListResponse,
     ):

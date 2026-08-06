@@ -20,6 +20,8 @@ import {
   activateTrustProfile,
   createTrustProfile,
   listTrustProfiles,
+  addTrustProfileIssuer,
+  listTrustProfileIssuers,
 } from '../presentationPolicyApi'
 import {
   mockPolicies,
@@ -811,6 +813,100 @@ describe('presentationPolicyApi', () => {
       expect(profile).toHaveProperty('name')
       expect(profile).toHaveProperty('status')
       expect(profile).toHaveProperty('trust_list_url')
+    })
+
+    it('composes trust-profile issuer relationships with organization-scoped issuer entities', async () => {
+      server.use(
+        http.get('http://localhost:8000/v1/issuer-entities', ({ request }) => {
+          expect(new URL(request.url).searchParams.get('organization_id')).toBe('org-1')
+          return HttpResponse.json([{
+            id: '10000000-0000-4000-8000-000000000001',
+            organization_id: 'org-1',
+            issuer_id: 'did:web:issuer.example.com',
+            issuer_type: 'ORGANIZATION',
+            display_name: 'Example Issuer',
+            description: 'Resolved issuer identity',
+            compliance_status: 'COMPLIANT',
+            metadata: { issuer_url: 'https://issuer.example.com' },
+          }])
+        }),
+        http.get('http://localhost:8000/v1/trust-profiles/:id/issuers', () => HttpResponse.json([{
+          id: '20000000-0000-4000-8000-000000000001',
+          trust_profile_id: '30000000-0000-4000-8000-000000000001',
+          issuer_id: '10000000-0000-4000-8000-000000000001',
+          trust_level: 100,
+          relationship_status: 'TRUSTED',
+          cascade_revocation_policy: 'NOTIFY_ONLY',
+          metadata: { credential_template_ids: [] },
+        }])),
+      )
+
+      const issuers = await listTrustProfileIssuers(
+        '30000000-0000-4000-8000-000000000001',
+        'org-1',
+      )
+
+      expect(issuers).toHaveLength(1)
+      expect(issuers[0]).toMatchObject({
+        issuer_id: '10000000-0000-4000-8000-000000000001',
+        issuer_did: 'did:web:issuer.example.com',
+        did: 'did:web:issuer.example.com',
+        name: 'Example Issuer',
+      })
+    })
+
+    it('creates an issuer entity and links only its public relationship fields', async () => {
+      let entityPayload: any
+      let relationshipPayload: any
+      server.use(
+        http.get('http://localhost:8000/v1/issuer-entities', () => HttpResponse.json([])),
+        http.post('http://localhost:8000/v1/issuer-entities', async ({ request }) => {
+          entityPayload = await request.json()
+          return HttpResponse.json({
+            id: '10000000-0000-4000-8000-000000000002',
+            compliance_status: 'PENDING',
+            ...entityPayload,
+          }, { status: 201 })
+        }),
+        http.post('http://localhost:8000/v1/trust-profiles/:id/issuers', async ({ request }) => {
+          relationshipPayload = await request.json()
+          return HttpResponse.json({
+            id: '20000000-0000-4000-8000-000000000002',
+            trust_profile_id: '30000000-0000-4000-8000-000000000002',
+            ...relationshipPayload,
+          }, { status: 201 })
+        }),
+      )
+
+      await addTrustProfileIssuer(
+        '30000000-0000-4000-8000-000000000002',
+        'org-1',
+        {
+          issuer_did: 'did:web:new.example.com',
+          name: 'New Issuer',
+          issuer_profile_id: 'must-not-cross-the-public-boundary',
+          signing_service_id: 'must-not-cross-the-public-boundary',
+          signing_key_reference: 'must-not-cross-the-public-boundary',
+          kms_provider: 'must-not-cross-the-public-boundary',
+          verification_keys: [{ kty: 'EC', d: 'private-key-material' }],
+        },
+      )
+
+      expect(entityPayload).toEqual({
+        organization_id: 'org-1',
+        issuer_id: 'did:web:new.example.com',
+        issuer_type: 'ORGANIZATION',
+        display_name: 'New Issuer',
+        description: null,
+        metadata: {},
+      })
+      expect(relationshipPayload).toEqual({
+        issuer_id: '10000000-0000-4000-8000-000000000002',
+        trust_level: 100,
+        relationship_status: 'TRUSTED',
+        cascade_revocation_policy: 'NOTIFY_ONLY',
+        metadata: { credential_template_ids: [] },
+      })
     })
   })
 
