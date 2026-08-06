@@ -2215,6 +2215,7 @@ async def auto_issue_application(
 async def review_application(
     application_id: str,
     request: ApplicationReviewRequest,
+    reviewer_id: str,
     http_request: Request = None,
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> ApplicationResponse:
@@ -2247,16 +2248,29 @@ async def review_application(
         # application. Form data and integration context are applicant-controlled
         # inputs and must never select the Cedar organization or resource parent.
         org_id = application.organization_id
+        # The canonical route has already authenticated the reviewer, verified
+        # organization ownership, checked application:approve, and enforced the
+        # reviewer lock. Project that trusted capability into the bundled Cedar
+        # member role while preserving the real principal ID for auditability.
+        cedar_role_id = "member"
         cedar_entities = [
             {
-                "uid": {"type": "MIP::User", "id": "reviewer"},
+                "uid": {"type": "MIP::User", "id": reviewer_id},
                 "attrs": {"email": "", "status": "ACTIVE"},
-                "parents": [{"type": "MIP::Organization", "id": org_id}],
+                "parents": [
+                    {"type": "MIP::Organization", "id": org_id},
+                    {"type": "MIP::Role", "id": cedar_role_id},
+                ],
             },
             {
                 "uid": {"type": "MIP::Organization", "id": org_id},
                 "attrs": {},
                 "parents": [],
+            },
+            {
+                "uid": {"type": "MIP::Role", "id": cedar_role_id},
+                "attrs": {"is_system_role": True},
+                "parents": [{"type": "MIP::Organization", "id": org_id}],
             },
             {
                 "uid": {"type": "MIP::Application", "id": application_id},
@@ -2268,9 +2282,9 @@ async def review_application(
             },
         ]
         cedar_decision = cedar_engine.is_authorized(
-            principal='MIP::User::"reviewer"',
+            principal=f"MIP::User::{json.dumps(reviewer_id)}",
             action='MIP::Action::"applications:approve"',
-            resource=f'MIP::Application::"{application_id}"',
+            resource=f"MIP::Application::{json.dumps(application_id)}",
             context=cedar_context,
             entities=cedar_entities,
         )
@@ -3652,6 +3666,7 @@ async def _canonical_review_decision(
     response = await review_application(
         application.id,
         ApplicationReviewRequest(decision=decision, notes=notes, reason=reason),
+        reviewer_id=user_id,
         http_request=http_request,
         repo=repo,
     )

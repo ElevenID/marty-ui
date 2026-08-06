@@ -193,6 +193,9 @@ def test_self_service_is_owner_scoped(client, seeded):
 
 
 def test_review_requires_actual_org_permission_and_callers_lock(client, seeded):
+    from marty_common import CedarEngine
+
+    client.app.state.cedar_engine = CedarEngine.with_defaults()
     application_id = create_application(client).json()["id"]
     submitted = client.post(f"/v1/me/applications/{application_id}/submit", headers=self_headers())
     assert submitted.status_code == 200, submitted.text
@@ -271,6 +274,16 @@ def test_approval_cedar_scope_uses_persisted_owner_not_untrusted_metadata(
     )
 
     assert approved.status_code == 200, approved.text
+    assert any(
+        entity["uid"] == {"type": "MIP::User", "id": "reviewer-1"}
+        and {"type": "MIP::Role", "id": "member"} in entity["parents"]
+        for entity in cedar.entities
+    )
+    assert any(
+        entity["uid"] == {"type": "MIP::Role", "id": "member"}
+        and entity["attrs"] == {"is_system_role": True}
+        for entity in cedar.entities
+    )
     organization_ids = {
         parent["id"]
         for entity in cedar.entities
