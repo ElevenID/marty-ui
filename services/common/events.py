@@ -49,13 +49,16 @@ class DomainEvent:
 
 class EventPublisher:
     """
-    Event publisher using gRPC for known services, HTTP for generic
-    webhooks, and the in-process event bus for streaming subscribers.
+    Event publisher using gRPC for known services and HTTP for generic
+    webhooks. All streaming events go through the central event-stream RPC.
     """
     
     def __init__(self):
         self.subscribers: dict[EventType, list[str]] = {}
         self._flow_grpc_channel = None
+        from common.grpc_event_bus import GrpcEventStreamPublisher
+
+        self._event_stream_publisher = GrpcEventStreamPublisher()
         self._load_subscriptions()
     
     def _load_subscriptions(self):
@@ -87,20 +90,15 @@ class EventPublisher:
         return f"{base.rstrip('/')}/internal/events"
 
     async def publish(self, event: DomainEvent) -> None:
-        """Publish an event to subscribers via gRPC (preferred) or HTTP,
-        and also fan out to in-process streaming subscribers."""
-        # Fan out to gRPC streaming subscribers
-        try:
-            from common.grpc_event_bus import get_event_bus
-            await get_event_bus().publish(
-                event_type=event.event_type.value,
-                aggregate_id=event.aggregate_id,
-                aggregate_type=event.aggregate_type,
-                organization_id=event.organization_id,
-                data={k: str(v) for k, v in event.data.items()},
-            )
-        except Exception as exc:
-            logger.debug("Event bus fan-out failed (ok if not running): %s", exc)
+        """Publish an event through central gRPC and configured subscribers."""
+        await self._event_stream_publisher.publish_fields(
+            event_type=event.event_type.value,
+            aggregate_id=event.aggregate_id,
+            aggregate_type=event.aggregate_type,
+            organization_id=event.organization_id,
+            data=event.data,
+            timestamp=event.timestamp.isoformat(),
+        )
 
         # APPLICATION_APPROVED goes directly to flow service via gRPC
         if event.event_type == EventType.APPLICATION_APPROVED:

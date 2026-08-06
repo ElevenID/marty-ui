@@ -50,6 +50,7 @@ data:
   VERIFICATION_SERVICE_URL: "http://verification:8012"
   REVOCATION_PROFILE_SERVICE_URL: "http://revocation-profile:8013"
   DEVICE_REGISTRATION_SERVICE_URL: "http://device-registration:8014"
+  ES_GRPC_TARGET: "event-stream:9015"
 
   CORS_ORIGINS: "${CORS_ORIGINS}"
 
