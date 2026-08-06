@@ -226,6 +226,28 @@ def test_review_requires_actual_org_permission_and_callers_lock(client, seeded):
     assert approved.json()["status"] == ApplicationStatus.APPROVED.value
 
 
+def test_submitted_application_checks_use_canonical_reviewer_route(client, seeded):
+    application_id = create_application(client).json()["id"]
+    submitted = client.post(
+        f"/v1/me/applications/{application_id}/submit",
+        headers=self_headers(),
+    )
+    assert submitted.status_code == 200, submitted.text
+
+    response = client.get(
+        f"/v1/organizations/org-1/applicants/{application_id}/checks",
+        headers=reviewer_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    checks = response.json()
+    assert len(checks) == 1
+    assert checks[0]["check_type"] == "identity_verification"
+    assert checks[0]["status"] == "not_started"
+    assert checks[0]["created_at"]
+    assert checks[0]["updated_at"]
+
+
 def test_claim_blocked_state_is_persisted(client, repo, seeded, monkeypatch):
     application_id = create_application(client).json()["id"]
     application = run(repo.get_application(application_id))

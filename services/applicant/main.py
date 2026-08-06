@@ -19,11 +19,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, AsyncGenerator
+from typing import Any, AsyncGenerator
 
 import httpx
 from fastapi import APIRouter, Body, Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from marty_common.service_setup import create_service_app
 
@@ -38,7 +37,8 @@ except ImportError:
     EventPublisher = None
     DomainEvent = None
     EventType = None
-    get_event_publisher = lambda: None
+    def get_event_publisher() -> None:
+        return None
 
 SERVICE_NAME = "applicant-service"
 SERVICE_PORT = int(os.environ.get("APPLICANT_SERVICE_PORT", "8006"))
@@ -440,11 +440,13 @@ def _build_credential_claims(
 ) -> dict[str, Any]:
     """Map applicant form fields to credential claims using the active template."""
     claims: dict[str, Any] = {}
-    for field in template.get("form_fields") or []:
-        if not isinstance(field, dict):
+    for field_definition in template.get("form_fields") or []:
+        if not isinstance(field_definition, dict):
             continue
-        field_id = str(field.get("field_id") or "").strip()
-        claim_name = str(field.get("claim_mapping") or field_id).strip()
+        field_id = str(field_definition.get("field_id") or "").strip()
+        claim_name = str(
+            field_definition.get("claim_mapping") or field_id
+        ).strip()
         if field_id and claim_name and field_id in application.form_data:
             claims[claim_name] = application.form_data[field_id]
 
@@ -2098,11 +2100,11 @@ async def get_application(
 
 async def list_checks(
     application_id: str,
-    limit: int = Query(default=100, le=500, description="Max items to return"),
-    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
+    limit: int = 100,
+    offset: int = 0,
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> list[VettingCheckResponse]:
-    """List vetting checks for an application."""
+    """List vetting checks for an application from canonical route code."""
     application = await repo.get_application(application_id)
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
