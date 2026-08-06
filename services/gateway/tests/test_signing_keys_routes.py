@@ -194,7 +194,9 @@ def test_internal_signing_router_exposes_only_did_mediated_identity_signing() ->
     }
 
     assert any(path.endswith("/issuer-dids/sign") for path in paths)
-    assert not any("issuer-profiles" in path and path.endswith("/sign") for path in paths)
+    assert not any(
+        "issuer-profiles" in path and path.endswith("/sign") for path in paths
+    )
 
 
 @pytest.mark.asyncio
@@ -245,6 +247,7 @@ async def test_internal_issuer_did_signing_resolves_profile_without_exposing_it(
             "issuer_did": "did:web:issuer.example",
             "credential_format": "ldp_vc",
             "key_purpose": "vc_jwt_issuer",
+            "algorithm": "ES256",
             "payload_b64": "cGF5bG9hZA",
         },
         organization_id="org-1",
@@ -260,8 +263,23 @@ async def test_internal_issuer_did_signing_resolves_profile_without_exposing_it(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "private_selector",
+    (
+        "issuer_profile_id",
+        "service_id",
+        "signing_service_id",
+        "key_reference",
+        "signing_key_reference",
+        "key_id",
+        "kms_key_id",
+        "kms_provider",
+        "provider",
+    ),
+)
 async def test_internal_issuer_did_signing_rejects_profile_and_kms_overrides(
     monkeypatch: pytest.MonkeyPatch,
+    private_selector: str,
 ):
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
 
@@ -271,15 +289,48 @@ async def test_internal_issuer_did_signing_rejects_profile_and_kms_overrides(
             body={
                 "issuer_did": "did:web:issuer.example",
                 "credential_format": "ldp_vc",
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256",
                 "payload_b64": "cGF5bG9hZA",
-                "issuer_profile_id": "attacker-selected-profile",
+                private_selector: "",
             },
             organization_id="org-1",
             x_api_key="test-internal-key",
         )
 
     assert exc_info.value.status_code == 422
-    assert "routing overrides" in str(exc_info.value.detail)
+    assert "only public signing inputs" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_field", ("key_purpose", "algorithm"))
+async def test_internal_issuer_did_signing_requires_complete_selector_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+    missing_field: str,
+):
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+    resolve = AsyncMock()
+    monkeypatch.setattr(signing_keys, "_resolve_org_scoped_issuer_identity", resolve)
+    body = {
+        "issuer_did": "did:web:issuer.example",
+        "credential_format": "ldp_vc",
+        "key_purpose": "vc_jwt_issuer",
+        "algorithm": "ES256",
+        "payload_b64": "cGF5bG9hZA",
+    }
+    body.pop(missing_field)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys.internal_sign_payload_with_issuer_did(
+            request=_build_request("org-1"),
+            body=body,
+            organization_id="org-1",
+            x_api_key="test-internal-key",
+        )
+
+    assert exc_info.value.status_code == 422
+    assert f"{missing_field} is required" in str(exc_info.value.detail)
+    resolve.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -5473,6 +5524,51 @@ async def test_internal_resolve_issuer_did_rejects_ambiguous_active_profiles(
 
     assert exc_info.value.status_code == 409
     assert "multiple active issuer profiles" in str(exc_info.value.detail)
+    assert "ip-1" not in str(exc_info.value.detail)
+    assert "ip-2" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_internal_resolve_issuer_did_rejects_cross_tenant_profile_record(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A corrupt tenant bucket cannot lend another organization its signer."""
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+    issuer_did = "did:web:issuer.example:orgs:other"
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(
+        return_value=json.dumps(
+            {
+                "profiles": [
+                    {
+                        "id": "profile-other",
+                        "organization_id": "org-other",
+                        "issuer_did": issuer_did,
+                        "signing_service_id": "svc-other",
+                        "signing_key_reference": "key-other",
+                        "key_purpose": "vc_jwt_issuer",
+                        "algorithm": "ES256",
+                        "status": "active",
+                    }
+                ]
+            }
+        )
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys.internal_resolve_issuer_did(
+            request=_build_request("org-requesting", redis_client=redis_mock),
+            organization_id="org-requesting",
+            issuer_did=issuer_did,
+            verification_method_id=None,
+            credential_format="dc+sd-jwt",
+            key_purpose="vc_jwt_issuer",
+            algorithm="ES256",
+            x_api_key="test-internal-key",
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "profile-other" not in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
