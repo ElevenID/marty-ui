@@ -110,6 +110,7 @@ export const RESOURCE_LABELS = {
   'trust-profile': 'Trust Profiles',
   'trusted-issuer': 'Trusted Issuers',
   'credential-template': 'Credential Templates',
+  wallet: 'Wallet Registry',
   'compliance-profile': 'Compliance Profiles',
   'presentation-policy': 'Presentation Policies',
   'revocation-profile': 'Revocation Profiles',

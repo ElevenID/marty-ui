@@ -20,12 +20,6 @@ const {
   mockUseConsole: vi.fn(),
 }))
 
-vi.mock('../../../hooks/useAuth', () => ({
-  useAuth: () => ({
-    organizationId: 'auth-org',
-  }),
-}))
-
 vi.mock('../../../contexts/ConsoleContext', () => ({
   useConsole: () => mockUseConsole(),
 }))
@@ -126,6 +120,22 @@ describe('ApiKeysPage', () => {
 
     expect(screen.getByText(/Callback status could not be loaded/i)).toBeInTheDocument()
     expect(screen.getAllByText('Unavailable').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('offers the published wallet registry API-key scopes', async () => {
+    const { user } = renderWithoutRouter(
+      <MemoryRouter>
+        <ApiKeysPage />
+      </MemoryRouter>
+    )
+
+    await user.click(await screen.findByRole('button', {
+      name: /create api key|generate api key|deploy\.apiKeysPage\.generateKey/i,
+    }))
+
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText('Read wallet registry')).toBeInTheDocument()
+    expect(within(dialog).getByText('Manage wallet registry')).toBeInTheDocument()
   })
 
   it('creates an api key and paired callback in one flow', async () => {

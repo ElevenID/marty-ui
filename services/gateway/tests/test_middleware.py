@@ -396,6 +396,98 @@ def test_vc_api_cedar_registration_is_idempotent():
 
 
 @pytest.mark.parametrize(
+    ("method", "permission"),
+    [
+        ("GET", "wallet:view"),
+        ("HEAD", "wallet:view"),
+        ("OPTIONS", "wallet:view"),
+        ("POST", "wallet:write"),
+        ("PUT", "wallet:write"),
+        ("PATCH", "wallet:write"),
+        ("DELETE", "wallet:write"),
+    ],
+)
+def test_wallet_registry_routes_have_exact_cedar_permissions(
+    method: str,
+    permission: str,
+) -> None:
+    assert cedar_actions.resolve_action_and_resource(
+        method,
+        "/v1/wallet-registry/example",
+    ) == (permission, "wallet")
+
+
+def test_wallet_registry_cedar_registration_is_idempotent() -> None:
+    rules_before = list(cedar_actions.SPECIAL_ROUTE_RULES)
+    lookups_before = dict(cedar_actions.RESOURCE_LOOKUP_MAP)
+
+    gateway_main._register_wallet_registry_cedar_routes()
+
+    assert cedar_actions.SPECIAL_ROUTE_RULES == rules_before
+    assert cedar_actions.RESOURCE_LOOKUP_MAP == lookups_before
+
+
+def test_every_wallet_registry_endpoint_has_a_protected_mapping() -> None:
+    assert gateway_main.wallet_registry_router.routes
+
+    for route in gateway_main.wallet_registry_router.routes:
+        assert route.path.startswith("/v1/wallet-registry")
+        for method in route.methods:
+            permission = gateway_main._WALLET_REGISTRY_ROUTE_PERMISSIONS[method]
+            assert cedar_actions.resolve_action_and_resource(method, route.path) == (
+                permission,
+                "wallet",
+            )
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (
+            "/v1/wallet-registry/example",
+            ("credential-templates", "/v1/wallet-registry/example"),
+        ),
+        (
+            "/v1/wallet-registry/example/open-link",
+            ("credential-templates", "/v1/wallet-registry/example"),
+        ),
+        ("/v1/wallet-registry/resolve/profile", None),
+        ("/v1/wallet-registry", None),
+    ],
+)
+def test_wallet_registry_resource_lookups_resolve_real_tenant(
+    path: str,
+    expected: tuple[str, str] | None,
+) -> None:
+    assert cedar_actions.resolve_resource_lookup(path) == expected
+
+
+@pytest.mark.parametrize(
+    ("permission", "scopes", "allowed"),
+    [
+        ("wallet:view", ["wallet:read"], True),
+        ("wallet:view", ["wallet:write"], True),
+        ("wallet:write", ["wallet:write"], True),
+        ("wallet:write", ["wallet:read"], False),
+        ("wallet:view", ["templates:read"], False),
+        ("wallet:delete", ["wallet:write"], False),
+    ],
+)
+def test_wallet_registry_routes_use_published_api_key_scopes(
+    permission: str,
+    scopes: list[str],
+    allowed: bool,
+) -> None:
+    assert (
+        gateway_main.GatewayCedarAuthMiddleware._api_key_allowed(
+            permission,
+            scopes,
+        )
+        is allowed
+    )
+
+
+@pytest.mark.parametrize(
     ("permission", "scopes", "allowed"),
     [
         ("issuance:initiate", ["credentials:issue"], True),

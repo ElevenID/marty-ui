@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -192,6 +193,9 @@ def test_self_service_is_owner_scoped(client, seeded):
 
 
 def test_review_requires_actual_org_permission_and_callers_lock(client, seeded):
+    from marty_common import CedarEngine
+
+    client.app.state.cedar_engine = CedarEngine.with_defaults()
     application_id = create_application(client).json()["id"]
     submitted = client.post(f"/v1/me/applications/{application_id}/submit", headers=self_headers())
     assert submitted.status_code == 200, submitted.text
@@ -224,6 +228,132 @@ def test_review_requires_actual_org_permission_and_callers_lock(client, seeded):
     )
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == ApplicationStatus.APPROVED.value
+
+
+@pytest.mark.parametrize(
+    ("decision", "payload", "expected_application", "expected_applicant"),
+    [
+        (
+            "approve",
+            {"notes": "verified"},
+            ApplicationStatus.APPROVED,
+            ApplicantStatus.APPROVED,
+        ),
+        (
+            "reject",
+            {"reason": "evidence mismatch"},
+            ApplicationStatus.REJECTED,
+            ApplicantStatus.REJECTED,
+        ),
+    ],
+)
+def test_review_completes_directly_from_submitted_state(
+    client,
+    repo,
+    seeded,
+    monkeypatch,
+    decision,
+    payload,
+    expected_application,
+    expected_applicant,
+):
+    from marty_common import CedarEngine
+
+    seeded.status = ApplicantStatus.SUBMITTED
+    run(repo.save(seeded))
+    client.app.state.cedar_engine = CedarEngine.with_defaults()
+
+    class Publisher:
+        async def publish(self, _event) -> None:
+            return None
+
+    monkeypatch.setattr(service, "get_event_publisher", lambda: Publisher())
+
+    application_id = create_application(client).json()["id"]
+    submitted = client.post(
+        f"/v1/me/applications/{application_id}/submit",
+        headers=self_headers(),
+    )
+    assert submitted.status_code == 200, submitted.text
+
+    lock = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/lock",
+        headers=reviewer_headers(),
+        json={},
+    )
+    assert lock.status_code == 200, lock.text
+
+    reviewed = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/{decision}",
+        headers=reviewer_headers(),
+        json=payload,
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["status"] == expected_application.value
+    assert run(repo.get_by_id(seeded.id)).status == expected_applicant
+
+
+def test_approval_cedar_scope_uses_persisted_owner_not_untrusted_metadata(
+    client, seeded, monkeypatch
+):
+    response = create_application(
+        client,
+        integration_context={"organization_id": "org-attacker"},
+    )
+    assert response.status_code == 200, response.text
+    application_id = response.json()["id"]
+    submitted = client.post(
+        f"/v1/me/applications/{application_id}/submit",
+        headers=self_headers(),
+    )
+    assert submitted.status_code == 200, submitted.text
+    lock = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/lock",
+        headers=reviewer_headers(),
+        json={},
+    )
+    assert lock.status_code == 200, lock.text
+
+    class CapturingCedar:
+        def __init__(self) -> None:
+            self.entities = []
+
+        def is_authorized(self, **kwargs):
+            self.entities = kwargs["entities"]
+            return SimpleNamespace(allowed=True, reasons=[], errors=[])
+
+    cedar = CapturingCedar()
+    client.app.state.cedar_engine = cedar
+
+    class Publisher:
+        async def publish(self, _event) -> None:
+            return None
+
+    monkeypatch.setattr(service, "get_event_publisher", lambda: Publisher())
+    approved = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/approve",
+        headers=reviewer_headers(),
+        json={"notes": "tenant-scoped"},
+    )
+
+    assert approved.status_code == 200, approved.text
+    assert any(
+        entity["uid"] == {"type": "MIP::User", "id": "reviewer-1"}
+        and {"type": "MIP::Role", "id": "member"} in entity["parents"]
+        for entity in cedar.entities
+    )
+    assert any(
+        entity["uid"] == {"type": "MIP::Role", "id": "member"}
+        and entity["attrs"] == {"is_system_role": True}
+        for entity in cedar.entities
+    )
+    organization_ids = {
+        parent["id"]
+        for entity in cedar.entities
+        for parent in entity.get("parents", [])
+        if parent.get("type") == "MIP::Organization"
+    }
+    assert organization_ids == {"org-1"}
 
 
 def test_canonical_approval_publishes_tenant_scoped_application_event(
