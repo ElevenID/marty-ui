@@ -445,7 +445,6 @@ class ContentTypeEnforcementMiddleware(BaseHTTPMiddleware):
         "/v1/issuance/token",       # OAuth token endpoint: application/x-www-form-urlencoded
         "/v1/issuance/par",         # PAR endpoint (RFC 9126): application/x-www-form-urlencoded
         "/v1/issuance/nonce",       # OID4VCI nonce endpoint: wallets may POST empty/non-JSON bodies
-        "/v1/issuance/didcomm/",    # DIDComm v2: application/didcomm-plain+json
         "/v1/flows/instances/",     # OID4VP submit: application/x-www-form-urlencoded
         "/v1/flows/siop/submit",    # SIOPv2 submit
         "/v1/auth/",               # Auth service may use form data

@@ -810,8 +810,9 @@ services:
       CANVAS_LTI_JWKS_TTL_MINUTES: ${CANVAS_LTI_JWKS_TTL_MINUTES:-1440}
       CANVAS_ALLOW_PRIVATE_BASE_URLS: ${CANVAS_ALLOW_PRIVATE_BASE_URLS:-false}
       CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-false}
-      # DIDComm v2 push delivery — optional Universal Resolver for unknown DID methods
+      # DIDComm resolver infrastructure is deployment-managed and never caller-selected.
       UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
+      DIDCOMM_ALLOW_PRIVATE_ENDPOINTS: ${DIDCOMM_ALLOW_PRIVATE_ENDPOINTS:-false}
     ports:
       - "8005:8005"
       - "9005:9005"

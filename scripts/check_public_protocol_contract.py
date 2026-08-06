@@ -9,19 +9,20 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from check_generated_protocol_bindings import assert_generated_bindings_current
 from fastapi import Response
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
-
-from check_generated_protocol_bindings import assert_generated_bindings_current
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "services"))
 
 from gateway.models import (  # noqa: E402
+    PUBLIC_ISSUANCE_RESERVED_CLAIMS,
     CredentialRenewalOfferResponse,
     CredentialTemplateResponse,
+    DidcommDeliverRequest,
+    DidcommDeliveryResponse,
     FlowDefinitionCreate,
     FlowDefinitionResponse,
     FlowDefinitionUpdate,
@@ -44,10 +45,9 @@ from gateway.models import (  # noqa: E402
     PresentationPolicyCreate,
     PresentationPolicyResponse,
     PresentationPolicyUpdate,
-    PUBLIC_ISSUANCE_RESERVED_CLAIMS,
     StartVerificationFlowRequest,
-    VerificationResultResponse,
     VerificationRequestResponse,
+    VerificationResultResponse,
 )
 from gateway.routes.credentials import (  # noqa: E402
     _PUBLIC_TEMPLATE_RESPONSE_FIELDS,
@@ -66,7 +66,6 @@ from gateway.routes.verification import (  # noqa: E402
     _sanitize_presentation_policy_response,
     _validated_policy_payload,
 )
-
 
 FORBIDDEN_PUBLIC_FIELDS = {
     "auto_generate_artifacts",
@@ -87,12 +86,14 @@ FORBIDDEN_PUBLIC_FIELDS = {
     "provider",
     "remote_key_binding",
     "remote_signing_config",
+    "resolver_url",
     "service_id",
     "signing_agent_auth",
     "signing_agent_url",
     "signing_key_reference",
     "signing_service_id",
     "transit_mount",
+    "universal_resolver_url",
     "verification_method_id",
 }
 
@@ -666,6 +667,8 @@ def check_contract(protocol_root: Path) -> None:
         ("issued-credential.json", IssuedCredentialRecordResponse),
         ("issued-credential-lifecycle-request.json", IssuedCredentialLifecycleRequest),
         ("credential-renewal-offer-response.json", CredentialRenewalOfferResponse),
+        ("didcomm-deliver-request.json", DidcommDeliverRequest),
+        ("didcomm-delivery-response.json", DidcommDeliveryResponse),
     )
     operation_validators: dict[str, Draft202012Validator] = {}
     for filename, model in operation_models:
