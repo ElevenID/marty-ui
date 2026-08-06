@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -224,6 +225,59 @@ def test_review_requires_actual_org_permission_and_callers_lock(client, seeded):
     )
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == ApplicationStatus.APPROVED.value
+
+
+def test_approval_cedar_scope_uses_persisted_owner_not_untrusted_metadata(
+    client, seeded, monkeypatch
+):
+    response = create_application(
+        client,
+        integration_context={"organization_id": "org-attacker"},
+    )
+    assert response.status_code == 200, response.text
+    application_id = response.json()["id"]
+    submitted = client.post(
+        f"/v1/me/applications/{application_id}/submit",
+        headers=self_headers(),
+    )
+    assert submitted.status_code == 200, submitted.text
+    lock = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/lock",
+        headers=reviewer_headers(),
+        json={},
+    )
+    assert lock.status_code == 200, lock.text
+
+    class CapturingCedar:
+        def __init__(self) -> None:
+            self.entities = []
+
+        def is_authorized(self, **kwargs):
+            self.entities = kwargs["entities"]
+            return SimpleNamespace(allowed=True, reasons=[], errors=[])
+
+    cedar = CapturingCedar()
+    client.app.state.cedar_engine = cedar
+
+    class Publisher:
+        async def publish(self, _event) -> None:
+            return None
+
+    monkeypatch.setattr(service, "get_event_publisher", lambda: Publisher())
+    approved = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/approve",
+        headers=reviewer_headers(),
+        json={"notes": "tenant-scoped"},
+    )
+
+    assert approved.status_code == 200, approved.text
+    organization_ids = {
+        parent["id"]
+        for entity in cedar.entities
+        for parent in entity.get("parents", [])
+        if parent.get("type") == "MIP::Organization"
+    }
+    assert organization_ids == {"org-1"}
 
 
 def test_canonical_approval_publishes_tenant_scoped_application_event(

@@ -2243,7 +2243,10 @@ async def review_application(
             "evidence_count": int(meta.get("evidence_count", 1)),
             "applicant_country": str(meta.get("applicant_country", "US")),
         }
-        org_id = str(meta.get("organization_id", application.applicant_id))
+        # Tenant ownership is an authoritative property of the persisted
+        # application. Form data and integration context are applicant-controlled
+        # inputs and must never select the Cedar organization or resource parent.
+        org_id = application.organization_id
         cedar_entities = [
             {
                 "uid": {"type": "MIP::User", "id": "reviewer"},
