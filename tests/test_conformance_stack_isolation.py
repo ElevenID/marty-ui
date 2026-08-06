@@ -222,6 +222,39 @@ def test_haip_overlay_is_explicit_and_isolation_is_last() -> None:
     )
 
 
+def test_local_build_defines_ui_without_release_image_overlays() -> None:
+    command = stack.compose_command(
+        "marty-conformance-test1",
+        use_ghcr=False,
+    )
+    files = [
+        command[index + 1] for index, value in enumerate(command) if value == "--file"
+    ]
+
+    assert files[-1].endswith("docker-compose.profile.conformance.yml")
+    assert any(path.endswith("docker-compose.profile.local-build.yml") for path in files)
+    assert not any(path.endswith("docker-compose.profile.ghcr.yml") for path in files)
+    assert not any(
+        path.endswith("docker-compose.profile.conformance-images.yml") for path in files
+    )
+
+    source_profile = (ROOT / stack.LOCAL_BUILD_FILE).read_text(encoding="utf-8")
+    ui_section = source_profile.split("  ui:\n", 1)[1]
+    assert "context: ./ui" in ui_section
+    assert "dockerfile: Dockerfile.prod" in ui_section
+    assert "gateway:" in ui_section
+
+
+def test_local_ui_image_is_reproducible_and_installs_postinstall_script() -> None:
+    dockerfile = (ROOT / "ui" / "Dockerfile.prod").read_text(encoding="utf-8")
+
+    assert "oven/bun:1.3.14-alpine@sha256:" in dockerfile
+    assert "nginx:1.29.1-alpine@sha256:" in dockerfile
+    assert dockerfile.index("COPY scripts/patch-prerenderer-ts-deepmerge.cjs") < dockerfile.index(
+        "RUN bun install --frozen-lockfile"
+    )
+
+
 def test_release_profile_removes_builds_and_pins_infrastructure() -> None:
     ghcr = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
     infrastructure = (ROOT / "docker-compose.profile.conformance-images.yml").read_text(
