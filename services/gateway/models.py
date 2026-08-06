@@ -143,51 +143,74 @@ class TrustProfileResponse(BaseModel):
     updated_at: str
 
 
-class TrustedIssuerCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=255)
-    description: str | None = Field(None, max_length=2000)
-    issuer_did: str = Field(min_length=1, max_length=2048)
-    issuer_url: str | None = Field(None, max_length=2048)
-    credential_template_ids: list[str] = Field(default_factory=list)
-    # A pinned issuer must carry its public verification material through the
-    # public gateway.  Dropping this field at the gateway made an apparently
-    # configured OID4VP trust profile unverifiable by the downstream service.
-    verification_keys: list[dict] = Field(default_factory=list)
+class TrustProfileIssuerCreate(BaseModel):
+    """Create a protocol-defined link to an existing IssuerEntity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issuer_id: str = Field(
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    trust_level: int = Field(default=100, ge=0, le=100)
+    relationship_status: Literal["TRUSTED", "DENIED", "UNDER_REVIEW"] = "TRUSTED"
+    cascade_revocation_policy: Literal["AUTO_CASCADE", "MANUAL", "NOTIFY_ONLY"] = (
+        "NOTIFY_ONLY"
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> "TrustProfileIssuerCreate":
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
-class TrustedIssuerUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    issuer_did: str | None = None
-    issuer_url: str | None = None
-    credential_template_ids: list[str] | None = None
-    verification_keys: list[dict] | None = None
-    valid_from: str | None = None
-    valid_until: str | None = None
-    trust_level: int | None = None
-    relationship_status: str | None = None
-    cascade_revocation_policy: str | None = None
+class TrustProfileIssuerUpdate(BaseModel):
+    """Update relationship policy without mutating the linked issuer entity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trust_level: int | None = Field(default=None, ge=0, le=100)
+    relationship_status: Literal["TRUSTED", "DENIED", "UNDER_REVIEW"] | None = None
+    cascade_revocation_policy: (
+        Literal["AUTO_CASCADE", "MANUAL", "NOTIFY_ONLY"] | None
+    ) = None
+    metadata: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_update(self) -> "TrustProfileIssuerUpdate":
+        if not self.model_fields_set:
+            raise ValueError("at least one trust relationship field is required")
+        if "metadata" in self.model_fields_set and self.metadata is None:
+            raise ValueError("metadata cannot be null")
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
-class TrustedIssuerResponse(BaseModel):
-    id: str
-    trust_profile_id: str
-    issuer_id: str | None = None
-    issuer_entity_id: str | None = None
-    name: str
-    description: str | None = None
-    issuer_did: str
-    issuer_type: str | None = None
-    issuer_url: str | None = None
-    status: str
-    compliance_status: str | None = None
-    trust_level: int = 100
-    relationship_status: str = "TRUSTED"
-    cascade_revocation_policy: str = "NOTIFY_ONLY"
-    credential_template_ids: list[str] = Field(default_factory=list)
+class TrustProfileIssuerResponse(BaseModel):
+    """marty-protocol TrustProfileIssuer resource."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    trust_profile_id: str = Field(
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    issuer_id: str = Field(
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    trust_level: int = Field(ge=0, le=100)
+    relationship_status: Literal["TRUSTED", "DENIED", "UNDER_REVIEW"]
+    cascade_revocation_policy: Literal["AUTO_CASCADE", "MANUAL", "NOTIFY_ONLY"]
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
+
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> "TrustProfileIssuerResponse":
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
 _PRIVATE_CUSTODY_METADATA_FIELDS = {
@@ -214,9 +237,16 @@ _PRIVATE_CUSTODY_METADATA_FIELDS = {
     "verification_method_id",
 }
 
+_PRIVATE_JWK_PARAMETERS = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+
 
 def _find_private_custody_metadata(value: Any) -> str | None:
     if isinstance(value, dict):
+        normalized_keys = {str(key).lower() for key in value}
+        if "kty" in normalized_keys:
+            private_parameters = normalized_keys & _PRIVATE_JWK_PARAMETERS
+            if private_parameters:
+                return f"private JWK parameter '{sorted(private_parameters)[0]}'"
         for key, nested_value in value.items():
             if str(key).lower() in _PRIVATE_CUSTODY_METADATA_FIELDS:
                 return str(key)
@@ -235,7 +265,7 @@ def _reject_private_custody_metadata(metadata: dict[str, Any] | None) -> None:
     field = _find_private_custody_metadata(metadata)
     if field is not None:
         raise ValueError(
-            f"Public metadata cannot contain private custody selector '{field}'; "
+            f"Public metadata cannot contain private custody selector or private key material '{field}'; "
             "signing is resolved from the issuer DID through an issuer profile"
         )
 

@@ -24,10 +24,8 @@ import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
 import { useWizard } from '../../../hooks/useWizard';
-import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { activateTrustProfile, addTrustProfileIssuer, createTrustProfile } from '../../../services/presentationPolicyApi';
-import signingKeysApi from '../../../services/signingKeysApi';
 import BasicsStep from './steps/BasicsStep';
 import TrustSourcesStep from './steps/TrustSourcesStep';
 import ValidationRulesStep from './steps/ValidationRulesStep';
@@ -44,41 +42,15 @@ const getSteps = (t) => [
   t('wizards.trustProfile.steps.review'),
 ];
 
-const MANAGED_ISSUER_SOURCES = new Set([
-  'kms-derived-identity',
-  'auto-created',
-  'imported-did',
-  'issuer-profile',
-]);
-
-const issuerMetadata = (issuer) => (issuer && typeof issuer.metadata === 'object' ? issuer.metadata : {});
-
-const issuerProfileId = (issuer) => issuerMetadata(issuer).issuer_profile_id || issuer.issuer_profile_id || '';
-
-const issuerSigningServiceId = (issuer) => issuerMetadata(issuer).signing_service_id || issuer.signing_service_id || '';
-
-const issuerSigningKeyReference = (issuer) => issuerMetadata(issuer).signing_key_reference || issuer.signing_key_reference || '';
-
 const hasTrustConfiguration = (data) => (
   (data.trusted_issuers?.length || 0) > 0
   || (data.trust_sources?.length || 0) > 0
   || data.allow_all_issuers === true
 );
 
-const needsManagedIssuerProfile = (issuer) => {
-  if (!issuer?.did || issuer.certificate_pem || issuerProfileId(issuer)) {
-    return false;
-  }
-  if (issuerMetadata(issuer).source === 'kms-derived-identity' && issuerSigningKeyReference(issuer)) {
-    return false;
-  }
-  return MANAGED_ISSUER_SOURCES.has(issuerMetadata(issuer).source);
-};
-
 const TrustProfileWizard = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
   const { activeOrgId } = useConsole();
   const effectiveOrganizationId = activeOrgId;
 
@@ -107,55 +79,11 @@ const TrustProfileWizard = () => {
       }));
     }
 
-    const trustedIssuers = data.trusted_issuers || [];
-    let keyManagementConfig = null;
-    const trustedIssuersWithProfiles = [];
+    const configuredIssuers = data.trusted_issuers || [];
 
-    for (const issuer of trustedIssuers) {
-      if (!needsManagedIssuerProfile(issuer)) {
-        trustedIssuersWithProfiles.push(issuer);
-        continue;
-      }
-
-      if (!keyManagementConfig) {
-        keyManagementConfig = await signingKeysApi.getKeyManagementConfig({ organization_id: effectiveOrganizationId });
-      }
-
-      const signingServiceId = issuerSigningServiceId(issuer) || keyManagementConfig?.default_service_id || '';
-      if (!signingServiceId) {
-        throw new Error(t('trust.issuerIdentityRequiresKms', {
-          defaultValue: 'A managed DID issuer identity must be backed by a KMS signing service. Configure Key Management before creating this trust profile.',
-        }));
-      }
-
-      const response = await signingKeysApi.createIssuerProfile({
-        organization_id: effectiveOrganizationId,
-        name: issuer.name || issuer.did,
-        issuer_did: issuer.did,
-        signing_service_id: signingServiceId,
-        signing_key_reference: issuerSigningKeyReference(issuer) || undefined,
-        key_purpose: 'vc_jwt_issuer',
-        status: 'active',
-      });
-      const profile = response?.profile || response || {};
-      trustedIssuersWithProfiles.push({
-        ...issuer,
-        issuer_profile_id: profile.id || issuerProfileId(issuer),
-        signing_service_id: profile.signing_service_id || signingServiceId,
-        signing_key_reference: profile.signing_key_reference || issuerSigningKeyReference(issuer),
-        metadata: {
-          ...issuerMetadata(issuer),
-          source: issuerMetadata(issuer).source || 'issuer-profile',
-          issuer_profile_id: profile.id || issuerProfileId(issuer),
-          signing_service_id: profile.signing_service_id || signingServiceId,
-          signing_key_reference: profile.signing_key_reference || issuerSigningKeyReference(issuer),
-        },
-      });
-    }
-
-    const didIssuers = trustedIssuersWithProfiles.filter((i) => i.did);
-    const certIssuers = trustedIssuersWithProfiles.filter((i) => i.certificate_pem);
-    const hasExplicitTrustConfiguration = trustedIssuersWithProfiles.length > 0 || (data.trust_sources?.length || 0) > 0;
+    const didIssuers = configuredIssuers.filter((i) => i.did);
+    const certIssuers = configuredIssuers.filter((i) => i.certificate_pem);
+    const hasExplicitTrustConfiguration = configuredIssuers.length > 0 || (data.trust_sources?.length || 0) > 0;
     const effectiveAllowedIssuers = hasExplicitTrustConfiguration
       ? data.allowed_issuers
       : (data.allow_all_issuers ? null : []);
@@ -175,7 +103,9 @@ const TrustProfileWizard = () => {
 
     const profile = await createTrustProfile({
       ...data,
-      trusted_issuers: trustedIssuersWithProfiles,
+      // DID issuers are linked through the normalized IssuerEntity relationship
+      // after the profile exists. Do not also encode them as embedded trust sources.
+      trusted_issuers: [],
       organization_id: effectiveOrganizationId,
       status: data.activate_immediately ? 'active' : 'draft',
       allowed_issuers: effectiveAllowedIssuers,
@@ -184,7 +114,7 @@ const TrustProfileWizard = () => {
     });
 
     await Promise.all(
-      didIssuers.map((issuer) => addTrustProfileIssuer(profile.id, {
+      didIssuers.map((issuer) => addTrustProfileIssuer(profile.id, effectiveOrganizationId, {
         name: issuer.name || issuer.did,
         description: issuer.description || null,
         issuer_did: issuer.did,
@@ -251,7 +181,6 @@ const TrustProfileWizard = () => {
           <TrustSourcesStep
             data={wizard.data}
             onChange={wizard.updateData}
-            organizationId={effectiveOrganizationId}
           />
         );
       case 2:

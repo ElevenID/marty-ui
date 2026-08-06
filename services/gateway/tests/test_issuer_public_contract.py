@@ -11,6 +11,9 @@ from gateway.models import (
     IssuerEntityResponse,
     IssuerEntityUpdate,
     IssuerIdentityListResponse,
+    TrustProfileIssuerCreate,
+    TrustProfileIssuerResponse,
+    TrustProfileIssuerUpdate,
 )
 from gateway.routes import trust
 
@@ -62,6 +65,17 @@ def test_create_rejects_system_authority_and_private_metadata() -> None:
             {
                 **base,
                 "metadata": {"public": [{"signing_service_id": "private"}]},
+            }
+        )
+    with pytest.raises(ValidationError, match="private JWK parameter"):
+        IssuerEntityCreate.model_validate(
+            {
+                **base,
+                "metadata": {
+                    "verification_keys": [
+                        {"kty": "OKP", "crv": "Ed25519", "x": "public", "d": "private"}
+                    ]
+                },
             }
         )
 
@@ -116,7 +130,9 @@ def test_success_response_validation_fails_closed_on_private_state() -> None:
 
 def test_success_list_requires_public_resource_array() -> None:
     valid = trust._sanitize_issuer_entity_response(
-        Response(content=json.dumps([_entity_payload()]), media_type="application/json"),
+        Response(
+            content=json.dumps([_entity_payload()]), media_type="application/json"
+        ),
         many=True,
     )
     assert valid.status_code == 200
@@ -126,6 +142,62 @@ def test_success_list_requires_public_resource_array() -> None:
         many=True,
     )
     assert rejected.status_code == 502
+
+
+def _relationship_payload() -> dict:
+    return {
+        "id": "30000000-0000-4000-8000-000000000001",
+        "trust_profile_id": "40000000-0000-4000-8000-000000000001",
+        "issuer_id": ENTITY_ID,
+        "trust_level": 100,
+        "relationship_status": "TRUSTED",
+        "cascade_revocation_policy": "NOTIFY_ONLY",
+        "metadata": {"credential_template_ids": ["template-1"]},
+        "created_at": "2026-08-01T00:00:00Z",
+        "updated_at": "2026-08-01T00:00:00Z",
+    }
+
+
+def test_trust_profile_issuer_contract_is_normalized_and_fail_closed() -> None:
+    create = TrustProfileIssuerCreate.model_validate({"issuer_id": ENTITY_ID})
+    update = TrustProfileIssuerUpdate.model_validate({"trust_level": 80})
+    assert json.loads(trust._validated_trust_profile_issuer_payload(create)) == {
+        "cascade_revocation_policy": "NOTIFY_ONLY",
+        "issuer_id": ENTITY_ID,
+        "metadata": {},
+        "relationship_status": "TRUSTED",
+        "trust_level": 100,
+    }
+    assert json.loads(trust._validated_trust_profile_issuer_payload(update)) == {
+        "trust_level": 80
+    }
+
+    valid = trust._sanitize_trust_profile_issuer_response(
+        Response(
+            content=json.dumps(_relationship_payload()),
+            media_type="application/json",
+        )
+    )
+    assert valid.status_code == 200
+    TrustProfileIssuerResponse.model_validate(json.loads(bytes(valid.body)))
+
+    denormalized = {
+        **_relationship_payload(),
+        "issuer_did": "did:web:must-not-be-duplicated.example",
+    }
+    rejected = trust._sanitize_trust_profile_issuer_response(
+        Response(content=json.dumps(denormalized), media_type="application/json")
+    )
+    assert rejected.status_code == 502
+
+
+def test_trust_profile_issuer_rejects_private_and_legacy_fields() -> None:
+    for payload in (
+        {"issuer_id": ENTITY_ID, "issuer_did": "did:example:legacy"},
+        {"issuer_id": ENTITY_ID, "metadata": {"signing_service_id": "private"}},
+    ):
+        with pytest.raises(ValidationError):
+            TrustProfileIssuerCreate.model_validate(payload)
 
 
 def test_public_identity_projection_is_did_only() -> None:
