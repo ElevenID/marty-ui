@@ -230,6 +230,69 @@ def test_review_requires_actual_org_permission_and_callers_lock(client, seeded):
     assert approved.json()["status"] == ApplicationStatus.APPROVED.value
 
 
+@pytest.mark.parametrize(
+    ("decision", "payload", "expected_application", "expected_applicant"),
+    [
+        (
+            "approve",
+            {"notes": "verified"},
+            ApplicationStatus.APPROVED,
+            ApplicantStatus.APPROVED,
+        ),
+        (
+            "reject",
+            {"reason": "evidence mismatch"},
+            ApplicationStatus.REJECTED,
+            ApplicantStatus.REJECTED,
+        ),
+    ],
+)
+def test_review_completes_directly_from_submitted_state(
+    client,
+    repo,
+    seeded,
+    monkeypatch,
+    decision,
+    payload,
+    expected_application,
+    expected_applicant,
+):
+    from marty_common import CedarEngine
+
+    seeded.status = ApplicantStatus.SUBMITTED
+    run(repo.save(seeded))
+    client.app.state.cedar_engine = CedarEngine.with_defaults()
+
+    class Publisher:
+        async def publish(self, _event) -> None:
+            return None
+
+    monkeypatch.setattr(service, "get_event_publisher", lambda: Publisher())
+
+    application_id = create_application(client).json()["id"]
+    submitted = client.post(
+        f"/v1/me/applications/{application_id}/submit",
+        headers=self_headers(),
+    )
+    assert submitted.status_code == 200, submitted.text
+
+    lock = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/lock",
+        headers=reviewer_headers(),
+        json={},
+    )
+    assert lock.status_code == 200, lock.text
+
+    reviewed = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/{decision}",
+        headers=reviewer_headers(),
+        json=payload,
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["status"] == expected_application.value
+    assert run(repo.get_by_id(seeded.id)).status == expected_applicant
+
+
 def test_approval_cedar_scope_uses_persisted_owner_not_untrusted_metadata(
     client, seeded, monkeypatch
 ):
