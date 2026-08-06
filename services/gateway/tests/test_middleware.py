@@ -11,19 +11,18 @@ import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from marty_common import cedar_actions
-from marty_common.middleware import IdempotencyMiddleware
-
 from gateway import main as gateway_main
 from gateway.middleware import (
+    _RATE_LIMIT_RPM,
     AuthMiddleware,
     ContentTypeEnforcementMiddleware,
     MIPVersionMiddleware,
     RateLimitMiddleware,
     SessionCache,
-    _RATE_LIMIT_RPM,
     mip_error_response,
 )
+from marty_common import cedar_actions
+from marty_common.middleware import IdempotencyMiddleware
 
 # ---------------------------------------------------------------------------
 # Helpers: fake gRPC response objects
@@ -1188,6 +1187,19 @@ class TestContentTypeEnforcementMiddleware:
                 "/v1/example",
                 headers={"Content-Type": "application/octet-stream"},
                 content=b"",
+            )
+
+        assert resp.status_code == 415
+        assert resp.json()["error"] == "unsupported_media_type"
+
+    async def test_didcomm_delivery_requires_json(self, content_type_app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=content_type_app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/issuance/didcomm/deliver",
+                headers={"Content-Type": "application/didcomm-plain+json"},
+                content=b"{}",
             )
 
         assert resp.status_code == 415
