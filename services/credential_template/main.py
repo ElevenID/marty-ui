@@ -3177,6 +3177,73 @@ async def delete_delivery_destination(
 internal_router = APIRouter(prefix="/internal", tags=["internal"])
 
 
+def _template_to_internal_issuance_context(
+    template: CredentialTemplate,
+) -> dict[str, Any]:
+    """Return the safe server-owned context needed to prepare issuance.
+
+    The public template shape deliberately omits the resolved signing
+    algorithm. Protocol services still need the algorithm together with the
+    issuer DID, credential format, and purpose to perform an exact live
+    issuer-profile resolution. This internal shape contains those public
+    cryptographic identity facts but never cached profile, service, provider,
+    or KMS key coordinates.
+    """
+
+    public = _template_to_response(template).model_dump(exclude_none=True)
+    public.update(
+        {
+            "issuer_algorithm": str(template.issuer_algorithm or "").strip(),
+            "supported_formats": [item.value for item in template.supported_formats],
+            "issuance_protocol": template.issuance_protocol,
+            "selective_disclosure_fields": list(
+                template.selective_disclosure_fields
+            ),
+            "zk_predicate_claims": list(template.zk_predicate_claims),
+            "wallet_configs": [
+                {
+                    "wallet_id": item.wallet_id,
+                    "deep_link_scheme": item.deep_link_scheme,
+                    **(
+                        {"format_variant": item.format_variant}
+                        if item.format_variant
+                        else {}
+                    ),
+                }
+                for item in template.wallet_configs
+            ],
+            "validity_rules": {
+                "default_validity_days": template.validity_rules.default_validity_days,
+                "max_validity_days": template.validity_rules.max_validity_days,
+                "renewable": template.validity_rules.renewable,
+                "renewal_window_days": template.validity_rules.renewal_window_days,
+                "not_before_offset_seconds": (
+                    template.validity_rules.not_before_offset_seconds
+                ),
+                "require_revalidation": template.validity_rules.require_revalidation,
+                "revalidation_interval_days": (
+                    template.validity_rules.revalidation_interval_days
+                ),
+            },
+        }
+    )
+    return public
+
+
+@internal_router.get("/credential-templates/{template_id}/issuance-context")
+async def get_internal_credential_template_issuance_context(
+    template_id: str,
+    repo: InMemoryCredentialTemplateRepository
+    | PostgresCredentialTemplateRepository = Depends(get_repo),
+) -> dict[str, Any]:
+    """Return a DID-first template snapshot for internal issuance services."""
+
+    template = await repo.get(template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="Credential Template not found")
+    return _template_to_internal_issuance_context(template)
+
+
 def _has_managed_issuer_did(template: Any) -> bool:
     return str(getattr(template, "issuer_did", "") or "").strip().startswith("did:")
 

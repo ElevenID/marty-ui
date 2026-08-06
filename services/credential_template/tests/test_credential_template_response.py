@@ -214,6 +214,65 @@ def test_get_credential_template_returns_protocol_shape_only() -> None:
 	assert "wallet_configs" not in body
 
 
+def test_internal_issuance_context_exposes_did_algorithm_without_custody() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	template = asyncio.run(_save_template(repo))
+	template.issuer_algorithm = "ES256"
+	template.selective_disclosure_fields = ["given_name"]
+	template.wallet_configs = [
+		credential_template.WalletConfig(
+			wallet_id="wallet-1",
+			deep_link_scheme="openid-credential-offer://",
+			format_variant="dc+sd-jwt",
+		)
+	]
+	asyncio.run(repo.save(template))
+	client, _ = _build_client(repo)
+
+	response = client.get(
+		f"/internal/credential-templates/{template.id}/issuance-context"
+	)
+
+	assert response.status_code == 200
+	body = response.json()
+	assert body["organization_id"] == "org-1"
+	assert body["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:test"
+	assert body["issuer_algorithm"] == "ES256"
+	assert body["credential_payload_format"] == "SD_JWT_VC"
+	assert body["selective_disclosure_fields"] == ["given_name"]
+	assert body["wallet_configs"] == [
+		{
+			"wallet_id": "wallet-1",
+			"deep_link_scheme": "openid-credential-offer://",
+			"format_variant": "dc+sd-jwt",
+		}
+	]
+	assert body["validity_rules"]["default_validity_days"] == 30
+	serialized = response.text.lower()
+	for forbidden in (
+		"issuer_profile_id",
+		"signing_service_id",
+		"signing_key_reference",
+		"issuer_key_id",
+		"kms_provider",
+		"kms_key_id",
+		"remote_signing_config",
+	):
+		assert forbidden not in serialized
+
+
+def test_internal_issuance_context_returns_404_for_unknown_template() -> None:
+	client, _ = _build_client(
+		credential_template.InMemoryCredentialTemplateRepository()
+	)
+
+	response = client.get(
+		"/internal/credential-templates/missing/issuance-context"
+	)
+
+	assert response.status_code == 404
+
+
 def test_issuer_profile_validation_uses_format_specific_key_purpose() -> None:
 	assert credential_template._key_purpose_for_credential_format("SD_JWT_VC") == "vc_jwt_issuer"
 	assert credential_template._key_purpose_for_credential_format("mso_mdoc") == "mdoc_dsc"
