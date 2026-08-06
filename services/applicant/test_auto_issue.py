@@ -226,6 +226,49 @@ def test_review_requires_actual_org_permission_and_callers_lock(client, seeded):
     assert approved.json()["status"] == ApplicationStatus.APPROVED.value
 
 
+def test_canonical_approval_publishes_tenant_scoped_application_event(
+    client, seeded, monkeypatch
+):
+    application_id = create_application(client).json()["id"]
+    submitted = client.post(
+        f"/v1/me/applications/{application_id}/submit", headers=self_headers()
+    )
+    assert submitted.status_code == 200, submitted.text
+    lock = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/lock",
+        headers=reviewer_headers(),
+        json={},
+    )
+    assert lock.status_code == 200, lock.text
+
+    class Publisher:
+        def __init__(self) -> None:
+            self.events = []
+
+        async def publish(self, event) -> None:
+            self.events.append(event)
+
+    publisher = Publisher()
+    monkeypatch.setattr(service, "get_event_publisher", lambda: publisher)
+
+    approved = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/approve",
+        headers=reviewer_headers(),
+        json={"notes": "verified"},
+    )
+
+    assert approved.status_code == 200, approved.text
+    assert len(publisher.events) == 1
+    event = publisher.events[0]
+    assert event.event_type == service.EventType.APPLICATION_APPROVED
+    assert event.aggregate_id == application_id
+    assert event.aggregate_type == "application"
+    assert event.organization_id == "org-1"
+    assert event.data["application_id"] == application_id
+    assert event.data["applicant_id"] == "applicant-1"
+    assert event.data["credential_template_id"] == "credential-template-1"
+
+
 def test_submitted_application_checks_use_canonical_reviewer_route(client, seeded):
     application_id = create_application(client).json()["id"]
     submitted = client.post(

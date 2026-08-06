@@ -30,11 +30,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 try:
-    from common.events import EventPublisher, DomainEvent, EventType, get_event_publisher
+    from common.events import DomainEvent, EventType, get_event_publisher
 except ImportError:
     logger.info("common.events not available; event publishing disabled")
     # Fallback if common module not available
-    EventPublisher = None
     DomainEvent = None
     EventType = None
     def get_event_publisher() -> None:
@@ -1204,12 +1203,6 @@ class UpdateApplicantRequest(BaseModel):
     vetting_data: dict[str, Any] | None = None
 
 
-class ReviewRequest(BaseModel):
-    decision: str  # "approve" or "reject"
-    notes: str | None = None
-    reason: str | None = None
-
-
 class ApplicantResponse(BaseModel):
     id: str
     organization_id: str
@@ -1893,12 +1886,12 @@ async def review_application(
                 detail=f"Approval denied by policy: {cedar_decision.reasons or cedar_decision.errors}",
             )
     
+    applicant = await repo.get_by_id(application.applicant_id)
     if decision == "approve":
         _set_application_status(application, ApplicationStatus.APPROVED)
         application.reviewed_at = datetime.now(timezone.utc)
         if request.notes:
             application.system_data["review_notes"] = request.notes
-        applicant = await repo.get_by_id(application.applicant_id)
         if applicant and applicant.status != ApplicantStatus.APPROVED:
             _set_applicant_status(applicant, ApplicantStatus.APPROVED)
             await repo.save(applicant)
@@ -1910,7 +1903,6 @@ async def review_application(
         application.system_data["rejection_reason"] = request.reason
         if request.notes:
             application.system_data["review_notes"] = request.notes
-        applicant = await repo.get_by_id(application.applicant_id)
         if applicant:
             _set_applicant_status(applicant, ApplicantStatus.REJECTED)
             await repo.save(applicant)
@@ -1918,6 +1910,50 @@ async def review_application(
         raise HTTPException(status_code=400, detail="Invalid decision")
 
     await repo.save_application(application)
+    if DomainEvent and EventType:
+        event_type = (
+            EventType.APPLICATION_APPROVED
+            if decision == "approve"
+            else EventType.APPLICATION_REJECTED
+        )
+        event_data = {
+            "applicant_id": application.applicant_id,
+            "application_id": application.id,
+            "credential_template_id": application.credential_template_id,
+            "status": application.status.value,
+            "reviewer_notes": request.notes,
+        }
+        if applicant:
+            event_data.update(
+                {
+                    "email": applicant.email,
+                    "given_name": applicant.given_name,
+                    "family_name": applicant.family_name,
+                    "vetting_level": applicant.vetting_level.value,
+                }
+            )
+        if request.reason:
+            event_data["rejection_reason"] = request.reason
+        try:
+            await get_event_publisher().publish(
+                DomainEvent(
+                    event_type=event_type,
+                    aggregate_id=application.id,
+                    aggregate_type="application",
+                    organization_id=application.organization_id,
+                    data=event_data,
+                    timestamp=application.reviewed_at,
+                )
+            )
+        except Exception as exc:
+            # The durable review decision is authoritative. A temporary event
+            # transport outage must be visible without rolling it back.
+            logger.warning(
+                "Failed to publish %s for application %s: %s",
+                event_type.value,
+                application.id,
+                exc,
+            )
     return _application_to_response(application)
 
 
@@ -2275,60 +2311,6 @@ async def update_applicant(
         applicant.vetting_data.update(request.vetting_data)
     
     applicant.updated_at = datetime.now(timezone.utc)
-    await repo.save(applicant)
-    return _to_response(applicant)
-
-
-async def review_applicant(
-    applicant_id: str,
-    request: ReviewRequest,
-    repo: InMemoryApplicantRepository = Depends(get_repo),
-) -> ApplicantResponse:
-    """Review an applicant (approve/reject)."""
-    applicant = await repo.get_by_id(applicant_id)
-    if not applicant:
-        raise HTTPException(status_code=404, detail="Applicant not found")
-
-    if applicant.status == ApplicantStatus.DRAFT:
-        _set_applicant_status(applicant, ApplicantStatus.SUBMITTED)
-    if applicant.status in {ApplicantStatus.SUBMITTED, ApplicantStatus.PENDING_INFORMATION}:
-        _set_applicant_status(applicant, ApplicantStatus.UNDER_REVIEW)
-    
-    if request.decision == "approve":
-        applicant.approve(request.notes)
-        
-        # Publish APPLICATION_APPROVED event
-        if EventPublisher and get_event_publisher():
-            try:
-                event = DomainEvent(
-                    event_type=EventType.APPLICATION_APPROVED,
-                    aggregate_id=applicant.id,
-                    aggregate_type="applicant",
-                    organization_id=applicant.organization_id,
-                    data={
-                        "applicant_id": applicant.id,
-                        "email": applicant.email,
-                        "given_name": applicant.given_name,
-                        "family_name": applicant.family_name,
-                        "status": applicant.status.value,
-                        "vetting_level": applicant.vetting_level.value,
-                        "reviewer_notes": request.notes,
-                    }
-                )
-                publisher = get_event_publisher()
-                await publisher.publish(event)
-                logger.info(f"Published APPLICATION_APPROVED event for applicant {applicant.id}")
-            except Exception as e:
-                logger.error(f"Failed to publish event: {e}")
-                # Don't fail the approval if event publishing fails
-        
-    elif request.decision == "reject":
-        if not request.reason:
-            raise HTTPException(status_code=400, detail="Rejection reason required")
-        applicant.reject(request.reason)
-    else:
-        raise HTTPException(status_code=400, detail="Invalid decision")
-    
     await repo.save(applicant)
     return _to_response(applicant)
 

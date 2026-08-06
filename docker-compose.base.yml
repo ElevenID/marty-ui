@@ -416,6 +416,7 @@ services:
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
+      ES_GRPC_TARGET: event-stream:9015
       AUTH_GRPC_PORT: "9001"
     ports:
       - "8001:8001"
@@ -453,6 +454,7 @@ services:
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
       MARTY_ORG_REVIEWER_EMAIL: ${MARTY_ORG_REVIEWER_EMAIL:-reviewer@marty.demo}
+      ES_GRPC_TARGET: event-stream:9015
     ports:
       - "8002:8002"
       - "9002:9002"
@@ -550,6 +552,7 @@ services:
       APPLICATION_TEMPLATE_MIGRATION_MAP: ${APPLICATION_TEMPLATE_MIGRATION_MAP:-}
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
+      ES_GRPC_TARGET: event-stream:9015
     ports:
       - "8006:8006"
     volumes:
