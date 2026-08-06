@@ -4743,6 +4743,7 @@ async def internal_resolve_issuer_context(
         for profile in (profiles or [])
         if isinstance(profile, dict)
         and profile.get("status") == "active"
+        and profile.get("organization_id") == organization_id
         and profile.get("issuer_did")
         and profile.get("signing_service_id")
     ]
@@ -5142,6 +5143,19 @@ async def internal_sign_payload_with_issuer_did(
     second identity selector or override custody routing.
     """
     _require_internal_signing_key_api_key(x_api_key)
+    allowed_fields = {
+        "issuer_did",
+        "credential_format",
+        "key_purpose",
+        "algorithm",
+        "payload_b64",
+        "payload_hex",
+    }
+    if set(body) - allowed_fields:
+        raise HTTPException(
+            status_code=422,
+            detail="DID-mediated signing accepts only public signing inputs and payload.",
+        )
     issuer_did = body.get("issuer_did")
     credential_format = body.get("credential_format")
     key_purpose = body.get("key_purpose")
@@ -5153,24 +5167,15 @@ async def internal_sign_payload_with_issuer_did(
             status_code=422,
             detail="credential_format is required for DID-mediated signing.",
         )
-    if key_purpose is not None and (
-        not isinstance(key_purpose, str) or not key_purpose.strip()
-    ):
-        raise HTTPException(
-            status_code=422, detail="key_purpose must be a non-empty string."
-        )
-    if any(
-        body.get(field)
-        for field in (
-            "issuer_profile_id",
-            "key_reference",
-            "service_id",
-            "signing_service_id",
-        )
-    ):
+    if not isinstance(key_purpose, str) or not key_purpose.strip():
         raise HTTPException(
             status_code=422,
-            detail="DID-mediated signing does not accept profile or KMS routing overrides.",
+            detail="key_purpose is required for DID-mediated signing.",
+        )
+    if not isinstance(algorithm, str) or not algorithm.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="algorithm is required for DID-mediated signing.",
         )
 
     identity = await _resolve_org_scoped_issuer_identity(
@@ -6249,6 +6254,7 @@ async def _resolve_org_scoped_issuer_identity(
         for profile in (profiles or [])
         if isinstance(profile, dict)
         and profile.get("status") == "active"
+        and profile.get("organization_id") == organization_id
         and profile.get("issuer_did") == issuer_did
         and profile.get("signing_service_id")
     ]
@@ -6425,16 +6431,12 @@ async def _resolve_org_scoped_issuer_identity(
         )
 
     if len(resolved_identities) > 1:
-        profile_ids = sorted(
-            str(identity["issuer_profile"].get("id") or "<unknown>")
-            for identity in resolved_identities
-        )
         raise HTTPException(
             status_code=409,
             detail=(
                 "Issuer DID resolves to multiple active issuer profiles for the "
                 "requested organization, purpose, format, and algorithm. Repair "
-                f"the issuer registry before signing. Matching profiles: {profile_ids}"
+                "the issuer registry before signing."
             ),
         )
     if resolved_identities:
