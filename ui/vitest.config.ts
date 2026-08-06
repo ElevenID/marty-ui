@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
 import { existsSync } from 'fs'
 
+const configDir = import.meta.dirname
+
 function muiIconMjsCompatibilityPlugin() {
   return {
     name: 'mui-icon-mjs-compatibility',
@@ -11,11 +13,11 @@ function muiIconMjsCompatibilityPlugin() {
       if (!/^@mui\/icons-material\/.+\.js$/.test(source)) return null
 
       const iconName = source.slice('@mui/icons-material/'.length, -'.js'.length)
-      const iconPath = resolve(__dirname, 'node_modules', '@mui', 'icons-material', `${iconName}.mjs`)
+      const iconPath = resolve(configDir, 'node_modules', '@mui', 'icons-material', `${iconName}.mjs`)
       if (existsSync(iconPath)) return iconPath
 
       const renamedIconPath = resolve(
-        __dirname,
+        configDir,
         'node_modules',
         '@mui',
         'icons-material',
@@ -72,16 +74,16 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': resolve(__dirname, './src'),
-      '@components': resolve(__dirname, './src/components'),
-      '@services': resolve(__dirname, './src/services'),
-      '@hooks': resolve(__dirname, './src/hooks'),
-      '@contexts': resolve(__dirname, './src/contexts'),
-      '@config': resolve(__dirname, './src/config'),
-      '@ui-public-config': resolve(__dirname, './src/variants/publicConfig.public.js'),
-      '@ui-public-routes': resolve(__dirname, './src/variants/publicSite.public.jsx'),
-      '@marty/commerce-extension': resolve(__dirname, './src/extensions/commerce/publicStub.jsx'),
-      '@test': resolve(__dirname, './src/test'),
+      '@': resolve(configDir, './src'),
+      '@components': resolve(configDir, './src/components'),
+      '@services': resolve(configDir, './src/services'),
+      '@hooks': resolve(configDir, './src/hooks'),
+      '@contexts': resolve(configDir, './src/contexts'),
+      '@config': resolve(configDir, './src/config'),
+      '@ui-public-config': resolve(configDir, './src/variants/publicConfig.public.js'),
+      '@ui-public-routes': resolve(configDir, './src/variants/publicSite.public.jsx'),
+      '@marty/commerce-extension': resolve(configDir, './src/extensions/commerce/publicStub.jsx'),
+      '@test': resolve(configDir, './src/test'),
     },
   },
 })
