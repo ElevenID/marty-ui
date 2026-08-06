@@ -10,15 +10,14 @@ from enum import Enum
 from typing import Any, Literal
 
 from pydantic import (
-    AnyHttpUrl,
     AliasChoices,
+    AnyHttpUrl,
     BaseModel,
     ConfigDict,
     EmailStr,
     Field,
     model_validator,
 )
-
 
 # =============================================================================
 # Base Classes
@@ -2235,9 +2234,11 @@ class IssuanceCreate(BaseModel):
 class DidcommDeliverRequest(BaseModel):
     """Deliver a credential via DIDComm v2 push."""
 
-    transaction_id: str
-    holder_did: str
-    universal_resolver_url: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(min_length=1)
+    transaction_id: str = Field(min_length=1)
+    holder_did: str = Field(min_length=1, pattern=r"^did:")
 
 
 class DidcommDeliveryResponse(BaseModel):
