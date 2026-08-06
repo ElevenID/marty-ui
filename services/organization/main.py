@@ -157,7 +157,7 @@ def get_config() -> dict:
     }
 
 
-from common.grpc_event_bus import GrpcEventBusPublisher  # noqa: E402
+from common.grpc_event_bus import GrpcEventStreamPublisher  # noqa: E402
 from .application.ports import AddMemberRoleCommand, SetMemberRolesCommand  # noqa: E402
 
 
@@ -193,7 +193,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Persist audit events, then fan out live events over the gRPC event bus.
     event_publisher = AuditEventPublisher(
         audit_repo=audit_event_repo,
-        delegate=GrpcEventBusPublisher(),
+        delegate=GrpcEventStreamPublisher(),
     )
     
     # Initialize use cases

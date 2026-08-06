@@ -13,6 +13,14 @@ from common.events import (
     EventType,
     get_event_publisher,
 )
+from common.grpc_event_bus import GrpcEventStreamPublisher
+
+
+@pytest.fixture(autouse=True)
+def event_stream_publish(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    publish = AsyncMock(return_value=0)
+    monkeypatch.setattr(GrpcEventStreamPublisher, "publish_fields", publish)
+    return publish
 
 
 def _make_event(event_type=EventType.APPLICATION_APPROVED, **overrides):
@@ -32,6 +40,26 @@ def _make_event(event_type=EventType.APPLICATION_APPROVED, **overrides):
 
 
 class TestApplicationApprovedGrpc:
+    async def test_all_events_are_published_to_central_stream(
+        self, event_stream_publish: AsyncMock
+    ):
+        publisher = EventPublisher()
+        event = _make_event(event_type=EventType.CREDENTIAL_ISSUED)
+
+        await publisher.publish(event)
+
+        event_stream_publish.assert_awaited_once_with(
+            event_type="credential.issued",
+            aggregate_id="app-1",
+            aggregate_type="Application",
+            organization_id="org-1",
+            data={
+                "applicant_id": "a-1",
+                "credential_type": "MemberCredential",
+            },
+            timestamp="2026-03-14T00:00:00+00:00",
+        )
+
     async def test_routes_to_grpc_not_http(self):
         """APPLICATION_APPROVED events are routed to _publish_to_flow_grpc, not HTTP."""
         publisher = EventPublisher()
