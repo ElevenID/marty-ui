@@ -12,6 +12,7 @@ import { isNetworkAbortLikeError, postWithIdempotency } from './idempotency';
 const PRESENTATION_POLICY_BASE = '/v1/presentation-policies';
 const CREDENTIAL_TEMPLATE_BASE = '/v1/credential-templates';
 const TRUST_PROFILE_BASE = '/v1/trust-profiles';
+const ISSUER_ENTITY_BASE = '/v1/issuer-entities';
 
 const TRUST_PROFILE_FORMAT_ALIASES = {
   jwt_vc: 'VC_JWT',
@@ -125,9 +126,31 @@ function normalizeTrustProfileType(profileType) {
 function normalizeTrustedIssuer(issuer = {}) {
   return {
     ...issuer,
-    did: issuer.did || issuer.issuer_did || issuer.issuer_id || '',
-    issuer_did: issuer.issuer_did || issuer.did || issuer.issuer_id || '',
+    did: issuer.did || issuer.issuer_did || '',
+    issuer_did: issuer.issuer_did || issuer.did || '',
     country: issuer.country || issuer.metadata?.country || '—',
+  };
+}
+
+function composeTrustProfileIssuer(relationship, issuerEntity) {
+  if (!relationship || !issuerEntity || relationship.issuer_id !== issuerEntity.id) {
+    const error = new Error('Trust Profile Issuer response references an unavailable Issuer Entity.');
+    error.code = 'MALFORMED_RESPONSE';
+    throw error;
+  }
+
+  return {
+    ...relationship,
+    issuer_entity: issuerEntity,
+    name: issuerEntity.display_name,
+    description: issuerEntity.description || null,
+    did: issuerEntity.issuer_id,
+    issuer_did: issuerEntity.issuer_id,
+    issuer_type: issuerEntity.issuer_type,
+    issuer_url: issuerEntity.metadata?.issuer_url || null,
+    status: issuerEntity.compliance_status,
+    compliance_status: issuerEntity.compliance_status,
+    credential_template_ids: relationship.metadata?.credential_template_ids || [],
   };
 }
 
@@ -814,17 +837,65 @@ export async function deleteTrustProfile(id) {
 /**
  * List trusted issuers for a trust profile.
  */
-export async function listTrustProfileIssuers(profileId) {
-  const result = await get(`${TRUST_PROFILE_BASE}/${profileId}/issuers`);
-  return Array.isArray(result) ? result.map((issuer) => normalizeTrustedIssuer(issuer)) : result;
+export async function listIssuerEntities(organizationId) {
+  const scopedOrganizationId = requireOrganizationId({ organization_id: organizationId });
+  const result = await get(ISSUER_ENTITY_BASE, {
+    params: { organization_id: scopedOrganizationId },
+  });
+  return requireDirectArray(result, 'Issuer Entity');
+}
+
+export async function listTrustProfileIssuers(profileId, organizationId) {
+  const [relationships, entities] = await Promise.all([
+    get(`${TRUST_PROFILE_BASE}/${profileId}/issuers`),
+    listIssuerEntities(organizationId),
+  ]);
+  const directRelationships = requireDirectArray(relationships, 'Trust Profile Issuer');
+  const entitiesById = new Map(entities.map((entity) => [entity.id, entity]));
+  return directRelationships.map((relationship) => (
+    composeTrustProfileIssuer(relationship, entitiesById.get(relationship.issuer_id))
+  ));
 }
 
 /**
  * Add a trusted issuer to a trust profile.
  */
-export async function addTrustProfileIssuer(profileId, data) {
-  const result = await post(`${TRUST_PROFILE_BASE}/${profileId}/issuers`, data);
-  return normalizeTrustedIssuer(result);
+export async function addTrustProfileIssuer(profileId, organizationId, data) {
+  const scopedOrganizationId = requireOrganizationId({ organization_id: organizationId });
+  const issuerDid = String(data?.issuer_did || data?.did || '').trim();
+  if (!issuerDid) {
+    const error = new Error('An issuer DID is required before linking a trusted issuer.');
+    error.code = 'ISSUER_DID_REQUIRED';
+    throw error;
+  }
+
+  const entities = await listIssuerEntities(scopedOrganizationId);
+  let issuerEntity = entities.find((entity) => (
+    entity.organization_id === scopedOrganizationId && entity.issuer_id === issuerDid
+  ));
+  if (!issuerEntity) {
+    issuerEntity = await post(ISSUER_ENTITY_BASE, {
+      organization_id: scopedOrganizationId,
+      issuer_id: issuerDid,
+      issuer_type: data.issuer_type || 'ORGANIZATION',
+      display_name: data.name || issuerDid,
+      description: data.description || null,
+      metadata: {
+        ...(data.issuer_url ? { issuer_url: data.issuer_url } : {}),
+      },
+    });
+  }
+
+  const relationship = await post(`${TRUST_PROFILE_BASE}/${profileId}/issuers`, {
+    issuer_id: issuerEntity.id,
+    trust_level: data.trust_level ?? 100,
+    relationship_status: data.relationship_status || 'TRUSTED',
+    cascade_revocation_policy: data.cascade_revocation_policy || 'NOTIFY_ONLY',
+    metadata: {
+      credential_template_ids: data.credential_template_ids || [],
+    },
+  });
+  return composeTrustProfileIssuer(relationship, issuerEntity);
 }
 
 /**

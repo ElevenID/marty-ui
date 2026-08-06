@@ -45,7 +45,9 @@ def _build_client(
     return TestClient(app), get_membership
 
 
-def _save_profile(repo: trust_profile.InMemoryTrustProfileRepository, organization_id: str = "org-1") -> trust_profile.TrustProfile:
+def _save_profile(
+    repo: trust_profile.InMemoryTrustProfileRepository, organization_id: str = "org-1"
+) -> trust_profile.TrustProfile:
     profile = trust_profile.TrustProfile(
         organization_id=organization_id,
         name="Default trust profile",
@@ -126,7 +128,9 @@ def test_create_issuer_entity_creates_protocol_record():
     assert body["metadata"] == {"issuer_url": "https://issuer.example"}
     get_membership.assert_awaited_once_with("user-1", "org-1")
 
-    saved = asyncio.run(repo.find_issuer_entity_by_identifier("org-1", "did:example:issuer-1"))
+    saved = asyncio.run(
+        repo.find_issuer_entity_by_identifier("org-1", "did:example:issuer-1")
+    )
     assert saved is not None
     assert saved.display_name == "Acme Issuer"
 
@@ -150,7 +154,44 @@ def test_create_issuer_entity_rejects_duplicate_identifier_within_scope():
     assert response.json()["detail"] == "Issuer identifier already exists in this scope"
 
 
-def test_add_trusted_issuer_creates_compatibility_link_to_issuer_entity():
+def test_add_trusted_issuer_links_existing_issuer_entity():
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = _save_profile(repo)
+    issuer_entity = _save_issuer_entity(
+        repo,
+        profile.organization_id,
+        "did:example:issuer-1",
+        display_name="Acme Issuer",
+    )
+    client, _ = _build_client(repo)
+
+    response = client.post(
+        f"/v1/trust-profiles/{profile.id}/issuers",
+        headers={"x-user-id": "user-1"},
+        json={
+            "issuer_id": issuer_entity.id,
+            "metadata": {"credential_template_ids": ["tpl-1"]},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["trust_profile_id"] == profile.id
+    assert body["issuer_id"] == issuer_entity.id
+    assert body["trust_level"] == 100
+    assert body["relationship_status"] == "TRUSTED"
+    assert body["cascade_revocation_policy"] == "NOTIFY_ONLY"
+    assert body["metadata"]["credential_template_ids"] == ["tpl-1"]
+    # Denormalized fields removed — issuer_did, name now only on IssuerEntity
+    assert "issuer_did" not in body
+    assert "name" not in body
+
+    links = asyncio.run(repo.list_profile_issuers(profile.id))
+    assert len(links) == 1
+    assert links[0].issuer_id == issuer_entity.id
+
+
+def test_add_trusted_issuer_rejects_obsolete_combined_shape():
     repo = trust_profile.InMemoryTrustProfileRepository()
     profile = _save_profile(repo)
     client, _ = _build_client(repo)
@@ -159,62 +200,52 @@ def test_add_trusted_issuer_creates_compatibility_link_to_issuer_entity():
         f"/v1/trust-profiles/{profile.id}/issuers",
         headers={"x-user-id": "user-1"},
         json={
-            "name": "Acme Issuer",
-            "description": "Legacy compatibility issuer",
-            "issuer_did": "did:example:issuer-compat",
-            "issuer_url": "https://issuer.example",
-            "credential_template_ids": ["tpl-1"],
-            "verification_keys": [{"kid": "key-1"}],
+            "name": "Legacy issuer",
+            "issuer_did": "did:example:legacy",
         },
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["trust_profile_id"] == profile.id
-    assert body["issuer_id"] is not None
-    assert body["trust_level"] == 100
-    assert body["relationship_status"] == "TRUSTED"
-    assert body["cascade_revocation_policy"] == "NOTIFY_ONLY"
-    assert body["metadata"]["credential_template_ids"] == ["tpl-1"]
-    assert body["metadata"]["verification_keys"] == [{"kid": "key-1"}]
-    # Denormalized fields removed — issuer_did, name now only on IssuerEntity
-    assert "issuer_did" not in body
-    assert "issuer_entity_id" not in body
+    assert response.status_code == 422
 
-    issuer_entity = asyncio.run(
-        repo.find_issuer_entity_by_identifier(profile.organization_id, "did:example:issuer-compat")
+
+def test_add_trusted_issuer_rejects_foreign_entity():
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = _save_profile(repo, "org-1")
+    foreign = _save_issuer_entity(repo, "org-2", "did:example:foreign")
+    client, _ = _build_client(repo)
+
+    response = client.post(
+        f"/v1/trust-profiles/{profile.id}/issuers",
+        headers={"x-user-id": "user-1"},
+        json={"issuer_id": foreign.id},
     )
-    assert issuer_entity is not None
-    assert issuer_entity.display_name == "Acme Issuer"
 
-    links = asyncio.run(repo.list_profile_issuers(profile.id))
-    assert len(links) == 1
-    assert links[0].issuer_id == issuer_entity.id
+    assert response.status_code == 404
+    assert asyncio.run(repo.list_profile_issuers(profile.id)) == []
 
 
 def test_update_trusted_issuer_updates_relationship_fields_and_metadata():
     repo = trust_profile.InMemoryTrustProfileRepository()
     profile = _save_profile(repo)
-    issuer_entity = _save_issuer_entity(repo, profile.organization_id, "did:example:issuer-1", display_name="Acme")
+    issuer_entity = _save_issuer_entity(
+        repo, profile.organization_id, "did:example:issuer-1", display_name="Acme"
+    )
     profile_issuer = trust_profile.TrustProfileIssuer(
         trust_profile_id=profile.id,
         issuer_id=issuer_entity.id,
-        metadata={"legacy_name": "Acme", "issuer_url": "https://old.example"},
+        metadata={"credential_template_ids": ["tpl-1"]},
     )
     asyncio.run(repo.save_profile_issuer(profile_issuer))
     client, _ = _build_client(repo)
 
-    response = client.put(
+    response = client.patch(
         f"/v1/trust-profiles/{profile.id}/issuers/{profile_issuer.id}",
         headers={"x-user-id": "user-1"},
         json={
-            "name": "Acme Updated",
-            "issuer_url": "https://new.example",
-            "issuer_did": "did:example:issuer-2",
             "trust_level": 77,
             "relationship_status": "UNDER_REVIEW",
             "cascade_revocation_policy": "MANUAL",
-            "credential_template_ids": ["tpl-2"],
+            "metadata": {"credential_template_ids": ["tpl-2"]},
         },
     )
 
@@ -232,14 +263,20 @@ def test_update_trusted_issuer_updates_relationship_fields_and_metadata():
 
     saved_entity = asyncio.run(repo.get_issuer_entity(issuer_entity.id))
     assert saved_entity is not None
-    assert saved_entity.display_name == "Acme Updated"
-    assert saved_entity.issuer_id == "did:example:issuer-2"
+    assert saved_entity.display_name == "Acme"
+    assert saved_entity.issuer_id == "did:example:issuer-1"
 
     saved_link = asyncio.run(repo.get_profile_issuer(profile_issuer.id))
     assert saved_link is not None
     assert saved_link.trust_level == 77
-    assert saved_link.relationship_status == trust_profile.TrustRelationshipStatus.UNDER_REVIEW
-    assert saved_link.cascade_revocation_policy == trust_profile.CascadeRevocationPolicy.MANUAL
+    assert (
+        saved_link.relationship_status
+        == trust_profile.TrustRelationshipStatus.UNDER_REVIEW
+    )
+    assert (
+        saved_link.cascade_revocation_policy
+        == trust_profile.CascadeRevocationPolicy.MANUAL
+    )
 
 
 def test_revoked_issuer_entity_cannot_be_reinstated():
@@ -298,6 +335,26 @@ def test_public_issuer_entity_input_rejects_system_claims_and_custody_metadata()
         json={**base, "metadata": {"public": [{"signing_service_id": "private"}]}},
     )
     assert custody.status_code == 422
+
+    private_jwk = client.post(
+        "/v1/issuer-entities",
+        headers={"x-user-id": "user-1"},
+        json={
+            **base,
+            "metadata": {
+                "verification_keys": [
+                    {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "public-x",
+                        "y": "public-y",
+                        "d": "must-remain-in-managed-custody",
+                    }
+                ]
+            },
+        },
+    )
+    assert private_jwk.status_code == 422
 
 
 def test_global_and_system_issuer_mutation_fails_closed():
@@ -416,7 +473,10 @@ def test_sync_trust_registry_returns_delta_entries_and_status_counts():
     sync_body = sync_response.json()
     assert sync_body["sync_token"] == "3"
     assert sync_body["sequence"] == 3
-    assert [entry["entry_id"] for entry in sync_body["entries"]] == [current_csca.id, current_dsc.id]
+    assert [entry["entry_id"] for entry in sync_body["entries"]] == [
+        current_csca.id,
+        current_dsc.id,
+    ]
     assert removed_entry.id not in [entry["entry_id"] for entry in sync_body["entries"]]
 
     status_response = client.get("/v1/trust-registry/status")
@@ -460,7 +520,9 @@ def test_list_country_csca_entries_filters_by_country_and_invalid_sync_token_is_
     assert all(entry["country_code"] == "US" for entry in country_body)
     assert all(entry["anchor_type"] == "CSCA" for entry in country_body)
 
-    invalid_response = client.get("/v1/trust-registry/sync", params={"since": "not-a-token"})
+    invalid_response = client.get(
+        "/v1/trust-registry/sync", params={"since": "not-a-token"}
+    )
 
     assert invalid_response.status_code == 400
     assert invalid_response.json()["detail"] == "Invalid sync token"
@@ -572,7 +634,9 @@ def test_update_organization_trust_profile_requires_admin_membership():
     )
 
     assert response.status_code == 403
-    assert response.json()["detail"] == "Missing required permission: trust-profile:edit"
+    assert (
+        response.json()["detail"] == "Missing required permission: trust-profile:edit"
+    )
 
 
 def test_organization_trust_profile_rejects_public_key_management_selector():
@@ -619,7 +683,9 @@ def test_organization_trust_profile_rejects_nested_custody_metadata():
     )
 
     assert response.status_code == 422
-    assert "cannot contain private custody selector" in response.json()["detail"][0]["msg"]
+    assert (
+        "cannot contain private custody selector" in response.json()["detail"][0]["msg"]
+    )
 
 
 def test_organization_trust_profile_removes_deprecated_key_utility_routes():

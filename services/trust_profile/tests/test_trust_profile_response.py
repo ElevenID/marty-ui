@@ -65,26 +65,36 @@ def test_bootstrap_updates_marty_managed_issuer_did(monkeypatch) -> None:
             )
         ],
     )
-    stale_issuer = trust_profile.TrustedIssuer(
+    stale_issuer = trust_profile.IssuerEntity(
+        id=trust_profile.MARTY_ISSUER_ENTITY_ID,
+        organization_id=trust_profile.MARTY_ORG_ID,
+        issuer_id="did:web:beta.elevenidllc.com",
+        display_name="Marty Managed Issuer",
+        metadata={"issuer_url": "https://beta.elevenidllc.com"},
+    )
+    stale_link = trust_profile.TrustProfileIssuer(
         id=trust_profile.MARTY_TRUSTED_ISSUER_ID,
         trust_profile_id=trust_profile.MARTY_TRUST_PROFILE_ID,
-        name="Marty Managed Issuer",
-        issuer_did="did:web:beta.elevenidllc.com",
-        issuer_url="https://beta.elevenidllc.com",
-        status=trust_profile.IssuerStatus.ACTIVE,
+        issuer_id=stale_issuer.id,
     )
     asyncio.run(repo.save_profile(stale_profile))
-    asyncio.run(repo.save_issuer(stale_issuer))
+    asyncio.run(repo.save_issuer_entity(stale_issuer))
+    asyncio.run(repo.save_profile_issuer(stale_link))
 
     asyncio.run(trust_profile._bootstrap_marty_login_trust_profile(repo))
 
     profile = asyncio.run(repo.get_profile(trust_profile.MARTY_TRUST_PROFILE_ID))
-    issuer = asyncio.run(repo.get_issuer(trust_profile.MARTY_TRUSTED_ISSUER_ID))
+    issuer = asyncio.run(repo.get_issuer_entity(trust_profile.MARTY_ISSUER_ENTITY_ID))
+    link = asyncio.run(repo.get_profile_issuer(trust_profile.MARTY_TRUSTED_ISSUER_ID))
 
     assert profile is not None
-    assert profile.trust_sources[0].issuer_did == "did:web:beta.elevenidllc.com:orgs:marty"
+    assert (
+        profile.trust_sources[0].issuer_did == "did:web:beta.elevenidllc.com:orgs:marty"
+    )
     assert issuer is not None
-    assert issuer.issuer_did == "did:web:beta.elevenidllc.com:orgs:marty"
+    assert issuer.issuer_id == "did:web:beta.elevenidllc.com:orgs:marty"
+    assert link is not None
+    assert link.issuer_id == issuer.id
 
 
 async def _save_profile(
@@ -107,7 +117,11 @@ async def _save_profile(
         allowed_issuers=["did:example:issuer-1"],
         denied_issuers=["did:example:issuer-2"],
         system_issuer_overrides={
-            "did:example:issuer-3": {"action": "DOWNGRADE", "trust_level": 40, "reason": "Pilot issuer"}
+            "did:example:issuer-3": {
+                "action": "DOWNGRADE",
+                "trust_level": 40,
+                "reason": "Pilot issuer",
+            }
         },
         compatible_compliance_codes=["AAMVA_MDL"],
         verification_policy_set_id="policy-set-1",
@@ -209,7 +223,9 @@ def test_internal_get_trust_profile_skips_user_membership() -> None:
     assert get_membership.await_count == 0
 
 
-def test_resource_owner_lookup_is_minimal_and_service_authenticated(monkeypatch) -> None:
+def test_resource_owner_lookup_is_minimal_and_service_authenticated(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "gateway-service-key")
     repo = trust_profile.InMemoryTrustProfileRepository()
     profile = asyncio.run(_save_profile(repo))
@@ -260,7 +276,7 @@ def test_create_trust_profile_returns_canonical_fields() -> None:
                     "name": "EUDI trust list",
                     "source_type": "trust_list",
                     "url": "https://trust.example/eudi.json",
-                    "description": "LOTL source"
+                    "description": "LOTL source",
                 }
             ],
             "allowed_algorithms": ["ES256"],
@@ -269,13 +285,13 @@ def test_create_trust_profile_returns_canonical_fields() -> None:
                 "check_ocsp": True,
                 "check_crl": True,
                 "check_status_list": False,
-                "cache_duration_hours": 1
+                "cache_duration_hours": 1,
             },
             "time_policy": {
                 "max_clock_skew_seconds": 60,
                 "credential_freshness_hours": 1,
                 "require_not_before": True,
-                "require_expiration": True
+                "require_expiration": True,
             },
             "supported_formats": ["mdoc", "SD_JWT_VC"],
             "allowed_issuers": ["did:example:eudi-1"],
@@ -337,10 +353,10 @@ def test_create_trust_profile_round_trips_canvas_issuer_aliases() -> None:
             "source_type": "PINNED_ISSUER",
             "url": "https://canvas.example.edu/issuers/issuer-123",
             "certificate_pem": None,
-                "issuer_did": None,
-                "description": "Pinned Canvas Credentials issuer",
-                "pinned_certificates": [],
-            }
+            "issuer_did": None,
+            "description": "Pinned Canvas Credentials issuer",
+            "pinned_certificates": [],
+        }
     ]
     get_membership.assert_awaited_once_with("user-1", "org-1")
 
@@ -388,7 +404,9 @@ def test_create_empty_trust_profile_can_explicitly_allow_all_issuers() -> None:
     get_membership.assert_awaited_once_with("user-1", "org-1")
 
 
-def test_update_trust_profile_clears_to_deny_all_when_trust_sources_are_removed() -> None:
+def test_update_trust_profile_clears_to_deny_all_when_trust_sources_are_removed() -> (
+    None
+):
     repo = trust_profile.InMemoryTrustProfileRepository()
     profile = asyncio.run(_save_profile(repo))
     profile.allowed_issuers = None
