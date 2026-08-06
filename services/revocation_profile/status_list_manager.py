@@ -14,7 +14,7 @@ import logging
 import os
 import zlib
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional, Protocol
 
@@ -67,8 +67,8 @@ class StatusList:
     version: int = 0
     published_at: Optional[datetime] = None
     url: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class IStatusListRepository(Protocol):
@@ -281,7 +281,7 @@ class StatusListManager:
                 status_list.data = bytes(data)
 
             status_list.version += 1
-            status_list.updated_at = datetime.utcnow()
+            status_list.updated_at = datetime.now(timezone.utc)
 
             await self._repository.save(status_list)
 
@@ -336,22 +336,18 @@ class StatusListManager:
         """
         status_list = await self.get_or_create(tenant_id, format)
 
-        # Compress the data
-        if format == StatusListFormat.TOKEN_STATUS_LIST:
-            compressed = self._compress_token_status_list(status_list.data)
-            content_type = "application/cbor"
-            extension = "cbor"
-        else:
-            compressed = self._compress_bitstring_status_list(status_list.data)
-            content_type = "application/json"
-            extension = "json"
+        extension = (
+            "cbor"
+            if format == StatusListFormat.TOKEN_STATUS_LIST
+            else "json"
+        )
 
         # Generate URL
         list_hash = hashlib.sha256(status_list.data).hexdigest()[:16]
         url = f"{self._base_url}/{tenant_id}/{format.value}/{list_hash}.{extension}"
 
         # Update status list
-        status_list.published_at = datetime.utcnow()
+        status_list.published_at = datetime.now(timezone.utc)
         status_list.url = url
         await self._repository.save(status_list)
 
@@ -408,7 +404,7 @@ class StatusListManager:
         return {
             "iss": issuer,
             "sub": subject,
-            "iat": int(datetime.utcnow().timestamp()),
+            "iat": int(datetime.now(timezone.utc).timestamp()),
             "status_list": {
                 "bits": status_list.bits_per_status,
                 "lst": base64.urlsafe_b64encode(compressed).decode("ascii").rstrip("="),
@@ -558,7 +554,7 @@ class StatusListRepository:
         allocation = {
             "index": index,
             "credential_id": credential_id,
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         allocations.append(allocation)
         

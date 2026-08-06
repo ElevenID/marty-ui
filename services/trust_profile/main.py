@@ -45,7 +45,6 @@ from marty_common.system_ids import (
 from marty_common.system_urls import resolve_marty_issuer_base_url, resolve_marty_issuer_did
 from trust_profile.infrastructure.adapters import PostgresTrustProfileRepository
 from trust_profile.infrastructure.models import mapper_registry
-from trust_profile.routes.registry_imports import registry_router as registry_imports_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -2452,7 +2451,7 @@ def create_app() -> FastAPI:
         description="Manages Trust Profiles - who is trusted and how validation happens",
         service_name=SERVICE_NAME,
         lifespan=lifespan,
-        routers=[router, internal_router, resource_owner_router, organization_trust_profile_router, framework_router, registry_router, issuer_router, registry_imports_router],
+        routers=[router, internal_router, resource_owner_router, organization_trust_profile_router, framework_router, registry_router, issuer_router],
     )
 
 
