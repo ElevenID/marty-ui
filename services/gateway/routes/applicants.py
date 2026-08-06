@@ -94,6 +94,43 @@ async def get_my_application(application_id: str, request: Request) -> Response:
     return await proxy_request(request, _applicant_url(), f"/v1/me/applications/{application_id}")
 
 
+@applicant_router.post("/v1/me/applications/{application_id}/evidence", summary="Submit My Application Evidence")
+async def submit_my_application_evidence(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _applicant_url(), f"/v1/me/applications/{application_id}/evidence")
+
+
+@applicant_router.get("/v1/me/applications/{application_id}/evidence", summary="List My Application Evidence")
+async def list_my_application_evidence(application_id: str, request: Request) -> Response:
+    return await proxy_request(request, _applicant_url(), f"/v1/me/applications/{application_id}/evidence")
+
+
+@applicant_router.get("/v1/me/applications/{application_id}/evidence/{evidence_id}", summary="Get My Application Evidence")
+async def get_my_application_evidence(application_id: str, evidence_id: str, request: Request) -> Response:
+    return await proxy_request(
+        request,
+        _applicant_url(),
+        f"/v1/me/applications/{application_id}/evidence/{evidence_id}",
+    )
+
+
+@applicant_router.get("/v1/me/applications/{application_id}/evidence/{evidence_id}/content", summary="Download My Application Evidence")
+async def download_my_application_evidence(application_id: str, evidence_id: str, request: Request) -> Response:
+    return await proxy_request(
+        request,
+        _applicant_url(),
+        f"/v1/me/applications/{application_id}/evidence/{evidence_id}/content",
+    )
+
+
+@applicant_router.delete("/v1/me/applications/{application_id}/evidence/{evidence_id}", summary="Delete My Application Evidence")
+async def delete_my_application_evidence(application_id: str, evidence_id: str, request: Request) -> Response:
+    return await proxy_request(
+        request,
+        _applicant_url(),
+        f"/v1/me/applications/{application_id}/evidence/{evidence_id}",
+    )
+
+
 @applicant_router.post("/v1/me/applications/{application_id}/submit", summary="Submit My Application")
 async def submit_my_application(application_id: str, request: Request) -> Response:
     return await proxy_request(request, _applicant_url(), f"/v1/me/applications/{application_id}/submit")
@@ -126,6 +163,41 @@ async def get_organization_applicant(organization_id: str, application_id: str, 
         request,
         _applicant_url(),
         f"/v1/organizations/{organization_id}/applicants/{application_id}",
+    )
+
+
+@applicant_router.get("/v1/organizations/{organization_id}/applicants/{application_id}/evidence")
+async def list_organization_applicant_evidence(organization_id: str, application_id: str, request: Request) -> Response:
+    return await _proxy_application_action(organization_id, application_id, "evidence", request)
+
+
+@applicant_router.get("/v1/organizations/{organization_id}/applicants/{application_id}/evidence/{evidence_id}")
+async def get_organization_applicant_evidence(organization_id: str, application_id: str, evidence_id: str, request: Request) -> Response:
+    return await _proxy_application_action(
+        organization_id,
+        application_id,
+        f"evidence/{evidence_id}",
+        request,
+    )
+
+
+@applicant_router.get("/v1/organizations/{organization_id}/applicants/{application_id}/evidence/{evidence_id}/content")
+async def download_organization_applicant_evidence(organization_id: str, application_id: str, evidence_id: str, request: Request) -> Response:
+    return await _proxy_application_action(
+        organization_id,
+        application_id,
+        f"evidence/{evidence_id}/content",
+        request,
+    )
+
+
+@applicant_router.post("/v1/organizations/{organization_id}/applicants/{application_id}/evidence/{evidence_id}/revoke")
+async def revoke_organization_applicant_evidence(organization_id: str, application_id: str, evidence_id: str, request: Request) -> Response:
+    return await _proxy_application_action(
+        organization_id,
+        application_id,
+        f"evidence/{evidence_id}/revoke",
+        request,
     )
 
 
