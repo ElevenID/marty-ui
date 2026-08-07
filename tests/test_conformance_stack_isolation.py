@@ -249,6 +249,27 @@ def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
         ).read_text(encoding="utf-8")
 
 
+def test_trust_registry_private_adapter_is_conformance_only() -> None:
+    isolation = (ROOT / stack.ISOLATION_FILE).read_text(encoding="utf-8")
+    trust_profile = isolation.split("  trust-profile:\n", 1)[1].split(
+        "  deployment-profile:\n", 1
+    )[0]
+
+    assert "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST: trust-registry-fixture" in trust_profile
+    assert "TRUST_REGISTRY_TLS_CA_FILE:" in trust_profile
+    assert 'TRUST_REGISTRY_SYNC_POLL_SECONDS: "86400"' in trust_profile
+    assert "trust-registry-conformance-root-ca.pem:ro" in trust_profile
+    for production_file in (
+        "docker-compose.base.yml",
+        "docker-compose.selfhost.prod.yml",
+        "docker-compose.ui-prod.yml",
+        "docker-compose.ui-release.yml",
+    ):
+        production = (ROOT / production_file).read_text(encoding="utf-8")
+        assert "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST" not in production
+        assert "TRUST_REGISTRY_TLS_CA_FILE" not in production
+
+
 def test_local_build_defines_ui_without_release_image_overlays() -> None:
     command = stack.compose_command(
         "marty-conformance-test1",
