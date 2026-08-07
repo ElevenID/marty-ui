@@ -4540,6 +4540,7 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
                         "signing_service_id": "svc-bao",
                         "signing_key_reference": "",
                         "verification_method_id": "",
+                        "credential_format": "SD_JWT_VC",
                         "algorithm": "",
                         "status": "draft",
                         "created_at": "2026-01-01T00:00:00Z",
@@ -4600,6 +4601,7 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
             "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
             "signing_service_id": "svc-bao",
             "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
             "status": "active",
         },
         organization_id=None,
@@ -5281,6 +5283,7 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
                     "signing_key_reference": "cred-issuer-acme-es256",
                     "verification_method_id": vm_id,
                     "key_purpose": "vc_jwt_issuer",
+                    "credential_format": "SD_JWT_VC",
                     "algorithm": "ES256",
                     "status": "active",
                 },
@@ -5292,6 +5295,7 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
                     "signing_key_reference": "lti-tool-acme-rs256",
                     "verification_method_id": lti_vm_id,
                     "key_purpose": "lti_tool_signing",
+                    "credential_format": "SD_JWT_VC",
                     "algorithm": "RS256",
                     "status": "active",
                 },
@@ -5457,6 +5461,7 @@ async def test_internal_resolve_issuer_did_rejects_ambiguous_active_profiles(
         "signing_key_reference": "cred-issuer-acme-es256",
         "verification_method_id": vm_id,
         "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
         "algorithm": "ES256",
         "status": "active",
     }
@@ -5658,6 +5663,7 @@ async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
                         "organization_id": "org_issuer",
                         "issuer_did": "did:web:issuer.example",
                         "key_purpose": "oid4vp_request_signing",
+                        "credential_format": "SD_JWT_VC",
                         "algorithm": "ES256",
                         "status": "active",
                         "signing_service_id": "kms-service-internal",
@@ -5668,6 +5674,7 @@ async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
                         "organization_id": "org_issuer",
                         "issuer_did": "did:web:inactive.example",
                         "key_purpose": "oid4vp_request_signing",
+                        "credential_format": "SD_JWT_VC",
                         "algorithm": "ES256",
                         "status": "inactive",
                         "signing_service_id": "kms-service-internal",
@@ -5690,6 +5697,7 @@ async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
             {
                 "issuer_did": "did:web:issuer.example",
                 "key_purpose": "oid4vp_request_signing",
+                "credential_format": "SD_JWT_VC",
                 "algorithm": "ES256",
                 "status": "active",
             }
@@ -5712,6 +5720,7 @@ async def test_public_issuer_identities_fail_closed_on_ambiguous_profiles():
         "organization_id": "org_issuer",
         "issuer_did": "did:web:issuer.example",
         "key_purpose": "oid4vp_request_signing",
+        "credential_format": "SD_JWT_VC",
         "algorithm": "ES256",
         "status": "active",
     }
@@ -5784,3 +5793,178 @@ async def test_org_scoped_signing_key_routes_require_org_context(
 
     assert exc_info.value.status_code == 422
     assert "organization_id is required" in str(exc_info.value.detail)
+
+
+def test_public_router_exposes_identities_not_private_issuer_profiles() -> None:
+    public_paths = {route.path for route in signing_keys.signing_key_router.routes}
+    internal_paths = {
+        route.path for route in signing_keys.internal_signing_key_router.routes
+    }
+
+    assert "/v1/signing-keys/issuer-identities" in public_paths
+    assert "/v1/signing-keys/issuer-identities/resolve" in public_paths
+    assert "/v1/signing-keys/issuer-identities/certificate" in public_paths
+    assert not any(path.startswith("/v1/signing-keys/issuer-profiles") for path in public_paths)
+    assert "/internal/signing-keys/issuer-profiles" in internal_paths
+    assert "/internal/signing-keys/issuer-profiles/{profile_id}" in internal_paths
+
+
+def test_public_identity_request_rejects_every_private_custody_selector() -> None:
+    request = {
+        "organization_id": "org-a",
+        "issuer_did": "did:web:issuer.example:orgs:a",
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256",
+    }
+    for field in (
+        "issuer_profile_id",
+        "signing_service_id",
+        "signing_key_reference",
+        "kms_provider",
+        "key_name",
+    ):
+        with pytest.raises(ValueError):
+            signing_keys.IssuerIdentityCreateRequest.model_validate(
+                {**request, field: "private"}
+            )
+
+
+@pytest.mark.asyncio
+async def test_public_identity_creation_returns_only_provider_neutral_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation = signing_keys.IssuerIdentityCreateRequest(
+        organization_id="org-a",
+        issuer_did="did:web:issuer.example:orgs:a",
+        key_purpose="vc_jwt_issuer",
+        credential_format="SD_JWT_VC",
+        algorithm="ES256",
+    )
+    monkeypatch.setenv("PUBLIC_DOMAIN", "issuer.example")
+    monkeypatch.setattr(
+        signing_keys, "_matching_issuer_identity_profiles", AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "_managed_custody_for_new_identity",
+        AsyncMock(return_value=("private-service", "private-key")),
+    )
+    create_profile = AsyncMock(
+        return_value=JSONResponse(
+            content={
+                "created": True,
+                "profile": {
+                    "id": "private-profile",
+                    "organization_id": "org-a",
+                    "issuer_did": operation.issuer_did,
+                    "key_purpose": operation.key_purpose,
+                    "credential_format": operation.credential_format,
+                    "algorithm": operation.algorithm,
+                    "status": "active",
+                    "signing_service_id": "private-service",
+                    "signing_key_reference": "private-key",
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(signing_keys, "create_issuer_profile", create_profile)
+
+    response = await signing_keys.create_public_issuer_identity(
+        _build_request("org-a"), operation
+    )
+
+    assert response.model_dump() == {
+        "identity": {
+            "issuer_did": operation.issuer_did,
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "ES256",
+            "status": "active",
+        },
+        "created": True,
+    }
+    serialized = json.dumps(response.model_dump())
+    assert "private-profile" not in serialized
+    assert "private-service" not in serialized
+    assert "private-key" not in serialized
+    create_profile.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_public_identity_creation_rejects_cross_tenant_context() -> None:
+    operation = signing_keys.IssuerIdentityCreateRequest(
+        organization_id="org-b",
+        issuer_did="did:web:issuer.example:orgs:b",
+        key_purpose="vc_jwt_issuer",
+        credential_format="SD_JWT_VC",
+        algorithm="ES256",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys.create_public_issuer_identity(
+            _build_request("org-a"), operation
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_public_identity_resolution_returns_only_tuple_selected_public_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation = signing_keys.IssuerIdentityOperationRequest(
+        organization_id="org-a",
+        issuer_did="did:web:issuer.example:orgs:a",
+        key_purpose="mdoc_dsc",
+        credential_format="MDOC",
+        algorithm="ES256",
+    )
+    profile = {
+        "id": "private-profile",
+        "organization_id": "org-a",
+        "issuer_did": operation.issuer_did,
+        "key_purpose": operation.key_purpose,
+        "credential_format": operation.credential_format,
+        "algorithm": operation.algorithm,
+        "status": "active",
+        "signing_service_id": "private-service",
+        "signing_key_reference": "private-key",
+    }
+    monkeypatch.setattr(
+        signing_keys,
+        "_matching_issuer_identity_profiles",
+        AsyncMock(return_value=[profile]),
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "_resolve_exact_issuer_profile_identity",
+        AsyncMock(
+            return_value=(
+                profile,
+                {
+                    "public_jwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "public-x",
+                        "y": "public-y",
+                        "kid": f"{operation.issuer_did}#private-key",
+                    }
+                },
+            )
+        ),
+    )
+
+    response = await signing_keys.resolve_public_issuer_identity(
+        _build_request("org-a"), operation
+    )
+    data = response.model_dump()
+    assert data["public_jwk"] == {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "public-x",
+        "y": "public-y",
+    }
+    serialized = json.dumps(data)
+    for private_value in ("private-profile", "private-service", "private-key"):
+        assert private_value not in serialized

@@ -207,6 +207,7 @@ def test_public_identity_projection_is_did_only() -> None:
                 {
                     "issuer_did": "did:web:issuer.example",
                     "key_purpose": "vc_jwt_issuer",
+                    "credential_format": "SD_JWT_VC",
                     "algorithm": "ES256",
                     "status": "active",
                 }
@@ -222,6 +223,7 @@ def test_public_identity_projection_is_did_only() -> None:
                     {
                         "issuer_did": "did:web:issuer.example",
                         "key_purpose": "vc_jwt_issuer",
+                        "credential_format": "SD_JWT_VC",
                         "algorithm": "ES256",
                         "status": "active",
                         "issuer_profile_id": "private-profile",

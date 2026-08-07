@@ -36,7 +36,13 @@ from gateway.models import (  # noqa: E402
     IssuerEntityCreate,
     IssuerEntityResponse,
     IssuerEntityUpdate,
+    IssuerIdentityCertificateRequest,
+    IssuerIdentityCreateRequest,
+    IssuerIdentityCreateResponse,
+    IssuerIdentityDeleteResponse,
     IssuerIdentityListResponse,
+    IssuerIdentityOperationRequest,
+    IssuerIdentityResolutionResponse,
     IssuerIdentityResponse,
     OrganizationCreate,
     OrganizationResponse,
@@ -571,11 +577,67 @@ def check_contract(protocol_root: Path) -> None:
     issuer_identity = IssuerIdentityResponse(
         issuer_did="did:web:issuer.example",
         key_purpose="vc_jwt_issuer",
+        credential_format="SD_JWT_VC",
         algorithm="ES256",
         status="active",
     ).model_dump(mode="json")
     issuer_identity_validator.validate(issuer_identity)
     issuer_identity_list_validator.validate({"identities": [issuer_identity]})
+
+    issuer_operation = {
+        "organization_id": "org-conformance",
+        "issuer_did": "did:web:issuer.example",
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256",
+    }
+    lifecycle_contracts = (
+        (
+            IssuerIdentityOperationRequest,
+            "issuer-identity-operation-request.json",
+            issuer_operation,
+        ),
+        (
+            IssuerIdentityCreateRequest,
+            "issuer-identity-create-request.json",
+            issuer_operation,
+        ),
+        (
+            IssuerIdentityCertificateRequest,
+            "issuer-identity-certificate-request.json",
+            {**issuer_operation, "cert_pem": "public certificate"},
+        ),
+        (
+            IssuerIdentityCreateResponse,
+            "issuer-identity-create-response.json",
+            {"identity": issuer_identity, "created": True},
+        ),
+        (
+            IssuerIdentityDeleteResponse,
+            "issuer-identity-delete-response.json",
+            {"deleted": issuer_identity},
+        ),
+        (
+            IssuerIdentityResolutionResponse,
+            "issuer-identity-resolution-response.json",
+            {
+                "identity": issuer_identity,
+                "public_jwk": {"kty": "EC", "crv": "P-256"},
+            },
+        ),
+    )
+    lifecycle_schemas: list[dict[str, Any]] = []
+    for model, schema_name, payload in lifecycle_contracts:
+        lifecycle_schema, lifecycle_validator = _validator(
+            protocol_root, registry, schema_name
+        )
+        _assert_model_shape(
+            model=model, schema=lifecycle_schema, label=model.__name__
+        )
+        lifecycle_validator.validate(
+            model.model_validate(payload).model_dump(mode="json", exclude_none=True)
+        )
+        lifecycle_schemas.append(lifecycle_schema)
 
     for document in (
         issuer_entity_schema,
@@ -586,6 +648,7 @@ def check_contract(protocol_root: Path) -> None:
         trust_profile_issuer_update_schema,
         issuer_identity_schema,
         issuer_identity_list_schema,
+        *lifecycle_schemas,
     ):
         leaked = FORBIDDEN_PUBLIC_FIELDS & set(document.get("properties", {}))
         if leaked:
@@ -601,6 +664,12 @@ def check_contract(protocol_root: Path) -> None:
         TrustProfileIssuerResponse,
         IssuerIdentityResponse,
         IssuerIdentityListResponse,
+        IssuerIdentityOperationRequest,
+        IssuerIdentityCreateRequest,
+        IssuerIdentityCertificateRequest,
+        IssuerIdentityCreateResponse,
+        IssuerIdentityDeleteResponse,
+        IssuerIdentityResolutionResponse,
     ):
         leaked = FORBIDDEN_PUBLIC_FIELDS & set(model.model_fields)
         if leaked:
