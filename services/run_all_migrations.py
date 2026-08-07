@@ -153,6 +153,7 @@ MARTY_ISSUER_PROFILE_SPECS: list[dict[str, str]] = [
         "name": "Marty VC issuer",
         "signing_key_reference": "cred-issuer-marty-es256",
         "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
         "algorithm": "ES256",
     },
     {
@@ -160,6 +161,7 @@ MARTY_ISSUER_PROFILE_SPECS: list[dict[str, str]] = [
         "name": "Marty OID4VP verifier",
         "signing_key_reference": "oid4vp-verifier-marty-es256",
         "key_purpose": "oid4vp_request_signing",
+        "credential_format": "SD_JWT_VC",
         "algorithm": "ES256",
     },
     {
@@ -167,6 +169,7 @@ MARTY_ISSUER_PROFILE_SPECS: list[dict[str, str]] = [
         "name": "Marty Canvas LTI tool",
         "signing_key_reference": "lti-tool-marty-rs256",
         "key_purpose": "lti_tool_signing",
+        "credential_format": "VC_JWT",
         "algorithm": "RS256",
     },
     {
@@ -174,12 +177,16 @@ MARTY_ISSUER_PROFILE_SPECS: list[dict[str, str]] = [
         "name": "Marty mDoc document signer",
         "signing_key_reference": "cred-dsc-marty-primary",
         "key_purpose": "mdoc_dsc",
+        "credential_format": "MDOC",
+        "algorithm": "ES256",
     },
     {
         "id": "ip-marty-vdsnc-issuer",
         "name": "Marty VDS-NC document signer",
         "signing_key_reference": "cred-dsc-marty-primary",
         "key_purpose": "vdsnc_signing",
+        "credential_format": "MDOC",
+        "algorithm": "ES256",
     },
 ]
 
@@ -797,6 +804,7 @@ def _seed_issuer_profiles(
             "signing_key_reference": spec["signing_key_reference"],
             "verification_method_id": verification_method_id,
             "key_purpose": spec["key_purpose"],
+            "credential_format": spec["credential_format"],
             "algorithm": spec.get("algorithm", ""),
             "status": "active",
             "created_at": existing.get("created_at")
@@ -806,7 +814,37 @@ def _seed_issuer_profiles(
         }
         profiles_by_id[spec["id"]] = profile
 
-    doc["profiles"] = list(profiles_by_id.values())
+    # v1.1.110 and earlier seeded profiles without a credential format. A
+    # later public ensure call could therefore create an equivalent UUID
+    # profile instead of repairing the stable seeded record. Prefer the stable
+    # seed ID and remove only exact active custody duplicates; profiles that
+    # differ by DID, purpose, format, algorithm, service, or key remain intact
+    # and continue to fail closed if their public tuple is ambiguous.
+    seeded_ids = {spec["id"] for spec in MARTY_ISSUER_PROFILE_SPECS}
+    ordered_profiles = sorted(
+        profiles_by_id.values(),
+        key=lambda candidate: 0 if candidate.get("id") in seeded_ids else 1,
+    )
+    deduplicated_profiles: list[dict[str, Any]] = []
+    active_bindings: set[tuple[str, ...]] = set()
+    for candidate in ordered_profiles:
+        if str(candidate.get("status") or "").lower() == "active":
+            binding = (
+                str(candidate.get("organization_id") or ""),
+                str(candidate.get("issuer_did") or ""),
+                str(candidate.get("signing_service_id") or ""),
+                str(candidate.get("signing_key_reference") or ""),
+                str(candidate.get("key_purpose") or ""),
+                str(candidate.get("credential_format") or ""),
+                str(candidate.get("algorithm") or ""),
+            )
+            if all(binding) and binding in active_bindings:
+                continue
+            if all(binding):
+                active_bindings.add(binding)
+        deduplicated_profiles.append(candidate)
+
+    doc["profiles"] = deduplicated_profiles
     _save_json_to_redis(redis_client, storage_key, doc)
 
 

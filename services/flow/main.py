@@ -186,6 +186,12 @@ async def _oid4vp_issuer_identity(
                     "organization_id": organization_id,
                     "issuer_did": resolved_did,
                     "key_purpose": "oid4vp_request_signing",
+                    # This is the operation's internal wire capability, not a
+                    # caller-selected credential profile.  Supplying it makes
+                    # DID resolution use the complete organization + DID +
+                    # purpose + format + algorithm tuple and excludes stale,
+                    # incomplete profile records.
+                    "credential_format": "oauth-authz-req+jwt",
                     "algorithm": "ES256",
                 },
                 headers={"X-API-Key": api_key},

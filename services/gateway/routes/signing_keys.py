@@ -6611,8 +6611,16 @@ async def create_issuer_profile(
             == (profile.get("signing_key_reference") or "")
             and (candidate.get("key_purpose") or "vc_jwt_issuer")
             == (profile.get("key_purpose") or "vc_jwt_issuer")
-            and candidate.get("credential_format")
-            == profile.get("credential_format")
+            and (
+                not str(candidate.get("credential_format") or "").strip()
+                or candidate.get("credential_format")
+                == profile.get("credential_format")
+            )
+            and (
+                not str(candidate.get("algorithm") or "").strip()
+                or _canonical_signing_algorithm(candidate.get("algorithm"))
+                == _canonical_signing_algorithm(profile.get("algorithm"))
+            )
         ),
         None,
     )

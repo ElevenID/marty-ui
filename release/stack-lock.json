@@ -57,13 +57,13 @@
     {
       "name": "marty-common",
       "repository": "ElevenID/Marty",
-      "version": "0.2.5",
-      "commit": "2f14f77fa7e70c1ea9655ea94dd22c2af8bf7f59",
+      "version": "0.2.6",
+      "commit": "6c4cadef956f0720be60f5f0fdb2ce090a79daae",
       "artifacts": [{
         "type": "python",
-        "uri": "https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.5/marty_common-0.2.5-py3-none-any.whl",
-        "digest": "sha256:cd7d11ed38bb09f34adbb79bda3db9a9eee06481c70c2c44c1cc32270faa1693",
-        "sbom": "https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.5/marty-common-sbom.cdx.json",
+        "uri": "https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.6/marty_common-0.2.6-py3-none-any.whl",
+        "digest": "sha256:82236ca999fb0d28eec7a5709667c5e3b2f32abd57e518c1b1e2e9e5d0ac2f1a",
+        "sbom": "https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.6/marty-common-sbom.cdx.json",
         "provenance": "https://github.com/ElevenID/Marty/attestations"
       }]
     },

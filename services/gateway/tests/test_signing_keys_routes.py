@@ -4540,7 +4540,6 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
                         "signing_service_id": "svc-bao",
                         "signing_key_reference": "",
                         "verification_method_id": "",
-                        "credential_format": "SD_JWT_VC",
                         "algorithm": "",
                         "status": "draft",
                         "created_at": "2026-01-01T00:00:00Z",
@@ -4613,6 +4612,8 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
     assert response_body["profile"]["status"] == "active"
     assert response_body["profile"]["signing_key_reference"] == "cred-issuer-test-es256"
     assert response_body["profile"]["key_purpose"] == "vc_jwt_issuer"
+    assert response_body["profile"]["credential_format"] == "SD_JWT_VC"
+    assert response_body["profile"]["algorithm"] == "ES256"
     assert (
         response_body["profile"]["verification_method_id"]
         == "did:web:beta.elevenidllc.com:orgs:acme#cred-issuer-test-es256"
@@ -4624,6 +4625,8 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
     assert saved_profiles[0]["id"] == "ip-stale"
     assert saved_profiles[0]["status"] == "active"
     assert saved_profiles[0]["key_purpose"] == "vc_jwt_issuer"
+    assert saved_profiles[0]["credential_format"] == "SD_JWT_VC"
+    assert saved_profiles[0]["algorithm"] == "ES256"
     assert (
         saved_profiles[0]["verification_method_id"]
         == "did:web:beta.elevenidllc.com:orgs:acme#cred-issuer-test-es256"
