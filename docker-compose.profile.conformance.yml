@@ -91,6 +91,13 @@ services:
   issuance:
     container_name: !reset null
     ports: !reset []
+    # The owned DIDComm interoperability lane starts a disposable holder
+    # receiver on the Docker host. Linux does not provide this hostname by
+    # default, so expose only the Docker host gateway to the issuance service
+    # in this isolated conformance overlay. Production Compose files do not
+    # inherit this mapping.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   canvas-sync-worker:
     container_name: !reset null
   revocation-profile:
