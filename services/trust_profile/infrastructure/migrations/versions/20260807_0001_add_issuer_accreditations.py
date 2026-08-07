@@ -20,22 +20,67 @@ branch_labels = None
 depends_on = None
 
 
+_SCHEMA = "trust_profile_service"
+_TABLE = "issuer_entities"
+_COLUMN = "accreditations"
+
+
+def _has_table(conn: sa.engine.Connection) -> bool:
+    return bool(
+        conn.execute(
+            sa.text("SELECT to_regclass(:qualified_name) IS NOT NULL"),
+            {"qualified_name": f"{_SCHEMA}.{_TABLE}"},
+        ).scalar()
+    )
+
+
+def _has_column(conn: sa.engine.Connection) -> bool:
+    return bool(
+        conn.execute(
+            sa.text(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM information_schema.columns
+                    WHERE table_schema = :schema
+                      AND table_name = :table
+                      AND column_name = :column
+                )
+                """
+            ),
+            {"schema": _SCHEMA, "table": _TABLE, "column": _COLUMN},
+        ).scalar()
+    )
+
+
 def upgrade() -> None:
+    conn = op.get_bind()
+    # Fresh artifact-only installations run Alembic before service startup.
+    # issuer_entities is a runtime-model table there, so create_all will create
+    # it with the current non-null column after this revision is recorded. An
+    # existing deployment already has the table and needs the additive ALTER.
+    if not _has_table(conn) or _has_column(conn):
+        return
+
     op.add_column(
-        "issuer_entities",
+        _TABLE,
         sa.Column(
-            "accreditations",
+            _COLUMN,
             sa.JSON(),
             nullable=False,
             server_default=sa.text("'[]'::json"),
         ),
-        schema="trust_profile_service",
+        schema=_SCHEMA,
     )
 
 
 def downgrade() -> None:
+    conn = op.get_bind()
+    if not _has_table(conn) or not _has_column(conn):
+        return
+
     op.drop_column(
-        "issuer_entities",
-        "accreditations",
-        schema="trust_profile_service",
+        _TABLE,
+        _COLUMN,
+        schema=_SCHEMA,
     )
