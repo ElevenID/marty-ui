@@ -220,7 +220,68 @@ def test_internal_get_trust_profile_skips_user_membership() -> None:
 
     assert response.status_code == 200
     assert response.json()["id"] == profile.id
+    assert response.json()["issuer_relationships"] == []
     assert get_membership.await_count == 0
+
+
+def test_internal_get_trust_profile_materializes_normalized_issuer_decision() -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = asyncio.run(_save_profile(repo))
+    issuer = trust_profile.IssuerEntity(
+        organization_id=profile.organization_id,
+        issuer_id="did:web:issuer.example",
+        display_name="Example Issuer",
+        compliance_status=trust_profile.IssuerEntityComplianceStatus.ACCREDITED,
+        accreditation_body="Example Accreditation Authority",
+    )
+    relationship = trust_profile.TrustProfileIssuer(
+        trust_profile_id=profile.id,
+        issuer_id=issuer.id,
+        trust_level=87,
+        relationship_status=trust_profile.TrustRelationshipStatus.TRUSTED,
+    )
+    asyncio.run(repo.save_issuer_entity(issuer))
+    asyncio.run(repo.save_profile_issuer(relationship))
+    client, get_membership = _build_client(repo)
+
+    response = client.get(f"/internal/v1/trust-profiles/{profile.id}")
+
+    assert response.status_code == 200
+    assert response.json()["issuer_relationships"] == [
+        {
+            "issuer_id": "did:web:issuer.example",
+            "trust_level": 87,
+            "relationship_status": "TRUSTED",
+            "compliance_status": "ACCREDITED",
+            "accreditation_body": "Example Accreditation Authority",
+            "valid_from": issuer.valid_from.isoformat(),
+        }
+    ]
+    assert get_membership.await_count == 0
+
+
+def test_internal_get_trust_profile_fails_closed_for_cross_org_relationship() -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = asyncio.run(_save_profile(repo))
+    issuer = trust_profile.IssuerEntity(
+        organization_id="org-other",
+        issuer_id="did:web:foreign.example",
+        display_name="Foreign Issuer",
+    )
+    relationship = trust_profile.TrustProfileIssuer(
+        trust_profile_id=profile.id,
+        issuer_id=issuer.id,
+    )
+    asyncio.run(repo.save_issuer_entity(issuer))
+    asyncio.run(repo.save_profile_issuer(relationship))
+    client, _ = _build_client(repo)
+
+    response = client.get(f"/internal/v1/trust-profiles/{profile.id}")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Trust Profile contains a cross-organization issuer relationship"
+    }
 
 
 def test_resource_owner_lookup_is_minimal_and_service_authenticated(
