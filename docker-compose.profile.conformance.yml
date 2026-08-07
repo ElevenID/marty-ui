@@ -96,6 +96,7 @@ services:
       # The issuance code adds this CA to normal Web PKI validation; it never
       # disables certificate or hostname verification.
       DIDCOMM_TLS_CA_FILE: /run/secrets/didcomm-conformance-root-ca.pem
+      DIDCOMM_ALLOW_PRIVATE_IPS: "true"
     volumes:
       - ${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to generated conformance material}/root-ca.pem:/run/secrets/didcomm-conformance-root-ca.pem:ro
     # The owned DIDComm interoperability lane starts a disposable holder
