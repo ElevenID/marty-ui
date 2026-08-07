@@ -229,6 +229,9 @@ def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
     )[0]
 
     assert '"host.docker.internal:host-gateway"' in issuance
+    assert "DIDCOMM_TLS_CA_FILE:" in issuance
+    assert 'DIDCOMM_ALLOW_PRIVATE_IPS: "true"' in issuance
+    assert "didcomm-conformance-root-ca.pem:ro" in issuance
     for production_file in (
         "docker-compose.base.yml",
         "docker-compose.selfhost.prod.yml",
@@ -236,6 +239,12 @@ def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
         "docker-compose.ui-release.yml",
     ):
         assert "host.docker.internal:host-gateway" not in (
+            ROOT / production_file
+        ).read_text(encoding="utf-8")
+        assert "DIDCOMM_TLS_CA_FILE" not in (
+            ROOT / production_file
+        ).read_text(encoding="utf-8")
+        assert "DIDCOMM_ALLOW_PRIVATE_IPS" not in (
             ROOT / production_file
         ).read_text(encoding="utf-8")
 
