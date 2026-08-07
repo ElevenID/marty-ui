@@ -8,9 +8,12 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Literal
+from urllib.parse import urlsplit
+from uuid import UUID
 
 from pydantic import (
     AliasChoices,
+    AwareDatetime,
     AnyHttpUrl,
     BaseModel,
     ConfigDict,
@@ -50,14 +53,77 @@ class BaseResourceResponse(BaseModel):
 # =============================================================================
 
 
+class RegistrySyncConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocol: Literal["MARTY_TRUST_REGISTRY_SYNC_V1"]
+    refresh_interval_hours: int = Field(ge=1, le=720)
+
+
 class TrustSourceModel(BaseModel):
-    name: str = ""
-    source_type: str = "TRUST_LIST"
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: Literal["TRUST_LIST", "PINNED_ISSUER", "ROOT_CA", "PKD_URL"]
     url: str | None = None
     certificate_pem: str | None = None
     issuer_did: str | None = None
-    description: str | None = None
-    enabled: bool = True
+    description: str | None = Field(default=None, max_length=256)
+    registry_sync: RegistrySyncConfigModel | None = None
+
+    @field_validator("source_type", mode="before")
+    @classmethod
+    def normalize_source_type(cls, value: object) -> object:
+        return value.upper() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "TrustSourceModel":
+        if (
+            sum(
+                value is not None
+                for value in (self.url, self.certificate_pem, self.issuer_did)
+            )
+            != 1
+        ):
+            raise ValueError(
+                "exactly one of url, certificate_pem, or issuer_did is required"
+            )
+        if self.url is not None:
+            try:
+                parsed = urlsplit(self.url)
+                port = parsed.port
+            except ValueError as exc:
+                raise ValueError("registry URL is invalid") from exc
+            if (
+                parsed.scheme.lower() != "https"
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or port not in {None, 443}
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "URL trust sources require a credential-free standard-port HTTPS URL without query or fragment"
+                )
+        if self.registry_sync is not None and (
+            self.url is None or self.source_type not in {"TRUST_LIST", "PKD_URL"}
+        ):
+            raise ValueError("registry_sync requires a TRUST_LIST or PKD_URL URL")
+        if (
+            self.registry_sync is None
+            and self.url is not None
+            and self.source_type in {"TRUST_LIST", "PKD_URL"}
+        ):
+            raise ValueError(
+                "URL trust registries require an explicit supported registry_sync protocol"
+            )
+        if self.certificate_pem is not None and not self.certificate_pem.startswith(
+            "-----BEGIN CERTIFICATE-----"
+        ):
+            raise ValueError("certificate_pem must contain a PEM certificate")
+        if self.issuer_did is not None and not self.issuer_did.startswith("did:"):
+            raise ValueError("issuer_did must be a DID")
+        return self
 
 
 class ValidationRulesModel(BaseModel):
@@ -72,6 +138,8 @@ class ValidationRulesModel(BaseModel):
 
 
 class TrustProfileCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -95,6 +163,8 @@ class TrustProfileCreate(BaseModel):
 
 
 class TrustProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     profile_type: str | None = Field(None, max_length=50)
@@ -458,10 +528,12 @@ class KeyAttestationPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["disabled", "optional", "required"]
-    trusted_root_certificates_pem: list[str] = Field(default_factory=list, max_length=64)
-    allowed_algorithms: list[
-        Literal["ES256", "ES384", "RS256", "EdDSA"]
-    ] = Field(default_factory=list)
+    trusted_root_certificates_pem: list[str] = Field(
+        default_factory=list, max_length=64
+    )
+    allowed_algorithms: list[Literal["ES256", "ES384", "RS256", "EdDSA"]] = Field(
+        default_factory=list
+    )
     required_key_storage: list[str] = Field(default_factory=list)
     required_user_authentication: list[str] = Field(default_factory=list)
     max_age_seconds: int = Field(default=300, ge=1, le=86_400)
@@ -707,6 +779,45 @@ class TrustRegistryStatusResponse(BaseModel):
     csca_entries: int
     dsc_entries: int
     generated_at: str
+
+
+class TrustProfileRegistrySourceSyncResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(pattern=r"^https://")
+    protocol: Literal["MARTY_TRUST_REGISTRY_SYNC_V1"]
+    sequence: int = Field(ge=0)
+    csca_entries: int = Field(ge=0)
+    dsc_entries: int = Field(ge=0)
+    synchronized_at: AwareDatetime
+
+    @field_validator("url")
+    @classmethod
+    def validate_result_url(cls, value: str) -> str:
+        try:
+            parsed = urlsplit(value)
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("registry URL is invalid") from exc
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or port not in {None, 443}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("registry result URL is unsafe")
+        return value
+
+
+class TrustProfileRegistrySyncResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    trust_profile_id: UUID
+    sources: list[TrustProfileRegistrySourceSyncResponse] = Field(min_length=1)
+    synchronized_at: AwareDatetime
 
 
 # =============================================================================

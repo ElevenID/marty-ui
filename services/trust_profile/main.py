@@ -16,19 +16,30 @@ Port: 8004
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 import os
 import uuid
-from contextlib import asynccontextmanager
+from copy import deepcopy
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Annotated, Any, AsyncGenerator, Literal
 
+import httpx
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from marty_common.dto import DeleteResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from sqlalchemy import text
 from marty_common import ensure_membership_permission
 from marty_common.org_authorization import get_organization_client
@@ -48,6 +59,13 @@ from marty_common.system_urls import (
 )
 from trust_profile.infrastructure.adapters import PostgresTrustProfileRepository
 from trust_profile.infrastructure.models import mapper_registry
+from trust_profile.registry_sync import (
+    RegistrySyncError,
+    state_from_storage,
+    synchronize_registry,
+    validate_current_registry_entries,
+    validate_registry_url_structure,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -161,6 +179,11 @@ class TrustSource:
     pinned_certificates: list[str] = field(default_factory=list)
     refresh_interval_hours: int = 24
     enabled: bool = True
+    registry_sync: dict[str, Any] | None = None
+    registry_sync_token: str | None = None
+    registry_sequence: int = 0
+    registry_entries: dict[str, dict[str, Any]] = field(default_factory=dict)
+    registry_last_synced_at: datetime | None = None
 
 
 @dataclass
@@ -539,14 +562,28 @@ class InMemoryTrustProfileRepository:
         }
 
     # Trust Profile operations
-    async def save_profile(self, profile: TrustProfile) -> None:
+    async def save_profile(
+        self,
+        profile: TrustProfile,
+        *,
+        expected_updated_at: datetime | None = None,
+    ) -> bool:
+        current = self._profiles.get(profile.id)
+        if expected_updated_at is not None and (
+            current is None or current.updated_at != expected_updated_at
+        ):
+            return False
         self._profiles[profile.id] = profile
+        return True
 
     async def get_profile(self, profile_id: str) -> TrustProfile | None:
         return self._profiles.get(profile_id)
 
     async def list_profiles(self, org_id: str) -> list[TrustProfile]:
         return [p for p in self._profiles.values() if p.organization_id == org_id]
+
+    async def list_all_profiles(self) -> list[TrustProfile]:
+        return sorted(self._profiles.values(), key=lambda profile: profile.id)
 
     async def delete_profile(self, profile_id: str) -> None:
         self._profiles.pop(profile_id, None)
@@ -649,16 +686,73 @@ class InMemoryTrustProfileRepository:
 # =============================================================================
 
 
+class RegistrySyncConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocol: Literal["MARTY_TRUST_REGISTRY_SYNC_V1"]
+    refresh_interval_hours: int = Field(ge=1, le=720)
+
+
 class TrustSourceModel(BaseModel):
-    name: str = ""
-    source_type: str = TrustSourceType.TRUST_LIST.value
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: Literal["TRUST_LIST", "PINNED_ISSUER", "ROOT_CA", "PKD_URL"]
     url: str | None = None
     certificate_pem: str | None = None
     issuer_did: str | None = None
-    description: str | None = None
-    pinned_certificates: list[str] = Field(default_factory=list)
-    refresh_interval_hours: int = 24
-    enabled: bool = True
+    description: str | None = Field(default=None, max_length=256)
+    registry_sync: RegistrySyncConfigModel | None = None
+
+    @field_validator("source_type", mode="before")
+    @classmethod
+    def normalize_source_type(cls, value: object) -> object:
+        return value.upper() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_source_identity(self) -> "TrustSourceModel":
+        selectors = [self.url, self.certificate_pem, self.issuer_did]
+        if sum(value is not None for value in selectors) != 1:
+            raise ValueError(
+                "exactly one of url, certificate_pem, or issuer_did is required"
+            )
+        if self.url is not None:
+            try:
+                validate_registry_url_structure(self.url)
+            except ValueError as exc:
+                raise ValueError(str(exc)) from exc
+        if self.registry_sync is not None:
+            if self.url is None:
+                raise ValueError("registry_sync requires a registry URL")
+            if self.source_type not in {
+                TrustSourceType.TRUST_LIST.value,
+                TrustSourceType.PKD_URL.value,
+            }:
+                raise ValueError(
+                    "registry_sync requires TRUST_LIST or PKD_URL source_type"
+                )
+        elif self.url is not None and self.source_type in {
+            TrustSourceType.TRUST_LIST.value,
+            TrustSourceType.PKD_URL.value,
+        }:
+            raise ValueError(
+                "URL trust registries require an explicit supported registry_sync protocol"
+            )
+        if self.certificate_pem is not None and not self.certificate_pem.startswith(
+            "-----BEGIN CERTIFICATE-----"
+        ):
+            raise ValueError("certificate_pem must contain a PEM certificate")
+        if self.issuer_did is not None and not self.issuer_did.startswith("did:"):
+            raise ValueError("issuer_did must be a DID")
+        return self
+
+
+def _validated_registry_sync_config(source: TrustSource) -> RegistrySyncConfigModel:
+    try:
+        return RegistrySyncConfigModel.model_validate(source.registry_sync)
+    except ValidationError as exc:
+        raise RegistrySyncError(
+            "stored registry sync configuration is invalid"
+        ) from exc
 
 
 class ValidationRulesModel(BaseModel):
@@ -689,6 +783,8 @@ class TimePolicyModel(BaseModel):
 
 
 class CreateTrustProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -717,6 +813,8 @@ class CreateTrustProfileRequest(BaseModel):
 
 
 class UpdateTrustProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     profile_type: str | None = None
@@ -1000,25 +1098,20 @@ def _build_validation_rules(
 
 
 def _build_trust_sources(trust_sources: list[TrustSourceModel]) -> list[TrustSource]:
-    # MIP §5.2 — each TrustSource MUST specify exactly one of url, certificate_pem, issuer_did
-    for ts in trust_sources:
-        provided = sum(1 for v in (ts.url, ts.certificate_pem, ts.issuer_did) if v)
-        if provided != 1:
-            raise HTTPException(
-                status_code=422,
-                detail=f"TrustSource '{ts.name}' must specify exactly one of url, certificate_pem, or issuer_did (got {provided})",
-            )
     return [
         TrustSource(
-            name=ts.name,
+            name=ts.description or ts.url or ts.issuer_did or "Trust Source",
             source_type=_normalize_trust_source_type(ts.source_type),
             url=ts.url,
             certificate_pem=ts.certificate_pem,
             issuer_did=ts.issuer_did,
             description=ts.description,
-            pinned_certificates=ts.pinned_certificates,
-            refresh_interval_hours=ts.refresh_interval_hours,
-            enabled=ts.enabled,
+            refresh_interval_hours=(
+                ts.registry_sync.refresh_interval_hours if ts.registry_sync else 24
+            ),
+            registry_sync=(
+                ts.registry_sync.model_dump(mode="json") if ts.registry_sync else None
+            ),
         )
         for ts in trust_sources
     ]
@@ -1330,6 +1423,33 @@ class TrustRegistryStatusResponse(BaseModel):
     generated_at: str
 
 
+class TrustProfileRegistrySourceSyncResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(pattern=r"^https://")
+    protocol: Literal["MARTY_TRUST_REGISTRY_SYNC_V1"]
+    sequence: int = Field(ge=0)
+    csca_entries: int = Field(ge=0)
+    dsc_entries: int = Field(ge=0)
+    synchronized_at: AwareDatetime
+
+    @field_validator("url")
+    @classmethod
+    def validate_result_url(cls, value: str) -> str:
+        try:
+            return validate_registry_url_structure(value)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+
+class TrustProfileRegistrySyncResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    trust_profile_id: uuid.UUID
+    sources: list[TrustProfileRegistrySourceSyncResponse] = Field(min_length=1)
+    synchronized_at: AwareDatetime
+
+
 class CreateOrganizationTrustProfileRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1437,6 +1557,79 @@ class InternalTrustProfileResponse(TrustProfileResponse):
     )
 
 
+def _imported_registry_trust_sources(profile: TrustProfile) -> list[dict[str, Any]]:
+    """Return fresh imported anchors or fail before a trust decision is made."""
+    imported_sources: list[dict[str, Any]] = []
+    now = datetime.now(timezone.utc)
+    for source in profile.trust_sources:
+        if not source.enabled:
+            continue
+        if source.registry_sync is None:
+            if source.url and source.source_type in {
+                TrustSourceType.TRUST_LIST.value,
+                TrustSourceType.PKD_URL.value,
+            }:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Trust Profile registry source has no supported sync protocol",
+                )
+            continue
+        try:
+            sync_config = _validated_registry_sync_config(source)
+        except RegistrySyncError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Trust Profile registry configuration is invalid",
+            ) from exc
+        if source.registry_last_synced_at is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Trust Profile registry source has never synchronized",
+            )
+        stale_after = source.registry_last_synced_at + timedelta(
+            hours=sync_config.refresh_interval_hours
+        )
+        if now >= stale_after:
+            raise HTTPException(
+                status_code=503,
+                detail="Trust Profile registry source is stale",
+            )
+        try:
+            stored_state = state_from_storage(
+                sync_token=source.registry_sync_token,
+                sequence=source.registry_sequence,
+                entries=source.registry_entries,
+                synchronized_at=source.registry_last_synced_at,
+            )
+            current_entries = validate_current_registry_entries(
+                stored_state.entries,
+                now=now,
+            )
+        except RegistrySyncError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Trust Profile registry state is invalid",
+            ) from exc
+        for imported in current_entries.values():
+            anchor_type = imported.anchor_type
+            certificate_pem = imported.certificate_pem
+            imported_sources.append(
+                {
+                    "source_type": (
+                        TrustSourceType.ROOT_CA.value
+                        if anchor_type == "CSCA"
+                        else TrustSourceType.PINNED_ISSUER.value
+                    ),
+                    "certificate_pem": certificate_pem,
+                    "description": (
+                        f"Imported {anchor_type} from {source.url or 'registry'}"
+                    ),
+                    "pinned_certificates": [],
+                }
+            )
+    return imported_sources
+
+
 async def _internal_profile_to_response(
     repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository,
     profile: TrustProfile,
@@ -1469,13 +1662,22 @@ async def _internal_profile_to_response(
                 valid_until=(
                     issuer.valid_until.isoformat() if issuer.valid_until else None
                 ),
-                revoked_at=(issuer.revoked_at.isoformat() if issuer.revoked_at else None),
+                revoked_at=(
+                    issuer.revoked_at.isoformat() if issuer.revoked_at else None
+                ),
             )
         )
 
     public_response = _profile_to_response(profile)
+    effective_sources = [
+        *public_response.trust_sources,
+        *_imported_registry_trust_sources(profile),
+    ]
     return InternalTrustProfileResponse(
-        **public_response.model_dump(),
+        **{
+            **public_response.model_dump(),
+            "trust_sources": effective_sources,
+        },
         issuer_relationships=decisions,
     )
 
@@ -2014,6 +2216,220 @@ async def internal_get_trust_profile(
     return await _internal_profile_to_response(repo, profile)
 
 
+def _registry_source_is_due(source: TrustSource, now: datetime) -> bool:
+    sync_config = _validated_registry_sync_config(source)
+    if source.registry_last_synced_at is None:
+        return True
+    refresh_seconds = sync_config.refresh_interval_hours * 60 * 60
+    return now >= source.registry_last_synced_at + timedelta(
+        seconds=refresh_seconds * 0.8
+    )
+
+
+async def _synchronize_profile_registry_sources(
+    profile: TrustProfile,
+    repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository,
+    client: httpx.AsyncClient,
+    *,
+    synchronized_at: datetime,
+    due_only: bool,
+) -> list[TrustProfileRegistrySourceSyncResponse]:
+    """Refresh selected sources and persist them with optimistic concurrency."""
+    profile_version = profile.updated_at
+    candidate = deepcopy(profile)
+    configured = [
+        source
+        for source in candidate.trust_sources
+        if source.enabled and source.registry_sync is not None
+    ]
+    selected = [
+        source
+        for source in configured
+        if not due_only or _registry_source_is_due(source, synchronized_at)
+    ]
+    if not selected:
+        return []
+
+    source_results: list[TrustProfileRegistrySourceSyncResponse] = []
+    for source in selected:
+        if source.url is None:
+            raise RegistrySyncError("registry source has no URL")
+        sync_config = _validated_registry_sync_config(source)
+        source.refresh_interval_hours = sync_config.refresh_interval_hours
+        state = state_from_storage(
+            sync_token=source.registry_sync_token,
+            sequence=source.registry_sequence,
+            entries=source.registry_entries,
+            synchronized_at=source.registry_last_synced_at,
+        )
+        imported = await synchronize_registry(
+            source.url,
+            state,
+            client=client,
+            now=synchronized_at,
+        )
+        source.registry_sync_token = imported.state.sync_token
+        source.registry_sequence = imported.state.sequence
+        source.registry_entries = {
+            entry_id: entry.to_storage()
+            for entry_id, entry in imported.state.entries.items()
+        }
+        source.registry_last_synced_at = imported.state.synchronized_at
+        csca_entries = sum(
+            entry.anchor_type == "CSCA" for entry in imported.state.entries.values()
+        )
+        dsc_entries = sum(
+            entry.anchor_type == "DSC" for entry in imported.state.entries.values()
+        )
+        source_results.append(
+            TrustProfileRegistrySourceSyncResponse(
+                url=source.url,
+                protocol=sync_config.protocol,
+                sequence=imported.state.sequence,
+                csca_entries=csca_entries,
+                dsc_entries=dsc_entries,
+                synchronized_at=synchronized_at.isoformat(),
+            )
+        )
+
+    candidate.updated_at = synchronized_at
+    saved = await repo.save_profile(
+        candidate,
+        expected_updated_at=profile_version,
+    )
+    if not saved:
+        raise HTTPException(
+            status_code=409,
+            detail="Trust Profile changed during registry synchronization; retry the operation",
+        )
+    return source_results
+
+
+def _registry_sync_poll_seconds() -> int:
+    raw = os.environ.get("TRUST_REGISTRY_SYNC_POLL_SECONDS", "300")
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("Invalid TRUST_REGISTRY_SYNC_POLL_SECONDS; using 300")
+        return 300
+    return min(max(value, 60), 86_400)
+
+
+async def _synchronize_due_registry_sources(
+    repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository,
+) -> None:
+    profiles = await repo.list_all_profiles()
+    if not any(
+        source.enabled and source.registry_sync is not None
+        for profile in profiles
+        for source in profile.trust_sources
+    ):
+        return
+
+    synchronized_at = datetime.now(timezone.utc)
+    timeout = httpx.Timeout(15.0, connect=5.0)
+    async with httpx.AsyncClient(
+        follow_redirects=False,
+        timeout=timeout,
+        trust_env=False,
+    ) as client:
+        for profile in profiles:
+            try:
+                results = await _synchronize_profile_registry_sources(
+                    profile,
+                    repo,
+                    client,
+                    synchronized_at=synchronized_at,
+                    due_only=True,
+                )
+                if results:
+                    logger.info(
+                        "Synchronized %d registry source(s) for Trust Profile %s",
+                        len(results),
+                        profile.id,
+                    )
+            except (RegistrySyncError, HTTPException) as exc:
+                logger.warning(
+                    "Scheduled registry synchronization failed for Trust Profile %s: %s",
+                    profile.id,
+                    exc,
+                )
+
+
+async def _registry_sync_loop(
+    repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository,
+) -> None:
+    while True:
+        try:
+            await _synchronize_due_registry_sources(repo)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Scheduled trust registry synchronization failed")
+        await asyncio.sleep(_registry_sync_poll_seconds())
+
+
+@router.post(
+    "/{profile_id}/registry-sync",
+    response_model=TrustProfileRegistrySyncResponse,
+    response_model_exclude_none=True,
+)
+async def synchronize_trust_profile_registries(
+    profile_id: str,
+    user_id: str = Depends(get_current_user_id),
+    repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(
+        get_repo
+    ),
+) -> TrustProfileRegistrySyncResponse:
+    """Atomically refresh all configured external registry feeds."""
+    profile = await repo.get_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Trust Profile not found")
+    membership = await app.state.org_client.get_membership(
+        user_id, profile.organization_id
+    )
+    ensure_membership_permission(membership, "trust-profile", "edit")
+
+    configured = [
+        source
+        for source in profile.trust_sources
+        if source.enabled and source.registry_sync is not None
+    ]
+    if not configured:
+        raise HTTPException(
+            status_code=409,
+            detail="Trust Profile has no external registry sync source",
+        )
+
+    synchronized_at = datetime.now(timezone.utc)
+    timeout = httpx.Timeout(15.0, connect=5.0)
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=timeout,
+            trust_env=False,
+        ) as client:
+            source_results = await _synchronize_profile_registry_sources(
+                profile,
+                repo,
+                client,
+                synchronized_at=synchronized_at,
+                due_only=False,
+            )
+    except RegistrySyncError as exc:
+        logger.warning("Trust registry synchronization rejected: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail="External trust registry synchronization failed",
+        ) from exc
+
+    return TrustProfileRegistrySyncResponse(
+        trust_profile_id=profile.id,
+        sources=source_results,
+        synchronized_at=synchronized_at.isoformat(),
+    )
+
+
 @resource_owner_router.get(
     "/trust-profiles/{profile_id}",
     response_model=dict[str, str],
@@ -2144,6 +2560,10 @@ async def activate_trust_profile(
         user_id, profile.organization_id
     )
     ensure_membership_permission(membership, "trust-profile", "activate")
+    try:
+        _imported_registry_trust_sources(profile)
+    except HTTPException as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     profile.activate()
     await repo.save_profile(profile)
     return _profile_to_response(profile)
@@ -2720,6 +3140,11 @@ def _profile_to_response(profile: TrustProfile) -> TrustProfileResponse:
                 "issuer_did": ts.issuer_did,
                 "description": ts.description,
                 "pinned_certificates": list(ts.pinned_certificates),
+                **(
+                    {"registry_sync": deepcopy(ts.registry_sync)}
+                    if ts.registry_sync is not None
+                    else {}
+                ),
             }
             for ts in profile.trust_sources
         ],
@@ -2873,9 +3298,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from common.di import setup_org_client, teardown_org_client
 
     await setup_org_client(app, "trust-profile")
+    registry_sync_task = asyncio.create_task(
+        _registry_sync_loop(_repo), name="trust-registry-sync"
+    )
 
     yield
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    registry_sync_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await registry_sync_task
     await teardown_org_client(app)
     await db.close()
 

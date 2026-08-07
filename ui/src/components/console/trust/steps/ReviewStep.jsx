@@ -80,8 +80,6 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
     freshness_window_seconds: 86400,
     ...(data.time_policy || {}),
   };
-  const supportedWallets = data.supported_wallet_ids || [];
-
   return (
     <Box>
       <Typography variant="h6" gutterBottom>
@@ -279,38 +277,6 @@ const ReviewStep = ({ data, onChange, onEdit }) => {
               />
             </Grid>
 
-            <Grid item xs={12}>
-              <ReviewField
-                label={t(
-                  'wizards.trustProfile.reviewStep.fields.issuanceProtocol',
-                  { defaultValue: 'Issuance protocol' },
-                )}
-                value={String(data.issuance_protocol || 'oid4vci').toUpperCase()}
-              />
-            </Grid>
-
-            <Grid item xs={12}>
-              <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                {t(
-                  'wizards.trustProfile.reviewStep.fields.supportedWallets',
-                  { defaultValue: 'Supported wallets' },
-                )}
-              </Typography>
-              {supportedWallets.length > 0 ? (
-                <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                  {supportedWallets.map((walletId) => (
-                    <Chip key={walletId} label={walletId} size="small" />
-                  ))}
-                </Box>
-              ) : (
-                <Typography variant="body2" color="text.secondary">
-                  {t(
-                    'wizards.trustProfile.reviewStep.values.allCompatibleWallets',
-                    { defaultValue: 'No wallet targeting configured' },
-                  )}
-                </Typography>
-              )}
-            </Grid>
           </Grid>
       </ReviewSectionCard>
 

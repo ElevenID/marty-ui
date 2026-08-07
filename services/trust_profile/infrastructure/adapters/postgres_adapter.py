@@ -6,6 +6,7 @@ and trusted issuer persistence.
 """
 
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, func, select
@@ -500,15 +501,21 @@ class PostgresTrustProfileRepository:
     # Trust Profile Operations
     # =========================================================================
 
-    async def save_profile(self, profile: "TrustProfile") -> None:
+    async def save_profile(
+        self,
+        profile: "TrustProfile",
+        *,
+        expected_updated_at=None,
+    ) -> bool:
         """Save or update a trust profile."""
         async with self._session_factory() as session:
-            # Check if profile exists
-            stmt = select(trust_profiles_table).where(
-                trust_profiles_table.c.id == profile.id
-            )
-            result = await session.execute(stmt)
-            existing = result.first()
+            existing = True
+            if expected_updated_at is None:
+                stmt = select(trust_profiles_table).where(
+                    trust_profiles_table.c.id == profile.id
+                )
+                result = await session.execute(stmt)
+                existing = result.first()
 
             # Serialize nested objects to JSON
             trust_sources_json = [
@@ -523,6 +530,15 @@ class PostgresTrustProfileRepository:
                     "pinned_certificates": ts.pinned_certificates,
                     "refresh_interval_hours": ts.refresh_interval_hours,
                     "enabled": ts.enabled,
+                    "registry_sync": ts.registry_sync,
+                    "registry_sync_token": ts.registry_sync_token,
+                    "registry_sequence": ts.registry_sequence,
+                    "registry_entries": ts.registry_entries,
+                    "registry_last_synced_at": (
+                        ts.registry_last_synced_at.isoformat()
+                        if ts.registry_last_synced_at
+                        else None
+                    ),
                 }
                 for ts in profile.trust_sources
             ]
@@ -577,19 +593,24 @@ class PostgresTrustProfileRepository:
 
             if existing:
                 # Update existing
-                stmt = (
-                    trust_profiles_table.update()
-                    .where(trust_profiles_table.c.id == profile.id)
-                    .values(**profile_data)
+                stmt = trust_profiles_table.update().where(
+                    trust_profiles_table.c.id == profile.id
                 )
-                await session.execute(stmt)
+                if expected_updated_at is not None:
+                    stmt = stmt.where(
+                        trust_profiles_table.c.updated_at == expected_updated_at
+                    )
+                result = await session.execute(stmt.values(**profile_data))
+                saved = result.rowcount == 1
             else:
                 # Insert new
                 profile_data["created_at"] = profile.created_at
                 stmt = trust_profiles_table.insert().values(**profile_data)
                 await session.execute(stmt)
+                saved = True
 
             await session.commit()
+            return saved
 
     async def get_profile(self, profile_id: str) -> "TrustProfile | None":
         """Get a trust profile by ID."""
@@ -642,6 +663,15 @@ class PostgresTrustProfileRepository:
                     pinned_certificates=ts.get("pinned_certificates", []),
                     refresh_interval_hours=ts.get("refresh_interval_hours", 24),
                     enabled=ts.get("enabled", True),
+                    registry_sync=ts.get("registry_sync"),
+                    registry_sync_token=ts.get("registry_sync_token"),
+                    registry_sequence=int(ts.get("registry_sequence", 0)),
+                    registry_entries=ts.get("registry_entries") or {},
+                    registry_last_synced_at=(
+                        datetime.fromisoformat(ts["registry_last_synced_at"])
+                        if ts.get("registry_last_synced_at")
+                        else None
+                    ),
                 )
                 for ts in trust_sources_json
             ]
@@ -751,6 +781,20 @@ class PostgresTrustProfileRepository:
                     profiles.append(profile)
 
             return profiles
+
+    async def list_all_profiles(self) -> list["TrustProfile"]:
+        """List all profiles for internal registry maintenance only."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(trust_profiles_table.c.id).order_by(trust_profiles_table.c.id)
+            )
+            profile_ids = [row.id for row in result.all()]
+        profiles = []
+        for profile_id in profile_ids:
+            profile = await self.get_profile(profile_id)
+            if profile is not None:
+                profiles.append(profile)
+        return profiles
 
     async def delete_profile(self, profile_id: str) -> None:
         """Delete a trust profile and its relationship links."""
