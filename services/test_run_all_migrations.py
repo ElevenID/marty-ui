@@ -170,6 +170,7 @@ def test_seed_issuer_profiles_creates_active_marty_kms_profiles():
         == "cred-issuer-marty-es256"
     )
     assert profiles["ip-marty-vc-jwt-issuer"]["key_purpose"] == "vc_jwt_issuer"
+    assert profiles["ip-marty-vc-jwt-issuer"]["credential_format"] == "SD_JWT_VC"
     assert profiles["ip-marty-vc-jwt-issuer"]["algorithm"] == "ES256"
     assert (
         profiles["ip-marty-oid4vp-verifier"]["signing_key_reference"]
@@ -178,26 +179,81 @@ def test_seed_issuer_profiles_creates_active_marty_kms_profiles():
     assert (
         profiles["ip-marty-oid4vp-verifier"]["key_purpose"] == "oid4vp_request_signing"
     )
+    assert (
+        profiles["ip-marty-oid4vp-verifier"]["credential_format"] == "SD_JWT_VC"
+    )
     assert profiles["ip-marty-oid4vp-verifier"]["algorithm"] == "ES256"
     assert (
         profiles["ip-marty-canvas-lti-tool"]["signing_key_reference"]
         == "lti-tool-marty-rs256"
     )
     assert profiles["ip-marty-canvas-lti-tool"]["key_purpose"] == "lti_tool_signing"
+    assert profiles["ip-marty-canvas-lti-tool"]["credential_format"] == "VC_JWT"
     assert profiles["ip-marty-canvas-lti-tool"]["algorithm"] == "RS256"
     assert (
         profiles["ip-marty-mdoc-dsc"]["signing_key_reference"]
         == "cred-dsc-marty-primary"
     )
     assert profiles["ip-marty-mdoc-dsc"]["key_purpose"] == "mdoc_dsc"
+    assert profiles["ip-marty-mdoc-dsc"]["credential_format"] == "MDOC"
+    assert profiles["ip-marty-mdoc-dsc"]["algorithm"] == "ES256"
     assert (
         profiles["ip-marty-vdsnc-issuer"]["signing_key_reference"]
         == "cred-dsc-marty-primary"
     )
+    assert profiles["ip-marty-vdsnc-issuer"]["credential_format"] == "MDOC"
     assert profiles["ip-marty-vdsnc-issuer"]["key_purpose"] == "vdsnc_signing"
+    assert profiles["ip-marty-vdsnc-issuer"]["algorithm"] == "ES256"
 
     for profile in profiles.values():
         assert profile["organization_id"] == organization_id
         assert profile["issuer_did"] == issuer_did
         assert profile["status"] == "active"
         assert profile["verification_method_id"].startswith(f"{issuer_did}#")
+
+
+def test_seed_issuer_profiles_repairs_and_deduplicates_legacy_oid4vp_binding():
+    redis = FakeRedis()
+    organization_id = "00000000-0000-0000-0000-000000000001"
+    issuer_did = "did:web:beta.elevenidllc.com:orgs:marty"
+    storage_key = migrations._issuer_profiles_storage_key(organization_id)
+    common = {
+        "organization_id": organization_id,
+        "issuer_did": issuer_did,
+        "signing_service_id": migrations.MANAGED_OPENBAO_SERVICE_ID,
+        "signing_key_reference": "oid4vp-verifier-marty-es256",
+        "key_purpose": "oid4vp_request_signing",
+        "algorithm": "ES256",
+        "status": "active",
+    }
+    redis.store[storage_key] = json.dumps(
+        {
+            "profiles": [
+                {"id": "ip-marty-oid4vp-verifier", **common},
+                {
+                    "id": "generated-duplicate",
+                    **common,
+                    "credential_format": "SD_JWT_VC",
+                },
+            ]
+        }
+    )
+
+    migrations._seed_issuer_profiles(
+        redis,
+        organization_id,
+        issuer_did,
+        "https://beta.elevenidllc.com",
+    )
+
+    profiles = json.loads(redis.store[storage_key])["profiles"]
+    matching = [
+        profile
+        for profile in profiles
+        if profile.get("key_purpose") == "oid4vp_request_signing"
+        and profile.get("issuer_did") == issuer_did
+    ]
+    assert [profile["id"] for profile in matching] == [
+        "ip-marty-oid4vp-verifier"
+    ]
+    assert matching[0]["credential_format"] == "SD_JWT_VC"

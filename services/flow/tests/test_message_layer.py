@@ -130,6 +130,7 @@ async def test_oid4vp_identity_resolves_did_without_public_profile_selection(
             "organization_id": "org-1",
             "issuer_did": issuer_did,
             "key_purpose": "oid4vp_request_signing",
+            "credential_format": "oauth-authz-req+jwt",
             "algorithm": "ES256",
         },
         "headers": {"X-API-Key": "api-key"},
