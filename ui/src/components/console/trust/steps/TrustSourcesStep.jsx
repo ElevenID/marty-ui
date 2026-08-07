@@ -116,6 +116,8 @@ const normalizeIssuer = (issuer, importSource = 'manual') => {
     source_type: 'PINNED_ISSUER',
     name: issuer.name || '',
     description: issuer.description || '',
+    accreditation_body: issuer.accreditation_body || '',
+    accreditations: toArray(issuer.accreditations),
     added_at: issuer.added_at || new Date().toISOString(),
     metadata: {
       country: issuer.metadata?.country || issuer.country || '',
@@ -222,6 +224,8 @@ const TrustSourcesStep = ({ data, onChange }) => {
   const [newIssuerName, setNewIssuerName] = useState('');
   const [newIssuerCountry, setNewIssuerCountry] = useState('');
   const [newIssuerCredentialTypes, setNewIssuerCredentialTypes] = useState('');
+  const [newIssuerAccreditationBody, setNewIssuerAccreditationBody] = useState('');
+  const [newIssuerAccreditations, setNewIssuerAccreditations] = useState('');
   const [importUrl, setImportUrl] = useState('');
   const [importFeedback, setImportFeedback] = useState({ type: '', message: '' });
   const [loadingUrlImport, setLoadingUrlImport] = useState(false);
@@ -350,6 +354,8 @@ const TrustSourcesStep = ({ data, onChange }) => {
           name: newIssuerName.trim(),
           country: newIssuerCountry.trim(),
           credential_types: newIssuerCredentialTypes,
+          accreditation_body: newIssuerAccreditationBody.trim(),
+          accreditations: newIssuerAccreditations,
           source: 'manual',
         },
         'manual',
@@ -361,6 +367,8 @@ const TrustSourcesStep = ({ data, onChange }) => {
     setNewIssuerName('');
     setNewIssuerCountry('');
     setNewIssuerCredentialTypes('');
+    setNewIssuerAccreditationBody('');
+    setNewIssuerAccreditations('');
   };
 
   const handleImportFileClick = () => {
@@ -623,6 +631,23 @@ const TrustSourcesStep = ({ data, onChange }) => {
                   fullWidth
                 />
               </Stack>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mb: 2 }}>
+                <TextField
+                  label={t('wizards.trustProfile.trustSourcesStep.accreditationBody.label', { defaultValue: 'Accreditation Authority' })}
+                  placeholder={t('wizards.trustProfile.trustSourcesStep.accreditationBody.placeholder', { defaultValue: 'Authority that certified this issuer' })}
+                  value={newIssuerAccreditationBody}
+                  onChange={(e) => setNewIssuerAccreditationBody(e.target.value)}
+                  fullWidth
+                />
+                <TextField
+                  label={t('wizards.trustProfile.trustSourcesStep.accreditations.label', { defaultValue: 'Accreditations Held' })}
+                  placeholder={t('wizards.trustProfile.trustSourcesStep.accreditations.placeholder', { defaultValue: 'e.g. ISO27001|FIPS140-2' })}
+                  value={newIssuerAccreditations}
+                  onChange={(e) => setNewIssuerAccreditations(e.target.value)}
+                  helperText={t('wizards.trustProfile.trustSourcesStep.accreditations.helper', { defaultValue: 'Use | or ; between multiple identifiers.' })}
+                  fullWidth
+                />
+              </Stack>
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mb: 3 }}>
                 <TextField
                   label={t('wizards.trustProfile.trustSourcesStep.issuerCountry.label', { defaultValue: 'Country' })}
@@ -729,6 +754,9 @@ const TrustSourcesStep = ({ data, onChange }) => {
                             {issuer.metadata?.country ? <Chip label={issuer.metadata.country} size="small" /> : null}
                             {(issuer.metadata?.credential_types || []).map((type) => (
                               <Chip key={`${getEntryKey(issuer)}-${type}`} label={type} size="small" color="info" variant="outlined" />
+                            ))}
+                            {(issuer.accreditations || []).map((accreditation) => (
+                              <Chip key={`${getEntryKey(issuer)}-accreditation-${accreditation}`} label={accreditation} size="small" color="success" variant="outlined" />
                             ))}
                             {issuer.metadata?.source ? (
                               <Chip label={`${t('wizards.trustProfile.trustSourcesStep.sourceChip', { defaultValue: 'Source' })}: ${issuer.metadata.source}`} size="small" variant="outlined" />

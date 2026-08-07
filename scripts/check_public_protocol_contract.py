@@ -45,6 +45,7 @@ from gateway.models import (  # noqa: E402
     IssuerIdentityOperationRequest,
     IssuerIdentityResolutionResponse,
     IssuerIdentityResponse,
+    KeyAttestationPolicy,
     OrganizationCreate,
     OrganizationResponse,
     OrganizationTrustProfileResponse,
@@ -413,6 +414,7 @@ def check_contract(protocol_root: Path) -> None:
         "is_system_issuer": False,
         "compliance_status": "COMPLIANT",
         "accreditation_body": None,
+        "accreditations": ["ISO27001", "FIPS140-2"],
         "accreditation_date": None,
         "valid_from": "2026-08-01T00:00:00Z",
         "valid_until": None,
@@ -592,6 +594,19 @@ def check_contract(protocol_root: Path) -> None:
         "credential_format": "SD_JWT_VC",
         "algorithm": "ES256",
     }
+    key_attestation_schema, key_attestation_validator = _validator(
+        protocol_root,
+        registry,
+        "key-attestation-policy.json",
+    )
+    _assert_model_shape(
+        model=KeyAttestationPolicy,
+        schema=key_attestation_schema,
+        label="KeyAttestationPolicy",
+    )
+    key_attestation_validator.validate(
+        KeyAttestationPolicy(mode="required").model_dump(mode="json")
+    )
     lifecycle_contracts = (
         (
             IssuerIdentityOperationRequest,
@@ -649,6 +664,7 @@ def check_contract(protocol_root: Path) -> None:
         trust_profile_issuer_update_schema,
         issuer_identity_schema,
         issuer_identity_list_schema,
+        key_attestation_schema,
         *lifecycle_schemas,
     ):
         leaked = FORBIDDEN_PUBLIC_FIELDS & set(document.get("properties", {}))
@@ -665,6 +681,7 @@ def check_contract(protocol_root: Path) -> None:
         TrustProfileIssuerResponse,
         IssuerIdentityResponse,
         IssuerIdentityListResponse,
+        KeyAttestationPolicy,
         IssuerIdentityOperationRequest,
         IssuerIdentityCreateRequest,
         IssuerIdentityCertificateRequest,

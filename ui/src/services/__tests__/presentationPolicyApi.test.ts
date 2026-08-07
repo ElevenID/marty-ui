@@ -827,6 +827,8 @@ describe('presentationPolicyApi', () => {
             display_name: 'Example Issuer',
             description: 'Resolved issuer identity',
             compliance_status: 'COMPLIANT',
+            accreditation_body: 'National Identity Authority',
+            accreditations: ['ISO27001', 'FIPS140-2'],
             metadata: { issuer_url: 'https://issuer.example.com' },
           }])
         }),
@@ -852,6 +854,8 @@ describe('presentationPolicyApi', () => {
         issuer_did: 'did:web:issuer.example.com',
         did: 'did:web:issuer.example.com',
         name: 'Example Issuer',
+        accreditation_body: 'National Identity Authority',
+        accreditations: ['ISO27001', 'FIPS140-2'],
       })
     })
 
@@ -884,6 +888,8 @@ describe('presentationPolicyApi', () => {
         {
           issuer_did: 'did:web:new.example.com',
           name: 'New Issuer',
+          accreditation_body: 'National Identity Authority',
+          accreditations: ['ISO27001', 'FIPS140-2'],
           issuer_profile_id: 'must-not-cross-the-public-boundary',
           signing_service_id: 'must-not-cross-the-public-boundary',
           signing_key_reference: 'must-not-cross-the-public-boundary',
@@ -898,6 +904,8 @@ describe('presentationPolicyApi', () => {
         issuer_type: 'ORGANIZATION',
         display_name: 'New Issuer',
         description: null,
+        accreditation_body: 'National Identity Authority',
+        accreditations: ['ISO27001', 'FIPS140-2'],
         metadata: {},
       })
       expect(relationshipPayload).toEqual({

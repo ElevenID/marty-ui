@@ -2263,15 +2263,16 @@ def _evaluate_normalized_issuer_relationship(
             for accreditation in constraints.required_accreditations
             if str(accreditation).strip()
         }
-        accreditation_body = relationship.get("accreditation_body")
-        normalized_accreditation = (
-            accreditation_body.strip().casefold()
-            if isinstance(accreditation_body, str)
-            else ""
-        )
-        held_accreditations = (
-            {normalized_accreditation} if normalized_accreditation else set()
-        )
+        raw_accreditations = relationship.get("accreditations")
+        if not isinstance(raw_accreditations, list) or any(
+            not isinstance(accreditation, str) or not accreditation.strip()
+            for accreditation in raw_accreditations
+        ):
+            return False, f"Issuer {issuer_did} has invalid accreditation evidence"
+        held_accreditations = {
+            accreditation.strip().casefold()
+            for accreditation in raw_accreditations
+        }
         if not required_accreditations.issubset(held_accreditations):
             return False, f"Issuer {issuer_did} does not meet accreditation requirements"
 
