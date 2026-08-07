@@ -1,6 +1,6 @@
 {
   "schema": "marty.stack-lock/v1",
-  "release": "marty-ui@1.1.103",
+  "release": "marty-ui@1.1.104",
   "components": [
     {
       "name": "marty-api-core",
@@ -44,13 +44,13 @@
     {
       "name": "marty-credentials-issuance",
       "repository": "ElevenID/marty-credentials",
-      "version": "0.1.44",
-      "commit": "ed0c49e965c0ceae234f4b7409bf6e475da9cef1",
+      "version": "0.1.45",
+      "commit": "c2e9e6e456e6eb051ad021eaca639c5826403b85",
       "artifacts": [{
         "type": "oci",
         "uri": "ghcr.io/elevenid/marty-credentials-issuance",
-        "digest": "sha256:38b40f7dd0f7c3ef622c2e6da74b78afd1e6b653971e680c867390e7757f5814",
-        "sbom": "https://github.com/ElevenID/marty-credentials/releases/download/v0.1.44/marty-credentials-issuance.spdx.json",
+        "digest": "sha256:9c7673c7b4d56dffbfd9f3aac9c94fb97c3196a401b897d0666dbb29958a344f",
+        "sbom": "https://github.com/ElevenID/marty-credentials/releases/download/v0.1.45/marty-credentials-issuance.spdx.json",
         "provenance": "https://github.com/ElevenID/marty-credentials/attestations"
       }]
     },
@@ -83,14 +83,14 @@
     {
       "name": "marty-integration-tests",
       "repository": "ElevenID/marty-integration-tests",
-      "version": "1.2.34",
-      "commit": "abd99e71234309091d9e21128fa686780ffe226f",
+      "version": "1.2.36",
+      "commit": "9fee02453c1303dd3039fb12df2409e7b11a9669",
       "artifacts": [{
         "type": "release",
-        "uri": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.34/marty-integration-tests-1.2.34-source.tar.gz",
-        "digest": "sha256:c2315c09432c62f2567bfb123daf2dbefdefb641d1ad51c095e33fe96150050e",
-        "sbom": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.34/marty-integration-tests.spdx.json",
-        "provenance": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.34/marty-integration-tests-1.2.34-source.tar.gz.sigstore.json"
+        "uri": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.36/marty-integration-tests-1.2.36-source.tar.gz",
+        "digest": "sha256:e6e6669c320609c4b9cfc12cc4a1632b423f0da53cac5576053f83d0e0aacf3b",
+        "sbom": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.36/marty-integration-tests.spdx.json",
+        "provenance": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.36/marty-integration-tests-1.2.36-source.tar.gz.sigstore.json"
       }]
     }
   ]
