@@ -233,6 +233,7 @@ def test_internal_get_trust_profile_materializes_normalized_issuer_decision() ->
         display_name="Example Issuer",
         compliance_status=trust_profile.IssuerEntityComplianceStatus.ACCREDITED,
         accreditation_body="Example Accreditation Authority",
+        accreditations=["ISO27001", "FIPS140-2"],
     )
     relationship = trust_profile.TrustProfileIssuer(
         trust_profile_id=profile.id,
@@ -254,6 +255,7 @@ def test_internal_get_trust_profile_materializes_normalized_issuer_decision() ->
             "relationship_status": "TRUSTED",
             "compliance_status": "ACCREDITED",
             "accreditation_body": "Example Accreditation Authority",
+            "accreditations": ["ISO27001", "FIPS140-2"],
             "valid_from": issuer.valid_from.isoformat(),
         }
     ]

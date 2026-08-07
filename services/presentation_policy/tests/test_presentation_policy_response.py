@@ -1466,6 +1466,7 @@ def _normalized_issuer_relationship(
         "relationship_status": "TRUSTED",
         "compliance_status": "ACCREDITED",
         "accreditation_body": "Example Accreditation Authority",
+        "accreditations": ["ISO27001", "FIPS140-2"],
         "valid_from": (now - timedelta(days=1)).isoformat(),
         "valid_until": (now + timedelta(days=1)).isoformat(),
         "revoked_at": None,
@@ -1484,7 +1485,7 @@ def test_normalized_trusted_issuer_satisfies_policy_constraints() -> None:
         constraints=pp.IssuerConstraints(
             min_trust_level=80,
             required_compliance_statuses=["ACCREDITED"],
-            required_accreditations=["Example Accreditation Authority"],
+            required_accreditations=["iso27001", "FIPS140-2"],
         ),
     )
 
@@ -1510,7 +1511,7 @@ def test_normalized_trusted_issuer_satisfies_policy_constraints() -> None:
             "is expired",
         ),
         ({"compliance_status": "COMPLIANT"}, "compliance requirements"),
-        ({"accreditation_body": "Other Authority"}, "accreditation requirements"),
+        ({"accreditations": ["ISO27001"]}, "accreditation requirements"),
     ],
 )
 def test_normalized_issuer_relationship_failures_are_closed(
@@ -1526,7 +1527,7 @@ def test_normalized_issuer_relationship_failures_are_closed(
         constraints=pp.IssuerConstraints(
             min_trust_level=80,
             required_compliance_statuses=["ACCREDITED"],
-            required_accreditations=["Example Accreditation Authority"],
+            required_accreditations=["ISO27001", "FIPS140-2"],
         ),
     )
 
@@ -1535,7 +1536,7 @@ def test_normalized_issuer_relationship_failures_are_closed(
     assert expected_error in error
 
 
-def test_all_required_accreditations_must_be_proven() -> None:
+def test_all_required_accreditations_are_proven_by_first_class_set() -> None:
     passed, error = pp._evaluate_issuer_trust(
         trust_profile_data={
             "status": "active",
@@ -1544,15 +1545,51 @@ def test_all_required_accreditations_must_be_proven() -> None:
         issuer_did="did:web:beta.elevenidllc.com:orgs:marty",
         constraints=pp.IssuerConstraints(
             required_accreditations=[
-                "Example Accreditation Authority",
-                "Second Accreditation",
+                "ISO27001",
+                "FIPS140-2",
             ]
+        ),
+    )
+
+    assert passed is True
+    assert error is None
+
+
+def test_accreditation_body_does_not_count_as_accreditation() -> None:
+    passed, error = pp._evaluate_issuer_trust(
+        trust_profile_data={
+            "status": "active",
+            "issuer_relationships": [
+                _normalized_issuer_relationship(accreditations=[])
+            ],
+        },
+        issuer_did="did:web:beta.elevenidllc.com:orgs:marty",
+        constraints=pp.IssuerConstraints(
+            required_accreditations=["Example Accreditation Authority"]
         ),
     )
 
     assert passed is False
     assert error is not None
     assert "accreditation requirements" in error
+
+
+@pytest.mark.parametrize("invalid", [None, "ISO27001", [" "]])
+def test_malformed_accreditation_evidence_fails_closed(invalid: object) -> None:
+    passed, error = pp._evaluate_issuer_trust(
+        trust_profile_data={
+            "status": "active",
+            "issuer_relationships": [
+                _normalized_issuer_relationship(accreditations=invalid)
+            ],
+        },
+        issuer_did="did:web:beta.elevenidllc.com:orgs:marty",
+        constraints=pp.IssuerConstraints(required_accreditations=["ISO27001"]),
+    )
+
+    assert passed is False
+    assert error is not None
+    assert "invalid accreditation evidence" in error
 
 
 def test_normalized_issuer_relationships_fail_closed_when_missing_or_ambiguous() -> None:
@@ -1709,7 +1746,7 @@ def test_evaluation_uses_normalized_trusted_issuer_relationship(monkeypatch) -> 
     policy.issuer_constraints = pp.IssuerConstraints(
         min_trust_level=80,
         required_compliance_statuses=["ACCREDITED"],
-        required_accreditations=["Example Accreditation Authority"],
+        required_accreditations=["ISO27001"],
     )
     asyncio.run(repo.save(policy))
     _install_marty_trust_profile(

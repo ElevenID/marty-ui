@@ -16,6 +16,7 @@ from pydantic import (
     ConfigDict,
     EmailStr,
     Field,
+    field_validator,
     model_validator,
 )
 
@@ -270,6 +271,25 @@ def _reject_private_custody_metadata(metadata: dict[str, Any] | None) -> None:
         )
 
 
+def _normalize_accreditations(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("accreditation identifiers cannot be blank")
+        if len(cleaned) > 128:
+            raise ValueError("accreditation identifiers cannot exceed 128 characters")
+        comparison_key = cleaned.casefold()
+        if comparison_key in seen:
+            raise ValueError(
+                "accreditation identifiers must be unique case-insensitively"
+            )
+        seen.add(comparison_key)
+        normalized.append(cleaned)
+    return normalized
+
+
 class IssuerEntityCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -280,11 +300,17 @@ class IssuerEntityCreate(BaseModel):
     description: str | None = Field(None, max_length=1024)
     compliance_status: Literal["ACCREDITED", "COMPLIANT", "SUSPENDED"] = "COMPLIANT"
     accreditation_body: str | None = Field(None, max_length=256)
+    accreditations: list[str] = Field(default_factory=list, max_length=64)
     accreditation_date: str | None = None
     valid_from: str | None = None
     valid_until: str | None = None
     trust_anchor_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("accreditations")
+    @classmethod
+    def validate_accreditations(cls, values: list[str]) -> list[str]:
+        return _normalize_accreditations(values)
 
     @model_validator(mode="after")
     def reject_private_custody_metadata(self) -> "IssuerEntityCreate":
@@ -303,12 +329,18 @@ class IssuerEntityUpdate(BaseModel):
         Literal["ACCREDITED", "COMPLIANT", "SUSPENDED", "REVOKED"] | None
     ) = None
     accreditation_body: str | None = Field(None, max_length=256)
+    accreditations: list[str] | None = Field(None, max_length=64)
     accreditation_date: str | None = None
     valid_from: str | None = None
     valid_until: str | None = None
     trust_anchor_id: str | None = None
     metadata: dict[str, Any] | None = None
     revocation_reason: str | None = Field(None, max_length=512)
+
+    @field_validator("accreditations")
+    @classmethod
+    def validate_accreditations(cls, values: list[str] | None) -> list[str] | None:
+        return None if values is None else _normalize_accreditations(values)
 
     @model_validator(mode="after")
     def validate_update(self) -> "IssuerEntityUpdate":
@@ -318,6 +350,7 @@ class IssuerEntityUpdate(BaseModel):
             "display_name",
             "issuer_type",
             "compliance_status",
+            "accreditations",
             "valid_from",
             "metadata",
         ):
@@ -346,6 +379,7 @@ class IssuerEntityResponse(BaseModel):
     is_system_issuer: bool
     compliance_status: str
     accreditation_body: str | None = None
+    accreditations: list[str] = Field(max_length=64)
     accreditation_date: str | None = None
     valid_from: str
     valid_until: str | None = None
@@ -361,6 +395,11 @@ class IssuerEntityResponse(BaseModel):
     def reject_private_custody_metadata(self) -> "IssuerEntityResponse":
         _reject_private_custody_metadata(self.metadata)
         return self
+
+    @field_validator("accreditations")
+    @classmethod
+    def validate_accreditations(cls, values: list[str]) -> list[str]:
+        return _normalize_accreditations(values)
 
 
 class IssuerIdentityResponse(BaseModel):

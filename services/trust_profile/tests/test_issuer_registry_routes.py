@@ -121,6 +121,8 @@ def test_create_issuer_entity_creates_protocol_record():
             "issuer_id": "did:example:issuer-1",
             "display_name": "Acme Issuer",
             "issuer_type": "ORGANIZATION",
+            "accreditation_body": "National Identity Authority",
+            "accreditations": [" ISO27001 ", "FIPS140-2"],
             "metadata": {"issuer_url": "https://issuer.example"},
         },
     )
@@ -130,6 +132,8 @@ def test_create_issuer_entity_creates_protocol_record():
     assert body["organization_id"] == "org-1"
     assert body["issuer_id"] == "did:example:issuer-1"
     assert body["display_name"] == "Acme Issuer"
+    assert body["accreditation_body"] == "National Identity Authority"
+    assert body["accreditations"] == ["ISO27001", "FIPS140-2"]
     assert body["metadata"] == {"issuer_url": "https://issuer.example"}
     get_membership.assert_awaited_once_with("user-1", "org-1")
 
@@ -138,6 +142,31 @@ def test_create_issuer_entity_creates_protocol_record():
     )
     assert saved is not None
     assert saved.display_name == "Acme Issuer"
+    assert saved.accreditations == ["ISO27001", "FIPS140-2"]
+
+
+def test_issuer_accreditations_reject_case_insensitive_duplicates_and_blank_values():
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    client, _ = _build_client(repo)
+    base = {
+        "organization_id": "org-1",
+        "issuer_id": "did:example:issuer-1",
+        "display_name": "Acme Issuer",
+    }
+
+    duplicate = client.post(
+        "/v1/issuer-entities",
+        headers={"x-user-id": "user-1"},
+        json={**base, "accreditations": ["ISO27001", "iso27001"]},
+    )
+    blank = client.post(
+        "/v1/issuer-entities",
+        headers={"x-user-id": "user-1"},
+        json={**base, "accreditations": [" "]},
+    )
+
+    assert duplicate.status_code == 422
+    assert blank.status_code == 422
 
 
 def test_create_issuer_entity_rejects_duplicate_identifier_within_scope():
@@ -413,6 +442,7 @@ def test_partial_issuer_update_can_clear_nullable_public_fields():
     issuer = _save_issuer_entity(repo, "org-1", "did:example:issuer-1")
     issuer.description = "Old description"
     issuer.accreditation_body = "Old authority"
+    issuer.accreditations = ["ISO27001"]
     asyncio.run(repo.save_issuer_entity(issuer))
     client, _ = _build_client(repo)
 
@@ -423,12 +453,17 @@ def test_partial_issuer_update_can_clear_nullable_public_fields():
             "organization_id": "org-1",
             "description": None,
             "accreditation_body": None,
+            "accreditations": [],
         },
     )
 
     assert response.status_code == 200
     assert "description" not in response.json()
     assert "accreditation_body" not in response.json()
+    assert response.json()["accreditations"] == []
+    stored = asyncio.run(repo.get_issuer_entity(issuer.id))
+    assert stored is not None
+    assert stored.accreditations == []
 
 
 def test_list_trust_frameworks_returns_seeded_system_frameworks():

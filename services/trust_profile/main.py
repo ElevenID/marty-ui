@@ -28,7 +28,7 @@ from typing import Annotated, Any, AsyncGenerator, Literal
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from marty_common.dto import DeleteResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import text
 from marty_common import ensure_membership_permission
 from marty_common.org_authorization import get_organization_client
@@ -222,6 +222,7 @@ class IssuerEntity:
         IssuerEntityComplianceStatus.COMPLIANT
     )
     accreditation_body: str | None = None
+    accreditations: list[str] = field(default_factory=list)
     accreditation_date: datetime | None = None
     valid_from: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     valid_until: datetime | None = None
@@ -777,6 +778,26 @@ def _field_was_provided(model: BaseModel, field_name: str) -> bool:
     return False
 
 
+def _normalize_accreditations(values: list[str]) -> list[str]:
+    """Validate and normalize public accreditation identifiers."""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("accreditation identifiers cannot be blank")
+        if len(cleaned) > 128:
+            raise ValueError("accreditation identifiers cannot exceed 128 characters")
+        comparison_key = cleaned.casefold()
+        if comparison_key in seen:
+            raise ValueError(
+                "accreditation identifiers must be unique case-insensitively"
+            )
+        seen.add(comparison_key)
+        normalized.append(cleaned)
+    return normalized
+
+
 class CreateIssuerEntityRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -787,11 +808,17 @@ class CreateIssuerEntityRequest(BaseModel):
     description: str | None = Field(None, max_length=1024)
     compliance_status: Literal["ACCREDITED", "COMPLIANT", "SUSPENDED"] = "COMPLIANT"
     accreditation_body: str | None = Field(None, max_length=256)
+    accreditations: list[str] = Field(default_factory=list, max_length=64)
     accreditation_date: str | None = Field(None, max_length=50)
     valid_from: str | None = Field(None, max_length=50)
     valid_until: str | None = Field(None, max_length=50)
     trust_anchor_id: str | None = Field(None, max_length=255)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("accreditations")
+    @classmethod
+    def validate_accreditations(cls, values: list[str]) -> list[str]:
+        return _normalize_accreditations(values)
 
     @model_validator(mode="after")
     def reject_private_custody_metadata(self) -> CreateIssuerEntityRequest:
@@ -810,12 +837,18 @@ class UpdateIssuerEntityRequest(BaseModel):
         Literal["ACCREDITED", "COMPLIANT", "SUSPENDED", "REVOKED"] | None
     ) = None
     accreditation_body: str | None = Field(None, max_length=256)
+    accreditations: list[str] | None = Field(None, max_length=64)
     accreditation_date: str | None = Field(None, max_length=50)
     valid_from: str | None = Field(None, max_length=50)
     valid_until: str | None = Field(None, max_length=50)
     trust_anchor_id: str | None = Field(None, max_length=255)
     metadata: dict[str, Any] | None = None
     revocation_reason: str | None = Field(None, max_length=512)
+
+    @field_validator("accreditations")
+    @classmethod
+    def validate_accreditations(cls, values: list[str] | None) -> list[str] | None:
+        return None if values is None else _normalize_accreditations(values)
 
     @model_validator(mode="after")
     def validate_update(self) -> UpdateIssuerEntityRequest:
@@ -825,6 +858,7 @@ class UpdateIssuerEntityRequest(BaseModel):
             "display_name",
             "issuer_type",
             "compliance_status",
+            "accreditations",
             "valid_from",
             "metadata",
         ):
@@ -1116,6 +1150,7 @@ def _build_issuer_entity_from_request(
             request.compliance_status.upper()
         ),
         accreditation_body=request.accreditation_body,
+        accreditations=request.accreditations,
         accreditation_date=_parse_optional_datetime(request.accreditation_date),
         valid_from=_parse_optional_datetime(request.valid_from)
         or datetime.now(timezone.utc),
@@ -1227,6 +1262,7 @@ class IssuerEntityResponse(BaseModel):
     is_system_issuer: bool
     compliance_status: str
     accreditation_body: str | None = None
+    accreditations: list[str] = Field(max_length=64)
     accreditation_date: str | None = None
     valid_from: str
     valid_until: str | None = None
@@ -1242,6 +1278,11 @@ class IssuerEntityResponse(BaseModel):
     def reject_private_custody_metadata(self) -> IssuerEntityResponse:
         _reject_private_custody_metadata(self.metadata)
         return self
+
+    @field_validator("accreditations")
+    @classmethod
+    def validate_accreditations(cls, values: list[str]) -> list[str]:
+        return _normalize_accreditations(values)
 
 
 class TrustFrameworkResponse(BaseModel):
@@ -1380,6 +1421,7 @@ class TrustDecisionIssuerResponse(BaseModel):
     relationship_status: Literal["TRUSTED", "DENIED", "UNDER_REVIEW"]
     compliance_status: Literal["ACCREDITED", "COMPLIANT", "SUSPENDED", "REVOKED"]
     accreditation_body: str | None = None
+    accreditations: list[str] = Field(default_factory=list, max_length=64)
     valid_from: str
     valid_until: str | None = None
     revoked_at: str | None = None
@@ -1422,6 +1464,7 @@ async def _internal_profile_to_response(
                 relationship_status=relationship.relationship_status.value,
                 compliance_status=issuer.compliance_status.value,
                 accreditation_body=issuer.accreditation_body,
+                accreditations=list(issuer.accreditations),
                 valid_from=issuer.valid_from.isoformat(),
                 valid_until=(
                     issuer.valid_until.isoformat() if issuer.valid_until else None
@@ -2594,6 +2637,8 @@ async def update_issuer_entity(
         issuer_entity.issuer_type = IssuerEntityType(request.issuer_type.upper())
     if _field_was_provided(request, "accreditation_body"):
         issuer_entity.accreditation_body = request.accreditation_body
+    if _field_was_provided(request, "accreditations"):
+        issuer_entity.accreditations = list(request.accreditations or [])
     if _field_was_provided(request, "accreditation_date"):
         issuer_entity.accreditation_date = _parse_optional_datetime(
             request.accreditation_date
@@ -2718,6 +2763,7 @@ def _issuer_entity_to_response(issuer_entity: IssuerEntity) -> IssuerEntityRespo
         is_system_issuer=issuer_entity.is_system_issuer,
         compliance_status=issuer_entity.compliance_status.value,
         accreditation_body=issuer_entity.accreditation_body,
+        accreditations=list(issuer_entity.accreditations),
         accreditation_date=issuer_entity.accreditation_date.isoformat()
         if issuer_entity.accreditation_date
         else None,
