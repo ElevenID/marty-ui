@@ -28,7 +28,7 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Any, AsyncGenerator
 from urllib.parse import quote, unquote, urlparse
@@ -56,8 +56,6 @@ logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "presentation-policy-service"
 SERVICE_PORT = int(os.environ.get("PRESENTATION_POLICY_SERVICE_PORT", "8009"))
-_TRUST_PROFILE_CACHE_TTL_DEFAULT_SECONDS = 300
-_TRUST_PROFILE_CACHE_TTL_MAX_SECONDS = 3600
 
 
 def get_config() -> dict[str, Any]:
@@ -365,56 +363,6 @@ class PresentationPolicy:
 # =============================================================================
 # Application Layer
 # =============================================================================
-
-
-class TrustProfileCache:
-    """
-    In-memory cache for Trust Profiles.
-
-    Caches Trust Profile data with a bounded TTL derived from trust-profile freshness.
-    Reduces load on trust-profiles service during verification.
-    """
-
-    def __init__(self, maxsize: int = 10_000):
-        self._cache: dict[str, dict] = {}  # profile_id -> {data, expires_at}
-        self._maxsize = maxsize
-
-    def get(self, profile_id: str) -> dict | None:
-        """Get cached Trust Profile if not expired."""
-        entry = self._cache.get(profile_id)
-        if not entry:
-            return None
-
-        if datetime.now(timezone.utc) > entry["expires_at"]:
-            # Expired
-            del self._cache[profile_id]
-            return None
-
-        return entry["data"]
-
-    def set(self, profile_id: str, data: dict, ttl_seconds: int) -> None:
-        """Cache Trust Profile with TTL."""
-        if len(self._cache) >= self._maxsize:
-            # Evict expired entries first, then oldest
-            now = datetime.now(timezone.utc)
-            expired = [k for k, v in self._cache.items() if now > v["expires_at"]]
-            for k in expired:
-                del self._cache[k]
-            if len(self._cache) >= self._maxsize:
-                oldest = min(self._cache, key=lambda k: self._cache[k]["expires_at"])
-                del self._cache[oldest]
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
-        self._cache[profile_id] = {
-            "data": data,
-            "expires_at": expires_at,
-        }
-        logger.debug(
-            f"Cached Trust Profile {profile_id} until {expires_at.isoformat()}"
-        )
-
-    def clear(self) -> None:
-        """Clear all cached profiles."""
-        self._cache.clear()
 
 
 class InMemoryPresentationPolicyRepository:
@@ -2204,6 +2152,184 @@ def _trust_source_issuer_candidates(source: dict[str, Any]) -> set[str]:
     return candidates
 
 
+def _trust_decision_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _issuer_constraints_require_relationship(
+    constraints: IssuerConstraints | None,
+) -> bool:
+    return bool(
+        constraints
+        and (
+            constraints.min_trust_level is not None
+            or constraints.required_compliance_statuses
+            or constraints.required_accreditations
+        )
+    )
+
+
+def _normalized_relationship_issuer_id(value: str) -> str:
+    """Normalize a registry identifier without collapsing distinct DID paths."""
+    raw = value.strip()
+    if raw.lower().startswith("did:"):
+        return raw
+    return _normalize_issuer_url(raw) or raw
+
+
+def _evaluate_normalized_issuer_relationship(
+    *,
+    issuer_did: str,
+    relationships: list[object],
+    constraints: IssuerConstraints | None,
+    now: datetime | None = None,
+) -> tuple[bool, str | None]:
+    """Evaluate exactly one normalized TrustProfile-to-IssuerEntity link."""
+    matched: list[dict[str, Any]] = []
+    for relationship in relationships:
+        if not isinstance(relationship, dict):
+            return False, "Trust Profile contains invalid issuer relationship data"
+        configured_issuer = relationship.get("issuer_id")
+        if not isinstance(configured_issuer, str) or not configured_issuer.strip():
+            return False, "Trust Profile contains invalid issuer relationship data"
+        if _normalized_relationship_issuer_id(
+            configured_issuer
+        ) == _normalized_relationship_issuer_id(issuer_did):
+            matched.append(relationship)
+
+    if not matched:
+        return False, f"Issuer {issuer_did} has no trusted issuer relationship"
+    if len(matched) != 1:
+        return False, f"Issuer {issuer_did} has ambiguous issuer relationships"
+
+    relationship = matched[0]
+    relationship_status = str(relationship.get("relationship_status") or "").upper()
+    if relationship_status == "DENIED":
+        return False, f"Issuer {issuer_did} is explicitly denied by Trust Profile"
+    if relationship_status != "TRUSTED":
+        return False, f"Issuer {issuer_did} relationship is not trusted"
+
+    compliance_status = str(relationship.get("compliance_status") or "").upper()
+    if compliance_status in {"SUSPENDED", "REVOKED"}:
+        return False, f"Issuer {issuer_did} is {compliance_status.lower()}"
+    if compliance_status not in {"ACCREDITED", "COMPLIANT"}:
+        return False, f"Issuer {issuer_did} has invalid compliance status"
+    if relationship.get("revoked_at"):
+        return False, f"Issuer {issuer_did} is revoked"
+
+    current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    valid_from = _trust_decision_datetime(relationship.get("valid_from"))
+    if valid_from is None:
+        return False, f"Issuer {issuer_did} has invalid validity metadata"
+    if current_time < valid_from:
+        return False, f"Issuer {issuer_did} is not yet valid"
+    valid_until_value = relationship.get("valid_until")
+    if valid_until_value is not None:
+        valid_until = _trust_decision_datetime(valid_until_value)
+        if valid_until is None:
+            return False, f"Issuer {issuer_did} has invalid validity metadata"
+        if current_time >= valid_until:
+            return False, f"Issuer {issuer_did} relationship is expired"
+
+    trust_level = relationship.get("trust_level")
+    if isinstance(trust_level, bool) or not isinstance(trust_level, int):
+        return False, f"Issuer {issuer_did} has invalid trust level"
+    if trust_level < 0 or trust_level > 100:
+        return False, f"Issuer {issuer_did} has invalid trust level"
+
+    if constraints:
+        if (
+            constraints.min_trust_level is not None
+            and trust_level < constraints.min_trust_level
+        ):
+            return False, f"Issuer {issuer_did} does not meet minimum trust level"
+
+        required_statuses = {
+            str(status).upper() for status in constraints.required_compliance_statuses
+        }
+        if required_statuses and compliance_status not in required_statuses:
+            return False, f"Issuer {issuer_did} does not meet compliance requirements"
+
+        required_accreditations = {
+            str(accreditation).strip().casefold()
+            for accreditation in constraints.required_accreditations
+            if str(accreditation).strip()
+        }
+        accreditation_body = relationship.get("accreditation_body")
+        normalized_accreditation = (
+            accreditation_body.strip().casefold()
+            if isinstance(accreditation_body, str)
+            else ""
+        )
+        held_accreditations = (
+            {normalized_accreditation} if normalized_accreditation else set()
+        )
+        if not required_accreditations.issubset(held_accreditations):
+            return False, f"Issuer {issuer_did} does not meet accreditation requirements"
+
+    return True, None
+
+
+def _evaluate_issuer_trust(
+    *,
+    trust_profile_data: dict[str, Any],
+    issuer_did: str,
+    constraints: IssuerConstraints | None,
+) -> tuple[bool, str | None]:
+    """Evaluate normalized issuer relationships with legacy-source fallback."""
+    if str(trust_profile_data.get("status") or "").lower() != "active":
+        return False, "Trust Profile is not active"
+
+    issuer_identifiers = _issuer_identifier_candidates(issuer_did)
+    denied_issuers = trust_profile_data.get("denied_issuers") or []
+    if denied_issuers and _matches_configured_issuer_identifiers(
+        issuer_identifiers, denied_issuers
+    ):
+        return False, f"Issuer {issuer_did} is explicitly denied by Trust Profile"
+
+    relationship_value = trust_profile_data.get("issuer_relationships")
+    if relationship_value is not None and not isinstance(relationship_value, list):
+        return False, "Trust Profile contains invalid issuer relationship data"
+    relationships = relationship_value or []
+    if relationships:
+        return _evaluate_normalized_issuer_relationship(
+            issuer_did=issuer_did,
+            relationships=relationships,
+            constraints=constraints,
+        )
+    if _issuer_constraints_require_relationship(constraints):
+        return False, f"Issuer {issuer_did} has no trust-level relationship"
+
+    allowed_issuers = trust_profile_data.get("allowed_issuers") or []
+    if allowed_issuers:
+        if _matches_configured_issuer_identifiers(
+            issuer_identifiers, allowed_issuers
+        ):
+            return True, None
+        return False, f"Issuer {issuer_did} is not in Trust Profile allowed_issuers"
+
+    trust_sources = trust_profile_data.get("trust_sources") or []
+    source_identifiers: set[str] = set()
+    for source in trust_sources:
+        if isinstance(source, dict):
+            source_identifiers.update(_trust_source_issuer_candidates(source))
+    if source_identifiers and issuer_identifiers.isdisjoint(source_identifiers):
+        return (
+            False,
+            f"Issuer {issuer_did} does not match any trust source issuer identifier",
+        )
+
+    return True, None
+
+
 def _verify_open_badge(vp_token: str, version: str) -> dict:
     request_key = "assertion" if version == "v2" else "credential"
     credential, document_store = _extract_open_badge_payload(vp_token, request_key)
@@ -2269,7 +2395,6 @@ def _verify_open_badge_v3(vp_token: str) -> dict:
 router = APIRouter(prefix="/v1/presentation-policies", tags=["presentation-policies"])
 
 _repo: InMemoryPresentationPolicyRepository | None = None
-_trust_profile_cache: TrustProfileCache | None = None
 
 
 def get_repo() -> InMemoryPresentationPolicyRepository:
@@ -2281,39 +2406,6 @@ def get_repo() -> InMemoryPresentationPolicyRepository:
 def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
     """Extract user ID from X-User-Id header (injected by gateway)."""
     return x_user_id
-
-
-def get_trust_cache() -> TrustProfileCache:
-    if _trust_profile_cache is None:
-        raise RuntimeError("Service not configured")
-    return _trust_profile_cache
-
-
-def _bounded_cache_ttl_seconds(value: Any, fallback: int) -> int:
-    try:
-        ttl_seconds = int(value)
-    except (TypeError, ValueError):
-        ttl_seconds = fallback
-
-    return max(1, min(ttl_seconds, _TRUST_PROFILE_CACHE_TTL_MAX_SECONDS))
-
-
-def _trust_profile_cache_ttl_seconds(trust_profile_data: dict[str, Any]) -> int:
-    configured_ttl = _bounded_cache_ttl_seconds(
-        os.environ.get(
-            "TRUST_PROFILE_CACHE_TTL_SECONDS",
-            str(_TRUST_PROFILE_CACHE_TTL_DEFAULT_SECONDS),
-        ),
-        _TRUST_PROFILE_CACHE_TTL_DEFAULT_SECONDS,
-    )
-    freshness_window = (trust_profile_data.get("time_policy") or {}).get(
-        "freshness_window_seconds"
-    )
-    if freshness_window is None:
-        return configured_ttl
-
-    freshness_ttl = _bounded_cache_ttl_seconds(freshness_window, configured_ttl)
-    return min(configured_ttl, freshness_ttl)
 
 
 def _trust_profile_service_url() -> str:
@@ -2346,41 +2438,40 @@ def _load_policy_trust_profile(
         )
     expected_organization_id = policy_organization_id.strip()
 
-    trust_cache = get_trust_cache()
-    trust_profile_data = trust_cache.get(profile_id)
-    loaded_from_service = trust_profile_data is None
-    if loaded_from_service:
-        import httpx as _httpx
+    # Trust relationship, lifecycle, and revocation changes are authorization
+    # decisions. Read the current internal view for every evaluation rather
+    # than accepting a stale process-local allow decision.
+    import httpx as _httpx
 
-        try:
-            response = _httpx.get(_trust_profile_lookup_url(profile_id), timeout=5.0)
-        except Exception as exc:
-            logger.warning(
-                "Could not load Trust Profile %s for tenant validation",
-                profile_id,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=503,
-                detail=f"Trust Profile {profile_id} could not be loaded",
-            ) from exc
-        if response.status_code == 404:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Trust Profile {profile_id} does not exist",
-            )
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Trust Profile {profile_id} could not be loaded",
-            )
-        try:
-            trust_profile_data = response.json()
-        except Exception as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Trust Profile {profile_id} returned invalid data",
-            ) from exc
+    try:
+        response = _httpx.get(_trust_profile_lookup_url(profile_id), timeout=5.0)
+    except Exception as exc:
+        logger.warning(
+            "Could not load Trust Profile %s for tenant validation",
+            profile_id,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Trust Profile {profile_id} could not be loaded",
+        ) from exc
+    if response.status_code == 404:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Trust Profile {profile_id} does not exist",
+        )
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Trust Profile {profile_id} could not be loaded",
+        )
+    try:
+        trust_profile_data = response.json()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Trust Profile {profile_id} returned invalid data",
+        ) from exc
 
     if not isinstance(trust_profile_data, dict):
         raise HTTPException(
@@ -2402,12 +2493,6 @@ def _load_policy_trust_profile(
             detail="Trust Profile and Presentation Policy must belong to the same organization",
         )
 
-    if loaded_from_service:
-        trust_cache.set(
-            profile_id,
-            trust_profile_data,
-            _trust_profile_cache_ttl_seconds(trust_profile_data),
-        )
     return trust_profile_data
 
 
@@ -3440,75 +3525,12 @@ async def evaluate_presentation(
     trust_check_error: str | None = None
     if trust_profile_id and issuer_did and issuer_did != "unknown":
         try:
-            trust_cache = get_trust_cache()
-            trust_profile_data = trust_profile_data or trust_cache.get(trust_profile_id)
-            if trust_profile_data is None:
-                # Fetch from trust-profiles service via HTTP
-                import httpx as _httpx
-
-                resp = _httpx.get(
-                    _trust_profile_lookup_url(trust_profile_id),
-                    timeout=5.0,
+            if trust_profile_data is not None:
+                trust_check_passed, trust_check_error = _evaluate_issuer_trust(
+                    trust_profile_data=trust_profile_data,
+                    issuer_did=issuer_did,
+                    constraints=policy.issuer_constraints,
                 )
-                if resp.status_code == 200:
-                    trust_profile_data = resp.json()
-                    ttl = _trust_profile_cache_ttl_seconds(trust_profile_data)
-                    trust_cache.set(trust_profile_id, trust_profile_data, ttl)
-                else:
-                    trust_check_passed = False
-                    trust_check_error = (
-                        f"Trust Profile {trust_profile_id} could not be loaded "
-                        f"(HTTP {resp.status_code})"
-                    )
-                    logger.warning(trust_check_error)
-
-            if trust_profile_data:
-                issuer_identifiers = _issuer_identifier_candidates(issuer_did)
-                allowed_issuers: list[str] = (
-                    trust_profile_data.get("allowed_issuers") or []
-                )
-                denied_issuers: list[str] = (
-                    trust_profile_data.get("denied_issuers") or []
-                )
-                trust_sources: list[dict] = (
-                    trust_profile_data.get("trust_sources") or []
-                )
-                # Check denied list first (fail-closed)
-                if denied_issuers and _matches_configured_issuer_identifiers(
-                    issuer_identifiers, denied_issuers
-                ):
-                    trust_check_passed = False
-                    trust_check_error = (
-                        f"Issuer {issuer_did} is explicitly denied by Trust Profile"
-                    )
-                elif allowed_issuers:
-                    # If allowed list is specified, issuer MUST be in it
-                    if not _matches_configured_issuer_identifiers(
-                        issuer_identifiers, allowed_issuers
-                    ):
-                        trust_check_passed = False
-                        trust_check_error = f"Issuer {issuer_did} is not in Trust Profile allowed_issuers"
-                elif trust_sources:
-                    source_identifiers: set[str] = set()
-                    for source in trust_sources:
-                        if isinstance(source, dict):
-                            source_identifiers.update(
-                                _trust_source_issuer_candidates(source)
-                            )
-
-                    if source_identifiers and issuer_identifiers.isdisjoint(
-                        source_identifiers
-                    ):
-                        trust_check_passed = False
-                        trust_check_error = (
-                            f"Issuer {issuer_did} does not match any trust source issuer identifier "
-                            f"in Trust Profile {trust_profile_id}"
-                        )
-                    elif not source_identifiers:
-                        logger.debug(
-                            "Trust Profile %s has no trust_source issuer identifiers — skipping issuer match",
-                            trust_profile_id,
-                        )
             elif trust_check_passed:
                 trust_check_passed = False
                 trust_check_error = (
@@ -4031,7 +4053,7 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _repo, _trust_profile_cache
+    global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
 
     # Initialize PostgreSQL adapter
@@ -4046,8 +4068,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from common.di import setup_org_client, teardown_org_client
 
     await setup_org_client(app, "presentation-policy")
-
-    _trust_profile_cache = TrustProfileCache()
 
     # Initialize Cedar engine for credential verification policies.
     # Some deployed images may carry an older marty_common package that does not

@@ -1370,6 +1370,73 @@ class OrganizationTrustProfileResponse(BaseModel):
         return self
 
 
+class TrustDecisionIssuerResponse(BaseModel):
+    """Minimal issuer relationship material consumed by verification services."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issuer_id: str = Field(..., min_length=1, max_length=512)
+    trust_level: int = Field(ge=0, le=100)
+    relationship_status: Literal["TRUSTED", "DENIED", "UNDER_REVIEW"]
+    compliance_status: Literal["ACCREDITED", "COMPLIANT", "SUSPENDED", "REVOKED"]
+    accreditation_body: str | None = None
+    valid_from: str
+    valid_until: str | None = None
+    revoked_at: str | None = None
+
+
+class InternalTrustProfileResponse(TrustProfileResponse):
+    """Internal verification view with normalized issuer decisions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issuer_relationships: list[TrustDecisionIssuerResponse] = Field(
+        default_factory=list
+    )
+
+
+async def _internal_profile_to_response(
+    repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository,
+    profile: TrustProfile,
+) -> InternalTrustProfileResponse:
+    """Materialize normalized issuer relationships for a trust decision."""
+    decisions: list[TrustDecisionIssuerResponse] = []
+    for relationship in await repo.list_profile_issuers(profile.id):
+        issuer = await repo.get_issuer_entity(relationship.issuer_id)
+        if issuer is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Trust Profile contains an unresolved issuer relationship",
+            )
+        if issuer.organization_id != profile.organization_id and not (
+            issuer.organization_id is None and issuer.is_system_issuer
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="Trust Profile contains a cross-organization issuer relationship",
+            )
+        decisions.append(
+            TrustDecisionIssuerResponse(
+                issuer_id=issuer.issuer_id,
+                trust_level=relationship.trust_level,
+                relationship_status=relationship.relationship_status.value,
+                compliance_status=issuer.compliance_status.value,
+                accreditation_body=issuer.accreditation_body,
+                valid_from=issuer.valid_from.isoformat(),
+                valid_until=(
+                    issuer.valid_until.isoformat() if issuer.valid_until else None
+                ),
+                revoked_at=(issuer.revoked_at.isoformat() if issuer.revoked_at else None),
+            )
+        )
+
+    public_response = _profile_to_response(profile)
+    return InternalTrustProfileResponse(
+        **public_response.model_dump(),
+        issuer_relationships=decisions,
+    )
+
+
 # =============================================================================
 # HTTP Adapter - Router
 # =============================================================================
@@ -1887,7 +1954,7 @@ async def get_trust_profile(
 
 @internal_router.get(
     "/{profile_id}",
-    response_model=TrustProfileResponse,
+    response_model=InternalTrustProfileResponse,
     response_model_exclude_none=True,
     include_in_schema=False,
 )
@@ -1896,12 +1963,12 @@ async def internal_get_trust_profile(
     repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(
         get_repo
     ),
-) -> TrustProfileResponse:
+) -> InternalTrustProfileResponse:
     """Read a Trust Profile for internal verifier/policy evaluation."""
     profile = await repo.get_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Trust Profile not found")
-    return _profile_to_response(profile)
+    return await _internal_profile_to_response(repo, profile)
 
 
 @resource_owner_router.get(
