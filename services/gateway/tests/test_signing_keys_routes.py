@@ -5664,7 +5664,7 @@ async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
                         "issuer_did": "did:web:issuer.example",
                         "key_purpose": "oid4vp_request_signing",
                         "credential_format": "SD_JWT_VC",
-                        "algorithm": "ES256",
+                        "algorithm": "EDDSA",
                         "status": "active",
                         "signing_service_id": "kms-service-internal",
                         "signing_key_reference": "kms-key-internal",
@@ -5688,7 +5688,7 @@ async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
         request=_build_request("org_issuer", redis_client=redis_mock),
         organization_id=None,
         key_purpose="oid4vp_request_signing",
-        algorithm="ES256",
+        algorithm="EdDSA",
     )
 
     data = response.model_dump(mode="json")
@@ -5698,7 +5698,7 @@ async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
                 "issuer_did": "did:web:issuer.example",
                 "key_purpose": "oid4vp_request_signing",
                 "credential_format": "SD_JWT_VC",
-                "algorithm": "ES256",
+                "algorithm": "EdDSA",
                 "status": "active",
             }
         ]
@@ -5712,6 +5712,61 @@ async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
         "provider",
     ):
         assert forbidden not in serialized
+
+
+@pytest.mark.asyncio
+async def test_matching_public_identity_preserves_eddsa_exact_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation = signing_keys.IssuerIdentityOperationRequest(
+        organization_id="org_issuer",
+        issuer_did="did:web:issuer.example",
+        key_purpose="vc_jwt_issuer",
+        credential_format="SD_JWT_VC",
+        algorithm="EdDSA",
+    )
+    profile = {
+        "id": "internal-profile",
+        "organization_id": operation.organization_id,
+        "issuer_did": operation.issuer_did,
+        "key_purpose": operation.key_purpose,
+        "credential_format": operation.credential_format,
+        "algorithm": "EDDSA",
+        "status": "active",
+        "signing_service_id": "internal-service",
+        "signing_key_reference": "internal-key",
+    }
+    monkeypatch.setattr(
+        signing_keys,
+        "_load_json_document",
+        AsyncMock(return_value={"profiles": [profile]}),
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "_resolve_effective_service",
+        AsyncMock(
+            return_value=(
+                {"keys": [{"id": "internal-key", "algorithm": "EdDSA"}]},
+                None,
+                {
+                    "credential_formats": ["dc+sd-jwt"],
+                    "key_purposes": ["vc_jwt_issuer"],
+                    "algorithms": ["EdDSA"],
+                },
+                None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        signing_keys, "_assert_issuer_profile_key_compatible", lambda *_: None
+    )
+
+    matches = await signing_keys._matching_issuer_identity_profiles(
+        _build_request("org_issuer"), operation
+    )
+
+    assert matches == [profile]
+    assert signing_keys._issuer_identity_projection(profile).algorithm == "EdDSA"
 
 
 @pytest.mark.asyncio
@@ -5839,7 +5894,7 @@ async def test_public_identity_creation_returns_only_provider_neutral_projection
         issuer_did="did:web:issuer.example:orgs:a",
         key_purpose="vc_jwt_issuer",
         credential_format="SD_JWT_VC",
-        algorithm="ES256",
+        algorithm="EdDSA",
     )
     monkeypatch.setenv("PUBLIC_DOMAIN", "issuer.example")
     monkeypatch.setattr(
@@ -5879,7 +5934,7 @@ async def test_public_identity_creation_returns_only_provider_neutral_projection
             "issuer_did": operation.issuer_did,
             "key_purpose": "vc_jwt_issuer",
             "credential_format": "SD_JWT_VC",
-            "algorithm": "ES256",
+            "algorithm": "EdDSA",
             "status": "active",
         },
         "created": True,
