@@ -28,7 +28,7 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Any, AsyncGenerator
 from urllib.parse import quote, unquote, urlparse
@@ -56,8 +56,6 @@ logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "presentation-policy-service"
 SERVICE_PORT = int(os.environ.get("PRESENTATION_POLICY_SERVICE_PORT", "8009"))
-_TRUST_PROFILE_CACHE_TTL_DEFAULT_SECONDS = 300
-_TRUST_PROFILE_CACHE_TTL_MAX_SECONDS = 3600
 
 
 def get_config() -> dict[str, Any]:
@@ -365,56 +363,6 @@ class PresentationPolicy:
 # =============================================================================
 # Application Layer
 # =============================================================================
-
-
-class TrustProfileCache:
-    """
-    In-memory cache for Trust Profiles.
-
-    Caches Trust Profile data with a bounded TTL derived from trust-profile freshness.
-    Reduces load on trust-profiles service during verification.
-    """
-
-    def __init__(self, maxsize: int = 10_000):
-        self._cache: dict[str, dict] = {}  # profile_id -> {data, expires_at}
-        self._maxsize = maxsize
-
-    def get(self, profile_id: str) -> dict | None:
-        """Get cached Trust Profile if not expired."""
-        entry = self._cache.get(profile_id)
-        if not entry:
-            return None
-
-        if datetime.now(timezone.utc) > entry["expires_at"]:
-            # Expired
-            del self._cache[profile_id]
-            return None
-
-        return entry["data"]
-
-    def set(self, profile_id: str, data: dict, ttl_seconds: int) -> None:
-        """Cache Trust Profile with TTL."""
-        if len(self._cache) >= self._maxsize:
-            # Evict expired entries first, then oldest
-            now = datetime.now(timezone.utc)
-            expired = [k for k, v in self._cache.items() if now > v["expires_at"]]
-            for k in expired:
-                del self._cache[k]
-            if len(self._cache) >= self._maxsize:
-                oldest = min(self._cache, key=lambda k: self._cache[k]["expires_at"])
-                del self._cache[oldest]
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
-        self._cache[profile_id] = {
-            "data": data,
-            "expires_at": expires_at,
-        }
-        logger.debug(
-            f"Cached Trust Profile {profile_id} until {expires_at.isoformat()}"
-        )
-
-    def clear(self) -> None:
-        """Clear all cached profiles."""
-        self._cache.clear()
 
 
 class InMemoryPresentationPolicyRepository:
@@ -2447,7 +2395,6 @@ def _verify_open_badge_v3(vp_token: str) -> dict:
 router = APIRouter(prefix="/v1/presentation-policies", tags=["presentation-policies"])
 
 _repo: InMemoryPresentationPolicyRepository | None = None
-_trust_profile_cache: TrustProfileCache | None = None
 
 
 def get_repo() -> InMemoryPresentationPolicyRepository:
@@ -2459,39 +2406,6 @@ def get_repo() -> InMemoryPresentationPolicyRepository:
 def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
     """Extract user ID from X-User-Id header (injected by gateway)."""
     return x_user_id
-
-
-def get_trust_cache() -> TrustProfileCache:
-    if _trust_profile_cache is None:
-        raise RuntimeError("Service not configured")
-    return _trust_profile_cache
-
-
-def _bounded_cache_ttl_seconds(value: Any, fallback: int) -> int:
-    try:
-        ttl_seconds = int(value)
-    except (TypeError, ValueError):
-        ttl_seconds = fallback
-
-    return max(1, min(ttl_seconds, _TRUST_PROFILE_CACHE_TTL_MAX_SECONDS))
-
-
-def _trust_profile_cache_ttl_seconds(trust_profile_data: dict[str, Any]) -> int:
-    configured_ttl = _bounded_cache_ttl_seconds(
-        os.environ.get(
-            "TRUST_PROFILE_CACHE_TTL_SECONDS",
-            str(_TRUST_PROFILE_CACHE_TTL_DEFAULT_SECONDS),
-        ),
-        _TRUST_PROFILE_CACHE_TTL_DEFAULT_SECONDS,
-    )
-    freshness_window = (trust_profile_data.get("time_policy") or {}).get(
-        "freshness_window_seconds"
-    )
-    if freshness_window is None:
-        return configured_ttl
-
-    freshness_ttl = _bounded_cache_ttl_seconds(freshness_window, configured_ttl)
-    return min(configured_ttl, freshness_ttl)
 
 
 def _trust_profile_service_url() -> str:
@@ -2524,41 +2438,40 @@ def _load_policy_trust_profile(
         )
     expected_organization_id = policy_organization_id.strip()
 
-    trust_cache = get_trust_cache()
-    trust_profile_data = trust_cache.get(profile_id)
-    loaded_from_service = trust_profile_data is None
-    if loaded_from_service:
-        import httpx as _httpx
+    # Trust relationship, lifecycle, and revocation changes are authorization
+    # decisions. Read the current internal view for every evaluation rather
+    # than accepting a stale process-local allow decision.
+    import httpx as _httpx
 
-        try:
-            response = _httpx.get(_trust_profile_lookup_url(profile_id), timeout=5.0)
-        except Exception as exc:
-            logger.warning(
-                "Could not load Trust Profile %s for tenant validation",
-                profile_id,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=503,
-                detail=f"Trust Profile {profile_id} could not be loaded",
-            ) from exc
-        if response.status_code == 404:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Trust Profile {profile_id} does not exist",
-            )
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Trust Profile {profile_id} could not be loaded",
-            )
-        try:
-            trust_profile_data = response.json()
-        except Exception as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Trust Profile {profile_id} returned invalid data",
-            ) from exc
+    try:
+        response = _httpx.get(_trust_profile_lookup_url(profile_id), timeout=5.0)
+    except Exception as exc:
+        logger.warning(
+            "Could not load Trust Profile %s for tenant validation",
+            profile_id,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Trust Profile {profile_id} could not be loaded",
+        ) from exc
+    if response.status_code == 404:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Trust Profile {profile_id} does not exist",
+        )
+    if response.status_code != 200:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Trust Profile {profile_id} could not be loaded",
+        )
+    try:
+        trust_profile_data = response.json()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Trust Profile {profile_id} returned invalid data",
+        ) from exc
 
     if not isinstance(trust_profile_data, dict):
         raise HTTPException(
@@ -2580,12 +2493,6 @@ def _load_policy_trust_profile(
             detail="Trust Profile and Presentation Policy must belong to the same organization",
         )
 
-    if loaded_from_service:
-        trust_cache.set(
-            profile_id,
-            trust_profile_data,
-            _trust_profile_cache_ttl_seconds(trust_profile_data),
-        )
     return trust_profile_data
 
 
@@ -3618,29 +3525,7 @@ async def evaluate_presentation(
     trust_check_error: str | None = None
     if trust_profile_id and issuer_did and issuer_did != "unknown":
         try:
-            trust_cache = get_trust_cache()
-            trust_profile_data = trust_profile_data or trust_cache.get(trust_profile_id)
-            if trust_profile_data is None:
-                # Fetch from trust-profiles service via HTTP
-                import httpx as _httpx
-
-                resp = _httpx.get(
-                    _trust_profile_lookup_url(trust_profile_id),
-                    timeout=5.0,
-                )
-                if resp.status_code == 200:
-                    trust_profile_data = resp.json()
-                    ttl = _trust_profile_cache_ttl_seconds(trust_profile_data)
-                    trust_cache.set(trust_profile_id, trust_profile_data, ttl)
-                else:
-                    trust_check_passed = False
-                    trust_check_error = (
-                        f"Trust Profile {trust_profile_id} could not be loaded "
-                        f"(HTTP {resp.status_code})"
-                    )
-                    logger.warning(trust_check_error)
-
-            if trust_profile_data:
+            if trust_profile_data is not None:
                 trust_check_passed, trust_check_error = _evaluate_issuer_trust(
                     trust_profile_data=trust_profile_data,
                     issuer_did=issuer_did,
@@ -4168,7 +4053,7 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _repo, _trust_profile_cache
+    global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
 
     # Initialize PostgreSQL adapter
@@ -4183,8 +4068,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from common.di import setup_org_client, teardown_org_client
 
     await setup_org_client(app, "presentation-policy")
-
-    _trust_profile_cache = TrustProfileCache()
 
     # Initialize Cedar engine for credential verification policies.
     # Some deployed images may carry an older marty_common package that does not

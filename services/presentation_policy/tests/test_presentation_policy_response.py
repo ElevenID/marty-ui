@@ -1204,26 +1204,6 @@ def test_trust_profile_lookup_url_uses_internal_service_endpoint(monkeypatch) ->
     )
 
 
-def test_trust_profile_cache_ttl_defaults_to_five_minutes(monkeypatch) -> None:
-    monkeypatch.delenv("TRUST_PROFILE_CACHE_TTL_SECONDS", raising=False)
-
-    ttl = pp._trust_profile_cache_ttl_seconds(
-        {"time_policy": {"freshness_window_seconds": 86400}}
-    )
-
-    assert ttl == 300
-
-
-def test_trust_profile_cache_ttl_honors_smaller_freshness_window(monkeypatch) -> None:
-    monkeypatch.setenv("TRUST_PROFILE_CACHE_TTL_SECONDS", "300")
-
-    ttl = pp._trust_profile_cache_ttl_seconds(
-        {"time_policy": {"freshness_window_seconds": 60}}
-    )
-
-    assert ttl == 60
-
-
 def test_credential_status_lookup_url_honors_mip_template(monkeypatch) -> None:
     monkeypatch.setenv(
         "MIP_CREDENTIAL_STATUS_URL_TEMPLATE",
@@ -1452,24 +1432,28 @@ def _install_marty_trust_profile(
     trust_sources: list[dict[str, object]] | None = None,
     issuer_relationships: list[dict[str, object]] | None = None,
     status: str = "active",
-) -> None:
-    cache = pp.TrustProfileCache()
-    cache.set(
-        "60000000-0000-0000-0000-000000000001",
-        {
-            "organization_id": organization_id,
-            "status": status,
-            "allowed_issuers": ["did:web:beta.elevenidllc.com:orgs:marty"]
-            if allowed_issuers is None
-            else allowed_issuers,
-            "denied_issuers": denied_issuers or [],
-            "trust_sources": trust_sources or [],
-            "issuer_relationships": issuer_relationships,
-            "time_policy": {"freshness_window_seconds": 3600},
-        },
-        3600,
-    )
-    monkeypatch.setattr(pp, "_trust_profile_cache", cache)
+) -> dict[str, object]:
+    profile_data: dict[str, object] = {
+        "organization_id": organization_id,
+        "status": status,
+        "allowed_issuers": ["did:web:beta.elevenidllc.com:orgs:marty"]
+        if allowed_issuers is None
+        else allowed_issuers,
+        "denied_issuers": denied_issuers or [],
+        "trust_sources": trust_sources or [],
+        "issuer_relationships": issuer_relationships,
+        "time_policy": {"freshness_window_seconds": 3600},
+    }
+
+    def get(_url: str, **_kwargs: object) -> SimpleNamespace:
+        # Model an independent service response. Returning a fresh copy is
+        # important: authorization tests must fail if the evaluator reuses a
+        # stale in-process object instead of loading the current relationship.
+        response_data = json.loads(json.dumps(profile_data))
+        return SimpleNamespace(status_code=200, json=lambda: response_data)
+
+    monkeypatch.setattr("httpx.get", get)
+    return profile_data
 
 
 def _normalized_issuer_relationship(
@@ -1756,6 +1740,55 @@ def test_evaluation_uses_normalized_trusted_issuer_relationship(monkeypatch) -> 
 
     assert response.result == "passed"
     assert response.decision == "allow"
+
+
+def test_relationship_revocation_takes_effect_on_next_evaluation(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    relationship = _normalized_issuer_relationship()
+    profile_data = _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=[],
+        issuer_relationships=[relationship],
+    )
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "claims": {"email": "member@example.com"},
+            "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+            "format": "sd-jwt",
+            "error": None,
+        },
+    )
+
+    first = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
+            repo=repo,
+        )
+    )
+    assert first.decision == "allow"
+
+    current_relationships = profile_data["issuer_relationships"]
+    assert isinstance(current_relationships, list)
+    current_relationships[0]["relationship_status"] = "DENIED"
+
+    second = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-2"),
+            repo=repo,
+        )
+    )
+
+    assert second.result == "failed"
+    assert second.decision == "deny"
+    assert second.credential_results[0].trust_check_passed is False
+    assert "explicitly denied" in second.decision_reason
 
 
 def test_normalized_denial_overrides_legacy_allowed_issuer(monkeypatch) -> None:
