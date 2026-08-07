@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from check_generated_protocol_bindings import assert_generated_bindings_current
+from check_public_protocol_documentation import assert_documented_public_boundary
 from fastapi import Response
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
@@ -142,19 +143,6 @@ FORBIDDEN_TRUST_CONFIGURATION_TOKENS = {
     "verification_keys",
 }
 
-# Public documentation may name private selectors when it explains that they
-# are rejected or internal.  It must never instruct a caller or UI developer
-# to select custody routing, persist it on a public template, or forward it to
-# issuance.  These phrases came from a retired pre-DID-first gap analysis and
-# represent the prohibited design rather than merely the prohibited field.
-FORBIDDEN_PUBLIC_SIGNING_GUIDANCE = {
-    "signing service selector",
-    "signing_service_id override",
-    "store signing_service_id on credential template",
-    "pass signing_service_id through to issuance",
-}
-
-
 def _load_registry(protocol_root: Path) -> Registry:
     registry = Registry()
     for directory in ("schemas", "enums"):
@@ -182,33 +170,6 @@ def _property_names(value: object) -> set[str]:
             result.update(_property_names(child))
         return result
     return set()
-
-
-def _assert_documented_public_boundary(root: Path = REPO_ROOT) -> None:
-    violations: dict[str, list[str]] = {}
-    markdown_paths = sorted(root.glob("*.md"))
-    docs_root = root / "docs"
-    if docs_root.is_dir():
-        markdown_paths.extend(sorted(docs_root.rglob("*.md")))
-
-    for path in markdown_paths:
-        source = (
-            path.read_text(encoding="utf-8")
-            .lower()
-            .replace("`", "")
-            .replace("**", "")
-        )
-        matched = sorted(
-            phrase for phrase in FORBIDDEN_PUBLIC_SIGNING_GUIDANCE if phrase in source
-        )
-        if matched:
-            violations[str(path.relative_to(root))] = matched
-
-    if violations:
-        raise AssertionError(
-            "Documentation recommends private signing selectors at the public "
-            f"boundary: {violations}"
-        )
 
 
 def _assert_model_shape(
@@ -308,7 +269,7 @@ def _public_response(
 
 def check_contract(protocol_root: Path) -> None:
     assert_generated_bindings_current(protocol_root)
-    _assert_documented_public_boundary()
+    assert_documented_public_boundary()
 
     for relative_path in TRUST_CONFIGURATION_UI_PATHS:
         source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")

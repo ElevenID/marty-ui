@@ -10,7 +10,9 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from check_public_protocol_contract import _assert_documented_public_boundary  # noqa: E402
+from check_public_protocol_documentation import (  # noqa: E402
+    assert_documented_public_boundary,
+)
 
 
 def test_public_documentation_rejects_custody_selector_guidance(
@@ -22,7 +24,7 @@ def test_public_documentation_rejects_custody_selector_guidance(
     )
 
     with pytest.raises(AssertionError, match="private signing selectors"):
-        _assert_documented_public_boundary(tmp_path)
+        assert_documented_public_boundary(tmp_path)
 
 
 def test_public_documentation_can_describe_did_only_rejection(
@@ -36,4 +38,4 @@ def test_public_documentation_can_describe_did_only_rejection(
         encoding="utf-8",
     )
 
-    _assert_documented_public_boundary(tmp_path)
+    assert_documented_public_boundary(tmp_path)
