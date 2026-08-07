@@ -170,6 +170,7 @@ def test_seed_issuer_profiles_creates_active_marty_kms_profiles():
         == "cred-issuer-marty-es256"
     )
     assert profiles["ip-marty-vc-jwt-issuer"]["key_purpose"] == "vc_jwt_issuer"
+    assert profiles["ip-marty-vc-jwt-issuer"]["algorithm"] == "ES256"
     assert (
         profiles["ip-marty-oid4vp-verifier"]["signing_key_reference"]
         == "oid4vp-verifier-marty-es256"
