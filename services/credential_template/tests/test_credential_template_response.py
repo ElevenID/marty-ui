@@ -360,6 +360,22 @@ def test_derived_claim_source_and_display_icon_round_trip() -> None:
 	}
 
 
+@pytest.mark.parametrize("legacy_issuer_did", [None, "", "did:", "https://issuer.example"])
+def test_template_response_rejects_legacy_row_without_managed_issuer_did(
+	legacy_issuer_did: str | None,
+) -> None:
+	template = asyncio.run(
+		_save_template(credential_template.InMemoryCredentialTemplateRepository())
+	)
+	template.issuer_did = legacy_issuer_did
+
+	with pytest.raises(credential_template.HTTPException) as exc_info:
+		credential_template._template_to_response(template)
+
+	assert exc_info.value.status_code == 409
+	assert "no managed issuer_did" in exc_info.value.detail
+
+
 def test_create_mdoc_template_uses_doctype_without_fabricating_vct() -> None:
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	client, _ = _build_client(repo)
