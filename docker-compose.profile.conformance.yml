@@ -91,6 +91,13 @@ services:
   issuance:
     container_name: !reset null
     ports: !reset []
+    environment:
+      # Trust the disposable conformance CA only for outbound DIDComm TLS.
+      # The issuance code adds this CA to normal Web PKI validation; it never
+      # disables certificate or hostname verification.
+      DIDCOMM_TLS_CA_FILE: /run/secrets/didcomm-conformance-root-ca.pem
+    volumes:
+      - ${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to generated conformance material}/root-ca.pem:/run/secrets/didcomm-conformance-root-ca.pem:ro
     # The owned DIDComm interoperability lane starts a disposable holder
     # receiver on the Docker host. Linux does not provide this hostname by
     # default, so expose only the Docker host gateway to the issuance service
