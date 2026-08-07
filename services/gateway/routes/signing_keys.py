@@ -932,6 +932,27 @@ def _normalize_algorithm_list(values: Any) -> list[str]:
     ]
 
 
+def _canonical_signing_algorithm(value: Any, *, default: str = "ES256") -> str:
+    """Return the registered spelling for a supported signing algorithm.
+
+    JOSE algorithm identifiers are case-sensitive. In particular, uppercasing
+    ``EdDSA`` produces the invalid identifier ``EDDSA``. Stored profiles may
+    predate strict request-model validation, so canonicalize known identifiers
+    case-insensitively at the persistence boundary while leaving unknown values
+    unsupported and therefore fail-closed at their callers.
+    """
+
+    candidate = str(value or default).strip()
+    return next(
+        (
+            algorithm
+            for algorithm in SUPPORTED_SIGNING_ALGORITHMS
+            if algorithm.casefold() == candidate.casefold()
+        ),
+        candidate,
+    )
+
+
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -6682,7 +6703,7 @@ def _issuer_identity_projection(profile: dict[str, Any]) -> IssuerIdentityRespon
         issuer_did=str(profile.get("issuer_did") or ""),
         key_purpose=str(profile.get("key_purpose") or "vc_jwt_issuer"),
         credential_format=str(profile.get("credential_format") or ""),
-        algorithm=str(profile.get("algorithm") or "ES256").upper(),
+        algorithm=_canonical_signing_algorithm(profile.get("algorithm")),
         status="active",
     )
 
@@ -6741,7 +6762,10 @@ async def _matching_issuer_identity_profiles(
             continue
         if str(profile.get("key_purpose") or "vc_jwt_issuer") != operation.key_purpose:
             continue
-        if str(profile.get("algorithm") or "ES256").upper() != operation.algorithm:
+        if (
+            _canonical_signing_algorithm(profile.get("algorithm"))
+            != operation.algorithm
+        ):
             continue
         if profile.get("credential_format") != operation.credential_format:
             continue
@@ -6953,7 +6977,9 @@ async def list_public_issuer_identities(
     storage_key = _issuer_profiles_storage_key(resolved_org_id)
     doc = await _load_json_document(request, storage_key, {"profiles": []})
     requested_purpose = str(key_purpose or "").strip()
-    requested_algorithm = str(algorithm or "").strip().upper()
+    requested_algorithm = (
+        _canonical_signing_algorithm(algorithm, default="") if algorithm else ""
+    )
     requested_format = (
         credential_format.strip().upper()
         if isinstance(credential_format, str)
@@ -6974,10 +7000,12 @@ async def list_public_issuer_identities(
         issuer_did = str(profile.get("issuer_did") or "").strip()
         purpose = str(profile.get("key_purpose") or "vc_jwt_issuer").strip()
         profile_format = str(profile.get("credential_format") or "").strip().upper()
-        profile_algorithm = str(profile.get("algorithm") or "ES256").strip().upper()
+        profile_algorithm = _canonical_signing_algorithm(profile.get("algorithm"))
         if not issuer_did.startswith("did:"):
             continue
         if profile_format not in PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE:
+            continue
+        if profile_algorithm not in SUPPORTED_SIGNING_ALGORITHMS:
             continue
         if requested_purpose and purpose != requested_purpose:
             continue
