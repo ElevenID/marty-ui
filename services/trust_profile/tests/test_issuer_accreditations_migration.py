@@ -31,6 +31,10 @@ def _load_migration() -> ModuleType:
 def test_upgrade_adds_fail_closed_accreditation_set(monkeypatch) -> None:
     migration = _load_migration()
     calls: list[tuple[str, sa.Column[object], str | None]] = []
+    connection = object()
+    monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
+    monkeypatch.setattr(migration, "_has_table", lambda conn: conn is connection)
+    monkeypatch.setattr(migration, "_has_column", lambda conn: False)
     monkeypatch.setattr(
         migration.op,
         "add_column",
@@ -51,9 +55,48 @@ def test_upgrade_adds_fail_closed_accreditation_set(monkeypatch) -> None:
     assert str(column.server_default.arg) == "'[]'::json"
 
 
+def test_upgrade_defers_to_current_model_when_table_does_not_exist(monkeypatch) -> None:
+    migration = _load_migration()
+    calls: list[object] = []
+    connection = object()
+    monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
+    monkeypatch.setattr(migration, "_has_table", lambda conn: False)
+    monkeypatch.setattr(
+        migration.op,
+        "add_column",
+        lambda *_args, **_kwargs: calls.append(object()),
+    )
+
+    migration.upgrade()
+
+    assert calls == []
+
+
+def test_upgrade_is_idempotent_when_current_model_created_column(monkeypatch) -> None:
+    migration = _load_migration()
+    calls: list[object] = []
+    connection = object()
+    monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
+    monkeypatch.setattr(migration, "_has_table", lambda conn: True)
+    monkeypatch.setattr(migration, "_has_column", lambda conn: True)
+    monkeypatch.setattr(
+        migration.op,
+        "add_column",
+        lambda *_args, **_kwargs: calls.append(object()),
+    )
+
+    migration.upgrade()
+
+    assert calls == []
+
+
 def test_downgrade_removes_only_the_accreditation_column(monkeypatch) -> None:
     migration = _load_migration()
     calls: list[tuple[str, str, str | None]] = []
+    connection = object()
+    monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
+    monkeypatch.setattr(migration, "_has_table", lambda conn: True)
+    monkeypatch.setattr(migration, "_has_column", lambda conn: True)
     monkeypatch.setattr(
         migration.op,
         "drop_column",
@@ -65,3 +108,20 @@ def test_downgrade_removes_only_the_accreditation_column(monkeypatch) -> None:
     assert calls == [
         ("issuer_entities", "accreditations", "trust_profile_service")
     ]
+
+
+def test_downgrade_is_safe_when_runtime_table_is_absent(monkeypatch) -> None:
+    migration = _load_migration()
+    calls: list[object] = []
+    connection = object()
+    monkeypatch.setattr(migration.op, "get_bind", lambda: connection)
+    monkeypatch.setattr(migration, "_has_table", lambda conn: False)
+    monkeypatch.setattr(
+        migration.op,
+        "drop_column",
+        lambda *_args, **_kwargs: calls.append(object()),
+    )
+
+    migration.downgrade()
+
+    assert calls == []
