@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from check_generated_protocol_bindings import assert_generated_bindings_current
+from check_public_protocol_documentation import assert_documented_public_boundary
 from fastapi import Response
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
@@ -142,7 +143,6 @@ FORBIDDEN_TRUST_CONFIGURATION_TOKENS = {
     "verification_keys",
 }
 
-
 def _load_registry(protocol_root: Path) -> Registry:
     registry = Registry()
     for directory in ("schemas", "enums"):
@@ -269,6 +269,7 @@ def _public_response(
 
 def check_contract(protocol_root: Path) -> None:
     assert_generated_bindings_current(protocol_root)
+    assert_documented_public_boundary()
 
     for relative_path in TRUST_CONFIGURATION_UI_PATHS:
         source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
