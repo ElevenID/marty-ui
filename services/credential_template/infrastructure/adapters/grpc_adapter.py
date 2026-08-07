@@ -130,7 +130,16 @@ def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateRespon
         created_at=resp.created_at,
         updated_at=resp.updated_at,
         wallet_configs_json=getattr(resp, "wallet_configs_json", None) or "[]",
-        issuer_algorithm=getattr(resp, "issuer_algorithm", None) or "",
+        # ``to_response_fn`` deliberately returns the public-sanitized shape,
+        # which omits signing-algorithm details.  This protobuf is the private
+        # service-to-service contract used by issuance, so preserve the
+        # algorithm that was resolved from the organization-owned issuer DID
+        # and stored on the domain template.
+        issuer_algorithm=(
+            getattr(template, "issuer_algorithm", None)
+            or getattr(resp, "issuer_algorithm", None)
+            or ""
+        ),
         revocation_profile_id=getattr(resp, "revocation_profile_id", None) or "",
         issuer_did=getattr(resp, "issuer_did", None) or "",
     )
