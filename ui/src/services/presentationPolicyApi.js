@@ -161,12 +161,27 @@ function trustSourcesFromTrustedIssuers(trustedIssuers = []) {
     .map((issuer) => normalizeTrustedIssuer(issuer))
     .filter((issuer) => issuer.issuer_did)
     .map((issuer) => ({
-      name: issuer.name || issuer.issuer_did,
       description: issuer.description || null,
       issuer_did: issuer.issuer_did,
       source_type: 'PINNED_ISSUER',
-      enabled: issuer.enabled !== false,
     }));
+}
+
+function normalizePublicTrustSource(source = {}) {
+  const normalized = {
+    source_type: normalizeTrustSourceType(source.source_type),
+  };
+  if (source.url) normalized.url = String(source.url).trim();
+  if (source.certificate_pem) normalized.certificate_pem = String(source.certificate_pem).trim();
+  if (source.issuer_did) normalized.issuer_did = String(source.issuer_did).trim();
+  if (source.description) normalized.description = String(source.description).trim();
+  if (source.registry_sync) {
+    normalized.registry_sync = {
+      protocol: 'MARTY_TRUST_REGISTRY_SYNC_V1',
+      refresh_interval_hours: Number(source.registry_sync.refresh_interval_hours ?? 24),
+    };
+  }
+  return normalized;
 }
 
 function normalizeValidationRules(data = {}) {
@@ -183,47 +198,20 @@ function normalizeValidationRules(data = {}) {
   };
 }
 
-function normalizeRegistryImport(entry = {}) {
-  return {
-    ...entry,
-    sync_enabled: entry.sync_enabled !== false,
-    sync_interval_hours: Number(entry.sync_interval_hours ?? 24),
-    credential_format_filter: Array.isArray(entry.credential_format_filter) ? entry.credential_format_filter : [],
-  };
-}
-
 function buildTrustProfilePayload(data = {}) {
-  const {
-    framework_type,
-    trusted_issuers,
-    allow_all_issuers,
-    activate_immediately,
-    min_key_size,
-    required_credential_types,
-    revocation_check_enabled,
-    signature_validation_required,
-    trust_anchors,
-    status,
-    ...rest
-  } = data;
-
   const validation_rules = normalizeValidationRules(data);
-  const trust_sources = Array.isArray(rest.trust_sources) && rest.trust_sources.length > 0
-    ? rest.trust_sources.map((source) => ({
-        ...source,
-        source_type: normalizeTrustSourceType(source.source_type),
-      }))
-    : trustSourcesFromTrustedIssuers(trusted_issuers || []);
-  const registry_imports = Array.isArray(rest.registry_imports)
-    ? rest.registry_imports.map((entry) => normalizeRegistryImport(entry))
-    : [];
+  const trust_sources = Array.isArray(data.trust_sources) && data.trust_sources.length > 0
+    ? data.trust_sources.map((source) => normalizePublicTrustSource(source))
+    : trustSourcesFromTrustedIssuers(data.trusted_issuers || []);
 
   return {
-    ...rest,
-    profile_type: normalizeTrustProfileType(rest.profile_type || framework_type || 'custom'),
-    supported_formats: (rest.supported_formats || ['sd_jwt_vc', 'mdoc']).map(normalizeTrustProfileFormat),
+    organization_id: data.organization_id,
+    name: data.name,
+    description: data.description,
+    profile_type: normalizeTrustProfileType(data.profile_type || data.framework_type || 'custom'),
+    compliance_status: data.compliance_status || 'SETUP_REQUIRED',
+    supported_formats: (data.supported_formats || ['sd_jwt_vc', 'mdoc']).map(normalizeTrustProfileFormat),
     trust_sources,
-    registry_imports,
     validation_rules,
     allowed_algorithms: validation_rules.allowed_algorithms,
     min_key_size_rsa: validation_rules.min_key_size_rsa,
@@ -231,6 +219,15 @@ function buildTrustProfilePayload(data = {}) {
     require_key_usage: validation_rules.require_key_usage,
     max_chain_depth: validation_rules.max_chain_depth,
     allow_self_signed: validation_rules.allow_self_signed,
+    revocation_policy: data.revocation_policy,
+    revocation_profile_id: data.revocation_profile_id,
+    time_policy: data.time_policy,
+    allowed_issuers: data.allowed_issuers,
+    denied_issuers: data.denied_issuers,
+    system_issuer_overrides: data.system_issuer_overrides || {},
+    compatible_compliance_codes: data.compatible_compliance_codes || [],
+    verification_policy_set_id: data.verification_policy_set_id,
+    auto_generated: data.auto_generated || false,
   };
 }
 
@@ -459,12 +456,12 @@ function normalizePresentationPolicy(data = {}) {
 export function buildPresentationPolicyPayload(data = {}) {
   const organizationId = requireOrganizationId(data);
   const {
-    activate_immediately,
-    status,
+    activate_immediately: _activateImmediately,
+    status: _status,
     holder_binding,
     freshness_requirements,
-    single_presentation,
-    template_id,
+    single_presentation: _singlePresentation,
+    template_id: _templateId,
     metadata,
     ...rest
   } = data;
@@ -794,6 +791,13 @@ export async function activateTrustProfile(id) {
     }
     throw error;
   }
+}
+
+/**
+ * Atomically synchronize every external registry source on a trust profile.
+ */
+export async function synchronizeTrustProfileRegistries(id) {
+  return post(`${TRUST_PROFILE_BASE}/${id}/registry-sync`, {});
 }
 
 /**

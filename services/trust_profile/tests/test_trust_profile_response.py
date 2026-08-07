@@ -1,13 +1,60 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from services.trust_profile import main as trust_profile
+from trust_profile.registry_sync import (
+    ImportedRegistryEntry,
+    RegistryImportResult,
+    RegistryImportState,
+    RegistrySyncError,
+)
+
+
+def _registry_certificate_pem(*, expired: bool = False) -> str:
+    now = datetime.now(timezone.utc)
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "Registry response test")]
+    )
+    not_after = now - timedelta(hours=1) if expired else now + timedelta(days=365)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=2))
+        .not_valid_after(not_after)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=False,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=None,
+                decipher_only=None,
+            ),
+            critical=True,
+        )
+        .sign(private_key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode()
 
 
 class FakeMembership:
@@ -224,6 +271,370 @@ def test_internal_get_trust_profile_skips_user_membership() -> None:
     assert get_membership.await_count == 0
 
 
+def test_registry_sync_uses_stored_organization_and_materializes_imported_anchors(
+    monkeypatch,
+) -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = trust_profile.TrustProfile(
+        organization_id="org-2",
+        name="External registry profile",
+        trust_sources=[
+            trust_profile.TrustSource(
+                source_type="TRUST_LIST",
+                url="https://registry.example/v1/trust-registry/sync",
+                registry_sync={
+                    "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+                    "refresh_interval_hours": 24,
+                },
+                refresh_interval_hours=24,
+            )
+        ],
+    )
+    asyncio.run(repo.save_profile(profile))
+    client, get_membership = _build_client(repo)
+    imported_certificate = _registry_certificate_pem()
+
+    async def fake_sync(url, previous, *, client, now):
+        assert url == "https://registry.example/v1/trust-registry/sync"
+        assert previous == RegistryImportState()
+        entry = ImportedRegistryEntry(
+            entry_id="c6d7e8f9-a0b1-4234-9678-901234abcdef",
+            anchor_type="CSCA",
+            country_code="US",
+            certificate_pem=imported_certificate,
+            source="MANUAL",
+        )
+        return RegistryImportResult(
+            state=RegistryImportState(
+                sync_token="8",
+                sequence=8,
+                entries={entry.entry_id: entry},
+                synchronized_at=now,
+            ),
+            pages=1,
+        )
+
+    monkeypatch.setattr(trust_profile, "synchronize_registry", fake_sync)
+    response = client.post(
+        f"/v1/trust-profiles/{profile.id}/registry-sync",
+        headers={"x-user-id": "user-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["sources"] == [
+        {
+            "url": "https://registry.example/v1/trust-registry/sync",
+            "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+            "sequence": 8,
+            "csca_entries": 1,
+            "dsc_entries": 0,
+            "synchronized_at": response.json()["synchronized_at"],
+        }
+    ]
+    get_membership.assert_awaited_once_with("user-1", "org-2")
+
+    stored = asyncio.run(repo.get_profile(profile.id))
+    assert stored is not None
+    assert stored.trust_sources[0].registry_sequence == 8
+    assert set(stored.trust_sources[0].registry_entries) == {
+        "c6d7e8f9-a0b1-4234-9678-901234abcdef"
+    }
+
+    internal = client.get(f"/internal/v1/trust-profiles/{profile.id}")
+    assert internal.status_code == 200
+    imported = [
+        source
+        for source in internal.json()["trust_sources"]
+        if source["source_type"] == "ROOT_CA"
+    ]
+    assert imported == [
+        {
+            "source_type": "ROOT_CA",
+            "certificate_pem": imported_certificate,
+            "description": "Imported CSCA from https://registry.example/v1/trust-registry/sync",
+            "pinned_certificates": [],
+        }
+    ]
+
+
+def test_registry_sync_failure_is_atomic(monkeypatch) -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    sources = [
+        trust_profile.TrustSource(
+            source_type="TRUST_LIST",
+            url=f"https://registry-{index}.example/v1/trust-registry/sync",
+            registry_sync={
+                "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+                "refresh_interval_hours": 24,
+            },
+        )
+        for index in (1, 2)
+    ]
+    profile = trust_profile.TrustProfile(
+        organization_id="org-1", name="Atomic registry profile", trust_sources=sources
+    )
+    asyncio.run(repo.save_profile(profile))
+    client, _ = _build_client(repo)
+    calls = 0
+
+    async def partially_failing_sync(url, previous, *, client, now):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RegistrySyncError("second source rejected")
+        return RegistryImportResult(
+            state=RegistryImportState(sync_token="1", sequence=1, synchronized_at=now),
+            pages=1,
+        )
+
+    monkeypatch.setattr(trust_profile, "synchronize_registry", partially_failing_sync)
+    response = client.post(
+        f"/v1/trust-profiles/{profile.id}/registry-sync",
+        headers={"x-user-id": "user-1"},
+    )
+
+    assert response.status_code == 502
+    stored = asyncio.run(repo.get_profile(profile.id))
+    assert stored is not None
+    assert [source.registry_sequence for source in stored.trust_sources] == [0, 0]
+    assert all(source.registry_sync_token is None for source in stored.trust_sources)
+
+
+def test_registry_sync_rejects_concurrent_profile_change(monkeypatch) -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = trust_profile.TrustProfile(
+        organization_id="org-1",
+        name="Concurrent registry profile",
+        trust_sources=[
+            trust_profile.TrustSource(
+                source_type="TRUST_LIST",
+                url="https://registry.example/v1/trust-registry/sync",
+                registry_sync={
+                    "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+                    "refresh_interval_hours": 24,
+                },
+            )
+        ],
+    )
+    asyncio.run(repo.save_profile(profile))
+    client, _ = _build_client(repo)
+
+    async def concurrent_sync(url, previous, *, client, now):
+        profile.updated_at = now + timedelta(seconds=1)
+        return RegistryImportResult(
+            state=RegistryImportState(sync_token="1", sequence=1, synchronized_at=now),
+            pages=1,
+        )
+
+    monkeypatch.setattr(trust_profile, "synchronize_registry", concurrent_sync)
+    response = client.post(
+        f"/v1/trust-profiles/{profile.id}/registry-sync",
+        headers={"x-user-id": "user-1"},
+    )
+
+    assert response.status_code == 409
+    stored = asyncio.run(repo.get_profile(profile.id))
+    assert stored is not None
+    assert stored.trust_sources[0].registry_sequence == 0
+
+
+def test_internal_trust_decision_rejects_unsynchronized_registry_source() -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = trust_profile.TrustProfile(
+        organization_id="org-1",
+        name="Unsynchronized registry profile",
+        trust_sources=[
+            trust_profile.TrustSource(
+                source_type="TRUST_LIST",
+                url="https://registry.example/v1/trust-registry/sync",
+                registry_sync={
+                    "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+                    "refresh_interval_hours": 24,
+                },
+            )
+        ],
+    )
+    asyncio.run(repo.save_profile(profile))
+    client, _ = _build_client(repo)
+
+    response = client.get(f"/internal/v1/trust-profiles/{profile.id}")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Trust Profile registry source has never synchronized"
+    )
+
+    activation = client.post(
+        f"/v1/trust-profiles/{profile.id}/activate",
+        headers={"x-user-id": "user-1"},
+    )
+    assert activation.status_code == 409
+    stored = asyncio.run(repo.get_profile(profile.id))
+    assert stored is not None
+    assert stored.status == trust_profile.TrustProfileStatus.DRAFT
+
+
+def test_internal_trust_decision_rejects_stale_registry_source() -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = trust_profile.TrustProfile(
+        organization_id="org-1",
+        name="Stale registry profile",
+        trust_sources=[
+            trust_profile.TrustSource(
+                source_type="TRUST_LIST",
+                url="https://registry.example/v1/trust-registry/sync",
+                registry_sync={
+                    "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+                    "refresh_interval_hours": 1,
+                },
+                refresh_interval_hours=1,
+                registry_sync_token="1",
+                registry_sequence=1,
+                registry_last_synced_at=datetime.now(timezone.utc) - timedelta(hours=2),
+            )
+        ],
+    )
+    asyncio.run(repo.save_profile(profile))
+    client, _ = _build_client(repo)
+
+    response = client.get(f"/internal/v1/trust-profiles/{profile.id}")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Trust Profile registry source is stale"
+
+
+def test_internal_trust_decision_revalidates_imported_certificate_state() -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    entry = ImportedRegistryEntry(
+        entry_id="c6d7e8f9-a0b1-4234-9678-901234abcdef",
+        anchor_type="CSCA",
+        country_code="US",
+        certificate_pem=_registry_certificate_pem(expired=True),
+        source="MANUAL",
+    )
+    profile = trust_profile.TrustProfile(
+        organization_id="org-1",
+        name="Expired imported certificate profile",
+        trust_sources=[
+            trust_profile.TrustSource(
+                source_type="TRUST_LIST",
+                url="https://registry.example/v1/trust-registry/sync",
+                registry_sync={
+                    "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+                    "refresh_interval_hours": 24,
+                },
+                registry_sync_token="1",
+                registry_sequence=1,
+                registry_entries={entry.entry_id: entry.to_storage()},
+                registry_last_synced_at=datetime.now(timezone.utc),
+            )
+        ],
+    )
+    asyncio.run(repo.save_profile(profile))
+    client, _ = _build_client(repo)
+
+    response = client.get(f"/internal/v1/trust-profiles/{profile.id}")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Trust Profile registry state is invalid"
+
+
+def test_internal_trust_decision_rejects_legacy_url_without_adapter() -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = trust_profile.TrustProfile(
+        organization_id="org-1",
+        name="Legacy URL-only profile",
+        trust_sources=[
+            trust_profile.TrustSource(
+                source_type="TRUST_LIST",
+                url="https://registry.example/unknown-format",
+            )
+        ],
+    )
+    asyncio.run(repo.save_profile(profile))
+    client, _ = _build_client(repo)
+
+    response = client.get(f"/internal/v1/trust-profiles/{profile.id}")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Trust Profile registry source has no supported sync protocol"
+    )
+
+
+def test_registry_source_becomes_due_before_its_fail_closed_deadline() -> None:
+    source = trust_profile.TrustSource(
+        source_type="TRUST_LIST",
+        url="https://registry.example/v1/trust-registry/sync",
+        registry_sync={
+            "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+            "refresh_interval_hours": 24,
+        },
+        registry_last_synced_at=datetime(2026, 8, 7, tzinfo=timezone.utc),
+    )
+
+    assert not trust_profile._registry_source_is_due(
+        source, datetime(2026, 8, 7, 19, tzinfo=timezone.utc)
+    )
+    assert trust_profile._registry_source_is_due(
+        source, datetime(2026, 8, 7, 20, tzinfo=timezone.utc)
+    )
+
+
+@pytest.mark.asyncio
+async def test_scheduler_refreshes_only_due_registry_sources(monkeypatch) -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    now = datetime.now(timezone.utc)
+
+    def profile(name: str, last_synced: datetime) -> trust_profile.TrustProfile:
+        return trust_profile.TrustProfile(
+            organization_id="org-1",
+            name=name,
+            trust_sources=[
+                trust_profile.TrustSource(
+                    source_type="TRUST_LIST",
+                    url=f"https://registry.example/{name}/sync",
+                    registry_sync={
+                        "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+                        "refresh_interval_hours": 24,
+                    },
+                    registry_sync_token="1",
+                    registry_sequence=1,
+                    registry_last_synced_at=last_synced,
+                )
+            ],
+        )
+
+    due = profile("due", now - timedelta(hours=20))
+    fresh = profile("fresh", now - timedelta(hours=1))
+    await repo.save_profile(due)
+    await repo.save_profile(fresh)
+    refreshed: list[str] = []
+
+    async def successful_sync(url, previous, *, client, now):
+        refreshed.append(url)
+        return RegistryImportResult(
+            state=RegistryImportState(
+                sync_token="2",
+                sequence=2,
+                entries=previous.entries,
+                synchronized_at=now,
+            ),
+            pages=1,
+        )
+
+    monkeypatch.setattr(trust_profile, "synchronize_registry", successful_sync)
+    await trust_profile._synchronize_due_registry_sources(repo)
+
+    stored_due = await repo.get_profile(due.id)
+    stored_fresh = await repo.get_profile(fresh.id)
+    assert stored_due is not None
+    assert stored_fresh is not None
+    assert refreshed == ["https://registry.example/due/sync"]
+    assert stored_due.trust_sources[0].registry_sequence == 2
+    assert stored_fresh.trust_sources[0].registry_sequence == 1
+
+
 def test_internal_get_trust_profile_materializes_normalized_issuer_decision() -> None:
     repo = trust_profile.InMemoryTrustProfileRepository()
     profile = asyncio.run(_save_profile(repo))
@@ -336,10 +747,13 @@ def test_create_trust_profile_returns_canonical_fields() -> None:
             "compliance_status": "COMPLIANT",
             "trust_sources": [
                 {
-                    "name": "EUDI trust list",
                     "source_type": "trust_list",
                     "url": "https://trust.example/eudi.json",
                     "description": "LOTL source",
+                    "registry_sync": {
+                        "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+                        "refresh_interval_hours": 24,
+                    },
                 }
             ],
             "allowed_algorithms": ["ES256"],
@@ -392,7 +806,6 @@ def test_create_trust_profile_round_trips_canvas_issuer_aliases() -> None:
             "supported_formats": ["SD_JWT_VC"],
             "trust_sources": [
                 {
-                    "name": "Canvas issuer",
                     "source_type": "PINNED_ISSUER",
                     "url": "https://canvas.example.edu/issuers/issuer-123",
                     "description": "Pinned Canvas Credentials issuer",
