@@ -99,11 +99,32 @@ class TestGetTemplate:
         assert resp.display_style.background_color == "#003366"
         assert resp.validity_rules.default_validity_days == 365
         assert resp.issuer_did == "did:web:issuer.example:orgs:org-1"
+        assert resp.issuer_algorithm == "ES256"
         assert "issuer_profile_id" not in resp.DESCRIPTOR.fields_by_name
         assert "key_access_mode" not in resp.DESCRIPTOR.fields_by_name
         assert "issuer_key_id" not in resp.DESCRIPTOR.fields_by_name
         assert "remote_signing_config_json" not in resp.DESCRIPTOR.fields_by_name
         assert ctx.code is None
+
+    async def test_internal_get_preserves_algorithm_omitted_from_public_response(self, ctx):
+        """Issuance receives the stored DID resolution, not the sanitized REST shape."""
+        template = _make_template_response(issuer_algorithm="EdDSA")
+        public_response = _make_template_response()
+        del public_response.issuer_algorithm
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=template)
+        servicer = _build_servicer(
+            repo=repo,
+            to_response_fn=lambda _template: public_response,
+        )
+
+        response = await servicer.GetTemplate(
+            ct_pb2.GetTemplateRequest(template_id="tpl-1"),
+            ctx,
+        )
+
+        assert response.issuer_algorithm == "EdDSA"
+        assert response.issuer_did == "did:web:issuer.example:orgs:org-1"
 
     async def test_not_found(self, ctx):
         repo = MagicMock()
