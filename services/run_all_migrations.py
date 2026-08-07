@@ -153,6 +153,7 @@ MARTY_ISSUER_PROFILE_SPECS: list[dict[str, str]] = [
         "name": "Marty VC issuer",
         "signing_key_reference": "cred-issuer-marty-es256",
         "key_purpose": "vc_jwt_issuer",
+        "algorithm": "ES256",
     },
     {
         "id": "ip-marty-oid4vp-verifier",
