@@ -382,7 +382,104 @@ class IssuerIdentityResponse(BaseModel):
         "lti_tool_signing",
     ]
     algorithm: Literal["ES256", "ES384", "RS256", "EdDSA"]
+    credential_format: Literal[
+        "MDOC", "SD_JWT_VC", "VC_JWT", "JSON_LD", "ZK_MDOC", "ICAO_EMRTD"
+    ]
     status: Literal["active"]
+
+
+class IssuerIdentityOperationRequest(BaseModel):
+    """Complete public selector for exactly one managed issuer identity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(min_length=1, max_length=255)
+    issuer_did: str = Field(pattern=r"^did:", max_length=2048)
+    key_purpose: Literal[
+        "vc_jwt_issuer",
+        "mdoc_dsc",
+        "x509_doc_signer",
+        "holder_binding",
+        "presentation_signing",
+        "oid4vp_request_signing",
+        "vdsnc_signing",
+        "csca",
+        "jwks_signing",
+        "lti_tool_signing",
+    ]
+    credential_format: Literal[
+        "MDOC", "SD_JWT_VC", "VC_JWT", "JSON_LD", "ZK_MDOC", "ICAO_EMRTD"
+    ]
+    algorithm: Literal["ES256", "ES384", "RS256", "EdDSA"]
+
+
+class KeyAttestationPolicy(BaseModel):
+    """Public holder-key trust policy; never an issuer custody selector."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["disabled", "optional", "required"]
+    trusted_root_certificates_pem: list[str] = Field(default_factory=list, max_length=64)
+    allowed_algorithms: list[
+        Literal["ES256", "ES384", "RS256", "EdDSA"]
+    ] = Field(default_factory=list)
+    required_key_storage: list[str] = Field(default_factory=list)
+    required_user_authentication: list[str] = Field(default_factory=list)
+    max_age_seconds: int = Field(default=300, ge=1, le=86_400)
+    require_nonce: bool = True
+    status_validation: Literal["disabled", "if_present", "required"] = "required"
+    status_list_allowed_origins: list[str] = Field(default_factory=list)
+    status_list_trusted_root_certificates_pem: list[str] = Field(
+        default_factory=list, max_length=64
+    )
+    status_list_allowed_algorithms: list[
+        Literal["ES256", "ES384", "RS256", "EdDSA"]
+    ] = Field(default_factory=list)
+    status_list_max_age_seconds: int = Field(default=86_400, ge=1, le=604_800)
+    status_list_allow_private_hosts: bool = False
+    status_list_tls_ca_certificates_pem: list[str] = Field(
+        default_factory=list, max_length=64
+    )
+
+
+class IssuerIdentityCreateRequest(IssuerIdentityOperationRequest):
+    """Provider-neutral request to ensure a managed issuer identity."""
+
+    key_attestation_policy: KeyAttestationPolicy | None = None
+
+
+class IssuerIdentityCertificateRequest(IssuerIdentityOperationRequest):
+    """Attach a public certificate chain to a DID-selected managed identity."""
+
+    cert_pem: str = Field(min_length=1, max_length=1_048_576)
+    cert_chain_pem: str | None = Field(default=None, max_length=1_048_576)
+
+
+class IssuerIdentityCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    identity: IssuerIdentityResponse
+    created: bool
+
+
+class IssuerIdentityResolutionResponse(BaseModel):
+    """Provider-neutral public key resolved from the complete identity tuple."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    identity: IssuerIdentityResponse
+    public_jwk: dict[str, Any]
+
+    @model_validator(mode="after")
+    def reject_private_key_material(self) -> "IssuerIdentityResolutionResponse":
+        _reject_private_custody_metadata(self.public_jwk)
+        return self
+
+
+class IssuerIdentityDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    deleted: IssuerIdentityResponse
 
 
 class IssuerIdentityListResponse(BaseModel):
