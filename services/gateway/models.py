@@ -822,7 +822,7 @@ class CredentialTemplateResponse(BaseModel):
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
     validity_rules: dict
-    issuer_did: str | None = None
+    issuer_did: str = Field(pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
     credential_payload_format: str | None = None
     created_at: str
     updated_at: str | None = None

@@ -1069,7 +1069,7 @@ class CredentialTemplateResponse(BaseModel):
     revocation_profile_id: str | None = None
     claims: list[dict]
     validity_rules: dict
-    issuer_did: str | None = None
+    issuer_did: str = Field(pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
     privacy_posture: dict | None = None
     created_at: str
     updated_at: str
@@ -2148,6 +2148,16 @@ async def add_claim(
 
 
 def _template_to_response(template: CredentialTemplate) -> CredentialTemplateResponse:
+    issuer_did = str(template.issuer_did or "").strip()
+    if re.fullmatch(r"did:[a-z0-9]+:.+", issuer_did) is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Credential Template has no managed issuer_did. Migrate the "
+                "template to an active organization-owned issuer DID before use."
+            ),
+        )
+
     canonical_payload_format = normalize_credential_payload_format(
         template.credential_payload_format,
         template.supported_formats,
@@ -2172,7 +2182,7 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
         application_template_id=template.application_template_id,
         trust_profile_id=template.trust_profile_id,
         revocation_profile_id=template.revocation_profile_id,
-        issuer_did=template.issuer_did,
+        issuer_did=issuer_did,
         claims=[
             {
                 "name": c.name,
