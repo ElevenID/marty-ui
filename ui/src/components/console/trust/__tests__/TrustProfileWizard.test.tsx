@@ -123,9 +123,6 @@ const TRANSLATIONS = {
   'wizards.trustProfile.reviewStep.fields.revocationStrategy': 'Revocation Strategy',
   'wizards.trustProfile.reviewStep.fields.clockSkew': 'Clock Skew Tolerance',
   'wizards.trustProfile.reviewStep.fields.credentialFreshness': 'Credential Freshness',
-  'wizards.trustProfile.reviewStep.fields.issuanceProtocol': 'Issuance Protocol',
-  'wizards.trustProfile.reviewStep.fields.supportedWallets': 'Supported Wallets',
-  'wizards.trustProfile.reviewStep.values.allCompatibleWallets': 'No wallet targeting configured',
   'wizards.trustProfile.reviewStep.activationExplanation.title': 'Activation',
   'wizards.trustProfile.reviewStep.activationExplanation.description': 'Choose whether to activate immediately.',
   'wizards.trustProfile.reviewStep.activateImmediately.label': 'Activate immediately',
@@ -722,7 +719,7 @@ describe('TrustProfileWizard', () => {
       expect(lastTrustProfileRequestBody.allowed_issuers).toBeNull()
     })
 
-    it('should submit wallet compatibility and runtime policy settings', async () => {
+    it('should submit only protocol-backed runtime policy settings', async () => {
       const { user } = render(<TrustProfileWizard />)
 
       await user.type(screen.getByTestId('wizard.trustProfile.name'), 'Runtime Aware Trust Profile')
@@ -733,14 +730,6 @@ describe('TrustProfileWizard', () => {
       })
       await addTrustedIssuer(user)
       await user.click(screen.getByTestId('wizard.trustProfile.next'))
-
-      await waitFor(() => {
-        expect(screen.getByTestId('wizard.trustProfile.issuanceProtocol')).toBeInTheDocument()
-      })
-
-      const walletAutocomplete = await screen.findByRole('combobox', { name: /supported wallets/i })
-      await user.type(walletAutocomplete, 'Acme')
-      await user.click(await screen.findByText('Acme Wallet'))
 
       await user.click(screen.getByRole('button', { name: /show advanced options/i }))
       fireEvent.mouseDown(within(screen.getByTestId('wizard.trustProfile.revocationStrategy')).getByRole('combobox'))
@@ -763,8 +752,8 @@ describe('TrustProfileWizard', () => {
         expect(lastTrustProfileRequestBody).toBeTruthy()
       })
 
-      expect(lastTrustProfileRequestBody.supported_wallet_ids).toEqual(['wallet-1'])
-      expect(lastTrustProfileRequestBody.issuance_protocol).toBe('oid4vci')
+      expect(lastTrustProfileRequestBody).not.toHaveProperty('supported_wallet_ids')
+      expect(lastTrustProfileRequestBody).not.toHaveProperty('issuance_protocol')
       expect(lastTrustProfileRequestBody.revocation_policy).toEqual({ check_mode: 'SOFT_FAIL' })
       expect(lastTrustProfileRequestBody.time_policy).toEqual({
         clock_skew_seconds: 900,

@@ -25,7 +25,12 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 
 import { useWizard } from '../../../hooks/useWizard';
 import { useConsole } from '../../../contexts/ConsoleContext';
-import { activateTrustProfile, addTrustProfileIssuer, createTrustProfile } from '../../../services/presentationPolicyApi';
+import {
+  activateTrustProfile,
+  addTrustProfileIssuer,
+  createTrustProfile,
+  synchronizeTrustProfileRegistries,
+} from '../../../services/presentationPolicyApi';
 import BasicsStep from './steps/BasicsStep';
 import TrustSourcesStep from './steps/TrustSourcesStep';
 import ValidationRulesStep from './steps/ValidationRulesStep';
@@ -45,6 +50,7 @@ const getSteps = (t) => [
 const hasTrustConfiguration = (data) => (
   (data.trusted_issuers?.length || 0) > 0
   || (data.trust_sources?.length || 0) > 0
+  || (data.registry_sources?.length || 0) > 0
   || data.allow_all_issuers === true
 );
 
@@ -83,7 +89,9 @@ const TrustProfileWizard = () => {
 
     const didIssuers = configuredIssuers.filter((i) => i.did);
     const certIssuers = configuredIssuers.filter((i) => i.certificate_pem);
-    const hasExplicitTrustConfiguration = configuredIssuers.length > 0 || (data.trust_sources?.length || 0) > 0;
+    const hasExplicitTrustConfiguration = configuredIssuers.length > 0
+      || (data.trust_sources?.length || 0) > 0
+      || (data.registry_sources?.length || 0) > 0;
     const effectiveAllowedIssuers = hasExplicitTrustConfiguration
       ? data.allowed_issuers
       : (data.allow_all_issuers ? null : []);
@@ -95,10 +103,9 @@ const TrustProfileWizard = () => {
       ),
     };
     const certTrustSources = certIssuers.map((i) => ({
-      name: i.name || 'X.509 Root CA',
       source_type: 'ROOT_CA',
       certificate_pem: i.certificate_pem,
-      description: i.description || null,
+      description: i.description || i.name || null,
     }));
 
     const profile = await createTrustProfile({
@@ -110,7 +117,11 @@ const TrustProfileWizard = () => {
       status: data.activate_immediately ? 'active' : 'draft',
       allowed_issuers: effectiveAllowedIssuers,
       validation_rules: effectiveValidationRules,
-      trust_sources: [...(data.trust_sources || []), ...certTrustSources],
+      trust_sources: [
+        ...(data.trust_sources || []),
+        ...(data.registry_sources || []),
+        ...certTrustSources,
+      ],
     });
 
     await Promise.all(
@@ -122,6 +133,10 @@ const TrustProfileWizard = () => {
         accreditations: Array.isArray(issuer.accreditations) ? issuer.accreditations : [],
       }))
     );
+
+    if ((data.registry_sources?.length || 0) > 0) {
+      await synchronizeTrustProfileRegistries(profile.id);
+    }
 
     if (data.activate_immediately) {
       return activateTrustProfile(profile.id);
@@ -137,11 +152,9 @@ const TrustProfileWizard = () => {
       description: '',
       framework_type: 'custom',
       supported_formats: getSupportedFormatsForFramework('custom'),
-      supported_wallet_ids: [],
-      issuance_protocol: 'oid4vci',
       trusted_issuers: [],
       allow_all_issuers: false,
-      registry_imports: [],
+      registry_sources: [],
       revocation_policy: {
         check_mode: 'HARD_FAIL',
       },

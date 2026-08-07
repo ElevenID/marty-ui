@@ -20,6 +20,7 @@ from gateway.models import (
     TrustProfileIssuerCreate,
     TrustProfileIssuerResponse,
     TrustProfileIssuerUpdate,
+    TrustProfileRegistrySyncResponse,
     TrustFrameworkResponse,
     TrustProfileCreate,
     TrustProfileResponse,
@@ -168,6 +169,40 @@ def _sanitize_trust_profile_issuer_response(
     )
 
 
+def _sanitize_registry_sync_response(response: Response) -> Response:
+    """Fail closed when a registry refresh result drifts from the contract."""
+    if response.status_code >= 400:
+        return response
+    try:
+        raw = json.loads(bytes(response.body))
+        public = TrustProfileRegistrySyncResponse.model_validate(raw).model_dump(
+            mode="json"
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        logger.warning("Trust service returned an invalid registry sync response")
+        return mip_error_response(
+            status_code=502,
+            error="invalid_service_response",
+            message="Trust service returned an invalid registry sync response",
+        )
+    return Response(
+        content=json.dumps(public, separators=(",", ":")),
+        status_code=response.status_code,
+        headers={
+            key: value
+            for key, value in response.headers.items()
+            if key.lower()
+            not in {
+                "content-encoding",
+                "transfer-encoding",
+                "content-length",
+                "content-type",
+            }
+        },
+        media_type="application/json",
+    )
+
+
 # ── Trust Profile ────────────────────────────────────────────────────
 
 
@@ -216,6 +251,25 @@ async def activate_trust_profile(profile_id: str, request: Request) -> Response:
     return await proxy_request(
         request, service_url, f"/v1/trust-profiles/{profile_id}/activate"
     )
+
+
+@trust_profile_router.post(
+    "/{profile_id}/registry-sync",
+    response_model=TrustProfileRegistrySyncResponse,
+    summary="Synchronize Trust Profile Registries",
+)
+async def synchronize_trust_profile_registries(
+    profile_id: str, request: Request
+) -> Response:
+    """Refresh every configured external registry feed atomically."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    response = await proxy_request(
+        request,
+        service_url,
+        f"/v1/trust-profiles/{profile_id}/registry-sync",
+    )
+    return _sanitize_registry_sync_response(response)
 
 
 @trust_profile_router.patch(

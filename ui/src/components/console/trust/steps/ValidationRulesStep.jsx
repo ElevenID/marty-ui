@@ -5,7 +5,7 @@
  * This step is optional with sensible defaults.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -22,21 +22,13 @@ import {
   Button,
   Chip,
   Collapse,
-  Autocomplete,
-  Avatar,
-  Paper,
-  Stack,
-  TextField,
 } from '@mui/material';
 import SecurityIcon from '@mui/icons-material/Security';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import WalletIcon from '@mui/icons-material/AccountBalanceWallet';
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { useTranslation } from 'react-i18next';
 
-import { listWallets } from '../../../../services/walletRegistryApi';
 import {
   TRUST_PROFILE_ALLOWED_ALGORITHMS as ALGORITHMS,
   getAllowedAlgorithmsForFramework,
@@ -76,22 +68,15 @@ function haveSameValues(left = [], right = []) {
 const ValidationRulesStep = ({ data, onChange }) => {
   const { t } = useTranslation('console');
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [wallets, setWallets] = useState([]);
-  const [loadingWallets, setLoadingWallets] = useState(false);
-  const [walletError, setWalletError] = useState(null);
-  const walletLoadErrorMessage = t(
-    'wizards.trustProfile.validationRulesStep.walletCompatibility.loadError',
-    { defaultValue: 'Could not load the wallet registry. You can keep configuring the trust profile and add wallet targeting later.' },
-  );
 
   const frameworkType = data.framework_type || 'custom';
   const algorithmSelectionLocked = isFrameworkAlgorithmSelectionLocked(frameworkType);
-  const defaultRules = {
+  const defaultRules = useMemo(() => ({
     allowed_algorithms: getAllowedAlgorithmsForFramework(frameworkType),
     allow_self_signed: false,
     min_key_size: 2048,
     require_key_usage: true,
-  };
+  }), [frameworkType]);
   const rules = {
     ...defaultRules,
     ...(data.validation_rules || {}),
@@ -107,37 +92,6 @@ const ValidationRulesStep = ({ data, onChange }) => {
     freshness_window_seconds: 86400,
     ...(data.time_policy || {}),
   };
-  const selectedWallets = wallets.filter((wallet) =>
-    (data.supported_wallet_ids || []).includes(wallet.id)
-  );
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoadingWallets(true);
-    setWalletError(null);
-
-    listWallets(true)
-      .then((walletList) => {
-        if (!cancelled) {
-          setWallets(Array.isArray(walletList) ? walletList : []);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setWalletError(walletLoadErrorMessage);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoadingWallets(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [walletLoadErrorMessage]);
-
   useEffect(() => {
     if (!algorithmSelectionLocked) {
       return;
@@ -177,14 +131,6 @@ const ValidationRulesStep = ({ data, onChange }) => {
 
   const handleResetDefaults = () => {
     onChange({ validation_rules: defaultRules });
-  };
-
-  const handleWalletChange = (_, newValue) => {
-    onChange({ supported_wallet_ids: newValue.map((wallet) => wallet.id) });
-  };
-
-  const handleIssuanceProtocolChange = (event) => {
-    onChange({ issuance_protocol: event.target.value });
   };
 
   const handleRevocationChange = (event) => {
@@ -289,187 +235,6 @@ const ValidationRulesStep = ({ data, onChange }) => {
           </Box>
         </FormGroup>
       </FormControl>
-
-      <Divider sx={{ my: 3 }} />
-
-      <Box sx={{ mb: 3 }}>
-        <Typography variant="subtitle2" gutterBottom>
-          {t(
-            'wizards.trustProfile.validationRulesStep.walletCompatibility.title',
-            { defaultValue: 'Wallet compatibility' },
-          )}
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          {t(
-            'wizards.trustProfile.validationRulesStep.walletCompatibility.description',
-            { defaultValue: 'Select the wallets this trust profile is intended to support so downstream flows can surface the right handoff options.' },
-          )}
-        </Typography>
-
-        <FormControl fullWidth size="small" sx={{ mb: 2 }}>
-          <InputLabel id="trust-profile-issuance-protocol-label">
-            {t(
-              'wizards.trustProfile.validationRulesStep.walletCompatibility.protocolLabel',
-              { defaultValue: 'Issuance protocol' },
-            )}
-          </InputLabel>
-          <Select
-            labelId="trust-profile-issuance-protocol-label"
-            value={data.issuance_protocol || 'oid4vci'}
-            onChange={handleIssuanceProtocolChange}
-            label={t(
-              'wizards.trustProfile.validationRulesStep.walletCompatibility.protocolLabel',
-              { defaultValue: 'Issuance protocol' },
-            )}
-            data-testid="wizard.trustProfile.issuanceProtocol"
-          >
-            <MenuItem value="oid4vci">OID4VCI</MenuItem>
-          </Select>
-          <FormHelperText>
-            {t(
-              'wizards.trustProfile.validationRulesStep.walletCompatibility.protocolHelper',
-              { defaultValue: 'The protocol used when this trust profile participates in wallet handoff flows.' },
-            )}
-          </FormHelperText>
-        </FormControl>
-
-        {loadingWallets ? (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1 }}>
-            <SecurityIcon fontSize="small" color="action" />
-            <Typography variant="body2" color="text.secondary">
-              {t(
-                'wizards.trustProfile.validationRulesStep.walletCompatibility.loading',
-                { defaultValue: 'Loading wallet registry…' },
-              )}
-            </Typography>
-          </Box>
-        ) : (
-          <>
-            {walletError && (
-              <Alert severity="warning" icon={<InfoOutlinedIcon />} sx={{ mb: 2 }}>
-                {walletError}
-              </Alert>
-            )}
-
-            <Autocomplete
-              multiple
-              options={wallets}
-              getOptionLabel={(wallet) => wallet.name}
-              isOptionEqualToValue={(left, right) => left.id === right.id}
-              value={selectedWallets}
-              onChange={handleWalletChange}
-              renderValue={(value, getItemProps) =>
-                value.map((wallet, index) => {
-                  const { key, ...itemProps } = getItemProps({ index });
-
-                  return (
-                    <Chip
-                      key={key}
-                      label={wallet.name}
-                      size="small"
-                      avatar={wallet.logo_url ? <Avatar src={wallet.logo_url} sx={{ width: 18, height: 18 }} /> : undefined}
-                      icon={!wallet.logo_url ? <WalletIcon sx={{ fontSize: 16 }} /> : undefined}
-                      {...itemProps}
-                    />
-                  );
-                })
-              }
-              renderOption={(props, wallet) => {
-                const { key, ...optionProps } = props;
-                const platforms = wallet.supported_platforms || wallet.platforms || [];
-
-                return (
-                  <Box key={key} component="li" {...optionProps} sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 1 }}>
-                    {wallet.logo_url ? (
-                      <Box
-                        component="img"
-                        src={wallet.logo_url}
-                        alt={wallet.name}
-                        sx={{ width: 24, height: 24, objectFit: 'contain' }}
-                      />
-                    ) : (
-                      <WalletIcon fontSize="small" color="action" />
-                    )}
-                    <Box>
-                      <Typography variant="body2">{wallet.name}</Typography>
-                      {platforms.length > 0 && (
-                        <Typography variant="caption" color="text.secondary">
-                          {platforms.join(' · ')}
-                        </Typography>
-                      )}
-                    </Box>
-                  </Box>
-                );
-              }}
-              renderInput={(params) => (
-                <TextField
-                  {...params}
-                  label={t(
-                    'wizards.trustProfile.validationRulesStep.walletCompatibility.walletsLabel',
-                    { defaultValue: 'Supported wallets' },
-                  )}
-                  placeholder={t(
-                    'wizards.trustProfile.validationRulesStep.walletCompatibility.walletsPlaceholder',
-                    { defaultValue: 'Search wallet registry…' },
-                  )}
-                  helperText={t(
-                    'wizards.trustProfile.validationRulesStep.walletCompatibility.walletsHelper',
-                    { defaultValue: 'Selecting wallets lets issuance and handoff experiences prioritize the right apps.' },
-                  )}
-                  size="small"
-                />
-              )}
-              sx={{ mb: 2 }}
-            />
-
-            {selectedWallets.length === 0 && (
-              <Alert severity="info" icon={<InfoOutlinedIcon />}>
-                {t(
-                  'wizards.trustProfile.validationRulesStep.walletCompatibility.noWalletsSelected',
-                  { defaultValue: 'No specific wallets selected. Compatible flows will fall back to generic wallet handoff behavior.' },
-                )}
-              </Alert>
-            )}
-
-            {selectedWallets.length > 0 && (
-              <Paper variant="outlined" sx={{ p: 2, mt: 2 }}>
-                <Typography variant="caption" color="text.secondary" display="block" gutterBottom>
-                  {t(
-                    'wizards.trustProfile.validationRulesStep.walletCompatibility.previewLabel',
-                    { defaultValue: 'Selected wallet targets' },
-                  )}
-                </Typography>
-                <Stack spacing={1}>
-                  {selectedWallets.map((wallet) => {
-                    const platforms = wallet.supported_platforms || wallet.platforms || [];
-
-                    return (
-                      <Box key={wallet.id} sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                        {wallet.logo_url ? (
-                          <Box
-                            component="img"
-                            src={wallet.logo_url}
-                            alt={wallet.name}
-                            sx={{ width: 20, height: 20, objectFit: 'contain' }}
-                          />
-                        ) : (
-                          <WalletIcon fontSize="small" color="action" />
-                        )}
-                        <Typography variant="body2">{wallet.name}</Typography>
-                        <Stack direction="row" spacing={0.5} sx={{ ml: 'auto' }}>
-                          {platforms.map((platform) => (
-                            <Chip key={platform} label={platform} size="small" variant="outlined" sx={{ fontSize: '0.65rem', height: 18 }} />
-                          ))}
-                        </Stack>
-                      </Box>
-                    );
-                  })}
-                </Stack>
-              </Paper>
-            )}
-          </>
-        )}
-      </Box>
 
       {/* Advanced Options Toggle */}
       <Box sx={{ mt: 3 }}>

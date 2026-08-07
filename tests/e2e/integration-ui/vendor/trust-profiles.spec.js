@@ -2,9 +2,8 @@
  * Trust Profile creation coverage.
  *
  * These tests exercise the trust profile wizard end to end from the browser,
- * but they do not call live ICAO/EU/AAMVA registry endpoints. Registry imports
- * are verified against the product's built-in registry metadata and mocked URL
- * imports only, which keeps the suite compliant with third-party registry terms.
+ * They do not call live external registry endpoints. Registry synchronization
+ * is exercised through the same organization-scoped product API used by the UI.
  */
 const { test, expect } = require('@playwright/test');
 
@@ -120,6 +119,7 @@ async function submitWizard(page) {
 async function configureSubmissionMocks(page) {
   const createdProfiles = [];
   const linkedIssuers = [];
+  const syncedProfiles = [];
 
   await page.route('**/v1/trust-profiles', async (route) => {
     if (route.request().method() !== 'POST') {
@@ -156,7 +156,32 @@ async function configureSubmissionMocks(page) {
     });
   });
 
-  return { createdProfiles, linkedIssuers };
+  await page.route('**/v1/trust-profiles/*/registry-sync', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+    const profileId = new URL(route.request().url()).pathname.split('/').at(-2);
+    syncedProfiles.push(profileId);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        trust_profile_id: profileId,
+        sources: [{
+          url: 'https://registry.example.test/v1/trust-registry/sync',
+          protocol: 'MARTY_TRUST_REGISTRY_SYNC_V1',
+          sequence: 1,
+          csca_entries: 1,
+          dsc_entries: 0,
+          synchronized_at: '2026-08-07T12:00:00Z',
+        }],
+        synchronized_at: '2026-08-07T12:00:00Z',
+      }),
+    });
+  });
+
+  return { createdProfiles, linkedIssuers, syncedProfiles };
 }
 
 test.describe('Trust Profile Wizard', () => {
@@ -253,7 +278,7 @@ test.describe('Trust Profile Wizard', () => {
         expect.objectContaining({
           source_type: 'ROOT_CA',
           certificate_pem: SAMPLE_CERT_PEM,
-          name: 'Manual Root CA',
+          description: 'Manual Root CA',
         }),
         expect.objectContaining({
           source_type: 'ROOT_CA',
@@ -267,36 +292,32 @@ test.describe('Trust Profile Wizard', () => {
     );
   });
 
-  test('captures registry import configuration and its auto-update strategy without contacting live registries', async ({ page }) => {
-    const { createdProfiles } = await configureSubmissionMocks(page);
+  test('synchronizes a compatible registry through the production API without browser-side fetching', async ({ page }) => {
+    const { createdProfiles, syncedProfiles } = await configureSubmissionMocks(page);
     const profileName = uniqueProfileName('Playwright Registry Trust');
     const externalRegistryRequests = [];
+    const registryUrl = 'https://registry.example.test/v1/trust-registry/sync';
 
     page.on('request', (request) => {
-      const url = request.url();
-      if (
-        url.includes('pkd.icao.int')
-        || url.includes('digital-building-blocks')
-        || url.includes('aamva.org')
-      ) {
-        externalRegistryRequests.push(url);
+      if (request.url() === registryUrl) {
+        externalRegistryRequests.push(request.url());
       }
     });
 
     await loginAndOpenWizard(page);
-    await completeBasics(page, profileName, 'Covers registry import metadata only');
+    await completeBasics(page, profileName, 'Covers real registry synchronization');
 
     await page.getByRole('tab', { name: 'Import from Registries' }).click();
     await page.getByTestId('wizard.trustProfile.addRegistry').click();
-    const registryDialog = page.getByRole('dialog', { name: 'Import from Registry' });
+    const registryDialog = page.getByRole('dialog', { name: 'Connect Registry Feed' });
     await expect(registryDialog).toBeVisible();
 
-    await registryDialog.getByRole('combobox').click();
-    await page.getByRole('option', { name: /EU List of Trusted Lists/i }).click();
+    await registryDialog.getByLabel('Registry sync endpoint').fill(registryUrl);
+    await registryDialog.getByLabel('Description').fill('External registry test');
     await registryDialog.getByRole('button', { name: 'Add' }).click();
 
-    await expect(page.getByText('EU List of Trusted Lists (LoTL)')).toBeVisible();
-  await expect(page.getByText('Auto-sync enabled (24h)', { exact: true })).toBeVisible();
+    await expect(page.getByText('External registry test')).toBeVisible();
+    await expect(page.getByText('Marty Sync v1 • refresh required every 24h', { exact: true })).toBeVisible();
 
     await page.getByRole('tab', { name: 'Manual Issuers' }).click();
     await page.getByTestId('wizard.trustProfile.issuerDid').fill('did:web:registry-proof.example');
@@ -307,16 +328,18 @@ test.describe('Trust Profile Wizard', () => {
 
     expect(externalRegistryRequests).toEqual([]);
     expect(createdProfiles).toHaveLength(1);
-    expect(createdProfiles[0].registry_imports).toEqual([
+    expect(createdProfiles[0]).not.toHaveProperty('registry_imports');
+    expect(createdProfiles[0].trust_sources).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        registry_type: 'EU_TRUST_LIST',
-        sync_enabled: true,
-        metadata: expect.objectContaining({
-          name: 'EU List of Trusted Lists (LoTL)',
-          frameworks: ['EUDI'],
-          credential_types: ['SD_JWT_VC', 'VC_JWT'],
-        }),
+        source_type: 'TRUST_LIST',
+        url: registryUrl,
+        description: 'External registry test',
+        registry_sync: {
+          protocol: 'MARTY_TRUST_REGISTRY_SYNC_V1',
+          refresh_interval_hours: 24,
+        },
       }),
-    ]);
+    ]));
+    expect(syncedProfiles).toEqual(['tp-1']);
   });
 });

@@ -19,6 +19,7 @@ import {
   getCredentialTemplate,
   activateTrustProfile,
   createTrustProfile,
+  synchronizeTrustProfileRegistries,
   listTrustProfiles,
   addTrustProfileIssuer,
   listTrustProfileIssuers,
@@ -745,18 +746,76 @@ describe('presentationPolicyApi', () => {
   })
 
   describe('Trust Profiles', () => {
-    it('should create trust profile', async () => {
+    it('creates only the public trust-profile contract and preserves registry sync configuration', async () => {
+      let requestBody: any
+      server.use(
+        http.post('http://localhost:8000/v1/trust-profiles', async ({ request }) => {
+          requestBody = await request.json()
+          return HttpResponse.json({
+            id: 'trust-profile-1',
+            status: 'DRAFT',
+            ...requestBody,
+          })
+        })
+      )
       const newProfile = {
         organization_id: 'org-1',
         name: 'Production Trust',
-        trust_list_url: 'https://example.com/trust-list',
         status: 'active',
+        registry_imports: [{ registry_type: 'EU_TRUST_LIST' }],
+        supported_wallet_ids: ['ui-only-wallet'],
+        trust_sources: [{
+          source_type: 'TRUST_LIST',
+          url: 'https://registry.example/sync',
+          registry_sync: {
+            protocol: 'MARTY_TRUST_REGISTRY_SYNC_V1',
+            refresh_interval_hours: 24,
+          },
+          metadata: { ui_only: true },
+        }],
       }
 
       const result = await createTrustProfile(newProfile)
 
       expect(result.name).toBeDefined()
       expect(result).toHaveProperty('id')
+      expect(requestBody).not.toHaveProperty('status')
+      expect(requestBody).not.toHaveProperty('registry_imports')
+      expect(requestBody).not.toHaveProperty('supported_wallet_ids')
+      expect(requestBody.trust_sources).toEqual([{
+        source_type: 'TRUST_LIST',
+        url: 'https://registry.example/sync',
+        registry_sync: {
+          protocol: 'MARTY_TRUST_REGISTRY_SYNC_V1',
+          refresh_interval_hours: 24,
+        },
+      }])
+    })
+
+    it('synchronizes registries through the trust-profile production API', async () => {
+      let synchronizedId: string | undefined
+      server.use(
+        http.post('http://localhost:8000/v1/trust-profiles/:id/registry-sync', ({ params }) => {
+          synchronizedId = params.id as string
+          return HttpResponse.json({
+            trust_profile_id: params.id,
+            sources: [{
+              url: 'https://registry.example/sync',
+              protocol: 'MARTY_TRUST_REGISTRY_SYNC_V1',
+              sequence: 2,
+              csca_entries: 1,
+              dsc_entries: 0,
+              synchronized_at: '2026-08-07T12:00:00Z',
+            }],
+            synchronized_at: '2026-08-07T12:00:00Z',
+          })
+        })
+      )
+
+      const result = await synchronizeTrustProfileRegistries('trust-profile-1')
+
+      expect(synchronizedId).toBe('trust-profile-1')
+      expect(result.sources[0].sequence).toBe(2)
     })
 
     it('fails locally instead of creating trust profiles without an active organization', async () => {

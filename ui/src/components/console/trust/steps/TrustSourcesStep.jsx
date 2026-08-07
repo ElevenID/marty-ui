@@ -30,7 +30,6 @@ import {
   Select,
   MenuItem,
   Paper,
-  CircularProgress,
   Stack,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -40,30 +39,6 @@ import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import LinkIcon from '@mui/icons-material/Link';
 import { useTranslation } from 'react-i18next';
-
-const DEFAULT_REGISTRIES = [
-  {
-    id: 'ICAO_PKD',
-    name: 'ICAO Public Key Directory',
-    description: 'ePassports and travel documents',
-    frameworks: ['ICAO'],
-    credential_types: ['MDOC'],
-  },
-  {
-    id: 'EU_TRUST_LIST',
-    name: 'EU List of Trusted Lists (LoTL)',
-    description: 'EU credential issuers',
-    frameworks: ['EUDI'],
-    credential_types: ['SD_JWT_VC', 'VC_JWT'],
-  },
-  {
-    id: 'AAMVA',
-    name: 'AAMVA Mobile Driver License',
-    description: 'Mobile driver licenses and travel documents',
-    frameworks: ['AAMVA'],
-    credential_types: ['MDOC', 'SD_JWT_VC'],
-  },
-];
 
 const splitCsvLine = (line) => line.split(',').map((value) => value.trim());
 
@@ -203,13 +178,9 @@ const parseImportContent = (content, importSource = 'file') => {
     .filter(Boolean);
 };
 
-const getRegistrySyncSummary = (registryImport) => {
-  if (registryImport.sync_enabled === false) {
-    return 'Manual sync only';
-  }
-
-  const intervalHours = Number(registryImport.sync_interval_hours || 24);
-  return `Auto-sync enabled (${intervalHours}h)`;
+const getRegistrySyncSummary = (source) => {
+  const intervalHours = Number(source.registry_sync?.refresh_interval_hours || 24);
+  return `Marty Sync v1 • refresh required every ${intervalHours}h`;
 };
 
 const TrustSourcesStep = ({ data, onChange }) => {
@@ -217,10 +188,11 @@ const TrustSourcesStep = ({ data, onChange }) => {
   const [newIssuerDid, setNewIssuerDid] = useState('');
   const [tabValue, setTabValue] = useState(0);
   const [openRegistryDialog, setOpenRegistryDialog] = useState(false);
-  const [selectedRegistry, setSelectedRegistry] = useState('');
-  const [availableRegistries, setAvailableRegistries] = useState([]);
-  const [loadingRegistries, setLoadingRegistries] = useState(false);
-  const [registryImports, setRegistryImports] = useState(data.registry_imports || []);
+  const [registrySources, setRegistrySources] = useState(data.registry_sources || []);
+  const [registryUrl, setRegistryUrl] = useState('');
+  const [registryDescription, setRegistryDescription] = useState('');
+  const [registryIntervalHours, setRegistryIntervalHours] = useState(24);
+  const [registryFeedback, setRegistryFeedback] = useState('');
   const [newIssuerName, setNewIssuerName] = useState('');
   const [newIssuerCountry, setNewIssuerCountry] = useState('');
   const [newIssuerCredentialTypes, setNewIssuerCredentialTypes] = useState('');
@@ -270,48 +242,63 @@ const TrustSourcesStep = ({ data, onChange }) => {
     return added;
   };
 
-  // Fetch available registries when dialog opens
-  const handleOpenRegistryDialog = async () => {
-    setLoadingRegistries(true);
-    try {
-      const framework = data.profile_type || 'CUSTOM';
-      const filtered = framework === 'CUSTOM'
-        ? DEFAULT_REGISTRIES
-        : DEFAULT_REGISTRIES.filter((registry) => registry.frameworks.includes(framework));
-      setAvailableRegistries(filtered);
-      setOpenRegistryDialog(true);
-    } finally {
-      setLoadingRegistries(false);
-    }
+  const handleOpenRegistryDialog = () => {
+    setRegistryFeedback('');
+    setOpenRegistryDialog(true);
   };
 
-  const handleAddRegistry = async () => {
-    if (!selectedRegistry) return;
-
-    // Check for duplicates
-    if (registryImports.some((imp) => imp.registry_type === selectedRegistry)) {
+  const handleAddRegistry = () => {
+    const candidate = registryUrl.trim();
+    let parsed;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      setRegistryFeedback('Enter a valid HTTPS Marty Trust Registry Sync v1 endpoint.');
+      return;
+    }
+    if (
+      parsed.protocol !== 'https:'
+      || parsed.username
+      || parsed.password
+      || (parsed.port && parsed.port !== '443')
+      || parsed.search
+      || parsed.hash
+    ) {
+      setRegistryFeedback('Use a credential-free HTTPS URL on port 443 without a query or fragment.');
+      return;
+    }
+    if (registrySources.some((source) => source.url === candidate)) {
+      setRegistryFeedback('That registry endpoint is already configured.');
+      return;
+    }
+    const interval = Number(registryIntervalHours);
+    if (!Number.isInteger(interval) || interval < 1 || interval > 720) {
+      setRegistryFeedback('Refresh interval must be from 1 through 720 hours.');
       return;
     }
 
-    const newImport = {
-      registry_type: selectedRegistry,
-      sync_enabled: true,
-      sync_interval_hours: 24,
-      credential_format_filter: [],
-      added_at: new Date().toISOString(),
-      metadata: availableRegistries.find((registry) => registry.id === selectedRegistry) || {},
+    const source = {
+      source_type: 'TRUST_LIST',
+      url: candidate,
+      description: registryDescription.trim() || 'External Marty trust registry',
+      registry_sync: {
+        protocol: 'MARTY_TRUST_REGISTRY_SYNC_V1',
+        refresh_interval_hours: interval,
+      },
     };
-
-    setRegistryImports([...registryImports, newImport]);
-    onChange({ registry_imports: [...registryImports, newImport] });
-    setSelectedRegistry('');
+    const next = [...registrySources, source];
+    setRegistrySources(next);
+    onChange({ registry_sources: next });
+    setRegistryUrl('');
+    setRegistryDescription('');
+    setRegistryIntervalHours(24);
     setOpenRegistryDialog(false);
   };
 
   const handleRemoveRegistry = (index) => {
-    const newImports = registryImports.filter((_, i) => i !== index);
-    setRegistryImports(newImports);
-    onChange({ registry_imports: newImports });
+    const next = registrySources.filter((_, i) => i !== index);
+    setRegistrySources(next);
+    onChange({ registry_sources: next });
   };
 
   const handleAddIssuer = () => {
@@ -807,10 +794,14 @@ const TrustSourcesStep = ({ data, onChange }) => {
         <Box>
           <Alert severity="success" sx={{ mb: 3 }} icon={<CloudDownloadIcon />}>
             <Typography variant="body2">
-              {t('wizards.trustProfile.trustSourcesStep.registryAlert.title')}
+              {t('wizards.trustProfile.trustSourcesStep.registryAlert.title', {
+                defaultValue: 'Connect a Marty Trust Registry Sync v1 feed',
+              })}
             </Typography>
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
-              {t('wizards.trustProfile.trustSourcesStep.registryAlert.description')}
+              {t('wizards.trustProfile.trustSourcesStep.registryAlert.description', {
+                defaultValue: 'The service validates and imports this feed through the organization-scoped production API. Native ICAO PKD, EU LoTL, and AAMVA website formats are not treated as compatible feeds.',
+              })}
             </Typography>
           </Alert>
 
@@ -819,43 +810,34 @@ const TrustSourcesStep = ({ data, onChange }) => {
             variant="contained"
             startIcon={<CloudDownloadIcon />}
             onClick={handleOpenRegistryDialog}
-            disabled={loadingRegistries}
             sx={{ mb: 3 }}
             data-testid="wizard.trustProfile.addRegistry"
           >
-            {loadingRegistries ? (
-              <CircularProgress size={20} sx={{ mr: 1 }} />
-            ) : null}
             {t('wizards.trustProfile.trustSourcesStep.importButton')}
           </Button>
 
           {/* Registry Imports List */}
-          {registryImports && registryImports.length > 0 ? (
+          {registrySources.length > 0 ? (
             <Box>
               <Typography variant="subtitle2" gutterBottom>
                 {t('wizards.trustProfile.trustSourcesStep.registryImportsTitle', {
-                  count: registryImports.length,
+                  count: registrySources.length,
                 })}
               </Typography>
               <List>
-                {registryImports.map((imp, index) => (
-                  <Paper key={index} sx={{ p: 2, mb: 1 }}>
+                {registrySources.map((source, index) => (
+                  <Paper key={source.url} sx={{ p: 2, mb: 1 }}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <Box>
                         <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                            {imp.metadata?.name || imp.registry_type.replace(/_/g, ' ')}
+                          {source.description || 'External Marty trust registry'}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" data-testid={`wizard.trustProfile.registryImport.sync.${index}`}>
-                          {getRegistrySyncSummary(imp)}
+                          {getRegistrySyncSummary(source)}
                         </Typography>
-                          <Box sx={{ mt: 0.5, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                            {(imp.metadata?.frameworks || []).map((framework) => (
-                              <Chip key={`${imp.registry_type}-${framework}`} label={framework} size="small" variant="outlined" />
-                            ))}
-                            {(imp.metadata?.credential_types || []).map((format) => (
-                              <Chip key={`${imp.registry_type}-${format}`} label={format} size="small" color="info" variant="outlined" />
-                            ))}
-                          </Box>
+                        <Typography variant="caption" color="text.secondary" display="block" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                          {source.url}
+                        </Typography>
                       </Box>
                       <IconButton
                         onClick={() => handleRemoveRegistry(index)}
@@ -891,39 +873,37 @@ const TrustSourcesStep = ({ data, onChange }) => {
       <Dialog open={openRegistryDialog} onClose={() => setOpenRegistryDialog(false)} maxWidth="sm" fullWidth data-testid="wizard.trustProfile.registryDialog">
         <DialogTitle>{t('wizards.trustProfile.trustSourcesStep.registryDialog.title')}</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
-          <FormControl fullWidth>
-            <InputLabel>{t('wizards.trustProfile.trustSourcesStep.registryDialog.label')}</InputLabel>
-            <Select
-              value={selectedRegistry}
-              onChange={(e) => setSelectedRegistry(e.target.value)}
-              data-testid="wizard.trustProfile.registrySelect"
-              label={t('wizards.trustProfile.trustSourcesStep.registryDialog.label')}
-            >
-              {availableRegistries.map((reg) => (
-                <MenuItem key={reg.id} value={reg.id}>
-                  <Box>
-                    <Typography variant="body2">{reg.name}</Typography>
-                    <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-                      {reg.description}
-                    </Typography>
-                    <Box sx={{ mt: 0.5, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                      {reg.frameworks.map((framework) => (
-                        <Chip key={`${reg.id}-${framework}`} label={framework} size="small" variant="outlined" />
-                      ))}
-                      {reg.credential_types.map((format) => (
-                        <Chip key={`${reg.id}-${format}`} label={format} size="small" color="info" variant="outlined" />
-                      ))}
-                    </Box>
-                  </Box>
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+          <Stack spacing={2}>
+            <TextField
+              label="Registry sync endpoint"
+              value={registryUrl}
+              onChange={(event) => setRegistryUrl(event.target.value)}
+              placeholder="https://registry.example.org/v1/trust-registry/sync"
+              inputProps={{ 'data-testid': 'wizard.trustProfile.registrySelect' }}
+              fullWidth
+            />
+            <TextField
+              label="Description"
+              value={registryDescription}
+              onChange={(event) => setRegistryDescription(event.target.value)}
+              placeholder="Production travel-document trust registry"
+              fullWidth
+            />
+            <TextField
+              label="Required refresh interval (hours)"
+              type="number"
+              value={registryIntervalHours}
+              onChange={(event) => setRegistryIntervalHours(event.target.value)}
+              inputProps={{ min: 1, max: 720 }}
+              fullWidth
+            />
+          </Stack>
           <Alert severity="info" sx={{ mt: 2 }}>
             <Typography variant="caption">
-              {t('wizards.trustProfile.trustSourcesStep.registryDialog.info')}
+              The endpoint must serve the published Marty Trust Registry Sync v1 JSON contract over public CA-validated HTTPS. The profile remains unusable for verification if the first refresh fails or imported trust becomes stale.
             </Typography>
           </Alert>
+          {registryFeedback ? <Alert severity="error" sx={{ mt: 2 }}>{registryFeedback}</Alert> : null}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpenRegistryDialog(false)}>
@@ -932,7 +912,7 @@ const TrustSourcesStep = ({ data, onChange }) => {
           <Button
             onClick={handleAddRegistry}
             variant="contained"
-            disabled={!selectedRegistry}
+            disabled={!registryUrl.trim()}
             data-testid="wizard.trustProfile.registryDialog.add"
           >
             {t('add', { ns: 'common', defaultValue: 'Add' })}
