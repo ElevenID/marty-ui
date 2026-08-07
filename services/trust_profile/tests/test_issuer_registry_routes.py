@@ -98,9 +98,14 @@ def _save_registry_entry(
 
 
 def test_service_does_not_publish_placeholder_registry_import_routes():
-    assert all(
-        not route.path.startswith("/v1/registries")
+    published_paths = {
+        path
         for route in trust_profile.app.routes
+        if isinstance((path := getattr(route, "path", None)), str)
+    }
+    assert all(
+        not path.startswith("/v1/registries")
+        for path in published_paths
     )
 
 
