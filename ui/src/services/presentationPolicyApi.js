@@ -150,6 +150,8 @@ function composeTrustProfileIssuer(relationship, issuerEntity) {
     issuer_url: issuerEntity.metadata?.issuer_url || null,
     status: issuerEntity.compliance_status,
     compliance_status: issuerEntity.compliance_status,
+    accreditation_body: issuerEntity.accreditation_body || null,
+    accreditations: Array.isArray(issuerEntity.accreditations) ? issuerEntity.accreditations : [],
     credential_template_ids: relationship.metadata?.credential_template_ids || [],
   };
 }
@@ -880,6 +882,8 @@ export async function addTrustProfileIssuer(profileId, organizationId, data) {
       issuer_type: data.issuer_type || 'ORGANIZATION',
       display_name: data.name || issuerDid,
       description: data.description || null,
+      accreditation_body: data.accreditation_body || null,
+      accreditations: Array.isArray(data.accreditations) ? data.accreditations : [],
       metadata: {
         ...(data.issuer_url ? { issuer_url: data.issuer_url } : {}),
       },

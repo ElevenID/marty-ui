@@ -157,6 +157,7 @@ issuer_entities_table = Table(
     Column("is_system_issuer", Boolean, nullable=False, default=False),
     Column("compliance_status", String, nullable=False),
     Column("accreditation_body", String, nullable=True),
+    Column("accreditations", JSON, nullable=False, default=list),
     Column("accreditation_date", DateTime(timezone=True), nullable=True),
     Column("valid_from", DateTime(timezone=True), nullable=False),
     Column("valid_until", DateTime(timezone=True), nullable=True),

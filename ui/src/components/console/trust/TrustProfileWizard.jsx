@@ -118,6 +118,8 @@ const TrustProfileWizard = () => {
         name: issuer.name || issuer.did,
         description: issuer.description || null,
         issuer_did: issuer.did,
+        accreditation_body: issuer.accreditation_body || null,
+        accreditations: Array.isArray(issuer.accreditations) ? issuer.accreditations : [],
       }))
     );
 

@@ -33,6 +33,7 @@ def _entity_payload() -> dict:
         "is_system_issuer": False,
         "compliance_status": "COMPLIANT",
         "accreditation_body": None,
+        "accreditations": ["ISO27001", "FIPS140-2"],
         "accreditation_date": None,
         "valid_from": "2026-08-01T00:00:00Z",
         "valid_until": None,
@@ -79,6 +80,15 @@ def test_create_rejects_system_authority_and_private_metadata() -> None:
             }
         )
 
+    normalized = IssuerEntityCreate.model_validate(
+        {**base, "accreditations": [" ISO27001 ", "FIPS140-2"]}
+    )
+    assert normalized.accreditations == ["ISO27001", "FIPS140-2"]
+    with pytest.raises(ValidationError, match="unique case-insensitively"):
+        IssuerEntityCreate.model_validate(
+            {**base, "accreditations": ["ISO27001", "iso27001"]}
+        )
+
 
 def test_update_is_tenant_bound_partial_and_server_attributed() -> None:
     with pytest.raises(ValidationError):
@@ -110,6 +120,11 @@ def test_update_is_tenant_bound_partial_and_server_attributed() -> None:
         "description": None,
         "organization_id": ORG_ID,
     }
+
+    with pytest.raises(ValidationError):
+        IssuerEntityUpdate.model_validate(
+            {"organization_id": ORG_ID, "accreditations": None}
+        )
 
 
 def test_success_response_validation_fails_closed_on_private_state() -> None:
