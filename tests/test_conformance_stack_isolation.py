@@ -222,6 +222,24 @@ def test_haip_overlay_is_explicit_and_isolation_is_last() -> None:
     )
 
 
+def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
+    isolation = (ROOT / stack.ISOLATION_FILE).read_text(encoding="utf-8")
+    issuance = isolation.split("  issuance:\n", 1)[1].split(
+        "  canvas-sync-worker:\n", 1
+    )[0]
+
+    assert '"host.docker.internal:host-gateway"' in issuance
+    for production_file in (
+        "docker-compose.base.yml",
+        "docker-compose.selfhost.prod.yml",
+        "docker-compose.ui-prod.yml",
+        "docker-compose.ui-release.yml",
+    ):
+        assert "host.docker.internal:host-gateway" not in (
+            ROOT / production_file
+        ).read_text(encoding="utf-8")
+
+
 def test_local_build_defines_ui_without_release_image_overlays() -> None:
     command = stack.compose_command(
         "marty-conformance-test1",
