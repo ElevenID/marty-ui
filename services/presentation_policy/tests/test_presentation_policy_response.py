@@ -399,7 +399,8 @@ def test_detect_credential_format_recognizes_vcdm_data_integrity_object() -> Non
     assert pp._detect_credential_format(document) == "w3c-vcdm-di"
 
 
-def test_vcdm_candidate_detection_leaves_context_acceptance_to_released_verifier(
+@pytest.mark.asyncio
+async def test_vcdm_candidate_detection_leaves_context_acceptance_to_released_verifier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     document = {
@@ -432,7 +433,7 @@ def test_vcdm_candidate_detection_leaves_context_acceptance_to_released_verifier
     )
 
     credential_format = pp._detect_credential_format(document)
-    result = pp._verify_credential_by_format(
+    result = await pp._verify_credential_by_format(
         document,
         credential_format,
         None,
@@ -693,7 +694,8 @@ def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
     }
 
 
-def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_claims(
+@pytest.mark.asyncio
+async def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_claims(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requests: list[dict] = []
@@ -726,7 +728,7 @@ def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_claims(
         "verifiableCredential": [credential],
     }
 
-    result = pp._verify_vcdm_data_integrity(document, "challenge", "verifier")
+    result = await pp._verify_vcdm_data_integrity(document, "challenge", "verifier")
 
     assert result["verified"] is True
     assert result["issuer_did"] == "did:key:issuer"
@@ -740,7 +742,8 @@ def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_claims(
     ]
 
 
-def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
+@pytest.mark.asyncio
+async def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer = "did:web:issuer.example:orgs:tenant-a"
@@ -777,7 +780,9 @@ def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
     }
     captured: list[dict] = []
 
-    monkeypatch.setattr(pp, "_resolve_did_document", lambda did: did_document)
+    monkeypatch.setattr(
+        pp, "_resolve_did_document", AsyncMock(return_value=did_document)
+    )
     monkeypatch.setattr(
         pp,
         "_load_marty_rs_binding",
@@ -797,7 +802,7 @@ def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
         ),
     )
 
-    result = pp._verify_vcdm_data_integrity(document, None, None)
+    result = await pp._verify_vcdm_data_integrity(document, None, None)
 
     assert result["verified"] is True
     assert captured == [
@@ -814,39 +819,21 @@ def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
     ]
 
 
-def test_did_resolver_skips_a_candidate_with_the_wrong_document_id(
+@pytest.mark.asyncio
+async def test_did_resolver_delegates_to_controlled_common_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     did = "did:web:issuer.example:orgs:tenant-a"
-    candidates = [
-        "http://gateway:8000/orgs/tenant-a/did.json",
-        "https://issuer.example/orgs/tenant-a/did.json",
-    ]
-    requested: list[str] = []
+    document = {"id": did, "verificationMethod": []}
+    resolver = AsyncMock(return_value=SimpleNamespace(document=document))
+    monkeypatch.setattr(pp, "resolve_did_document", resolver)
 
-    class Response:
-        status_code = 200
-
-        def __init__(self, document: dict) -> None:
-            self._document = document
-
-        def json(self) -> dict:
-            return self._document
-
-    def get(url: str, **_kwargs) -> Response:
-        requested.append(url)
-        if url == candidates[0]:
-            return Response({"id": "did:web:gateway.example:orgs:tenant-a"})
-        return Response({"id": did, "verificationMethod": []})
-
-    monkeypatch.setattr(pp, "_did_resolution_candidate_urls", lambda _did: candidates)
-    monkeypatch.setattr("httpx.get", get)
-
-    assert pp._resolve_did_document(did)["id"] == did
-    assert requested == candidates
+    assert (await pp._resolve_did_document(did))["id"] == did
+    resolver.assert_awaited_once_with(did)
 
 
-def test_vcdm_data_integrity_rejects_cross_tenant_proof_before_rust(
+@pytest.mark.asyncio
+async def test_vcdm_data_integrity_rejects_cross_tenant_proof_before_rust(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer = "did:web:issuer.example:orgs:tenant-a"
@@ -882,7 +869,7 @@ def test_vcdm_data_integrity_rejects_cross_tenant_proof_before_rust(
         },
     }
 
-    result = pp._verify_vcdm_data_integrity(document, None, None)
+    result = await pp._verify_vcdm_data_integrity(document, None, None)
 
     assert result["verified"] is False
     assert result["claims"] == {}
@@ -890,7 +877,8 @@ def test_vcdm_data_integrity_rejects_cross_tenant_proof_before_rust(
     assert "tenant-b" not in result["error"]
 
 
-def test_vcdm_data_integrity_fails_closed_without_leaking_engine_errors(
+@pytest.mark.asyncio
+async def test_vcdm_data_integrity_fails_closed_without_leaking_engine_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     binding = SimpleNamespace(
@@ -900,7 +888,7 @@ def test_vcdm_data_integrity_fails_closed_without_leaking_engine_errors(
     )
     monkeypatch.setattr(pp, "_load_marty_rs_binding", lambda: binding)
 
-    result = pp._verify_vcdm_data_integrity(
+    result = await pp._verify_vcdm_data_integrity(
         {"type": ["VerifiableCredential"]}, None, None
     )
 
@@ -914,7 +902,8 @@ def _jwt_segment(payload: dict) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def test_w3c_vc_uses_public_issuer_profile_did_material(
+@pytest.mark.asyncio
+async def test_w3c_vc_uses_public_issuer_profile_did_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer = "did:web:issuer.example:profiles:university"
@@ -974,7 +963,7 @@ def test_w3c_vc_uses_public_issuer_profile_did_material(
         lambda: SimpleNamespace(verify_vcdm_jwt=verify),
     )
 
-    result = pp._verify_w3c_vc(token, None, None, public_jwk)
+    result = await pp._verify_w3c_vc(token, None, None, public_jwk)
 
     assert result["verified"] is True
     assert result["issuer_did"] == issuer
@@ -984,7 +973,8 @@ def test_w3c_vc_uses_public_issuer_profile_did_material(
     assert all(parameter not in json.dumps(captured) for parameter in ('"d"', '"k"'))
 
 
-def test_w3c_vc_did_key_resolution_stays_inside_rust(
+@pytest.mark.asyncio
+async def test_w3c_vc_did_key_resolution_stays_inside_rust(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer = "did:key:z6MkhIssuer"
@@ -1024,13 +1014,14 @@ def test_w3c_vc_did_key_resolution_stays_inside_rust(
         lambda _did: pytest.fail("did:key must be resolved by the Rust verifier"),
     )
 
-    result = pp._verify_w3c_vc(token, None, None)
+    result = await pp._verify_w3c_vc(token, None, None)
 
     assert result["verified"] is True
     assert captured == {"token": token}
 
 
-def test_w3c_vc_does_not_expose_unverified_credential_id(
+@pytest.mark.asyncio
+async def test_w3c_vc_does_not_expose_unverified_credential_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer = "did:web:issuer.example"
@@ -1061,31 +1052,34 @@ def test_w3c_vc_does_not_expose_unverified_credential_id(
     monkeypatch.setattr(
         pp,
         "_resolve_did_document",
-        lambda _issuer: {
-            "id": issuer,
-            "verificationMethod": [
-                {
-                    "id": f"{issuer}#key-1",
-                    "controller": issuer,
-                    "publicKeyJwk": {
-                        "kty": "EC",
-                        "crv": "P-256",
-                        "x": "public-x",
-                        "y": "public-y",
-                    },
-                }
-            ],
-        },
+        AsyncMock(
+            return_value={
+                "id": issuer,
+                "verificationMethod": [
+                    {
+                        "id": f"{issuer}#key-1",
+                        "controller": issuer,
+                        "publicKeyJwk": {
+                            "kty": "EC",
+                            "crv": "P-256",
+                            "x": "public-x",
+                            "y": "public-y",
+                        },
+                    }
+                ],
+            }
+        ),
     )
 
-    result = pp._verify_w3c_vc(token, None, None)
+    result = await pp._verify_w3c_vc(token, None, None)
 
     assert result["verified"] is False
     assert result["credential_id"] is None
     assert result["claims"] == {}
 
 
-def test_w3c_vc_fails_closed_without_profile_public_key(
+@pytest.mark.asyncio
+async def test_w3c_vc_fails_closed_without_profile_public_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer = "https://issuer.example"
@@ -1112,14 +1106,15 @@ def test_w3c_vc_fails_closed_without_profile_public_key(
 
     monkeypatch.setattr(pp, "_resolve_did_document", fail_resolution)
 
-    result = pp._verify_w3c_vc(token, None, None)
+    result = await pp._verify_w3c_vc(token, None, None)
 
     assert result["verified"] is False
     assert result["claims"] == {}
     assert "no issuer profile DID key" in result["error"]
 
 
-def test_w3c_vc_logs_only_fixed_verifier_error_categories(
+@pytest.mark.asyncio
+async def test_w3c_vc_logs_only_fixed_verifier_error_categories(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     issuer = "did:web:issuer.example:profiles:private"
@@ -1160,7 +1155,7 @@ def test_w3c_vc_logs_only_fixed_verifier_error_categories(
         ),
     )
 
-    result = pp._verify_w3c_vc(
+    result = await pp._verify_w3c_vc(
         token,
         None,
         None,
@@ -1236,7 +1231,8 @@ def test_credential_status_identifier_candidates_use_explicit_ids_only() -> None
     assert candidates == ["credential-123", "credential-789", "credential-456"]
 
 
-def test_verify_sd_jwt_reports_did_resolution_failure(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_verify_sd_jwt_reports_did_resolution_failure(monkeypatch) -> None:
     token = ".".join(
         [
             _jwt_segment({"alg": "ES256", "typ": "vc+sd-jwt", "kid": "#issuer-key"}),
@@ -1264,28 +1260,30 @@ def test_verify_sd_jwt_reports_did_resolution_failure(monkeypatch) -> None:
 
     monkeypatch.setattr(pp, "_resolve_did_document", _fail_resolution)
 
-    result = pp._verify_sd_jwt(token, nonce=None, audience=None)
+    result = await pp._verify_sd_jwt(token, nonce=None, audience=None)
 
     assert result["verified"] is False
     assert "DID resolution failed" in result["error"]
     assert result["claims"]["email"] == "member@example.com"
 
 
-def test_resolve_did_jwk_without_network() -> None:
+@pytest.mark.asyncio
+async def test_resolve_did_jwk_without_network() -> None:
     public_jwk = {"kty": "EC", "crv": "P-256", "x": "x-value", "y": "y-value"}
     encoded = (
         base64.urlsafe_b64encode(json.dumps(public_jwk).encode()).decode().rstrip("=")
     )
     did = f"did:jwk:{encoded}"
 
-    document = pp._resolve_did_document(did)
+    document = await pp._resolve_did_document(did)
 
     assert document["id"] == did
     assert document["assertionMethod"] == [did]
     assert document["verificationMethod"][0]["publicKeyJwk"] == public_jwk
 
 
-def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
     public_jwk = {"kty": "EC", "crv": "P-256", "x": "x-value", "y": "y-value"}
     encoded = (
         base64.urlsafe_b64encode(json.dumps(public_jwk).encode()).decode().rstrip("=")
@@ -1319,7 +1317,7 @@ def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
         lambda: SimpleNamespace(verify_sd_jwt=_verify),
     )
 
-    result = pp._verify_sd_jwt(
+    result = await pp._verify_sd_jwt(
         token, nonce="nonce-123", audience="https://verifier.example"
     )
 

@@ -1351,6 +1351,8 @@ spec:
               value: "8009"
             - name: DID_RESOLUTION_BASE_URL
               value: "http://gateway:8000"
+            - name: DID_PUBLIC_FALLBACK_ENABLED
+              value: "false"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

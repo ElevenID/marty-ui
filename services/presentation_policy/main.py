@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Any, AsyncGenerator
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -47,6 +47,7 @@ from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
 from marty_common.domain_enums import parse_credential_format
 
+from common.did_resolution import resolve_did_document
 from presentation_policy.infrastructure.adapters import (
     PostgresPresentationPolicyRepository,
 )
@@ -790,109 +791,18 @@ def _jwt_verification_evidence(
     }
 
 
-def _did_web_resolution_path(did: str) -> str:
-    if not did.startswith("did:web:"):
-        raise ValueError(
-            f"Unsupported issuer DID method for SD-JWT verification: {did}"
-        )
-
-    did_parts = did[len("did:web:") :].split(":")
-    if not did_parts or not did_parts[0]:
-        raise ValueError(f"Malformed did:web issuer DID: {did}")
-
-    path_parts = [unquote(part) for part in did_parts[1:] if part]
-    if not path_parts:
-        return "/.well-known/did.json"
-    return "/" + "/".join(path_parts) + "/did.json"
+async def _resolve_did_document(did: str) -> dict[str, Any]:
+    result = await resolve_did_document(did)
+    return result.document
 
 
-def _did_web_external_url(did: str) -> str:
-    did_parts = did[len("did:web:") :].split(":")
-    domain = unquote(did_parts[0])
-    return f"https://{domain}{_did_web_resolution_path(did)}"
-
-
-def _did_resolution_candidate_urls(did: str) -> list[str]:
-    path = _did_web_resolution_path(did)
-    candidates: list[str] = []
-    for base in (
-        os.environ.get("DID_RESOLUTION_BASE_URL"),
-        os.environ.get("PUBLIC_BASE_URL"),
-        os.environ.get("ISSUER_BASE_URL"),
-        os.environ.get("PUBLIC_API_URL"),
-        "http://gateway:8000",
-    ):
-        if not base:
-            continue
-        url = f"{base.rstrip('/')}{path}"
-        if url not in candidates:
-            candidates.append(url)
-
-    external_url = _did_web_external_url(did)
-    if external_url not in candidates:
-        candidates.append(external_url)
-    return candidates
-
-
-def _resolve_did_document(did: str) -> dict[str, Any]:
-    import httpx
-
-    if did.startswith("did:jwk:"):
-        encoded_jwk = did[len("did:jwk:") :]
-        try:
-            public_jwk = json.loads(_b64decode_unpadded(encoded_jwk))
-        except Exception as exc:
-            raise RuntimeError(
-                f"DID resolution failed for {did}: invalid did:jwk payload"
-            ) from exc
-        if not isinstance(public_jwk, dict) or not public_jwk.get("kty"):
-            raise RuntimeError(f"DID resolution failed for {did}: invalid JWK")
-        public_jwk = {
-            key: value
-            for key, value in public_jwk.items()
-            if key not in {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
-        }
-        method_id = did
-        return {
-            "@context": ["https://www.w3.org/ns/did/v1"],
-            "id": did,
-            "verificationMethod": [
-                {
-                    "id": method_id,
-                    "type": "JsonWebKey2020",
-                    "controller": did,
-                    "publicKeyJwk": public_jwk,
-                }
-            ],
-            "authentication": [method_id],
-            "assertionMethod": [method_id],
-        }
-
-    errors: list[str] = []
-    for url in _did_resolution_candidate_urls(did):
-        try:
-            response = httpx.get(
-                url,
-                headers={"Accept": "application/did+json, application/json"},
-                timeout=5.0,
-            )
-            if response.status_code == 200:
-                document = response.json()
-                if isinstance(document, dict):
-                    if document.get("id") != did:
-                        errors.append(
-                            f"{url}: resolved DID document id does not match {did}"
-                        )
-                        continue
-                    return document
-                errors.append(f"{url}: DID document was not a JSON object")
-                continue
-            errors.append(f"{url}: HTTP {response.status_code}")
-        except Exception as exc:
-            errors.append(f"{url}: {exc}")
-
-    suffix = "; ".join(errors[-3:]) if errors else "no resolution URLs configured"
-    raise RuntimeError(f"DID resolution failed for {did}: {suffix}")
+async def _await_verification_result(value: Any) -> dict[str, Any]:
+    """Await production verifiers while preserving simple injected test adapters."""
+    if hasattr(value, "__await__"):
+        value = await value
+    if not isinstance(value, dict):
+        raise TypeError("Credential verifier returned a non-object result")
+    return value
 
 
 def _document_identifier(document: dict[str, Any], name: str) -> str | None:
@@ -984,7 +894,9 @@ def _resolved_public_method(
     }
 
 
-def _resolved_data_integrity_methods(document: dict[str, Any]) -> list[dict[str, Any]]:
+async def _resolved_data_integrity_methods(
+    document: dict[str, Any],
+) -> list[dict[str, Any]]:
     """Resolve non-did:key proof methods through the product DID resolver.
 
     The proof selects a DID URL, never a key or custody backend. This function
@@ -1039,7 +951,7 @@ def _resolved_data_integrity_methods(document: dict[str, Any]) -> list[dict[str,
                     "DID resolution failed: proof controller does not match document signer"
                 )
             method = _resolved_public_method(
-                _resolve_did_document(controller),
+                await _resolve_did_document(controller),
                 controller,
                 method_id,
                 relationship,
@@ -1230,7 +1142,7 @@ def _detect_credential_format(vp_token: str | dict[str, Any]) -> str:
     return "unknown"
 
 
-def _verify_credential_by_format(
+async def _verify_credential_by_format(
     vp_token: str | dict[str, Any],
     credential_format: str,
     nonce: str | None,
@@ -1253,20 +1165,22 @@ def _verify_credential_by_format(
         if credential_format == "w3c-vcdm-di":
             if not isinstance(vp_token, dict):
                 raise ValueError("VCDM Data Integrity input must be a JSON object")
-            return _verify_vcdm_data_integrity(vp_token, nonce, audience)
+            return await _verify_vcdm_data_integrity(vp_token, nonce, audience)
         if not isinstance(vp_token, str):
             raise ValueError(
                 f"Credential format {credential_format} requires a string serialization"
             )
         if credential_format == "w3c-vc":
-            return _verify_w3c_vc(
+            return await _verify_w3c_vc(
                 vp_token,
                 nonce,
                 audience,
                 issuer_public_jwk,
             )
         elif credential_format == "sd-jwt":
-            return _verify_sd_jwt(vp_token, nonce, audience, issuer_public_jwk)
+            return await _verify_sd_jwt(
+                vp_token, nonce, audience, issuer_public_jwk
+            )
         elif credential_format == "mdoc":
             return _verify_mdoc(
                 vp_token,
@@ -1326,7 +1240,7 @@ def _vcdm_issuer_and_claims(document: dict[str, Any]) -> tuple[str, dict[str, An
     return issuer, claims
 
 
-def _verify_vcdm_data_integrity(
+async def _verify_vcdm_data_integrity(
     document: dict[str, Any],
     nonce: str | None,
     audience: str | None,
@@ -1344,7 +1258,7 @@ def _verify_vcdm_data_integrity(
 
     try:
         request: dict[str, Any] = {"document": document}
-        resolved_methods = _resolved_data_integrity_methods(document)
+        resolved_methods = await _resolved_data_integrity_methods(document)
         if resolved_methods:
             request["resolved_verification_methods"] = resolved_methods
         types = document.get("type")
@@ -1432,7 +1346,7 @@ def _verify_vcdm_data_integrity(
     }
 
 
-def _verify_w3c_vc(
+async def _verify_w3c_vc(
     vp_token: str,
     _nonce: str | None,
     _audience: str | None,
@@ -1470,7 +1384,7 @@ def _verify_w3c_vc(
 
         public_jwk = issuer_public_jwk
         if public_jwk is None and not issuer.startswith("did:key:"):
-            did_document = _resolve_did_document(issuer)
+            did_document = await _resolve_did_document(issuer)
             public_jwk = _select_public_jwk_from_did_document(
                 did_document,
                 issuer,
@@ -1590,7 +1504,7 @@ def _vcdm_jwt_error_categories(errors: Any) -> list[str]:
     return sorted(categories or {"verifier"})
 
 
-def _verify_sd_jwt(
+async def _verify_sd_jwt(
     vp_token: str,
     nonce: str | None,
     audience: str | None,
@@ -1682,7 +1596,7 @@ def _verify_sd_jwt(
                 # remains the default for every other issuer.
                 public_jwk = issuer_public_jwk
             elif issuer.startswith("did:"):
-                did_document = _resolve_did_document(issuer)
+                did_document = await _resolve_did_document(issuer)
                 public_jwk = _select_public_jwk_from_did_document(
                     did_document, issuer, header.get("kid")
                 )
@@ -3743,15 +3657,17 @@ async def evaluate_presentation(
     mdoc_root_certs_pem, mdoc_pinned_issuer_certs_pem = _mdoc_trust_certificates_pem(
         trust_profile_data
     )
-    verification_result = _verify_credential_by_format(
-        request.vp_token,
-        credential_format,
-        verify_nonce,
-        verify_audience,
-        pinned_issuer_jwk,
-        request.context,
-        mdoc_root_certs_pem,
-        mdoc_pinned_issuer_certs_pem,
+    verification_result = await _await_verification_result(
+        _verify_credential_by_format(
+            request.vp_token,
+            credential_format,
+            verify_nonce,
+            verify_audience,
+            pinned_issuer_jwk,
+            request.context,
+            mdoc_root_certs_pem,
+            mdoc_pinned_issuer_certs_pem,
+        )
     )
     # 4. Check issuer trust using Trust Profile
     # 5. Evaluate claims against policy constraints
