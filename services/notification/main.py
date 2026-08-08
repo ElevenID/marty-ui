@@ -32,7 +32,7 @@ import httpx
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
 from marty_common.dto import DeleteResponse
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
-from sqlalchemy import text
+from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from marty_common.service_setup import create_service_app
@@ -2234,6 +2234,33 @@ async def _seed_default_templates(
         await repo.save_template(template)
 
 
+def _require_migrated_notification_schema(connection: Any) -> None:
+    schema = "notification_service"
+    inspector = inspect(connection)
+    expected = {
+        table.name
+        for table in mapper_registry.metadata.tables.values()
+        if table.schema == schema
+    }
+    present = set(inspector.get_table_names(schema=schema))
+    missing = sorted(expected - present)
+    if missing or "alembic_version" not in present:
+        detail = f"missing tables: {', '.join(missing)}" if missing else "unversioned"
+        raise RuntimeError(
+            "Notification database schema is not migrated "
+            f"({detail}); run the deployment migration job"
+        )
+    delivery_columns = {
+        column["name"]
+        for column in inspector.get_columns("webhook_deliveries", schema=schema)
+    }
+    if "response_body" in delivery_columns:
+        raise RuntimeError(
+            "Notification database still permits receiver-body retention; "
+            "run the deployment migration job"
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
@@ -2257,9 +2284,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         pool_pre_ping=True,
         pool_recycle=3600,
     )
-    async with engine.begin() as conn:
-        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS notification_service"))
-        await conn.run_sync(mapper_registry.metadata.create_all)
+    async with engine.connect() as conn:
+        await conn.run_sync(_require_migrated_notification_schema)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     _repo = PostgresNotificationRepository(session_factory)
     await _seed_default_templates(_repo)

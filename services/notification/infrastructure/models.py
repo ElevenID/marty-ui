@@ -120,7 +120,6 @@ webhook_deliveries = Table(
     Column("event_type", String(255), nullable=False),
     Column("success", Boolean, nullable=False),
     Column("response_status_code", Integer, nullable=True),
-    Column("response_body", Text, nullable=True),
     Column("error_message", Text, nullable=True),
     Column("retry_count", Integer, nullable=False, default=0),
     Column("response_time_ms", Integer, nullable=True),
