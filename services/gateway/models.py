@@ -137,6 +137,12 @@ class ValidationRulesModel(BaseModel):
     allow_self_signed: bool = False
 
 
+class RevocationPolicyModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    check_mode: Literal["HARD_FAIL", "SOFT_FAIL", "SKIP"] = "HARD_FAIL"
+
+
 class TrustProfileCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -153,6 +159,8 @@ class TrustProfileCreate(BaseModel):
     require_key_usage: bool | None = None
     max_chain_depth: int | None = None
     allow_self_signed: bool | None = None
+    revocation_policy: RevocationPolicyModel | None = None
+    revocation_profile_id: str | None = None
     supported_formats: list[str] = Field(default_factory=lambda: ["SD_JWT_VC", "MDOC"])
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
@@ -177,6 +185,8 @@ class TrustProfileUpdate(BaseModel):
     require_key_usage: bool | None = None
     max_chain_depth: int | None = None
     allow_self_signed: bool | None = None
+    revocation_policy: RevocationPolicyModel | None = None
+    revocation_profile_id: str | None = None
     supported_formats: list[str] | None = None
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
@@ -203,6 +213,7 @@ class TrustProfileResponse(BaseModel):
     max_chain_depth: int
     allow_self_signed: bool
     revocation_policy: dict
+    revocation_profile_id: str | None = None
     supported_formats: list[str]
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
