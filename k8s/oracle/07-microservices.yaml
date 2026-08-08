@@ -1150,6 +1150,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: NOTIFICATION_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: NOTIFICATION_WEBHOOK_SECRET
             - name: NOTIFICATION_SERVICE_PORT
               value: "8007"
             - name: DATABASE_URL

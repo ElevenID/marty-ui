@@ -31,7 +31,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
 from marty_common.dto import DeleteResponse
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -40,6 +40,13 @@ from notification.infrastructure.adapters.postgres_adapter import (
     PostgresNotificationRepository,
 )
 from notification.infrastructure.models import mapper_registry
+from notification.webhook_security import (
+    WebhookDestinationError,
+    load_direct_webhook_signing_secret,
+    resolve_webhook_destination,
+    validate_webhook_url_structure,
+    valid_webhook_signing_secret,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -194,9 +201,17 @@ class NotificationTemplate:
 
 
 class RetryPolicy(BaseModel):
-    max_attempts: int = 3
-    initial_backoff_seconds: int = 1
-    max_backoff_seconds: int = 30
+    max_attempts: int = Field(3, ge=1, le=10)
+    initial_backoff_seconds: int = Field(1, ge=0, le=60)
+    max_backoff_seconds: int = Field(30, ge=1, le=300)
+
+    @model_validator(mode="after")
+    def validate_backoff_order(self) -> RetryPolicy:
+        if self.initial_backoff_seconds > self.max_backoff_seconds:
+            raise ValueError(
+                "initial_backoff_seconds must not exceed max_backoff_seconds"
+            )
+        return self
 
 
 @dataclass
@@ -504,7 +519,7 @@ class CreateWebhookRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     description: str | None = Field(None, max_length=2000)
     event_types: list[str] = Field(default_factory=list)
-    secret: str | None = None
+    secret: str | None = Field(None, min_length=32, max_length=1024)
     enabled: bool = True
 
 
@@ -513,7 +528,7 @@ class UpdateWebhookRequest(BaseModel):
     url: str | None = Field(None, min_length=1, max_length=2048)
     description: str | None = Field(None, max_length=2000)
     event_types: list[str] | None = None
-    secret: str | None = None
+    secret: str | None = Field(None, min_length=32, max_length=1024)
     enabled: bool | None = None
 
 
@@ -739,6 +754,7 @@ def _validate_target(target: NotificationTarget, ttl_seconds: int) -> None:
             raise HTTPException(
                 status_code=422, detail="Webhook endpoints must use HTTPS"
             )
+        _validate_webhook_url(endpoint)
 
 
 async def _deliver_direct_webhook(
@@ -761,17 +777,36 @@ async def _deliver_direct_webhook(
         "X-MIP-Notification-ID": notification.id,
         "X-MIP-Event-Type": notification.event_type,
     }
-    secret = os.environ.get("NOTIFICATION_WEBHOOK_SECRET")
-    if secret:
-        headers["X-MIP-Signature"] = _generate_signature(secret, payload)
+    secret = load_direct_webhook_signing_secret()
+    if not secret:
+        return DeliveryResult(
+            notification_id=notification.id,
+            channel=ChannelType.WEBHOOK,
+            success=False,
+            attempted_at=attempted_at,
+            error_code="WEBHOOK_SIGNING_UNAVAILABLE",
+            should_retry=False,
+        )
+    headers["X-MIP-Signature"] = _generate_signature(secret, payload)
 
-    max_attempts = int(os.environ.get("DIRECT_WEBHOOK_MAX_RETRIES", "3"))
+    max_attempts = min(
+        10, max(1, int(os.environ.get("DIRECT_WEBHOOK_MAX_RETRIES", "3")))
+    )
     last_error: str | None = None
     for attempt in range(max_attempts):
         try:
+            destination = await resolve_webhook_destination(endpoint)
             async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.post(endpoint, json=payload, headers=headers)
-            if 200 <= response.status_code < 300:
+                async with client.stream(
+                    "POST",
+                    destination.url,
+                    json=payload,
+                    headers={**headers, "Host": destination.host_header},
+                    extensions=destination.extensions,
+                    follow_redirects=False,
+                ) as response:
+                    status_code = response.status_code
+            if 200 <= status_code < 300:
                 return DeliveryResult(
                     notification_id=notification.id,
                     channel=ChannelType.WEBHOOK,
@@ -779,9 +814,16 @@ async def _deliver_direct_webhook(
                     attempted_at=attempted_at,
                     delivered_at=datetime.now(timezone.utc),
                 )
-            last_error = f"HTTP_{response.status_code}"
-            if response.status_code < 500:
+            if 300 <= status_code < 400:
+                last_error = "WEBHOOK_REDIRECT_REJECTED"
+                break
+            last_error = f"HTTP_{status_code}"
+            if status_code < 500 and status_code not in {408, 425, 429}:
                 break  # Non-retryable client error
+        except WebhookDestinationError as exc:
+            last_error = exc.code
+            if not exc.retryable:
+                break
         except httpx.HTTPError:
             last_error = "WEBHOOK_DELIVERY_FAILED"
         # Exponential backoff before retry
@@ -884,9 +926,16 @@ def _apply_delivery_results(
 
 def _validate_webhook_url(url: str) -> None:
     """Validate webhook URL is HTTPS and not targeting private/loopback networks (SSRF prevention)."""
-    parsed = urlparse(url.strip())
-    if parsed.scheme.lower() != "https":
-        raise HTTPException(status_code=422, detail="Webhook URL must use HTTPS")
+    try:
+        validate_webhook_url_structure(url)
+    except WebhookDestinationError as exc:
+        detail = (
+            "Webhook URL must use HTTPS"
+            if exc.code == "WEBHOOK_HTTPS_REQUIRED"
+            else "Webhook URL is not an allowed public HTTPS destination"
+        )
+        raise HTTPException(status_code=422, detail=detail) from exc
+    parsed = urlparse(url)
     hostname = parsed.hostname
     if not hostname:
         raise HTTPException(
@@ -914,15 +963,10 @@ def _validate_webhook_url(url: str) -> None:
     else:
         addrs = [addr]
     for addr in addrs:
-        if (
-            addr.is_private
-            or addr.is_loopback
-            or addr.is_reserved
-            or addr.is_link_local
-        ):
+        if not addr.is_global:
             raise HTTPException(
                 status_code=422,
-                detail="Webhook URL must not target private or reserved IP addresses",
+                detail="Webhook URL must target only public IP addresses",
             )
 
 
@@ -938,55 +982,55 @@ async def _deliver_to_webhook(
     success = False
     error_message: str | None = None
     response_status_code: int | None = None
-    response_body: str | None = None
     started_at = datetime.now(timezone.utc)
 
-    # MIP §15.7: webhook URLs MUST be absolute HTTPS URIs
-    if urlparse(webhook.url).scheme.lower() != "https":
-        logger.warning(
-            "Webhook URL %s is not HTTPS — delivery blocked per MIP §15.7", webhook.url
-        )
-        return WebhookDelivery(
-            id=str(uuid.uuid4()),
-            webhook_endpoint_id=webhook.id,
-            subscription_id=subscription.id,
-            event_type=payload.get("type", ""),
-            payload=payload,
-            success=False,
-            attempt_count=0,
-            response_status_code=None,
-            response_body=None,
-            error_message="Webhook URL must use HTTPS",
-            started_at=started_at,
-            completed_at=datetime.now(timezone.utc),
-        )
+    if not valid_webhook_signing_secret(webhook.secret):
+        error_message = "WEBHOOK_SIGNING_UNAVAILABLE"
+        attempts_allowed = 0
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         for attempt in range(attempts_allowed):
             attempt_count = attempt + 1
             try:
-                response = await client.post(
-                    webhook.url,
+                destination = await resolve_webhook_destination(webhook.url)
+                async with client.stream(
+                    "POST",
+                    destination.url,
                     json=payload,
                     headers={
                         "Content-Type": "application/json",
+                        "Host": destination.host_header,
                         "X-MIP-Signature": _generate_signature(webhook.secret, payload),
                         "X-MIP-Event": payload["type"],
                         "X-MIP-Event-Id": payload["id"],
                         "X-MIP-Timestamp": payload["timestamp"],
                     },
-                )
-                response_status_code = response.status_code
-                response_body = response.text[:1000]
-                if 200 <= response.status_code < 300:
+                    extensions=destination.extensions,
+                    follow_redirects=False,
+                ) as response:
+                    response_status_code = response.status_code
+                if 200 <= response_status_code < 300:
                     success = True
                     webhook.failure_count = 0
                     webhook.last_triggered_at = datetime.now(timezone.utc)
                     webhook.circuit_breaker_open_until = None
                     break
-                error_message = f"HTTP {response.status_code}: {response.text[:200]}"
-            except Exception as exc:  # pragma: no cover
-                error_message = str(exc)
+                if 300 <= response_status_code < 400:
+                    error_message = "WEBHOOK_REDIRECT_REJECTED"
+                    break
+                error_message = f"HTTP_{response_status_code}"
+                if response_status_code < 500 and response_status_code not in {
+                    408,
+                    425,
+                    429,
+                }:
+                    break
+            except WebhookDestinationError as exc:
+                error_message = exc.code
+                if not exc.retryable:
+                    break
+            except httpx.HTTPError:
+                error_message = "WEBHOOK_DELIVERY_FAILED"
 
             if attempt + 1 < attempts_allowed:
                 backoff = min(
@@ -1014,7 +1058,8 @@ async def _deliver_to_webhook(
         event_type=payload["type"],
         success=success,
         response_status_code=response_status_code,
-        response_body=response_body,
+        # Receiver response bodies are untrusted and may contain secrets or PII.
+        response_body=None,
         error_message=error_message if not success else None,
         retry_count=max(0, attempt_count - 1),
         response_time_ms=int(
@@ -1066,6 +1111,9 @@ async def _dispatch_event_to_subscriptions(
             continue
         webhook = await repo.get_webhook(subscription.delivery_target_id)
         if not webhook or not webhook.enabled:
+            continue
+        if webhook.organization_id != subscription.organization_id:
+            failures += 1
             continue
         if (
             webhook.circuit_breaker_open_until

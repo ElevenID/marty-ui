@@ -584,6 +584,7 @@ services:
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
       NOTIF_GRPC_PORT: "9007"
+      NOTIFICATION_WEBHOOK_SECRET: ${NOTIFICATION_WEBHOOK_SECRET:-}
     ports:
       - "8007:8007"
       - "9007:9007"
