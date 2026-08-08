@@ -7,7 +7,8 @@ Uses HTTP callbacks for event delivery.
 
 import logging
 import os
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -48,6 +49,7 @@ class DomainEvent:
     organization_id: str
     data: dict[str, Any]
     timestamp: datetime = None
+    event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     def __post_init__(self):
         if self.timestamp is None:
@@ -107,6 +109,7 @@ class EventPublisher:
             aggregate_type=event.aggregate_type,
             organization_id=event.organization_id,
             data=event.data,
+            event_id=event.event_id,
             timestamp=event.timestamp.isoformat(),
         )
 
@@ -123,6 +126,7 @@ class EventPublisher:
             return
 
         payload = {
+            "event_id": event.event_id,
             "event_type": event.event_type.value,
             "aggregate_id": event.aggregate_id,
             "aggregate_type": event.aggregate_type,
@@ -161,6 +165,7 @@ class EventPublisher:
             return
 
         payload = {
+            "event_id": event.event_id,
             "event_type": event.event_type.value,
             "aggregate_id": event.aggregate_id,
             "aggregate_type": event.aggregate_type,

@@ -13,6 +13,7 @@ from services.notification import main as notification
 
 TOKEN = "n" * 48
 EVENT = {
+    "event_id": "event-1",
     "event_type": "credential.issued",
     "aggregate_id": "credential-1",
     "aggregate_type": "credential",
@@ -82,6 +83,39 @@ def test_internal_event_accepts_the_purpose_scoped_service_credential(
         "failures": 0,
     }
     dispatch.assert_awaited_once()
+
+
+def test_internal_event_requires_a_stable_event_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, dispatch = _client(monkeypatch)
+    event_without_id = {key: value for key, value in EVENT.items() if key != "event_id"}
+
+    response = client.post(
+        "/internal/events",
+        json=event_without_id,
+        headers={"X-Service-Token": TOKEN},
+    )
+
+    assert response.status_code == 422
+    dispatch.assert_not_awaited()
+
+
+@pytest.mark.parametrize("event_id", [" event-1", "event-1\r\nInjected: true"])
+def test_internal_event_rejects_header_unsafe_event_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    event_id: str,
+) -> None:
+    client, dispatch = _client(monkeypatch)
+
+    response = client.post(
+        "/internal/events",
+        json={**EVENT, "event_id": event_id},
+        headers={"X-Service-Token": TOKEN},
+    )
+
+    assert response.status_code == 422
+    dispatch.assert_not_awaited()
 
 
 def test_internal_event_fails_closed_when_server_auth_is_not_configured(

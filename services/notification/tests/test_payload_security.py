@@ -113,6 +113,7 @@ def test_send_accepts_offer_uri_and_minimized_lifecycle_metadata() -> None:
 
 def test_internal_application_event_accepts_only_the_minimized_projection() -> None:
     event = notification.EventIngestRequest(
+        event_id="event-1",
         event_type="application.approved",
         aggregate_id="application-1",
         aggregate_type="application",
@@ -151,6 +152,7 @@ def test_internal_application_event_rejects_noncontract_personal_data(
         match="fields outside the minimized event contract",
     ):
         notification.EventIngestRequest(
+            event_id="event-1",
             event_type="application.approved",
             aggregate_id="application-1",
             aggregate_type="application",
@@ -165,6 +167,7 @@ def test_internal_event_rejects_unversioned_custom_fan_out() -> None:
         match="event_type is not supported for notification fan-out",
     ):
         notification.EventIngestRequest(
+            event_id="event-1",
             event_type="custom.unbounded",
             aggregate_id="aggregate-1",
             aggregate_type="custom",

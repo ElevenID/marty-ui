@@ -57,6 +57,7 @@ class TestApplicationApprovedGrpc:
                 "applicant_id": "a-1",
                 "credential_type": "MemberCredential",
             },
+            event_id=event.event_id,
             timestamp="2026-03-14T00:00:00+00:00",
         )
 

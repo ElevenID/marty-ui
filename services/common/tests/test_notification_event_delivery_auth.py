@@ -50,7 +50,8 @@ async def test_notification_producer_attaches_the_purpose_scoped_token(
         lambda **_kwargs: _FakeClient(calls),
     )
 
-    await EventPublisher()._publish_to_notification_service(_event())
+    event = _event()
+    await EventPublisher()._publish_to_notification_service(event)
 
     assert len(calls) == 1
     assert calls[0]["url"] == "http://notification:8007/internal/events"
@@ -58,6 +59,7 @@ async def test_notification_producer_attaches_the_purpose_scoped_token(
         "Content-Type": "application/json",
         "X-Service-Token": "t" * 48,
     }
+    assert calls[0]["json"]["event_id"] == event.event_id
 
 
 @pytest.mark.asyncio
