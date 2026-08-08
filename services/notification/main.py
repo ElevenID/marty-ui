@@ -44,6 +44,12 @@ from notification.infrastructure.adapters.postgres_adapter import (
     PostgresNotificationRepository,
 )
 from notification.infrastructure.models import mapper_registry
+from notification.payload_security import (
+    NotificationPayloadSecurityError,
+    validate_internal_event_data,
+    validate_notification_data,
+    validate_notification_text,
+)
 from notification.webhook_security import (
     WebhookDestinationError,
     load_direct_webhook_signing_secret,
@@ -427,6 +433,14 @@ class SendNotificationRequest(BaseModel):
     correlation_id: str | None = None
     target: "NotificationTargetModel | None" = None
 
+    @model_validator(mode="after")
+    def validate_payload_data(self) -> SendNotificationRequest:
+        try:
+            validate_notification_data(self.data)
+        except NotificationPayloadSecurityError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
 
 class NotificationTargetModel(BaseModel):
     organization_id: str | None = None
@@ -592,6 +606,14 @@ class EventIngestRequest(BaseModel):
     organization_id: str
     data: dict[str, Any] = Field(default_factory=dict)
     timestamp: str | None = None
+
+    @model_validator(mode="after")
+    def validate_minimized_data(self) -> EventIngestRequest:
+        try:
+            validate_internal_event_data(self.event_type, self.data)
+        except NotificationPayloadSecurityError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
 
 
 # =============================================================================
@@ -1262,6 +1284,11 @@ async def send_notification(
             for key, value in request.data.items():
                 subject = subject.replace(f"{{{{{key}}}}}", str(value))
                 body = body.replace(f"{{{{{key}}}}}", str(value))
+
+    try:
+        validate_notification_text(subject, body)
+    except NotificationPayloadSecurityError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     target = _build_target(request)
     _validate_target(target, request.ttl_seconds)
