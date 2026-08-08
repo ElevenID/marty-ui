@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -43,6 +44,17 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
     assert "marty-subscriptions" not in workflow
     assert "self-hosted" not in workflow
     assert "runs-on: ubuntu-latest" in workflow
+
+
+def test_cli_and_api_core_use_the_same_monorepo_release() -> None:
+    lock = json.loads(_text("release/stack-lock.json"))
+    components = {component["name"]: component for component in lock["components"]}
+
+    api_core = components["marty-api-core"]
+    cli = components["marty-cli"]
+    assert api_core["repository"] == cli["repository"] == "ElevenID/marty-cli"
+    assert api_core["version"] == cli["version"]
+    assert api_core["commit"] == cli["commit"]
 
 
 def test_stack_release_publishes_signed_evidence() -> None:
