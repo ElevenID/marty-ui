@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
 import hashlib
 import json
 import logging
@@ -51,6 +52,7 @@ from fastapi import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from jwcrypto import jwk
+from jwcrypto import jwt as jwcrypto_jwt
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -88,6 +90,9 @@ _SD_JWT_PRESENTATION_ALGS = {
     "kb-jwt_alg_values": ["ES256", "EdDSA"],
 }
 _DC_API_PROTOCOL = "openid4vp-v1-signed"
+_SIOP_ID_TOKEN_ALGS = ("ES256", "EdDSA")
+_SIOP_JWK_SUBJECT_PREFIX = "urn:ietf:params:oauth:jwk-thumbprint"
+_SIOP_CLOCK_SKEW_SECONDS = 60
 _DC_API_JWT_RESPONSE_MODE = "dc_api.jwt"
 _HAIP_JWE_ALG = "ECDH-ES"
 _HAIP_JWE_ENC = "A256GCM"
@@ -298,9 +303,7 @@ async def _sign_request_object_with_issuer_did(
             status_code=503, detail="Issuer DID signing service is unavailable"
         ) from exc
     if response.status_code >= 400:
-        raise HTTPException(
-            status_code=503, detail="Issuer DID request signing failed"
-        )
+        raise HTTPException(status_code=503, detail="Issuer DID request signing failed")
     signed = response.json()
     if (
         signed.get("issuer_did") != identity.get("issuer_did")
@@ -3710,8 +3713,8 @@ class StartSiopFlowRequest(BaseModel):
 class SiopSubmitRequest(BaseModel):
     """Body for validating a self-issued ID token."""
 
-    id_token: str
-    instance_id: str | None = None  # optional — for nonce binding to a specific session
+    id_token: str = Field(min_length=1, max_length=16384)
+    instance_id: str = Field(min_length=1, max_length=255)
 
 
 class SubmitVerificationRequest(BaseModel):
@@ -3836,8 +3839,10 @@ async def start_verification_flow(
             + timedelta(minutes=request.expiry_minutes),
         )
         base_url = os.environ.get("PUBLIC_BASE_URL", "http://marty-gateway:8000")
+        client_id = os.environ.get("VERIFIER_CLIENT_ID", f"{base_url}/verifier")
         request_uri = f"{base_url}/v1/flows/instances/{instance.id}/request"
         auth_request = f"openid://authorize?request_uri={request_uri}"
+        instance.context["siop_client_id"] = client_id
         instance.context["request_uri"] = request_uri
         instance.context["auth_request"] = auth_request
         await repo.save_instance(instance)
@@ -4754,9 +4759,13 @@ async def get_verification_request_object(
     )
     # Build base URL for response_uri (where wallet posts the VP)
     base_url = os.environ.get("PUBLIC_BASE_URL", "http://marty-gateway:8000")
-    client_id = os.environ.get("VERIFIER_CLIENT_ID", f"{base_url}/verifier")
-
     flow_type = instance.context.get("flow_type", "verification")
+    configured_client_id = os.environ.get("VERIFIER_CLIENT_ID", f"{base_url}/verifier")
+    client_id = (
+        instance.context.get("siop_client_id") or configured_client_id
+        if flow_type == "siop_v2"
+        else configured_client_id
+    )
     compat_profile = (compat or "").strip().lower()
     request_x5c: list[str] | None = None
 
@@ -4780,8 +4789,6 @@ async def get_verification_request_object(
             # SIOPv2 §6.1: advertise subject syntax types we accept
             "subject_syntax_types_supported": [
                 "urn:ietf:params:oauth:jwk-thumbprint",
-                "did:key",
-                "did:jwk",
             ],
         }
     else:
@@ -6287,6 +6294,7 @@ async def start_siop_flow(
     )
     instance.context["request_uri"] = request_uri
     instance.context["siop_uri"] = siop_uri
+    instance.context["siop_client_id"] = client_id
     await repo.save_instance(instance)
     logger.info(f"Started SIOPv2 cross-device flow: {instance.id}")
     return {
@@ -6298,172 +6306,208 @@ async def start_siop_flow(
     }
 
 
+def _siop_error(description: str, *, error: str = "invalid_id_token") -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={"error": error, "error_description": description},
+    )
+
+
+def _decode_siop_jwt_object(segment: str, label: str) -> dict[str, Any]:
+    if not segment or not re.fullmatch(r"[A-Za-z0-9_-]+", segment):
+        raise ValueError(f"Invalid {label} encoding")
+    padded = segment + "=" * (-len(segment) % 4)
+    decoded = base64.b64decode(padded, altchars=b"-_", validate=True)
+    value = json.loads(decoded)
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return value
+
+
+def _verify_siop_jwk_id_token(id_token: str) -> tuple[dict[str, Any], str]:
+    """Verify a draft-13 JWK-thumbprint SIOPv2 ID token.
+
+    DID subject syntax is deliberately not accepted until the verifier has a
+    governed DID resolver that can select the header ``kid`` from the resolved
+    authentication methods.
+    """
+    parts = id_token.split(".")
+    if len(parts) != 3 or not parts[2]:
+        raise _siop_error("ID token must be a signed compact JWS")
+
+    try:
+        header = _decode_siop_jwt_object(parts[0], "JOSE header")
+        unverified_claims = _decode_siop_jwt_object(parts[1], "JWT claims")
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise _siop_error(f"Malformed ID token: {exc}") from exc
+
+    alg = header.get("alg")
+    if alg not in _SIOP_ID_TOKEN_ALGS:
+        raise _siop_error("ID token signing algorithm is not supported")
+
+    subject = unverified_claims.get("sub")
+    if not isinstance(subject, str) or not subject.startswith(
+        f"{_SIOP_JWK_SUBJECT_PREFIX}:"
+    ):
+        raise _siop_error(
+            "Only JWK-thumbprint SIOPv2 subjects are currently supported",
+            error="subject_syntax_types_not_supported",
+        )
+
+    sub_jwk = unverified_claims.get("sub_jwk")
+    if not isinstance(sub_jwk, dict):
+        raise _siop_error("JWK-thumbprint subject requires a sub_jwk public key")
+    private_members = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+    if private_members.intersection(sub_jwk):
+        raise _siop_error("sub_jwk must contain public key material only")
+
+    expected_key_shape = {
+        "ES256": ("EC", "P-256"),
+        "EdDSA": ("OKP", "Ed25519"),
+    }[alg]
+    if (sub_jwk.get("kty"), sub_jwk.get("crv")) != expected_key_shape:
+        raise _siop_error("sub_jwk key type does not match the signing algorithm")
+    if sub_jwk.get("alg") not in (None, alg):
+        raise _siop_error("sub_jwk algorithm does not match the JOSE header")
+    if sub_jwk.get("use") not in (None, "sig"):
+        raise _siop_error("sub_jwk is not authorized for signatures")
+    key_ops = sub_jwk.get("key_ops")
+    if key_ops is not None and (
+        not isinstance(key_ops, list) or "verify" not in key_ops
+    ):
+        raise _siop_error("sub_jwk is not authorized for verification")
+
+    try:
+        verification_key = jwk.JWK.from_json(json.dumps(sub_jwk))
+        verified_token = jwcrypto_jwt.JWT(
+            jwt=id_token,
+            key=verification_key,
+            algs=[alg],
+            check_claims={},
+        )
+        claims = json.loads(verified_token.claims)
+    except Exception as exc:
+        logger.info(
+            "SIOPv2 ID token signature validation failed: %s", type(exc).__name__
+        )
+        raise _siop_error("ID token signature validation failed") from exc
+
+    if not isinstance(claims, dict):
+        raise _siop_error("ID token claims must be a JSON object")
+
+    thumbprint = verification_key.thumbprint()
+    expected_subject = f"{_SIOP_JWK_SUBJECT_PREFIX}:sha-256:{thumbprint}"
+    if not hmac.compare_digest(subject, expected_subject):
+        raise _siop_error("sub is not bound to the sub_jwk thumbprint")
+
+    return claims, alg
+
+
 @router.post("/siop/submit")
 async def submit_siop_id_token(
     body: SiopSubmitRequest,
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> dict:
-    """SIOPv2 Draft 13 §11: Validate a self-issued ID token from the wallet.
-
-    Enforces:
-    - iss MUST be 'https://self-issued.me/v2' (§11)
-    - sub MUST equal iss (§11)
-    - nonce MUST match the session nonce if instance_id is provided (§9)
-    - sub_jwk MUST be present for jwk-thumbprint subject syntax (§11)
-    """
-    import base64 as _b64
-    import hashlib
-
-    SELF_ISSUED_V2 = "https://self-issued.me/v2"
-
-    # Decode JWT payload without verification (signature verification would
-    # require the sub_jwk public key, which the spec requires to be in the token)
-    def _decode_payload(token: str) -> dict:
-        parts = token.split(".")
-        if len(parts) < 2:
-            raise ValueError("Not a valid JWT")
-        segment = parts[1]
-        segment += "=" * (4 - len(segment) % 4)
-        return json.loads(_b64.urlsafe_b64decode(segment))
-
-    try:
-        payload = _decode_payload(body.id_token)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_id_token",
-                "error_description": f"Malformed JWT: {exc}",
-            },
+    """Validate a cross-device SIOPv2 draft-13 self-issued ID token."""
+    instance = await repo.get_instance(body.instance_id)
+    if not instance:
+        raise _siop_error("Flow instance not found", error="invalid_request")
+    if instance.context.get("flow_type") != "siop_v2":
+        raise _siop_error(
+            "Flow instance is not a SIOPv2 transaction", error="invalid_request"
+        )
+    if instance.expires_at and datetime.now(timezone.utc) > instance.expires_at:
+        instance.status = FlowInstanceStatus.EXPIRED
+        await repo.save_instance(instance)
+        raise HTTPException(status_code=410, detail="SIOPv2 transaction has expired")
+    if instance.status not in {
+        FlowInstanceStatus.AWAITING_WALLET,
+        FlowInstanceStatus.IN_PROGRESS,
+    }:
+        raise _siop_error(
+            "SIOPv2 response is not accepted in the current state",
+            error="invalid_request",
         )
 
-    iss = payload.get("iss")
-    sub = payload.get("sub")
-    nonce = payload.get("nonce")
-
-    # SIOPv2 §11: iss MUST be the self-issued value
-    if iss != SELF_ISSUED_V2:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_id_token",
-                "error_description": f"iss MUST be '{SELF_ISSUED_V2}', got {iss!r}",
-            },
+    expected_nonce = instance.context.get("nonce")
+    expected_audience = instance.context.get("siop_client_id")
+    if not isinstance(expected_nonce, str) or not expected_nonce:
+        raise _siop_error(
+            "SIOPv2 transaction has no verifier nonce", error="invalid_request"
+        )
+    if not isinstance(expected_audience, str) or not expected_audience:
+        raise _siop_error(
+            "SIOPv2 transaction has no verifier audience", error="invalid_request"
         )
 
-    # SIOPv2 §11: sub MUST equal iss for self-issued tokens using self-issued URI subject syntax.
-    # For JWK-thumbprint subject syntax, sub is the thumbprint of the sub_jwk public key.
-    sub_jwk = payload.get("sub_jwk")
-    if sub_jwk:
-        # jwk-thumbprint subject syntax: sub MUST be the JWK thumbprint of sub_jwk
-        import hashlib
+    claims, alg = _verify_siop_jwk_id_token(body.id_token)
+    subject = claims.get("sub")
+    issuer = claims.get("iss")
+    nonce = claims.get("nonce")
 
-        try:
-            key = sub_jwk
-            kty = key.get("kty", "")
-            if kty == "OKP":
-                canonical = json.dumps(
-                    {"crv": key["crv"], "kty": kty, "x": key["x"]}, sort_keys=True
-                ).encode()
-            elif kty == "EC":
-                canonical = json.dumps(
-                    {"crv": key["crv"], "kty": kty, "x": key["x"], "y": key["y"]},
-                    sort_keys=True,
-                ).encode()
-            else:
-                canonical = json.dumps(
-                    {
-                        k: v
-                        for k, v in sorted(key.items())
-                        if k not in ("d", "use", "key_ops", "alg", "kid")
-                    },
-                ).encode()
-            expected_thumbprint = (
-                base64.urlsafe_b64encode(hashlib.sha256(canonical).digest())
-                .rstrip(b"=")
-                .decode()
-            )
-            if sub != expected_thumbprint:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "invalid_id_token",
-                        "error_description": "sub MUST be JWK thumbprint of sub_jwk when using jwk-thumbprint syntax",
-                    },
-                )
-        except HTTPException:
-            raise
-        except Exception:
-            logger.warning(
-                "JWK thumbprint computation failed for sub=%r — rejecting token",
-                sub,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_id_token",
-                    "error_description": "Failed to compute JWK thumbprint for sub_jwk validation",
-                },
-            )
-    else:
-        # self-issued URI subject syntax: sub MUST equal iss
-        if sub != iss:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_id_token",
-                    "error_description": f"sub MUST equal iss in a self-issued ID token (sub={sub!r}, iss={iss!r})",
-                },
-            )
+    if not isinstance(issuer, str) or not isinstance(subject, str) or issuer != subject:
+        raise _siop_error("Self-issued ID token requires iss to equal sub")
 
-    # Nonce binding: verify against the flow instance when instance_id is provided
-    if body.instance_id:
-        instance = await repo.get_instance(body.instance_id)
-        if not instance:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_request",
-                    "error_description": "Flow instance not found",
-                },
-            )
-        expected_nonce = instance.context.get("nonce")
-        if expected_nonce and nonce != expected_nonce:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_id_token",
-                    "error_description": "nonce in ID token does not match the session nonce",
-                },
-            )
-        # MIP §26: reject replayed nonces
-        if expected_nonce and not await _check_nonce(expected_nonce):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "nonce_reused",
-                    "error_description": "This nonce has already been used",
-                },
-            )
-    else:
-        # No instance_id — accept any well-formed token but still reject wrong nonce
-        # if the nonce is clearly wrong (wrong-nonce-* sentinel values used in tests)
-        if nonce and nonce.startswith("wrong-"):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_id_token",
-                    "error_description": "nonce mismatch",
-                },
-            )
+    audience = claims.get("aud")
+    audience_matches = audience == expected_audience or (
+        isinstance(audience, list) and expected_audience in audience
+    )
+    if not audience_matches:
+        raise _siop_error("ID token audience does not match the SIOPv2 request")
+    if not isinstance(nonce, str) or not hmac.compare_digest(nonce, expected_nonce):
+        raise _siop_error("ID token nonce does not match the SIOPv2 request")
 
-    logger.info(f"SIOPv2 ID token validated for sub={sub!r} nonce={nonce!r}")
+    now = int(datetime.now(timezone.utc).timestamp())
+    issued_at = claims.get("iat")
+    expires_at = claims.get("exp")
+    if (
+        isinstance(issued_at, bool)
+        or not isinstance(issued_at, (int, float))
+        or isinstance(expires_at, bool)
+        or not isinstance(expires_at, (int, float))
+    ):
+        raise _siop_error("ID token requires numeric iat and exp claims")
+    if issued_at > now + _SIOP_CLOCK_SKEW_SECONDS:
+        raise _siop_error("ID token iat is in the future")
+    if expires_at <= now - _SIOP_CLOCK_SKEW_SECONDS:
+        raise _siop_error("ID token has expired")
+    if issued_at >= expires_at:
+        raise _siop_error("ID token validity window is invalid")
+    if instance.started_at:
+        earliest_iat = int(instance.started_at.timestamp()) - _SIOP_CLOCK_SKEW_SECONDS
+        if issued_at < earliest_iat:
+            raise _siop_error("ID token predates the SIOPv2 transaction")
+
+    # Consume replay state only after all cryptographic and transaction checks
+    # pass, so an invalid submission cannot burn a legitimate wallet response.
+    if not await _check_nonce(expected_nonce):
+        raise _siop_error("This nonce has already been used", error="nonce_reused")
+
+    instance.status = FlowInstanceStatus.COMPLETED
+    instance.subject_id = subject
+    instance.completed_at = datetime.now(timezone.utc)
+    instance.updated_at = instance.completed_at
+    instance.result = {
+        "evaluation_result": "passed",
+        "decision": "allow",
+        "subject": subject,
+        "subject_syntax_type": _SIOP_JWK_SUBJECT_PREFIX,
+        "signing_algorithm": alg,
+        "claims_trust": "self_attested",
+    }
+    await repo.save_instance(instance)
+
+    subject_digest = hashlib.sha256(subject.encode("utf-8")).hexdigest()
+    logger.info(
+        "SIOPv2 ID token validated for subject_sha256=%s instance=%s",
+        subject_digest,
+        instance.id,
+    )
     return {
         "status": "verified",
-        "sub": sub,
+        "sub": subject,
         "nonce": nonce,
-        "subject_syntax_type": "urn:ietf:params:oauth:jwk-thumbprint",
+        "subject_syntax_type": _SIOP_JWK_SUBJECT_PREFIX,
     }
 
 
