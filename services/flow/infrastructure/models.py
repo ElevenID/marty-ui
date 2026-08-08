@@ -1,8 +1,19 @@
 """
 SQLAlchemy models for flow service.
 """
+
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Integer, DateTime, Text, Boolean, Index, Table
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Index,
+    Integer,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import registry
 
@@ -24,12 +35,10 @@ flow_definitions = Table(
     Column("description", Text, nullable=True),
     Column("status", String(50), nullable=False, default="DRAFT"),
     Column("flow_type", String(50), nullable=False),
-    
     # Steps and transitions (JSON arrays)
     Column("steps", JSON, nullable=False, default=list),
     Column("transitions", JSON, nullable=False, default=list),
     Column("start_step_id", String(36), nullable=True),
-    
     # Linked configurations
     Column("credential_template_id", String(36), nullable=True),
     Column("application_template_id", String(36), nullable=True),
@@ -43,19 +52,21 @@ flow_definitions = Table(
     Column("trigger", JSON, nullable=True),
     Column("extension", JSON, nullable=True),
     Column("preconditions", JSON, nullable=False, server_default="[]"),
-    
     # Flow settings
     Column("default_timeout_seconds", Integer, nullable=False, default=3600),
     Column("max_retries", Integer, nullable=False, default=3),
     Column("enable_resume", Boolean, nullable=False, default=True),
-    
     # Version tracking
     Column("version", Integer, nullable=False, default=1),
-    
     # Timestamps (timezone-aware)
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
-    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow),
-    
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    ),
     schema="flow_service",
 )
 
@@ -68,31 +79,47 @@ flow_instances = Table(
     Column("organization_id", String(255), nullable=False),
     Column("status", String(50), nullable=False, default="created"),
     Column("current_step_id", String(36), nullable=True),
-    
     # Context and history (JSON)
     Column("context", JSON, nullable=False, default=dict),
     Column("step_history", JSON, nullable=False, default=list),
-    
     # Subject
     Column("subject_id", String(255), nullable=True),
     Column("subject_type", String(50), nullable=False, default="applicant"),
-    
     # External references
     Column("external_reference", String(255), nullable=True),
-    
     # Timing
     Column("started_at", DateTime(timezone=True), nullable=True),
     Column("completed_at", DateTime(timezone=True), nullable=True),
     Column("expires_at", DateTime(timezone=True), nullable=True),
-    
     # Result
     Column("result", JSON, nullable=True),
     Column("error", Text, nullable=True),
-    
     # Timestamps (timezone-aware)
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
-    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow),
-    
+    Column(
+        "updated_at",
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+    ),
+    schema="flow_service",
+)
+
+# Replay consumption is committed in the same database transaction as the
+# terminal flow result. Only a digest is retained; raw verifier nonces are not
+# persisted in the replay ledger.
+flow_nonce_consumptions = Table(
+    "flow_nonce_consumptions",
+    mapper_registry.metadata,
+    Column("nonce_digest", String(64), primary_key=True),
+    Column("flow_instance_id", String(36), nullable=False),
+    Column("consumed_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint(
+        "flow_instance_id",
+        name="uq_flow_nonce_consumptions_flow_instance_id",
+    ),
     schema="flow_service",
 )
 
@@ -100,10 +127,18 @@ flow_instances = Table(
 Index("ix_flow_definitions_organization_id", flow_definitions.c.organization_id)
 Index("ix_flow_definitions_status", flow_definitions.c.status)
 Index("ix_flow_definitions_flow_type", flow_definitions.c.flow_type)
-Index("ix_flow_definitions_org_status", flow_definitions.c.organization_id, flow_definitions.c.status)
+Index(
+    "ix_flow_definitions_org_status",
+    flow_definitions.c.organization_id,
+    flow_definitions.c.status,
+)
 
 Index("ix_flow_instances_organization_id", flow_instances.c.organization_id)
 Index("ix_flow_instances_flow_definition_id", flow_instances.c.flow_definition_id)
 Index("ix_flow_instances_status", flow_instances.c.status)
 Index("ix_flow_instances_subject_id", flow_instances.c.subject_id)
 Index("ix_flow_instances_external_reference", flow_instances.c.external_reference)
+Index(
+    "ix_flow_nonce_consumptions_expires_at",
+    flow_nonce_consumptions.c.expires_at,
+)

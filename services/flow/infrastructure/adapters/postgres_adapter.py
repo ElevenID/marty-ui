@@ -1,25 +1,42 @@
 """
 PostgreSQL adapter for flow repository.
 """
+
 import logging
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 if TYPE_CHECKING:
-    from flow.main import FlowDefinition, FlowInstance, FlowInstanceArtifact, FlowStatus, FlowType, FlowInstanceStatus
+    from flow.main import (
+        FlowDefinition,
+        FlowInstance,
+        FlowInstanceArtifact,
+        FlowInstanceStatus,
+    )
 
-from flow.infrastructure.models import flow_definitions, flow_instances
+from flow.infrastructure.models import (
+    flow_definitions,
+    flow_instances,
+    flow_nonce_consumptions,
+)
 
 logger = logging.getLogger(__name__)
+
+
+class _FinalizationConflict(Exception):
+    pass
 
 
 def _serialize_preconditions_payload(flow: "FlowDefinition") -> list[str]:
     return list(flow.preconditions)
 
 
-def _deserialize_preconditions_payload(payload: list[str] | dict | None) -> tuple[list[str], dict]:
+def _deserialize_preconditions_payload(
+    payload: list[str] | dict | None,
+) -> tuple[list[str], dict]:
     if isinstance(payload, dict):
         return payload.get("items", []) or [], payload.get("protocol", {}) or {}
     return payload or [], {}
@@ -32,7 +49,11 @@ def _coerce_step_type(value):
     try:
         return StepType(normalized)
     except ValueError:
-        logger.warning("Unknown flow step_type '%s'; defaulting to '%s'", value, StepType.USER_INPUT.value)
+        logger.warning(
+            "Unknown flow step_type '%s'; defaulting to '%s'",
+            value,
+            StepType.USER_INPUT.value,
+        )
         return StepType.USER_INPUT
 
 
@@ -53,12 +74,12 @@ def _coerce_transition_condition(value):
 
 class PostgresFlowRepository:
     """PostgreSQL implementation of flow repository."""
-    
+
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._session_factory = session_factory
         # Artifacts are kept in-memory until a dedicated table is added.
         self._artifacts: dict[str, "FlowInstanceArtifact"] = {}
-    
+
     # ========== Flow Instance Artifact Operations (in-memory) ==========
 
     async def save_artifact(self, artifact: "FlowInstanceArtifact") -> None:
@@ -67,17 +88,25 @@ class PostgresFlowRepository:
     async def get_artifact(self, artifact_id: str) -> "FlowInstanceArtifact | None":
         return self._artifacts.get(artifact_id)
 
-    async def list_artifacts(self, flow_instance_id: str) -> list["FlowInstanceArtifact"]:
-        return [a for a in self._artifacts.values() if a.flow_instance_id == flow_instance_id]
+    async def list_artifacts(
+        self, flow_instance_id: str
+    ) -> list["FlowInstanceArtifact"]:
+        return [
+            a
+            for a in self._artifacts.values()
+            if a.flow_instance_id == flow_instance_id
+        ]
 
-    async def get_artifact_by_code(self, pre_authorized_code: str) -> "FlowInstanceArtifact | None":
+    async def get_artifact_by_code(
+        self, pre_authorized_code: str
+    ) -> "FlowInstanceArtifact | None":
         for a in self._artifacts.values():
             if a.pre_authorized_code == pre_authorized_code:
                 return a
         return None
 
     # ========== Flow Definition Operations ==========
-    
+
     async def save_definition(self, flow: "FlowDefinition") -> None:
         """Save or update a flow definition."""
         async with self._session_factory() as session:
@@ -96,7 +125,7 @@ class PostgresFlowRepository:
                 }
                 for step in flow.steps
             ]
-            
+
             # Serialize transitions
             transitions_data = [
                 {
@@ -108,13 +137,13 @@ class PostgresFlowRepository:
                 }
                 for trans in flow.transitions
             ]
-            
+
             # Check if exists
             result = await session.execute(
                 select(flow_definitions.c.id).where(flow_definitions.c.id == flow.id)
             )
             exists = result.scalar_one_or_none()
-            
+
             if exists:
                 # Update
                 await session.execute(
@@ -181,27 +210,37 @@ class PostgresFlowRepository:
                         updated_at=flow.updated_at,
                     )
                 )
-            
+
             await session.commit()
-    
+
     async def get_definition(self, flow_id: str) -> "FlowDefinition | None":
         """Get a flow definition by ID."""
-        from flow.main import FlowDefinition, FlowStep, FlowTransition, _parse_flow_status, _parse_flow_type
-        
+        from flow.main import (
+            FlowDefinition,
+            FlowStep,
+            FlowTransition,
+            _parse_flow_status,
+            _parse_flow_type,
+        )
+
         async with self._session_factory() as session:
             result = await session.execute(
                 select(flow_definitions).where(flow_definitions.c.id == flow_id)
             )
             row = result.first()
-            
+
             if not row:
                 return None
 
-            preconditions, protocol_metadata = _deserialize_preconditions_payload(getattr(row, 'preconditions', None))
+            preconditions, protocol_metadata = _deserialize_preconditions_payload(
+                getattr(row, "preconditions", None)
+            )
 
             steps_payload = row.steps if isinstance(row.steps, list) else []
-            transitions_payload = row.transitions if isinstance(row.transitions, list) else []
-            
+            transitions_payload = (
+                row.transitions if isinstance(row.transitions, list) else []
+            )
+
             # Deserialize steps
             steps = [
                 FlowStep(
@@ -217,7 +256,7 @@ class PostgresFlowRepository:
                 for step_data in steps_payload
                 if isinstance(step_data, dict)
             ]
-            
+
             # Deserialize transitions
             transitions = [
                 FlowTransition(
@@ -230,7 +269,7 @@ class PostgresFlowRepository:
                 for trans_data in transitions_payload
                 if isinstance(trans_data, dict)
             ]
-            
+
             return FlowDefinition(
                 id=row.id,
                 organization_id=row.organization_id,
@@ -243,13 +282,18 @@ class PostgresFlowRepository:
                 start_step_id=row.start_step_id,
                 preconditions=preconditions,
                 credential_template_id=row.credential_template_id,
-                application_template_id=row.application_template_id or protocol_metadata.get("application_template_id"),
+                application_template_id=row.application_template_id
+                or protocol_metadata.get("application_template_id"),
                 presentation_policy_id=row.presentation_policy_id,
                 delivery_destination_profile_id=row.delivery_destination_profile_id,
                 deployment_profile_id=row.deployment_profile_id,
-                deployment_profile_ids=row.deployment_profile_ids or protocol_metadata.get("deployment_profile_ids") or ([row.deployment_profile_id] if row.deployment_profile_id else []),
-                trust_profile_id=row.trust_profile_id or protocol_metadata.get("trust_profile_id"),
-                approval_strategy=row.approval_strategy or protocol_metadata.get("approval_strategy", "AUTO"),
+                deployment_profile_ids=row.deployment_profile_ids
+                or protocol_metadata.get("deployment_profile_ids")
+                or ([row.deployment_profile_id] if row.deployment_profile_id else []),
+                trust_profile_id=row.trust_profile_id
+                or protocol_metadata.get("trust_profile_id"),
+                approval_strategy=row.approval_strategy
+                or protocol_metadata.get("approval_strategy", "AUTO"),
                 hooks=row.hooks or protocol_metadata.get("hooks") or {},
                 trigger=row.trigger or protocol_metadata.get("trigger"),
                 extension=row.extension,
@@ -260,11 +304,17 @@ class PostgresFlowRepository:
                 created_at=row.created_at,
                 updated_at=row.updated_at,
             )
-    
+
     async def list_definitions(self, org_id: str) -> list["FlowDefinition"]:
         """List all flow definitions for an organization."""
-        from flow.main import FlowDefinition, FlowStep, FlowTransition, _parse_flow_status, _parse_flow_type
-        
+        from flow.main import (
+            FlowDefinition,
+            FlowStep,
+            FlowTransition,
+            _parse_flow_status,
+            _parse_flow_type,
+        )
+
         async with self._session_factory() as session:
             result = await session.execute(
                 select(flow_definitions)
@@ -272,12 +322,16 @@ class PostgresFlowRepository:
                 .order_by(flow_definitions.c.created_at.desc())
             )
             rows = result.all()
-            
+
             definitions = []
             for row in rows:
-                preconditions, protocol_metadata = _deserialize_preconditions_payload(getattr(row, 'preconditions', None))
+                preconditions, protocol_metadata = _deserialize_preconditions_payload(
+                    getattr(row, "preconditions", None)
+                )
                 steps_payload = row.steps if isinstance(row.steps, list) else []
-                transitions_payload = row.transitions if isinstance(row.transitions, list) else []
+                transitions_payload = (
+                    row.transitions if isinstance(row.transitions, list) else []
+                )
                 # Deserialize steps
                 steps = [
                     FlowStep(
@@ -293,20 +347,22 @@ class PostgresFlowRepository:
                     for step_data in steps_payload
                     if isinstance(step_data, dict)
                 ]
-                
+
                 # Deserialize transitions
                 transitions = [
                     FlowTransition(
                         id=trans_data.get("id", ""),
                         from_step_id=trans_data.get("from_step_id", ""),
                         to_step_id=trans_data.get("to_step_id", ""),
-                        condition=_coerce_transition_condition(trans_data.get("condition")),
+                        condition=_coerce_transition_condition(
+                            trans_data.get("condition")
+                        ),
                         condition_expression=trans_data.get("condition_expression"),
                     )
                     for trans_data in transitions_payload
                     if isinstance(trans_data, dict)
                 ]
-                
+
                 definitions.append(
                     FlowDefinition(
                         id=row.id,
@@ -320,13 +376,22 @@ class PostgresFlowRepository:
                         start_step_id=row.start_step_id,
                         preconditions=preconditions,
                         credential_template_id=row.credential_template_id,
-                        application_template_id=row.application_template_id or protocol_metadata.get("application_template_id"),
+                        application_template_id=row.application_template_id
+                        or protocol_metadata.get("application_template_id"),
                         presentation_policy_id=row.presentation_policy_id,
                         delivery_destination_profile_id=row.delivery_destination_profile_id,
                         deployment_profile_id=row.deployment_profile_id,
-                        deployment_profile_ids=row.deployment_profile_ids or protocol_metadata.get("deployment_profile_ids") or ([row.deployment_profile_id] if row.deployment_profile_id else []),
-                        trust_profile_id=row.trust_profile_id or protocol_metadata.get("trust_profile_id"),
-                        approval_strategy=row.approval_strategy or protocol_metadata.get("approval_strategy", "AUTO"),
+                        deployment_profile_ids=row.deployment_profile_ids
+                        or protocol_metadata.get("deployment_profile_ids")
+                        or (
+                            [row.deployment_profile_id]
+                            if row.deployment_profile_id
+                            else []
+                        ),
+                        trust_profile_id=row.trust_profile_id
+                        or protocol_metadata.get("trust_profile_id"),
+                        approval_strategy=row.approval_strategy
+                        or protocol_metadata.get("approval_strategy", "AUTO"),
                         hooks=row.hooks or protocol_metadata.get("hooks") or {},
                         trigger=row.trigger or protocol_metadata.get("trigger"),
                         extension=row.extension,
@@ -338,9 +403,9 @@ class PostgresFlowRepository:
                         updated_at=row.updated_at,
                     )
                 )
-            
+
             return definitions
-    
+
     async def delete_definition(self, flow_id: str) -> None:
         """Delete a flow definition."""
         async with self._session_factory() as session:
@@ -348,9 +413,9 @@ class PostgresFlowRepository:
                 delete(flow_definitions).where(flow_definitions.c.id == flow_id)
             )
             await session.commit()
-    
+
     # ========== Flow Instance Operations ==========
-    
+
     async def save_instance(self, instance: "FlowInstance") -> None:
         """Save or update a flow instance."""
         async with self._session_factory() as session:
@@ -359,7 +424,7 @@ class PostgresFlowRepository:
                 select(flow_instances.c.id).where(flow_instances.c.id == instance.id)
             )
             exists = result.scalar_one_or_none()
-            
+
             if exists:
                 # Update
                 await session.execute(
@@ -406,22 +471,86 @@ class PostgresFlowRepository:
                         updated_at=instance.updated_at,
                     )
                 )
-            
+
             await session.commit()
-    
+
+    async def finalize_verification(
+        self,
+        instance: "FlowInstance",
+        *,
+        nonce_digest: str,
+        replay_expires_at,
+        expected_status: "FlowInstanceStatus",
+    ) -> bool:
+        """Atomically consume replay state and commit one terminal decision."""
+        consumed_at = instance.completed_at or instance.updated_at
+        try:
+            async with self._session_factory() as session:
+                async with session.begin():
+                    # Opportunistic bounded cleanup is part of the same
+                    # transaction and never weakens a live replay record.
+                    await session.execute(
+                        delete(flow_nonce_consumptions).where(
+                            flow_nonce_consumptions.c.expires_at <= consumed_at
+                        )
+                    )
+                    replay_result = await session.execute(
+                        pg_insert(flow_nonce_consumptions)
+                        .values(
+                            nonce_digest=nonce_digest,
+                            flow_instance_id=instance.id,
+                            consumed_at=consumed_at,
+                            expires_at=replay_expires_at,
+                        )
+                        .on_conflict_do_nothing()
+                        .returning(flow_nonce_consumptions.c.nonce_digest)
+                    )
+                    if replay_result.scalar_one_or_none() is None:
+                        raise _FinalizationConflict
+
+                    update_result = await session.execute(
+                        flow_instances.update()
+                        .where(
+                            flow_instances.c.id == instance.id,
+                            flow_instances.c.status == expected_status.value,
+                        )
+                        .values(
+                            flow_definition_id=instance.flow_definition_id,
+                            organization_id=instance.organization_id,
+                            status=instance.status,
+                            current_step_id=instance.current_step_id,
+                            context=instance.context,
+                            step_history=instance.step_history,
+                            subject_id=instance.subject_id,
+                            subject_type=instance.subject_type,
+                            external_reference=instance.external_reference,
+                            started_at=instance.started_at,
+                            completed_at=instance.completed_at,
+                            expires_at=instance.expires_at,
+                            result=instance.result,
+                            error=instance.error,
+                            updated_at=instance.updated_at,
+                        )
+                    )
+                    if update_result.rowcount != 1:
+                        raise _FinalizationConflict
+        except _FinalizationConflict:
+            return False
+        return True
+
     async def get_instance(self, instance_id: str) -> "FlowInstance | None":
         """Get a flow instance by ID."""
         from flow.main import FlowInstance, FlowInstanceStatus
-        
+
         async with self._session_factory() as session:
             result = await session.execute(
                 select(flow_instances).where(flow_instances.c.id == instance_id)
             )
             row = result.first()
-            
+
             if not row:
                 return None
-            
+
             return FlowInstance(
                 id=row.id,
                 flow_definition_id=row.flow_definition_id,
@@ -441,7 +570,7 @@ class PostgresFlowRepository:
                 created_at=row.created_at,
                 updated_at=row.updated_at,
             )
-    
+
     async def list_instances(
         self,
         org_id: str,
@@ -450,21 +579,25 @@ class PostgresFlowRepository:
     ) -> list["FlowInstance"]:
         """List flow instances with optional filters."""
         from flow.main import FlowInstance, FlowInstanceStatus
-        
+
         async with self._session_factory() as session:
-            query = select(flow_instances).where(flow_instances.c.organization_id == org_id)
-            
+            query = select(flow_instances).where(
+                flow_instances.c.organization_id == org_id
+            )
+
             if flow_definition_id:
-                query = query.where(flow_instances.c.flow_definition_id == flow_definition_id)
-            
+                query = query.where(
+                    flow_instances.c.flow_definition_id == flow_definition_id
+                )
+
             if status:
                 query = query.where(flow_instances.c.status == status)
-            
+
             query = query.order_by(flow_instances.c.created_at.desc())
-            
+
             result = await session.execute(query)
             rows = result.all()
-            
+
             instances = []
             for row in rows:
                 instances.append(
@@ -488,5 +621,5 @@ class PostgresFlowRepository:
                         updated_at=row.updated_at,
                     )
                 )
-            
+
             return instances

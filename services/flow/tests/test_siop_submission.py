@@ -8,7 +8,6 @@ import pytest
 from fastapi import HTTPException
 from jwcrypto import jwk, jwt
 
-import flow.main as flow_main
 from flow.main import (
     FlowInstance,
     FlowInstanceStatus,
@@ -19,15 +18,6 @@ from flow.main import (
 
 
 SIOP_SUBJECT_PREFIX = "urn:ietf:params:oauth:jwk-thumbprint"
-
-
-@pytest.fixture(autouse=True)
-def clear_nonce_replay_cache(monkeypatch):
-    flow_main._used_nonces.clear()
-    flow_main._nonce_last_cleanup = 0.0
-    monkeypatch.setattr(flow_main, "_nonce_redis", None)
-    yield
-    flow_main._used_nonces.clear()
 
 
 def _key_for_algorithm(algorithm: str) -> jwk.JWK:
@@ -129,6 +119,55 @@ async def test_siop_submission_verifies_supported_signatures(algorithm: str) -> 
     assert instance.result["claims_trust"] == "self_attested"
     assert "id_token" not in instance.context
     assert token not in json.dumps(instance.result)
+
+
+@pytest.mark.asyncio
+async def test_identical_siop_retry_returns_immutable_result() -> None:
+    repo = InMemoryFlowRepository()
+    instance = await _pending_siop_instance(repo)
+    key = _key_for_algorithm("ES256")
+    token = _signed_id_token(
+        signing_key=key,
+        algorithm="ES256",
+        nonce=instance.context["nonce"],
+        audience=instance.context["siop_client_id"],
+    )
+    request = SiopSubmitRequest(id_token=token, instance_id=instance.id)
+
+    first = await submit_siop_id_token(request, repo)
+    second = await submit_siop_id_token(request, repo)
+
+    assert second == first
+    assert len(repo._consumed_nonce_digests) == 1
+
+
+@pytest.mark.asyncio
+async def test_conflicting_siop_retry_is_rejected() -> None:
+    repo = InMemoryFlowRepository()
+    instance = await _pending_siop_instance(repo)
+    tokens = [
+        _signed_id_token(
+            signing_key=key,
+            algorithm="ES256",
+            nonce=instance.context["nonce"],
+            audience=instance.context["siop_client_id"],
+        )
+        for key in (_key_for_algorithm("ES256"), _key_for_algorithm("ES256"))
+    ]
+
+    await submit_siop_id_token(
+        SiopSubmitRequest(id_token=tokens[0], instance_id=instance.id),
+        repo,
+    )
+    with pytest.raises(HTTPException) as conflict:
+        await submit_siop_id_token(
+            SiopSubmitRequest(id_token=tokens[1], instance_id=instance.id),
+            repo,
+        )
+
+    assert conflict.value.status_code == 409
+    assert conflict.value.detail["error"] == "verification_replay_conflict"
+    assert len(repo._consumed_nonce_digests) == 1
 
 
 @pytest.mark.asyncio

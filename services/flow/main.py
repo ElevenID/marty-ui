@@ -22,18 +22,18 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
 import hmac
 import hashlib
 import json
 import logging
 import os
 import re
-import time
 import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, AsyncGenerator, Literal
@@ -332,54 +332,8 @@ VERIFIER_CLIENT_ID = os.environ.get(
     "VERIFIER_CLIENT_ID", ""
 )  # Will be set based on PUBLIC_BASE_URL
 
-# MIP §26: Nonce replay prevention — track used nonces to reject duplicates.
-# Uses Redis when available (shared across replicas); falls back to process-local dict.
+# Replay state is committed by the repository with the terminal decision.
 _NONCE_TTL_SECONDS = int(os.environ.get("NONCE_TTL_SECONDS", "3600"))
-_used_nonces: dict[str, float] = {}  # fallback: nonce -> expiry timestamp
-_nonce_lock = asyncio.Lock()
-_NONCE_CLEANUP_INTERVAL = 600  # seconds between cleanup sweeps
-_nonce_last_cleanup: float = 0.0
-_nonce_redis = None  # set in lifespan if Redis is available
-
-
-async def _record_nonce_used_redis(nonce: str) -> bool:
-    """Redis-backed nonce check. Returns False if already used (replay)."""
-    # SET NX with TTL — returns True only on first insertion
-    was_new = await _nonce_redis.set(
-        f"mip:nonce:{nonce}", "1", nx=True, ex=_NONCE_TTL_SECONDS
-    )
-    return bool(was_new)
-
-
-def _record_nonce_used(nonce: str) -> bool:
-    """Record a nonce as used. Returns False if already used (replay)."""
-    global _nonce_last_cleanup
-    now = time.time()
-    # Periodic cleanup of expired entries
-    if now - _nonce_last_cleanup > _NONCE_CLEANUP_INTERVAL:
-        _nonce_last_cleanup = now
-        expired = [k for k, exp in _used_nonces.items() if exp <= now]
-        for k in expired:
-            del _used_nonces[k]
-    # Check for replay
-    if nonce in _used_nonces and _used_nonces[nonce] > now:
-        return False
-    _used_nonces[nonce] = now + _NONCE_TTL_SECONDS
-    return True
-
-
-async def _check_nonce(nonce: str) -> bool:
-    """Check nonce replay. Uses Redis when available, process-local fallback.\n    Returns False if nonce was already used (replay detected)."""
-    if _nonce_redis is not None:
-        try:
-            return await _record_nonce_used_redis(nonce)
-        except Exception as exc:
-            logger.warning(
-                "Redis nonce check failed (%s) — falling back to process-local store",
-                exc,
-            )
-    async with _nonce_lock:
-        return _record_nonce_used(nonce)
 
 
 def get_config() -> dict[str, Any]:
@@ -1586,6 +1540,9 @@ class InMemoryFlowRepository:
         self._definitions: dict[str, FlowDefinition] = {}
         self._instances: dict[str, FlowInstance] = {}
         self._artifacts: dict[str, FlowInstanceArtifact] = {}
+        self._finalization_lock = asyncio.Lock()
+        self._consumed_nonce_digests: dict[str, datetime] = {}
+        self._finalized_instance_ids: set[str] = set()
 
     # Flow Definition operations
     async def save_definition(self, flow: FlowDefinition) -> None:
@@ -1606,6 +1563,41 @@ class InMemoryFlowRepository:
 
     async def get_instance(self, instance_id: str) -> FlowInstance | None:
         return self._instances.get(instance_id)
+
+    async def finalize_verification(
+        self,
+        instance: FlowInstance,
+        *,
+        nonce_digest: str,
+        replay_expires_at: datetime,
+        expected_status: FlowInstanceStatus,
+    ) -> bool:
+        """Development repository equivalent of the database transaction."""
+        async with self._finalization_lock:
+            now = instance.completed_at or datetime.now(timezone.utc)
+            self._consumed_nonce_digests = {
+                digest: expiry
+                for digest, expiry in self._consumed_nonce_digests.items()
+                if expiry > now
+            }
+            if (
+                nonce_digest in self._consumed_nonce_digests
+                or instance.id in self._finalized_instance_ids
+                or instance.id not in self._instances
+                or self._instances[instance.id].status is not expected_status
+                or expected_status
+                not in {
+                    FlowInstanceStatus.AWAITING_WALLET,
+                    FlowInstanceStatus.IN_PROGRESS,
+                }
+            ):
+                return False
+            self._consumed_nonce_digests[nonce_digest] = replay_expires_at
+            self._finalized_instance_ids.add(instance.id)
+            stored_instance = self._instances[instance.id]
+            stored_instance.__dict__.update(copy.deepcopy(instance.__dict__))
+            self._instances[instance.id] = stored_instance
+            return True
 
     async def list_instances(
         self,
@@ -5682,6 +5674,53 @@ def _decrypt_dc_api_jwt_response(
     )
 
 
+def _verification_submission_digest(
+    *,
+    vp_token: str,
+    presentation_submission: str | dict[str, Any] | None,
+    state: str | None,
+) -> str:
+    canonical = json.dumps(
+        {
+            "vp_token": vp_token,
+            "presentation_submission": presentation_submission,
+            "state": state,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _terminal_verification_response(
+    instance: FlowInstance,
+) -> VerificationResultResponse:
+    result = instance.result or {}
+    return VerificationResultResponse(
+        instance_id=instance.id,
+        status=_protocol_status_for_instance(instance.status),
+        result=str(result.get("evaluation_result") or "failed"),
+        decision=str(result.get("decision") or "deny"),
+        decision_reason=str(result.get("decision_reason") or ""),
+        verified_claims=result.get("verified_claims")
+        if isinstance(result.get("verified_claims"), dict)
+        else {},
+        evaluation_timestamp=(instance.completed_at or instance.updated_at).isoformat(),
+    )
+
+
+def _raise_verification_replay_conflict() -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "verification_replay_conflict",
+            "error_description": (
+                "A different response already finalized this verification transaction"
+            ),
+        },
+    )
+
+
 async def _submit_verification_response_internal(
     instance_id: str,
     vp_token: str,
@@ -5693,6 +5732,22 @@ async def _submit_verification_response_internal(
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow instance not found")
+
+    submission_digest = _verification_submission_digest(
+        vp_token=vp_token,
+        presentation_submission=presentation_submission,
+        state=state,
+    )
+    if instance.status in {
+        FlowInstanceStatus.COMPLETED,
+        FlowInstanceStatus.FAILED,
+    }:
+        prior_digest = (instance.result or {}).get("submission_digest")
+        if isinstance(prior_digest, str) and hmac.compare_digest(
+            prior_digest, submission_digest
+        ):
+            return _terminal_verification_response(instance)
+        _raise_verification_replay_conflict()
 
     if instance.expires_at and datetime.now(timezone.utc) > instance.expires_at:
         instance.status = FlowInstanceStatus.EXPIRED
@@ -5706,6 +5761,11 @@ async def _submit_verification_response_internal(
         raise HTTPException(
             status_code=400, detail="Submission not accepted in current state"
         )
+    expected_status = instance.status
+    # Repository adapters return detached objects in production. Use the same
+    # semantics in the development repository so concurrent handlers never
+    # mutate shared state before the compare-and-swap commit.
+    instance = copy.deepcopy(instance)
 
     # Every request object emitted by this verifier contains a state value.
     # Require the corresponding callback parameter before accepting a
@@ -5757,21 +5817,13 @@ async def _submit_verification_response_internal(
     # receives the exact nonce and audience from this flow below.
     expected_nonce = instance.context.get("nonce")
 
-    # Store the presentation
-    instance.context["vp_token"] = vp_token
-    if vp_token != raw_vp_token:
-        instance.context["vp_token_raw"] = raw_vp_token
-    instance.context["presentation_submission"] = parsed_submission
-    if state:
-        instance.context["state"] = state
-    instance.status = FlowInstanceStatus.IN_PROGRESS
-
     # -----------------------------------------------------------------------
     # Real policy evaluation — call the presentation-policy service via gRPC
     # -----------------------------------------------------------------------
     policy_id = instance.context.get("presentation_policy_id")
 
     verified_claims: dict = {}
+    credential_results: list[dict[str, Any]] = []
     evaluation_result = "passed"
     evaluation_decision = "allow"
     decision_reason = "All policy requirements satisfied"
@@ -5851,6 +5903,26 @@ async def _submit_verification_response_internal(
                 evaluation_result = eval_resp.result
                 evaluation_decision = eval_resp.decision
                 decision_reason = eval_resp.decision_reason
+                try:
+                    decoded_credential_results = (
+                        _json.loads(eval_resp.credential_results_json)
+                        if eval_resp.credential_results_json
+                        else []
+                    )
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Presentation-policy service returned malformed credential evidence"
+                    )
+                    decoded_credential_results = []
+                credential_results = (
+                    [
+                        item
+                        for item in decoded_credential_results
+                        if isinstance(item, dict)
+                    ]
+                    if isinstance(decoded_credential_results, list)
+                    else []
+                )
                 verified_claims = (
                     _json.loads(eval_resp.verified_claims_json)
                     if eval_resp.verified_claims_json
@@ -5891,31 +5963,65 @@ async def _submit_verification_response_internal(
         decision_reason = "A presentation policy is required for verification"
         verified_claims = {}
 
-    # Mark the challenge used only after the authoritative verifier has
-    # accepted the cryptographic presentation. Invalid signatures must not be
-    # able to consume a legitimate wallet's nonce. SET NX keeps concurrent
-    # submissions atomic across replicas and rejects the second response.
-    if (
-        expected_nonce
-        and evaluation_result == "passed"
-        and evaluation_decision == "allow"
-        and not await _check_nonce(expected_nonce)
-    ):
+    cryptographic_response_authenticated = bool(credential_results) and all(
+        credential_result.get("signature_valid") is True
+        for credential_result in credential_results
+    )
+    if not cryptographic_response_authenticated:
+        # An unauthenticated or structurally incomplete response cannot claim
+        # the transaction. The wallet may retry with a valid presentation.
+        return VerificationResultResponse(
+            instance_id=instance.id,
+            status=_protocol_status_for_instance(expected_status),
+            result="failed",
+            decision="deny",
+            decision_reason=decision_reason,
+            verified_claims={},
+            evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+
+    if not isinstance(expected_nonce, str) or not expected_nonce:
         raise HTTPException(
             status_code=400,
             detail={
-                "error": "nonce_reused",
-                "error_description": "This nonce has already been used",
+                "error": "invalid_request",
+                "error_description": "Verification transaction has no live nonce",
             },
         )
 
-    instance.status = FlowInstanceStatus.COMPLETED
+    final_allowed = evaluation_result == "passed" and evaluation_decision == "allow"
+    if not final_allowed:
+        verified_claims = {}
+    instance.context.pop("vp_token", None)
+    instance.context.pop("vp_token_raw", None)
+    instance.context.pop("presentation_submission", None)
+    instance.context["vp_token_sha256"] = hashlib.sha256(
+        vp_token.encode("utf-8")
+    ).hexdigest()
+    if raw_vp_token != vp_token:
+        instance.context["vp_transport_sha256"] = hashlib.sha256(
+            raw_vp_token.encode("utf-8")
+        ).hexdigest()
+    if parsed_submission is not None:
+        instance.context["presentation_submission_sha256"] = hashlib.sha256(
+            json.dumps(
+                parsed_submission,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+    if state:
+        instance.context["state"] = state
+    instance.status = (
+        FlowInstanceStatus.COMPLETED if final_allowed else FlowInstanceStatus.FAILED
+    )
     instance.completed_at = datetime.now(timezone.utc)
     instance.result = {
         "evaluation_result": evaluation_result,
         "decision": evaluation_decision,
         "decision_reason": decision_reason,
         "verified_claims": verified_claims,
+        "submission_digest": submission_digest,
     }
 
     verification_result_message = MIPMessage(
@@ -5948,7 +6054,31 @@ async def _submit_verification_response_internal(
     _record_mip_message(instance, "verification_result", verification_result_message)
     instance.updated_at = datetime.now(timezone.utc)
 
-    await repo.save_instance(instance)
+    replay_expires_at = instance.expires_at
+    if replay_expires_at is None or replay_expires_at <= instance.completed_at:
+        replay_expires_at = instance.completed_at + timedelta(
+            seconds=_NONCE_TTL_SECONDS
+        )
+    committed = await repo.finalize_verification(
+        instance,
+        nonce_digest=hashlib.sha256(expected_nonce.encode("utf-8")).hexdigest(),
+        replay_expires_at=replay_expires_at,
+        expected_status=expected_status,
+    )
+    if not committed:
+        current = await repo.get_instance(instance.id)
+        prior_digest = (
+            (current.result or {}).get("submission_digest") if current else None
+        )
+        if (
+            current is not None
+            and current.status
+            in {FlowInstanceStatus.COMPLETED, FlowInstanceStatus.FAILED}
+            and isinstance(prior_digest, str)
+            and hmac.compare_digest(prior_digest, submission_digest)
+        ):
+            return _terminal_verification_response(current)
+        _raise_verification_replay_conflict()
     logger.info(
         "Completed verification flow: %s result=%s decision=%s reason=%s",
         instance_id,
@@ -6403,6 +6533,17 @@ def _verify_siop_jwk_id_token(id_token: str) -> tuple[dict[str, Any], str]:
     return claims, alg
 
 
+def _terminal_siop_response(instance: FlowInstance) -> dict[str, Any]:
+    result = instance.result or {}
+    return {
+        "status": "verified",
+        "sub": result.get("subject"),
+        "nonce": instance.context.get("nonce"),
+        "subject_syntax_type": result.get("subject_syntax_type")
+        or _SIOP_JWK_SUBJECT_PREFIX,
+    }
+
+
 @router.post("/siop/submit")
 async def submit_siop_id_token(
     body: SiopSubmitRequest,
@@ -6412,6 +6553,23 @@ async def submit_siop_id_token(
     instance = await repo.get_instance(body.instance_id)
     if not instance:
         raise _siop_error("Flow instance not found", error="invalid_request")
+    submission_digest = hashlib.sha256(
+        json.dumps(
+            {"id_token": body.id_token},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    if instance.status in {
+        FlowInstanceStatus.COMPLETED,
+        FlowInstanceStatus.FAILED,
+    }:
+        prior_digest = (instance.result or {}).get("submission_digest")
+        if isinstance(prior_digest, str) and hmac.compare_digest(
+            prior_digest, submission_digest
+        ):
+            return _terminal_siop_response(instance)
+        _raise_verification_replay_conflict()
     if instance.context.get("flow_type") != "siop_v2":
         raise _siop_error(
             "Flow instance is not a SIOPv2 transaction", error="invalid_request"
@@ -6428,6 +6586,8 @@ async def submit_siop_id_token(
             "SIOPv2 response is not accepted in the current state",
             error="invalid_request",
         )
+    expected_status = instance.status
+    instance = copy.deepcopy(instance)
 
     expected_nonce = instance.context.get("nonce")
     expected_audience = instance.context.get("siop_client_id")
@@ -6478,11 +6638,6 @@ async def submit_siop_id_token(
         if issued_at < earliest_iat:
             raise _siop_error("ID token predates the SIOPv2 transaction")
 
-    # Consume replay state only after all cryptographic and transaction checks
-    # pass, so an invalid submission cannot burn a legitimate wallet response.
-    if not await _check_nonce(expected_nonce):
-        raise _siop_error("This nonce has already been used", error="nonce_reused")
-
     instance.status = FlowInstanceStatus.COMPLETED
     instance.subject_id = subject
     instance.completed_at = datetime.now(timezone.utc)
@@ -6494,8 +6649,32 @@ async def submit_siop_id_token(
         "subject_syntax_type": _SIOP_JWK_SUBJECT_PREFIX,
         "signing_algorithm": alg,
         "claims_trust": "self_attested",
+        "submission_digest": submission_digest,
     }
-    await repo.save_instance(instance)
+    replay_expires_at = instance.expires_at
+    if replay_expires_at is None or replay_expires_at <= instance.completed_at:
+        replay_expires_at = instance.completed_at + timedelta(
+            seconds=_NONCE_TTL_SECONDS
+        )
+    committed = await repo.finalize_verification(
+        instance,
+        nonce_digest=hashlib.sha256(expected_nonce.encode("utf-8")).hexdigest(),
+        replay_expires_at=replay_expires_at,
+        expected_status=expected_status,
+    )
+    if not committed:
+        current = await repo.get_instance(instance.id)
+        prior_digest = (
+            (current.result or {}).get("submission_digest") if current else None
+        )
+        if (
+            current is not None
+            and current.status is FlowInstanceStatus.COMPLETED
+            and isinstance(prior_digest, str)
+            and hmac.compare_digest(prior_digest, submission_digest)
+        ):
+            return _terminal_siop_response(current)
+        _raise_verification_replay_conflict()
 
     subject_digest = hashlib.sha256(subject.encode("utf-8")).hexdigest()
     logger.info(
@@ -6715,23 +6894,8 @@ async def handle_application_approved(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _repo, _nonce_redis
+    global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
-
-    # Initialize Redis for nonce replay prevention (shared across replicas)
-    import redis.asyncio as aioredis
-
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
-    redis_db = int(os.environ.get("REDIS_DB_FLOW", "3"))
-    try:
-        _nonce_redis = aioredis.from_url(
-            f"{redis_url}/{redis_db}", encoding="utf-8", decode_responses=True
-        )
-        await _nonce_redis.ping()
-        logger.info("Flow nonce store: Redis at %s/%s", redis_url, redis_db)
-    except Exception as exc:
-        logger.warning("Redis unavailable (%s) — using process-local nonce store", exc)
-        _nonce_redis = None
 
     # Initialize PostgreSQL adapter
     config = get_config()
@@ -6802,8 +6966,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await ct_grpc_channel.close()
     await issuance_grpc_channel.close()
     await teardown_org_client(app)
-    if _nonce_redis is not None:
-        await _nonce_redis.aclose()
     await engine.dispose()
 
 

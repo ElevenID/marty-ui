@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -605,15 +607,6 @@ def test_mdoc_binding_diagnostics_expose_only_digests() -> None:
 
 
 @pytest.fixture(autouse=True)
-def clear_nonce_replay_cache(monkeypatch):
-    flow_main._used_nonces.clear()
-    flow_main._nonce_last_cleanup = 0.0
-    monkeypatch.setattr(flow_main, "_nonce_redis", None)
-    yield
-    flow_main._used_nonces.clear()
-
-
-@pytest.fixture(autouse=True)
 def issuer_did_signer(monkeypatch):
     """Model the DID-mediated API without giving production code a private key."""
     private_key = jwcrypto_jwk.JWK.generate(kty="EC", crv="P-256")
@@ -794,6 +787,9 @@ def _install_accepting_evaluation_stub(
                 decision="allow",
                 decision_reason="Cryptographic presentation accepted",
                 verified_claims_json=json.dumps(verified_claims),
+                credential_results_json=json.dumps(
+                    [{"signature_valid": True, "satisfied": True}]
+                ),
             )
 
     monkeypatch.setattr(
@@ -2326,7 +2322,11 @@ async def test_submit_verification_response_decrypts_per_flow_direct_post_jwt(
 
     assert response.result == "passed"
     assert response.verified_claims["given_name"] == "HAIP"
-    assert instance.context["vp_token"] == vp_token
+    assert (
+        instance.context["vp_token_sha256"]
+        == hashlib.sha256(vp_token.encode()).hexdigest()
+    )
+    assert "vp_token" not in instance.context
 
 
 @pytest.mark.asyncio
@@ -2515,9 +2515,7 @@ async def test_get_verification_request_object_supports_dc_api(monkeypatch):
     assert message["payload"]["dcql_query"] == decoded_payload["dcql_query"]
 
 
-def test_oid4vp_did_web_document_exposes_verifier_key(
-    monkeypatch, issuer_did_signer
-):
+def test_oid4vp_did_web_document_exposes_verifier_key(monkeypatch, issuer_did_signer):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
 
     document = _oid4vp_did_web_document(issuer_did_signer["identity"])
@@ -2770,7 +2768,7 @@ async def test_build_presentation_definition_accepts_current_and_legacy_open_bad
 
 
 @pytest.mark.asyncio
-async def test_submit_verification_without_policy_records_fail_closed_result_message():
+async def test_submit_verification_without_policy_does_not_claim_transaction():
     repo = InMemoryFlowRepository()
     instance = FlowInstance(
         flow_definition_id="__verification__",
@@ -2794,12 +2792,9 @@ async def test_submit_verification_without_policy_records_fail_closed_result_mes
     assert response.result == "failed"
     assert response.decision == "deny"
     assert response.verified_claims == {}
-    message = instance.context["mip_messages"]["verification_result"]
-    assert message["message_type"] == MessageType.VERIFICATION_RESULT.value
-    assert message["correlation_id"] == instance.id
-    assert message["payload"]["overall_result"] == "FAILED"
-    assert message["payload"]["verifier_nonce"] == "nonce-xyz"
-    assert message["payload"]["claim_results"] == []
+    assert instance.status == FlowInstanceStatus.AWAITING_WALLET
+    assert "mip_messages" not in instance.context
+    assert repo._consumed_nonce_digests == {}
 
 
 @pytest.mark.asyncio
@@ -2821,6 +2816,9 @@ async def test_submit_verification_response_forwards_flow_trust_profile_to_polic
                 decision="allow",
                 decision_reason="Official signer is trusted",
                 verified_claims_json='{"given_name":"Marty"}',
+                credential_results_json=json.dumps(
+                    [{"signature_valid": True, "satisfied": True}]
+                ),
             )
 
     monkeypatch.setattr(
@@ -2914,7 +2912,7 @@ async def test_internal_flow_fails_closed_when_policy_rejects_cross_org_trust(
     assert response.result == "failed"
     assert response.decision == "deny"
     assert "same organization" in response.decision_reason
-    assert "nonce-xyz" not in flow_main._used_nonces
+    assert hashlib.sha256(b"nonce-xyz").hexdigest() not in repo._consumed_nonce_digests
 
 
 @pytest.mark.asyncio
@@ -2962,7 +2960,10 @@ async def test_internal_flow_fails_closed_when_policy_returns_no_decision(
     assert response.result == "failed"
     assert response.decision == "deny"
     assert response.verified_claims == {}
-    assert "nonce-empty-decision" not in flow_main._used_nonces
+    assert (
+        hashlib.sha256(b"nonce-empty-decision").hexdigest()
+        not in repo._consumed_nonce_digests
+    )
 
 
 @pytest.mark.asyncio
@@ -3005,8 +3006,88 @@ async def test_two_accepted_presentations_cannot_reuse_one_nonce(monkeypatch):
             None,
             repo,
         )
-    assert replay.value.status_code == 400
-    assert replay.value.detail["error"] == "nonce_reused"
+    assert replay.value.status_code == 409
+    assert replay.value.detail["error"] == "verification_replay_conflict"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_identical_verification_retries_are_idempotent(
+    monkeypatch,
+):
+    _install_accepting_evaluation_stub(monkeypatch)
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={
+            "nonce": "nonce-idempotent",
+            "presentation_policy_id": "policy-1",
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+    vp_token = (
+        f"{_jwt_segment({'alg': 'none'})}."
+        f"{_jwt_segment({'nonce': 'nonce-idempotent', 'value': 'same'})}."
+    )
+
+    first, second = await asyncio.gather(
+        submit_verification_response(instance.id, vp_token, None, None, repo),
+        submit_verification_response(instance.id, vp_token, None, None, repo),
+    )
+
+    assert first.result == second.result == "passed"
+    assert first.decision == second.decision == "allow"
+    assert instance.status is FlowInstanceStatus.COMPLETED
+    assert len(repo._consumed_nonce_digests) == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_conflicting_verification_retries_commit_once(
+    monkeypatch,
+):
+    _install_accepting_evaluation_stub(monkeypatch)
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={
+            "nonce": "nonce-conflict",
+            "presentation_policy_id": "policy-1",
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+    tokens = [
+        (
+            f"{_jwt_segment({'alg': 'none'})}."
+            f"{_jwt_segment({'nonce': 'nonce-conflict', 'value': value})}."
+        )
+        for value in ("first", "second")
+    ]
+
+    outcomes = await asyncio.gather(
+        *(
+            submit_verification_response(instance.id, token, None, None, repo)
+            for token in tokens
+        ),
+        return_exceptions=True,
+    )
+
+    accepted = [
+        outcome
+        for outcome in outcomes
+        if isinstance(outcome, flow_main.VerificationResultResponse)
+    ]
+    conflicts = [outcome for outcome in outcomes if isinstance(outcome, HTTPException)]
+    assert len(accepted) == 1
+    assert accepted[0].decision == "allow"
+    assert len(conflicts) == 1
+    assert conflicts[0].status_code == 409
+    assert conflicts[0].detail["error"] == "verification_replay_conflict"
+    assert len(repo._consumed_nonce_digests) == 1
 
 
 @pytest.mark.asyncio
@@ -3019,7 +3100,10 @@ async def test_submit_verification_response_unwraps_descriptor_map_vp_token(
         flow_definition_id="__verification__",
         organization_id="org-1",
         status=FlowInstanceStatus.AWAITING_WALLET,
-        context={"presentation_policy_id": "policy-1"},
+        context={
+            "nonce": "nonce-descriptor-map",
+            "presentation_policy_id": "policy-1",
+        },
         expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
     )
     await repo.save_instance(instance)
@@ -3035,8 +3119,16 @@ async def test_submit_verification_response_unwraps_descriptor_map_vp_token(
 
     assert response.result == "passed"
     assert response.verified_claims["given_name"] == "Marty"
-    assert instance.context["vp_token"] == vp_token
-    assert instance.context["vp_token_raw"] == wrapped_vp_token
+    assert (
+        instance.context["vp_token_sha256"]
+        == hashlib.sha256(vp_token.encode()).hexdigest()
+    )
+    assert (
+        instance.context["vp_transport_sha256"]
+        == hashlib.sha256(wrapped_vp_token.encode()).hexdigest()
+    )
+    assert "vp_token" not in instance.context
+    assert "vp_token_raw" not in instance.context
 
 
 @pytest.mark.asyncio
@@ -3078,7 +3170,11 @@ async def test_submit_digital_credential_response_uses_origin_audience(monkeypat
         instance.context["verification_audience"]
         == "origin:https://beta.elevenidllc.com"
     )
-    assert instance.context["vp_token"] == vp_token
+    assert (
+        instance.context["vp_token_sha256"]
+        == hashlib.sha256(vp_token.encode()).hexdigest()
+    )
+    assert "vp_token" not in instance.context
 
 
 @pytest.mark.asyncio
@@ -3134,7 +3230,11 @@ async def test_submit_digital_credential_response_decrypts_dc_api_jwt_response(
         instance.context["dc_api_last_response_mode"]
         == flow_main._DC_API_JWT_RESPONSE_MODE
     )
-    assert instance.context["vp_token"] == vp_token
+    assert (
+        instance.context["vp_token_sha256"]
+        == hashlib.sha256(vp_token.encode()).hexdigest()
+    )
+    assert "vp_token" not in instance.context
 
 
 @pytest.mark.asyncio
