@@ -188,6 +188,17 @@ def test_public_trust_profile_model_rejects_placeholder_registry_imports() -> No
     validated = TrustProfileCreate.model_validate(base)
     assert validated.trust_sources[0].registry_sync is not None
 
+    current_policy = TrustProfileCreate.model_validate(
+        {
+            **base,
+            "revocation_policy": {"check_mode": "SKIP"},
+            "revocation_profile_id": "revocation-profile-1",
+        }
+    )
+    assert current_policy.revocation_policy is not None
+    assert current_policy.revocation_policy.check_mode == "SKIP"
+    assert current_policy.revocation_profile_id == "revocation-profile-1"
+
     with pytest.raises(ValidationError, match="extra_forbidden"):
         TrustProfileCreate.model_validate(
             {
