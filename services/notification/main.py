@@ -823,17 +823,23 @@ async def _deliver_notification(notification: Notification) -> list[DeliveryResu
                 results.append(await _deliver_direct_webhook(notification, endpoint))
             continue
 
+        # Webhook is the only transport adapter implemented in this service.
+        # A resolvable address is not delivery evidence, so unconfigured
+        # channels must remain explicit failures until a real adapter reports.
         if channel == ChannelType.EMAIL:
-            success = bool(target.email_addresses)
+            has_target = bool(target.email_addresses)
             results.append(
                 DeliveryResult(
                     notification_id=notification.id,
                     channel=channel,
-                    success=success,
+                    success=False,
                     attempted_at=now,
-                    delivered_at=now if success else None,
-                    error_code=None if success else "NO_EMAIL_TARGETS",
-                    should_retry=False if success else None,
+                    error_code=(
+                        "EMAIL_ADAPTER_UNAVAILABLE"
+                        if has_target
+                        else "NO_EMAIL_TARGETS"
+                    ),
+                    should_retry=False,
                 )
             )
             continue
@@ -846,11 +852,14 @@ async def _deliver_notification(notification: Notification) -> list[DeliveryResu
                 DeliveryResult(
                     notification_id=notification.id,
                     channel=channel,
-                    success=has_resolvable_target,
+                    success=False,
                     attempted_at=now,
-                    delivered_at=now if has_resolvable_target else None,
-                    error_code=None if has_resolvable_target else "NO_DEVICE_TARGETS",
-                    should_retry=False if has_resolvable_target else None,
+                    error_code=(
+                        f"{channel.value}_ADAPTER_UNAVAILABLE"
+                        if has_resolvable_target
+                        else "NO_DEVICE_TARGETS"
+                    ),
+                    should_retry=False,
                 )
             )
     return results
