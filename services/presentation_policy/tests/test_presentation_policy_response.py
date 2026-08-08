@@ -2702,8 +2702,10 @@ def test_required_holder_binding_needs_explicit_verifier_evidence(
     assert "holder binding was not verified" in response.decision_reason
 
 
+@pytest.mark.parametrize("engine_source", ["http", "internal"])
 def test_cedar_receives_only_verified_policy_evidence(
     monkeypatch: pytest.MonkeyPatch,
+    engine_source: str,
 ) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
@@ -2727,12 +2729,17 @@ def test_cedar_receives_only_verified_policy_evidence(
         )
     )
 
+    engine_kwargs = (
+        {"http_request": http_request}
+        if engine_source == "http"
+        else {"cedar_engine": http_request.app.state.cedar_engine}
+    )
     response = asyncio.run(
         pp.evaluate_presentation(
             policy.id,
             pp.EvaluatePresentationRequest(vp_token="credential"),
-            http_request=http_request,
             repo=repo,
+            **engine_kwargs,
         )
     )
 

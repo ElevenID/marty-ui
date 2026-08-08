@@ -3618,6 +3618,7 @@ async def evaluate_presentation(
     request: EvaluatePresentationRequest,
     http_request: Request = None,
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
+    cedar_engine: Any = None,
 ) -> PolicyEvaluationResponse:
     """
     Evaluate a Verifiable Presentation against a Presentation Policy.
@@ -4100,8 +4101,11 @@ async def evaluate_presentation(
         all_satisfied = False
 
     # Cedar policy evaluation for credential verification trust rules
-    cedar_engine = None
-    if http_request and hasattr(http_request.app.state, "cedar_engine"):
+    if (
+        cedar_engine is None
+        and http_request
+        and hasattr(http_request.app.state, "cedar_engine")
+    ):
         cedar_engine = http_request.app.state.cedar_engine
 
     if cedar_engine and decision == "allow":
@@ -4468,6 +4472,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         repo=_repo,
         evaluate_fn=evaluate_presentation,
         to_response_fn=_policy_to_response,
+        cedar_engine=app.state.cedar_engine,
     )
     add_PresentationPolicyServiceServicer_to_server(servicer, grpc_server)
     start_grpc_server_port(
