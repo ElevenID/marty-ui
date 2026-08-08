@@ -15,6 +15,7 @@ from starlette.requests import Request
 
 import flow.main as flow_main
 from marty_common.messages import MessageType
+from common.webhook_signatures import verify_event_signature
 from flow.main import (
     ApplicationApprovedWebhook,
     _DC_API_PROTOCOL,
@@ -2867,6 +2868,71 @@ async def test_submit_verification_response_forwards_flow_trust_profile_to_polic
     assert context["oid4vp_response_uri"] == "https://verifier.example/callback"
     assert isinstance(context["mdoc_session_transcript_b64url"], str)
     assert context["mdoc_session_transcript_b64url"]
+
+
+@pytest.mark.asyncio
+async def test_verification_callback_signature_binds_event_headers_and_payload(monkeypatch):
+    _install_accepting_evaluation_stub(
+        monkeypatch,
+        claims={"email": "alice@example.com"},
+    )
+    callback_secret = "test-flow-webhook-secret-at-least-32-bytes"
+    monkeypatch.setenv("FLOW_WEBHOOK_SECRET", callback_secret)
+    captured: dict[str, object] = {}
+
+    class CallbackResponse:
+        status_code = 200
+
+    class CallbackClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, url, *, json, headers):
+            captured.update(url=url, payload=json, headers=headers)
+            return CallbackResponse()
+
+    monkeypatch.setattr(
+        flow_main.httpx,
+        "AsyncClient",
+        lambda **_kwargs: CallbackClient(),
+    )
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={
+            "nonce": "nonce-callback",
+            "presentation_policy_id": "policy-1",
+            "callback_url": "https://auth.example/internal/credential-verified",
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+
+    await submit_verification_response(
+        instance.id,
+        f"{_jwt_segment({'alg': 'none'})}.{_jwt_segment({'nonce': 'nonce-callback'})}.",
+        None,
+        None,
+        repo,
+    )
+
+    headers = captured["headers"]
+    payload = captured["payload"]
+    assert isinstance(headers, dict)
+    assert isinstance(payload, dict)
+    assert verify_event_signature(
+        headers["X-MIP-Signature"],
+        callback_secret,
+        event=headers["X-MIP-Event"],
+        event_id=headers["X-MIP-Event-Id"],
+        timestamp=headers["X-MIP-Timestamp"],
+        payload=payload,
+    )
 
 
 @pytest.mark.asyncio

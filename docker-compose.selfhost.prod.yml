@@ -333,9 +333,11 @@ services:
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
       AUTH_GRPC_PORT: "9001"
+      FLOW_WEBHOOK_SECRET_FILE: /run/secrets/flow_webhook_secret
     secrets:
       - marty_api_client_secret
       - grpc_service_token
+      - flow_webhook_secret
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -753,9 +755,11 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_DB_FLOW: "3"
       FLOW_GRPC_PORT: "9011"
+      FLOW_WEBHOOK_SECRET_FILE: /run/secrets/flow_webhook_secret
     secrets:
       - marty_db_password
       - grpc_service_token
+      - flow_webhook_secret
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1000,6 +1004,8 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/issuance_api_key
   grpc_service_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/grpc_service_token
+  flow_webhook_secret:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_webhook_secret
   integration_secret_master_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/integration_secret_master_key
   token_hmac_key:

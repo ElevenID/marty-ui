@@ -69,6 +69,7 @@ from marty_common import (
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
+from common.webhook_signatures import is_valid_event_secret, sign_event
 from flow.infrastructure.adapters import PostgresFlowRepository
 from protocol_version import MIP_VERSION
 
@@ -5955,8 +5956,6 @@ async def _submit_verification_response_internal(
     # -----------------------------------------------------------------------
     callback_url = instance.context.get("callback_url")
     if callback_url:
-        import hmac as _hmac
-
         callback_payload = {
             "flow_instance_id": instance.id,
             "result": evaluation_result,
@@ -5966,30 +5965,40 @@ async def _submit_verification_response_internal(
             "presentation_policy_id": policy_id,
             "completed_at": instance.completed_at.isoformat(),
         }
+        callback_event = "flow.verification_completed"
+        callback_timestamp = datetime.now(timezone.utc).isoformat()
         cb_headers: dict[str, str] = {
             "Content-Type": "application/json",
-            "X-MIP-Event": "flow.verification_completed",
+            "X-MIP-Event": callback_event,
             "X-MIP-Event-Id": instance.id,
-            "X-MIP-Timestamp": datetime.now(timezone.utc).isoformat(),
+            "X-MIP-Timestamp": callback_timestamp,
         }
-        webhook_secret = os.environ.get("FLOW_WEBHOOK_SECRET")
-        if webhook_secret:
-            payload_bytes = json.dumps(callback_payload, sort_keys=True).encode()
-            sig = _hmac.new(
-                webhook_secret.encode(), payload_bytes, hashlib.sha256
-            ).hexdigest()
-            cb_headers["X-MIP-Signature"] = f"sha256={sig}"
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                cb_resp = await client.post(
-                    callback_url, json=callback_payload, headers=cb_headers
-                )
-                logger.info(
-                    f"Callback to {callback_url} returned HTTP {cb_resp.status_code}"
-                )
-        except httpx.RequestError as exc:
-            # Log but don't fail the submission — the poller will handle this
-            logger.warning(f"Callback POST to {callback_url} failed: {exc}")
+        webhook_secret = _read_secret_value("FLOW_WEBHOOK_SECRET")
+        if not is_valid_event_secret(webhook_secret):
+            logger.error(
+                "Refusing verification callback without a secret of at least 32 bytes "
+                "for flow %s",
+                instance.id,
+            )
+        else:
+            cb_headers["X-MIP-Signature"] = sign_event(
+                webhook_secret,
+                event=callback_event,
+                event_id=instance.id,
+                timestamp=callback_timestamp,
+                payload=callback_payload,
+            )
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    cb_resp = await client.post(
+                        callback_url, json=callback_payload, headers=cb_headers
+                    )
+                    logger.info(
+                        f"Callback to {callback_url} returned HTTP {cb_resp.status_code}"
+                    )
+            except httpx.RequestError as exc:
+                # Do not change the already-committed verification result.
+                logger.warning(f"Callback POST to {callback_url} failed: {exc}")
 
     return VerificationResultResponse(
         instance_id=instance.id,
