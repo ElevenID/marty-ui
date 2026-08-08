@@ -128,7 +128,7 @@ export const protocolSchema = () => ({
   url: 'https://elevenidllc.com/protocol',
   datePublished: '2026-03-11',
   license: 'https://www.apache.org/licenses/LICENSE-2.0',
-  version: '0.4.0',
+  version: '0.4.1',
   author: {
     '@type': 'Organization',
     name: 'The MIP Authors',

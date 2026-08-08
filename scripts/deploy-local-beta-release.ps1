@@ -253,8 +253,8 @@ if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf)) {
     throw "Missing source manifest: $sourceManifestPath"
 }
 $sourceManifest = Get-Content -LiteralPath $sourceManifestPath -Raw | ConvertFrom-Json
-if ($sourceManifest.schema_version -ne 1 -or $sourceManifest.mip_version -ne "0.4.0") {
-    throw "Source manifest is not a supported MIP 0.4.0 local release"
+if ($sourceManifest.schema_version -ne 1 -or $sourceManifest.mip_version -ne "0.4.1") {
+    throw "Source manifest is not a supported MIP 0.4.1 local release"
 }
 if ($sourceManifest.source_kind -ne "local-worktree-snapshot" -or $sourceManifest.promotion_eligible -ne $false) {
     throw "Local source manifest must be a non-promotable worktree snapshot"
@@ -613,7 +613,7 @@ foreach ($marker in @($servicesMarker, $uiMarker, $betaServicesMarker, $betaUiMa
     }
 }
 foreach ($marker in @($servicesMarker, $betaServicesMarker)) {
-    if ($marker.stack_version -ne $stackVersion -or $marker.mip_version -ne "0.4.0" -or $marker.deployment_release_marker -ne $releaseVersion) {
+    if ($marker.stack_version -ne $stackVersion -or $marker.mip_version -ne "0.4.1" -or $marker.deployment_release_marker -ne $releaseVersion) {
         throw "Services runtime marker does not match Stack and MIP provenance"
     }
     foreach ($entry in $runtimeImageDigests.GetEnumerator()) {
@@ -628,7 +628,7 @@ $deploymentManifest = [ordered]@{
     schema_version = 1
     release_version = $releaseVersion
     stack_version = $stackVersion
-    mip_version = "0.4.0"
+    mip_version = "0.4.1"
     source_kind = "local-worktree-snapshot"
     marty_ui_sha = $sourceId
     beta_origin = $BetaOrigin

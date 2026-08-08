@@ -202,8 +202,8 @@ async function main() {
       return response.status >= 400 && !removedPaths.has(pathname);
     });
     const releaseReady = (
-      canonicalRoutes.every((probe) => probe.status === 200 && probe.mipVersion === '0.4.0')
-      && removedRoutes.every((probe) => probe.status === 404 && probe.mipVersion === '0.4.0')
+      canonicalRoutes.every((probe) => probe.status === 200 && probe.mipVersion === '0.4.1')
+      && removedRoutes.every((probe) => probe.status === 404 && probe.mipVersion === '0.4.1')
       && serverErrors.length === 0
       && unexpectedResponses.length === 0
       && failedRequests.length === 0

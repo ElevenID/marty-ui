@@ -62,7 +62,7 @@ describeIfBuilt('prerendered ElevenID LLC demo output', () => {
     expect(releaseHtml).toContain('Credential Lifecycle Foundation')
     expect(releaseHtml).toContain('ElevenID LLC Credential Platform')
     expect(releaseHtml).toContain('Version v2026.07.0')
-    expect(releaseHtml).toContain('Implements MIP 0.4.0')
+    expect(releaseHtml).toContain('Implements MIP 0.4.1')
     expect(releaseHtml).toContain('PARTIAL coverage')
 
     const scenarioHtml = readPrerenderedHtml('demos', '2026.07.0', 'membership-badge-login')

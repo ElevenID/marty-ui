@@ -1,17 +1,17 @@
 {
   "schema": "marty.stack-lock/v1",
-  "release": "marty-ui@1.1.120",
+  "release": "marty-ui@1.1.121",
   "components": [
     {
       "name": "marty-api-core",
       "repository": "ElevenID/marty-cli",
-      "version": "0.2.2",
-      "commit": "18fe959cc848087032b99b76caa4c023b5dba938",
+      "version": "0.2.3",
+      "commit": "a8eb3a2e971c33a314ee584c6dea721b4363890b",
       "artifacts": [{
         "type": "npm",
-        "uri": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.2/elevenid-marty-api-core-0.2.2.tgz",
-        "digest": "sha256:11afb6cfa7c2c28e1d9c94c1904411a21df053822ae0ebb67b34d3c63815c2b8",
-        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.2/marty-api-core-sbom.cdx.json",
+        "uri": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.3/elevenid-marty-api-core-0.2.3.tgz",
+        "digest": "sha256:d3fed82fbd58d9106ea198511d1facec2c5e4d9aa703868ee57d1a9a4a4d9fdd",
+        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.3/marty-api-core-sbom.cdx.json",
         "provenance": "https://github.com/ElevenID/marty-cli/attestations"
       }]
     },
@@ -70,13 +70,13 @@
     {
       "name": "marty-cli",
       "repository": "ElevenID/marty-cli",
-      "version": "0.2.2",
-      "commit": "18fe959cc848087032b99b76caa4c023b5dba938",
+      "version": "0.2.3",
+      "commit": "a8eb3a2e971c33a314ee584c6dea721b4363890b",
       "artifacts": [{
         "type": "npm",
-        "uri": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.2/elevenid-marty-cli-0.2.2.tgz",
-        "digest": "sha256:083d307e81d91cfbfb5ac499a9567c5e0b2f64e2a7c4f0e2e1f0b22b1253b240",
-        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.2/marty-cli-sbom.cdx.json",
+        "uri": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.3/elevenid-marty-cli-0.2.3.tgz",
+        "digest": "sha256:02df21fa8cef0e475ce676841fccb2238588145d2e07a9ac9e29a869325193d3",
+        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.3/marty-cli-sbom.cdx.json",
         "provenance": "https://github.com/ElevenID/marty-cli/attestations"
       }]
     },

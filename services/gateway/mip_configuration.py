@@ -1,4 +1,4 @@
-"""Canonical MIP 0.4.0 discovery document construction."""
+"""Canonical MIP 0.4.1 discovery document construction."""
 
 from __future__ import annotations
 

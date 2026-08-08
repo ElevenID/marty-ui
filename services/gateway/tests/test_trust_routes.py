@@ -12,8 +12,33 @@ from gateway.models import (
     OrganizationTrustProfileCreate,
     OrganizationTrustProfileResponse,
     TrustProfileCreate,
+    TrustProfileResponse,
 )
 from gateway.routes import trust as trust_routes
+
+
+def test_trust_profile_response_requires_canonical_lowercase_status() -> None:
+    payload = {
+        "id": "profile-1",
+        "organization_id": "org-1",
+        "name": "Public trust profile",
+        "description": None,
+        "status": "ACTIVE",
+        "profile_type": "CUSTOM",
+        "compliance_status": "COMPLIANT",
+        "trust_sources": [],
+        "allowed_algorithms": ["ES256"],
+        "revocation_policy": {},
+        "supported_formats": ["SD_JWT_VC"],
+        "created_at": "2026-08-07T00:00:00Z",
+        "updated_at": "2026-08-07T00:00:00Z",
+    }
+
+    with pytest.raises(ValidationError):
+        TrustProfileResponse.model_validate(payload)
+
+    response = TrustProfileResponse.model_validate({**payload, "status": "active"})
+    assert response.status == "active"
 
 
 @pytest.mark.asyncio
