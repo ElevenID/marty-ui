@@ -324,7 +324,7 @@ export const handlers = [
   // Flow Definitions
   http.get(`${API_BASE}/v1/flows/capabilities`, () => {
     return HttpResponse.json({
-      protocol_version: '0.4.0',
+      protocol_version: '0.4.1',
       standard_flow_types: [
         'oid4vci_pre_authorized', 'oid4vci_authorization_code', 'mdl_issuance',
         'oid4vp_presentation', 'mdl_presentation', 'siopv2',

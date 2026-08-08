@@ -841,19 +841,21 @@ class UpdateTrustProfileRequest(BaseModel):
 
 
 class TrustProfileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     name: str
-    description: str | None
-    status: str
+    description: str | None = None
+    status: Literal["draft", "active", "suspended", "archived"]
     profile_type: str
     compliance_status: str
     trust_sources: list[dict]
     allowed_algorithms: list[str]
     revocation_policy: dict | None = None
     revocation_services: dict | None = None
-    revocation_profile_id: str | None  # NEW
-    time_policy: dict
+    revocation_profile_id: str | None = None
+    time_policy: dict | None = None
     supported_formats: list[str]
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
@@ -862,7 +864,7 @@ class TrustProfileResponse(BaseModel):
     verification_policy_set_id: str | None = None
     auto_generated: bool = False
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
 
 
 def _field_was_provided(model: BaseModel, field_name: str) -> bool:
