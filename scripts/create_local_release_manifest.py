@@ -154,7 +154,7 @@ def create_manifest(
     manifest: dict[str, object] = {
         "schema_version": 1,
         "release_version": release_version,
-        "mip_version": "0.3.1",
+        "mip_version": "0.4.0",
         "source_kind": "local-worktree-snapshot",
         "marty_ui_sha": ui_source_sha[:40],
         "marty_ui_source_sha256": ui_source_sha,

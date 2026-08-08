@@ -29,7 +29,7 @@ ALLOWED_KEYS = {
 }
 
 
-def test_mip_configuration_uses_only_canonical_v031_fields() -> None:
+def test_mip_configuration_uses_only_canonical_v040_fields() -> None:
     document = mip_configuration_document(
         "https://beta.elevenidllc.com/",
         [
@@ -62,8 +62,8 @@ def test_mip_configuration_uses_only_canonical_v031_fields() -> None:
     )
 
     assert set(document) == ALLOWED_KEYS
-    assert document["mip_version"] == "0.3.1"
-    assert document["supported_versions"] == ["0.3.1"]
+    assert document["mip_version"] == "0.4.0"
+    assert document["supported_versions"] == ["0.4.0"]
     assert document["issuer"] == "https://beta.elevenidllc.com"
     assert document["mip_configuration_endpoint"] == (
         "https://beta.elevenidllc.com/.well-known/mip-configuration"
@@ -116,4 +116,4 @@ async def test_gateway_serves_canonical_mip_configuration(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert set(response.json()) == ALLOWED_KEYS
-    assert response.headers["x-mip-version"] == "0.3.1"
+    assert response.headers["x-mip-version"] == "0.4.0"

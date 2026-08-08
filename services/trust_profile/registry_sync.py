@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import os
 import socket
+import ssl
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -21,6 +23,8 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_PAGES = 100
 SYNC_PROTOCOL = "MARTY_TRUST_REGISTRY_SYNC_V1"
+PRIVATE_HOST_ALLOWLIST_ENV = "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST"
+TLS_CA_FILE_ENV = "TRUST_REGISTRY_TLS_CA_FILE"
 
 
 class RegistrySyncError(RuntimeError):
@@ -113,6 +117,58 @@ class RegistryImportResult:
 DestinationValidator = Callable[[str], Awaitable[str | None]]
 
 
+def _private_registry_host_allowlist() -> frozenset[str]:
+    """Return exact operator-managed hostnames allowed on private networks.
+
+    This setting is process configuration, never a public request field.  It
+    supports private enterprise registries and the disposable conformance
+    topology without permitting a caller to opt out of SSRF protection.
+    """
+    configured: set[str] = set()
+    for raw_host in os.environ.get(PRIVATE_HOST_ALLOWLIST_ENV, "").split(","):
+        host = raw_host.strip().lower().rstrip(".")
+        if not host:
+            continue
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            pass
+        else:
+            raise RegistrySyncError(
+                f"{PRIVATE_HOST_ALLOWLIST_ENV} accepts exact DNS hostnames, not IP addresses"
+            )
+        if any(
+            not label
+            or len(label) > 63
+            or label[0] == "-"
+            or label[-1] == "-"
+            or not all(
+                character in "abcdefghijklmnopqrstuvwxyz0123456789-"
+                for character in label
+            )
+            for label in host.split(".")
+        ):
+            raise RegistrySyncError(
+                f"{PRIVATE_HOST_ALLOWLIST_ENV} contains an invalid DNS hostname"
+            )
+        configured.add(host)
+    return frozenset(configured)
+
+
+def registry_tls_context() -> ssl.SSLContext:
+    """Build normal Web PKI trust plus an optional operator-owned CA bundle."""
+    context = ssl.create_default_context()
+    ca_file = os.environ.get(TLS_CA_FILE_ENV, "").strip()
+    if ca_file:
+        try:
+            context.load_verify_locations(cafile=ca_file)
+        except (OSError, ssl.SSLError) as exc:
+            raise RegistrySyncError(
+                f"{TLS_CA_FILE_ENV} could not be loaded"
+            ) from exc
+    return context
+
+
 def validate_registry_url_structure(url: str) -> str:
     """Validate the stable public URL shape before it is persisted."""
     try:
@@ -137,6 +193,8 @@ async def require_public_registry_destination(url: str) -> str:
     """Resolve one public address that the HTTPS request must use."""
     parsed = urlsplit(validate_registry_url_structure(url))
     assert parsed.hostname is not None
+    hostname = parsed.hostname.lower().rstrip(".")
+    private_allowlist = _private_registry_host_allowlist()
     try:
         addresses = await asyncio.to_thread(
             socket.getaddrinfo,
@@ -150,7 +208,16 @@ async def require_public_registry_destination(url: str) -> str:
         raise RegistrySyncError("registry hostname resolved to no addresses")
     for address in addresses:
         candidate = ipaddress.ip_address(address[4][0])
-        if not candidate.is_global:
+        explicitly_allowed_private = (
+            hostname in private_allowlist
+            and candidate.is_private
+            and not candidate.is_loopback
+            and not candidate.is_link_local
+            and not candidate.is_multicast
+            and not candidate.is_unspecified
+            and not candidate.is_reserved
+        )
+        if not candidate.is_global and not explicitly_allowed_private:
             raise RegistrySyncError(
                 "registry hostname resolves to a non-public network address"
             )
