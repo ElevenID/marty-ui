@@ -67,9 +67,6 @@ services:
   credential-template:
     container_name: !reset null
     ports: !reset []
-  trust-profile:
-    container_name: !reset null
-    ports: !reset []
   applicant:
     container_name: !reset null
     ports: !reset []
