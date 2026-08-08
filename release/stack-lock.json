@@ -1,17 +1,17 @@
 {
   "schema": "marty.stack-lock/v1",
-  "release": "marty-ui@1.1.118",
+  "release": "marty-ui@1.1.119",
   "components": [
     {
       "name": "marty-api-core",
       "repository": "ElevenID/marty-cli",
-      "version": "0.1.0",
-      "commit": "808b8efced3dbc8496e60369342c143b08d2cf0e",
+      "version": "0.2.0",
+      "commit": "5debea50eddca15a23b07dec4b9e05c66488dc76",
       "artifacts": [{
         "type": "npm",
-        "uri": "https://github.com/ElevenID/marty-cli/releases/download/v0.1.0/elevenid-marty-api-core-0.1.0.tgz",
-        "digest": "sha256:c048d482faee350e984bc647c7e99948d894bae5c3355c976909ffe2a62c3dcc",
-        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.1.0/marty-api-core-sbom.cdx.json",
+        "uri": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.0/elevenid-marty-api-core-0.2.0.tgz",
+        "digest": "sha256:6de8466a4781ea7aa1339fea141e63136ae1c1ad0a36e1e060b2f84cd891853c",
+        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.0/marty-api-core-sbom.cdx.json",
         "provenance": "https://github.com/ElevenID/marty-cli/attestations"
       }]
     },
