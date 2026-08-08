@@ -527,7 +527,7 @@ class CreateWebhookRequest(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     description: str | None = Field(None, max_length=2000)
     event_types: list[str] = Field(default_factory=list)
-    secret: str | None = Field(None, min_length=32, max_length=1024)
+    secret: str | None = Field(None, min_length=32, max_length=128)
     enabled: bool = True
 
 
@@ -536,7 +536,7 @@ class UpdateWebhookRequest(BaseModel):
     url: str | None = Field(None, min_length=1, max_length=2048)
     description: str | None = Field(None, max_length=2000)
     event_types: list[str] | None = None
-    secret: str | None = Field(None, min_length=32, max_length=1024)
+    secret: str | None = Field(None, min_length=32, max_length=128)
     enabled: bool | None = None
 
 

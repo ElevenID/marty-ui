@@ -139,6 +139,20 @@ def test_direct_signing_secret_rejects_ambiguous_sources(
     assert webhook_security.load_direct_webhook_signing_secret() is None
 
 
+def test_webhook_signing_secret_matches_the_persisted_32_to_128_contract() -> None:
+    assert webhook_security.valid_webhook_signing_secret("s" * 32) is True
+    assert webhook_security.valid_webhook_signing_secret("s" * 128) is True
+    assert webhook_security.valid_webhook_signing_secret("s" * 31) is False
+    assert webhook_security.valid_webhook_signing_secret("s" * 129) is False
+    with pytest.raises(ValueError):
+        notification.CreateWebhookRequest(
+            organization_id="org-1",
+            name="Too-long key",
+            url="https://hooks.example.com/events",
+            secret="s" * 129,
+        )
+
+
 @pytest.mark.parametrize(
     "retry_policy",
     [

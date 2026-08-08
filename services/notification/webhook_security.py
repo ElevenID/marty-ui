@@ -13,6 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 WEBHOOK_SECRET_ENV = "NOTIFICATION_WEBHOOK_SECRET"
 WEBHOOK_SECRET_FILE_ENV = "NOTIFICATION_WEBHOOK_SECRET_FILE"
 MIN_WEBHOOK_SECRET_LENGTH = 32
+MAX_WEBHOOK_SECRET_LENGTH = 128
 
 
 class WebhookDestinationError(Exception):
@@ -37,7 +38,9 @@ def valid_webhook_signing_secret(secret: str) -> bool:
     """Require a non-placeholder HMAC key with a useful security margin."""
     normalized = secret.strip()
     lowered = normalized.lower()
-    return len(normalized) >= MIN_WEBHOOK_SECRET_LENGTH and not lowered.startswith(
+    return MIN_WEBHOOK_SECRET_LENGTH <= len(
+        normalized
+    ) <= MAX_WEBHOOK_SECRET_LENGTH and not lowered.startswith(
         ("change-me", "change_me", "changeme")
     )
 
