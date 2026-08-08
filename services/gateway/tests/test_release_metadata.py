@@ -6,7 +6,7 @@ from gateway.release_metadata import release_metadata
 
 
 def test_release_metadata_reports_embedded_runtime_identity(monkeypatch) -> None:
-    monkeypatch.setenv("MARTY_RELEASE_VERSION", "mip-0.4.0-beta-test")
+    monkeypatch.setenv("MARTY_RELEASE_VERSION", "mip-0.4.1-beta-test")
     monkeypatch.setenv("MARTY_UI_SHA", "a" * 40)
     monkeypatch.setenv("ELEVENID_STACK_VERSION", "2026.07.0")
     monkeypatch.setenv(
@@ -16,10 +16,10 @@ def test_release_metadata_reports_embedded_runtime_identity(monkeypatch) -> None
 
     assert release_metadata() == {
         "component": "services",
-        "release_version": "mip-0.4.0-beta-test",
-        "deployment_release_marker": "mip-0.4.0-beta-test",
+        "release_version": "mip-0.4.1-beta-test",
+        "deployment_release_marker": "mip-0.4.1-beta-test",
         "stack_version": "2026.07.0",
-        "mip_version": "0.4.0",
+        "mip_version": "0.4.1",
         "marty_ui_sha": "a" * 40,
         "image_digests": {
             "gateway": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -38,7 +38,7 @@ def test_release_metadata_is_explicitly_non_release_without_build_args(monkeypat
         "release_version": "development",
         "deployment_release_marker": "development",
         "stack_version": "development",
-        "mip_version": "0.4.0",
+        "mip_version": "0.4.1",
         "marty_ui_sha": "unknown",
         "image_digests": {},
     }
@@ -52,7 +52,7 @@ def test_release_metadata_ignores_malformed_image_digest_json(monkeypatch) -> No
 
 @pytest.mark.asyncio
 async def test_release_metadata_route_exposes_embedded_identity(monkeypatch) -> None:
-    monkeypatch.setenv("MARTY_RELEASE_VERSION", "mip-0.4.0-beta-test")
+    monkeypatch.setenv("MARTY_RELEASE_VERSION", "mip-0.4.1-beta-test")
     monkeypatch.setenv("MARTY_UI_SHA", "b" * 40)
     monkeypatch.setenv("ELEVENID_STACK_VERSION", "2026.07.0")
     monkeypatch.setenv("ELEVENID_IMAGE_DIGESTS_JSON", "{}")
@@ -64,10 +64,10 @@ async def test_release_metadata_route_exposes_embedded_identity(monkeypatch) -> 
     assert response.status_code == 200
     assert response.json() == {
         "component": "services",
-        "release_version": "mip-0.4.0-beta-test",
-        "deployment_release_marker": "mip-0.4.0-beta-test",
+        "release_version": "mip-0.4.1-beta-test",
+        "deployment_release_marker": "mip-0.4.1-beta-test",
         "stack_version": "2026.07.0",
-        "mip_version": "0.4.0",
+        "mip_version": "0.4.1",
         "marty_ui_sha": "b" * 40,
         "image_digests": {},
     }

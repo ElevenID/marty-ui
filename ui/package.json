@@ -28,7 +28,7 @@
     "postinstall": "node scripts/patch-prerenderer-ts-deepmerge.cjs"
   },
   "dependencies": {
-    "@elevenid/marty-api-core": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.2/elevenid-marty-api-core-0.2.2.tgz",
+    "@elevenid/marty-api-core": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.3/elevenid-marty-api-core-0.2.3.tgz",
     "@elevenid/marty-blog": "https://github.com/ElevenID/marty-blog/releases/download/v0.1.5/elevenid-marty-blog-0.1.5.tgz",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
