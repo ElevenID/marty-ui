@@ -53,7 +53,7 @@ class VerificationServiceGrpc(
     # -- StartVerification ---------------------------------------------------
 
     async def StartVerification(self, request, context):
-        from verification.main import SessionStatus, VerificationSession
+        from verification.main import VerificationSession
 
         if request.response_type in ("vp_token", "") and not request.presentation_policy_id:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
@@ -72,7 +72,7 @@ class VerificationServiceGrpc(
             purpose=request.purpose or "",
         )
         store = self._get_store()
-        store.save(session, touch_updated_at=False)
+        await store.save(session, touch_updated_at=False)
         logger.info("gRPC StartVerification: %s", session.session_id)
         return _session_to_pb(session)
 
@@ -80,7 +80,7 @@ class VerificationServiceGrpc(
 
     async def GetSession(self, request, context):
         store = self._get_store()
-        session = store.get(request.session_id)
+        session = await store.get(request.session_id)
         if not session:
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(f"Session {request.session_id} not found")
@@ -94,12 +94,14 @@ class VerificationServiceGrpc(
             SessionStatus,
             _evaluate_via_grpc,
             _inspect_via_grpc,
+            _normalize_holder_binding_evidence,
+            _sha256_text,
             INSPECTION_SYSTEM_TARGET,
         )
         from datetime import datetime, timezone
 
         store = self._get_store()
-        session = store.get(request.session_id)
+        session = await store.get(request.session_id)
         if not session:
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(f"Session {request.session_id} not found")
@@ -110,7 +112,8 @@ class VerificationServiceGrpc(
             context.set_details(f"Session is {session.status.value}")
             return vs_pb2.VerificationResult()
 
-        session.vp_token = request.vp_token
+        session.vp_token_sha256 = _sha256_text(request.vp_token)
+        inspection_result = ""
         try:
             eval_result = await _evaluate_via_grpc(
                 policy_id=session.presentation_policy_id or "",
@@ -123,10 +126,21 @@ class VerificationServiceGrpc(
             session.decision_reason = eval_result.get("decision_reason", "")
             session.verified_claims = eval_result.get("verified_claims", {})
             session.credential_results = eval_result.get("credential_results", [])
+            session.holder_binding_evidence = _normalize_holder_binding_evidence(
+                eval_result
+            )
+            session.error = None
         except Exception as exc:
+            logger.error(
+                "gRPC evaluation failed for session %s: %s",
+                request.session_id,
+                exc,
+            )
             session.result = "failed"
             session.decision = "deny"
-            session.decision_reason = str(exc)
+            session.decision_reason = "Credential evaluation failed"
+            session.holder_binding_evidence = None
+            session.error = "Credential evaluation failed"
             eval_result = {"credential_results": [], "total_requirements": 0, "satisfied_requirements": 0}
 
         if INSPECTION_SYSTEM_TARGET and session.result != "failed":
@@ -138,21 +152,23 @@ class VerificationServiceGrpc(
         session.status = SessionStatus.COMPLETED if session.result == "passed" else SessionStatus.FAILED
         session.completed_at = datetime.now(timezone.utc)
         session.updated_at = session.completed_at
-        store.save(session, touch_updated_at=False)
+        await store.save(session, touch_updated_at=False)
 
         return vs_pb2.VerificationResult(
             session_id=request.session_id,
             result=session.result or "",
             decision=session.decision or "",
             decision_reason=session.decision_reason,
-            verified_claims_json=json.dumps(session.verified_claims),
-            credential_results_json=json.dumps(session.credential_results),
+            verified_claims_json=json.dumps(eval_result.get("verified_claims", {})),
+            credential_results_json=json.dumps(
+                eval_result.get("credential_results", [])
+            ),
             total_requirements=eval_result.get("total_requirements", 0),
             satisfied_requirements=eval_result.get("satisfied_requirements", 0),
             evaluation_timestamp=session.completed_at.isoformat(),
             nonce=session.nonce,
             inspection_performed=session.inspection_performed,
-            inspection_result=session.inspection_result,
+            inspection_result=inspection_result,
         )
 
     # -- EvaluatePresentation ------------------------------------------------
@@ -188,7 +204,7 @@ class VerificationServiceGrpc(
 
     async def ListSessions(self, request, context):
         store = self._get_store()
-        sessions = store.list_by_org(
+        sessions = await store.list_by_org(
             request.organization_id,
             request.status or None,
         )
@@ -204,7 +220,7 @@ class VerificationServiceGrpc(
 
     async def GetInspectionResult(self, request, context):
         store = self._get_store()
-        session = store.get(request.session_id)
+        session = await store.get(request.session_id)
         if not session:
             context.set_code(grpc.StatusCode.NOT_FOUND)
             context.set_details(f"Session {request.session_id} not found")
@@ -214,7 +230,11 @@ class VerificationServiceGrpc(
             session_id=session.session_id,
             performed=session.inspection_performed,
             result=session.inspection_result,
-            detail_json="{}",
+            detail_json=json.dumps(
+                {"result_sha256": session.inspection_result_sha256}
+                if session.inspection_result_sha256
+                else {}
+            ),
             timestamp=session.completed_at.isoformat() if session.completed_at else "",
         )
 

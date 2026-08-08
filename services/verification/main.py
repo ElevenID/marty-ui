@@ -20,6 +20,7 @@ Port: 8012  |  gRPC: 9017
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -30,11 +31,9 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Annotated, Any, AsyncGenerator, Awaitable
 
-import grpc
 import grpc.aio as grpc_aio
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from marty_common.service_setup import create_service_app
@@ -103,7 +102,8 @@ class VerificationSession:
         self.holder_binding_evidence: dict[str, Any] | None = None
         self.inspection_performed: bool = False
         self.inspection_result: str = ""
-        self.vp_token: str | None = None
+        self.inspection_result_sha256: str | None = None
+        self.vp_token_sha256: str | None = None
         self.completed_at: datetime | None = None
         self.error: str | None = None
 
@@ -125,6 +125,139 @@ REDIS_URL = os.environ.get("REDIS_URL", "")
 SESSION_PREFIX = "verification:session:"
 SESSION_TTL_SECONDS = 60 * 60  # 1 hour (covers 15-min expiry + buffer)
 
+_SAFE_INSPECTION_RESULTS = {
+    "error",
+    "failed",
+    "invalid",
+    "ok",
+    "passed",
+    "recorded",
+    "unavailable",
+    "unsupported",
+    "unverified",
+    "valid",
+    "verified",
+}
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _minimize_verified_claims(claims: Any) -> dict[str, bool]:
+    """Retain claim names and pass status, never disclosed values."""
+    if not isinstance(claims, dict):
+        return {}
+    return {name: True for name in sorted(str(name) for name in claims) if name}
+
+
+def _minimize_claim_result(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, Any] = {}
+    for key in ("claim_name", "satisfied"):
+        item = value.get(key)
+        if isinstance(item, (str, bool)) or item is None:
+            if item is not None:
+                result[key] = item
+    constraint_results = value.get("constraint_results")
+    if isinstance(constraint_results, list):
+        minimized_constraints = []
+        for constraint in constraint_results:
+            if not isinstance(constraint, dict):
+                continue
+            minimized = {
+                key: item
+                for key in ("constraint_type", "passed", "satisfied")
+                if isinstance((item := constraint.get(key)), (str, bool))
+            }
+            if minimized:
+                minimized_constraints.append(minimized)
+        if minimized_constraints:
+            result["constraint_results"] = minimized_constraints
+    return result or None
+
+
+def _minimize_credential_results(results: Any) -> list[dict[str, Any]]:
+    """Project credential evaluations to non-value decision evidence."""
+    if not isinstance(results, list):
+        return []
+    minimized_results: list[dict[str, Any]] = []
+    scalar_keys = (
+        "credential_template_id",
+        "credential_type",
+        "credential_format",
+        "satisfied",
+        "issuer_did",
+        "signature_valid",
+        "trust_validated",
+        "revocation_checked",
+        "revocation_validated",
+        "revocation_status_checked",
+        "holder_binding_validated",
+    )
+    list_keys = ("claims_missing", "claims_satisfied")
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        minimized: dict[str, Any] = {
+            key: item
+            for key in scalar_keys
+            if isinstance((item := result.get(key)), (str, bool, int, float))
+        }
+        for key in list_keys:
+            values = result.get(key)
+            if isinstance(values, list):
+                minimized[key] = [str(item) for item in values if str(item)]
+        claim_results = result.get("claim_results")
+        if isinstance(claim_results, list):
+            minimized_claims = [
+                item
+                for claim_result in claim_results
+                if (item := _minimize_claim_result(claim_result)) is not None
+            ]
+            if minimized_claims:
+                minimized["claim_results"] = minimized_claims
+        minimized_results.append(minimized)
+    return minimized_results
+
+
+def _minimize_inspection_result(raw_result: str) -> tuple[str, str | None]:
+    if not raw_result:
+        return "", None
+    digest = _sha256_text(raw_result)
+    normalized = raw_result.strip().lower()
+    try:
+        parsed = json.loads(raw_result)
+    except (TypeError, ValueError):
+        parsed = None
+    if isinstance(parsed, dict):
+        for key in ("result", "status", "decision"):
+            candidate = str(parsed.get(key, "")).strip().lower()
+            if candidate in _SAFE_INSPECTION_RESULTS:
+                normalized = candidate
+                break
+    safe_result = normalized if normalized in _SAFE_INSPECTION_RESULTS else "recorded"
+    return safe_result, digest
+
+
+def _minimize_terminal_session(session: VerificationSession) -> None:
+    """Remove prohibited post-verification data before persistence."""
+    if session.status == SessionStatus.PENDING:
+        return
+    session.verified_claims = _minimize_verified_claims(session.verified_claims)
+    session.credential_results = _minimize_credential_results(
+        session.credential_results
+    )
+    if session.inspection_result and not (
+        session.inspection_result_sha256
+        and session.inspection_result in _SAFE_INSPECTION_RESULTS
+    ):
+        (
+            session.inspection_result,
+            session.inspection_result_sha256,
+        ) = _minimize_inspection_result(session.inspection_result)
+
 
 class _CompletedAwaitable:
     def __await__(self):
@@ -135,6 +268,7 @@ class _CompletedAwaitable:
 
 def _session_to_redis_dict(session: VerificationSession) -> dict[str, Any]:
     """Serialize a VerificationSession to a JSON-safe dict for Redis storage."""
+    _minimize_terminal_session(session)
     return {
         "session_id": session.session_id,
         "flow_id": session.flow_id,
@@ -161,7 +295,8 @@ def _session_to_redis_dict(session: VerificationSession) -> dict[str, Any]:
         "holder_binding_evidence": session.holder_binding_evidence,
         "inspection_performed": session.inspection_performed,
         "inspection_result": session.inspection_result,
-        "vp_token": session.vp_token,
+        "inspection_result_sha256": session.inspection_result_sha256,
+        "vp_token_sha256": session.vp_token_sha256,
         "completed_at": session.completed_at.isoformat() if session.completed_at else None,
         "error": session.error,
     }
@@ -195,11 +330,16 @@ def _session_from_dict(data: dict[str, Any]) -> VerificationSession:
     session.holder_binding_evidence = data.get("holder_binding_evidence")
     session.inspection_performed = data.get("inspection_performed", False)
     session.inspection_result = data.get("inspection_result", "")
-    session.vp_token = data.get("vp_token")
+    session.inspection_result_sha256 = data.get("inspection_result_sha256")
+    legacy_vp_token = data.get("vp_token")
+    session.vp_token_sha256 = data.get("vp_token_sha256") or (
+        _sha256_text(legacy_vp_token) if isinstance(legacy_vp_token, str) else None
+    )
     session.completed_at = (
         datetime.fromisoformat(data["completed_at"]) if data.get("completed_at") else None
     )
     session.error = data.get("error")
+    _minimize_terminal_session(session)
     return session
 
 
@@ -222,6 +362,7 @@ class SessionStore:
     ) -> Awaitable[None]:
         if touch_updated_at:
             session.updated_at = datetime.now(timezone.utc)
+        _minimize_terminal_session(session)
         if self._use_redis:
             async def _save_to_redis() -> None:
                 key = f"{SESSION_PREFIX}{session.session_id}"
@@ -239,7 +380,13 @@ class SessionStore:
             raw = await self._redis.get(f"{SESSION_PREFIX}{session_id}")
             if raw is None:
                 return None
-            session = _session_from_dict(json.loads(raw))
+            stored_data = json.loads(raw)
+            session = _session_from_dict(stored_data)
+            if (
+                session.status != SessionStatus.PENDING
+                and _session_to_redis_dict(session) != stored_data
+            ):
+                await self.save(session, touch_updated_at=False)
         else:
             session = self._fallback.get(session_id)
         if session is None:
@@ -1033,7 +1180,7 @@ async def submit_presentation(
         session.updated_at = datetime.now(timezone.utc)
         raise HTTPException(status_code=410, detail="Session expired")
 
-    session.vp_token = body.vp_token
+    session.vp_token_sha256 = _sha256_text(body.vp_token)
     session.updated_at = datetime.now(timezone.utc)
 
     try:
@@ -1054,9 +1201,9 @@ async def submit_presentation(
         logger.error("Evaluation failed for session %s: %s", session_id, exc)
         session.result = "failed"
         session.decision = "deny"
-        session.decision_reason = str(exc)
+        session.decision_reason = "Credential evaluation failed"
         session.holder_binding_evidence = None
-        session.error = None
+        session.error = "Credential evaluation failed"
 
     # Optionally call InspectionSystem for deep document verification
     if INSPECTION_SYSTEM_TARGET and session.result != "failed":
@@ -1068,6 +1215,14 @@ async def submit_presentation(
     session.status = SessionStatus.COMPLETED if session.result == "passed" else SessionStatus.FAILED
     session.completed_at = datetime.now(timezone.utc)
     session.updated_at = session.completed_at
+    callback_payload = _session_to_dict(session)
+    callback_payload["credential_results"] = _minimize_credential_results(
+        session.credential_results
+    )
+    (
+        callback_payload["inspection_result"],
+        callback_payload["inspection_result_sha256"],
+    ) = _minimize_inspection_result(session.inspection_result)
     await store.save(session, touch_updated_at=False)
 
     # Fire callback if configured
@@ -1075,7 +1230,7 @@ async def submit_presentation(
         import httpx
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.post(session.callback_url, json=_session_to_dict(session))
+                await client.post(session.callback_url, json=callback_payload)
         except Exception as cb_exc:
             logger.warning("Callback POST to %s failed: %s", session.callback_url, cb_exc)
 
@@ -1121,6 +1276,7 @@ async def get_inspection_result(
         "session_id": session_id,
         "performed": session.inspection_performed,
         "result": session.inspection_result,
+        "result_sha256": session.inspection_result_sha256,
         "timestamp": session.completed_at.isoformat() if session.completed_at else "",
     }
 
@@ -1178,7 +1334,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Starting {SERVICE_NAME} service on port {SERVICE_PORT}...")
 
     # Initialize session store (Redis or in-memory fallback)
-    store = await init_store()
+    await init_store()
 
     if GRPC_ENABLED:
         try:
