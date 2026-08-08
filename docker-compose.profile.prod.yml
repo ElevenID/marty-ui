@@ -2,15 +2,77 @@
 # ===========================
 # Production-focused overrides layered on docker-compose.base.yml.
 
+x-marty-production-service-auth: &marty_production_service_auth
+  ENVIRONMENT: production
+  GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set}
+
 services:
+  gateway:
+    environment:
+      <<: *marty_production_service_auth
+
   auth:
     environment:
+      <<: *marty_production_service_auth
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       FLOW_WEBHOOK_SECRET: ${FLOW_WEBHOOK_SECRET:?FLOW_WEBHOOK_SECRET must be set}
 
+  organization:
+    environment:
+      <<: *marty_production_service_auth
+
+  credential-template:
+    environment:
+      <<: *marty_production_service_auth
+
+  trust-profile:
+    environment:
+      <<: *marty_production_service_auth
+
+  issuance:
+    environment:
+      <<: *marty_production_service_auth
+
+  applicant:
+    environment:
+      <<: *marty_production_service_auth
+
+  notification:
+    environment:
+      <<: *marty_production_service_auth
+
+  compliance-profile:
+    environment:
+      <<: *marty_production_service_auth
+
+  presentation-policy:
+    environment:
+      <<: *marty_production_service_auth
+
+  deployment-profile:
+    environment:
+      <<: *marty_production_service_auth
+
   flow:
     environment:
+      <<: *marty_production_service_auth
       FLOW_WEBHOOK_SECRET: ${FLOW_WEBHOOK_SECRET:?FLOW_WEBHOOK_SECRET must be set}
+
+  verification:
+    environment:
+      <<: *marty_production_service_auth
+
+  revocation-profile:
+    environment:
+      <<: *marty_production_service_auth
+
+  device-registration:
+    environment:
+      <<: *marty_production_service_auth
+
+  event-stream:
+    environment:
+      <<: *marty_production_service_auth
 
   keycloak:
     environment:
