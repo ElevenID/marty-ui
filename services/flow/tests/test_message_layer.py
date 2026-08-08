@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from starlette.requests import Request
 
 import flow.main as flow_main
+import flow.callback_outbox as callback_outbox
 from marty_common.messages import MessageType
 from common.webhook_signatures import verify_event_signature
 from flow.main import (
@@ -2869,13 +2870,19 @@ async def test_submit_verification_response_forwards_flow_trust_profile_to_polic
 
 
 @pytest.mark.asyncio
-async def test_verification_callback_signature_binds_event_headers_and_payload(monkeypatch):
+async def test_verification_callback_signature_binds_event_headers_and_payload(
+    monkeypatch,
+):
     _install_accepting_evaluation_stub(
         monkeypatch,
         claims={"email": "alice@example.com"},
     )
     callback_secret = "test-flow-webhook-secret-at-least-32-bytes"
     monkeypatch.setenv("FLOW_WEBHOOK_SECRET", callback_secret)
+    monkeypatch.setenv(
+        "FLOW_CALLBACK_DESTINATIONS",
+        "org-1|https://auth.example/internal/credential-verified",
+    )
     captured: dict[str, object] = {}
 
     class CallbackResponse:
@@ -2893,7 +2900,7 @@ async def test_verification_callback_signature_binds_event_headers_and_payload(m
             return CallbackResponse()
 
     monkeypatch.setattr(
-        flow_main.httpx,
+        callback_outbox.httpx,
         "AsyncClient",
         lambda **_kwargs: CallbackClient(),
     )
@@ -2926,11 +2933,14 @@ async def test_verification_callback_signature_binds_event_headers_and_payload(m
     assert verify_event_signature(
         headers["X-MIP-Signature"],
         callback_secret,
+        audience=headers["X-MIP-Audience"],
         event=headers["X-MIP-Event"],
         event_id=headers["X-MIP-Event-Id"],
         timestamp=headers["X-MIP-Timestamp"],
         payload=payload,
     )
+    assert payload["evidence_digest"]
+    assert payload["decision_digest"]
 
 
 @pytest.mark.asyncio

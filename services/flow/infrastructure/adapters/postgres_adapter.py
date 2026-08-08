@@ -3,9 +3,10 @@ PostgreSQL adapter for flow repository.
 """
 
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -18,10 +19,12 @@ if TYPE_CHECKING:
     )
 
 from flow.infrastructure.models import (
+    flow_callback_outbox,
     flow_definitions,
     flow_instances,
     flow_nonce_consumptions,
 )
+from flow.callback_outbox import CallbackOutboxEvent, new_lease_token
 
 logger = logging.getLogger(__name__)
 
@@ -481,6 +484,7 @@ class PostgresFlowRepository:
         nonce_digest: str,
         replay_expires_at,
         expected_status: "FlowInstanceStatus",
+        callback_event: CallbackOutboxEvent | None = None,
     ) -> bool:
         """Atomically consume replay state and commit one terminal decision."""
         consumed_at = instance.completed_at or instance.updated_at
@@ -534,9 +538,168 @@ class PostgresFlowRepository:
                     )
                     if update_result.rowcount != 1:
                         raise _FinalizationConflict
+                    if callback_event is not None:
+                        await session.execute(
+                            flow_callback_outbox.insert().values(
+                                event_id=callback_event.event_id,
+                                flow_instance_id=callback_event.flow_instance_id,
+                                organization_id=callback_event.organization_id,
+                                destination_url=callback_event.destination_url,
+                                audience=callback_event.audience,
+                                event_type=callback_event.event_type,
+                                payload=callback_event.payload,
+                                status="pending",
+                                attempt_count=0,
+                                next_attempt_at=callback_event.next_attempt_at,
+                                created_at=callback_event.created_at,
+                                expires_at=callback_event.expires_at,
+                            )
+                        )
         except _FinalizationConflict:
             return False
         return True
+
+    async def claim_due_callback_events(
+        self,
+        *,
+        now: datetime,
+        lease_expires_at: datetime,
+        limit: int,
+    ) -> list[CallbackOutboxEvent]:
+        """Lease due callbacks across replicas using row locks."""
+        claimed: list[CallbackOutboxEvent] = []
+        async with self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    flow_callback_outbox.update()
+                    .where(
+                        flow_callback_outbox.c.expires_at <= now,
+                        flow_callback_outbox.c.status.in_(
+                            ("pending", "retry", "delivering", "dead_letter")
+                        ),
+                    )
+                    .values(
+                        status="expired",
+                        destination_url="",
+                        payload={},
+                        lease_token=None,
+                        lease_expires_at=None,
+                        last_error_code="retention_expired",
+                    )
+                )
+                result = await session.execute(
+                    select(flow_callback_outbox)
+                    .where(
+                        flow_callback_outbox.c.expires_at > now,
+                        or_(
+                            (
+                                flow_callback_outbox.c.status.in_(("pending", "retry"))
+                                & (flow_callback_outbox.c.next_attempt_at <= now)
+                            ),
+                            (
+                                (flow_callback_outbox.c.status == "delivering")
+                                & (flow_callback_outbox.c.lease_expires_at <= now)
+                            ),
+                        ),
+                    )
+                    .order_by(flow_callback_outbox.c.created_at)
+                    .limit(limit)
+                    .with_for_update(skip_locked=True)
+                )
+                for row in result.mappings().all():
+                    lease_token = new_lease_token()
+                    attempt_count = int(row["attempt_count"]) + 1
+                    await session.execute(
+                        flow_callback_outbox.update()
+                        .where(flow_callback_outbox.c.event_id == row["event_id"])
+                        .values(
+                            status="delivering",
+                            attempt_count=attempt_count,
+                            lease_token=lease_token,
+                            lease_expires_at=lease_expires_at,
+                        )
+                    )
+                    claimed.append(
+                        CallbackOutboxEvent(
+                            event_id=row["event_id"],
+                            flow_instance_id=row["flow_instance_id"],
+                            organization_id=row["organization_id"],
+                            destination_url=row["destination_url"],
+                            audience=row["audience"],
+                            event_type=row["event_type"],
+                            payload=row["payload"],
+                            created_at=row["created_at"],
+                            next_attempt_at=row["next_attempt_at"],
+                            expires_at=row["expires_at"],
+                            status="delivering",
+                            attempt_count=attempt_count,
+                            lease_token=lease_token,
+                            lease_expires_at=lease_expires_at,
+                            delivered_at=row["delivered_at"],
+                            last_error_code=row["last_error_code"],
+                        )
+                    )
+        return claimed
+
+    async def mark_callback_delivered(
+        self,
+        event_id: str,
+        *,
+        lease_token: str,
+        delivered_at: datetime,
+    ) -> bool:
+        """Acknowledge a leased event and immediately scrub sensitive fields."""
+        async with self._session_factory() as session:
+            result = await session.execute(
+                flow_callback_outbox.update()
+                .where(
+                    flow_callback_outbox.c.event_id == event_id,
+                    flow_callback_outbox.c.status == "delivering",
+                    flow_callback_outbox.c.lease_token == lease_token,
+                )
+                .values(
+                    status="delivered",
+                    destination_url="",
+                    payload={},
+                    delivered_at=delivered_at,
+                    lease_token=None,
+                    lease_expires_at=None,
+                    last_error_code=None,
+                )
+            )
+            await session.commit()
+        return result.rowcount == 1
+
+    async def mark_callback_failed(
+        self,
+        event_id: str,
+        *,
+        lease_token: str,
+        failed_at: datetime,
+        next_attempt_at: datetime,
+        terminal: bool,
+        error_code: str,
+    ) -> bool:
+        """Release a lease for retry or move an exhausted event to dead letter."""
+        del failed_at
+        async with self._session_factory() as session:
+            result = await session.execute(
+                flow_callback_outbox.update()
+                .where(
+                    flow_callback_outbox.c.event_id == event_id,
+                    flow_callback_outbox.c.status == "delivering",
+                    flow_callback_outbox.c.lease_token == lease_token,
+                )
+                .values(
+                    status="dead_letter" if terminal else "retry",
+                    next_attempt_at=next_attempt_at,
+                    lease_token=None,
+                    lease_expires_at=None,
+                    last_error_code=error_code,
+                )
+            )
+            await session.commit()
+        return result.rowcount == 1
 
     async def get_instance(self, instance_id: str) -> "FlowInstance | None":
         """Get a flow instance by ID."""

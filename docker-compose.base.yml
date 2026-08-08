@@ -722,6 +722,7 @@ services:
       REDIS_DB_FLOW: "3"
       FLOW_GRPC_PORT: "9011"
       FLOW_WEBHOOK_SECRET: ${FLOW_WEBHOOK_SECRET:-dev-flow-webhook-secret-change-me}
+      FLOW_CALLBACK_DESTINATIONS: ${FLOW_CALLBACK_DESTINATIONS:-${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}|http://auth:8001/internal/v1/auth/credential-verified?nonce=__MARTY_TOKEN__}
     ports:
       - "8011:8011"
       - "9011:9011"

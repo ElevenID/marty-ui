@@ -16,9 +16,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from flow.infrastructure.adapters.postgres_adapter import PostgresFlowRepository
 from flow.infrastructure.models import (
+    flow_callback_outbox,
     flow_instances,
     flow_nonce_consumptions,
 )
+from flow.callback_outbox import CallbackOutboxEvent
 from flow.main import FlowInstance, FlowInstanceStatus
 
 FLOW_SERVICE_DIR = Path(__file__).parents[1]
@@ -51,6 +53,24 @@ def _terminal_instance(instance_id: str, decision: str) -> FlowInstance:
         completed_at=now,
         updated_at=now,
         result={"evaluation_result": "passed", "decision": decision},
+    )
+
+
+def _callback_event(instance: FlowInstance, marker: str) -> CallbackOutboxEvent:
+    assert instance.completed_at is not None
+    return CallbackOutboxEvent(
+        event_id=instance.id,
+        flow_instance_id=instance.id,
+        organization_id=instance.organization_id,
+        destination_url=(
+            "https://auth.example/internal/credential-verified?nonce=" + marker * 32
+        ),
+        audience="marty-auth-service",
+        event_type="flow.verification_completed",
+        payload={"flow_instance_id": instance.id, "decision": marker},
+        created_at=instance.completed_at,
+        next_attempt_at=instance.completed_at,
+        expires_at=instance.completed_at + timedelta(minutes=15),
     )
 
 
@@ -97,7 +117,7 @@ async def test_postgres_migration_and_concurrent_finalization_are_atomic() -> No
             revision = await connection.scalar(
                 text("SELECT version_num FROM flow_service.alembic_version")
             )
-            assert revision == "20260808_0001"
+            assert revision == "20260808_0002"
 
             instance_id = "90000000-0000-0000-0000-000000000001"
             now = datetime.now(timezone.utc)
@@ -128,6 +148,7 @@ async def test_postgres_migration_and_concurrent_finalization_are_atomic() -> No
                     nonce_digest=nonce_digest,
                     replay_expires_at=instance.completed_at + timedelta(minutes=5),
                     expected_status=FlowInstanceStatus.AWAITING_WALLET,
+                    callback_event=_callback_event(instance, nonce_digest[0]),
                 )
                 for instance, nonce_digest in candidates
             )
@@ -151,9 +172,53 @@ async def test_postgres_migration_and_concurrent_finalization_are_atomic() -> No
                     )
                 )
             ).all()
+            callback_rows = (
+                await session.execute(
+                    select(
+                        flow_callback_outbox.c.flow_instance_id,
+                        flow_callback_outbox.c.payload,
+                        flow_callback_outbox.c.status,
+                    )
+                )
+            ).all()
 
         assert stored_result == winning_instance.result
         assert replay_rows == [(winning_digest, instance_id)]
+        assert callback_rows == [
+            (
+                instance_id,
+                {"flow_instance_id": instance_id, "decision": winning_digest[0]},
+                "pending",
+            )
+        ]
+
+        claimed = await repository.claim_due_callback_events(
+            now=winning_instance.completed_at + timedelta(seconds=1),
+            lease_expires_at=winning_instance.completed_at + timedelta(seconds=31),
+            limit=10,
+        )
+        assert len(claimed) == 1
+        assert claimed[0].attempt_count == 1
+        assert claimed[0].lease_token
+        acknowledged = await repository.mark_callback_delivered(
+            claimed[0].event_id,
+            lease_token=claimed[0].lease_token or "",
+            delivered_at=winning_instance.completed_at + timedelta(seconds=2),
+        )
+        assert acknowledged is True
+
+        async with session_factory() as session:
+            delivered_row = (
+                await session.execute(
+                    select(
+                        flow_callback_outbox.c.status,
+                        flow_callback_outbox.c.destination_url,
+                        flow_callback_outbox.c.payload,
+                        flow_callback_outbox.c.attempt_count,
+                    )
+                )
+            ).one()
+        assert delivered_row == ("delivered", "", {}, 1)
     finally:
         with sync_engine.begin() as connection:
             connection.execute(text("DROP SCHEMA IF EXISTS flow_service CASCADE"))

@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import secrets
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
@@ -25,7 +26,12 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from marty_common.system_ids import MARTY_OPEN_BADGE_LOGIN_POLICY_ID
-from common.webhook_signatures import is_valid_event_secret, verify_event_signature
+from common.webhook_signatures import (
+    AUTH_CALLBACK_AUDIENCE,
+    is_valid_event_secret,
+    payload_digest,
+    verify_event_signature,
+)
 
 from ...application.ports import (
     HandleCallbackCommand,
@@ -649,6 +655,7 @@ _COMPLETE_KEY = "marty:cred_login:complete:"
 _CALLBACK_CLAIM_KEY = "marty:cred_login:callback_claim:"
 _PENDING_TTL = 900   # 15 minutes
 _COMPLETE_TTL = 300  # 5 minutes (consumed once)
+_CALLBACK_CLAIM_LEASE_SECONDS = 30
 _CALLBACK_TIMESTAMP_SKEW_SECONDS = 300
 
 
@@ -2665,12 +2672,14 @@ class CredentialVerifiedPayload(BaseModel):
     verified_claims: dict[str, Any] = Field(default_factory=dict)
     presentation_policy_id: str = ""
     completed_at: str = ""
+    evidence_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    decision_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 def _authenticate_credential_verified_callback(
     payload: CredentialVerifiedPayload,
     request: Request,
-) -> None:
+) -> str:
     """Require a fresh, signed event bound to the callback payload."""
     try:
         secret = _read_flow_webhook_secret()
@@ -2687,11 +2696,22 @@ def _authenticate_credential_verified_callback(
         )
 
     event = request.headers.get("x-mip-event", "")
+    audience = request.headers.get("x-mip-audience", "")
     event_id = request.headers.get("x-mip-event-id", "")
     timestamp = request.headers.get("x-mip-timestamp", "")
     signature = request.headers.get("x-mip-signature", "")
-    if event != "flow.verification_completed" or not hmac.compare_digest(
-        event_id, payload.flow_instance_id
+    if (
+        event != "flow.verification_completed"
+        or not hmac.compare_digest(audience, AUTH_CALLBACK_AUDIENCE)
+        or not hmac.compare_digest(event_id, payload.flow_instance_id)
+    ):
+        raise HTTPException(status_code=401, detail="Invalid verification callback")
+
+    decision_basis = payload.model_dump(mode="json")
+    decision_basis.pop("decision_digest", None)
+    if not hmac.compare_digest(
+        payload.decision_digest,
+        payload_digest(decision_basis),
     ):
         raise HTTPException(status_code=401, detail="Invalid verification callback")
 
@@ -2711,21 +2731,48 @@ def _authenticate_credential_verified_callback(
     if not verify_event_signature(
         signature,
         secret,
+        audience=audience,
         event=event,
         event_id=event_id,
         timestamp=timestamp,
         payload=payload.model_dump(mode="json"),
     ):
         raise HTTPException(status_code=401, detail="Invalid verification callback")
+    return secret
 
 
-async def _mark_credential_login_failed(nonce: str, reason: str) -> None:
+def _credential_callback_session_id(
+    secret: str,
+    *,
+    flow_instance_id: str,
+    nonce: str,
+) -> str:
+    """Derive an unguessable stable session ID for crash-safe retries."""
+    digest = hmac.new(
+        secret.encode("utf-8"),
+        f"credential-login-session\0{flow_instance_id}\0{nonce}".encode("utf-8"),
+        hashlib.sha256,
+    ).digest()
+    return str(uuid.UUID(bytes=digest[:16], version=4))
+
+
+async def _mark_credential_login_failed(
+    nonce: str,
+    reason: str,
+    *,
+    flow_instance_id: str,
+) -> None:
     if _redis_client is None:
         return
     await _redis_client.setex(
         f"{_COMPLETE_KEY}{nonce}",
         _COMPLETE_TTL,
         json.dumps(_credential_login_failure_payload(reason)),
+    )
+    await _redis_client.set(
+        f"{_CALLBACK_CLAIM_KEY}{nonce}",
+        flow_instance_id,
+        ex=_PENDING_TTL,
     )
     await _redis_client.delete(f"{_PENDING_KEY}{nonce}")
 
@@ -2745,13 +2792,21 @@ async def credential_verified(
 
     This endpoint is NOT exposed via the gateway.
     """
-    _authenticate_credential_verified_callback(payload, request)
+    callback_secret = _authenticate_credential_verified_callback(payload, request)
     if _redis_client is None or _session_repository is None:
         raise HTTPException(status_code=503, detail="Session store not available")
 
     # Locate the pending login state
     pending_raw = await _redis_client.get(f"{_PENDING_KEY}{nonce}")
     if not pending_raw:
+        prior_claim = await _redis_client.get(f"{_CALLBACK_CLAIM_KEY}{nonce}")
+        if isinstance(prior_claim, bytes):
+            prior_claim = prior_claim.decode("utf-8", errors="replace")
+        if isinstance(prior_claim, str) and hmac.compare_digest(
+            prior_claim,
+            payload.flow_instance_id,
+        ):
+            return {"ok": True, "status": "already_processed"}
         logger.warning(f"credential-verified: nonce {nonce[:8]}... not found or expired")
         raise HTTPException(status_code=404, detail="Login session expired or not found")
 
@@ -2784,7 +2839,7 @@ async def credential_verified(
     callback_claimed = await _redis_client.set(
         f"{_CALLBACK_CLAIM_KEY}{nonce}",
         payload.flow_instance_id,
-        ex=_PENDING_TTL,
+        ex=_CALLBACK_CLAIM_LEASE_SECONDS,
         nx=True,
     )
     if not callback_claimed:
@@ -2800,6 +2855,7 @@ async def credential_verified(
         await _mark_credential_login_failed(
             nonce,
             payload.decision_reason or "Credential verification failed",
+            flow_instance_id=payload.flow_instance_id,
         )
         return {"ok": True, "status": "denied"}
 
@@ -2822,7 +2878,11 @@ async def credential_verified(
             payload.flow_instance_id,
             f"{nonce[:8]}...",
         )
-        await _mark_credential_login_failed(nonce, "Credential missing email claim")
+        await _mark_credential_login_failed(
+            nonce,
+            "Credential missing email claim",
+            flow_instance_id=payload.flow_instance_id,
+        )
         return {"ok": True, "status": "denied"}
 
     keycloak_user = None
@@ -2848,7 +2908,11 @@ async def credential_verified(
             # synthetic claim-only identities.
             require_existing_kc_user = _credential_login_require_existing_keycloak_user or not _credential_login_create_users
             if not kc_user_id and require_existing_kc_user:
-                await _mark_credential_login_failed(nonce, "keycloak_user_not_found")
+                await _mark_credential_login_failed(
+                    nonce,
+                    "keycloak_user_not_found",
+                    flow_instance_id=payload.flow_instance_id,
+                )
                 return {"ok": True, "status": "denied"}
             if kc_user_id:
                 kc_tokens = await _kc_admin_adapter.exchange_token_for_user(kc_user_id)
@@ -2876,10 +2940,18 @@ async def credential_verified(
             logger.warning("KC enrichment failed during credential login for %s: %s", email, kc_exc)
             require_existing_kc_user = _credential_login_require_existing_keycloak_user or not _credential_login_create_users
             if require_existing_kc_user:
-                await _mark_credential_login_failed(nonce, "keycloak_user_not_eligible")
+                await _mark_credential_login_failed(
+                    nonce,
+                    "keycloak_user_not_eligible",
+                    flow_instance_id=payload.flow_instance_id,
+                )
                 return {"ok": True, "status": "denied"}
     elif _credential_login_require_existing_keycloak_user:
-        await _mark_credential_login_failed(nonce, "keycloak_admin_unavailable")
+        await _mark_credential_login_failed(
+            nonce,
+            "keycloak_admin_unavailable",
+            flow_instance_id=payload.flow_instance_id,
+        )
         return {"ok": True, "status": "denied"}
 
     user = await build_credential_login_user(
@@ -2908,6 +2980,11 @@ async def credential_verified(
         ip_address=ip_address,
         user_agent=user_agent,
     )
+    session.session_id = _credential_callback_session_id(
+        callback_secret,
+        flow_instance_id=payload.flow_instance_id,
+        nonce=nonce,
+    )
 
     if kc_tokens:
         session.id_token = kc_tokens.get("id_token")
@@ -2932,6 +3009,11 @@ async def credential_verified(
             "revocation_checked": revocation_checked,
             "revocation_status": revocation_status,
         }),
+    )
+    await _redis_client.set(
+        f"{_CALLBACK_CLAIM_KEY}{nonce}",
+        payload.flow_instance_id,
+        ex=_PENDING_TTL,
     )
     # Clean up pending key
     await _redis_client.delete(f"{_PENDING_KEY}{nonce}")

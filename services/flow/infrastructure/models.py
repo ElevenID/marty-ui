@@ -5,8 +5,10 @@ SQLAlchemy models for flow service.
 from datetime import datetime, timezone
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -123,6 +125,41 @@ flow_nonce_consumptions = Table(
     schema="flow_service",
 )
 
+# Verification callbacks are enqueued in the same transaction as the terminal
+# result. Payloads are scrubbed immediately after successful delivery and all
+# undelivered data has a bounded expiry.
+flow_callback_outbox = Table(
+    "flow_callback_outbox",
+    mapper_registry.metadata,
+    Column("event_id", String(36), primary_key=True),
+    Column(
+        "flow_instance_id",
+        String(36),
+        ForeignKey("flow_service.flow_instances.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    Column("organization_id", String(255), nullable=False),
+    Column("destination_url", Text, nullable=False),
+    Column("audience", String(255), nullable=False),
+    Column("event_type", String(128), nullable=False),
+    Column("payload", JSON, nullable=False),
+    Column("status", String(32), nullable=False, default="pending"),
+    Column("attempt_count", Integer, nullable=False, default=0),
+    Column("next_attempt_at", DateTime(timezone=True), nullable=False),
+    Column("lease_token", String(36), nullable=True),
+    Column("lease_expires_at", DateTime(timezone=True), nullable=True),
+    Column("last_error_code", String(128), nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("delivered_at", DateTime(timezone=True), nullable=True),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint(
+        "status IN ('pending', 'delivering', 'retry', 'delivered', 'dead_letter', 'expired')",
+        name="ck_flow_callback_outbox_status",
+    ),
+    schema="flow_service",
+)
+
 # Indexes for efficient querying
 Index("ix_flow_definitions_organization_id", flow_definitions.c.organization_id)
 Index("ix_flow_definitions_status", flow_definitions.c.status)
@@ -141,4 +178,13 @@ Index("ix_flow_instances_external_reference", flow_instances.c.external_referenc
 Index(
     "ix_flow_nonce_consumptions_expires_at",
     flow_nonce_consumptions.c.expires_at,
+)
+Index(
+    "ix_flow_callback_outbox_due",
+    flow_callback_outbox.c.status,
+    flow_callback_outbox.c.next_attempt_at,
+)
+Index(
+    "ix_flow_callback_outbox_expires_at",
+    flow_callback_outbox.c.expires_at,
 )

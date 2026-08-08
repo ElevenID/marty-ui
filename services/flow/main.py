@@ -32,7 +32,7 @@ import re
 import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
@@ -71,7 +71,15 @@ from marty_common import (
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
-from common.webhook_signatures import is_valid_event_secret, sign_event
+from common.webhook_signatures import is_valid_event_secret, payload_digest
+from flow.callback_outbox import (
+    CallbackOutboxEvent,
+    deliver_due_callback_events,
+    new_callback_event,
+    new_lease_token,
+    require_registered_callback_destination,
+    run_callback_dispatcher,
+)
 from flow.infrastructure.adapters import PostgresFlowRepository
 from protocol_version import MIP_VERSION
 
@@ -1544,6 +1552,7 @@ class InMemoryFlowRepository:
         self._finalization_lock = asyncio.Lock()
         self._consumed_nonce_digests: dict[str, datetime] = {}
         self._finalized_instance_ids: set[str] = set()
+        self._callback_events: dict[str, CallbackOutboxEvent] = {}
 
     # Flow Definition operations
     async def save_definition(self, flow: FlowDefinition) -> None:
@@ -1572,6 +1581,7 @@ class InMemoryFlowRepository:
         nonce_digest: str,
         replay_expires_at: datetime,
         expected_status: FlowInstanceStatus,
+        callback_event: CallbackOutboxEvent | None = None,
     ) -> bool:
         """Development repository equivalent of the database transaction."""
         async with self._finalization_lock:
@@ -1598,6 +1608,122 @@ class InMemoryFlowRepository:
             stored_instance = self._instances[instance.id]
             stored_instance.__dict__.update(copy.deepcopy(instance.__dict__))
             self._instances[instance.id] = stored_instance
+            if callback_event is not None:
+                self._callback_events[callback_event.event_id] = copy.deepcopy(
+                    callback_event
+                )
+            return True
+
+    async def claim_due_callback_events(
+        self,
+        *,
+        now: datetime,
+        lease_expires_at: datetime,
+        limit: int,
+    ) -> list[CallbackOutboxEvent]:
+        async with self._finalization_lock:
+            for event_id, event in tuple(self._callback_events.items()):
+                if event.expires_at <= now and event.status in {
+                    "pending",
+                    "retry",
+                    "delivering",
+                    "dead_letter",
+                }:
+                    self._callback_events[event_id] = replace(
+                        event,
+                        status="expired",
+                        destination_url="",
+                        payload={},
+                        lease_token=None,
+                        lease_expires_at=None,
+                        last_error_code="retention_expired",
+                    )
+            due = sorted(
+                (
+                    event
+                    for event in self._callback_events.values()
+                    if event.expires_at > now
+                    and (
+                        (
+                            event.status in {"pending", "retry"}
+                            and event.next_attempt_at <= now
+                        )
+                        or (
+                            event.status == "delivering"
+                            and event.lease_expires_at is not None
+                            and event.lease_expires_at <= now
+                        )
+                    )
+                ),
+                key=lambda item: item.created_at,
+            )[:limit]
+            claimed: list[CallbackOutboxEvent] = []
+            for event in due:
+                claimed_event = replace(
+                    event,
+                    status="delivering",
+                    attempt_count=event.attempt_count + 1,
+                    lease_token=new_lease_token(),
+                    lease_expires_at=lease_expires_at,
+                )
+                self._callback_events[event.event_id] = claimed_event
+                claimed.append(copy.deepcopy(claimed_event))
+            return claimed
+
+    async def mark_callback_delivered(
+        self,
+        event_id: str,
+        *,
+        lease_token: str,
+        delivered_at: datetime,
+    ) -> bool:
+        async with self._finalization_lock:
+            event = self._callback_events.get(event_id)
+            if (
+                event is None
+                or event.status != "delivering"
+                or event.lease_token != lease_token
+            ):
+                return False
+            self._callback_events[event_id] = replace(
+                event,
+                status="delivered",
+                destination_url="",
+                payload={},
+                lease_token=None,
+                lease_expires_at=None,
+                delivered_at=delivered_at,
+                last_error_code=None,
+            )
+            return True
+
+    async def mark_callback_failed(
+        self,
+        event_id: str,
+        *,
+        lease_token: str,
+        failed_at: datetime,
+        next_attempt_at: datetime,
+        terminal: bool,
+        error_code: str,
+    ) -> bool:
+        del failed_at
+        async with self._finalization_lock:
+            event = self._callback_events.get(event_id)
+            if (
+                event is None
+                or event.status != "delivering"
+                or event.lease_token != lease_token
+            ):
+                return False
+            self._callback_events[event_id] = replace(
+                event,
+                status="dead_letter" if terminal else "retry",
+                next_attempt_at=next_attempt_at,
+                lease_token=None,
+                lease_expires_at=None,
+                last_error_code=error_code,
+            )
             return True
 
     async def list_instances(
@@ -3703,6 +3829,23 @@ class StartSiopFlowRequest(BaseModel):
     expiry_minutes: int = 15
 
 
+def _require_registered_callback(
+    organization_id: str,
+    callback_url: str | None,
+) -> None:
+    if not callback_url:
+        return
+    try:
+        require_registered_callback_destination(organization_id, callback_url)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Verification callback destination policy is unavailable",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 class SiopSubmitRequest(BaseModel):
     """Body for validating a self-issued ID token."""
 
@@ -3804,6 +3947,7 @@ async def start_verification_flow(
                 status_code=422,
                 detail="issuer_did is required to start a signed verification flow.",
             )
+        _require_registered_callback(organization_id, request.callback_url)
         signing_identity = await _oid4vp_issuer_identity(
             organization_id,
             request.issuer_did,
@@ -3905,6 +4049,7 @@ async def start_verification_flow(
             status_code=403,
             detail="Presentation policy belongs to another organization.",
         )
+    _require_registered_callback(organization_id, request.callback_url)
     if not str(request.issuer_did or "").strip():
         raise HTTPException(
             status_code=422,
@@ -6060,11 +6205,47 @@ async def _submit_verification_response_internal(
         replay_expires_at = instance.completed_at + timedelta(
             seconds=_NONCE_TTL_SECONDS
         )
+    callback_event: CallbackOutboxEvent | None = None
+    webhook_secret = ""
+    callback_url = instance.context.get("callback_url")
+    if isinstance(callback_url, str) and callback_url:
+        webhook_secret = _read_secret_value("FLOW_WEBHOOK_SECRET")
+        if not is_valid_event_secret(webhook_secret):
+            raise HTTPException(
+                status_code=503,
+                detail="Verification callback authentication is unavailable",
+            )
+        evidence_digest = payload_digest({"credential_results": credential_results})
+        callback_payload = {
+            "flow_instance_id": instance.id,
+            "result": evaluation_result,
+            "decision": evaluation_decision,
+            "decision_reason": decision_reason,
+            "verified_claims": verified_claims,
+            "presentation_policy_id": policy_id,
+            "completed_at": instance.completed_at.isoformat(),
+            "evidence_digest": evidence_digest,
+        }
+        callback_payload["decision_digest"] = payload_digest(callback_payload)
+        try:
+            callback_event = new_callback_event(
+                flow_instance_id=instance.id,
+                organization_id=instance.organization_id,
+                destination_url=callback_url,
+                payload=callback_payload,
+                created_at=instance.completed_at,
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Verification callback destination is not authorized",
+            ) from exc
     committed = await repo.finalize_verification(
         instance,
         nonce_digest=hashlib.sha256(expected_nonce.encode("utf-8")).hexdigest(),
         replay_expires_at=replay_expires_at,
         expected_status=expected_status,
+        callback_event=callback_event,
     )
     if not committed:
         current = await repo.get_instance(instance.id)
@@ -6088,54 +6269,20 @@ async def _submit_verification_response_internal(
         decision_reason or "<none>",
     )
 
-    # -----------------------------------------------------------------------
-    # Fire callback to notify requesting service (e.g., auth service)
-    # -----------------------------------------------------------------------
-    callback_url = instance.context.get("callback_url")
-    if callback_url:
-        callback_payload = {
-            "flow_instance_id": instance.id,
-            "result": evaluation_result,
-            "decision": evaluation_decision,
-            "decision_reason": decision_reason,
-            "verified_claims": verified_claims,
-            "presentation_policy_id": policy_id,
-            "completed_at": instance.completed_at.isoformat(),
-        }
-        callback_event = "flow.verification_completed"
-        callback_timestamp = datetime.now(timezone.utc).isoformat()
-        cb_headers: dict[str, str] = {
-            "Content-Type": "application/json",
-            "X-MIP-Event": callback_event,
-            "X-MIP-Event-Id": instance.id,
-            "X-MIP-Timestamp": callback_timestamp,
-        }
-        webhook_secret = _read_secret_value("FLOW_WEBHOOK_SECRET")
-        if not is_valid_event_secret(webhook_secret):
-            logger.error(
-                "Refusing verification callback without a secret of at least 32 bytes "
-                "for flow %s",
+    if callback_event is not None:
+        try:
+            await deliver_due_callback_events(
+                repo,
+                webhook_secret=webhook_secret,
+                limit=1,
+            )
+        except Exception:
+            # The callback was committed transactionally and the background
+            # dispatcher will reclaim it after this request or process fails.
+            logger.exception(
+                "Immediate callback delivery failed for flow %s; event remains durable",
                 instance.id,
             )
-        else:
-            cb_headers["X-MIP-Signature"] = sign_event(
-                webhook_secret,
-                event=callback_event,
-                event_id=instance.id,
-                timestamp=callback_timestamp,
-                payload=callback_payload,
-            )
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    cb_resp = await client.post(
-                        callback_url, json=callback_payload, headers=cb_headers
-                    )
-                    logger.info(
-                        f"Callback to {callback_url} returned HTTP {cb_resp.status_code}"
-                    )
-            except httpx.RequestError as exc:
-                # Do not change the already-committed verification result.
-                logger.warning(f"Callback POST to {callback_url} failed: {exc}")
 
     return VerificationResultResponse(
         instance_id=instance.id,
@@ -6905,6 +7052,14 @@ async def handle_application_approved(
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
+    callback_secret = _read_secret_value("FLOW_WEBHOOK_SECRET")
+    if (
+        not is_valid_event_secret(callback_secret)
+        and os.environ.get("ENVIRONMENT", "production").lower() == "production"
+    ):
+        raise RuntimeError(
+            "FLOW_WEBHOOK_SECRET must contain at least 32 bytes in production"
+        )
 
     # Initialize PostgreSQL adapter
     config = get_config()
@@ -6918,6 +7073,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     _repo = PostgresFlowRepository(session_factory)
     logger.info("PostgreSQL adapter initialized for flow service")
+
+    callback_stop = asyncio.Event()
+    callback_task: asyncio.Task[None] | None = None
+    if is_valid_event_secret(callback_secret):
+        callback_task = asyncio.create_task(
+            run_callback_dispatcher(
+                _repo,
+                secret_provider=lambda: _read_secret_value("FLOW_WEBHOOK_SECRET"),
+                stop_event=callback_stop,
+            ),
+            name="verification-callback-dispatcher",
+        )
+    else:
+        logger.warning(
+            "Verification callback dispatcher is disabled without a 32-byte secret"
+        )
 
     # Initialize gRPC channel to organization service
     from common.di import setup_org_client, teardown_org_client
@@ -6970,6 +7141,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    if callback_task is not None:
+        callback_stop.set()
+        await callback_task
     await grpc_server.stop(grace=5)
     await pp_grpc_channel.close()
     await ct_grpc_channel.close()
