@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -18,21 +18,26 @@ from flow.infrastructure.adapters.postgres_adapter import PostgresFlowRepository
 from flow.infrastructure.models import (
     flow_instances,
     flow_nonce_consumptions,
-    mapper_registry,
 )
 from flow.main import FlowInstance, FlowInstanceStatus
 
-MIGRATIONS_DIR = Path(__file__).parents[1] / "infrastructure" / "migrations"
+FLOW_SERVICE_DIR = Path(__file__).parents[1]
 TEST_DATABASE_NAME = "marty_atomic_test"
 TEST_DATABASE_HOSTS = {"127.0.0.1", "localhost"}
 
 
 def _upgrade_flow_schema(database_url: str) -> None:
-    config = Config(str(MIGRATIONS_DIR / "alembic.ini"))
-    config.set_main_option("script_location", str(MIGRATIONS_DIR))
-    config.set_main_option("sqlalchemy.url", database_url)
-    config.attributes["target_metadata"] = mapper_registry.metadata
-    command.upgrade(config, "head")
+    environment = {
+        **os.environ,
+        "DATABASE_URL": database_url,
+        "PYTHONIOENCODING": "utf-8",
+    }
+    subprocess.run(
+        [sys.executable, "manage_migrations.py", "upgrade"],
+        cwd=FLOW_SERVICE_DIR,
+        env=environment,
+        check=True,
+    )
 
 
 def _terminal_instance(instance_id: str, decision: str) -> FlowInstance:
