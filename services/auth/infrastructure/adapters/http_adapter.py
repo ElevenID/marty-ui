@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import html as _html
 import json
 import logging
 import os
 import secrets
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse
 
@@ -22,6 +25,7 @@ from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from marty_common.system_ids import MARTY_OPEN_BADGE_LOGIN_POLICY_ID
+from common.webhook_signatures import is_valid_event_secret, verify_event_signature
 
 from ...application.ports import (
     HandleCallbackCommand,
@@ -642,8 +646,29 @@ _credential_login_create_users = os.environ.get(
 # Redis key prefixes for credential-login state
 _PENDING_KEY = "marty:cred_login:pending:"
 _COMPLETE_KEY = "marty:cred_login:complete:"
+_CALLBACK_CLAIM_KEY = "marty:cred_login:callback_claim:"
 _PENDING_TTL = 900   # 15 minutes
 _COMPLETE_TTL = 300  # 5 minutes (consumed once)
+_CALLBACK_TIMESTAMP_SKEW_SECONDS = 300
+
+
+def _read_flow_webhook_secret() -> str:
+    inline_secret = os.environ.get("FLOW_WEBHOOK_SECRET", "").strip()
+    secret_file = os.environ.get("FLOW_WEBHOOK_SECRET_FILE", "").strip()
+    if inline_secret and secret_file:
+        raise RuntimeError(
+            "Set exactly one of FLOW_WEBHOOK_SECRET or FLOW_WEBHOOK_SECRET_FILE"
+        )
+    if secret_file:
+        try:
+            secret = Path(secret_file).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise RuntimeError("Unable to read FLOW_WEBHOOK_SECRET_FILE") from exc
+    else:
+        secret = inline_secret
+    if secret and not is_valid_event_secret(secret):
+        raise RuntimeError("FLOW_WEBHOOK_SECRET must be at least 32 bytes")
+    return secret
 
 
 def _credential_login_failure_reason_code(reason: str | None) -> str:
@@ -2432,6 +2457,21 @@ async def credential_login(request: Request) -> HTMLResponse:
             ),
             allow_retry=False,
         )
+    try:
+        callback_secret_configured = bool(_read_flow_webhook_secret())
+    except RuntimeError:
+        callback_secret_configured = False
+    if not callback_secret_configured:
+        return _credential_login_unavailable_response(
+            request,
+            title="Open Badge sign-in is temporarily unavailable",
+            message="The wallet sign-in callback is not configured securely.",
+            operator_details=(
+                "Configure exactly one of FLOW_WEBHOOK_SECRET or "
+                "FLOW_WEBHOOK_SECRET_FILE for both auth and flow services."
+            ),
+            allow_retry=False,
+        )
     if _redis_client is None:
         return _credential_login_unavailable_response(
             request,
@@ -2491,7 +2531,16 @@ async def credential_login(request: Request) -> HTMLResponse:
     await _redis_client.setex(
         f"{_PENDING_KEY}{nonce}",
         _PENDING_TTL,
-        json.dumps({"nonce": nonce, "flow_instance_id": instance_id, "status": "pending", "revocation_checked": False}),
+        json.dumps(
+            {
+                "nonce": nonce,
+                "flow_instance_id": instance_id,
+                "presentation_policy_id": _credential_login_policy_id,
+                "organization_id": _credential_login_organization_id,
+                "status": "pending",
+                "revocation_checked": False,
+            }
+        ),
     )
 
     qr_encoded = quote(oid4vp_uri, safe="")
@@ -2613,9 +2662,61 @@ class CredentialVerifiedPayload(BaseModel):
     result: str              # "passed" | "failed" | "partial"
     decision: str            # "allow" | "deny" | "manual_review"
     decision_reason: str = ""
-    verified_claims: dict[str, Any] = {}
+    verified_claims: dict[str, Any] = Field(default_factory=dict)
     presentation_policy_id: str = ""
     completed_at: str = ""
+
+
+def _authenticate_credential_verified_callback(
+    payload: CredentialVerifiedPayload,
+    request: Request,
+) -> None:
+    """Require a fresh, signed event bound to the callback payload."""
+    try:
+        secret = _read_flow_webhook_secret()
+    except RuntimeError as exc:
+        logger.error("Verification callback secret configuration is invalid: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Verification callback authentication is unavailable",
+        ) from exc
+    if not secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Verification callback authentication is unavailable",
+        )
+
+    event = request.headers.get("x-mip-event", "")
+    event_id = request.headers.get("x-mip-event-id", "")
+    timestamp = request.headers.get("x-mip-timestamp", "")
+    signature = request.headers.get("x-mip-signature", "")
+    if event != "flow.verification_completed" or not hmac.compare_digest(
+        event_id, payload.flow_instance_id
+    ):
+        raise HTTPException(status_code=401, detail="Invalid verification callback")
+
+    try:
+        event_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        if event_time.tzinfo is None:
+            raise ValueError("timestamp must include a timezone")
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid verification callback",
+        ) from exc
+    age_seconds = abs((datetime.now(timezone.utc) - event_time).total_seconds())
+    if age_seconds > _CALLBACK_TIMESTAMP_SKEW_SECONDS:
+        raise HTTPException(status_code=401, detail="Expired verification callback")
+
+    if not verify_event_signature(
+        signature,
+        secret,
+        event=event,
+        event_id=event_id,
+        timestamp=timestamp,
+        payload=payload.model_dump(mode="json"),
+    ):
+        raise HTTPException(status_code=401, detail="Invalid verification callback")
 
 
 async def _mark_credential_login_failed(nonce: str, reason: str) -> None:
@@ -2644,6 +2745,7 @@ async def credential_verified(
 
     This endpoint is NOT exposed via the gateway.
     """
+    _authenticate_credential_verified_callback(payload, request)
     if _redis_client is None or _session_repository is None:
         raise HTTPException(status_code=503, detail="Session store not available")
 
@@ -2653,7 +2755,42 @@ async def credential_verified(
         logger.warning(f"credential-verified: nonce {nonce[:8]}... not found or expired")
         raise HTTPException(status_code=404, detail="Login session expired or not found")
 
-    if payload.decision != "allow" or payload.result == "failed":
+    try:
+        pending = json.loads(pending_raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="Invalid pending login state") from exc
+    if not isinstance(pending, dict):
+        raise HTTPException(status_code=409, detail="Invalid pending login state")
+    expected_flow_id = pending.get("flow_instance_id")
+    expected_policy_id = pending.get("presentation_policy_id")
+    expected_organization_id = pending.get("organization_id")
+    if not (
+        isinstance(expected_flow_id, str)
+        and hmac.compare_digest(expected_flow_id, payload.flow_instance_id)
+        and isinstance(expected_policy_id, str)
+        and hmac.compare_digest(expected_policy_id, payload.presentation_policy_id)
+        and hmac.compare_digest(expected_policy_id, _credential_login_policy_id)
+        and isinstance(expected_organization_id, str)
+        and hmac.compare_digest(
+            expected_organization_id,
+            _credential_login_organization_id,
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Verification callback does not match the pending login",
+        )
+
+    callback_claimed = await _redis_client.set(
+        f"{_CALLBACK_CLAIM_KEY}{nonce}",
+        payload.flow_instance_id,
+        ex=_PENDING_TTL,
+        nx=True,
+    )
+    if not callback_claimed:
+        raise HTTPException(status_code=409, detail="Verification callback already claimed")
+
+    if payload.decision != "allow" or payload.result != "passed":
         logger.info(
             "Credential verification denied: decision=%s result=%s reason=%s",
             payload.decision,
@@ -2667,11 +2804,17 @@ async def credential_verified(
         return {"ok": True, "status": "denied"}
 
     # Extract identity claims from the VP
-    claims = payload.verified_claims
+    claims = dict(payload.verified_claims)
+    # Credential claims establish login identity, not platform authorization.
+    # Role and tenant context come from server configuration or Keycloak.
+    claims["role"] = "applicant"
+    claims["organization_id"] = _credential_login_organization_id
+    claims.pop("organization", None)
+    claims.pop("organization_name", None)
     email: str = claims.get("email", "")
     given_name: str | None = claims.get("given_name")
     family_name: str | None = claims.get("family_name")
-    role: str = claims.get("role", "applicant")
+    role = "applicant"
     preferred_username = claims.get("preferred_username") if isinstance(claims.get("preferred_username"), str) else email
     if not email:
         logger.warning(
