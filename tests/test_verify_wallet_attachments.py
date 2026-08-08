@@ -60,8 +60,8 @@ def _fixture(final_scheme: str = "https"):
         })
         responses[uri] = (content, f"{final_scheme}://storage.example.test/{kind}")
     return (
-        {"schema_version": 2, "mip_version": "0.3.1", "attachments": attachments},
-        {"schema_version": 2, "mip_version": "0.3.1", "required_attachment_kinds": list(payloads)},
+        {"schema_version": 2, "mip_version": "0.4.0", "attachments": attachments},
+        {"schema_version": 2, "mip_version": "0.4.0", "required_attachment_kinds": list(payloads)},
         FakeOpener(responses),
     )
 

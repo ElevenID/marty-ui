@@ -1,4 +1,4 @@
-"""MIP 0.3 application lifecycle and authorization regressions."""
+"""MIP 0.4 application lifecycle and authorization regressions."""
 
 from __future__ import annotations
 

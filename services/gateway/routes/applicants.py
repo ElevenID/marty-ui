@@ -1,4 +1,4 @@
-"""MIP 0.3 applicant self-service and organization review routes."""
+"""MIP 0.4 applicant self-service and organization review routes."""
 from __future__ import annotations
 
 import os
