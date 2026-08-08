@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 import grpc
+from fastapi import HTTPException
 
 from marty_proto.v1 import (
     verification_service_pb2 as vs_pb2,
@@ -59,6 +60,13 @@ class VerificationServiceGrpc(
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details("presentation_policy_id is required for vp_token")
             return vs_pb2.VerificationSession()
+        if request.callback_url:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(
+                "Standalone Verification callbacks are not supported; use the "
+                "Flow service transactional callback outbox"
+            )
+            return vs_pb2.VerificationSession()
 
         session = VerificationSession(
             organization_id=request.organization_id,
@@ -67,7 +75,7 @@ class VerificationServiceGrpc(
             trust_profile_id=request.trust_profile_id or None,
             deployment_profile_id=request.deployment_profile_id or None,
             external_reference=request.external_reference or None,
-            callback_url=request.callback_url or None,
+            callback_url=None,
             expiry_minutes=request.expiry_minutes or 15,
             purpose=request.purpose or "",
         )
@@ -90,85 +98,41 @@ class VerificationServiceGrpc(
     # -- SubmitPresentation --------------------------------------------------
 
     async def SubmitPresentation(self, request, context):
-        from verification.main import (
-            SessionStatus,
-            _evaluate_via_grpc,
-            _inspect_via_grpc,
-            _normalize_holder_binding_evidence,
-            _sha256_text,
-            INSPECTION_SYSTEM_TARGET,
-        )
-        from datetime import datetime, timezone
+        from verification.main import process_session_submission
 
         store = self._get_store()
-        session = await store.get(request.session_id)
-        if not session:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"Session {request.session_id} not found")
-            return vs_pb2.VerificationResult()
-
-        if session.status != SessionStatus.PENDING:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(f"Session is {session.status.value}")
-            return vs_pb2.VerificationResult()
-
-        session.vp_token_sha256 = _sha256_text(request.vp_token)
-        inspection_result = ""
         try:
-            eval_result = await _evaluate_via_grpc(
-                policy_id=session.presentation_policy_id or "",
-                vp_token=request.vp_token,
-                nonce=session.nonce,
-                context_json=json.dumps({"session_id": request.session_id}),
-            )
-            session.result = eval_result.get("result", "failed")
-            session.decision = eval_result.get("decision", "deny")
-            session.decision_reason = eval_result.get("decision_reason", "")
-            session.verified_claims = eval_result.get("verified_claims", {})
-            session.credential_results = eval_result.get("credential_results", [])
-            session.holder_binding_evidence = _normalize_holder_binding_evidence(
-                eval_result
-            )
-            session.error = None
-        except Exception as exc:
-            logger.error(
-                "gRPC evaluation failed for session %s: %s",
+            session = await process_session_submission(
+                store,
                 request.session_id,
-                exc,
+                request.vp_token,
             )
-            session.result = "failed"
-            session.decision = "deny"
-            session.decision_reason = "Credential evaluation failed"
-            session.holder_binding_evidence = None
-            session.error = "Credential evaluation failed"
-            eval_result = {"credential_results": [], "total_requirements": 0, "satisfied_requirements": 0}
-
-        if INSPECTION_SYSTEM_TARGET and session.result != "failed":
-            inspection_result = await _inspect_via_grpc(request.vp_token)
-            if inspection_result:
-                session.inspection_performed = True
-                session.inspection_result = inspection_result
-
-        session.status = SessionStatus.COMPLETED if session.result == "passed" else SessionStatus.FAILED
-        session.completed_at = datetime.now(timezone.utc)
-        session.updated_at = session.completed_at
-        await store.save(session, touch_updated_at=False)
+        except HTTPException as exc:
+            status_map = {
+                404: grpc.StatusCode.NOT_FOUND,
+                409: grpc.StatusCode.ABORTED,
+                410: grpc.StatusCode.FAILED_PRECONDITION,
+                503: grpc.StatusCode.UNAVAILABLE,
+            }
+            context.set_code(status_map.get(exc.status_code, grpc.StatusCode.INTERNAL))
+            context.set_details(str(exc.detail))
+            return vs_pb2.VerificationResult()
 
         return vs_pb2.VerificationResult(
             session_id=request.session_id,
             result=session.result or "",
             decision=session.decision or "",
             decision_reason=session.decision_reason,
-            verified_claims_json=json.dumps(eval_result.get("verified_claims", {})),
-            credential_results_json=json.dumps(
-                eval_result.get("credential_results", [])
+            verified_claims_json=json.dumps(session.verified_claims),
+            credential_results_json=json.dumps(session.credential_results),
+            total_requirements=session.total_requirements,
+            satisfied_requirements=session.satisfied_requirements,
+            evaluation_timestamp=(
+                session.completed_at.isoformat() if session.completed_at else ""
             ),
-            total_requirements=eval_result.get("total_requirements", 0),
-            satisfied_requirements=eval_result.get("satisfied_requirements", 0),
-            evaluation_timestamp=session.completed_at.isoformat(),
             nonce=session.nonce,
             inspection_performed=session.inspection_performed,
-            inspection_result=inspection_result,
+            inspection_result=session.inspection_result,
         )
 
     # -- EvaluatePresentation ------------------------------------------------
