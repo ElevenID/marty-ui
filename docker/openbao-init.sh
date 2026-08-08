@@ -154,9 +154,6 @@ path "transit/keys/flow-response-envelope-marty-aes256" {
 path "transit/encrypt/notification-webhook-envelope-marty-aes256" {
   capabilities = ["create", "update"]
 }
-path "transit/decrypt/notification-webhook-envelope-marty-aes256" {
-  capabilities = ["create", "update"]
-}
 path "transit/keys/notification-webhook-envelope-marty-aes256" {
   capabilities = ["read"]
 }
@@ -171,6 +168,20 @@ path "pki/cert/*" {
 
 # KV: read secrets
 path "secret/data/marty/*" {
+  capabilities = ["read"]
+}
+EOF
+
+echo "Writing Notification webhook envelope policy..."
+bao policy write -address="${BAO_ADDR}" notification-webhook-service - <<'EOF'
+# Notification alone can encrypt/decrypt registered webhook HMAC secrets.
+path "transit/encrypt/notification-webhook-envelope-marty-aes256" {
+  capabilities = ["create", "update"]
+}
+path "transit/decrypt/notification-webhook-envelope-marty-aes256" {
+  capabilities = ["create", "update"]
+}
+path "transit/keys/notification-webhook-envelope-marty-aes256" {
   capabilities = ["read"]
 }
 EOF

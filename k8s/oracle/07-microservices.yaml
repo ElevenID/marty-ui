@@ -1197,8 +1197,8 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SMTP_PASSWORD
-            - name: OPENBAO_SERVICE_TOKEN_FILE
-              value: /run/secrets/openbao_service_token
+            - name: NOTIFICATION_OPENBAO_TOKEN_FILE
+              value: /run/secrets/notification_openbao_token
           volumeMounts:
             - name: notification-openbao-token
               mountPath: /run/secrets
@@ -1227,8 +1227,8 @@ spec:
           secret:
             secretName: marty-secrets
             items:
-              - key: OPENBAO_SERVICE_TOKEN
-                path: openbao_service_token
+              - key: NOTIFICATION_OPENBAO_TOKEN
+                path: notification_openbao_token
 ---
 apiVersion: v1
 kind: Service
