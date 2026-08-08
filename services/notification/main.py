@@ -471,9 +471,17 @@ class TemplateResponse(BaseModel):
 
 
 class RetryPolicyModel(BaseModel):
-    max_attempts: int = 3
-    initial_backoff_seconds: int = 1
-    max_backoff_seconds: int = 30
+    max_attempts: int = Field(3, ge=1, le=10)
+    initial_backoff_seconds: int = Field(1, ge=0, le=60)
+    max_backoff_seconds: int = Field(30, ge=1, le=300)
+
+    @model_validator(mode="after")
+    def validate_backoff_order(self) -> RetryPolicyModel:
+        if self.initial_backoff_seconds > self.max_backoff_seconds:
+            raise ValueError(
+                "initial_backoff_seconds must not exceed max_backoff_seconds"
+            )
+        return self
 
 
 class CreateSubscriptionRequest(BaseModel):

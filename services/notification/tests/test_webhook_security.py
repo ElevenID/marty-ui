@@ -149,9 +149,15 @@ def test_direct_signing_secret_rejects_ambiguous_sources(
         {"initial_backoff_seconds": 31, "max_backoff_seconds": 30},
     ],
 )
-def test_retry_policy_is_bounded(retry_policy: dict[str, int]) -> None:
+@pytest.mark.parametrize(
+    "policy_type",
+    [notification.RetryPolicy, notification.RetryPolicyModel],
+)
+def test_retry_policy_is_bounded(
+    retry_policy: dict[str, int], policy_type: type
+) -> None:
     with pytest.raises(ValueError):
-        notification.RetryPolicy(**retry_policy)
+        policy_type(**retry_policy)
 
 
 @pytest.mark.asyncio
