@@ -3877,7 +3877,7 @@ async def evaluate_presentation(
                 issuer_did=issuer_did,
                 claim_results=[],
                 trust_check_passed=False,
-                signature_valid=False,
+                signature_valid=True,
                 errors=[str(trust_check_error)],
             )
             for req in policy.credential_requirements
@@ -3933,7 +3933,7 @@ async def evaluate_presentation(
                     issuer_did=issuer_did,
                     claim_results=[],
                     freshness_check_passed=False,
-                    signature_valid=False,
+                    signature_valid=True,
                     errors=[verification_error],
                 )
                 for req in policy.credential_requirements
@@ -3971,7 +3971,7 @@ async def evaluate_presentation(
                     issuer_did=issuer_did,
                     claim_results=[],
                     freshness_check_passed=False,
-                    signature_valid=False,
+                    signature_valid=True,
                     errors=[verification_error],
                 )
                 for req in policy.credential_requirements

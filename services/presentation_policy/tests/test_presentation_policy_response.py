@@ -1841,6 +1841,7 @@ def test_relationship_revocation_takes_effect_on_next_evaluation(monkeypatch) ->
     assert second.result == "failed"
     assert second.decision == "deny"
     assert second.credential_results[0].trust_check_passed is False
+    assert second.credential_results[0].signature_valid is True
     assert "explicitly denied" in second.decision_reason
 
 
@@ -2185,6 +2186,7 @@ def test_policy_freshness_denies_when_revocation_not_checked(monkeypatch) -> Non
     assert response.result == "failed"
     assert response.decision == "deny"
     assert response.credential_results[0].freshness_check_passed is False
+    assert response.credential_results[0].signature_valid is True
     assert "Revocation status was not checked" in response.decision_reason
 
 
