@@ -80,7 +80,6 @@ class PostgresNotificationRepository:
             ChannelType,
             DeliveryResult,
             Notification,
-            NotificationPriority,
             NotificationStatus,
             NotificationTarget,
             NotificationType,
@@ -188,7 +187,11 @@ class PostgresNotificationRepository:
             organization_id=row["organization_id"],
             name=row["name"],
             url=row["url"],
-            secret=row["secret"],
+            # Production reads never materialize the signing secret.  The
+            # worker unwraps it only for the lifetime of one delivery attempt.
+            secret="",
+            secret_envelope=row["secret_envelope"],
+            secret_hint=row["secret_hint"],
             description=row["description"],
             event_types=row["event_types"] or [],
             enabled=row["enabled"],
@@ -386,6 +389,12 @@ class PostgresNotificationRepository:
         return await self._delete_by_identity(subscriptions, "id", subscription_id)
 
     async def save_webhook(self, webhook: "WebhookEndpoint") -> None:
+        if (
+            not webhook.secret_envelope
+            or not webhook.secret_envelope.startswith("vault:")
+            or not webhook.secret_hint
+        ):
+            raise ValueError("PostgreSQL webhooks require an encrypted signing secret")
         await self._upsert(
             webhook_endpoints,
             "id",
@@ -394,7 +403,8 @@ class PostgresNotificationRepository:
                 "organization_id": webhook.organization_id,
                 "name": webhook.name,
                 "url": webhook.url,
-                "secret": webhook.secret,
+                "secret_envelope": webhook.secret_envelope,
+                "secret_hint": webhook.secret_hint,
                 "description": webhook.description,
                 "event_types": webhook.event_types,
                 "enabled": webhook.enabled,

@@ -95,7 +95,8 @@ webhook_endpoints = Table(
     Column("organization_id", String(36), nullable=False),
     Column("name", String(255), nullable=False),
     Column("url", Text, nullable=False),
-    Column("secret", String(128), nullable=False),
+    Column("secret_envelope", Text, nullable=False),
+    Column("secret_hint", String(8), nullable=False),
     Column("description", Text, nullable=True),
     Column("event_types", JSON, nullable=False, default=list),
     Column("enabled", Boolean, nullable=False, default=True),
@@ -105,6 +106,14 @@ webhook_endpoints = Table(
     Column("circuit_breaker_open_until", DateTime(timezone=True), nullable=True),
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow),
+    CheckConstraint(
+        "secret_envelope LIKE 'vault:%'",
+        name="ck_webhook_endpoints_secret_envelope",
+    ),
+    CheckConstraint(
+        "char_length(secret_hint) = 4",
+        name="ck_webhook_endpoints_secret_hint",
+    ),
     schema="notification_service",
 )
 

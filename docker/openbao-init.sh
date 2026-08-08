@@ -56,6 +56,13 @@ bao write -address="${BAO_ADDR}" -f transit/keys/cred-encrypt-marty-aes \
 bao write -address="${BAO_ADDR}" -f transit/keys/auth-session-es256 \
     type=ecdsa-p256 2>/dev/null || echo "  auth-session-es256 already exists"
 
+# Purpose-bound, non-exportable envelope keys.  Keep these separate from
+# credential encryption so ciphertext cannot be replayed across domains.
+bao write -address="${BAO_ADDR}" -f transit/keys/flow-response-envelope-marty-aes256 \
+    type=aes256-gcm96 exportable=false 2>/dev/null || echo "  flow-response-envelope-marty-aes256 already exists"
+bao write -address="${BAO_ADDR}" -f transit/keys/notification-webhook-envelope-marty-aes256 \
+    type=aes256-gcm96 exportable=false 2>/dev/null || echo "  notification-webhook-envelope-marty-aes256 already exists"
+
 # ── PKI Engine (certificate authority) ───────────────────────────────
 
 if bao secrets list -address="${BAO_ADDR}" 2>/dev/null | grep -q "^pki/"; then
@@ -131,6 +138,26 @@ path "transit/verify/auth-*" {
   capabilities = ["create", "update"]
 }
 path "transit/keys/auth-*" {
+  capabilities = ["read"]
+}
+
+# Purpose-bound envelope operations.  Key configuration remains operator-only.
+path "transit/encrypt/flow-response-envelope-marty-aes256" {
+  capabilities = ["create", "update"]
+}
+path "transit/decrypt/flow-response-envelope-marty-aes256" {
+  capabilities = ["create", "update"]
+}
+path "transit/keys/flow-response-envelope-marty-aes256" {
+  capabilities = ["read"]
+}
+path "transit/encrypt/notification-webhook-envelope-marty-aes256" {
+  capabilities = ["create", "update"]
+}
+path "transit/decrypt/notification-webhook-envelope-marty-aes256" {
+  capabilities = ["create", "update"]
+}
+path "transit/keys/notification-webhook-envelope-marty-aes256" {
   capabilities = ["read"]
 }
 

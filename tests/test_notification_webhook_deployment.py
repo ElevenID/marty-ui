@@ -70,3 +70,55 @@ def test_kubernetes_notification_reads_the_generated_webhook_secret() -> None:
         '--from-literal=NOTIFICATION_WEBHOOK_SECRET="$notification_webhook_secret"'
         in deploy_script
     )
+
+
+def test_notification_runtime_receives_openbao_token_as_a_secret_file() -> None:
+    compose = yaml.safe_load(
+        (ROOT / "docker-compose.selfhost.prod.yml").read_text(encoding="utf-8")
+    )
+    notification = compose["services"]["notification"]
+    assert notification["environment"]["OPENBAO_SERVICE_TOKEN_FILE"] == (
+        "/run/secrets/openbao_service_token"
+    )
+    assert "openbao_service_token" in notification["secrets"]
+
+    resources = list(
+        yaml.safe_load_all(
+            (ROOT / "k8s/oracle/07-microservices.yaml").read_text(encoding="utf-8")
+        )
+    )
+    deployment = next(
+        resource
+        for resource in resources
+        if resource
+        and resource.get("kind") == "Deployment"
+        and resource["metadata"]["name"] == "notification"
+    )
+    pod = deployment["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+    env = {item["name"]: item for item in container["env"]}
+    assert env["OPENBAO_SERVICE_TOKEN_FILE"]["value"] == (
+        "/run/secrets/openbao_service_token"
+    )
+    assert container["volumeMounts"] == [
+        {
+            "name": "notification-openbao-token",
+            "mountPath": "/run/secrets",
+            "readOnly": True,
+        }
+    ]
+    assert pod["volumes"][0]["secret"]["items"] == [
+        {"key": "OPENBAO_SERVICE_TOKEN", "path": "openbao_service_token"}
+    ]
+
+
+def test_openbao_provisions_a_non_exportable_purpose_specific_webhook_key() -> None:
+    init_script = (ROOT / "docker/openbao-init.sh").read_text(encoding="utf-8")
+    key_id = "notification-webhook-envelope-marty-aes256"
+
+    assert f"transit/keys/{key_id}" in init_script
+    assert "type=aes256-gcm96 exportable=false" in init_script
+    assert f'path "transit/encrypt/{key_id}"' in init_script
+    assert f'path "transit/decrypt/{key_id}"' in init_script
+    assert f'path "transit/keys/{key_id}"' in init_script
+    assert f'path "transit/export/{key_id}"' not in init_script

@@ -57,6 +57,12 @@ from notification.webhook_security import (
     validate_webhook_url_structure,
     valid_webhook_signing_secret,
 )
+from notification.webhook_secret_envelope import (
+    InvalidWebhookSecretEnvelope,
+    WebhookSecretEnvelope,
+    WebhookSecretEnvelopeError,
+    WebhookSecretEnvelopeUnavailable,
+)
 from notification.webhook_outbox import (
     WebhookOutboxEvent,
     logical_webhook_delivery_id,
@@ -258,6 +264,8 @@ class WebhookEndpoint:
     name: str = ""
     url: str = ""
     secret: str = field(default_factory=lambda: secrets.token_hex(32))
+    secret_envelope: str | None = None
+    secret_hint: str | None = None
     description: str | None = None
     event_types: list[str] = field(default_factory=list)
     enabled: bool = True
@@ -532,12 +540,34 @@ internal_router = APIRouter(
 )
 
 _repo: InMemoryNotificationRepository | PostgresNotificationRepository | None = None
+_webhook_secret_envelope: WebhookSecretEnvelope | None = None
 
 
 def get_repo() -> InMemoryNotificationRepository | PostgresNotificationRepository:
     if _repo is None:
         raise RuntimeError("Service not configured")
     return _repo
+
+
+def _require_webhook_secret_envelope() -> WebhookSecretEnvelope:
+    if _webhook_secret_envelope is None:
+        raise WebhookSecretEnvelopeUnavailable(
+            "Webhook secret protection is unavailable"
+        )
+    return _webhook_secret_envelope
+
+
+async def _protect_webhook_secret(
+    webhook: WebhookEndpoint, secret: str
+) -> None:
+    envelope = await _require_webhook_secret_envelope().wrap(
+        organization_id=webhook.organization_id,
+        webhook_id=webhook.id,
+        secret=secret,
+    )
+    webhook.secret = secret
+    webhook.secret_envelope = envelope
+    webhook.secret_hint = secret[:4]
 
 
 class SendNotificationRequest(BaseModel):
@@ -1453,13 +1483,44 @@ async def _deliver_claimed_webhook_event(
             response_time_ms=0,
         )
     else:
-        attempted_endpoint = True
-        result = await _attempt_webhook_request(
-            event.payload,
-            webhook,
-            delivery_id=event.id,
-            attempt_count=event.attempt_count,
-        )
+        delivery_webhook = webhook
+        if webhook.secret_envelope:
+            try:
+                plaintext_secret = await _require_webhook_secret_envelope().unwrap(
+                    organization_id=webhook.organization_id,
+                    webhook_id=webhook.id,
+                    ciphertext=webhook.secret_envelope,
+                )
+            except InvalidWebhookSecretEnvelope:
+                result = _outbox_validation_error("WEBHOOK_SECRET_ENVELOPE_INVALID")
+            except WebhookSecretEnvelopeUnavailable:
+                result = WebhookAttemptResult(
+                    success=False,
+                    retryable=True,
+                    error_code="WEBHOOK_SECRET_KMS_UNAVAILABLE",
+                    response_status_code=None,
+                    response_time_ms=0,
+                )
+            else:
+                delivery_webhook = replace(webhook, secret=plaintext_secret)
+                attempted_endpoint = True
+                result = await _attempt_webhook_request(
+                    event.payload,
+                    delivery_webhook,
+                    delivery_id=event.id,
+                    attempt_count=event.attempt_count,
+                )
+                plaintext_secret = ""
+        else:
+            # In-memory repositories retain plaintext only for isolated tests.
+            # PostgreSQL rows are rejected by the adapter unless enveloped.
+            attempted_endpoint = True
+            result = await _attempt_webhook_request(
+                event.payload,
+                delivery_webhook,
+                delivery_id=event.id,
+                attempt_count=event.attempt_count,
+            )
 
     completed_at = datetime.now(timezone.utc)
     if result.success:
@@ -1624,7 +1685,11 @@ def _webhook_to_response(
         endpoint_url=webhook.url,
         events=webhook.event_types,
         signing_secret=webhook.secret if include_secret else None,
-        signing_secret_masked=f"{webhook.secret[:4]}..." if webhook.secret else None,
+        signing_secret_masked=(
+            f"{webhook.secret_hint or webhook.secret[:4]}..."
+            if webhook.secret_hint or webhook.secret
+            else None
+        ),
         enabled=webhook.enabled,
         status="ACTIVE" if webhook.enabled else "DISABLED",
         failure_count=webhook.failure_count,
@@ -2093,15 +2158,25 @@ async def create_webhook(
 ) -> WebhookResponse:
     # MIP §15.7 — webhook URLs MUST be HTTPS; also block private/loopback (SSRF)
     _validate_webhook_url(body.url)
+    plaintext_secret = body.secret or secrets.token_hex(32)
     webhook = WebhookEndpoint(
         organization_id=body.organization_id,
         name=body.name,
         url=body.url,
-        secret=body.secret or secrets.token_hex(32),
+        secret=plaintext_secret,
+        secret_hint=plaintext_secret[:4],
         description=body.description,
         event_types=body.event_types,
         enabled=body.enabled,
     )
+    if isinstance(repo, PostgresNotificationRepository):
+        try:
+            await _protect_webhook_secret(webhook, plaintext_secret)
+        except WebhookSecretEnvelopeError:
+            raise HTTPException(
+                status_code=503,
+                detail="Webhook signing secret protection is unavailable",
+            ) from None
     await repo.save_webhook(webhook)
     return _webhook_to_response(webhook, include_secret=True)
 
@@ -2163,7 +2238,17 @@ async def update_webhook(
         webhook.event_types = body.event_types
     secret_rotated = False
     if body.secret is not None:
-        webhook.secret = body.secret
+        if isinstance(repo, PostgresNotificationRepository):
+            try:
+                await _protect_webhook_secret(webhook, body.secret)
+            except WebhookSecretEnvelopeError:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Webhook signing secret protection is unavailable",
+                ) from None
+        else:
+            webhook.secret = body.secret
+            webhook.secret_hint = body.secret[:4]
         secret_rotated = True
     if body.enabled is not None:
         webhook.enabled = body.enabled
@@ -2259,11 +2344,23 @@ def _require_migrated_notification_schema(connection: Any) -> None:
             "Notification database still permits receiver-body retention; "
             "run the deployment migration job"
         )
+    webhook_columns = {
+        column["name"]
+        for column in inspector.get_columns("webhook_endpoints", schema=schema)
+    }
+    if (
+        "secret" in webhook_columns
+        or not {"secret_envelope", "secret_hint"}.issubset(webhook_columns)
+    ):
+        raise RuntimeError(
+            "Notification database still permits plaintext webhook secrets; "
+            "run the deployment migration job"
+        )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _repo
+    global _repo, _webhook_secret_envelope
     logger.info("Starting %s...", SERVICE_NAME)
     # This route controls external fan-out; a missing credential must make the
     # production service unready instead of leaving an unauthenticated mode.
@@ -2273,6 +2370,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     webhook_outbox_lease_seconds()
     webhook_outbox_poll_seconds()
     webhook_outbox_batch_size()
+    _webhook_secret_envelope = WebhookSecretEnvelope.from_environment()
+    await _webhook_secret_envelope.check_ready()
     engine = create_async_engine(
         os.environ.get(
             "DATABASE_URL",
@@ -2327,6 +2426,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if grpc_server:
         await grpc_server.stop(grace=5)
     await engine.dispose()
+    _repo = None
+    _webhook_secret_envelope = None
 
 
 def create_app() -> FastAPI:
