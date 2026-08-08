@@ -36,6 +36,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from marty_common.service_setup import create_service_app
+from common.notification_event_auth import (
+    read_notification_event_ingest_token,
+    require_notification_event_ingest_token,
+)
 from notification.infrastructure.adapters.postgres_adapter import (
     PostgresNotificationRepository,
 )
@@ -388,7 +392,11 @@ class InMemoryNotificationRepository:
 router = APIRouter(prefix="/v1/notifications", tags=["notifications"])
 subscription_router = APIRouter(prefix="/v1/subscriptions", tags=["subscriptions"])
 webhook_router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
-internal_router = APIRouter(prefix="/internal", tags=["internal-notifications"])
+internal_router = APIRouter(
+    prefix="/internal",
+    tags=["internal-notifications"],
+    dependencies=[Depends(require_notification_event_ingest_token)],
+)
 
 _repo: InMemoryNotificationRepository | PostgresNotificationRepository | None = None
 
@@ -1800,6 +1808,9 @@ async def _seed_default_templates(
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
     logger.info("Starting %s...", SERVICE_NAME)
+    # This route controls external fan-out; a missing credential must make the
+    # production service unready instead of leaving an unauthenticated mode.
+    read_notification_event_ingest_token()
     engine = create_async_engine(
         os.environ.get(
             "DATABASE_URL",

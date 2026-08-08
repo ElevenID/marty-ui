@@ -1040,6 +1040,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: NOTIFICATION_EVENT_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: NOTIFICATION_EVENT_INGEST_TOKEN
             - name: APPLICANT_SERVICE_PORT
               value: "8006"
             - name: DATABASE_URL
@@ -1155,6 +1160,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: NOTIFICATION_WEBHOOK_SECRET
+            - name: NOTIFICATION_EVENT_INGEST_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: NOTIFICATION_EVENT_INGEST_TOKEN
             - name: NOTIFICATION_SERVICE_PORT
               value: "8007"
             - name: DATABASE_URL

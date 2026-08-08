@@ -14,11 +14,17 @@ from typing import Any
 
 import httpx
 
+from common.notification_event_auth import (
+    NotificationEventAuthConfigurationError,
+    notification_event_ingest_headers,
+)
+
 logger = logging.getLogger(__name__)
 
 
 class EventType(str, Enum):
     """Types of domain events."""
+
     APPLICATION_APPROVED = "application.approved"
     APPLICATION_REJECTED = "application.rejected"
     IDENTITY_VERIFIED = "identity.verified"
@@ -32,16 +38,17 @@ class EventType(str, Enum):
 class DomainEvent:
     """
     Domain event.
-    
+
     Represents something that happened in the system.
     """
+
     event_type: EventType
     aggregate_id: str
     aggregate_type: str
     organization_id: str
     data: dict[str, Any]
     timestamp: datetime = None
-    
+
     def __post_init__(self):
         if self.timestamp is None:
             self.timestamp = datetime.now(timezone.utc)
@@ -52,7 +59,7 @@ class EventPublisher:
     Event publisher using gRPC for known services and HTTP for generic
     webhooks. All streaming events go through the central event-stream RPC.
     """
-    
+
     def __init__(self):
         self.subscribers: dict[EventType, list[str]] = {}
         self._flow_grpc_channel = None
@@ -60,7 +67,7 @@ class EventPublisher:
 
         self._event_stream_publisher = GrpcEventStreamPublisher()
         self._load_subscriptions()
-    
+
     def _load_subscriptions(self):
         """Load event subscriptions from environment variables."""
         # Can add webhook subscriptions from environment
@@ -70,12 +77,15 @@ class EventPublisher:
             if urls:
                 if event_type not in self.subscribers:
                     self.subscribers[event_type] = []
-                self.subscribers[event_type].extend([u.strip() for u in urls.split(",") if u.strip()])
-    
+                self.subscribers[event_type].extend(
+                    [u.strip() for u in urls.split(",") if u.strip()]
+                )
+
     def _get_flow_grpc_channel(self):
         """Lazy-create gRPC channel to flow service."""
         if self._flow_grpc_channel is None:
             from common.grpc_factory import create_grpc_channel
+
             flow_grpc_target = os.environ.get("FLOW_GRPC_TARGET", "flow:9011")
             self._flow_grpc_channel = create_grpc_channel(flow_grpc_target)
         return self._flow_grpc_channel
@@ -111,7 +121,7 @@ class EventPublisher:
         if not subscribers:
             logger.debug(f"No subscribers for event type: {event.event_type}")
             return
-        
+
         payload = {
             "event_type": event.event_type.value,
             "aggregate_id": event.aggregate_id,
@@ -120,7 +130,7 @@ class EventPublisher:
             "data": event.data,
             "timestamp": event.timestamp.isoformat(),
         }
-        
+
         async with httpx.AsyncClient(timeout=5.0) as client:
             for subscriber_url in subscribers:
                 try:
@@ -130,7 +140,7 @@ class EventPublisher:
                         json=payload,
                         headers={"Content-Type": "application/json"},
                     )
-                    
+
                     if response.status_code >= 400:
                         logger.warning(
                             f"Event delivery failed to {subscriber_url}: "
@@ -138,7 +148,7 @@ class EventPublisher:
                         )
                     else:
                         logger.info(f"Event delivered successfully to {subscriber_url}")
-                
+
                 except httpx.TimeoutException:
                     logger.warning(f"Timeout publishing event to {subscriber_url}")
                 except Exception as e:
@@ -159,25 +169,32 @@ class EventPublisher:
             "timestamp": event.timestamp.isoformat(),
         }
         try:
+            auth_headers = notification_event_ingest_headers()
+        except NotificationEventAuthConfigurationError:
+            logger.error(
+                "Notification ingest skipped: service authentication is unavailable"
+            )
+            return
+        try:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 response = await client.post(
                     ingest_url,
                     json=payload,
-                    headers={"Content-Type": "application/json"},
+                    headers={"Content-Type": "application/json", **auth_headers},
                 )
             if response.status_code >= 400:
                 logger.warning(
-                    "Notification ingest failed: status=%s body=%s",
+                    "Notification ingest failed: status=%s",
                     response.status_code,
-                    response.text[:200],
                 )
-        except Exception as exc:
-            logger.warning("Notification ingest unavailable: %s", exc)
+        except httpx.HTTPError:
+            logger.warning("Notification ingest unavailable: request failed")
 
     async def _publish_to_flow_grpc(self, event: DomainEvent) -> None:
         """Deliver APPLICATION_APPROVED event to the flow service via gRPC."""
         try:
             from marty_proto.v1 import flow_service_pb2, flow_service_pb2_grpc
+
             channel = self._get_flow_grpc_channel()
             stub = flow_service_pb2_grpc.FlowServiceStub(channel)
             resp = await stub.ApplicationApproved(

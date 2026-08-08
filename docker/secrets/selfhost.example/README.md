@@ -21,6 +21,7 @@ Required files:
 - `issuance_api_key`
 - `grpc_service_token`
 - `notification_webhook_secret`
+- `notification_event_ingest_token`
 - `integration_secret_master_key`
 - `openbao_service_token`
 - `cloudflare_tunnel_token`

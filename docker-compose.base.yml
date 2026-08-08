@@ -550,6 +550,8 @@ services:
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       APPLICATION_TEMPLATE_MIGRATION_MAP: ${APPLICATION_TEMPLATE_MIGRATION_MAP:-}
+      NOTIFICATION_SERVICE_URL: http://notification:8007
+      NOTIFICATION_EVENT_INGEST_TOKEN: ${NOTIFICATION_EVENT_INGEST_TOKEN:-dev-notification-event-ingest-token-32-chars}
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
       ES_GRPC_TARGET: event-stream:9015
@@ -585,6 +587,7 @@ services:
       SMTP_PORT: "1025"
       NOTIF_GRPC_PORT: "9007"
       NOTIFICATION_WEBHOOK_SECRET: ${NOTIFICATION_WEBHOOK_SECRET:-}
+      NOTIFICATION_EVENT_INGEST_TOKEN: ${NOTIFICATION_EVENT_INGEST_TOKEN:-dev-notification-event-ingest-token-32-chars}
     ports:
       - "8007:8007"
       - "9007:9007"
