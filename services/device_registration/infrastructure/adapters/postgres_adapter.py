@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from device_registration.infrastructure.models import device_registrations
@@ -115,8 +115,3 @@ class PostgresDeviceRegistrationRepository:
             result = await session.execute(stmt)
             rows = result.mappings().all()
             return [self._to_registration(row) for row in rows]
-
-    async def delete(self, registration_id: str) -> None:
-        async with self._session_factory() as session:
-            await session.execute(delete(device_registrations).where(device_registrations.c.id == registration_id))
-            await session.commit()

@@ -120,10 +120,6 @@ class InMemoryDeviceRepository:
             if record.user_id == user_id and (organization_id is None or record.organization_id == organization_id)
         ]
 
-    async def delete(self, registration_id: str) -> None:
-        self._registrations.pop(registration_id, None)
-
-
 class DevicePreferencesModel(BaseModel):
     credential_notifications: bool = True
     verification_notifications: bool = True
@@ -588,7 +584,11 @@ async def delete_device(
     if not record or record.user_id != user_id:
         raise HTTPException(status_code=404, detail="Device registration not found")
     await _verify_org_membership(request, user_id, record.organization_id)
-    await repo.delete(registration_id)
+    # Device registrations are audit records. MIP §14 requires DELETE to
+    # deactivate the registration instead of physically removing it.
+    record.is_active = False
+    record.updated_at = datetime.now(timezone.utc)
+    await repo.save(record)
     return {"success": True}
 
 
