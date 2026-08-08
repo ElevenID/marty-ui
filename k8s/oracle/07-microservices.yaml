@@ -1,6 +1,6 @@
 ---
 # ================================================================
-# Marty Microservices — Gateway + 10 backend services
+# Marty Microservices — gateway and catalog-managed backend services
 # All images pulled from OCIR (${OCIR_REGISTRY}/marty-ui/<svc>:${IMAGE_TAG})
 # ================================================================
 
@@ -1573,3 +1573,257 @@ spec:
       name: grpc
   selector:
     app: flow
+---
+# ================================================================
+# 13. Revocation Profile (:8013)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: revocation-profile
+  namespace: marty-prod
+  labels:
+    app: revocation-profile
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: revocation-profile
+  template:
+    metadata:
+      labels:
+        app: revocation-profile
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: revocation-profile
+          image: ${OCIR_REGISTRY}/marty-ui/revocation-profile:${IMAGE_TAG}
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
+          ports:
+            - containerPort: 8013
+            - containerPort: 9013
+          env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
+            - name: REVOCATION_PROFILE_SERVICE_PORT
+              value: "8013"
+            - name: RP_GRPC_PORT
+              value: "9013"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              value: "redis://redis:6379/4"
+            - name: ORG_GRPC_TARGET
+              value: "organization:9002"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "300m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8013
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8013
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: revocation-profile
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8013
+      targetPort: 8013
+      name: http
+    - port: 9013
+      targetPort: 9013
+      name: grpc
+  selector:
+    app: revocation-profile
+---
+# ================================================================
+# 14. Device Registration (:8014)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: device-registration
+  namespace: marty-prod
+  labels:
+    app: device-registration
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: device-registration
+  template:
+    metadata:
+      labels:
+        app: device-registration
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: device-registration
+          image: ${OCIR_REGISTRY}/marty-ui/device-registration:${IMAGE_TAG}
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
+          ports:
+            - containerPort: 8014
+          env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
+            - name: DEVICE_REGISTRATION_SERVICE_PORT
+              value: "8014"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              value: "redis://redis:6379/5"
+            - name: ORG_GRPC_TARGET
+              value: "organization:9002"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "300m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8014
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8014
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: device-registration
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8014
+      targetPort: 8014
+      name: http
+  selector:
+    app: device-registration
+---
+# ================================================================
+# 15. Event Stream (:8015 HTTP, :9015 gRPC)
+# ================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-stream
+  namespace: marty-prod
+  labels:
+    app: event-stream
+    app.kubernetes.io/part-of: marty-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: event-stream
+  template:
+    metadata:
+      labels:
+        app: event-stream
+    spec:
+      serviceAccountName: marty-app
+      imagePullSecrets:
+        - name: ocir-secret
+      containers:
+        - name: event-stream
+          image: ${OCIR_REGISTRY}/marty-ui/event-stream:${IMAGE_TAG}
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: marty-config
+          ports:
+            - containerPort: 8015
+            - containerPort: 9015
+          env:
+            - name: GRPC_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: GRPC_SERVICE_TOKEN
+            - name: EVENT_STREAM_SERVICE_PORT
+              value: "8015"
+            - name: EVENT_STREAM_GRPC_ENABLED
+              value: "true"
+            - name: EVENT_STREAM_GRPC_PORT
+              value: "9015"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8015
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8015
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: event-stream
+  namespace: marty-prod
+spec:
+  ports:
+    - port: 8015
+      targetPort: 8015
+      name: http
+    - port: 9015
+      targetPort: 9015
+      name: grpc
+  selector:
+    app: event-stream
