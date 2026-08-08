@@ -2649,7 +2649,7 @@ class ApplicationUIConfigModel(BaseModel):
 
 
 class ApplicationFormFieldModel(BaseModel):
-    """Canonical MIP 0.3 applicant form field."""
+    """Canonical MIP 0.4 applicant form field."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -2762,7 +2762,7 @@ class ApplicationTemplateCreate(BaseModel):
 
 
 class ApplicationTemplatePatch(BaseModel):
-    """Patch mutable fields on a draft MIP 0.3 Application Template."""
+    """Patch mutable fields on a draft MIP 0.4 Application Template."""
 
     model_config = ConfigDict(extra="forbid")
 

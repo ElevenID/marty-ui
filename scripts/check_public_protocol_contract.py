@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +80,7 @@ from gateway.routes.verification import (  # noqa: E402
     _sanitize_presentation_policy_response,
     _validated_policy_payload,
 )
+from protocol_version import MIP_SUPPORTED_VERSIONS, MIP_VERSION  # noqa: E402
 
 FORBIDDEN_PUBLIC_FIELDS = {
     "auto_generate_artifacts",
@@ -133,6 +135,34 @@ TRUST_CONFIGURATION_UI_PATHS = (
     "ui/src/components/console/trust/TrustProfileWizard.jsx",
     "ui/src/components/console/trust/steps/TrustSourcesStep.jsx",
 )
+
+
+def _assert_protocol_version(protocol_root: Path) -> None:
+    """Require runtime discovery to match the exact pinned protocol release."""
+    metadata = tomllib.loads(
+        (protocol_root / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    protocol_version = metadata["project"]["version"]
+    if protocol_version != MIP_VERSION:
+        raise AssertionError(
+            "runtime MIP version drifted from the pinned public contract: "
+            f"runtime={MIP_VERSION}, protocol={protocol_version}"
+        )
+    if tuple(MIP_SUPPORTED_VERSIONS) != (MIP_VERSION,):
+        raise AssertionError(
+            "pre-1.0 runtime must advertise only the exact current MIP version"
+        )
+
+    fixture = json.loads(
+        (protocol_root / "conformance" / "valid" / "mip-configuration.json")
+        .read_text(encoding="utf-8")
+    )
+    if fixture.get("mip_version") != MIP_VERSION or fixture.get(
+        "supported_versions"
+    ) != [MIP_VERSION]:
+        raise AssertionError(
+            "public MIP discovery fixture does not declare the pinned release only"
+        )
 
 FORBIDDEN_TRUST_CONFIGURATION_TOKENS = {
     "issuer_profile_id",
@@ -269,6 +299,7 @@ def _public_response(
 
 
 def check_contract(protocol_root: Path) -> None:
+    _assert_protocol_version(protocol_root)
     assert_generated_bindings_current(protocol_root)
     assert_documented_public_boundary()
 

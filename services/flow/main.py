@@ -70,6 +70,7 @@ from marty_common import (
 from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
 from flow.infrastructure.adapters import PostgresFlowRepository
+from protocol_version import MIP_VERSION
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -2690,7 +2691,7 @@ def _flow_capabilities() -> dict[str, Any]:
         )
 
     return {
-        "protocol_version": "0.3.1",
+        "protocol_version": MIP_VERSION,
         "flow_types": [flow_type.value for flow_type in FlowType],
         "standard_flow_types": [flow_type.value for flow_type in STANDARD_FLOW_TYPES],
         "sequences": {

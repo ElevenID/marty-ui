@@ -61,6 +61,7 @@ from trust_profile.infrastructure.adapters import PostgresTrustProfileRepository
 from trust_profile.infrastructure.models import mapper_registry
 from trust_profile.registry_sync import (
     RegistrySyncError,
+    registry_tls_context,
     state_from_storage,
     synchronize_registry,
     validate_current_registry_entries,
@@ -2332,6 +2333,7 @@ async def _synchronize_due_registry_sources(
         follow_redirects=False,
         timeout=timeout,
         trust_env=False,
+        verify=registry_tls_context(),
     ) as client:
         for profile in profiles:
             try:
@@ -2408,6 +2410,7 @@ async def synchronize_trust_profile_registries(
             follow_redirects=False,
             timeout=timeout,
             trust_env=False,
+            verify=registry_tls_context(),
         ) as client:
             source_results = await _synchronize_profile_registry_sources(
                 profile,

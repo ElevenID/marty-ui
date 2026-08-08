@@ -2880,7 +2880,7 @@ def _enriched_application_to_response(
 
 
 # =============================================================================
-# MIP 0.3 HTTP Adapter
+# MIP 0.4 HTTP Adapter
 # =============================================================================
 
 canonical_router = APIRouter(tags=["applicants"])
