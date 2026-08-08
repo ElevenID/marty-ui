@@ -45,6 +45,7 @@ from marty_common import (
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
+from common.internal_service_auth import internal_service_headers
 from marty_common.domain_enums import parse_credential_format
 
 from presentation_policy.infrastructure.adapters import (
@@ -2445,7 +2446,11 @@ def _load_policy_trust_profile(
     import httpx as _httpx
 
     try:
-        response = _httpx.get(_trust_profile_lookup_url(profile_id), timeout=5.0)
+        response = _httpx.get(
+            _trust_profile_lookup_url(profile_id),
+            headers=internal_service_headers(),
+            timeout=5.0,
+        )
     except Exception as exc:
         logger.warning(
             "Could not load Trust Profile %s for tenant validation",

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -209,6 +210,25 @@ class TestServiceAuthentication:
         )
 
         assert getattr(rejected, cardinality) is not None
+
+    @pytest.mark.parametrize(
+        "service_source",
+        [
+            "credential_template/main.py",
+            "flow/main.py",
+            "verification/main.py",
+        ],
+    )
+    def test_service_source_does_not_bypass_authenticated_channel_factory(
+        self,
+        service_source,
+    ):
+        source = (Path(__file__).resolve().parents[2] / service_source).read_text(
+            encoding="utf-8"
+        )
+
+        assert "grpc.aio.insecure_channel" not in source
+        assert "grpc_aio.insecure_channel" not in source
 
 
 # ── LoggingMetricsInterceptor ────────────────────────────────────────

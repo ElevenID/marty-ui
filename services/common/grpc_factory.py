@@ -45,8 +45,8 @@ def _is_dev_environment() -> bool:
     return os.environ.get("ENVIRONMENT", "development").lower() in _DEV_ENVIRONMENTS
 
 
-def _read_service_token() -> str:
-    """Resolve the gRPC token and require a strong secret in production."""
+def read_service_token() -> str:
+    """Resolve the shared internal-service token with production safeguards."""
     token = os.environ.get("GRPC_SERVICE_TOKEN", "").strip()
     token_file = os.environ.get("GRPC_SERVICE_TOKEN_FILE", "").strip()
     if token and token_file:
@@ -525,7 +525,7 @@ def create_grpc_server(
 
     # Production service-to-service calls must authenticate. Development may
     # omit the token for isolated local work.
-    service_token = _read_service_token()
+    service_token = read_service_token()
     if service_token:
         all_interceptors.insert(0, ServiceAuthInterceptor(service_token))
 
@@ -634,7 +634,7 @@ def create_grpc_channel(
         all_interceptors.append(MetricsClientInterceptor(service_name))
 
     # Attach the same mandatory production token used by the server interceptor.
-    service_token = _read_service_token()
+    service_token = read_service_token()
     if service_token:
         all_interceptors.append(ServiceTokenClientInterceptor(service_token))
 
