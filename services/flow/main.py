@@ -6717,7 +6717,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     pp_grpc_target = os.environ.get("PP_GRPC_TARGET", "presentation-policy:9009")
-    pp_grpc_channel = create_grpc_channel(pp_grpc_target, service_name="flow")
+    pp_grpc_channel = create_grpc_channel(
+        pp_grpc_target,
+        service_name="flow",
+        require_workload_identity=True,
+    )
     app.state.pp_grpc_channel = pp_grpc_channel
 
     ct_grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
