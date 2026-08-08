@@ -658,6 +658,10 @@ def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
             "issuer_did": "unknown",
             "format": "mdoc",
             "error": None,
+            "verification_evidence": {
+                "holder_binding_verified": True,
+                "credential_count": 1,
+            },
         }
 
     monkeypatch.setattr(pp, "_verify_credential_by_format", _verify)
@@ -1503,11 +1507,19 @@ def test_normalized_trusted_issuer_satisfies_policy_constraints() -> None:
         ({"revoked_at": datetime.now(timezone.utc).isoformat()}, "is revoked"),
         ({"trust_level": 79}, "minimum trust level"),
         (
-            {"valid_from": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()},
+            {
+                "valid_from": (
+                    datetime.now(timezone.utc) + timedelta(days=1)
+                ).isoformat()
+            },
             "not yet valid",
         ),
         (
-            {"valid_until": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()},
+            {
+                "valid_until": (
+                    datetime.now(timezone.utc) - timedelta(days=1)
+                ).isoformat()
+            },
             "is expired",
         ),
         ({"compliance_status": "COMPLIANT"}, "compliance requirements"),
@@ -1592,12 +1604,16 @@ def test_malformed_accreditation_evidence_fails_closed(invalid: object) -> None:
     assert "invalid accreditation evidence" in error
 
 
-def test_normalized_issuer_relationships_fail_closed_when_missing_or_ambiguous() -> None:
+def test_normalized_issuer_relationships_fail_closed_when_missing_or_ambiguous() -> (
+    None
+):
     constraints = pp.IssuerConstraints(min_trust_level=80)
     missing = pp._evaluate_issuer_trust(
         trust_profile_data={
             "status": "active",
-            "issuer_relationships": [_normalized_issuer_relationship(issuer_id="did:web:other.example")],
+            "issuer_relationships": [
+                _normalized_issuer_relationship(issuer_id="did:web:other.example")
+            ],
         },
         issuer_did="did:web:beta.elevenidllc.com:orgs:marty",
         constraints=constraints,
@@ -2520,3 +2536,294 @@ def test_saved_policy_evaluation_uses_complete_gateway_api_key_context(
     assert response.status_code == 200
     assert response.json()["decision"] == "allow"
     membership.assert_not_awaited()
+
+
+def _install_successful_policy_verification(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    issued_at: object | None = None,
+    holder_binding_verified: bool = False,
+    credential_count: int = 1,
+) -> None:
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "claims": {"email": "member@example.com"},
+            "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+            "format": "sd-jwt",
+            "error": None,
+            "revocation_checked": True,
+            "not_revoked": True,
+            "verification_evidence": {
+                "algorithm": "EdDSA",
+                "issued_at": issued_at,
+                "expires_at": None,
+                "validity_checked": True,
+                "is_expired": False,
+                "holder_binding_verified": holder_binding_verified,
+                "credential_count": credential_count,
+            },
+        },
+    )
+
+
+def test_single_token_cannot_satisfy_multiple_credential_requirements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.credential_requirements.append(
+        pp.CredentialRequirement(
+            credential_template_id="second-template",
+            requested_claims=[
+                pp.RequestedClaim(claim_name="role", display_name="Role")
+            ],
+        )
+    )
+    asyncio.run(repo.save(policy))
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: pytest.fail("verifier must not run"),
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.satisfied_requirements == 0
+    assert "Exactly one credential requirement" in response.decision_reason
+
+
+def test_unevaluated_alternative_requirements_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.alternative_requirements = [
+        pp.AlternativeRequirement(
+            name="identity alternative",
+            credential_requirements=[policy.credential_requirements[0]],
+        )
+    ]
+    asyncio.run(repo.save(policy))
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: pytest.fail("verifier must not run"),
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert "descriptor-bound per-credential evidence" in response.decision_reason
+
+
+@pytest.mark.parametrize(
+    ("issued_at", "expected_reason"),
+    [
+        (None, "issuance-time evidence"),
+        (
+            int((datetime.now(timezone.utc) - timedelta(minutes=5)).timestamp()),
+            "exceeds maximum age",
+        ),
+    ],
+)
+def test_maximum_credential_age_is_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+    issued_at: object | None,
+    expected_reason: str,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.freshness = pp.FreshnessPolicy(max_age_seconds=60)
+    asyncio.run(repo.save(policy))
+    _install_marty_trust_profile(monkeypatch)
+    _install_successful_policy_verification(monkeypatch, issued_at=issued_at)
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
+    assert response.credential_results[0].freshness_check_passed is False
+    assert expected_reason in response.decision_reason
+
+
+def test_required_holder_binding_needs_explicit_verifier_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.holder_binding = pp.HolderBinding(required=True)
+    asyncio.run(repo.save(policy))
+    _install_marty_trust_profile(monkeypatch)
+    _install_successful_policy_verification(
+        monkeypatch,
+        issued_at=int(datetime.now(timezone.utc).timestamp()),
+        holder_binding_verified=False,
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(
+                vp_token="credential",
+                nonce="nonce",
+                audience="verifier",
+            ),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
+    assert "holder binding was not verified" in response.decision_reason
+
+
+def test_cedar_receives_only_verified_policy_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(
+        monkeypatch,
+        issuer_relationships=[_normalized_issuer_relationship(trust_level=87)],
+    )
+    issued_at = int((datetime.now(timezone.utc) - timedelta(seconds=30)).timestamp())
+    _install_successful_policy_verification(monkeypatch, issued_at=issued_at)
+    captured: dict[str, object] = {}
+
+    def is_authorized(**kwargs: object) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(allowed=True, reasons=[], errors=[])
+
+    http_request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                cedar_engine=SimpleNamespace(is_authorized=is_authorized)
+            )
+        )
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            http_request=http_request,
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "allow"
+    context = captured["context"]
+    assert isinstance(context, dict)
+    assert context["issuer_trust_level"] == 87
+    assert 30 <= context["credential_age_seconds"] <= 35
+    assert context["is_revoked"] is False
+    assert context["is_expired"] is False
+    assert context["holder_binding_present"] is False
+    assert context["algorithm"] == "EdDSA"
+
+
+def test_cedar_denies_when_numeric_trust_evidence_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(monkeypatch, issuer_relationships=None)
+    _install_successful_policy_verification(
+        monkeypatch,
+        issued_at=int(datetime.now(timezone.utc).timestamp()),
+    )
+    cedar_engine = SimpleNamespace(
+        is_authorized=lambda **_kwargs: pytest.fail(
+            "Cedar must not receive invented facts"
+        )
+    )
+    http_request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(cedar_engine=cedar_engine))
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            http_request=http_request,
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
+    assert "numeric issuer trust" in response.decision_reason
+
+
+def test_multi_credential_presentation_requires_per_credential_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(monkeypatch)
+    _install_successful_policy_verification(
+        monkeypatch,
+        issued_at=int(datetime.now(timezone.utc).timestamp()),
+        credential_count=2,
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="presentation"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
+    assert "exactly one independently verified credential" in response.decision_reason
+
+
+def test_per_requirement_credential_age_is_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.credential_requirements[0].max_age_seconds = 60
+    asyncio.run(repo.save(policy))
+    _install_marty_trust_profile(monkeypatch)
+    _install_successful_policy_verification(
+        monkeypatch,
+        issued_at=int((datetime.now(timezone.utc) - timedelta(minutes=5)).timestamp()),
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.credential_results[0].freshness_check_passed is False
+    assert "maximum age of 60 seconds" in response.decision_reason
