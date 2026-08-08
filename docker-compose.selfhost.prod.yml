@@ -848,6 +848,7 @@ services:
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      REDIS_URL: redis://redis:6379/5
       ORG_GRPC_TARGET: organization:9002
     secrets:
       - marty_db_password
@@ -855,6 +856,8 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8014/health"]
       interval: 10s

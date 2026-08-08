@@ -1195,6 +1195,20 @@ class DevicePreferencesModel(BaseModel):
     quiet_hours_end: str | None = None
 
 
+class DeviceChallengeRequest(BaseModel):
+    device_id: str = Field(min_length=1, max_length=255)
+    public_key_der: str = Field(min_length=1, max_length=8192)
+    public_key_kid: str = Field(min_length=1, max_length=255)
+
+
+class DeviceChallengeResponse(BaseModel):
+    challenge_id: str
+    challenge: str
+    algorithm: Literal["PS256"]
+    audience: Literal["marty-device-registration"]
+    expires_in: int
+
+
 class DeviceRegistrationCreate(BaseModel):
     user_id: str | None = Field(None, max_length=255)
     organization_id: str | None = Field(None, max_length=255)
