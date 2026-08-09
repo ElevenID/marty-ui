@@ -83,10 +83,17 @@ SERVICES = [
         "name": "flow",
         "module": "flow.infrastructure.models",
     },
+    {
+        "name": "notification",
+        "module": "notification.infrastructure.models",
+    },
 ]
 
 MANAGED_OPENBAO_SERVICE_ID = "managed-openbao-transit"
 MARTY_FLOW_ENVELOPE_KEY_ID = "flow-response-envelope-marty-aes256"
+MARTY_NOTIFICATION_WEBHOOK_ENVELOPE_KEY_ID = (
+    "notification-webhook-envelope-marty-aes256"
+)
 
 MARTY_KMS_KEY_SPECS: list[dict[str, Any]] = [
     {
@@ -504,19 +511,21 @@ def _ensure_openbao_key(
     }
 
 
-def _ensure_openbao_envelope_key(bao_addr: str, bao_token: str) -> None:
-    """Ensure the non-exportable KEK used for per-flow private key envelopes."""
+def _ensure_openbao_symmetric_key(
+    bao_addr: str, bao_token: str, key_id: str, description: str
+) -> None:
+    """Ensure a named, non-exportable AES-GCM Transit key exists."""
     import httpx
 
-    if (
-        _read_openbao_transit_key(bao_addr, bao_token, MARTY_FLOW_ENVELOPE_KEY_ID)
-        is not None
-    ):
+    data = _read_openbao_transit_key(bao_addr, bao_token, key_id)
+    if data is not None:
+        if data.get("type") != "aes256-gcm96" or data.get("exportable") is not False:
+            raise RuntimeError(f"OpenBao {description} key has unsafe attributes.")
         return
     try:
         _bao_request(
             "POST",
-            f"transit/keys/{MARTY_FLOW_ENVELOPE_KEY_ID}",
+            f"transit/keys/{key_id}",
             bao_addr=bao_addr,
             bao_token=bao_token,
             json_body={"type": "aes256-gcm96", "exportable": False},
@@ -524,8 +533,48 @@ def _ensure_openbao_envelope_key(bao_addr: str, bao_token: str) -> None:
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code if exc.response is not None else "unknown"
         raise RuntimeError(
-            f"OpenBao flow envelope key could not be created (HTTP {status})."
+            f"OpenBao {description} key could not be created (HTTP {status})."
         ) from exc
+
+
+def _ensure_openbao_envelope_key(bao_addr: str, bao_token: str) -> None:
+    """Ensure the non-exportable KEK used for per-flow private key envelopes."""
+    _ensure_openbao_symmetric_key(
+        bao_addr, bao_token, MARTY_FLOW_ENVELOPE_KEY_ID, "flow envelope"
+    )
+
+
+def prepare_notification_webhook_envelope_key() -> bool:
+    """Provision/check the KEK before plaintext webhook rows are migrated."""
+    bao_addr = os.environ.get("BAO_ADDR", "").strip()
+    bao_token = _read_secret_value("OPENBAO_SERVICE_TOKEN") or _read_secret_value(
+        "BAO_TOKEN"
+    )
+    if not bao_addr or not bao_token:
+        print(
+            "  Failed: OpenBao address/token are required for webhook secret protection.",
+            file=sys.stderr,
+        )
+        return False
+    try:
+        _ensure_transit_mount(bao_addr, bao_token)
+        _ensure_openbao_symmetric_key(
+            bao_addr,
+            bao_token,
+            MARTY_NOTIFICATION_WEBHOOK_ENVELOPE_KEY_ID,
+            "notification webhook envelope",
+        )
+        print(
+            "  Ensured non-exportable notification webhook envelope key: "
+            f"{MARTY_NOTIFICATION_WEBHOOK_ENVELOPE_KEY_ID}"
+        )
+        return True
+    except Exception as exc:
+        print(
+            f"  Failed notification webhook envelope key preparation: {exc}",
+            file=sys.stderr,
+        )
+        return False
 
 
 def _load_json_from_redis(
@@ -948,6 +997,7 @@ def ensure_schemas(database_url: str) -> None:
         "presentation_policy_service",
         "deployment_profile_service",
         "flow_service",
+        "notification_service",
         "revocation_profile_service",
     ]
 
@@ -1115,6 +1165,9 @@ def main():
     # Ensure schemas exist first
     if not args.verify_only:
         ensure_schemas(database_url)
+        if not prepare_notification_webhook_envelope_key():
+            print("\nNotification webhook KMS preparation failed", file=sys.stderr)
+            sys.exit(1)
 
     # Run migrations for each service
     success_count = 0

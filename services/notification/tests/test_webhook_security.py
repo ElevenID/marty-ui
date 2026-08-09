@@ -298,6 +298,8 @@ async def test_registered_delivery_does_not_retain_receiver_response_body(
     assert delivery.response_body is None
     assert delivery.error_message == "HTTP_500"
     assert calls[0]["follow_redirects"] is False
+    assert calls[0]["headers"]["X-MIP-Delivery-Id"] == delivery.id
+    assert calls[0]["headers"]["X-MIP-Delivery-Attempt"] == "1"
 
 
 @pytest.mark.asyncio
@@ -320,6 +322,7 @@ async def test_dispatch_rechecks_webhook_tenant_before_delivery(
     monkeypatch.setattr(notification, "_deliver_to_webhook", unexpected_delivery)
     result = await notification._dispatch_event_to_subscriptions(
         notification.EventIngestRequest(
+            event_id="event-1",
             event_type="credential.issued",
             aggregate_id="credential-1",
             aggregate_type="credential",
