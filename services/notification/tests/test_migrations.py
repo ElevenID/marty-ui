@@ -11,7 +11,11 @@ import sys
 
 import pytest
 
-from notification.infrastructure.models import mapper_registry, webhook_deliveries
+from notification.infrastructure.models import (
+    mapper_registry,
+    webhook_deliveries,
+    webhook_endpoints,
+)
 from services.notification import main as notification
 
 
@@ -20,6 +24,9 @@ MIGRATIONS = (
 )
 ROOT = Path(__file__).resolve().parents[3]
 REVISION = MIGRATIONS / "versions" / "20260808_0001_adopt_notification_schema.py"
+ENVELOPE_REVISION = (
+    MIGRATIONS / "versions" / "20260808_0002_protect_webhook_secrets.py"
+)
 
 
 def _load_revision():
@@ -48,7 +55,7 @@ def test_notification_migration_graph_has_exactly_one_head() -> None:
         if assignments["down_revision"] is not None:
             parents.add(assignments["down_revision"])
 
-    assert revisions - parents == {"20260808_0001"}
+    assert revisions - parents == {"20260808_0002"}
 
 
 def test_owned_schema_and_initial_revision_forbid_receiver_body_storage() -> None:
@@ -64,6 +71,15 @@ def test_owned_schema_and_initial_revision_forbid_receiver_body_storage() -> Non
 def test_adoption_downgrade_cannot_recreate_deleted_receiver_data() -> None:
     with pytest.raises(RuntimeError, match="irreversible"):
         _load_revision().downgrade()
+
+
+def test_owned_schema_head_forbids_plaintext_webhook_secret_storage() -> None:
+    assert "secret" not in webhook_endpoints.c
+    assert "secret_envelope" in webhook_endpoints.c
+    assert "secret_hint" in webhook_endpoints.c
+    source = ENVELOPE_REVISION.read_text(encoding="utf-8")
+    assert 'op.drop_column(TABLE, "secret"' in source
+    assert "online migration required to protect webhook secrets" in source
 
 
 def test_notification_migration_generates_offline_sql_in_isolation() -> None:
@@ -94,6 +110,8 @@ command.upgrade(config, 'head', sql=True)
     assert result.returncode == 0, result.stderr
     assert "CREATE SCHEMA IF NOT EXISTS notification_service" in result.stdout
     assert "DROP COLUMN IF EXISTS response_body" in result.stdout
+    assert "online migration required to protect webhook secrets" in result.stdout
+    assert "DROP COLUMN secret" in result.stdout
 
 
 def test_notification_startup_requires_versioned_clean_schema(
@@ -106,17 +124,33 @@ def test_notification_startup_requires_versioned_clean_schema(
     }
 
     class Inspector:
-        def __init__(self, tables: set[str], *, retains_body: bool = False) -> None:
+        def __init__(
+            self,
+            tables: set[str],
+            *,
+            retains_body: bool = False,
+            retains_plaintext_secret: bool = False,
+        ) -> None:
             self.tables = tables
             self.retains_body = retains_body
+            self.retains_plaintext_secret = retains_plaintext_secret
 
         def get_table_names(self, *, schema: str) -> list[str]:
             assert schema == "notification_service"
             return sorted(self.tables)
 
         def get_columns(self, table: str, *, schema: str) -> list[dict[str, str]]:
-            assert table == "webhook_deliveries"
             assert schema == "notification_service"
+            if table == "webhook_endpoints":
+                columns = [
+                    {"name": "id"},
+                    {"name": "secret_envelope"},
+                    {"name": "secret_hint"},
+                ]
+                if self.retains_plaintext_secret:
+                    columns.append({"name": "secret"})
+                return columns
+            assert table == "webhook_deliveries"
             columns = [{"name": "id"}]
             if self.retains_body:
                 columns.append({"name": "response_body"})
@@ -135,6 +169,16 @@ def test_notification_startup_requires_versioned_clean_schema(
         lambda _connection: Inspector(expected | {"alembic_version"}, retains_body=True),
     )
     with pytest.raises(RuntimeError, match="receiver-body retention"):
+        notification._require_migrated_notification_schema(object())
+
+    monkeypatch.setattr(
+        notification,
+        "inspect",
+        lambda _connection: Inspector(
+            expected | {"alembic_version"}, retains_plaintext_secret=True
+        ),
+    )
+    with pytest.raises(RuntimeError, match="plaintext webhook secrets"):
         notification._require_migrated_notification_schema(object())
 
     monkeypatch.setattr(

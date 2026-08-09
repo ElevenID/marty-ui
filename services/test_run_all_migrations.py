@@ -36,6 +36,54 @@ def test_notification_schema_is_owned_by_the_deployment_migration_runner() -> No
     assert services["notification"] == "notification.infrastructure.models"
 
 
+def test_notification_webhook_envelope_key_is_prepared_before_migration(
+    monkeypatch,
+) -> None:
+    calls = []
+    monkeypatch.setenv("BAO_ADDR", "https://bao.example")
+    monkeypatch.setenv("OPENBAO_SERVICE_TOKEN", "scoped-token")
+    monkeypatch.delenv("BAO_TOKEN", raising=False)
+    monkeypatch.setattr(
+        migrations,
+        "_ensure_transit_mount",
+        lambda address, token: calls.append(("mount", address, token)),
+    )
+    monkeypatch.setattr(
+        migrations,
+        "_ensure_openbao_symmetric_key",
+        lambda address, token, key_id, description: calls.append(
+            ("key", address, token, key_id, description)
+        ),
+    )
+
+    assert migrations.prepare_notification_webhook_envelope_key() is True
+    assert calls == [
+        ("mount", "https://bao.example", "scoped-token"),
+        (
+            "key",
+            "https://bao.example",
+            "scoped-token",
+            migrations.MARTY_NOTIFICATION_WEBHOOK_ENVELOPE_KEY_ID,
+            "notification webhook envelope",
+        ),
+    ]
+
+
+def test_notification_webhook_envelope_preparation_fails_without_kms(
+    monkeypatch,
+) -> None:
+    for name in (
+        "BAO_ADDR",
+        "BAO_TOKEN",
+        "BAO_TOKEN_FILE",
+        "OPENBAO_SERVICE_TOKEN",
+        "OPENBAO_SERVICE_TOKEN_FILE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    assert migrations.prepare_notification_webhook_envelope_key() is False
+
+
 def test_seed_signing_registry_binds_lti_key_inside_multi_key_service() -> None:
     redis = FakeRedis()
     organization_id = "00000000-0000-0000-0000-000000000001"
