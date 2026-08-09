@@ -219,6 +219,68 @@ async def test_postgres_migration_and_concurrent_finalization_are_atomic() -> No
                 )
             ).one()
         assert delivered_row == ("delivered", "", {}, 1)
+
+        # A handler that read the active row before finalization cannot
+        # resurrect or expire the now-terminal transaction afterward.
+        stale_instance = FlowInstance(
+            id=instance_id,
+            flow_definition_id="__verification__",
+            organization_id="org-1",
+            status=FlowInstanceStatus.EXPIRED,
+            context={"request_digest": "c" * 64},
+            completed_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        await repository.save_instance(stale_instance)
+        persisted = await repository.get_instance(instance_id)
+        assert persisted.status is FlowInstanceStatus.COMPLETED
+        assert persisted.result == winning_instance.result
+
+        # Expiry is re-evaluated by PostgreSQL in the finalization CAS, so a
+        # verifier response cannot commit after expensive validation crosses
+        # the transaction deadline.
+        expired_instance_id = "90000000-0000-0000-0000-000000000002"
+        now = datetime.now(timezone.utc)
+        async with engine.begin() as connection:
+            await connection.execute(
+                flow_instances.insert().values(
+                    id=expired_instance_id,
+                    flow_definition_id="__verification__",
+                    organization_id="org-1",
+                    status=FlowInstanceStatus.AWAITING_WALLET.value,
+                    context={"request_digest": "d" * 64},
+                    step_history=[],
+                    subject_type="applicant",
+                    expires_at=now - timedelta(seconds=1),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        expired_candidate = _terminal_instance(expired_instance_id, "allow")
+        assert (
+            await repository.finalize_verification(
+                expired_candidate,
+                nonce_digest="f" * 64,
+                replay_expires_at=expired_candidate.completed_at
+                + timedelta(minutes=5),
+                expected_status=FlowInstanceStatus.AWAITING_WALLET,
+            )
+            is False
+        )
+        async with session_factory() as session:
+            expired_status = await session.scalar(
+                select(flow_instances.c.status).where(
+                    flow_instances.c.id == expired_instance_id
+                )
+            )
+            expired_replay = await session.scalar(
+                select(flow_nonce_consumptions.c.nonce_digest).where(
+                    flow_nonce_consumptions.c.flow_instance_id
+                    == expired_instance_id
+                )
+            )
+        assert expired_status == FlowInstanceStatus.AWAITING_WALLET.value
+        assert expired_replay is None
     finally:
         with sync_engine.begin() as connection:
             connection.execute(text("DROP SCHEMA IF EXISTS flow_service CASCADE"))

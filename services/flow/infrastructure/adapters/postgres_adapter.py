@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 
 class _FinalizationConflict(Exception):
     pass
+
+
+_TERMINAL_FLOW_STATUSES = ("completed", "failed", "cancelled", "expired")
 
 
 def _serialize_preconditions_payload(flow: "FlowDefinition") -> list[str]:
@@ -432,7 +435,13 @@ class PostgresFlowRepository:
                 # Update
                 await session.execute(
                     flow_instances.update()
-                    .where(flow_instances.c.id == instance.id)
+                    .where(
+                        flow_instances.c.id == instance.id,
+                        # Terminal decisions are immutable. In particular, a
+                        # stale request/expiry handler must not overwrite a
+                        # verification result committed after it read the row.
+                        flow_instances.c.status.not_in(_TERMINAL_FLOW_STATUSES),
+                    )
                     .values(
                         flow_definition_id=instance.flow_definition_id,
                         organization_id=instance.organization_id,
@@ -487,15 +496,16 @@ class PostgresFlowRepository:
         callback_event: CallbackOutboxEvent | None = None,
     ) -> bool:
         """Atomically consume replay state and commit one terminal decision."""
-        consumed_at = instance.completed_at or instance.updated_at
         try:
             async with self._session_factory() as session:
                 async with session.begin():
-                    # Opportunistic bounded cleanup is part of the same
-                    # transaction and never weakens a live replay record.
+                    # Indexed opportunistic cleanup is part of the same
+                    # transaction and uses database time so application clock
+                    # skew cannot retire a live replay record early.
                     await session.execute(
                         delete(flow_nonce_consumptions).where(
-                            flow_nonce_consumptions.c.expires_at <= consumed_at
+                            flow_nonce_consumptions.c.expires_at
+                            <= func.clock_timestamp()
                         )
                     )
                     replay_result = await session.execute(
@@ -503,7 +513,7 @@ class PostgresFlowRepository:
                         .values(
                             nonce_digest=nonce_digest,
                             flow_instance_id=instance.id,
-                            consumed_at=consumed_at,
+                            consumed_at=func.clock_timestamp(),
                             expires_at=replay_expires_at,
                         )
                         .on_conflict_do_nothing()
@@ -517,6 +527,14 @@ class PostgresFlowRepository:
                         .where(
                             flow_instances.c.id == instance.id,
                             flow_instances.c.status == expected_status.value,
+                            # Expiry is part of the compare-and-swap boundary,
+                            # not just an application-layer preflight check.
+                            # PostgreSQL time is authoritative at commit.
+                            or_(
+                                flow_instances.c.expires_at.is_(None),
+                                flow_instances.c.expires_at
+                                >= func.clock_timestamp(),
+                            ),
                         )
                         .values(
                             flow_definition_id=instance.flow_definition_id,
