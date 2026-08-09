@@ -147,6 +147,26 @@ _VC_API_ROUTE_RULES = (
     ),
 )
 
+_WALLET_REGISTRY_ROUTE_PERMISSIONS = {
+    "GET": "wallet:view",
+    "HEAD": "wallet:view",
+    "OPTIONS": "wallet:view",
+    "POST": "wallet:write",
+    "PUT": "wallet:write",
+    "PATCH": "wallet:write",
+    "DELETE": "wallet:write",
+}
+_WALLET_REGISTRY_ROUTE_RULE = (
+    re.compile(r"^/v1/wallet-registry(?:/|$)"),
+    dict(_WALLET_REGISTRY_ROUTE_PERMISSIONS),
+    "wallet",
+)
+_WALLET_REGISTRY_RESOURCE_LOOKUP = (
+    "credential-templates",
+    "/v1/wallet-registry/{resource_id}",
+    {"resolve"},
+)
+
 _CANVAS_PROVENANCE_ROUTE = (
     "GET",
     "/v1/issuance/delivery-records/canvas-credentials/provenance",
@@ -155,6 +175,85 @@ _CANVAS_PROVENANCE_PERMISSION = (
     "integration-connector:view",
     "integration-connector",
 )
+
+_NOTIFICATION_ROUTE_RULES = (
+    (
+        re.compile(r"^/v1/webhooks/[^/]+/test$"),
+        {"POST": "webhook:test"},
+        "webhook",
+    ),
+    (
+        re.compile(r"^/v1/webhooks(?:/|$)"),
+        {
+            "GET": "webhook:view",
+            "HEAD": "webhook:view",
+            "OPTIONS": "webhook:view",
+            "POST": "webhook:create",
+            "PUT": "webhook:edit",
+            "PATCH": "webhook:edit",
+            "DELETE": "webhook:delete",
+        },
+        "webhook",
+    ),
+    (
+        re.compile(r"^/v1/subscriptions(?:/|$)"),
+        {
+            "GET": "notification:view",
+            "HEAD": "notification:view",
+            "OPTIONS": "notification:view",
+            "POST": "notification:send",
+            "PUT": "notification:send",
+            "PATCH": "notification:send",
+            "DELETE": "notification:send",
+        },
+        "notification",
+    ),
+    (
+        re.compile(r"^/v1/notifications/send$"),
+        {"POST": "notification:send"},
+        "notification",
+    ),
+    (
+        re.compile(r"^/v1/notifications(?:/|$)"),
+        {
+            "GET": "notification:view",
+            "HEAD": "notification:view",
+            "OPTIONS": "notification:view",
+            "POST": "notification:view",
+            "PUT": "notification:view",
+            "PATCH": "notification:view",
+            "DELETE": "notification:view",
+        },
+        "notification",
+    ),
+)
+
+_NOTIFICATION_RESOURCE_LOOKUPS = {
+    "webhooks": (
+        "notifications",
+        "/v1/webhooks/{resource_id}",
+        set(),
+    ),
+    "subscriptions": (
+        "notifications",
+        "/v1/subscriptions/{resource_id}",
+        set(),
+    ),
+    "notifications": (
+        "notifications",
+        "/v1/notifications/{resource_id}",
+        {
+            "events",
+            "preferences",
+            "read-all",
+            "rules",
+            "send",
+            "templates",
+            "unread",
+            "unread-count",
+        },
+    ),
+}
 
 
 class GatewayCedarAuthMiddleware(MartyCedarAuthMiddleware):
@@ -169,6 +268,19 @@ class GatewayCedarAuthMiddleware(MartyCedarAuthMiddleware):
     @staticmethod
     def _api_key_allowed(required_permission: str, scopes: list[str]) -> bool:
         resource, separator, action = required_permission.partition(":")
+        scope_set = set(scopes or [])
+        if "admin:full" in scope_set:
+            return True
+        if required_permission == "webhook:test":
+            return "webhooks:write" in scope_set
+        if required_permission == "notification:send":
+            return "notifications:send" in scope_set
+        if resource == "wallet":
+            if action == "view":
+                return bool(scope_set & {"wallet:read", "wallet:write"})
+            if action == "write":
+                return "wallet:write" in scope_set
+            return False
         if resource != "signing-key":
             return MartyCedarAuthMiddleware._api_key_allowed(
                 required_permission,
@@ -177,9 +289,6 @@ class GatewayCedarAuthMiddleware(MartyCedarAuthMiddleware):
         if separator != ":":
             return False
 
-        scope_set = set(scopes or [])
-        if "admin:full" in scope_set:
-            return True
         if action == "view":
             return bool(scope_set & {"keys:read", "keys:write"})
         if action in {
@@ -195,6 +304,91 @@ class GatewayCedarAuthMiddleware(MartyCedarAuthMiddleware):
         }:
             return "keys:write" in scope_set
         return False
+
+
+def _register_wallet_registry_cedar_routes() -> None:
+    """Complete the published wallet RBAC and API-key scope boundary."""
+
+    resolver = getattr(_cedar_actions, "resolve_action_and_resource", None)
+    lookup_resolver = getattr(_cedar_actions, "resolve_resource_lookup", None)
+    rules = getattr(_cedar_actions, "SPECIAL_ROUTE_RULES", None)
+    lookups = getattr(_cedar_actions, "RESOURCE_LOOKUP_MAP", None)
+    if (
+        not callable(resolver)
+        or not callable(lookup_resolver)
+        or not isinstance(rules, list)
+        or not isinstance(lookups, dict)
+    ):
+        raise RuntimeError(
+            "Unsupported marty-common Cedar registry; refusing to start "
+            "without wallet-registry tenant authorization."
+        )
+
+    probes = {
+        method: resolver(method, "/v1/wallet-registry/example")
+        for method in _WALLET_REGISTRY_ROUTE_PERMISSIONS
+    }
+    expected = {
+        method: (permission, "wallet")
+        for method, permission in _WALLET_REGISTRY_ROUTE_PERMISSIONS.items()
+    }
+    if any(
+        value is not None and value != expected[method]
+        for method, value in probes.items()
+    ):
+        raise RuntimeError(
+            "Conflicting marty-common wallet-registry Cedar mapping; "
+            "refusing to override it."
+        )
+    if any(value is None for value in probes.values()) and any(
+        value is not None for value in probes.values()
+    ):
+        raise RuntimeError(
+            "Partial marty-common wallet-registry Cedar mapping; "
+            "refusing to extend an ambiguous boundary."
+        )
+
+    inserted_rule = False
+    if probes != expected:
+        rules.insert(0, _WALLET_REGISTRY_ROUTE_RULE)
+        inserted_rule = True
+
+    existing_lookup = lookups.get("wallet-registry")
+    inserted_lookup = False
+    if existing_lookup is None:
+        lookups["wallet-registry"] = _WALLET_REGISTRY_RESOURCE_LOOKUP
+        inserted_lookup = True
+    elif existing_lookup != _WALLET_REGISTRY_RESOURCE_LOOKUP:
+        if inserted_rule:
+            rules.remove(_WALLET_REGISTRY_ROUTE_RULE)
+        raise RuntimeError(
+            "Conflicting marty-common wallet-registry tenant lookup; "
+            "refusing to override it."
+        )
+
+    try:
+        verified_routes = all(
+            resolver(method, "/v1/wallet-registry/example") == expected_value
+            for method, expected_value in expected.items()
+        )
+        verified_lookup = lookup_resolver("/v1/wallet-registry/example") == (
+            "credential-templates",
+            "/v1/wallet-registry/example",
+        )
+        verified_reserved = (
+            lookup_resolver("/v1/wallet-registry/resolve/profile") is None
+        )
+    except Exception:
+        verified_routes = verified_lookup = verified_reserved = False
+    if not (verified_routes and verified_lookup and verified_reserved):
+        if inserted_rule:
+            rules.remove(_WALLET_REGISTRY_ROUTE_RULE)
+        if inserted_lookup:
+            del lookups["wallet-registry"]
+        raise RuntimeError(
+            "Wallet-registry Cedar compatibility mapping did not activate; "
+            "refusing to start."
+        )
 
 
 def _register_signing_key_cedar_routes() -> None:
@@ -327,10 +521,7 @@ def _register_canvas_provenance_cedar_route() -> None:
     )
     rules.insert(0, compatibility_rule)
     try:
-        verified = (
-            resolver(*_CANVAS_PROVENANCE_ROUTE)
-            == _CANVAS_PROVENANCE_PERMISSION
-        )
+        verified = resolver(*_CANVAS_PROVENANCE_ROUTE) == _CANVAS_PROVENANCE_PERMISSION
     except Exception:
         verified = False
     if not verified:
@@ -339,6 +530,92 @@ def _register_canvas_provenance_cedar_route() -> None:
             "Canvas provenance Cedar compatibility mapping did not activate; "
             "refusing to start."
         )
+
+
+def _register_notification_cedar_routes() -> None:
+    """Protect notification resources until marty-common ships the same boundary."""
+    resolver = getattr(_cedar_actions, "resolve_action_and_resource", None)
+    lookup_resolver = getattr(_cedar_actions, "resolve_resource_lookup", None)
+    rules = getattr(_cedar_actions, "SPECIAL_ROUTE_RULES", None)
+    lookups = getattr(_cedar_actions, "RESOURCE_LOOKUP_MAP", None)
+    if (
+        not callable(resolver)
+        or not callable(lookup_resolver)
+        or not isinstance(rules, list)
+        or not isinstance(lookups, dict)
+    ):
+        raise RuntimeError(
+            "Unsupported marty-common Cedar registry; refusing to start "
+            "without notification tenant authorization."
+        )
+
+    probes = {
+        ("GET", "/v1/webhooks"): ("webhook:view", "webhook"),
+        ("POST", "/v1/webhooks"): ("webhook:create", "webhook"),
+        ("PATCH", "/v1/webhooks/example"): ("webhook:edit", "webhook"),
+        ("DELETE", "/v1/webhooks/example"): ("webhook:delete", "webhook"),
+        ("POST", "/v1/webhooks/example/test"): ("webhook:test", "webhook"),
+        ("GET", "/v1/subscriptions"): ("notification:view", "notification"),
+        ("POST", "/v1/subscriptions"): ("notification:send", "notification"),
+        ("GET", "/v1/notifications"): ("notification:view", "notification"),
+        ("POST", "/v1/notifications/send"): ("notification:send", "notification"),
+        ("GET", "/v1/notifications/events/push"): (
+            "notification:view",
+            "notification",
+        ),
+    }
+    current = {probe: resolver(*probe) for probe in probes}
+    if any(
+        value is not None and value != probes[probe] for probe, value in current.items()
+    ):
+        raise RuntimeError(
+            "Conflicting marty-common notification Cedar mapping; "
+            "refusing to override it."
+        )
+
+    inserted_rules: list[tuple] = []
+    if any(value is None for value in current.values()):
+        if any(value is not None for value in current.values()):
+            raise RuntimeError(
+                "Partial marty-common notification Cedar mapping; "
+                "refusing to extend an ambiguous boundary."
+            )
+        inserted_rules = list(_NOTIFICATION_ROUTE_RULES)
+        rules[0:0] = inserted_rules
+
+    inserted_lookup_keys: list[str] = []
+    try:
+        for resource, expected in _NOTIFICATION_RESOURCE_LOOKUPS.items():
+            current_lookup = lookups.get(resource)
+            if current_lookup is not None and current_lookup != expected:
+                raise RuntimeError(
+                    f"Conflicting marty-common {resource} tenant lookup; "
+                    "refusing to override it."
+                )
+            if current_lookup is None:
+                lookups[resource] = expected
+                inserted_lookup_keys.append(resource)
+
+        verified_routes = all(
+            resolver(*probe) == expected for probe, expected in probes.items()
+        )
+        verified_lookups = all(
+            lookup_resolver(f"/v1/{resource}/example")
+            == (expected[0], expected[1].format(resource_id="example"))
+            for resource, expected in _NOTIFICATION_RESOURCE_LOOKUPS.items()
+        )
+        if not verified_routes or not verified_lookups:
+            raise RuntimeError(
+                "Notification Cedar compatibility mapping did not activate; "
+                "refusing to start."
+            )
+    except Exception:
+        for rule in inserted_rules:
+            if rule in rules:
+                rules.remove(rule)
+        for resource in inserted_lookup_keys:
+            lookups.pop(resource, None)
+        raise
 
 
 def _required_ready_services() -> tuple[str, ...]:
@@ -686,8 +963,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     _register_signing_key_cedar_routes()
+    _register_wallet_registry_cedar_routes()
     _register_vc_api_cedar_routes()
     _register_canvas_provenance_cedar_route()
+    _register_notification_cedar_routes()
     app = FastAPI(
         title="Marty API Gateway",
         description="""
@@ -1071,32 +1350,6 @@ Verification is handled through two complementary approaches:
     async def get_org_waltid_as_metadata_appended(org_id: str) -> Response:
         return await _proxy_to_issuance_well_known(
             f"/.well-known/oauth-authorization-server/org/{org_id}"
-        )
-
-    # SpruceID / SpruceKit wallet variants
-
-    @app.get("/.well-known/openid-credential-issuer/org/{org_id}/spruce")
-    async def get_org_spruce_issuer_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(
-            f"/.well-known/openid-credential-issuer/org/{org_id}/spruce"
-        )
-
-    @app.get("/org/{org_id}/spruce/.well-known/openid-credential-issuer")
-    async def get_org_spruce_issuer_metadata_appended(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(
-            f"/.well-known/openid-credential-issuer/org/{org_id}/spruce"
-        )
-
-    @app.get("/.well-known/oauth-authorization-server/org/{org_id}/spruce")
-    async def get_org_spruce_as_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(
-            f"/.well-known/oauth-authorization-server/org/{org_id}/spruce"
-        )
-
-    @app.get("/org/{org_id}/spruce/.well-known/oauth-authorization-server")
-    async def get_org_spruce_as_metadata_appended(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(
-            f"/.well-known/oauth-authorization-server/org/{org_id}/spruce"
         )
 
     # Google Wallet CredentialManager API variants

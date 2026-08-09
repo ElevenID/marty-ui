@@ -13,19 +13,19 @@ import {
   ReadinessState,
 } from '../dashboardRules'
 
-const activeIssuerProfile = {
-  id: 'issuer-profile-1',
+const activeIssuerIdentity = {
   status: 'active',
   issuer_did: 'did:web:issuer.example.com',
-  signing_service_id: 'managed-openbao-transit',
+  key_purpose: 'vc_jwt_issuer',
+  algorithm: 'ES256',
 }
 const templateIssuerFields = {
-  issuer_did: activeIssuerProfile.issuer_did,
+  issuer_did: activeIssuerIdentity.issuer_did,
 }
 
 const readyTrustDependencies = {
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
-  issuerProfiles: [activeIssuerProfile],
+  issuerIdentities: [activeIssuerIdentity],
   keyManagementConfig: {
     default_service_id: 'managed-openbao-transit',
     services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
@@ -111,7 +111,7 @@ describe('dashboardRules', () => {
         setupIntent: 'verify',
         trustProfiles: [{ id: 1, status: 'active' }],
         signingKeys: [],
-        issuerProfiles: [],
+        issuerIdentities: [],
         keyManagementConfig: {
           default_service_id: null,
           services: [],
@@ -141,7 +141,7 @@ describe('dashboardRules', () => {
         setupIntent: 'issue',
         trustProfiles: [],
         signingKeys: [],
-        issuerProfiles: [],
+        issuerIdentities: [],
         keyManagementConfig: {
           default_service_id: null,
           services: [],
@@ -168,7 +168,7 @@ describe('dashboardRules', () => {
         setupIntent: 'verify',
         trustProfiles: [{ id: 'trust-1', status: 'active' }],
         signingKeys: [],
-        issuerProfiles: [],
+        issuerIdentities: [],
         keyManagementConfig: { default_service_id: null, services: [] },
         templates: [],
         policies: [{ id: 'policy-1', required_claims: ['given_name'] }],
@@ -303,7 +303,7 @@ describe('dashboardRules', () => {
       const data = {
         trustProfiles: [],
         signingKeys: [],
-        issuerProfiles: [],
+        issuerIdentities: [],
         keyManagementConfig: {
           default_service_id: null,
           services: [],
@@ -327,7 +327,7 @@ describe('dashboardRules', () => {
       const data = {
         trustProfiles: [],
         signingKeys: [],
-        issuerProfiles: [],
+        issuerIdentities: [],
         keyManagementConfig: {
           default_service_id: 'managed-openbao-transit',
           services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
@@ -393,10 +393,10 @@ describe('dashboardRules', () => {
       expect(result.trust.blockReason).toBeNull()
     })
 
-    it('should mark template as BLOCKED when artifacts are missing', () => {
+    it('should ignore legacy artifact metadata when the public issuer DID is active', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
-        issuerProfiles: [activeIssuerProfile],
+        issuerIdentities: [activeIssuerIdentity],
         templates: [
           {
             id: 1,
@@ -414,15 +414,14 @@ describe('dashboardRules', () => {
 
       const result = computeSetupReadiness(data)
 
-      expect(result.template.state).toBe(ReadinessState.BLOCKED)
-      expect(result.template.message).toContain('missing signing artifacts')
-      expect(result.template.blockReason).toContain('missing signing artifacts')
+      expect(result.template.state).toBe(ReadinessState.READY)
+      expect(result.template.message).toContain('1 active template')
     })
 
     it('should mark template as READY when active with valid artifacts', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
-        issuerProfiles: [activeIssuerProfile],
+        issuerIdentities: [activeIssuerIdentity],
         templates: [
           {
             id: 1,
@@ -444,10 +443,10 @@ describe('dashboardRules', () => {
       expect(result.template.message).toContain('1 active template')
     })
 
-    it('should mark template as BLOCKED when no active KMS-backed issuer profile is bound', () => {
+    it('should mark template as BLOCKED when no compatible active issuer DID is bound', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
-        issuerProfiles: [activeIssuerProfile],
+        issuerIdentities: [activeIssuerIdentity],
         templates: [
           {
             id: 1,
@@ -465,15 +464,15 @@ describe('dashboardRules', () => {
       const result = computeSetupReadiness(data)
 
       expect(result.template.state).toBe(ReadinessState.BLOCKED)
-      expect(result.template.message).toContain('missing active KMS-backed issuer profile')
-      expect(result.template.blockReason).toContain('missing active KMS-backed issuer profile')
+      expect(result.template.message).toContain('missing compatible active issuer DID')
+      expect(result.template.blockReason).toContain('missing compatible active issuer DID')
       expect(result.policy.dependencyBlocked).toBe(true)
     })
 
-    it('should mark template as BLOCKED when the DID-resolved issuer profile is inactive', () => {
+    it('should mark template as BLOCKED when the DID-resolved issuer identity is inactive', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
-        issuerProfiles: [{ ...activeIssuerProfile, status: 'inactive' }],
+        issuerIdentities: [{ ...activeIssuerIdentity, status: 'inactive' }],
         templates: [
           {
             id: 1,
@@ -492,17 +491,18 @@ describe('dashboardRules', () => {
       const result = computeSetupReadiness(data)
 
       expect(result.template.state).toBe(ReadinessState.BLOCKED)
-      expect(result.template.message).toContain('missing active KMS-backed issuer profile')
+      expect(result.template.message).toContain('missing compatible active issuer DID')
       expect(result.policy.dependencyBlocked).toBe(true)
     })
 
-    it('should mark template as BLOCKED when the DID-resolved issuer profile has no KMS signing service', () => {
+    it('does not use public algorithm selectors to choose issuer custody', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
-        issuerProfiles: [{
-          id: activeIssuerProfile.id,
+        issuerIdentities: [{
           status: 'active',
           issuer_did: 'did:web:issuer.example.com',
+          key_purpose: 'vc_jwt_issuer',
+          algorithm: 'RS256',
         }],
         templates: [
           {
@@ -521,15 +521,13 @@ describe('dashboardRules', () => {
 
       const result = computeSetupReadiness(data)
 
-      expect(result.template.state).toBe(ReadinessState.BLOCKED)
-      expect(result.template.message).toContain('missing active KMS-backed issuer profile')
-      expect(result.policy.dependencyBlocked).toBe(true)
+      expect(result.template.state).toBe(ReadinessState.READY)
     })
 
     it('should mark policy as BLOCKED when missing required claims', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
-        issuerProfiles: [activeIssuerProfile],
+        issuerIdentities: [activeIssuerIdentity],
         templates: [
           {
             id: 1,
@@ -560,7 +558,7 @@ describe('dashboardRules', () => {
     it('should mark policy as READY when configured with required claims', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
-        issuerProfiles: [activeIssuerProfile],
+        issuerIdentities: [activeIssuerIdentity],
         templates: [
           {
             id: 1,
@@ -590,7 +588,7 @@ describe('dashboardRules', () => {
     it('should mark deployment as BLOCKED when no API keys exist', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
-        issuerProfiles: [activeIssuerProfile],
+        issuerIdentities: [activeIssuerIdentity],
         templates: [
           {
             id: 1,
@@ -621,7 +619,7 @@ describe('dashboardRules', () => {
     it('should mark deployment as READY when active with API keys', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
-        issuerProfiles: [activeIssuerProfile],
+        issuerIdentities: [activeIssuerIdentity],
         templates: [
           {
             id: 1,
@@ -652,7 +650,7 @@ describe('dashboardRules', () => {
     it('should mark flow as BLOCKED when missing references', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
-        issuerProfiles: [activeIssuerProfile],
+        issuerIdentities: [activeIssuerIdentity],
         templates: [
           {
             id: 1,
@@ -691,7 +689,7 @@ describe('dashboardRules', () => {
     it('should mark all as READY in fully configured org', () => {
       const data = {
         trustProfiles: [{ id: 1, status: 'active' }],
-        issuerProfiles: [activeIssuerProfile],
+        issuerIdentities: [activeIssuerIdentity],
         templates: [
           {
             id: 1,

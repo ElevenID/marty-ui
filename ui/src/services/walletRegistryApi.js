@@ -11,10 +11,16 @@ const BASE = '/v1/wallet-registry';
 /**
  * List all active wallets in the registry.
  * @param {boolean} [activeOnly=true] - If true, only return active wallet entries.
+ * @param {string|null} [organizationId=null] - Include overrides for this authorized organization.
  * @returns {Promise<Array>}
  */
-export const listWallets = async (activeOnly = true) => {
-  const response = await apiClient.get(BASE, { params: { active_only: activeOnly } });
+export const listWallets = async (activeOnly = true, organizationId = null) => {
+  const response = await apiClient.get(BASE, {
+    params: {
+      active_only: activeOnly,
+      ...(organizationId ? { organization_id: organizationId } : {}),
+    },
+  });
   return response.data;
 };
 

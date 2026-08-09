@@ -73,14 +73,30 @@ describe('CreateOrganizationPage', () => {
         description: 'Trusted travel credentials',
         contact_email: 'ops@example.com',
         org_type: 'enterprise',
-        jurisdiction: 'US',
-        is_discoverable: true,
         visibility: 'PUBLIC',
-        membership_mode: 'open',
+        join_mechanism: 'open',
+        requires_approval: false,
       }));
       expect(mockRefreshMemberships).toHaveBeenCalled();
       expect(mockSetActiveOrgId).toHaveBeenCalledWith('org-new', [{ id: 'org-new' }]);
       expect(mockNavigate).toHaveBeenCalledWith('/console/org');
+    });
+  });
+
+  it('maps approval admission to the canonical public organization contract', async () => {
+    const { user } = render(<CreateOrganizationPage />);
+
+    await user.type(screen.getByLabelText('Organization Slug'), 'approval-org');
+    await user.type(screen.getByLabelText('Display Name'), 'Approval Org');
+    await user.click(screen.getByLabelText(/Approval Required/));
+    await user.click(screen.getByRole('button', { name: 'Create Organization' }));
+
+    await waitFor(() => {
+      expect(mockCreateOrganization).toHaveBeenCalledWith(expect.objectContaining({
+        visibility: 'PUBLIC',
+        join_mechanism: 'open',
+        requires_approval: true,
+      }));
     });
   });
 

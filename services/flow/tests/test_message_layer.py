@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -14,9 +15,14 @@ from pydantic import ValidationError
 from starlette.requests import Request
 
 import flow.main as flow_main
+from common.application_event_auth import (
+    ApplicationEventEvidence,
+    sign_application_event,
+)
 from marty_common.messages import MessageType
 from flow.main import (
     ApplicationApprovedWebhook,
+    AdvanceFlowRequest,
     _DC_API_PROTOCOL,
     CreateFlowDefinitionRequest,
     FlowDefinition,
@@ -25,6 +31,7 @@ from flow.main import (
     FlowInstanceStatus,
     FlowType,
     StartVerificationFlowRequest,
+    StartFlowRequest,
     DigitalCredentialSubmissionRequest,
     InMemoryFlowRepository,
     _build_openid4vp_mdoc_session_transcript,
@@ -37,6 +44,8 @@ from flow.main import (
     _select_vp_token_for_evaluation,
     _validate_credential_layer_references,
     handle_application_approved,
+    receive_application_approved,
+    check_preconditions,
     get_verification_request_object,
     submit_digital_credential_response,
     start_verification_flow,
@@ -44,9 +53,215 @@ from flow.main import (
     update_flow_definition,
 )
 
-_PROFILE_SIGNER_UNDER_TEST = flow_main._sign_request_object_with_issuer_profile
-_PROFILE_IDENTITY_UNDER_TEST = flow_main._oid4vp_issuer_profile_identity
+_DID_SIGNER_UNDER_TEST = flow_main._sign_request_object_with_issuer_did
+_DID_IDENTITY_UNDER_TEST = flow_main._oid4vp_issuer_identity
 _TEMPLATE_IDENTITY_UNDER_TEST = flow_main._validate_template_issuer_identity
+
+
+def _application_event_evidence() -> ApplicationEventEvidence:
+    return ApplicationEventEvidence(
+        producer="marty-applicant-service",
+        audience="marty-flow-application-approved",
+        event_id_sha256="a" * 64,
+        payload_sha256="b" * 64,
+        authenticated_at="2026-05-05T12:00:00+00:00",
+    )
+
+
+@pytest.mark.asyncio
+async def test_preconditions_ignore_caller_boole_and_unknown_controls_fail_closed() -> None:
+    caller_context = {
+        "application_status": "approved",
+        "identity_verified": True,
+        "admin_approved": True,
+        "external_verification_result": "success",
+    }
+
+    met, unmet = await check_preconditions(
+        [
+            "application_approved",
+            "identity_verified",
+            "manual_admin_approval",
+            "external_verification",
+            "future_required_control",
+        ],
+        caller_context,
+    )
+
+    assert met is False
+    assert unmet == [
+        "application_approved",
+        "identity_verified",
+        "manual_admin_approval",
+        "external_verification",
+        "future_required_control",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_authenticated_server_evidence_satisfies_application_approval_only() -> None:
+    context = {
+        flow_main._PRECONDITION_EVIDENCE_KEY: {
+            "application_approved": _application_event_evidence().as_dict(),
+        }
+    }
+
+    assert await check_preconditions(["application_approved"], context) == (True, [])
+    assert await check_preconditions(["identity_verified"], context) == (
+        False,
+        ["identity_verified"],
+    )
+    assert await check_preconditions(
+        ["application_approved"],
+        {flow_main._PRECONDITION_EVIDENCE_KEY: {"application_approved": {}}},
+    ) == (False, ["application_approved"])
+
+
+def test_public_start_and_advance_reject_reserved_service_evidence() -> None:
+    with pytest.raises(ValidationError, match="private service state"):
+        StartFlowRequest.model_validate(
+            {
+                "organization_id": "org-1",
+                "flow_definition_id": "flow-1",
+                "initial_context": {
+                    "nested": {
+                        "_MARTY_PRECONDITION_EVIDENCE_V1": {
+                            "application_approved": {}
+                        }
+                    }
+                },
+            }
+        )
+
+    with pytest.raises(ValidationError, match="private service state"):
+        AdvanceFlowRequest.model_validate(
+            {"data": {"_marty_precondition_evidence_v1": {}}}
+        )
+
+
+def test_private_precondition_evidence_is_not_returned_publicly() -> None:
+    projected = flow_main._public_flow_value(
+        {
+            "claims": {"given_name": "Ada"},
+            flow_main._PRECONDITION_EVIDENCE_KEY: {
+                "application_approved": _application_event_evidence().as_dict()
+            },
+        }
+    )
+
+    assert projected == {"claims": {"given_name": "Ada"}}
+
+
+@pytest.mark.asyncio
+async def test_oid4vci_offer_creation_cannot_outrun_server_preconditions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    async def forbidden_issuance(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("issuance must not be reached")
+
+    monkeypatch.setattr(
+        flow_main,
+        "_initiate_credential_layer_issuance",
+        forbidden_issuance,
+    )
+    repo = InMemoryFlowRepository()
+    flow_def = _application_approved_custom_flow(
+        name="Approval-gated issuance",
+        credential_template_id="template-1",
+    )
+    instance = FlowInstance(
+        flow_definition_id=flow_def.id,
+        organization_id="org-1",
+        context={"application_status": "approved"},
+    )
+
+    with pytest.raises(HTTPException) as blocked:
+        await _create_oid4vci_artifact(instance, flow_def, repo)
+
+    assert blocked.value.status_code == 409
+    assert blocked.value.detail == {
+        "error": "ISSUANCE_PRECONDITIONS_NOT_MET",
+        "unmet_preconditions": ["application_approved"],
+    }
+    assert called is False
+    assert await repo.list_artifacts(instance.id) == []
+
+
+def test_application_approval_trigger_implies_server_owned_precondition() -> None:
+    flow_def = _application_approved_custom_flow(
+        name="Application approval trigger",
+        credential_template_id="template-1",
+    )
+
+    assert flow_def.preconditions == []
+    assert flow_main._required_issuance_preconditions(flow_def) == [
+        "application_approved"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_http_application_approval_requires_auth_and_rejects_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ReplayStore:
+        def __init__(self) -> None:
+            self.keys: set[str] = set()
+
+        async def set(self, key, _value, *, nx, ex):
+            assert nx is True
+            assert ex >= 60
+            if key in self.keys:
+                return False
+            self.keys.add(key)
+            return True
+
+    event = ApplicationApprovedWebhook(
+        event_type="application.approved",
+        aggregate_id="application-auth-boundary",
+        aggregate_type="application",
+        organization_id="org-1",
+        data={"applicant_id": "applicant-1"},
+        timestamp="2026-08-09T12:00:00+00:00",
+    )
+    repo = InMemoryFlowRepository()
+    monkeypatch.setenv(
+        "FLOW_APPLICATION_EVENT_HMAC_KEY",
+        "test-application-event-key-that-is-distinct-and-long",
+    )
+    monkeypatch.setattr(flow_main, "_nonce_redis", ReplayStore())
+
+    missing_request = Request({"type": "http", "headers": []})
+    with pytest.raises(HTTPException) as missing:
+        await receive_application_approved(event, missing_request, repo)
+    assert missing.value.status_code == 401
+    assert missing.value.detail["error"] == "missing_authentication"
+
+    headers = sign_application_event(event.model_dump(mode="json"), now=int(time.time()))
+    scope = {
+        "type": "http",
+        "headers": [
+            (name.encode("ascii"), value.encode("ascii"))
+            for name, value in headers.items()
+        ],
+    }
+    result = await receive_application_approved(event, Request(scope), repo)
+    assert result == {
+        "success": True,
+        "flows_triggered": 0,
+        "reason": (
+            "No active custom OID4VCI extension handling APPLICATION_APPROVED "
+            "matched org org-1"
+        ),
+    }
+
+    with pytest.raises(HTTPException) as replay:
+        await receive_application_approved(event, Request(scope), repo)
+    assert replay.value.status_code == 409
+    assert replay.value.detail["error"] == "replayed_event"
 
 
 def test_verification_runtime_accepts_public_did_not_kms_coordinates() -> None:
@@ -99,12 +314,8 @@ async def test_oid4vp_identity_resolves_did_without_public_profile_selection(
                     "id": issuer_did,
                     "verificationMethod": [{"id": verification_method_id}],
                 },
-                "issuer_profile": {
-                    "id": "internal-profile-1",
-                    "key_purpose": "oid4vp_request_signing",
-                    "algorithm": "ES256",
-                },
-                "signing_service": {"id": "internal-service-1"},
+                "key_purpose": "oid4vp_request_signing",
+                "algorithm": "ES256",
             }
 
     class _Client:
@@ -126,7 +337,7 @@ async def test_oid4vp_identity_resolves_did_without_public_profile_selection(
         lambda **_kwargs: _Client(),
     )
 
-    identity = await _PROFILE_IDENTITY_UNDER_TEST("org-1", issuer_did)
+    identity = await _DID_IDENTITY_UNDER_TEST("org-1", issuer_did)
 
     assert captured == {
         "url": "http://signing.internal/resolve-issuer-did",
@@ -134,18 +345,19 @@ async def test_oid4vp_identity_resolves_did_without_public_profile_selection(
             "organization_id": "org-1",
             "issuer_did": issuer_did,
             "key_purpose": "oid4vp_request_signing",
+            "credential_format": "oauth-authz-req+jwt",
             "algorithm": "ES256",
         },
         "headers": {"X-API-Key": "api-key"},
     }
-    assert identity["issuer_profile_id"] == "internal-profile-1"
     assert identity["issuer_did"] == issuer_did
+    assert "issuer_profile_id" not in identity
     assert "signing_service_id" not in identity
     assert "signing_key_reference" not in identity
 
     _Response.organization_id = "other-org"
     with pytest.raises(HTTPException) as cross_tenant:
-        await _PROFILE_IDENTITY_UNDER_TEST("org-1", issuer_did)
+        await _DID_IDENTITY_UNDER_TEST("org-1", issuer_did)
     assert cross_tenant.value.status_code == 409
 
 
@@ -173,16 +385,8 @@ async def test_template_identity_resolves_public_did_without_profile_selector(
                     "x": "x-coordinate",
                     "y": "y-coordinate",
                 },
-                "issuer_profile": {
-                    "id": "private-profile-1",
-                    "status": "active",
-                    "key_purpose": "vc_jwt_issuer",
-                    "algorithm": "ES256",
-                },
-                "signing_service": {
-                    "id": "private-kms-service-1",
-                    "service_type": "openbao-transit",
-                },
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256",
             }
 
     class _Client:
@@ -310,12 +514,8 @@ async def test_template_identity_rejects_cross_tenant_or_private_key_response(
                 "issuer_did": issuer_did,
                 "verification_method_id": f"{issuer_did}#credential-issuer-1",
                 "public_jwk": {"kty": "EC", "crv": "P-256", "d": "private"},
-                "issuer_profile": {
-                    "id": "private-profile-1",
-                    "key_purpose": "vc_jwt_issuer",
-                    "algorithm": "ES256",
-                },
-                "signing_service": {"id": "private-kms-service-1"},
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256",
             }
 
     class _Client:
@@ -347,17 +547,16 @@ async def test_template_identity_rejects_cross_tenant_or_private_key_response(
         )
 
     assert exc_info.value.status_code == 503
-    assert "invalid KMS-backed signing identity" in exc_info.value.detail
+    assert "invalid public signing identity" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
-async def test_request_object_signing_uses_profile_scoped_api_only(
+async def test_request_object_signing_uses_did_scoped_api_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer_did = "did:web:verifier.example:oid4vp"
     verification_method_id = f"{issuer_did}#request-signing-1"
     identity = {
-        "issuer_profile_id": "issuer-profile-1",
         "issuer_did": issuer_did,
         "verification_method_id": verification_method_id,
     }
@@ -393,9 +592,8 @@ async def test_request_object_signing_uses_profile_scoped_api_only(
         lambda **_kwargs: _Client(),
     )
 
-    token = await _PROFILE_SIGNER_UNDER_TEST(
+    token = await _DID_SIGNER_UNDER_TEST(
         organization_id="org-1",
-        issuer_profile_id="issuer-profile-1",
         identity=identity,
         protected_header={
             "alg": "ES256",
@@ -404,11 +602,16 @@ async def test_request_object_signing_uses_profile_scoped_api_only(
         claims={"iss": issuer_did, "sub": issuer_did},
     )
 
-    assert captured["url"] == (
-        "http://issuer-profile.internal/issuer-profiles/issuer-profile-1/sign"
-    )
+    assert captured["url"] == "http://issuer-profile.internal/issuer-dids/sign"
     assert captured["params"] == {"organization_id": "org-1"}
-    assert set(captured["json"]) == {"payload_b64", "algorithm"}
+    assert captured["json"] == {
+        "issuer_did": issuer_did,
+        "credential_format": "oauth-authz-req+jwt",
+        "key_purpose": "oid4vp_request_signing",
+        "payload_b64": captured["json"]["payload_b64"],
+        "algorithm": "ES256",
+    }
+    assert "issuer_profile_id" not in captured["json"]
     assert "signing_service_id" not in captured["json"]
     assert "signing_key_reference" not in captured["json"]
     assert token.endswith(".AQ")
@@ -626,8 +829,8 @@ def clear_nonce_replay_cache(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def issuer_profile_signer(monkeypatch):
-    """Model the profile API without giving production code a private key."""
+def issuer_did_signer(monkeypatch):
+    """Model the DID-mediated API without giving production code a private key."""
     private_key = jwcrypto_jwk.JWK.generate(kty="EC", crv="P-256")
     public_jwk = json.loads(private_key.export_public())
     issuer_did = "did:web:verifier.example:oid4vp"
@@ -647,7 +850,6 @@ def issuer_profile_signer(monkeypatch):
         "assertionMethod": [verification_method_id],
     }
     identity = {
-        "issuer_profile_id": flow_main._DEFAULT_OID4VP_ISSUER_PROFILE_ID,
         "issuer_did": issuer_did,
         "verification_method_id": verification_method_id,
         "public_jwk": public_jwk,
@@ -687,8 +889,8 @@ def issuer_profile_signer(monkeypatch):
         encoded = envelope.rsplit(":", 1)[-1]
         return json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)))
 
-    monkeypatch.setattr(flow_main, "_oid4vp_issuer_profile_identity", _identity)
-    monkeypatch.setattr(flow_main, "_sign_request_object_with_issuer_profile", _sign)
+    monkeypatch.setattr(flow_main, "_oid4vp_issuer_identity", _identity)
+    monkeypatch.setattr(flow_main, "_sign_request_object_with_issuer_did", _sign)
     monkeypatch.setattr(flow_main, "_wrap_flow_private_jwk", _wrap)
     monkeypatch.setattr(flow_main, "_unwrap_flow_private_jwk", _unwrap)
     return {"private_key": private_key, "identity": identity}
@@ -1247,6 +1449,7 @@ async def test_application_approved_webhook_filters_by_credential_template_id(
         name="Issue Open Badge",
         credential_template_id="template-open-badge",
     )
+    matching_flow.preconditions = ["application_approved"]
     matching_flow.activate()
     await repo.save_definition(matching_flow)
 
@@ -1279,6 +1482,7 @@ async def test_application_approved_webhook_filters_by_credential_template_id(
             },
         ),
         repo=repo,
+        auth_evidence=_application_event_evidence(),
     )
 
     assert result["success"] is True
@@ -1344,6 +1548,7 @@ async def test_application_approved_webhook_skips_malformed_trigger(monkeypatch)
             },
         ),
         repo=repo,
+        auth_evidence=_application_event_evidence(),
     )
 
     assert result["success"] is True
@@ -1374,6 +1579,7 @@ async def test_application_approved_webhook_returns_zero_when_template_not_found
             },
         ),
         repo=repo,
+        auth_evidence=_application_event_evidence(),
     )
 
     assert result["success"] is True
@@ -1434,6 +1640,7 @@ async def test_application_approved_webhook_requires_explicit_custom_trigger(
             },
         ),
         repo=repo,
+        auth_evidence=_application_event_evidence(),
     )
 
     assert result["success"] is False
@@ -1491,8 +1698,8 @@ async def test_application_approved_webhook_ignores_other_template_flows(monkeyp
             },
         ),
         repo=repo,
+        auth_evidence=_application_event_evidence(),
     )
-
     assert result["success"] is True
     assert result["flows_triggered"] == 0
     assert "template-open-badge" in result["reason"]
@@ -1540,6 +1747,7 @@ async def test_application_approved_webhook_manual_issue_does_not_bootstrap_defa
             },
         ),
         repo=repo,
+        auth_evidence=_application_event_evidence(),
     )
 
     assert result["success"] is False
@@ -1590,10 +1798,7 @@ async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
     )
     instance = await repo.get_instance(started.instance_id)
     assert instance is not None
-    assert (
-        instance.context["oid4vp_issuer_profile_id"]
-        == flow_main._DEFAULT_OID4VP_ISSUER_PROFILE_ID
-    )
+    assert "oid4vp_issuer_profile_id" not in instance.context
     assert instance.context["oid4vp_issuer_did"] == "did:web:verifier.example:oid4vp"
     parsed = urlparse(started.request_uri)
     parameters = parse_qs(parsed.query)
@@ -1629,7 +1834,7 @@ async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
 
 
 @pytest.mark.asyncio
-async def test_start_verification_url_query_carries_one_signed_jar_without_claim_rewriting(
+async def test_start_verification_request_object_carries_one_signed_jar_without_claim_rewriting(
     monkeypatch,
 ):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
@@ -1663,7 +1868,7 @@ async def test_start_verification_url_query_carries_one_signed_jar_without_claim
             presentation_policy_id="policy-1",
             organization_id="org-1",
             issuer_did="did:web:verifier.example:oid4vp",
-            request_transport="url_query",
+            request_transport="request_object",
         ),
         user_id="auth-service",
         repo=repo,
@@ -1690,8 +1895,104 @@ async def test_start_verification_url_query_carries_one_signed_jar_without_claim
 
     instance = await repo.get_instance(started.instance_id)
     assert instance is not None
-    assert instance.context["request_transport"] == "url_query"
+    assert instance.context["request_transport"] == "request_object"
     assert instance.context["auth_request"] == started.request_uri
+
+
+@pytest.mark.asyncio
+async def test_start_verification_url_query_uses_direct_unsigned_parameters(
+    monkeypatch,
+):
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
+    monkeypatch.setenv("OID4VP_CLIENT_ID_PREFIX", "x509_hash")
+    _install_reference_validation_stubs(
+        monkeypatch,
+        templates={},
+        policies={
+            "policy-1": {
+                "organization_id": "org-1",
+                "status": "active",
+                "credential_requirements_json": "[]",
+            },
+        },
+    )
+
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {
+            "id": "pd-1",
+            "input_descriptors": [
+                {
+                    "id": "descriptor-1",
+                    "format": {"dc+sd-jwt": {"alg": ["ES256"]}},
+                    "constraints": {"fields": []},
+                },
+            ],
+        }
+
+    async def _fail_if_signed(**_kwargs):
+        pytest.fail("native URL-query transport must not sign a Request Object")
+
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition", _fake_presentation_definition
+    )
+    monkeypatch.setattr(
+        "flow.main._sign_request_object_with_issuer_did",
+        _fail_if_signed,
+    )
+    repo = InMemoryFlowRepository()
+    started = await start_verification_flow(
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example:oid4vp",
+            request_transport="url_query",
+        ),
+        user_id="auth-service",
+        repo=repo,
+    )
+
+    parsed = urlparse(started.request_uri)
+    parameters = parse_qs(parsed.query)
+    response_uri = (
+        f"https://verifier.example/v1/flows/instances/{started.instance_id}/submit"
+    )
+
+    assert parsed.scheme == "openid4vp"
+    assert set(parameters) == {
+        "client_id",
+        "client_metadata",
+        "dcql_query",
+        "nonce",
+        "response_mode",
+        "response_type",
+        "response_uri",
+        "state",
+    }
+    assert parameters["client_id"] == [f"redirect_uri:{response_uri}"]
+    assert parameters["response_uri"] == [response_uri]
+    assert parameters["response_mode"] == ["direct_post"]
+    assert parameters["response_type"] == ["vp_token"]
+    assert parameters["state"] == [started.instance_id]
+    assert "request" not in parameters
+    assert "request_uri" not in parameters
+    assert "iss" not in parameters
+    assert "aud" not in parameters
+    assert "iat" not in parameters
+    assert "exp" not in parameters
+    assert json.loads(parameters["dcql_query"][0]) == {
+        "credentials": [{"format": "dc+sd-jwt", "id": "descriptor-1"}]
+    }
+    assert json.loads(parameters["client_metadata"][0])["vp_formats_supported"]
+
+    instance = await repo.get_instance(started.instance_id)
+    assert instance is not None
+    assert instance.context["request_transport"] == "url_query"
+    assert instance.context["oid4vp_client_id"] == f"redirect_uri:{response_uri}"
+    assert instance.context["verification_audience"] == f"redirect_uri:{response_uri}"
+    assert instance.context["auth_request"] == started.request_uri
+
+    with pytest.raises(HTTPException, match="no signed Request Object"):
+        await get_verification_request_object(started.instance_id, repo)
 
 
 def test_url_query_transport_rejects_request_uri_post_semantics() -> None:
@@ -1713,6 +2014,28 @@ def test_url_query_transport_rejects_siop_only_flow() -> None:
             issuer_did="did:web:verifier.example:oid4vp",
             response_type="id_token",
             request_transport="url_query",
+        )
+
+
+def test_url_query_transport_rejects_haip() -> None:
+    with pytest.raises(ValidationError, match="cannot be used for HAIP"):
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example:oid4vp",
+            oid4vp_profile="haip",
+            request_transport="url_query",
+        )
+
+
+def test_request_object_transport_rejects_request_uri_post_semantics() -> None:
+    with pytest.raises(ValidationError, match="request_object transport"):
+        StartVerificationFlowRequest(
+            presentation_policy_id="policy-1",
+            organization_id="org-1",
+            issuer_did="did:web:verifier.example:oid4vp",
+            request_transport="request_object",
+            request_uri_method="post",
         )
 
 
@@ -1776,7 +2099,7 @@ async def test_started_post_request_uri_transports_wallet_nonce_into_signed_requ
 @pytest.mark.asyncio
 async def test_get_verification_request_object_records_presentation_request_message(
     monkeypatch,
-    issuer_profile_signer,
+    issuer_did_signer,
 ):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
 
@@ -1812,7 +2135,7 @@ async def test_get_verification_request_object_records_presentation_request_mess
     decoded_header = _decode_jwt_segment(header)
     decoded_payload = _decode_jwt_segment(payload)
     verification_key = jwcrypto_jwk.JWK.from_json(
-        json.dumps(issuer_profile_signer["identity"]["public_jwk"])
+        json.dumps(issuer_did_signer["identity"]["public_jwk"])
     )
     verified_request = jwcrypto_jwt.JWT(
         key=verification_key, jwt=response.body.decode()
@@ -1905,7 +2228,7 @@ async def test_get_verification_request_object_uses_dcql_vct_values(monkeypatch)
             "input_descriptors": [
                 {
                     "id": "req-marty-open-badge-login",
-                    "format": {"spruce-vc+sd-jwt": {"sd-jwt_alg_values": ["ES256"]}},
+                    "format": {"dc+sd-jwt": {"sd-jwt_alg_values": ["ES256"]}},
                     "constraints": {
                         "fields": [
                             {
@@ -2262,7 +2585,7 @@ async def test_oid4vp_direct_post_callback_returns_only_the_standard_empty_objec
         called["kwargs"] = kwargs
         return flow_main.VerificationResultResponse(
             instance_id="flow-1",
-            status="completed",
+            status="COMPLETED",
             result="passed",
             decision="allow",
             decision_reason="internal result",
@@ -2295,7 +2618,7 @@ async def test_haip_direct_post_callback_returns_public_result_redirect(monkeypa
     async def _fake_submit(*_args, **_kwargs):
         return flow_main.VerificationResultResponse(
             instance_id=instance.id,
-            status="completed",
+            status="COMPLETED",
             result="passed",
             decision="allow",
             decision_reason="verified",
@@ -2322,7 +2645,7 @@ async def test_oid4vp_direct_post_callback_rejects_a_denied_presentation(monkeyp
     async def _fake_submit(*_args, **_kwargs):
         return flow_main.VerificationResultResponse(
             instance_id="flow-1",
-            status="completed",
+            status="COMPLETED",
             result="failed",
             decision="deny",
             decision_reason="signature invalid",
@@ -2414,11 +2737,11 @@ async def test_get_verification_request_object_supports_dc_api(monkeypatch):
 
 
 def test_oid4vp_did_web_document_exposes_verifier_key(
-    monkeypatch, issuer_profile_signer
+    monkeypatch, issuer_did_signer
 ):
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
 
-    document = _oid4vp_did_web_document(issuer_profile_signer["identity"])
+    document = _oid4vp_did_web_document(issuer_did_signer["identity"])
 
     assert document["id"] == "did:web:verifier.example:oid4vp"
     verification_method = document["verificationMethod"][0]

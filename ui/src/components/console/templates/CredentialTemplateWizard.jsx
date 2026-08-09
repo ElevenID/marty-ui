@@ -25,7 +25,6 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
 
 import { useWizard } from '../../../hooks/useWizard';
-import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { createCredentialTemplate } from '../../../services/presentationPolicyApi';
 import BasicsStep from './steps/BasicsStep';
@@ -45,7 +44,6 @@ const getSteps = (t) => [
 const CredentialTemplateWizard = () => {
   const navigate = useNavigate();
   const { t } = useTranslation('console');
-  const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
   const effectiveOrganizationId = activeOrgId;
 
@@ -97,7 +95,6 @@ const CredentialTemplateWizard = () => {
       trust_profile_id: null,
       compliance_profile_id: null,
       issuer_did: null,
-      signing_algorithm: 'ES256',
       validity_rules: {
         ttl_seconds: 31536000, // 1 year
         not_before_offset: 0,

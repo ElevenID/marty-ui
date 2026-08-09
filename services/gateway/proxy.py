@@ -72,6 +72,9 @@ def _forward_headers(request: Request | None) -> dict[str, str]:
         headers["X-Api-Key-Id"] = request.state.api_key_id
     if hasattr(request.state, "api_key_scopes") and request.state.api_key_scopes:
         headers["X-Api-Key-Scopes"] = ",".join(str(scope) for scope in request.state.api_key_scopes)
+    required_permission = getattr(request.state, "required_permission", None)
+    if required_permission:
+        headers["X-Required-Permission"] = str(required_permission)
     if hasattr(request.state, "org_plan") and request.state.org_plan:
         headers["X-Org-Plan"] = request.state.org_plan
     # Forward auth header if present
@@ -195,7 +198,18 @@ async def proxy_request(
     if hasattr(request.state, "org_plan") and request.state.org_plan:
         headers["X-Org-Plan"] = request.state.org_plan
 
+    required_permission = getattr(request.state, "required_permission", None)
     org_permissions = getattr(request.state, "org_permissions", None)
+    if (
+        getattr(request.state, "auth_source", None) == "api_key"
+        and required_permission
+    ):
+        # API-key scopes and organization RBAC permissions are different
+        # namespaces.  Cedar has already mapped and authorized the scope for
+        # this route, so downstream defense-in-depth checks must receive only
+        # that exact effective permission, never a broad scope such as
+        # ``admin:full`` masquerading as an RBAC permission.
+        org_permissions = {str(required_permission)}
     if org_permissions:
         headers["X-Org-Permissions"] = ",".join(sorted(str(value) for value in org_permissions))
 
@@ -203,7 +217,6 @@ async def proxy_request(
     if org_roles:
         headers["X-Org-Roles"] = ",".join(sorted(str(value) for value in org_roles))
 
-    required_permission = getattr(request.state, "required_permission", None)
     if required_permission:
         headers["X-Required-Permission"] = str(required_permission)
 

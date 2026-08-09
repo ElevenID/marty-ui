@@ -16,7 +16,7 @@ class MetadataError(ValueError):
     pass
 
 
-MEMBER_CONFIGURATION_ID = "MemberCredential#spruce-sd-jwt"
+MEMBER_CONFIGURATION_ID = "MemberCredential#sd-jwt"
 MEMBER_VCT_PATH = "/credentials/marty-verified-member-badge"
 EXPECTED_ISSUER_DISPLAY_NAME = "ElevenID LLC"
 EXPECTED_BADGE_NAME = "Marty Verified Member Badge"
@@ -34,17 +34,17 @@ def validate_spruce_metadata(
     expected_issuer_display_name: str = EXPECTED_ISSUER_DISPLAY_NAME,
     expected_member_vct: str,
 ) -> dict[str, Any]:
-    _require(metadata.get("credential_issuer") == expected_issuer, "Spruce credential_issuer mismatch")
+    _require(metadata.get("credential_issuer") == expected_issuer, "OID4VCI credential_issuer mismatch")
     displays = metadata.get("display") or []
     issuer_display_names = [
         str(item.get("name") or "").strip()
         for item in displays
         if isinstance(item, dict) and str(item.get("name") or "").strip()
     ]
-    _require(expected_issuer_display_name in issuer_display_names, "Spruce issuer display name mismatch")
+    _require(expected_issuer_display_name in issuer_display_names, "OID4VCI issuer display name mismatch")
     configs = metadata.get("credential_configurations_supported")
     _require(isinstance(configs, dict) and bool(configs), "credential_configurations_supported is empty or malformed")
-    _require(MEMBER_CONFIGURATION_ID in configs, "MemberCredential Spruce configuration is missing")
+    _require(MEMBER_CONFIGURATION_ID in configs, "MemberCredential configuration is missing")
 
     legacy_vcts: list[str] = []
     malformed: list[str] = []
@@ -53,8 +53,8 @@ def validate_spruce_metadata(
             malformed.append(config_id)
             continue
         config_format = config.get("format")
-        if config_format == "spruce-vc+sd-jwt":
-            if not config_id.endswith("#spruce-sd-jwt"):
+        if config_format == "dc+sd-jwt":
+            if not config_id.endswith(("#sd-jwt", "#credential-manager")):
                 malformed.append(config_id)
             vct = str(config.get("vct") or "")
             parsed = urlparse(vct)
@@ -66,15 +66,13 @@ def validate_spruce_metadata(
             doctype = str(config.get("doctype") or "").strip()
             if not doctype or config_id != f"{doctype}#mdoc":
                 malformed.append(config_id)
-        else:
-            malformed.append(config_id)
         config_displays = config.get("display") or []
         if not any(str(item.get("name") or "").strip() for item in config_displays if isinstance(item, dict)):
             malformed.append(config_id)
-    _require(not legacy_vcts, f"Spruce metadata exposes legacy VCTs: {sorted(set(legacy_vcts))}")
-    _require(not malformed, f"Malformed Spruce credential configurations: {sorted(set(malformed))}")
+    _require(not legacy_vcts, f"OID4VCI metadata exposes legacy VCTs: {sorted(set(legacy_vcts))}")
+    _require(not malformed, f"Malformed credential configurations: {sorted(set(malformed))}")
     member_config = configs[MEMBER_CONFIGURATION_ID]
-    _require(member_config.get("format") == "spruce-vc+sd-jwt", "MemberCredential format mismatch")
+    _require(member_config.get("format") == "dc+sd-jwt", "MemberCredential format mismatch")
     _require(member_config.get("vct") == expected_member_vct, "MemberCredential VCT mismatch")
     return {
         "credential_issuer": expected_issuer,
@@ -108,7 +106,7 @@ def _fetch_json(url: str, *, timeout: float) -> dict[str, Any]:
         url,
         headers={
             "Accept": "application/json",
-            "User-Agent": "Marty-MIP-Conformance/0.3.1",
+            "User-Agent": "Marty-MIP-Conformance/0.4.1",
         },
     )
     try:
@@ -135,18 +133,18 @@ def probe(base: str, org_id: str, *, timeout: float = 20.0) -> dict[str, Any]:
     base = base.rstrip("/")
     parsed_base = urlparse(base)
     _require(parsed_base.scheme == "https" and bool(parsed_base.netloc), "Beta origin must be an absolute HTTPS URL")
-    expected_issuer = f"{base}/org/{org_id}/spruce"
+    expected_issuer = f"{base}/org/{org_id}"
     expected_member_vct = f"{base}{MEMBER_VCT_PATH}"
     paths = {
-        "canonical": f"/.well-known/openid-credential-issuer/org/{org_id}/spruce",
-        "appended": f"/org/{org_id}/spruce/.well-known/openid-credential-issuer",
+        "canonical": f"/.well-known/openid-credential-issuer/org/{org_id}",
+        "appended": f"/org/{org_id}/.well-known/openid-credential-issuer",
         "member_vct": MEMBER_VCT_PATH,
     }
     responses: dict[str, dict[str, Any]] = {}
     for name in ("canonical", "appended"):
         path = paths[name]
         responses[name] = _fetch_json(f"{base}{path}", timeout=timeout)
-    _require(responses["canonical"] == responses["appended"], "Canonical and appended Spruce metadata differ")
+    _require(responses["canonical"] == responses["appended"], "Canonical and appended metadata differ")
     summary = validate_spruce_metadata(
         responses["canonical"],
         expected_issuer=expected_issuer,

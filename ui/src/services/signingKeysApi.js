@@ -319,15 +319,6 @@ export async function listHolderKeys(filters = {}) {
 }
 
 /**
- * Derive a holder binding key reference from a registered KMS service.
- * @param {Object} params - { service_id, holder_identifier, ... }
- * @returns {Promise<Object>}
- */
-export async function deriveHolderBindingKey(params) {
-  return post(withOrganizationQuery(`${BASE_PATH}/holder-keys/derive`, params), withoutOrganizationFields(params));
-}
-
-/**
  * Get the org JWKS document (published public keys).
  * @param {string} [organizationId]
  * @returns {Promise<Object>} JWKS document
@@ -346,28 +337,24 @@ export async function getOrgDidDocument(organizationId) {
 }
 
 // ---------------------------------------------------------------------------
-// Issuer Profiles
+// Provider-neutral issuer identities
 // ---------------------------------------------------------------------------
 
 /**
- * Create an issuer profile linking a published DID to a KMS signing service.
- * @param {Object} body - { name, issuer_did, signing_service_id, key_purpose?, status? }
- * @returns {Promise<Object>} { ok, profile }
+ * Provision or adopt a DID identity. Custody selection remains inside Marty.
+ * @param {Object} body - { organization_id, issuer_did, key_purpose, credential_format, algorithm }
+ * @returns {Promise<Object>} { identity, created }
  */
-export async function createIssuerProfile(body) {
-  const requestBody = withoutOrganizationFields(body);
-  return postWithIdempotency(
-    withOrganizationQuery(`${BASE_PATH}/issuer-profiles`, body, {}, 'creating issuer profiles'),
-    requestBody
-  );
-}
-
-/**
- * List issuer profiles for the current organization.
- * @returns {Promise<Object>} { profiles: [...] }
- */
-export async function listIssuerProfiles(params = {}) {
-  return get(withOrganizationQuery(`${BASE_PATH}/issuer-profiles`, params, {}, 'loading issuer profiles'));
+export async function createIssuerIdentity(body) {
+  const organizationId = requireOrganizationId(body, 'creating issuer identities');
+  return postWithIdempotency(`${BASE_PATH}/issuer-identities`, {
+    organization_id: organizationId,
+    issuer_did: body?.issuer_did,
+    key_purpose: body?.key_purpose,
+    credential_format: body?.credential_format,
+    algorithm: body?.algorithm,
+    key_attestation_policy: body?.key_attestation_policy,
+  });
 }
 
 /**
@@ -379,36 +366,41 @@ export async function listPublicIssuerIdentities(params = {}) {
   return get(withQuery(`${BASE_PATH}/issuer-identities`, buildDefinedQueryString({
     organization_id: organizationId,
     key_purpose: params?.key_purpose,
+    credential_format: params?.credential_format,
     algorithm: params?.algorithm,
   })));
 }
 
 /**
- * Get a single issuer profile by ID.
- * @param {string} profileId
- * @returns {Promise<Object>} { profile }
+ * Attach a public certificate chain to one DID-selected managed identity.
  */
-export async function getIssuerProfile(profileId, params = {}) {
-  return get(withOrganizationQuery(`${BASE_PATH}/issuer-profiles/${profileId}`, params));
+export async function storeIssuerIdentityCertificate(body) {
+  const organizationId = requireOrganizationId(body, 'attaching issuer certificates');
+  return put(`${BASE_PATH}/issuer-identities/certificate`, {
+    organization_id: organizationId,
+    issuer_did: body?.issuer_did,
+    key_purpose: body?.key_purpose,
+    credential_format: body?.credential_format,
+    algorithm: body?.algorithm,
+    cert_pem: body?.cert_pem,
+    cert_chain_pem: body?.cert_chain_pem,
+  });
 }
 
 /**
- * Update an issuer profile (partial update).
- * @param {string} profileId
- * @param {Object} body - Fields to update
- * @returns {Promise<Object>} { ok, profile }
+ * Retire exactly one DID-selected managed identity.
  */
-export async function updateIssuerProfile(profileId, body) {
-  return patch(withOrganizationQuery(`${BASE_PATH}/issuer-profiles/${profileId}`, body), withoutOrganizationFields(body));
-}
-
-/**
- * Delete an issuer profile.
- * @param {string} profileId
- * @returns {Promise<Object>} { ok, deleted }
- */
-export async function deleteIssuerProfile(profileId, params = {}) {
-  return del(withOrganizationQuery(`${BASE_PATH}/issuer-profiles/${profileId}`, params));
+export async function deleteIssuerIdentity(body) {
+  const organizationId = requireOrganizationId(body, 'retiring issuer identities');
+  return del(`${BASE_PATH}/issuer-identities`, {
+    body: JSON.stringify({
+      organization_id: organizationId,
+      issuer_did: body?.issuer_did,
+      key_purpose: body?.key_purpose,
+      credential_format: body?.credential_format,
+      algorithm: body?.algorithm,
+    }),
+  });
 }
 
 export default {
@@ -435,13 +427,10 @@ export default {
   signPayload,
   registerHolderKey,
   listHolderKeys,
-  deriveHolderBindingKey,
   getOrgJwks,
   getOrgDidDocument,
-  createIssuerProfile,
-  listIssuerProfiles,
+  createIssuerIdentity,
   listPublicIssuerIdentities,
-  getIssuerProfile,
-  updateIssuerProfile,
-  deleteIssuerProfile,
+  storeIssuerIdentityCertificate,
+  deleteIssuerIdentity,
 };

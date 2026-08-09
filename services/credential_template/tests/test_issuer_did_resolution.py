@@ -10,7 +10,7 @@ from services.credential_template import main as credential_template
 
 
 ISSUER_DID = "did:web:issuer.example:orgs:org-1"
-_require_active_issuer_profile = credential_template._require_active_issuer_profile
+_require_active_issuer_did = credential_template._require_active_issuer_did
 
 
 def _resolved_identity(**updates: Any) -> dict[str, Any]:
@@ -19,20 +19,9 @@ def _resolved_identity(**updates: Any) -> dict[str, Any]:
         "organization_id": "org-1",
         "issuer_did": ISSUER_DID,
         "verification_method_id": f"{ISSUER_DID}#credential-key",
-        "issuer_profile": {
-            "id": "profile-1",
-            "status": "active",
-            "issuer_did": ISSUER_DID,
-            "signing_service_id": "managed-openbao",
-            "signing_key_reference": "credential-key",
-            "key_purpose": "vc_jwt_issuer",
-            "algorithm": "ES256",
-        },
-        "signing_service": {
-            "id": "managed-openbao",
-            "key_reference": "credential-key",
-            "algorithm": "ES256",
-        },
+        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+        "key_purpose": "vc_jwt_issuer",
+        "algorithm": "ES256",
     }
     payload.update(updates)
     return payload
@@ -108,7 +97,7 @@ async def test_resolves_did_without_public_profile_selector(
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "service-secret")
     client = _install_client(monkeypatch)
 
-    payload = await _require_active_issuer_profile(
+    payload = await _require_active_issuer_did(
         _request(),
         organization_id="org-1",
         issuer_did=ISSUER_DID,
@@ -116,7 +105,9 @@ async def test_resolves_did_without_public_profile_selector(
         algorithm="ES256",
     )
 
-    assert payload["issuer_profile"]["id"] == "profile-1"
+    assert payload["issuer_did"] == ISSUER_DID
+    assert "issuer_profile" not in payload
+    assert "signing_service" not in payload
     assert client.request == {
         "url": "http://gateway:8000/internal/signing-keys/resolve-issuer-did",
         "params": {
@@ -155,7 +146,6 @@ def test_signing_format_uses_managed_service_capability_names(
     assert credential_template.payload_format_to_signing_wire(value) == expected
 
 
-@pytest.mark.asyncio
 def test_public_template_request_rejects_profile_selector() -> None:
     with pytest.raises(ValueError, match="issuer_profile_id"):
         credential_template.CreateCredentialTemplateRequest.model_validate(
@@ -167,8 +157,8 @@ def test_public_template_request_rejects_profile_selector() -> None:
 @pytest.mark.parametrize(
     ("status_code", "expected_status", "expected_detail"),
     [
-        (404, 422, "not an active managed-custody issuer identity"),
-        (409, 409, "does not resolve to exactly one active issuer profile"),
+        (404, 422, "not an active organization-owned signing identity"),
+        (409, 409, "does not resolve to exactly one active signing identity"),
         (422, 422, "could not be resolved"),
         (500, 503, "resolution failed with status 500"),
     ],
@@ -182,7 +172,7 @@ async def test_resolution_failures_fail_closed(
     _install_client(monkeypatch, status_code=status_code, payload={"detail": "private"})
 
     with pytest.raises(credential_template.HTTPException) as exc_info:
-        await _require_active_issuer_profile(
+        await _require_active_issuer_did(
             _request(),
             organization_id="org-1",
             issuer_did=ISSUER_DID,
@@ -199,21 +189,10 @@ async def test_resolution_failures_fail_closed(
     [
         _resolved_identity(organization_id="org-other"),
         _resolved_identity(issuer_did="did:web:issuer.example:orgs:org-other"),
-        _resolved_identity(issuer_profile={}),
-        _resolved_identity(
-            issuer_profile={
-                **_resolved_identity()["issuer_profile"],
-                "status": "inactive",
-            }
-        ),
-        _resolved_identity(
-            issuer_profile={
-                **_resolved_identity()["issuer_profile"],
-                "signing_service_id": "",
-                "signing_key_reference": "",
-            },
-            signing_service={},
-        ),
+        _resolved_identity(key_purpose="mdoc_dsc"),
+        _resolved_identity(algorithm=""),
+        _resolved_identity(verification_method_id="did:web:attacker.example#key"),
+        _resolved_identity(public_jwk={"kty": "EC", "d": "private"}),
     ],
 )
 async def test_incomplete_or_cross_tenant_identity_fails_closed(
@@ -223,7 +202,7 @@ async def test_incomplete_or_cross_tenant_identity_fails_closed(
     _install_client(monkeypatch, payload=payload)
 
     with pytest.raises(credential_template.HTTPException) as exc_info:
-        await _require_active_issuer_profile(
+        await _require_active_issuer_did(
             _request(),
             organization_id="org-1",
             issuer_did=ISSUER_DID,
@@ -243,7 +222,7 @@ async def test_resolution_outage_fails_closed(
     )
 
     with pytest.raises(credential_template.HTTPException) as exc_info:
-        await _require_active_issuer_profile(
+        await _require_active_issuer_did(
             _request(),
             organization_id="org-1",
             issuer_did=ISSUER_DID,

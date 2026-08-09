@@ -6,6 +6,7 @@ import asyncio
 import base64
 import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -30,6 +31,10 @@ PROTOCOL_KEYS = {
     "purpose",
     "required_claims",
     "accepted_credential_types",
+    "display_metadata",
+    "credential_requirements",
+    "alternative_requirements",
+    "compliance_profile_id",
     "trust_profile_id",
     "holder_binding",
     "freshness",
@@ -39,6 +44,7 @@ PROTOCOL_KEYS = {
     "issuer_constraints",
     "credential_ranking_strategy",
     "credential_ranking_weights",
+    "version",
     "created_at",
     "updated_at",
 }
@@ -270,17 +276,12 @@ def test_get_presentation_policy_returns_protocol_shape_only() -> None:
     assert body["fallback_policy"] == "ACCEPT_RAW"
     assert "ligero_age_over_21" in body["supported_circuits"]
 
-    # Legacy fields must NOT be present
-    for legacy_key in (
-        "display_metadata",
-        "credential_requirements",
-        "alternative_requirements",
-        "compliance_profile_id",
-        "version",
-    ):
-        assert legacy_key not in body, (
-            f"Legacy key {legacy_key!r} must not appear in protocol response"
-        )
+    # Holder-facing metadata, template binding, alternatives, and version are
+    # public policy semantics rather than hidden service implementation fields.
+    assert body["display_metadata"]["purpose"] == "identity_verification"
+    assert body["credential_requirements"] == []
+    assert body["alternative_requirements"] == []
+    assert body["version"] == 1
 
 
 def test_create_presentation_policy_accepts_protocol_required_claims() -> None:
@@ -314,6 +315,29 @@ def test_create_presentation_policy_accepts_protocol_required_claims() -> None:
     assert body["accepted_credential_types"] == ["DriversLicense"]
 
 
+def test_public_response_normalizes_legacy_enum_casing() -> None:
+    policy = pp.PresentationPolicy(
+        organization_id="org-1",
+        name="Legacy policy",
+        fallback_policy="accept_raw",
+        credential_ranking_strategy="freshest_first",
+        issuer_constraints=pp.IssuerConstraints(
+            required_compliance_statuses=["compliant"],
+        ),
+    )
+    policy.required_claims = [pp.RequestedClaim(claim_name="subject_id")]
+
+    response = pp._policy_to_response(policy)
+
+    assert response.fallback_policy == "ACCEPT_RAW"
+    assert response.credential_ranking_strategy == "FRESHEST_FIRST"
+    assert response.issuer_constraints == {
+        "min_trust_level": None,
+        "required_compliance_statuses": ["COMPLIANT"],
+        "required_accreditations": [],
+    }
+
+
 def test_activate_keeps_protocol_shape_stable() -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_policy(repo))
@@ -338,7 +362,9 @@ def test_activate_keeps_protocol_shape_stable() -> None:
     body = response.json()
     assert set(body.keys()) <= PROTOCOL_KEYS
     assert body["status"] == "active"
-    assert "credential_requirements" not in body
+    assert body["credential_requirements"][0]["credential_template_id"] == (
+        "IdentityCredential"
+    )
 
 
 def test_detect_credential_format_recognizes_json_open_badge_v3() -> None:
@@ -373,7 +399,8 @@ def test_detect_credential_format_recognizes_vcdm_data_integrity_object() -> Non
     assert pp._detect_credential_format(document) == "w3c-vcdm-di"
 
 
-def test_vcdm_candidate_detection_leaves_context_acceptance_to_released_verifier(
+@pytest.mark.asyncio
+async def test_vcdm_candidate_detection_leaves_context_acceptance_to_released_verifier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     document = {
@@ -406,7 +433,7 @@ def test_vcdm_candidate_detection_leaves_context_acceptance_to_released_verifier
     )
 
     credential_format = pp._detect_credential_format(document)
-    result = pp._verify_credential_by_format(
+    result = await pp._verify_credential_by_format(
         document,
         credential_format,
         None,
@@ -457,6 +484,23 @@ def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
             issuer_trusted=True,
             device_authentication_valid=True,
             document_types=["org.iso.18013.5.1.mDL"],
+            document_evidence=[
+                SimpleNamespace(
+                    document_type="org.iso.18013.5.1.mDL",
+                    signature_algorithm="ES256",
+                    digest_algorithm="SHA-256",
+                    signed_at="2026-08-09T06:00:00Z",
+                    valid_from="2026-08-09T06:00:00Z",
+                    valid_until="2027-08-09T06:00:00Z",
+                    issuer_certificate_sha256="a" * 64,
+                    validity_checked=True,
+                    valid_at_verification_time=True,
+                    revocation_checked=False,
+                    not_revoked=None,
+                )
+            ],
+            revocation_checked=False,
+            not_revoked=None,
             error=None,
         )
 
@@ -486,6 +530,25 @@ def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
 
     assert result["verified"] is True
     assert result["claims"] == {"given_name": "Ada"}
+    assert result["issuer_did"] == f"x509-sha256:{'a' * 64}"
+    assert result["revocation_checked"] is False
+    assert result["not_revoked"] is None
+    assert result["verification_evidence"] == {
+        "issuer_id": f"x509-sha256:{'a' * 64}",
+        "issuer_certificate_sha256": "a" * 64,
+        "document_type": "org.iso.18013.5.1.mDL",
+        "algorithm": "ES256",
+        "digest_algorithm": "SHA-256",
+        "issued_at": "2026-08-09T06:00:00Z",
+        "valid_from": "2026-08-09T06:00:00Z",
+        "expires_at": "2027-08-09T06:00:00Z",
+        "validity_checked": True,
+        "is_expired": False,
+        "revocation_checked": False,
+        "not_revoked": None,
+        "holder_binding_verified": True,
+        "credential_count": 1,
+    }
     assert calls == [
         (
             mdoc_bytes,
@@ -547,13 +610,67 @@ def test_mdoc_verification_logs_only_stable_error_category(
     assert "nonce-secret" not in caplog.text
 
 
+def test_mdoc_verification_rejects_legacy_or_incomplete_binding_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extracted: list[bytes] = []
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_mdoc_presentation=lambda *_args: SimpleNamespace(
+                issuer_signature_valid=True,
+                issuer_trusted=True,
+                device_authentication_valid=True,
+                document_types=["org.iso.18013.5.1.mDL"],
+                error=None,
+            ),
+            verify_mdoc_cbor=lambda value: extracted.append(bytes(value)),
+        ),
+    )
+    mdoc_bytes = b"\xa1aa\x01"
+    transcript = b"\x83\xf6\xf6\x82qOpenID4VPHandoverX"
+
+    result = pp._verify_mdoc(
+        base64.urlsafe_b64encode(mdoc_bytes).rstrip(b"=").decode(),
+        "nonce-1",
+        "did:web:verifier.example",
+        {
+            "mdoc_session_transcript_b64url": base64.urlsafe_b64encode(transcript)
+            .rstrip(b"=")
+            .decode(),
+            "oid4vp_client_id": "did:web:verifier.example",
+        },
+        ["-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----"],
+        [],
+    )
+
+    assert result["verified"] is False
+    assert result["claims"] == {}
+    assert result["issuer_did"] == "unknown"
+    assert result["error"] == "Authenticated mdoc evidence is incomplete"
+    assert result["verification_evidence"] == {
+        "holder_binding_verified": False,
+        "credential_count": 1,
+    }
+    assert extracted == []
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
         (None, "none"),
         ("Currently unsupported format", "device-auth-method-unsupported"),
         ("device key jwk is missing coordinates", "device-key-coordinates-missing"),
-        ("algorithm in protected headers did not match", "device-signature-algorithm-mismatch"),
+        (
+            "algorithm in protected headers did not match",
+            "device-signature-algorithm-mismatch",
+        ),
+        (
+            "issuer-signed value digest mismatch for family_name",
+            "issuer-disclosure-digest-mismatch",
+        ),
+        ("MSO is expired", "mso-expired"),
         ("an unfamiliar internal failure", "unclassified"),
     ],
 )
@@ -595,6 +712,91 @@ def test_mdoc_trust_material_preserves_root_and_direct_pin_semantics() -> None:
     assert pinned_issuers == [pinned]
 
 
+def test_mdoc_direct_pin_lifecycle_requires_one_current_governed_relationship() -> None:
+    certificate_pem = (
+        "-----BEGIN CERTIFICATE-----\n"
+        "Y2VydGlmaWNhdGU=\n"
+        "-----END CERTIFICATE-----\n"
+    )
+    certificate_sha256 = hashlib.sha256(b"certificate").hexdigest()
+    issuer_id = f"x509-sha256:{certificate_sha256}"
+    checked_at = datetime(2026, 8, 9, 12, 0, tzinfo=timezone.utc)
+    relationship = _normalized_issuer_relationship(
+        issuer_id=issuer_id,
+        valid_from="2026-08-08T00:00:00Z",
+        valid_until="2026-08-10T00:00:00Z",
+    )
+    profile = {
+        "id": "60000000-0000-0000-0000-000000000001",
+        "status": "active",
+        "updated_at": "2026-08-09T11:59:00Z",
+        "trust_sources": [
+            {
+                "source_type": "PINNED_ISSUER",
+                "certificate_pem": certificate_pem,
+            }
+        ],
+        "issuer_relationships": [relationship],
+    }
+    verification_evidence = {
+        "issuer_id": issuer_id,
+        "issuer_certificate_sha256": certificate_sha256,
+    }
+
+    assert pp._mdoc_direct_pin_lifecycle_evidence(
+        profile,
+        verification_evidence,
+        now=checked_at,
+    ) == {
+        "method": "trust-profile-direct-pin-lifecycle",
+        "issuer_id": issuer_id,
+        "issuer_certificate_sha256": certificate_sha256,
+        "checked_at": "2026-08-09T12:00:00Z",
+        "trust_profile_id": "60000000-0000-0000-0000-000000000001",
+        "trust_profile_updated_at": "2026-08-09T11:59:00Z",
+    }
+
+    profile["issuer_relationships"] = []
+    assert (
+        pp._mdoc_direct_pin_lifecycle_evidence(
+            profile,
+            verification_evidence,
+            now=checked_at,
+        )
+        is None
+    )
+    profile["issuer_relationships"] = [relationship]
+    profile["trust_sources"][0]["source_type"] = "ROOT_CA"
+    assert (
+        pp._mdoc_direct_pin_lifecycle_evidence(
+            profile,
+            verification_evidence,
+            now=checked_at,
+        )
+        is None
+    )
+    profile["trust_sources"][0]["source_type"] = "PINNED_ISSUER"
+    profile["trust_sources"] = [*profile["trust_sources"], *profile["trust_sources"]]
+    assert (
+        pp._mdoc_direct_pin_lifecycle_evidence(
+            profile,
+            verification_evidence,
+            now=checked_at,
+        )
+        is None
+    )
+    profile["trust_sources"] = [profile["trust_sources"][0]]
+    relationship["revoked_at"] = "2026-08-09T11:00:00Z"
+    assert (
+        pp._mdoc_direct_pin_lifecycle_evidence(
+            profile,
+            verification_evidence,
+            now=checked_at,
+        )
+        is None
+    )
+
+
 def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
@@ -629,6 +831,10 @@ def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
             "issuer_did": "unknown",
             "format": "mdoc",
             "error": None,
+            "verification_evidence": {
+                "holder_binding_verified": True,
+                "credential_count": 1,
+            },
         }
 
     monkeypatch.setattr(pp, "_verify_credential_by_format", _verify)
@@ -646,10 +852,12 @@ def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
                 context=context,
             ),
             repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
         )
     )
 
-    assert response.result == "passed"
+    assert response.result == "failed"
+    assert "Cedar policy evidence is incomplete" in response.decision_reason
     assert captured == {
         "nonce": "nonce-1",
         "audience": "did:web:verifier.example",
@@ -658,7 +866,8 @@ def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
     }
 
 
-def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_claims(
+@pytest.mark.asyncio
+async def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_claims(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requests: list[dict] = []
@@ -691,7 +900,7 @@ def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_claims(
         "verifiableCredential": [credential],
     }
 
-    result = pp._verify_vcdm_data_integrity(document, "challenge", "verifier")
+    result = await pp._verify_vcdm_data_integrity(document, "challenge", "verifier")
 
     assert result["verified"] is True
     assert result["issuer_did"] == "did:key:issuer"
@@ -705,7 +914,8 @@ def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_claims(
     ]
 
 
-def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
+@pytest.mark.asyncio
+async def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer = "did:web:issuer.example:orgs:tenant-a"
@@ -740,9 +950,18 @@ def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
         ],
         "assertionMethod": [method_id],
     }
+    resolved_document = pp._ResolvedDidDocument(did_document)
+    resolved_document.resolution_provenance = {
+        "did": issuer,
+        "source": "configured_internal_resolver",
+        "retrieved_at": "2026-08-09T07:00:00+00:00",
+        "content_sha256": "b" * 64,
+    }
     captured: list[dict] = []
 
-    monkeypatch.setattr(pp, "_resolve_did_document", lambda did: did_document)
+    monkeypatch.setattr(
+        pp, "_resolve_did_document", AsyncMock(return_value=resolved_document)
+    )
     monkeypatch.setattr(
         pp,
         "_load_marty_rs_binding",
@@ -762,7 +981,7 @@ def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
         ),
     )
 
-    result = pp._verify_vcdm_data_integrity(document, None, None)
+    result = await pp._verify_vcdm_data_integrity(document, None, None)
 
     assert result["verified"] is True
     assert captured == [
@@ -777,41 +996,111 @@ def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
             ],
         }
     ]
+    assert result["verification_evidence"]["did_resolution"] == [
+        resolved_document.resolution_provenance
+    ]
 
 
-def test_did_resolver_skips_a_candidate_with_the_wrong_document_id(
+@pytest.mark.asyncio
+async def test_did_resolver_delegates_to_controlled_common_boundary(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     did = "did:web:issuer.example:orgs:tenant-a"
-    candidates = [
-        "http://gateway:8000/orgs/tenant-a/did.json",
-        "https://issuer.example/orgs/tenant-a/did.json",
-    ]
-    requested: list[str] = []
+    document = {"id": did, "verificationMethod": []}
+    provenance = {
+        "source": "configured_internal_resolver",
+        "retrieved_at": "2026-08-09T07:00:00+00:00",
+        "content_sha256": "a" * 64,
+    }
+    resolver = AsyncMock(
+        return_value=SimpleNamespace(document=document, provenance=provenance)
+    )
+    monkeypatch.setattr(pp, "resolve_did_document", resolver)
 
-    class Response:
-        status_code = 200
+    resolved = await pp._resolve_did_document(did)
 
-        def __init__(self, document: dict) -> None:
-            self._document = document
-
-        def json(self) -> dict:
-            return self._document
-
-    def get(url: str, **_kwargs) -> Response:
-        requested.append(url)
-        if url == candidates[0]:
-            return Response({"id": "did:web:gateway.example:orgs:tenant-a"})
-        return Response({"id": did, "verificationMethod": []})
-
-    monkeypatch.setattr(pp, "_did_resolution_candidate_urls", lambda _did: candidates)
-    monkeypatch.setattr("httpx.get", get)
-
-    assert pp._resolve_did_document(did)["id"] == did
-    assert requested == candidates
+    assert resolved["id"] == did
+    assert pp._did_resolution_provenance(resolved) == {"did": did, **provenance}
+    resolved.resolution_provenance["content_sha256"] = "not-a-digest"
+    assert pp._did_resolution_provenance(resolved) is None
+    resolver.assert_awaited_once_with(did)
 
 
-def test_vcdm_data_integrity_rejects_cross_tenant_proof_before_rust(
+def _purpose_scoped_did_document() -> tuple[str, dict[str, object]]:
+    issuer = "did:web:issuer.example:orgs:tenant-a"
+    return issuer, {
+        "id": issuer,
+        "verificationMethod": [
+            {
+                "id": "#authentication-key",
+                "controller": issuer,
+                "publicKeyJwk": {
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "x": "authentication-key",
+                },
+            },
+            {
+                "id": "#assertion-key",
+                "controller": issuer,
+                "publicKeyJwk": {
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "x": "assertion-key",
+                },
+            },
+        ],
+        "authentication": ["#authentication-key"],
+        "assertionMethod": [f"{issuer}#assertion-key"],
+    }
+
+
+def test_jwt_key_selection_rejects_authentication_only_kid() -> None:
+    issuer, document = _purpose_scoped_did_document()
+
+    with pytest.raises(RuntimeError, match="kid does not select"):
+        pp._select_public_jwk_from_did_document(
+            document,
+            issuer,
+            f"{issuer}#authentication-key",
+        )
+
+
+def test_jwt_key_selection_rejects_unknown_kid_instead_of_fallback() -> None:
+    issuer, document = _purpose_scoped_did_document()
+
+    with pytest.raises(RuntimeError, match="kid does not select"):
+        pp._select_public_jwk_from_did_document(
+            document,
+            issuer,
+            f"{issuer}#missing",
+        )
+
+
+def test_jwt_key_selection_rejects_ambiguous_assertion_without_kid() -> None:
+    issuer, document = _purpose_scoped_did_document()
+    assertion = document["assertionMethod"]
+    assert isinstance(assertion, list)
+    assertion.append(f"{issuer}#authentication-key")
+
+    with pytest.raises(RuntimeError, match="kid is required"):
+        pp._select_public_jwk_from_did_document(document, issuer, None)
+
+
+def test_jwt_key_selection_normalizes_relative_assertion_method_ids() -> None:
+    issuer, document = _purpose_scoped_did_document()
+
+    selected = pp._select_public_jwk_from_did_document(
+        document,
+        issuer,
+        "#assertion-key",
+    )
+
+    assert selected["x"] == "assertion-key"
+
+
+@pytest.mark.asyncio
+async def test_vcdm_data_integrity_rejects_cross_tenant_proof_before_rust(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer = "did:web:issuer.example:orgs:tenant-a"
@@ -847,7 +1136,7 @@ def test_vcdm_data_integrity_rejects_cross_tenant_proof_before_rust(
         },
     }
 
-    result = pp._verify_vcdm_data_integrity(document, None, None)
+    result = await pp._verify_vcdm_data_integrity(document, None, None)
 
     assert result["verified"] is False
     assert result["claims"] == {}
@@ -855,7 +1144,8 @@ def test_vcdm_data_integrity_rejects_cross_tenant_proof_before_rust(
     assert "tenant-b" not in result["error"]
 
 
-def test_vcdm_data_integrity_fails_closed_without_leaking_engine_errors(
+@pytest.mark.asyncio
+async def test_vcdm_data_integrity_fails_closed_without_leaking_engine_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     binding = SimpleNamespace(
@@ -865,7 +1155,7 @@ def test_vcdm_data_integrity_fails_closed_without_leaking_engine_errors(
     )
     monkeypatch.setattr(pp, "_load_marty_rs_binding", lambda: binding)
 
-    result = pp._verify_vcdm_data_integrity(
+    result = await pp._verify_vcdm_data_integrity(
         {"type": ["VerifiableCredential"]}, None, None
     )
 
@@ -879,7 +1169,8 @@ def _jwt_segment(payload: dict) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
-def test_w3c_vc_uses_public_issuer_profile_did_material(
+@pytest.mark.asyncio
+async def test_w3c_vc_uses_public_issuer_profile_did_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer = "did:web:issuer.example:profiles:university"
@@ -939,7 +1230,7 @@ def test_w3c_vc_uses_public_issuer_profile_did_material(
         lambda: SimpleNamespace(verify_vcdm_jwt=verify),
     )
 
-    result = pp._verify_w3c_vc(token, None, None, public_jwk)
+    result = await pp._verify_w3c_vc(token, None, None, public_jwk)
 
     assert result["verified"] is True
     assert result["issuer_did"] == issuer
@@ -949,7 +1240,8 @@ def test_w3c_vc_uses_public_issuer_profile_did_material(
     assert all(parameter not in json.dumps(captured) for parameter in ('"d"', '"k"'))
 
 
-def test_w3c_vc_did_key_resolution_stays_inside_rust(
+@pytest.mark.asyncio
+async def test_w3c_vc_did_key_resolution_stays_inside_rust(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer = "did:key:z6MkhIssuer"
@@ -989,13 +1281,14 @@ def test_w3c_vc_did_key_resolution_stays_inside_rust(
         lambda _did: pytest.fail("did:key must be resolved by the Rust verifier"),
     )
 
-    result = pp._verify_w3c_vc(token, None, None)
+    result = await pp._verify_w3c_vc(token, None, None)
 
     assert result["verified"] is True
     assert captured == {"token": token}
 
 
-def test_w3c_vc_does_not_expose_unverified_credential_id(
+@pytest.mark.asyncio
+async def test_w3c_vc_does_not_expose_unverified_credential_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer = "did:web:issuer.example"
@@ -1006,6 +1299,30 @@ def test_w3c_vc_does_not_expose_unverified_credential_id(
             "signature",
         ]
     )
+    resolved_document = pp._ResolvedDidDocument(
+        {
+            "id": issuer,
+            "verificationMethod": [
+                {
+                    "id": f"{issuer}#key-1",
+                    "controller": issuer,
+                    "publicKeyJwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "public-x",
+                        "y": "public-y",
+                    },
+                }
+            ],
+            "assertionMethod": [f"{issuer}#key-1"],
+        }
+    )
+    resolved_document.resolution_provenance = {
+        "did": issuer,
+        "source": "configured_internal_resolver",
+        "retrieved_at": "2026-08-09T07:00:00+00:00",
+        "content_sha256": "c" * 64,
+    }
     monkeypatch.setattr(
         pp,
         "_load_marty_rs_binding",
@@ -1026,31 +1343,22 @@ def test_w3c_vc_does_not_expose_unverified_credential_id(
     monkeypatch.setattr(
         pp,
         "_resolve_did_document",
-        lambda _issuer: {
-            "id": issuer,
-            "verificationMethod": [
-                {
-                    "id": f"{issuer}#key-1",
-                    "controller": issuer,
-                    "publicKeyJwk": {
-                        "kty": "EC",
-                        "crv": "P-256",
-                        "x": "public-x",
-                        "y": "public-y",
-                    },
-                }
-            ],
-        },
+        AsyncMock(return_value=resolved_document),
     )
 
-    result = pp._verify_w3c_vc(token, None, None)
+    result = await pp._verify_w3c_vc(token, None, None)
 
     assert result["verified"] is False
     assert result["credential_id"] is None
     assert result["claims"] == {}
+    assert (
+        result["verification_evidence"]["did_resolution"]
+        == resolved_document.resolution_provenance
+    )
 
 
-def test_w3c_vc_fails_closed_without_profile_public_key(
+@pytest.mark.asyncio
+async def test_w3c_vc_fails_closed_without_profile_public_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     issuer = "https://issuer.example"
@@ -1077,14 +1385,15 @@ def test_w3c_vc_fails_closed_without_profile_public_key(
 
     monkeypatch.setattr(pp, "_resolve_did_document", fail_resolution)
 
-    result = pp._verify_w3c_vc(token, None, None)
+    result = await pp._verify_w3c_vc(token, None, None)
 
     assert result["verified"] is False
     assert result["claims"] == {}
     assert "no issuer profile DID key" in result["error"]
 
 
-def test_w3c_vc_logs_only_fixed_verifier_error_categories(
+@pytest.mark.asyncio
+async def test_w3c_vc_logs_only_fixed_verifier_error_categories(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     issuer = "did:web:issuer.example:profiles:private"
@@ -1125,7 +1434,7 @@ def test_w3c_vc_logs_only_fixed_verifier_error_categories(
         ),
     )
 
-    result = pp._verify_w3c_vc(
+    result = await pp._verify_w3c_vc(
         token,
         None,
         None,
@@ -1175,26 +1484,6 @@ def test_trust_profile_lookup_url_uses_internal_service_endpoint(monkeypatch) ->
     )
 
 
-def test_trust_profile_cache_ttl_defaults_to_five_minutes(monkeypatch) -> None:
-    monkeypatch.delenv("TRUST_PROFILE_CACHE_TTL_SECONDS", raising=False)
-
-    ttl = pp._trust_profile_cache_ttl_seconds(
-        {"time_policy": {"freshness_window_seconds": 86400}}
-    )
-
-    assert ttl == 300
-
-
-def test_trust_profile_cache_ttl_honors_smaller_freshness_window(monkeypatch) -> None:
-    monkeypatch.setenv("TRUST_PROFILE_CACHE_TTL_SECONDS", "300")
-
-    ttl = pp._trust_profile_cache_ttl_seconds(
-        {"time_policy": {"freshness_window_seconds": 60}}
-    )
-
-    assert ttl == 60
-
-
 def test_credential_status_lookup_url_honors_mip_template(monkeypatch) -> None:
     monkeypatch.setenv(
         "MIP_CREDENTIAL_STATUS_URL_TEMPLATE",
@@ -1221,7 +1510,8 @@ def test_credential_status_identifier_candidates_use_explicit_ids_only() -> None
     assert candidates == ["credential-123", "credential-789", "credential-456"]
 
 
-def test_verify_sd_jwt_reports_did_resolution_failure(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_verify_sd_jwt_reports_did_resolution_failure(monkeypatch) -> None:
     token = ".".join(
         [
             _jwt_segment({"alg": "ES256", "typ": "vc+sd-jwt", "kid": "#issuer-key"}),
@@ -1249,28 +1539,30 @@ def test_verify_sd_jwt_reports_did_resolution_failure(monkeypatch) -> None:
 
     monkeypatch.setattr(pp, "_resolve_did_document", _fail_resolution)
 
-    result = pp._verify_sd_jwt(token, nonce=None, audience=None)
+    result = await pp._verify_sd_jwt(token, nonce=None, audience=None)
 
     assert result["verified"] is False
     assert "DID resolution failed" in result["error"]
     assert result["claims"]["email"] == "member@example.com"
 
 
-def test_resolve_did_jwk_without_network() -> None:
+@pytest.mark.asyncio
+async def test_resolve_did_jwk_without_network() -> None:
     public_jwk = {"kty": "EC", "crv": "P-256", "x": "x-value", "y": "y-value"}
     encoded = (
         base64.urlsafe_b64encode(json.dumps(public_jwk).encode()).decode().rstrip("=")
     )
     did = f"did:jwk:{encoded}"
 
-    document = pp._resolve_did_document(did)
+    document = await pp._resolve_did_document(did)
 
     assert document["id"] == did
     assert document["assertionMethod"] == [did]
     assert document["verificationMethod"][0]["publicKeyJwk"] == public_jwk
 
 
-def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
     public_jwk = {"kty": "EC", "crv": "P-256", "x": "x-value", "y": "y-value"}
     encoded = (
         base64.urlsafe_b64encode(json.dumps(public_jwk).encode()).decode().rstrip("=")
@@ -1304,7 +1596,7 @@ def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
         lambda: SimpleNamespace(verify_sd_jwt=_verify),
     )
 
-    result = pp._verify_sd_jwt(
+    result = await pp._verify_sd_jwt(
         token, nonce="nonce-123", audience="https://verifier.example"
     )
 
@@ -1312,6 +1604,11 @@ def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
     assert result["issuer_did"] == did
     assert result["claims"]["email"] == "member@example.com"
     assert result["claims"]["given_name"] == "Marty"
+    did_resolution = result["verification_evidence"]["did_resolution"]
+    assert did_resolution["did"] == did
+    assert did_resolution["source"] == "embedded:did:jwk"
+    assert len(did_resolution["content_sha256"]) == 64
+    assert did_resolution["retrieved_at"]
     assert captured == {
         "token": token,
         "issuer_jwk": public_jwk,
@@ -1421,22 +1718,271 @@ def _install_marty_trust_profile(
     allowed_issuers: list[str] | None = None,
     denied_issuers: list[str] | None = None,
     trust_sources: list[dict[str, object]] | None = None,
-) -> None:
-    cache = pp.TrustProfileCache()
-    cache.set(
-        "60000000-0000-0000-0000-000000000001",
-        {
-            "organization_id": organization_id,
-            "allowed_issuers": ["did:web:beta.elevenidllc.com:orgs:marty"]
-            if allowed_issuers is None
-            else allowed_issuers,
-            "denied_issuers": denied_issuers or [],
-            "trust_sources": trust_sources or [],
-            "time_policy": {"freshness_window_seconds": 3600},
+    issuer_relationships: list[dict[str, object]] | None = None,
+    status: str = "active",
+) -> dict[str, object]:
+    profile_data: dict[str, object] = {
+        "organization_id": organization_id,
+        "status": status,
+        "allowed_issuers": ["did:web:beta.elevenidllc.com:orgs:marty"]
+        if allowed_issuers is None
+        else allowed_issuers,
+        "denied_issuers": denied_issuers or [],
+        "trust_sources": trust_sources or [],
+        "issuer_relationships": issuer_relationships,
+        "time_policy": {"freshness_window_seconds": 3600},
+    }
+
+    def get(_url: str, **_kwargs: object) -> SimpleNamespace:
+        # Model an independent service response. Returning a fresh copy is
+        # important: authorization tests must fail if the evaluator reuses a
+        # stale in-process object instead of loading the current relationship.
+        response_data = json.loads(json.dumps(profile_data))
+        return SimpleNamespace(status_code=200, json=lambda: response_data)
+
+    monkeypatch.setattr("httpx.get", get)
+    return profile_data
+
+
+def _normalized_issuer_relationship(
+    **updates: object,
+) -> dict[str, object]:
+    now = datetime.now(timezone.utc)
+    relationship: dict[str, object] = {
+        "issuer_id": "did:web:beta.elevenidllc.com:orgs:marty",
+        "trust_level": 90,
+        "relationship_status": "TRUSTED",
+        "compliance_status": "ACCREDITED",
+        "accreditation_body": "Example Accreditation Authority",
+        "accreditations": ["ISO27001", "FIPS140-2"],
+        "valid_from": (now - timedelta(days=1)).isoformat(),
+        "valid_until": (now + timedelta(days=1)).isoformat(),
+        "revoked_at": None,
+    }
+    relationship.update(updates)
+    return relationship
+
+
+def _complete_verification_result(
+    *,
+    claims: dict[str, object] | None = None,
+    issuer_did: str = "did:web:beta.elevenidllc.com:orgs:marty",
+    credential_format: str = "sd-jwt",
+) -> dict[str, object]:
+    return {
+        "verified": True,
+        "claims": claims or {"email": "member@example.com"},
+        "issuer_did": issuer_did,
+        "format": credential_format,
+        "error": None,
+        "revocation_checked": True,
+        "not_revoked": True,
+        "verification_evidence": {
+            "algorithm": "EdDSA",
+            "issued_at": int(datetime.now(timezone.utc).timestamp()),
+            "expires_at": None,
+            "validity_checked": True,
+            "is_expired": False,
+            "holder_binding_verified": False,
+            "credential_count": 1,
         },
-        3600,
+    }
+
+
+def _allowing_cedar_engine() -> SimpleNamespace:
+    return SimpleNamespace(
+        is_authorized=lambda **_kwargs: SimpleNamespace(
+            allowed=True,
+            reasons=[],
+            errors=[],
+        )
     )
-    monkeypatch.setattr(pp, "_trust_profile_cache", cache)
+
+
+def test_normalized_trusted_issuer_satisfies_policy_constraints() -> None:
+    passed, error = pp._evaluate_issuer_trust(
+        trust_profile_data={
+            "status": "active",
+            "issuer_relationships": [_normalized_issuer_relationship()],
+        },
+        issuer_did="did:web:beta.elevenidllc.com:orgs:marty",
+        constraints=pp.IssuerConstraints(
+            min_trust_level=80,
+            required_compliance_statuses=["ACCREDITED"],
+            required_accreditations=["iso27001", "FIPS140-2"],
+        ),
+    )
+
+    assert passed is True
+    assert error is None
+
+
+@pytest.mark.parametrize(
+    ("updates", "expected_error"),
+    [
+        ({"relationship_status": "DENIED"}, "explicitly denied"),
+        ({"relationship_status": "UNDER_REVIEW"}, "not trusted"),
+        ({"compliance_status": "SUSPENDED"}, "is suspended"),
+        ({"compliance_status": "REVOKED"}, "is revoked"),
+        ({"revoked_at": datetime.now(timezone.utc).isoformat()}, "is revoked"),
+        ({"trust_level": 79}, "minimum trust level"),
+        (
+            {
+                "valid_from": (
+                    datetime.now(timezone.utc) + timedelta(days=1)
+                ).isoformat()
+            },
+            "not yet valid",
+        ),
+        (
+            {
+                "valid_until": (
+                    datetime.now(timezone.utc) - timedelta(days=1)
+                ).isoformat()
+            },
+            "is expired",
+        ),
+        ({"compliance_status": "COMPLIANT"}, "compliance requirements"),
+        ({"accreditations": ["ISO27001"]}, "accreditation requirements"),
+    ],
+)
+def test_normalized_issuer_relationship_failures_are_closed(
+    updates: dict[str, object],
+    expected_error: str,
+) -> None:
+    passed, error = pp._evaluate_issuer_trust(
+        trust_profile_data={
+            "status": "active",
+            "issuer_relationships": [_normalized_issuer_relationship(**updates)],
+        },
+        issuer_did="did:web:beta.elevenidllc.com:orgs:marty",
+        constraints=pp.IssuerConstraints(
+            min_trust_level=80,
+            required_compliance_statuses=["ACCREDITED"],
+            required_accreditations=["ISO27001", "FIPS140-2"],
+        ),
+    )
+
+    assert passed is False
+    assert error is not None
+    assert expected_error in error
+
+
+def test_all_required_accreditations_are_proven_by_first_class_set() -> None:
+    passed, error = pp._evaluate_issuer_trust(
+        trust_profile_data={
+            "status": "active",
+            "issuer_relationships": [_normalized_issuer_relationship()],
+        },
+        issuer_did="did:web:beta.elevenidllc.com:orgs:marty",
+        constraints=pp.IssuerConstraints(
+            required_accreditations=[
+                "ISO27001",
+                "FIPS140-2",
+            ]
+        ),
+    )
+
+    assert passed is True
+    assert error is None
+
+
+def test_accreditation_body_does_not_count_as_accreditation() -> None:
+    passed, error = pp._evaluate_issuer_trust(
+        trust_profile_data={
+            "status": "active",
+            "issuer_relationships": [
+                _normalized_issuer_relationship(accreditations=[])
+            ],
+        },
+        issuer_did="did:web:beta.elevenidllc.com:orgs:marty",
+        constraints=pp.IssuerConstraints(
+            required_accreditations=["Example Accreditation Authority"]
+        ),
+    )
+
+    assert passed is False
+    assert error is not None
+    assert "accreditation requirements" in error
+
+
+@pytest.mark.parametrize("invalid", [None, "ISO27001", [" "]])
+def test_malformed_accreditation_evidence_fails_closed(invalid: object) -> None:
+    passed, error = pp._evaluate_issuer_trust(
+        trust_profile_data={
+            "status": "active",
+            "issuer_relationships": [
+                _normalized_issuer_relationship(accreditations=invalid)
+            ],
+        },
+        issuer_did="did:web:beta.elevenidllc.com:orgs:marty",
+        constraints=pp.IssuerConstraints(required_accreditations=["ISO27001"]),
+    )
+
+    assert passed is False
+    assert error is not None
+    assert "invalid accreditation evidence" in error
+
+
+def test_normalized_issuer_relationships_fail_closed_when_missing_or_ambiguous() -> (
+    None
+):
+    constraints = pp.IssuerConstraints(min_trust_level=80)
+    missing = pp._evaluate_issuer_trust(
+        trust_profile_data={
+            "status": "active",
+            "issuer_relationships": [
+                _normalized_issuer_relationship(issuer_id="did:web:other.example")
+            ],
+        },
+        issuer_did="did:web:beta.elevenidllc.com:orgs:marty",
+        constraints=constraints,
+    )
+    ambiguous = pp._evaluate_issuer_trust(
+        trust_profile_data={
+            "status": "active",
+            "issuer_relationships": [
+                _normalized_issuer_relationship(),
+                _normalized_issuer_relationship(),
+            ],
+        },
+        issuer_did="did:web:beta.elevenidllc.com:orgs:marty",
+        constraints=constraints,
+    )
+
+    assert missing[0] is False
+    assert "no trusted issuer relationship" in str(missing[1])
+    assert ambiguous[0] is False
+    assert "ambiguous issuer relationships" in str(ambiguous[1])
+
+
+def test_normalized_relationship_does_not_collapse_distinct_did_web_paths() -> None:
+    passed, error = pp._evaluate_issuer_trust(
+        trust_profile_data={
+            "status": "active",
+            "issuer_relationships": [_normalized_issuer_relationship()],
+        },
+        issuer_did="did:web:beta.elevenidllc.com:orgs:attacker",
+        constraints=None,
+    )
+
+    assert passed is False
+    assert error is not None
+    assert "no trusted issuer relationship" in error
+
+
+def test_inactive_trust_profile_fails_before_issuer_matching() -> None:
+    passed, error = pp._evaluate_issuer_trust(
+        trust_profile_data={
+            "status": "suspended",
+            "issuer_relationships": [_normalized_issuer_relationship()],
+        },
+        issuer_did="did:web:beta.elevenidllc.com:orgs:marty",
+        constraints=None,
+    )
+
+    assert passed is False
+    assert error == "Trust Profile is not active"
 
 
 def test_rest_evaluation_rejects_cross_org_trust_profile_override(monkeypatch) -> None:
@@ -1493,20 +2039,138 @@ def test_evaluator_rejects_trust_profile_without_unambiguous_org(
 def test_open_badge_login_policy_allows_verified_sd_jwt_badge(monkeypatch) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
-    _install_marty_trust_profile(monkeypatch)
+    _install_marty_trust_profile(
+        monkeypatch,
+        issuer_relationships=[_normalized_issuer_relationship()],
+    )
 
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: _complete_verification_result(
+            claims={
+                "email": "member@example.com",
+                "member_id": "member-123",
+                "organization_id": "org-1",
+                "role": "applicant",
+            },
+        ),
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
+            repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
+        )
+    )
+
+    assert response.result == "passed"
+    assert response.decision == "allow"
+    assert (
+        response.credential_results[0].credential_template_id
+        == "50000000-0000-0000-0000-000000000040"
+    )
+    assert response.verified_claims["email"] == "member@example.com"
+
+
+def test_evaluation_uses_normalized_trusted_issuer_relationship(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.issuer_constraints = pp.IssuerConstraints(
+        min_trust_level=80,
+        required_compliance_statuses=["ACCREDITED"],
+        required_accreditations=["ISO27001"],
+    )
+    asyncio.run(repo.save(policy))
+    _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=[],
+        issuer_relationships=[_normalized_issuer_relationship()],
+    )
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: _complete_verification_result(),
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
+            repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
+        )
+    )
+
+    assert response.result == "passed"
+    assert response.decision == "allow"
+
+
+def test_relationship_revocation_takes_effect_on_next_evaluation(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    relationship = _normalized_issuer_relationship()
+    profile_data = _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=[],
+        issuer_relationships=[relationship],
+    )
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: _complete_verification_result(),
+    )
+
+    first = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
+            repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
+        )
+    )
+    assert first.decision == "allow"
+
+    current_relationships = profile_data["issuer_relationships"]
+    assert isinstance(current_relationships, list)
+    current_relationships[0]["relationship_status"] = "DENIED"
+
+    second = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-2"),
+            repo=repo,
+        )
+    )
+
+    assert second.result == "failed"
+    assert second.decision == "deny"
+    assert second.credential_results[0].trust_check_passed is False
+    assert second.credential_results[0].signature_valid is True
+    assert "explicitly denied" in second.decision_reason
+
+
+def test_normalized_denial_overrides_legacy_allowed_issuer(monkeypatch) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(
+        monkeypatch,
+        issuer_relationships=[
+            _normalized_issuer_relationship(relationship_status="DENIED")
+        ],
+    )
     monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
         lambda *_args, **_kwargs: {
             "verified": True,
-            "claims": {
-                "email": "member@example.com",
-                "member_id": "member-123",
-                "organization_id": "org-1",
-                "role": "applicant",
-            },
+            "claims": {"email": "member@example.com"},
             "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
             "format": "sd-jwt",
             "error": None,
@@ -1521,13 +2185,10 @@ def test_open_badge_login_policy_allows_verified_sd_jwt_badge(monkeypatch) -> No
         )
     )
 
-    assert response.result == "passed"
-    assert response.decision == "allow"
-    assert (
-        response.credential_results[0].credential_template_id
-        == "50000000-0000-0000-0000-000000000040"
-    )
-    assert response.verified_claims["email"] == "member@example.com"
+    assert response.result == "failed"
+    assert response.decision == "deny"
+    assert response.credential_results[0].trust_check_passed is False
+    assert "explicitly denied" in response.decision_reason
 
 
 def test_oid4vp_context_requires_sd_jwt_holder_binding_even_when_policy_does_not(
@@ -1623,19 +2284,20 @@ def test_open_badge_login_policy_allows_issuer_url_alias(monkeypatch) -> None:
     _install_marty_trust_profile(
         monkeypatch,
         allowed_issuers=["https://canvas.example.edu/issuers/issuer-123"],
+        issuer_relationships=[
+            _normalized_issuer_relationship(
+                issuer_id="https://canvas.example.edu/issuers/issuer-123"
+            )
+        ],
     )
 
     monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
-        lambda *_args, **_kwargs: {
-            "verified": True,
-            "claims": {"email": "member@example.com"},
-            "issuer_did": "https://canvas.example.edu/issuers/issuer-123",
-            "format": "sd-jwt",
-            "error": None,
-        },
+        lambda *_args, **_kwargs: _complete_verification_result(
+            issuer_did="https://canvas.example.edu/issuers/issuer-123"
+        ),
     )
 
     response = asyncio.run(
@@ -1643,6 +2305,7 @@ def test_open_badge_login_policy_allows_issuer_url_alias(monkeypatch) -> None:
             policy.id,
             pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
             repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
         )
     )
 
@@ -1655,19 +2318,17 @@ def test_open_badge_login_policy_allows_did_web_issuer_by_domain_alias(
 ) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
-    _install_marty_trust_profile(monkeypatch, allowed_issuers=["beta.elevenidllc.com"])
+    _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=["beta.elevenidllc.com"],
+        issuer_relationships=[_normalized_issuer_relationship()],
+    )
 
     monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
-        lambda *_args, **_kwargs: {
-            "verified": True,
-            "claims": {"email": "member@example.com"},
-            "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
-            "format": "sd-jwt",
-            "error": None,
-        },
+        lambda *_args, **_kwargs: _complete_verification_result(),
     )
 
     response = asyncio.run(
@@ -1675,6 +2336,7 @@ def test_open_badge_login_policy_allows_did_web_issuer_by_domain_alias(
             policy.id,
             pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
             repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
         )
     )
 
@@ -1732,19 +2394,20 @@ def test_open_badge_login_policy_allows_pinned_issuer_url_trust_source(
                 "url": "https://canvas.example.edu/issuers/issuer-123",
             }
         ],
+        issuer_relationships=[
+            _normalized_issuer_relationship(
+                issuer_id="https://canvas.example.edu/issuers/issuer-123"
+            )
+        ],
     )
 
     monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
-        lambda *_args, **_kwargs: {
-            "verified": True,
-            "claims": {"email": "member@example.com"},
-            "issuer_did": "https://canvas.example.edu/issuers/issuer-123",
-            "format": "sd-jwt",
-            "error": None,
-        },
+        lambda *_args, **_kwargs: _complete_verification_result(
+            issuer_did="https://canvas.example.edu/issuers/issuer-123"
+        ),
     )
 
     response = asyncio.run(
@@ -1752,6 +2415,7 @@ def test_open_badge_login_policy_allows_pinned_issuer_url_trust_source(
             policy.id,
             pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
             repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
         )
     )
 
@@ -1835,6 +2499,7 @@ def test_policy_freshness_denies_when_revocation_not_checked(monkeypatch) -> Non
     assert response.result == "failed"
     assert response.decision == "deny"
     assert response.credential_results[0].freshness_check_passed is False
+    assert response.credential_results[0].signature_valid is True
     assert "Revocation status was not checked" in response.decision_reason
 
 
@@ -1880,7 +2545,13 @@ def test_policy_freshness_accepts_managed_issuer_active_credential_status(
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
     issuer_did = "did:web:issuer.example:orgs:demo"
-    _install_marty_trust_profile(monkeypatch, allowed_issuers=[issuer_did])
+    _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=[issuer_did],
+        issuer_relationships=[
+            _normalized_issuer_relationship(issuer_id=issuer_did)
+        ],
+    )
     policy.freshness = pp.FreshnessPolicy(require_not_revoked=True)
     policy.credential_requirements[0].credential_payload_format = "jwt_vc"
     asyncio.run(repo.save(policy))
@@ -1890,16 +2561,14 @@ def test_policy_freshness_accepts_managed_issuer_active_credential_status(
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
-        lambda *_args, **_kwargs: {
-            "verified": True,
-            "claims": {
+        lambda *_args, **_kwargs: _complete_verification_result(
+            claims={
                 "email": "member@example.com",
                 "credential_id": "credential-123",
             },
-            "issuer_did": issuer_did,
-            "format": "w3c-vc",
-            "error": None,
-        },
+            issuer_did=issuer_did,
+            credential_format="w3c-vc",
+        ),
     )
     monkeypatch.setattr(
         pp,
@@ -1912,6 +2581,7 @@ def test_policy_freshness_accepts_managed_issuer_active_credential_status(
             policy.id,
             pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
             repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
         )
     )
 
@@ -2062,22 +2732,29 @@ def _inline_evaluation_payload() -> dict:
 def test_inline_evaluation_uses_real_verifier_output(monkeypatch) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     client = _build_client(repo)
+    client.app.state.cedar_engine = _allowing_cedar_engine()
+    _install_marty_trust_profile(
+        monkeypatch,
+        issuer_relationships=[
+            _normalized_issuer_relationship(issuer_id="did:web:issuer.example")
+        ],
+    )
     monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "jwt-vc")
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
-        lambda *_args, **_kwargs: {
-            "verified": True,
-            "claims": {"name": "Alice"},
-            "issuer_did": "did:web:issuer.example",
-            "format": "jwt-vc",
-            "error": None,
-        },
+        lambda *_args, **_kwargs: _complete_verification_result(
+            claims={"name": "Alice"},
+            issuer_did="did:web:issuer.example",
+            credential_format="jwt-vc",
+        ),
     )
 
+    payload = _inline_evaluation_payload()
+    payload["trust_profile_id"] = "60000000-0000-0000-0000-000000000001"
     response = client.post(
         "/v1/presentation-policies/evaluate",
-        json=_inline_evaluation_payload(),
+        json=payload,
     )
 
     assert response.status_code == 200
@@ -2186,3 +2863,440 @@ def test_saved_policy_evaluation_uses_complete_gateway_api_key_context(
     assert response.status_code == 200
     assert response.json()["decision"] == "allow"
     membership.assert_not_awaited()
+
+
+def _install_successful_policy_verification(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    issued_at: object | None = None,
+    holder_binding_verified: bool = False,
+    credential_count: int = 1,
+) -> None:
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "claims": {"email": "member@example.com"},
+            "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+            "format": "sd-jwt",
+            "error": None,
+            "revocation_checked": True,
+            "not_revoked": True,
+            "verification_evidence": {
+                "algorithm": "EdDSA",
+                "issued_at": issued_at,
+                "expires_at": None,
+                "validity_checked": True,
+                "is_expired": False,
+                "holder_binding_verified": holder_binding_verified,
+                "credential_count": credential_count,
+            },
+        },
+    )
+
+
+def test_single_token_cannot_satisfy_multiple_credential_requirements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.credential_requirements.append(
+        pp.CredentialRequirement(
+            credential_template_id="second-template",
+            requested_claims=[
+                pp.RequestedClaim(claim_name="role", display_name="Role")
+            ],
+        )
+    )
+    asyncio.run(repo.save(policy))
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: pytest.fail("verifier must not run"),
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.satisfied_requirements == 0
+    assert "Exactly one credential requirement" in response.decision_reason
+
+
+def test_optional_only_credential_requirement_cannot_vacuously_allow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.credential_requirements[0].required = False
+    asyncio.run(repo.save(policy))
+    monkeypatch.setattr(
+        pp,
+        "_detect_credential_format",
+        lambda _token: pytest.fail("verifier must not run"),
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.required_total == 0
+    assert "required credential requirement" in response.decision_reason
+
+
+def test_missing_cedar_engine_cannot_bypass_policy_evidence_reducer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(monkeypatch)
+    _install_successful_policy_verification(
+        monkeypatch,
+        issued_at=int(datetime.now(timezone.utc).timestamp()),
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
+    assert "policy engine is unavailable" in response.decision_reason
+
+
+def test_unevaluated_alternative_requirements_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.alternative_requirements = [
+        pp.AlternativeRequirement(
+            name="identity alternative",
+            credential_requirements=[policy.credential_requirements[0]],
+        )
+    ]
+    asyncio.run(repo.save(policy))
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: pytest.fail("verifier must not run"),
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert "descriptor-bound per-credential evidence" in response.decision_reason
+
+
+@pytest.mark.parametrize(
+    ("issued_at", "expected_reason"),
+    [
+        (None, "issuance-time evidence"),
+        (
+            int((datetime.now(timezone.utc) - timedelta(minutes=5)).timestamp()),
+            "exceeds maximum age",
+        ),
+    ],
+)
+def test_maximum_credential_age_is_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+    issued_at: object | None,
+    expected_reason: str,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.freshness = pp.FreshnessPolicy(max_age_seconds=60)
+    asyncio.run(repo.save(policy))
+    _install_marty_trust_profile(monkeypatch)
+    _install_successful_policy_verification(monkeypatch, issued_at=issued_at)
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
+    assert response.credential_results[0].freshness_check_passed is False
+    assert expected_reason in response.decision_reason
+
+
+def test_required_holder_binding_needs_explicit_verifier_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.holder_binding = pp.HolderBinding(required=True)
+    asyncio.run(repo.save(policy))
+    _install_marty_trust_profile(monkeypatch)
+    _install_successful_policy_verification(
+        monkeypatch,
+        issued_at=int(datetime.now(timezone.utc).timestamp()),
+        holder_binding_verified=False,
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(
+                vp_token="credential",
+                nonce="nonce",
+                audience="verifier",
+            ),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
+    assert "holder binding was not verified" in response.decision_reason
+
+
+@pytest.mark.parametrize("engine_source", ["http", "internal"])
+def test_cedar_receives_only_verified_policy_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    engine_source: str,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(
+        monkeypatch,
+        issuer_relationships=[_normalized_issuer_relationship(trust_level=87)],
+    )
+    issued_at = int((datetime.now(timezone.utc) - timedelta(seconds=30)).timestamp())
+    _install_successful_policy_verification(monkeypatch, issued_at=issued_at)
+    captured: dict[str, object] = {}
+
+    def is_authorized(**kwargs: object) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(allowed=True, reasons=[], errors=[])
+
+    http_request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                cedar_engine=SimpleNamespace(is_authorized=is_authorized)
+            )
+        )
+    )
+
+    engine_kwargs = (
+        {"http_request": http_request}
+        if engine_source == "http"
+        else {"cedar_engine": http_request.app.state.cedar_engine}
+    )
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+            **engine_kwargs,
+        )
+    )
+
+    assert response.decision == "allow"
+    context = captured["context"]
+    assert isinstance(context, dict)
+    assert context["issuer_trust_level"] == 87
+    assert 30 <= context["credential_age_seconds"] <= 35
+    assert context["is_revoked"] is False
+    assert context["is_expired"] is False
+    assert context["holder_binding_present"] is False
+    assert context["algorithm"] == "EdDSA"
+
+
+def test_mdoc_direct_pin_lifecycle_supplies_separate_status_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.credential_requirements[0].credential_payload_format = "MDOC"
+    asyncio.run(repo.save(policy))
+
+    certificate_pem = (
+        "-----BEGIN CERTIFICATE-----\n"
+        "Y2VydGlmaWNhdGU=\n"
+        "-----END CERTIFICATE-----\n"
+    )
+    certificate_sha256 = hashlib.sha256(b"certificate").hexdigest()
+    issuer_id = f"x509-sha256:{certificate_sha256}"
+    _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=[],
+        trust_sources=[
+            {
+                "source_type": "PINNED_ISSUER",
+                "certificate_pem": certificate_pem,
+            }
+        ],
+        issuer_relationships=[
+            _normalized_issuer_relationship(issuer_id=issuer_id, trust_level=87)
+        ],
+    )
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "mdoc")
+    issued_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+    raw_result = {
+        "verified": True,
+        "claims": {"email": "member@example.com"},
+        "issuer_did": issuer_id,
+        "format": "mdoc",
+        "error": None,
+        # The cryptographic binding truthfully performs no status lookup.
+        "revocation_checked": False,
+        "not_revoked": None,
+        "verification_evidence": {
+            "issuer_id": issuer_id,
+            "issuer_certificate_sha256": certificate_sha256,
+            "algorithm": "ES256",
+            "issued_at": issued_at.isoformat(),
+            "expires_at": (issued_at + timedelta(days=1)).isoformat(),
+            "validity_checked": True,
+            "is_expired": False,
+            "revocation_checked": False,
+            "not_revoked": None,
+            "holder_binding_verified": True,
+            "credential_count": 1,
+        },
+    }
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: raw_result,
+    )
+    captured: dict[str, object] = {}
+
+    def is_authorized(**kwargs: object) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(allowed=True, reasons=[], errors=[])
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+            cedar_engine=SimpleNamespace(is_authorized=is_authorized),
+        )
+    )
+
+    assert response.decision == "allow"
+    assert raw_result["revocation_checked"] is True
+    assert raw_result["not_revoked"] is True
+    assert raw_result["status_evidence"]["method"] == (
+        "trust-profile-direct-pin-lifecycle"
+    )
+    assert raw_result["verification_evidence"]["revocation_checked"] is False
+    assert raw_result["verification_evidence"]["not_revoked"] is None
+    context = captured["context"]
+    assert isinstance(context, dict)
+    assert context["issuer_id"] == issuer_id
+    assert context["issuer_trust_level"] == 87
+    assert context["is_revoked"] is False
+    assert context["algorithm"] == "ES256"
+
+
+def test_cedar_denies_when_numeric_trust_evidence_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(monkeypatch, issuer_relationships=None)
+    _install_successful_policy_verification(
+        monkeypatch,
+        issued_at=int(datetime.now(timezone.utc).timestamp()),
+    )
+    cedar_engine = SimpleNamespace(
+        is_authorized=lambda **_kwargs: pytest.fail(
+            "Cedar must not receive invented facts"
+        )
+    )
+    http_request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(cedar_engine=cedar_engine))
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            http_request=http_request,
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
+    assert "numeric issuer trust" in response.decision_reason
+
+
+def test_multi_credential_presentation_requires_per_credential_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(monkeypatch)
+    _install_successful_policy_verification(
+        monkeypatch,
+        issued_at=int(datetime.now(timezone.utc).timestamp()),
+        credential_count=2,
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="presentation"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
+    assert "exactly one independently verified credential" in response.decision_reason
+
+
+def test_per_requirement_credential_age_is_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.credential_requirements[0].max_age_seconds = 60
+    asyncio.run(repo.save(policy))
+    _install_marty_trust_profile(monkeypatch)
+    _install_successful_policy_verification(
+        monkeypatch,
+        issued_at=int((datetime.now(timezone.utc) - timedelta(minutes=5)).timestamp()),
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.credential_results[0].freshness_check_passed is False
+    assert "maximum age of 60 seconds" in response.decision_reason

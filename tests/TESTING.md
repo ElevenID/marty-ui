@@ -569,7 +569,7 @@ If you encounter old test patterns, migrate them using this guide:
 
 **For more examples, see existing tests in `marty-ui/tests/e2e/e2e-flows/`.**
 
-## MIP 0.3 Release Gates
+## MIP 0.4 Release Gates
 
 The PR browser gate is deterministic and mocked. The real deployed lifecycle is
 `.github/workflows/e2e-tests.yml`, triggered manually or by the deployment
@@ -609,12 +609,12 @@ only and never reads secret values.
 
 The job starts the deterministic Marty browser wallet and fails unless:
 
-- the well-known configuration and response header advertise MIP `0.3.1`, and
+- the well-known configuration and response header advertise MIP `0.4.1`, and
   the body uses the canonical strict discovery schema with an
   `active_compliance_profiles` array and without removed `api_base_url`, endpoint
   maps, or authorization extensions;
 - canonical and appended SpruceKit issuer metadata match, identify `ElevenID LLC`,
-  include `MemberCredential#spruce-sd-jwt`, and point to the canonical public VCT;
+  include the standard `MemberCredential#sd-jwt`, and point to the canonical public VCT;
 - that VCT document identifies `Marty Verified Member Badge`, uses only supported
   SpruceKit formats, and no active configuration uses `marty.example`;
 - canonical applicant, application, and holder-inventory routes succeed;

@@ -12,7 +12,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 try:
     from cryptography.hazmat.primitives.asymmetric.ec import (
@@ -38,6 +38,16 @@ from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from gateway.middleware import mip_error_response
+from gateway.models import (
+    IssuerIdentityCertificateRequest,
+    IssuerIdentityCreateRequest,
+    IssuerIdentityCreateResponse,
+    IssuerIdentityDeleteResponse,
+    IssuerIdentityListResponse,
+    IssuerIdentityOperationRequest,
+    IssuerIdentityResolutionResponse,
+    IssuerIdentityResponse,
+)
 from gateway.proxy import get_registry, proxy_request
 
 signing_key_router = APIRouter(prefix="/v1/signing-keys", tags=["Signing Keys"])
@@ -152,12 +162,21 @@ KEY_PURPOSE_CREDENTIAL_FORMATS: dict[str, tuple[str, ...]] = {
     "mdoc_dsc": ("mso_mdoc", "zk_mdoc"),
     "x509_doc_signer": ("mso_mdoc", "zk_mdoc"),
     "holder_binding": ("mso_mdoc", "zk_mdoc", "dc+sd-jwt"),
-    "oid4vp_request_signing": (),
+    "oid4vp_request_signing": ("oauth-authz-req+jwt",),
     "presentation_signing": ("jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc"),
     "vdsnc_signing": ("mso_mdoc",),
     "csca": ("mso_mdoc", "zk_mdoc"),
     "jwks_signing": ("jwt_vc_json", "dc+sd-jwt"),
-    "lti_tool_signing": (),
+    "lti_tool_signing": ("lti_tool_jwt",),
+}
+
+PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE: dict[str, str] = {
+    "MDOC": "mso_mdoc",
+    "SD_JWT_VC": "dc+sd-jwt",
+    "VC_JWT": "jwt_vc_json",
+    "JSON_LD": "ldp_vc",
+    "ZK_MDOC": "zk_mdoc",
+    "ICAO_EMRTD": "icao_emrtd",
 }
 
 #: Per-service-type static capability metadata (GAP-007-a).
@@ -404,9 +423,33 @@ def _display_name_for_key(key_name: str) -> str:
 def _openbao_key_prefix_for_purpose(key_purpose: str | None) -> str:
     if key_purpose == "lti_tool_signing":
         return "lti-tool-"
+    if key_purpose == "oid4vp_request_signing":
+        return "oid4vp-verifier-"
     if key_purpose in {"mdoc_dsc", "x509_doc_signer", "vdsnc_signing", "csca"}:
         return "cred-dsc-"
     return "cred-issuer-"
+
+
+def _managed_key_purposes_for_reference(key_reference: Any) -> tuple[str, ...]:
+    """Return protocol capabilities encoded by a managed KMS key namespace.
+
+    Tenant registry bindings record authorization decisions.  They are not a
+    complete capability catalogue: a clean organization has no bindings, and
+    creating its first profile must not make the shared managed service appear
+    incapable of every other supported purpose.  Managed key namespaces are
+    provisioned by Marty and therefore provide the stable capability source.
+    """
+
+    reference = str(key_reference or "").strip()
+    if reference.startswith("oid4vp-verifier-"):
+        return ("oid4vp_request_signing",)
+    if reference.startswith("lti-tool-"):
+        return ("lti_tool_signing",)
+    if reference.startswith("cred-dsc-"):
+        return ("mdoc_dsc", "x509_doc_signer", "vdsnc_signing", "csca")
+    if reference.startswith("cred-issuer-"):
+        return ("vc_jwt_issuer", "jwks_signing")
+    return ()
 
 
 def _normalize_requested_openbao_key_name(
@@ -887,6 +930,27 @@ def _normalize_algorithm_list(values: Any) -> list[str]:
         for algorithm in _dedupe_strings(values)
         if algorithm in SUPPORTED_SIGNING_ALGORITHMS
     ]
+
+
+def _canonical_signing_algorithm(value: Any, *, default: str = "ES256") -> str:
+    """Return the registered spelling for a supported signing algorithm.
+
+    JOSE algorithm identifiers are case-sensitive. In particular, uppercasing
+    ``EdDSA`` produces the invalid identifier ``EDDSA``. Stored profiles may
+    predate strict request-model validation, so canonicalize known identifiers
+    case-insensitively at the persistence boundary while leaving unknown values
+    unsupported and therefore fail-closed at their callers.
+    """
+
+    candidate = str(value or default).strip()
+    return next(
+        (
+            algorithm
+            for algorithm in SUPPORTED_SIGNING_ALGORITHMS
+            if algorithm.casefold() == candidate.casefold()
+        ),
+        candidate,
+    )
 
 
 def _utcnow_iso() -> str:
@@ -1442,7 +1506,11 @@ async def _credential_issuer_key_references(
 
     references: set[str] = set()
     for profile in profiles:
-        if not isinstance(profile, dict) or profile.get("status") == "archived":
+        if (
+            not isinstance(profile, dict)
+            or profile.get("status") == "archived"
+            or profile.get("key_purpose") == "lti_tool_signing"
+        ):
             continue
         service_id = profile.get("signing_service_id")
         reference = profile.get("signing_key_reference")
@@ -1753,9 +1821,6 @@ def _resolve_key_reference_for_purpose(
         return current_reference
     bindings = _normalize_key_reference_purposes(registry.get("key_reference_purposes"))
     service_bindings = bindings.get(service_id, {})
-    if not service_bindings:
-        return current_reference
-
     aliases = set(_dedupe_strings(service.get("key_aliases")))
     if current_reference:
         aliases.add(current_reference)
@@ -1764,6 +1829,26 @@ def _resolve_key_reference_for_purpose(
         for reference, purposes in service_bindings.items()
         if key_purpose in purposes and (not aliases or reference in aliases)
     ]
+    if not candidates and service_id == MANAGED_OPENBAO_SERVICE_ID:
+        # A new tenant has not authorized any KMS key yet.  Resolve the
+        # purpose-specific managed key from live inventory so profile creation
+        # can establish that tenant-local binding without borrowing another
+        # organization's registry.
+        candidates = [
+            str(key.get("provider_key_name") or key.get("id"))
+            for key in keys
+            if isinstance(key, dict)
+            and key_purpose
+            in _managed_key_purposes_for_reference(
+                key.get("provider_key_name") or key.get("id")
+            )
+            and (
+                not aliases
+                or str(key.get("provider_key_name") or key.get("id")) in aliases
+            )
+        ]
+    if not candidates:
+        return current_reference if not service_bindings else None
     if algorithm:
         algorithm_by_reference = {
             str(key.get("provider_key_name") or key.get("id")): key.get("algorithm")
@@ -1901,6 +1986,13 @@ def _managed_openbao_service(
     managed_bindings = bindings.get(MANAGED_OPENBAO_SERVICE_ID, {})
     managed_purposes = sorted(
         {purpose for purposes in managed_bindings.values() for purpose in purposes}
+        | {
+            purpose
+            for key in keys
+            for purpose in _managed_key_purposes_for_reference(
+                key.get("provider_key_name") or key.get("id")
+            )
+        }
     )
     return {
         "id": MANAGED_OPENBAO_SERVICE_ID,
@@ -3521,6 +3613,25 @@ async def resolve_signing_service(
     """
     resolved_org_id = _resolve_org_id(request, organization_id)
     registry = await _load_registered_service_registry(request, resolved_org_id)
+    # A newly-created organization has no copied service rows.  Managed KMS
+    # inventory is nevertheless available to it and must be resolved from the
+    # live stack configuration rather than by accidentally falling back to the
+    # operator's/default organization's registry.
+    snapshot = await _load_signing_key_snapshot(resolved_org_id)
+    effective_config = await _build_key_management_config(
+        request,
+        resolved_org_id,
+        snapshot,
+        registry_override=registry,
+    )
+    effective_registry = {
+        **registry,
+        "services": effective_config.get("services") or [],
+        "default_service_id": (
+            registry.get("default_service_id")
+            or effective_config.get("default_service_id")
+        ),
+    }
 
     credential_format = (
         body.get("credential_format")
@@ -3535,7 +3646,7 @@ async def resolve_signing_service(
     )
 
     service = _resolve_service_for_format(
-        registry, credential_format, key_purpose, algorithm
+        effective_registry, credential_format, key_purpose, algorithm
     )
     if service is None:
         raise HTTPException(
@@ -3546,10 +3657,9 @@ async def resolve_signing_service(
             ),
         )
 
-    snapshot = await _load_signing_key_snapshot(resolved_org_id)
     keys = [key for key in (snapshot.get("keys") or []) if isinstance(key, dict)]
     resolved_key_reference = _resolve_key_reference_for_purpose(
-        registry,
+        effective_registry,
         service,
         keys,
         key_purpose=key_purpose,
@@ -4630,17 +4740,13 @@ async def sign_payload_with_service(
 async def internal_resolve_issuer_context(
     request: Request,
     organization_id: str = Query(..., description="Organization ID"),
-    issuer_profile_id: str | None = Query(
-        None,
-        description="Internal legacy issuer-profile selector; public callers resolve by issuer DID",
-    ),
     issuer_did: str | None = Query(
         None,
         description="Published issuer DID that must resolve to exactly one active profile",
     ),
     issuer_mode: str = Query(
         "org_managed",
-        description="Issuer mode to select when issuer_profile_id is omitted",
+        description="Issuer mode to select when issuer_did is omitted",
     ),
     credential_format: str | None = Query(None),
     key_purpose: str | None = Query(None),
@@ -4654,23 +4760,15 @@ async def internal_resolve_issuer_context(
     service that should sign credentials later.
     """
     _require_internal_signing_key_api_key(x_api_key)
+    if "issuer_profile_id" in request.query_params:
+        raise HTTPException(
+            status_code=422,
+            detail="issuer_profile_id is not accepted; resolve the issuer by issuer_did.",
+        )
     # FastAPI substitutes query defaults during HTTP handling, while direct
     # unit calls retain the Query object. Only an actual non-empty string is a
     # DID selector.
     issuer_did = issuer_did.strip() if isinstance(issuer_did, str) else None
-    issuer_profile_id = (
-        issuer_profile_id.strip()
-        if isinstance(issuer_profile_id, str) and issuer_profile_id.strip()
-        else None
-    )
-    if issuer_profile_id and not issuer_did:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Legacy issuer_profile_id requires issuer_did and is accepted "
-                "only as an exact-match assertion."
-            ),
-        )
     requested_issuer_mode = _normalize_issuer_mode(issuer_mode)
 
     profiles_doc = await _load_json_document(
@@ -4684,52 +4782,24 @@ async def internal_resolve_issuer_context(
         for profile in (profiles or [])
         if isinstance(profile, dict)
         and profile.get("status") == "active"
+        and profile.get("organization_id") == organization_id
         and profile.get("issuer_did")
         and profile.get("signing_service_id")
     ]
 
-    if issuer_profile_id:
-        selected = next(
-            (
-                profile
-                for profile in active_profiles
-                if profile.get("id") == issuer_profile_id
-            ),
-            None,
-        )
-        if selected is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Requested issuer profile is not active for this organization.",
-            )
-        if issuer_did and selected.get("issuer_did") != issuer_did:
-            raise HTTPException(
-                status_code=409,
-                detail="issuer_profile_id does not match the requested issuer_did.",
-            )
-        if key_purpose and selected.get("key_purpose") != key_purpose:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Requested issuer profile '{issuer_profile_id}' is configured for "
-                    f"key_purpose '{selected.get('key_purpose')}', not '{key_purpose}'."
-                ),
-            )
-        active_profiles = [selected]
+    if issuer_did:
+        active_profiles = [
+            profile
+            for profile in active_profiles
+            if profile.get("issuer_did") == issuer_did
+        ]
     else:
-        if issuer_did:
-            active_profiles = [
-                profile
-                for profile in active_profiles
-                if profile.get("issuer_did") == issuer_did
-            ]
-        else:
-            active_profiles = [
-                profile
-                for profile in active_profiles
-                if _normalize_issuer_mode(profile.get("issuer_mode"))
-                == requested_issuer_mode
-            ]
+        active_profiles = [
+            profile
+            for profile in active_profiles
+            if _normalize_issuer_mode(profile.get("issuer_mode"))
+            == requested_issuer_mode
+        ]
 
     if key_purpose:
         preferred = [
@@ -4821,9 +4891,6 @@ async def internal_resolve_issuer_context(
             or requested_purpose
             or "vc_jwt_issuer",
             "issuer_x5c": issuer_x5c,
-            # Compatibility for marty-credentials releases predating the
-            # profile-wide issuer_x5c name.
-            "mdoc_x5c": issuer_x5c,
             "issuer_profile": profile,
             "service": normalized,
         }
@@ -4837,12 +4904,6 @@ async def internal_resolve_issuer_did(
     request: Request,
     organization_id: str = Query(..., description="Organization ID"),
     issuer_did: str = Query(..., description="Issuer DID from the credential"),
-    issuer_profile_id: str | None = Query(
-        None,
-        description=(
-            "Internal legacy assertion that must match the profile selected by issuer_did"
-        ),
-    ),
     verification_method_id: str | None = Query(
         None, description="Expected DID verification method / kid"
     ),
@@ -4857,6 +4918,11 @@ async def internal_resolve_issuer_did(
     remote KMS keys remain behind organization-scoped DID issuer identities.
     """
     _require_internal_signing_key_api_key(x_api_key)
+    if "issuer_profile_id" in request.query_params:
+        raise HTTPException(
+            status_code=422,
+            detail="issuer_profile_id is not accepted; resolve the issuer by issuer_did.",
+        )
     if not issuer_did.startswith("did:"):
         raise HTTPException(status_code=422, detail="issuer_did must be a DID string.")
 
@@ -4869,20 +4935,6 @@ async def internal_resolve_issuer_did(
         key_purpose=key_purpose,
         algorithm=algorithm,
     )
-    legacy_profile_id = (
-        issuer_profile_id.strip()
-        if isinstance(issuer_profile_id, str) and issuer_profile_id.strip()
-        else None
-    )
-    resolved_profile = resolved.get("issuer_profile")
-    if legacy_profile_id and (
-        not isinstance(resolved_profile, dict)
-        or resolved_profile.get("id") != legacy_profile_id
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="issuer_profile_id does not match the profile resolved from issuer_did.",
-        )
     return JSONResponse(content=resolved)
 
 
@@ -5111,78 +5163,6 @@ async def internal_unwrap_flow_key(
 
 
 @internal_signing_key_router.post(
-    "/issuer-profiles/{issuer_profile_id}/sign",
-    summary="Sign Payload Through Issuer Profile Identity",
-)
-async def internal_sign_payload_with_issuer_profile(
-    request: Request,
-    issuer_profile_id: str,
-    body: dict = Body(default_factory=dict),
-    organization_id: str = Query(..., description="Organization scope"),
-    x_api_key: str | None = Header(default=None),
-):
-    """Sign through an active issuer profile and its published DID.
-
-    Callers select an identity profile, never a KMS service or provider key.
-    The gateway owns profile-to-KMS resolution and returns the DID verification
-    method used for the signature.  A caller cannot override the service, key
-    reference, purpose, or algorithm bound to the profile.
-    """
-    _require_internal_signing_key_api_key(x_api_key)
-    profile, identity = await _resolve_exact_issuer_profile_identity(
-        request,
-        organization_id=organization_id,
-        issuer_profile_id=issuer_profile_id,
-    )
-    service_id = str(profile.get("signing_service_id") or "")
-    key_reference = str(profile.get("signing_key_reference") or "")
-    key_purpose = str(profile.get("key_purpose") or "")
-    algorithm = str(profile.get("algorithm") or body.get("algorithm") or "ES256")
-
-    requested_algorithm = body.get("algorithm")
-    if requested_algorithm and requested_algorithm != algorithm:
-        raise HTTPException(
-            status_code=409,
-            detail="Signing algorithm must match the issuer profile binding.",
-        )
-    if body.get("key_reference") or body.get("key_purpose") or body.get("service_id"):
-        raise HTTPException(
-            status_code=422,
-            detail="Issuer-profile signing does not accept KMS routing overrides.",
-        )
-
-    signing_body = {
-        key: value
-        for key, value in body.items()
-        if key in {"payload_b64", "payload_hex"}
-    }
-    signing_body.update(
-        {
-            "algorithm": algorithm,
-            "key_reference": key_reference,
-            "key_purpose": key_purpose,
-        }
-    )
-    signed_response = await sign_payload_with_service(
-        request=request,
-        service_id=service_id,
-        body=signing_body,
-        organization_id=organization_id,
-    )
-    signed = json.loads(signed_response.body)
-    signed.update(
-        {
-            "issuer_profile_id": issuer_profile_id,
-            "issuer_did": identity["issuer_did"],
-            "verification_method_id": identity["verification_method_id"],
-            "public_jwk": identity["public_jwk"],
-        }
-    )
-    signed.pop("service_id", None)
-    return JSONResponse(content=signed)
-
-
-@internal_signing_key_router.post(
     "/issuer-dids/sign",
     summary="Sign Payload Through a Resolved Issuer DID",
 )
@@ -5202,6 +5182,19 @@ async def internal_sign_payload_with_issuer_did(
     second identity selector or override custody routing.
     """
     _require_internal_signing_key_api_key(x_api_key)
+    allowed_fields = {
+        "issuer_did",
+        "credential_format",
+        "key_purpose",
+        "algorithm",
+        "payload_b64",
+        "payload_hex",
+    }
+    if set(body) - allowed_fields:
+        raise HTTPException(
+            status_code=422,
+            detail="DID-mediated signing accepts only public signing inputs and payload.",
+        )
     issuer_did = body.get("issuer_did")
     credential_format = body.get("credential_format")
     key_purpose = body.get("key_purpose")
@@ -5213,24 +5206,15 @@ async def internal_sign_payload_with_issuer_did(
             status_code=422,
             detail="credential_format is required for DID-mediated signing.",
         )
-    if key_purpose is not None and (
-        not isinstance(key_purpose, str) or not key_purpose.strip()
-    ):
-        raise HTTPException(
-            status_code=422, detail="key_purpose must be a non-empty string."
-        )
-    if any(
-        body.get(field)
-        for field in (
-            "issuer_profile_id",
-            "key_reference",
-            "service_id",
-            "signing_service_id",
-        )
-    ):
+    if not isinstance(key_purpose, str) or not key_purpose.strip():
         raise HTTPException(
             status_code=422,
-            detail="DID-mediated signing does not accept profile or KMS routing overrides.",
+            detail="key_purpose is required for DID-mediated signing.",
+        )
+    if not isinstance(algorithm, str) or not algorithm.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="algorithm is required for DID-mediated signing.",
         )
 
     identity = await _resolve_org_scoped_issuer_identity(
@@ -5542,44 +5526,6 @@ async def list_holder_keys(
 
 
 @signing_key_router.post(
-    "/holder-keys/derive", summary="Derive Holder Binding Key Reference"
-)
-async def derive_holder_key_reference(
-    request: Request,
-    body: dict = Body(default_factory=dict),
-    organization_id: str | None = Query(None),
-):
-    """Expose deterministic holder-binding key derivation for server-managed wallet flows."""
-    _resolve_org_id(request, organization_id)
-    device_id = body.get("device_id") if isinstance(body.get("device_id"), str) else ""
-    credential_id = (
-        body.get("credential_id") if isinstance(body.get("credential_id"), str) else ""
-    )
-    if not device_id or not credential_id:
-        raise HTTPException(
-            status_code=422, detail="device_id and credential_id are required"
-        )
-
-    try:
-        from marty_common.crypto.credential_kms import CredentialKeyPrefix  # type: ignore
-
-        key_reference = CredentialKeyPrefix.holder_key_id(device_id, credential_id)
-    except Exception:
-        key_reference = f"cred:holder:{device_id}:{credential_id}"
-
-    return JSONResponse(
-        content={
-            "ok": True,
-            "device_id": device_id,
-            "credential_id": credential_id,
-            "key_purpose": "holder_binding",
-            "derived_key_reference": key_reference,
-            "derived_at": _utcnow_iso(),
-        }
-    )
-
-
-@signing_key_router.post(
     "/services/vdsnc/register", summary="Register VDS-NC Signing Service"
 )
 async def register_vdsnc_service(
@@ -5836,6 +5782,8 @@ async def get_keys_compliance_summary(
 
 _ISSUER_PROFILE_STATUSES = {"draft", "active", "revoked"}
 _ISSUER_MODES = {"org_managed", "elevenid_managed", "elevenid_alias_for_org"}
+_KEY_ATTESTATION_MODES = {"disabled", "optional", "required"}
+_KEY_ATTESTATION_STATUS_POLICIES = {"disabled", "if_present", "required"}
 
 
 def _normalize_issuer_mode(value: Any) -> str:
@@ -5846,6 +5794,195 @@ def _normalize_issuer_mode(value: Any) -> str:
             detail=f"Invalid issuer_mode '{mode}'. Must be one of {sorted(_ISSUER_MODES)}.",
         )
     return mode
+
+
+def _normalize_key_attestation_policy(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {
+            "mode": "disabled",
+            "trusted_root_certificates_pem": [],
+            "allowed_algorithms": [],
+            "required_key_storage": [],
+            "required_user_authentication": [],
+            "max_age_seconds": 300,
+            "require_nonce": True,
+            "status_validation": "required",
+            "status_list_allowed_origins": [],
+            "status_list_trusted_root_certificates_pem": [],
+            "status_list_allowed_algorithms": [],
+            "status_list_max_age_seconds": 86400,
+            "status_list_allow_private_hosts": False,
+            "status_list_tls_ca_certificates_pem": [],
+        }
+    if not isinstance(value, dict):
+        raise HTTPException(
+            status_code=422, detail="key_attestation_policy must be an object."
+        )
+
+    mode = str(value.get("mode") or "disabled")
+    if mode not in _KEY_ATTESTATION_MODES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid key attestation mode '{mode}'. Must be one of {sorted(_KEY_ATTESTATION_MODES)}.",
+        )
+    status_validation = str(value.get("status_validation") or "required")
+    if status_validation not in _KEY_ATTESTATION_STATUS_POLICIES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Invalid key attestation status_validation '{status_validation}'. "
+                f"Must be one of {sorted(_KEY_ATTESTATION_STATUS_POLICIES)}."
+            ),
+        )
+
+    def string_list(name: str) -> list[str]:
+        raw = value.get(name, [])
+        if not isinstance(raw, list) or any(
+            not isinstance(item, str) or not item.strip() for item in raw
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=f"key_attestation_policy.{name} must be an array of non-empty strings.",
+            )
+        return [item.strip() for item in raw]
+
+    roots = string_list("trusted_root_certificates_pem")
+    algorithms = string_list("allowed_algorithms")
+    unsupported_algorithms = sorted(set(algorithms) - set(SUPPORTED_SIGNING_ALGORITHMS))
+    if unsupported_algorithms:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported key attestation algorithms: {unsupported_algorithms}.",
+        )
+    if mode != "disabled" and (not roots or not algorithms):
+        raise HTTPException(
+            status_code=422,
+            detail="Enabled key attestation policy requires trusted roots and allowed algorithms.",
+        )
+    status_roots = string_list("status_list_trusted_root_certificates_pem")
+    status_tls_roots = string_list("status_list_tls_ca_certificates_pem")
+    if roots or status_roots or status_tls_roots:
+        if not _CRYPTOGRAPHY_AVAILABLE:
+            raise HTTPException(
+                status_code=503,
+                detail="Certificate validation support is unavailable.",
+            )
+        from cryptography import x509
+
+        try:
+            for root in [*roots, *status_roots, *status_tls_roots]:
+                x509.load_pem_x509_certificate(root.encode("utf-8"))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="key_attestation_policy contains an invalid trusted root certificate.",
+            ) from exc
+
+    max_age_seconds = value.get("max_age_seconds", 300)
+    if (
+        isinstance(max_age_seconds, bool)
+        or not isinstance(max_age_seconds, int)
+        or not 1 <= max_age_seconds <= 86400
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="key_attestation_policy.max_age_seconds must be from 1 through 86400.",
+        )
+    require_nonce = value.get("require_nonce", True)
+    if not isinstance(require_nonce, bool):
+        raise HTTPException(
+            status_code=422,
+            detail="key_attestation_policy.require_nonce must be a boolean.",
+        )
+    status_list_allowed_algorithms = string_list("status_list_allowed_algorithms")
+    unsupported_status_algorithms = sorted(
+        set(status_list_allowed_algorithms) - set(SUPPORTED_SIGNING_ALGORITHMS)
+    )
+    if unsupported_status_algorithms:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported status-list algorithms: {unsupported_status_algorithms}.",
+        )
+    status_list_max_age_seconds = value.get("status_list_max_age_seconds", 86400)
+    if (
+        isinstance(status_list_max_age_seconds, bool)
+        or not isinstance(status_list_max_age_seconds, int)
+        or not 1 <= status_list_max_age_seconds <= 604800
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "key_attestation_policy.status_list_max_age_seconds must be "
+                "from 1 through 604800."
+            ),
+        )
+    status_list_allow_private_hosts = value.get(
+        "status_list_allow_private_hosts", False
+    )
+    if not isinstance(status_list_allow_private_hosts, bool):
+        raise HTTPException(
+            status_code=422,
+            detail="key_attestation_policy.status_list_allow_private_hosts must be a boolean.",
+        )
+    status_list_allowed_origins: list[str] = []
+    for origin in string_list("status_list_allowed_origins"):
+        parsed = urlparse(origin)
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "key_attestation_policy.status_list_allowed_origins must contain "
+                    "HTTPS origins without paths or credentials."
+                ),
+            )
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="key_attestation_policy contains a status-list origin with an invalid port.",
+            ) from exc
+        host = parsed.hostname.lower()
+        host_display = f"[{host}]" if ":" in host else host
+        status_list_allowed_origins.append(
+            f"https://{host_display}{f':{port}' if port and port != 443 else ''}"
+        )
+    if (
+        mode != "disabled"
+        and status_validation != "disabled"
+        and not status_list_allowed_origins
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Enabled key attestation status validation requires at least one "
+                "status-list allowed origin."
+            ),
+        )
+    return {
+        "mode": mode,
+        "trusted_root_certificates_pem": roots,
+        "allowed_algorithms": algorithms,
+        "required_key_storage": string_list("required_key_storage"),
+        "required_user_authentication": string_list("required_user_authentication"),
+        "max_age_seconds": max_age_seconds,
+        "require_nonce": require_nonce,
+        "status_validation": status_validation,
+        "status_list_allowed_origins": status_list_allowed_origins,
+        "status_list_trusted_root_certificates_pem": status_roots,
+        "status_list_allowed_algorithms": status_list_allowed_algorithms,
+        "status_list_max_age_seconds": status_list_max_age_seconds,
+        "status_list_allow_private_hosts": status_list_allow_private_hosts,
+        "status_list_tls_ca_certificates_pem": status_tls_roots,
+    }
 
 
 def _normalize_issuer_profile(
@@ -5887,21 +6024,26 @@ def _normalize_issuer_profile(
             status_code=422,
             detail=f"Invalid key_purpose '{key_purpose}'. Must be one of {list(KEY_PURPOSES)}.",
         )
-    if key_purpose == "lti_tool_signing":
-        raise HTTPException(
-            status_code=422,
-            detail="lti_tool_signing is a protocol-key purpose and cannot be used by an issuer profile.",
-        )
-
     algorithm = body.get("algorithm", base.get("algorithm", ""))
     if algorithm and algorithm not in SUPPORTED_SIGNING_ALGORITHMS:
         raise HTTPException(
             status_code=422,
             detail=f"Invalid algorithm '{algorithm}'. Must be one of {list(SUPPORTED_SIGNING_ALGORITHMS)}.",
         )
+    credential_format = body.get(
+        "credential_format", base.get("credential_format", "")
+    )
+    if credential_format and credential_format not in PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid protocol credential_format '{credential_format}'.",
+        )
 
     issuer_mode = _normalize_issuer_mode(
         body.get("issuer_mode", base.get("issuer_mode", "org_managed"))
+    )
+    key_attestation_policy = _normalize_key_attestation_policy(
+        body.get("key_attestation_policy", base.get("key_attestation_policy"))
     )
 
     return {
@@ -5918,7 +6060,9 @@ def _normalize_issuer_profile(
             "verification_method_id", base.get("verification_method_id", "")
         ),
         "key_purpose": key_purpose,
+        "credential_format": credential_format,
         "algorithm": algorithm,
+        "key_attestation_policy": key_attestation_policy,
         "status": status,
         "created_at": base.get("created_at", now),
         "updated_at": now,
@@ -5961,11 +6105,6 @@ def _assert_issuer_profile_key_compatible(
     service_id = str(profile.get("signing_service_id") or "").strip()
     key_reference = str(profile.get("signing_key_reference") or "").strip()
     key_purpose = str(profile.get("key_purpose") or "vc_jwt_issuer").strip()
-    if key_purpose == "lti_tool_signing":
-        raise HTTPException(
-            status_code=422,
-            detail="LTI tool signing keys cannot be assigned to issuer profiles.",
-        )
     if not service_id or not key_reference:
         raise HTTPException(
             status_code=422,
@@ -5976,12 +6115,24 @@ def _assert_issuer_profile_key_compatible(
         service_id=service_id,
         key_reference=key_reference,
     )
-    if "lti_tool_signing" in reference_purposes:
+    if "lti_tool_signing" in reference_purposes and key_purpose != "lti_tool_signing":
         raise HTTPException(
             status_code=422,
             detail=(
                 f"Key reference '{key_reference}' is reserved for LTI tool signing "
                 "and cannot be assigned to an issuer profile."
+            ),
+        )
+    if (
+        key_purpose == "lti_tool_signing"
+        and reference_purposes
+        and reference_purposes != ["lti_tool_signing"]
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Key reference '{key_reference}' must be registered exclusively "
+                "for lti_tool_signing."
             ),
         )
     if reference_purposes and key_purpose not in reference_purposes:
@@ -5992,6 +6143,141 @@ def _assert_issuer_profile_key_compatible(
                 f"key_purpose '{key_purpose}'."
             ),
         )
+
+
+async def _complete_issuer_profile_algorithm(
+    request: Request,
+    *,
+    organization_id: str,
+    profile: dict[str, Any],
+    service: dict[str, Any],
+) -> None:
+    """Persist the algorithm selected by the profile's KMS key.
+
+    Runtime callers identify an issuer by DID, not by a KMS selector.  The
+    administrative profile therefore needs a complete, immutable binding from
+    DID to service, key, purpose, and algorithm.  Prefer the selected key's
+    live KMS inventory record; a single-algorithm service is an unambiguous
+    fallback.  Multi-algorithm services fail closed when the selected key
+    cannot be identified.
+    """
+
+    requested_algorithm = str(profile.get("algorithm") or "").strip()
+    key_reference = str(profile.get("signing_key_reference") or "").strip()
+    managed_service = service.get("id") == MANAGED_OPENBAO_SERVICE_ID
+    if requested_algorithm and not managed_service:
+        return
+    if key_reference:
+        snapshot = await _load_signing_key_snapshot(organization_id)
+        for key in snapshot.get("keys") or []:
+            if not isinstance(key, dict):
+                continue
+            candidate_reference = str(
+                key.get("provider_key_name") or key.get("id") or ""
+            ).strip()
+            candidate_algorithm = str(key.get("algorithm") or "").strip()
+            if (
+                candidate_reference == key_reference
+                and candidate_algorithm in SUPPORTED_SIGNING_ALGORITHMS
+            ):
+                if managed_service:
+                    key_purpose = str(profile.get("key_purpose") or "").strip()
+                    supported_purposes = _managed_key_purposes_for_reference(
+                        candidate_reference
+                    )
+                    if key_purpose not in supported_purposes:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=(
+                                f"Managed KMS key '{candidate_reference}' is not "
+                                f"provisioned for key_purpose '{key_purpose}'."
+                            ),
+                        )
+                    if (
+                        requested_algorithm
+                        and requested_algorithm != candidate_algorithm
+                    ):
+                        raise HTTPException(
+                            status_code=422,
+                            detail=(
+                                f"Managed KMS key '{candidate_reference}' uses "
+                                f"algorithm '{candidate_algorithm}', not "
+                                f"'{requested_algorithm}'."
+                            ),
+                        )
+                profile["algorithm"] = candidate_algorithm
+                return
+
+        if managed_service:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Managed KMS key '{key_reference}' was not found in the live "
+                    "KMS inventory."
+                ),
+            )
+
+    if requested_algorithm:
+        return
+
+    service_algorithms = _normalize_algorithm_list(service.get("algorithms"))
+    if len(service_algorithms) == 1:
+        profile["algorithm"] = service_algorithms[0]
+        return
+
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            "Issuer profile algorithm could not be determined from the selected "
+            "KMS key. Specify an algorithm that matches the key binding."
+        ),
+    )
+
+
+async def _persist_issuer_profile_registry_binding(
+    request: Request,
+    *,
+    organization_id: str,
+    profile: dict[str, Any],
+) -> None:
+    """Authorize the selected KMS key for this tenant and profile purpose.
+
+    Clean organizations do not inherit another tenant's registry.  Creating an
+    issuer profile is the explicit administrative action that establishes the
+    organization-local purpose binding.  Only registry metadata is persisted;
+    key material and provider credentials remain in KMS/service configuration.
+    """
+
+    service_id = str(profile.get("signing_service_id") or "").strip()
+    key_reference = str(profile.get("signing_key_reference") or "").strip()
+    key_purpose = str(profile.get("key_purpose") or "").strip()
+    if not service_id or not key_reference or not key_purpose:
+        raise HTTPException(
+            status_code=422,
+            detail="Issuer profile has an incomplete KMS purpose binding.",
+        )
+
+    registry = await _load_registered_service_registry(request, organization_id)
+    bindings = _normalize_key_reference_purposes(registry.get("key_reference_purposes"))
+    service_bindings = dict(bindings.get(service_id, {}))
+    purposes = list(service_bindings.get(key_reference, []))
+    if key_purpose not in purposes:
+        purposes.append(key_purpose)
+    service_bindings[key_reference] = sorted(set(purposes))
+    bindings[service_id] = service_bindings
+    _validate_lti_key_reference_bindings(bindings)
+
+    type_defaults = dict(registry.get("type_defaults") or {})
+    type_defaults.setdefault(key_purpose, service_id)
+    format_defaults = dict(registry.get("format_defaults") or {})
+    for credential_format in KEY_PURPOSE_CREDENTIAL_FORMATS.get(key_purpose, ()):
+        format_defaults.setdefault(credential_format, service_id)
+
+    registry["key_reference_purposes"] = bindings
+    registry["type_defaults"] = type_defaults
+    registry["format_defaults"] = format_defaults
+    registry["default_service_id"] = registry.get("default_service_id") or service_id
+    await _save_registered_service_registry(request, organization_id, registry)
 
 
 async def _resolve_org_scoped_issuer_identity(
@@ -6016,6 +6302,7 @@ async def _resolve_org_scoped_issuer_identity(
         for profile in (profiles or [])
         if isinstance(profile, dict)
         and profile.get("status") == "active"
+        and profile.get("organization_id") == organization_id
         and profile.get("issuer_did") == issuer_did
         and profile.get("signing_service_id")
     ]
@@ -6031,6 +6318,17 @@ async def _resolve_org_scoped_issuer_identity(
             profile
             for profile in active_profiles
             if profile.get("algorithm") in {algorithm, None, ""}
+        ]
+    if credential_format:
+        active_profiles = [
+            profile
+            for profile in active_profiles
+            if profile.get("credential_format")
+            and _custody_wire_format(
+                str(profile["credential_format"]),
+                str(profile.get("key_purpose") or "vc_jwt_issuer"),
+            )
+            == credential_format
         ]
 
     if not active_profiles:
@@ -6173,13 +6471,14 @@ async def _resolve_org_scoped_issuer_identity(
                 "public_jwk": public_jwk,
                 "verification_method": method,
                 "did_document": did_doc,
+                "key_purpose": profile_with_vm.get("key_purpose"),
+                "algorithm": profile_with_vm.get("algorithm"),
                 "issuer_profile": profile_with_vm,
                 # Public certificate material is part of the issuer profile's
                 # DID identity. Preserve it on the DID-first resolution path
                 # so SD-JWT JOSE and mDoc COSE issuance do not fall back to a
                 # profile-ID-only context or lose the chain before signing.
                 "issuer_x5c": issuer_x5c,
-                "mdoc_x5c": issuer_x5c,
                 "signing_service": _safe_signing_service_metadata(normalized_service),
                 "resolver": {
                     "type": "organization_issuer_profile",
@@ -6191,16 +6490,12 @@ async def _resolve_org_scoped_issuer_identity(
         )
 
     if len(resolved_identities) > 1:
-        profile_ids = sorted(
-            str(identity["issuer_profile"].get("id") or "<unknown>")
-            for identity in resolved_identities
-        )
         raise HTTPException(
             status_code=409,
             detail=(
                 "Issuer DID resolves to multiple active issuer profiles for the "
                 "requested organization, purpose, format, and algorithm. Repair "
-                f"the issuer registry before signing. Matching profiles: {profile_ids}"
+                "the issuer registry before signing."
             ),
         )
     if resolved_identities:
@@ -6209,11 +6504,6 @@ async def _resolve_org_scoped_issuer_identity(
     raise HTTPException(status_code=404, detail=last_mismatch_detail)
 
 
-@signing_key_router.post(
-    "/issuer-profiles",
-    summary="Create Issuer Profile",
-    response_class=JSONResponse,
-)
 async def create_issuer_profile(
     request: Request,
     body: dict = Body(default_factory=dict),
@@ -6240,6 +6530,13 @@ async def create_issuer_profile(
         "key_reference"
     ):
         profile["signing_key_reference"] = normalized_service["key_reference"]
+    await _complete_issuer_profile_algorithm(
+        request,
+        organization_id=resolved_org_id,
+        profile=profile,
+        service=normalized_service,
+    )
+    _assert_issuer_profile_service_compatible(profile, normalized_service)
     _assert_issuer_profile_key_compatible(profile, registry)
 
     storage_key = _issuer_profiles_storage_key(resolved_org_id)
@@ -6314,6 +6611,16 @@ async def create_issuer_profile(
             == (profile.get("signing_key_reference") or "")
             and (candidate.get("key_purpose") or "vc_jwt_issuer")
             == (profile.get("key_purpose") or "vc_jwt_issuer")
+            and (
+                not str(candidate.get("credential_format") or "").strip()
+                or candidate.get("credential_format")
+                == profile.get("credential_format")
+            )
+            and (
+                not str(candidate.get("algorithm") or "").strip()
+                or _canonical_signing_algorithm(candidate.get("algorithm"))
+                == _canonical_signing_algorithm(profile.get("algorithm"))
+            )
         ),
         None,
     )
@@ -6331,10 +6638,21 @@ async def create_issuer_profile(
             repaired_profile["signing_key_reference"] = profile["signing_key_reference"]
         if not repaired_profile.get("key_purpose") and profile.get("key_purpose"):
             repaired_profile["key_purpose"] = profile["key_purpose"]
+        if not repaired_profile.get("credential_format") and profile.get(
+            "credential_format"
+        ):
+            repaired_profile["credential_format"] = profile["credential_format"]
+        if not repaired_profile.get("algorithm") and profile.get("algorithm"):
+            repaired_profile["algorithm"] = profile["algorithm"]
         if not repaired_profile.get("name") and profile.get("name"):
             repaired_profile["name"] = profile["name"]
 
         repaired_profile = await ensure_did_web_verification_method(repaired_profile)
+        await _persist_issuer_profile_registry_binding(
+            request,
+            organization_id=resolved_org_id,
+            profile=repaired_profile,
+        )
         if repaired_profile != existing_profile:
             repaired_profile["updated_at"] = _utcnow_iso()
             profiles[existing_profile_index] = repaired_profile
@@ -6351,6 +6669,12 @@ async def create_issuer_profile(
         # the issuer profile should not be created.
         profile = await ensure_did_web_verification_method(profile)
 
+    await _persist_issuer_profile_registry_binding(
+        request,
+        organization_id=resolved_org_id,
+        profile=profile,
+    )
+
     profiles.append(profile)
     doc["profiles"] = profiles
     await _save_json_document(request, storage_key, doc)
@@ -6358,17 +6682,295 @@ async def create_issuer_profile(
     return JSONResponse(content={"ok": True, "profile": profile, "created": True})
 
 
+def _require_public_issuer_identity_organization(
+    request: Request, organization_id: str | None
+) -> str:
+    """Bind identity management to the authenticated tenant context."""
+    requested = str(organization_id or "").strip()
+    state = getattr(request, "state", None)
+    selected = str(
+        getattr(state, "organization_id", None)
+        or getattr(state, "session_organization_id", None)
+        or ""
+    ).strip()
+    if selected and selected != requested:
+        if not requested:
+            return selected
+        raise HTTPException(
+            status_code=403,
+            detail="organization_id does not match the authorized organization context.",
+        )
+    resolved = requested or selected
+    if not resolved:
+        raise HTTPException(status_code=422, detail="organization_id is required.")
+    return resolved
+
+
+def _issuer_identity_projection(profile: dict[str, Any]) -> IssuerIdentityResponse:
+    return IssuerIdentityResponse(
+        issuer_did=str(profile.get("issuer_did") or ""),
+        key_purpose=str(profile.get("key_purpose") or "vc_jwt_issuer"),
+        credential_format=str(profile.get("credential_format") or ""),
+        algorithm=_canonical_signing_algorithm(profile.get("algorithm")),
+        status="active",
+    )
+
+
+def _wire_credential_format(protocol_format: str) -> str:
+    wire_format = PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE.get(protocol_format)
+    if not wire_format:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported credential_format '{protocol_format}'.",
+        )
+    return wire_format
+
+
+def _custody_wire_format(
+    credential_format: str, key_purpose: str
+) -> str:
+    """Map non-credential signing purposes to their internal wire capability."""
+    if key_purpose in {
+        "oid4vp_request_signing",
+        "lti_tool_signing",
+        "vdsnc_signing",
+        "csca",
+    }:
+        purpose_formats = KEY_PURPOSE_CREDENTIAL_FORMATS.get(key_purpose, ())
+        if purpose_formats:
+            return purpose_formats[0]
+    return _wire_credential_format(credential_format)
+
+
+async def _matching_issuer_identity_profiles(
+    request: Request,
+    operation: IssuerIdentityOperationRequest,
+) -> list[dict[str, Any]]:
+    """Find only active profiles compatible with the complete public tuple."""
+    organization_id = _require_public_issuer_identity_organization(
+        request, operation.organization_id
+    )
+    wire_format = _custody_wire_format(
+        operation.credential_format, operation.key_purpose
+    )
+    document = await _load_json_document(
+        request,
+        _issuer_profiles_storage_key(organization_id),
+        {"profiles": []},
+    )
+    matches: list[dict[str, Any]] = []
+    for profile in document.get("profiles") or []:
+        if not isinstance(profile, dict):
+            continue
+        if profile.get("organization_id") != organization_id:
+            continue
+        if str(profile.get("status") or "").lower() != "active":
+            continue
+        if profile.get("issuer_did") != operation.issuer_did:
+            continue
+        if str(profile.get("key_purpose") or "vc_jwt_issuer") != operation.key_purpose:
+            continue
+        if (
+            _canonical_signing_algorithm(profile.get("algorithm"))
+            != operation.algorithm
+        ):
+            continue
+        if profile.get("credential_format") != operation.credential_format:
+            continue
+        service_id = str(profile.get("signing_service_id") or "").strip()
+        key_reference = str(profile.get("signing_key_reference") or "").strip()
+        if not service_id or not key_reference:
+            continue
+        registry, _, service, _ = await _resolve_effective_service(
+            request,
+            organization_id,
+            service_id,
+            key_reference_override=key_reference,
+        )
+        formats = service.get("credential_formats") or []
+        purposes = service.get("key_purposes") or []
+        algorithms = service.get("algorithms") or []
+        if formats and wire_format not in formats:
+            continue
+        if purposes and operation.key_purpose not in purposes:
+            continue
+        if algorithms and operation.algorithm not in algorithms:
+            continue
+        effective_profile = dict(profile)
+        effective_profile["signing_key_reference"] = key_reference
+        _assert_issuer_profile_key_compatible(effective_profile, registry)
+        matches.append(profile)
+    return matches
+
+
+async def _managed_custody_for_new_identity(
+    request: Request,
+    operation: IssuerIdentityCreateRequest,
+) -> tuple[str, str]:
+    """Select and, for managed OpenBao, provision custody without public selectors."""
+    organization_id = operation.organization_id
+    wire_format = _custody_wire_format(
+        operation.credential_format, operation.key_purpose
+    )
+    registry = await _load_registered_service_registry(request, organization_id)
+    snapshot = await _load_signing_key_snapshot(organization_id)
+    config = await _build_key_management_config(
+        request, organization_id, snapshot, registry_override=registry
+    )
+    effective_registry = {
+        **registry,
+        "services": config.get("services") or [],
+        "default_service_id": registry.get("default_service_id")
+        or config.get("default_service_id"),
+    }
+    service = _resolve_service_for_format(
+        effective_registry,
+        wire_format,
+        operation.key_purpose,
+        operation.algorithm,
+    )
+    if not service:
+        raise HTTPException(
+            status_code=404,
+            detail="No managed signing service supports the requested identity tuple.",
+        )
+    service_id = str(service.get("id") or "").strip()
+    if not service_id:
+        raise HTTPException(status_code=503, detail="Managed custody resolution failed.")
+    service_formats = service.get("credential_formats") or []
+    service_purposes = service.get("key_purposes") or []
+    service_algorithms = service.get("algorithms") or []
+    if service_formats and wire_format not in service_formats:
+        raise HTTPException(status_code=409, detail="Resolved custody is format-incompatible.")
+    if service_purposes and operation.key_purpose not in service_purposes:
+        raise HTTPException(status_code=409, detail="Resolved custody is purpose-incompatible.")
+    if service_algorithms and operation.algorithm not in service_algorithms:
+        raise HTTPException(status_code=409, detail="Resolved custody is algorithm-incompatible.")
+
+    if service_id == MANAGED_OPENBAO_SERVICE_ID:
+        identity_token = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            "|".join(
+                (
+                    organization_id,
+                    operation.issuer_did,
+                    operation.key_purpose,
+                    operation.credential_format,
+                    operation.algorithm,
+                )
+            ),
+        ).hex[:20]
+        created = await create_signing_key(
+            request=request,
+            body={
+                "name": f"issuer-{identity_token}",
+                "algorithm": operation.algorithm,
+                "key_purpose": operation.key_purpose,
+                "service_id": service_id,
+            },
+            organization_id=organization_id,
+        )
+        created_body = json.loads(bytes(created.body))
+        key_reference = str(created_body.get("provider_key_name") or "").strip()
+    else:
+        keys = [key for key in (snapshot.get("keys") or []) if isinstance(key, dict)]
+        key_reference = str(
+            _resolve_key_reference_for_purpose(
+                effective_registry,
+                service,
+                keys,
+                key_purpose=operation.key_purpose,
+                algorithm=operation.algorithm,
+            )
+            or ""
+        ).strip()
+    if not key_reference:
+        raise HTTPException(
+            status_code=404,
+            detail="Resolved managed custody has no compatible key for the identity tuple.",
+        )
+    return service_id, key_reference
+
+
+@signing_key_router.post(
+    "/issuer-identities",
+    summary="Provision Managed Issuer Identity",
+    response_model=IssuerIdentityCreateResponse,
+)
+async def create_public_issuer_identity(
+    request: Request,
+    body: IssuerIdentityCreateRequest,
+) -> IssuerIdentityCreateResponse:
+    """Ensure a DID identity while keeping its profile and custody private."""
+    organization_id = _require_public_issuer_identity_organization(
+        request, body.organization_id
+    )
+    matches = await _matching_issuer_identity_profiles(request, body)
+    if len(matches) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Issuer DID resolution is ambiguous for the requested identity tuple.",
+        )
+    if matches:
+        return IssuerIdentityCreateResponse(
+            identity=_issuer_identity_projection(matches[0]), created=False
+        )
+
+    configured_domain = _normalize_did_web_domain(
+        _domain_config(request).get("public_domain")
+    )
+    if not configured_domain or not _did_web_org_slug(
+        body.issuer_did, public_domain=configured_domain
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "New managed identities currently require a local path-scoped did:web. "
+                "Externally controlled DIDs must first be verified through a supported DID resolver."
+            ),
+        )
+    service_id, key_reference = await _managed_custody_for_new_identity(request, body)
+    created = await create_issuer_profile(
+        request=request,
+        body={
+            "name": body.issuer_did,
+            "issuer_did": body.issuer_did,
+            "signing_service_id": service_id,
+            "signing_key_reference": key_reference,
+            "key_purpose": body.key_purpose,
+            "credential_format": body.credential_format,
+            "algorithm": body.algorithm,
+            "key_attestation_policy": (
+                body.key_attestation_policy.model_dump(mode="json")
+                if body.key_attestation_policy is not None
+                else None
+            ),
+            "status": "active",
+        },
+        organization_id=organization_id,
+    )
+    created_body = json.loads(bytes(created.body))
+    profile = created_body.get("profile")
+    if not isinstance(profile, dict):
+        raise HTTPException(status_code=502, detail="Issuer identity provisioning failed.")
+    return IssuerIdentityCreateResponse(
+        identity=_issuer_identity_projection(profile),
+        created=bool(created_body.get("created")),
+    )
+
+
 @signing_key_router.get(
     "/issuer-identities",
     summary="List Public Issuer Identities",
-    response_class=JSONResponse,
+    response_model=IssuerIdentityListResponse,
 )
 async def list_public_issuer_identities(
     request: Request,
     organization_id: str | None = Query(None),
     key_purpose: str | None = Query(None),
+    credential_format: str | None = Query(None),
     algorithm: str | None = Query(None),
-):
+) -> IssuerIdentityListResponse:
     """Return DID-first runtime identities without custody coordinates.
 
     Issuer profiles are an internal administration and custody abstraction.
@@ -6377,11 +6979,25 @@ async def list_public_issuer_identities(
     ambiguous registry and fails closed rather than being hidden by projection.
     """
 
-    resolved_org_id = _resolve_org_id(request, organization_id)
+    resolved_org_id = _require_public_issuer_identity_organization(
+        request, organization_id if isinstance(organization_id, str) else None
+    )
     storage_key = _issuer_profiles_storage_key(resolved_org_id)
     doc = await _load_json_document(request, storage_key, {"profiles": []})
     requested_purpose = str(key_purpose or "").strip()
-    requested_algorithm = str(algorithm or "").strip().upper()
+    requested_algorithm = (
+        _canonical_signing_algorithm(algorithm, default="") if algorithm else ""
+    )
+    requested_format = (
+        credential_format.strip().upper()
+        if isinstance(credential_format, str)
+        else ""
+    )
+    wire_format = (
+        _custody_wire_format(requested_format, requested_purpose)
+        if requested_format
+        else ""
+    )
     matches: list[dict[str, Any]] = []
 
     for profile in doc.get("profiles") or []:
@@ -6391,27 +7007,50 @@ async def list_public_issuer_identities(
             continue
         issuer_did = str(profile.get("issuer_did") or "").strip()
         purpose = str(profile.get("key_purpose") or "vc_jwt_issuer").strip()
-        profile_algorithm = str(profile.get("algorithm") or "ES256").strip().upper()
+        profile_format = str(profile.get("credential_format") or "").strip().upper()
+        profile_algorithm = _canonical_signing_algorithm(profile.get("algorithm"))
         if not issuer_did.startswith("did:"):
+            continue
+        if profile_format not in PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE:
+            continue
+        if profile_algorithm not in SUPPORTED_SIGNING_ALGORITHMS:
             continue
         if requested_purpose and purpose != requested_purpose:
             continue
         if requested_algorithm and profile_algorithm != requested_algorithm:
             continue
+        if wire_format:
+            if profile_format != requested_format:
+                continue
+            service_id = str(profile.get("signing_service_id") or "").strip()
+            key_reference = str(profile.get("signing_key_reference") or "").strip()
+            if not service_id or not key_reference:
+                continue
+            _, _, service, _ = await _resolve_effective_service(
+                request,
+                resolved_org_id,
+                service_id,
+                key_reference_override=key_reference,
+            )
+            formats = service.get("credential_formats") or []
+            if formats and wire_format not in formats:
+                continue
         matches.append(
             {
                 "issuer_did": issuer_did,
                 "key_purpose": purpose,
+                "credential_format": profile_format,
                 "algorithm": profile_algorithm,
                 "status": "active",
             }
         )
 
-    counts: dict[tuple[str, str, str], int] = {}
+    counts: dict[tuple[str, str, str, str], int] = {}
     for identity in matches:
         key = (
             identity["issuer_did"],
             identity["key_purpose"],
+            identity["credential_format"],
             identity["algorithm"],
         )
         counts[key] = counts.get(key, 0) + 1
@@ -6424,14 +7063,53 @@ async def list_public_issuer_identities(
             ),
         )
 
-    return JSONResponse(content={"identities": matches})
+    return IssuerIdentityListResponse(identities=matches)
 
 
-@signing_key_router.get(
-    "/issuer-profiles",
-    summary="List Issuer Profiles",
-    response_class=JSONResponse,
+@signing_key_router.post(
+    "/issuer-identities/resolve",
+    summary="Resolve Managed Issuer Identity Public Key",
+    response_model=IssuerIdentityResolutionResponse,
 )
+async def resolve_public_issuer_identity(
+    request: Request,
+    body: IssuerIdentityOperationRequest,
+) -> IssuerIdentityResolutionResponse:
+    """Resolve exact public key material without accepting a key selector."""
+    matches = await _matching_issuer_identity_profiles(request, body)
+    if not matches:
+        raise HTTPException(
+            status_code=404,
+            detail="No active issuer identity matches the requested tuple.",
+        )
+    if len(matches) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Issuer DID resolution is ambiguous for the requested identity tuple.",
+        )
+    profile = matches[0]
+    _, resolved = await _resolve_exact_issuer_profile_identity(
+        request,
+        organization_id=body.organization_id,
+        issuer_profile_id=str(profile["id"]),
+    )
+    public_jwk = resolved.get("public_jwk")
+    if not isinstance(public_jwk, dict) or not public_jwk.get("kty"):
+        raise HTTPException(
+            status_code=503,
+            detail="Issuer DID resolution returned no usable public key.",
+        )
+    public_jwk = {
+        key: value
+        for key, value in public_jwk.items()
+        if key not in {"kid", "d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+    }
+    return IssuerIdentityResolutionResponse(
+        identity=_issuer_identity_projection(profile),
+        public_jwk=public_jwk,
+    )
+
+
 async def list_issuer_profiles(
     request: Request,
     organization_id: str | None = Query(None),
@@ -6444,11 +7122,6 @@ async def list_issuer_profiles(
     return JSONResponse(content={"profiles": profiles})
 
 
-@signing_key_router.get(
-    "/issuer-profiles/{profile_id}",
-    summary="Get Issuer Profile",
-    response_class=JSONResponse,
-)
 async def get_issuer_profile(
     request: Request,
     profile_id: str,
@@ -6465,11 +7138,6 @@ async def get_issuer_profile(
     return JSONResponse(content={"profile": profile})
 
 
-@signing_key_router.get(
-    "/issuer-profiles/{profile_id}/public-identity",
-    summary="Get Issuer Profile Public Identity",
-    response_class=JSONResponse,
-)
 async def get_issuer_profile_public_identity(
     request: Request,
     profile_id: str,
@@ -6509,11 +7177,6 @@ async def get_issuer_profile_public_identity(
     )
 
 
-@signing_key_router.put(
-    "/issuer-profiles/{profile_id}/certificate",
-    summary="Attach Certificate to Issuer Profile",
-    response_class=JSONResponse,
-)
 async def store_issuer_profile_certificate(
     request: Request,
     profile_id: str,
@@ -6578,11 +7241,6 @@ async def store_issuer_profile_certificate(
     )
 
 
-@signing_key_router.patch(
-    "/issuer-profiles/{profile_id}",
-    summary="Update Issuer Profile",
-    response_class=JSONResponse,
-)
 async def update_issuer_profile(
     request: Request,
     profile_id: str,
@@ -6628,11 +7286,6 @@ async def update_issuer_profile(
     return JSONResponse(content={"ok": True, "profile": updated})
 
 
-@signing_key_router.delete(
-    "/issuer-profiles/{profile_id}",
-    summary="Delete Issuer Profile",
-    response_class=JSONResponse,
-)
 async def delete_issuer_profile(
     request: Request,
     profile_id: str,
@@ -6653,6 +7306,163 @@ async def delete_issuer_profile(
     await _save_json_document(request, storage_key, doc)
 
     return JSONResponse(content={"ok": True, "deleted": profile_id})
+
+
+@signing_key_router.put(
+    "/issuer-identities/certificate",
+    summary="Attach Certificate to Managed Issuer Identity",
+    response_model=IssuerIdentityResponse,
+)
+async def store_public_issuer_identity_certificate(
+    request: Request,
+    body: IssuerIdentityCertificateRequest,
+) -> IssuerIdentityResponse:
+    """Attach public X.509 material without revealing the custody binding."""
+    matches = await _matching_issuer_identity_profiles(request, body)
+    if not matches:
+        raise HTTPException(
+            status_code=404,
+            detail="No active issuer identity matches the requested tuple.",
+        )
+    if len(matches) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Issuer DID resolution is ambiguous for the requested identity tuple.",
+        )
+    profile = matches[0]
+    await store_issuer_profile_certificate(
+        request=request,
+        profile_id=str(profile["id"]),
+        body={
+            "cert_pem": body.cert_pem,
+            "cert_chain_pem": body.cert_chain_pem,
+        },
+        organization_id=body.organization_id,
+    )
+    return _issuer_identity_projection(profile)
+
+
+@signing_key_router.delete(
+    "/issuer-identities",
+    summary="Retire Managed Issuer Identity",
+    response_model=IssuerIdentityDeleteResponse,
+)
+async def delete_public_issuer_identity(
+    request: Request,
+    body: IssuerIdentityOperationRequest,
+) -> IssuerIdentityDeleteResponse:
+    """Retire exactly one DID-selected identity without accepting a profile ID."""
+    matches = await _matching_issuer_identity_profiles(request, body)
+    if not matches:
+        raise HTTPException(
+            status_code=404,
+            detail="No active issuer identity matches the requested tuple.",
+        )
+    if len(matches) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Issuer DID resolution is ambiguous for the requested identity tuple.",
+        )
+    profile = matches[0]
+    deleted = _issuer_identity_projection(profile)
+    await delete_issuer_profile(
+        request=request,
+        profile_id=str(profile["id"]),
+        organization_id=body.organization_id,
+    )
+    return IssuerIdentityDeleteResponse(deleted=deleted)
+
+
+@internal_signing_key_router.post("/issuer-profiles", include_in_schema=False)
+async def internal_create_issuer_profile(
+    request: Request,
+    body: dict = Body(default_factory=dict),
+    organization_id: str = Query(...),
+    x_api_key: str | None = Header(default=None),
+):
+    _require_internal_signing_key_api_key(x_api_key)
+    return await create_issuer_profile(request, body, organization_id)
+
+
+@internal_signing_key_router.get("/issuer-profiles", include_in_schema=False)
+async def internal_list_issuer_profiles(
+    request: Request,
+    organization_id: str = Query(...),
+    x_api_key: str | None = Header(default=None),
+):
+    _require_internal_signing_key_api_key(x_api_key)
+    return await list_issuer_profiles(request, organization_id)
+
+
+@internal_signing_key_router.get(
+    "/issuer-profiles/{profile_id}", include_in_schema=False
+)
+async def internal_get_issuer_profile(
+    request: Request,
+    profile_id: str,
+    organization_id: str = Query(...),
+    x_api_key: str | None = Header(default=None),
+):
+    _require_internal_signing_key_api_key(x_api_key)
+    return await get_issuer_profile(request, profile_id, organization_id)
+
+
+@internal_signing_key_router.get(
+    "/issuer-profiles/{profile_id}/public-identity", include_in_schema=False
+)
+async def internal_get_issuer_profile_public_identity(
+    request: Request,
+    profile_id: str,
+    organization_id: str = Query(...),
+    x_api_key: str | None = Header(default=None),
+):
+    _require_internal_signing_key_api_key(x_api_key)
+    return await get_issuer_profile_public_identity(
+        request, profile_id, organization_id
+    )
+
+
+@internal_signing_key_router.put(
+    "/issuer-profiles/{profile_id}/certificate", include_in_schema=False
+)
+async def internal_store_issuer_profile_certificate(
+    request: Request,
+    profile_id: str,
+    body: dict = Body(default_factory=dict),
+    organization_id: str = Query(...),
+    x_api_key: str | None = Header(default=None),
+):
+    _require_internal_signing_key_api_key(x_api_key)
+    return await store_issuer_profile_certificate(
+        request, profile_id, body, organization_id
+    )
+
+
+@internal_signing_key_router.patch(
+    "/issuer-profiles/{profile_id}", include_in_schema=False
+)
+async def internal_update_issuer_profile(
+    request: Request,
+    profile_id: str,
+    body: dict = Body(default_factory=dict),
+    organization_id: str = Query(...),
+    x_api_key: str | None = Header(default=None),
+):
+    _require_internal_signing_key_api_key(x_api_key)
+    return await update_issuer_profile(request, profile_id, body, organization_id)
+
+
+@internal_signing_key_router.delete(
+    "/issuer-profiles/{profile_id}", include_in_schema=False
+)
+async def internal_delete_issuer_profile(
+    request: Request,
+    profile_id: str,
+    organization_id: str = Query(...),
+    x_api_key: str | None = Header(default=None),
+):
+    _require_internal_signing_key_api_key(x_api_key)
+    return await delete_issuer_profile(request, profile_id, organization_id)
 
 
 # ---------------------------------------------------------------------------

@@ -14,12 +14,77 @@ from gateway.models import (
     PolicyEvaluationResponse,
     PresentationPolicyCreate,
     PresentationPolicyResponse,
+    PresentationPolicyUpdate,
 )
-from gateway.proxy import _forward_headers, get_http_client, get_registry, proxy_request
+from gateway.proxy import (
+    _forward_headers,
+    _resource_org_id,
+    get_http_client,
+    get_registry,
+    proxy_request,
+)
 
 presentation_policy_router = APIRouter(
     prefix="/v1/presentation-policies", tags=["Presentation Policies"]
 )
+
+_PUBLIC_PRESENTATION_POLICY_FIELDS = frozenset(PresentationPolicyResponse.model_fields)
+
+
+def _sanitize_presentation_policy_response(response: Response) -> Response:
+    """Enforce the public MIP resource shape on proxied policy responses."""
+    if response.status_code >= 400 or response.status_code == 204 or not response.body:
+        return response
+    try:
+        payload = json.loads(response.body)
+    except (TypeError, ValueError, UnicodeDecodeError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Presentation policy service returned invalid JSON",
+        ) from exc
+
+    def sanitize(value: object) -> dict[str, Any]:
+        if not isinstance(value, dict):
+            raise HTTPException(
+                status_code=502,
+                detail="Presentation policy service returned an invalid resource",
+            )
+        public = {
+            key: entry
+            for key, entry in value.items()
+            if key in _PUBLIC_PRESENTATION_POLICY_FIELDS
+        }
+        try:
+            validated = PresentationPolicyResponse.model_validate(public)
+            sanitized = validated.model_dump(
+                mode="json",
+                exclude_none=True,
+            )
+            if not validated.holder_binding.required:
+                sanitized["holder_binding"] = {"required": False}
+            return sanitized
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="Presentation policy service response violates the public contract",
+            ) from exc
+
+    if isinstance(payload, list):
+        sanitized: object = [sanitize(item) for item in payload]
+    else:
+        sanitized = sanitize(payload)
+
+    headers = {
+        key: value
+        for key, value in response.headers.items()
+        if key.lower() not in {"content-length", "content-type"}
+    }
+    return Response(
+        content=json.dumps(sanitized, separators=(",", ":")),
+        status_code=response.status_code,
+        headers=headers,
+        media_type="application/json",
+    )
 
 
 async def _load_credential_template(
@@ -63,69 +128,86 @@ async def _load_credential_template(
     return template
 
 
+def _validated_policy_payload(
+    body: PresentationPolicyCreate | PresentationPolicyUpdate,
+    *,
+    include_organization_id: bool = True,
+) -> dict[str, Any]:
+    """Serialize only public validated fields in their canonical wire shape."""
+    payload = body.model_dump(mode="json", exclude_none=True, exclude_unset=True)
+    if body.holder_binding is not None and not body.holder_binding.required:
+        payload["holder_binding"] = {"required": False}
+    if not include_organization_id:
+        payload.pop("organization_id", None)
+    return payload
+
+
 async def _authoritative_policy_body(
-    body: PresentationPolicyCreate,
+    body: PresentationPolicyCreate | PresentationPolicyUpdate,
     request: Request,
+    *,
+    include_organization_id: bool = True,
 ) -> bytes:
     """Bind every policy requirement to its authoritative template format.
 
     The verifier must not guess SD-JWT for an mdoc template, and callers must
     not be allowed to select a format that differs from the referenced
-    template. Preserve the original JSON shape while replacing that field with
-    the credential-template service's canonical value.
+    template. Re-serialize only the validated public model and replace each
+    format with the credential-template service's canonical value.
     """
-    try:
-        payload = await request.json()
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise HTTPException(
-            status_code=400, detail="Invalid JSON request body"
-        ) from exc
-    if not isinstance(payload, dict):
-        raise HTTPException(
-            status_code=400, detail="Request body must be a JSON object"
-        )
+    payload = _validated_policy_payload(
+        body,
+        include_organization_id=include_organization_id,
+    )
+    organization_id = body.organization_id
 
-    raw_requirements = payload.get("credential_requirements", [])
-    if not isinstance(raw_requirements, list) or len(raw_requirements) != len(
-        body.credential_requirements
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="credential_requirements does not match the validated request",
+    requirement_groups = [
+        (
+            payload.get("credential_requirements", []),
+            body.credential_requirements or [],
         )
-
-    for raw_requirement, requirement in zip(
-        raw_requirements,
-        body.credential_requirements,
+    ]
+    raw_alternatives = payload.get("alternative_requirements", [])
+    for raw_alternative, alternative in zip(
+        raw_alternatives,
+        body.alternative_requirements or [],
         strict=True,
     ):
-        if not isinstance(raw_requirement, dict):
-            raise HTTPException(
-                status_code=422,
-                detail="credential_requirements entries must be JSON objects",
+        requirement_groups.append(
+            (
+                raw_alternative["credential_requirements"],
+                alternative.credential_requirements,
             )
-        template = await _load_credential_template(
-            requirement.credential_template_id,
-            request,
         )
-        if template.get("organization_id") != body.organization_id:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Credential template must belong to the presentation "
-                    f"policy organization: {requirement.credential_template_id}"
-                ),
+
+    for raw_requirements, requirements in requirement_groups:
+        for raw_requirement, requirement in zip(
+            raw_requirements,
+            requirements,
+            strict=True,
+        ):
+            template = await _load_credential_template(
+                requirement.credential_template_id,
+                request,
             )
-        credential_format = template.get("credential_payload_format")
-        if not isinstance(credential_format, str) or not credential_format.strip():
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    "Credential template has no canonical credential payload "
-                    f"format: {requirement.credential_template_id}"
-                ),
-            )
-        raw_requirement["credential_payload_format"] = credential_format.strip()
+            if template.get("organization_id") != organization_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Credential template must belong to the presentation "
+                        f"policy organization: {requirement.credential_template_id}"
+                    ),
+                )
+            credential_format = template.get("credential_payload_format")
+            if not isinstance(credential_format, str) or not credential_format.strip():
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Credential template has no canonical credential payload "
+                        f"format: {requirement.credential_template_id}"
+                    ),
+                )
+            raw_requirement["credential_payload_format"] = credential_format.strip()
 
     return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
 
@@ -140,12 +222,13 @@ async def create_presentation_policy(
     body_override = await _authoritative_policy_body(body, request)
     registry = get_registry()
     service_url = registry.get_service_url("presentation-policies")
-    return await proxy_request(
+    response = await proxy_request(
         request,
         service_url,
         "/v1/presentation-policies",
         body_override=body_override,
     )
+    return _sanitize_presentation_policy_response(response)
 
 
 @presentation_policy_router.get(
@@ -160,7 +243,12 @@ async def list_presentation_policies(
     """List all Presentation Policies for an organization."""
     registry = get_registry()
     service_url = registry.get_service_url("presentation-policies")
-    return await proxy_request(request, service_url, "/v1/presentation-policies")
+    response = await proxy_request(
+        request,
+        service_url,
+        "/v1/presentation-policies",
+    )
+    return _sanitize_presentation_policy_response(response)
 
 
 @presentation_policy_router.get(
@@ -172,9 +260,10 @@ async def get_presentation_policy(policy_id: str, request: Request) -> Response:
     """Get a Presentation Policy by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("presentation-policies")
-    return await proxy_request(
+    response = await proxy_request(
         request, service_url, f"/v1/presentation-policies/{policy_id}"
     )
+    return _sanitize_presentation_policy_response(response)
 
 
 @presentation_policy_router.post(
@@ -186,29 +275,42 @@ async def activate_presentation_policy(policy_id: str, request: Request) -> Resp
     """Activate a Presentation Policy for use in verification."""
     registry = get_registry()
     service_url = registry.get_service_url("presentation-policies")
-    return await proxy_request(
+    response = await proxy_request(
         request, service_url, f"/v1/presentation-policies/{policy_id}/activate"
     )
+    return _sanitize_presentation_policy_response(response)
 
 
-@presentation_policy_router.put(
+@presentation_policy_router.patch(
     "/{policy_id}",
     response_model=PresentationPolicyResponse,
     summary="Update Presentation Policy",
 )
 async def update_presentation_policy(
-    policy_id: str, body: PresentationPolicyCreate, request: Request
+    policy_id: str, body: PresentationPolicyUpdate, request: Request
 ) -> Response:
     """Update a Presentation Policy."""
-    body_override = await _authoritative_policy_body(body, request)
+    owner_org = await _resource_org_id(
+        "presentation-policies",
+        f"/v1/presentation-policies/{policy_id}",
+        request,
+    )
+    if owner_org is None or owner_org != body.organization_id:
+        raise HTTPException(status_code=404, detail="Presentation Policy not found")
+    body_override = await _authoritative_policy_body(
+        body,
+        request,
+        include_organization_id=False,
+    )
     registry = get_registry()
     service_url = registry.get_service_url("presentation-policies")
-    return await proxy_request(
+    response = await proxy_request(
         request,
         service_url,
         f"/v1/presentation-policies/{policy_id}",
         body_override=body_override,
     )
+    return _sanitize_presentation_policy_response(response)
 
 
 @presentation_policy_router.delete("/{policy_id}", summary="Delete Presentation Policy")

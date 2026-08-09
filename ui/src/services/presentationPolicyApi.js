@@ -12,6 +12,7 @@ import { isNetworkAbortLikeError, postWithIdempotency } from './idempotency';
 const PRESENTATION_POLICY_BASE = '/v1/presentation-policies';
 const CREDENTIAL_TEMPLATE_BASE = '/v1/credential-templates';
 const TRUST_PROFILE_BASE = '/v1/trust-profiles';
+const ISSUER_ENTITY_BASE = '/v1/issuer-entities';
 
 const TRUST_PROFILE_FORMAT_ALIASES = {
   jwt_vc: 'VC_JWT',
@@ -125,9 +126,33 @@ function normalizeTrustProfileType(profileType) {
 function normalizeTrustedIssuer(issuer = {}) {
   return {
     ...issuer,
-    did: issuer.did || issuer.issuer_did || issuer.issuer_id || '',
-    issuer_did: issuer.issuer_did || issuer.did || issuer.issuer_id || '',
+    did: issuer.did || issuer.issuer_did || '',
+    issuer_did: issuer.issuer_did || issuer.did || '',
     country: issuer.country || issuer.metadata?.country || '—',
+  };
+}
+
+function composeTrustProfileIssuer(relationship, issuerEntity) {
+  if (!relationship || !issuerEntity || relationship.issuer_id !== issuerEntity.id) {
+    const error = new Error('Trust Profile Issuer response references an unavailable Issuer Entity.');
+    error.code = 'MALFORMED_RESPONSE';
+    throw error;
+  }
+
+  return {
+    ...relationship,
+    issuer_entity: issuerEntity,
+    name: issuerEntity.display_name,
+    description: issuerEntity.description || null,
+    did: issuerEntity.issuer_id,
+    issuer_did: issuerEntity.issuer_id,
+    issuer_type: issuerEntity.issuer_type,
+    issuer_url: issuerEntity.metadata?.issuer_url || null,
+    status: issuerEntity.compliance_status,
+    compliance_status: issuerEntity.compliance_status,
+    accreditation_body: issuerEntity.accreditation_body || null,
+    accreditations: Array.isArray(issuerEntity.accreditations) ? issuerEntity.accreditations : [],
+    credential_template_ids: relationship.metadata?.credential_template_ids || [],
   };
 }
 
@@ -136,12 +161,27 @@ function trustSourcesFromTrustedIssuers(trustedIssuers = []) {
     .map((issuer) => normalizeTrustedIssuer(issuer))
     .filter((issuer) => issuer.issuer_did)
     .map((issuer) => ({
-      name: issuer.name || issuer.issuer_did,
       description: issuer.description || null,
       issuer_did: issuer.issuer_did,
       source_type: 'PINNED_ISSUER',
-      enabled: issuer.enabled !== false,
     }));
+}
+
+function normalizePublicTrustSource(source = {}) {
+  const normalized = {
+    source_type: normalizeTrustSourceType(source.source_type),
+  };
+  if (source.url) normalized.url = String(source.url).trim();
+  if (source.certificate_pem) normalized.certificate_pem = String(source.certificate_pem).trim();
+  if (source.issuer_did) normalized.issuer_did = String(source.issuer_did).trim();
+  if (source.description) normalized.description = String(source.description).trim();
+  if (source.registry_sync) {
+    normalized.registry_sync = {
+      protocol: 'MARTY_TRUST_REGISTRY_SYNC_V1',
+      refresh_interval_hours: Number(source.registry_sync.refresh_interval_hours ?? 24),
+    };
+  }
+  return normalized;
 }
 
 function normalizeValidationRules(data = {}) {
@@ -158,47 +198,20 @@ function normalizeValidationRules(data = {}) {
   };
 }
 
-function normalizeRegistryImport(entry = {}) {
-  return {
-    ...entry,
-    sync_enabled: entry.sync_enabled !== false,
-    sync_interval_hours: Number(entry.sync_interval_hours ?? 24),
-    credential_format_filter: Array.isArray(entry.credential_format_filter) ? entry.credential_format_filter : [],
-  };
-}
-
 function buildTrustProfilePayload(data = {}) {
-  const {
-    framework_type,
-    trusted_issuers,
-    allow_all_issuers,
-    activate_immediately,
-    min_key_size,
-    required_credential_types,
-    revocation_check_enabled,
-    signature_validation_required,
-    trust_anchors,
-    status,
-    ...rest
-  } = data;
-
   const validation_rules = normalizeValidationRules(data);
-  const trust_sources = Array.isArray(rest.trust_sources) && rest.trust_sources.length > 0
-    ? rest.trust_sources.map((source) => ({
-        ...source,
-        source_type: normalizeTrustSourceType(source.source_type),
-      }))
-    : trustSourcesFromTrustedIssuers(trusted_issuers || []);
-  const registry_imports = Array.isArray(rest.registry_imports)
-    ? rest.registry_imports.map((entry) => normalizeRegistryImport(entry))
-    : [];
+  const trust_sources = Array.isArray(data.trust_sources) && data.trust_sources.length > 0
+    ? data.trust_sources.map((source) => normalizePublicTrustSource(source))
+    : trustSourcesFromTrustedIssuers(data.trusted_issuers || []);
 
   return {
-    ...rest,
-    profile_type: normalizeTrustProfileType(rest.profile_type || framework_type || 'custom'),
-    supported_formats: (rest.supported_formats || ['sd_jwt_vc', 'mdoc']).map(normalizeTrustProfileFormat),
+    organization_id: data.organization_id,
+    name: data.name,
+    description: data.description,
+    profile_type: normalizeTrustProfileType(data.profile_type || data.framework_type || 'custom'),
+    compliance_status: data.compliance_status || 'SETUP_REQUIRED',
+    supported_formats: (data.supported_formats || ['sd_jwt_vc', 'mdoc']).map(normalizeTrustProfileFormat),
     trust_sources,
-    registry_imports,
     validation_rules,
     allowed_algorithms: validation_rules.allowed_algorithms,
     min_key_size_rsa: validation_rules.min_key_size_rsa,
@@ -206,6 +219,15 @@ function buildTrustProfilePayload(data = {}) {
     require_key_usage: validation_rules.require_key_usage,
     max_chain_depth: validation_rules.max_chain_depth,
     allow_self_signed: validation_rules.allow_self_signed,
+    revocation_policy: data.revocation_policy,
+    revocation_profile_id: data.revocation_profile_id,
+    time_policy: data.time_policy,
+    allowed_issuers: data.allowed_issuers,
+    denied_issuers: data.denied_issuers,
+    system_issuer_overrides: data.system_issuer_overrides || {},
+    compatible_compliance_codes: data.compatible_compliance_codes || [],
+    verification_policy_set_id: data.verification_policy_set_id,
+    auto_generated: data.auto_generated || false,
   };
 }
 
@@ -288,28 +310,37 @@ export function normalizeCredentialTemplateValidityRules(rules = {}) {
 }
 
 export function normalizeCredentialTemplate(data = {}) {
+  const {
+    issuer_profile_id: _issuerProfileId,
+    issuer_key_id: _issuerKeyId,
+    issuer_key_algorithm: _issuerKeyAlgorithm,
+    issuer_algorithm: _issuerAlgorithm,
+    signing_algorithm: _signingAlgorithm,
+    key_access_mode: _keyAccessMode,
+    remote_signing_config: _remoteSigningConfig,
+    issuer_certificate_chain_pem: _issuerCertificateChain,
+    issuer_certificate_chain_configured: _issuerCertificateChainConfigured,
+    auto_generate_artifacts: _autoGenerateArtifacts,
+    artifacts_status: _artifactsStatus,
+    artifact_status: _artifactStatus,
+    hasArtifacts: _hasArtifacts,
+    artifactsValidated: _artifactsValidated,
+    kms_provider: _kmsProvider,
+    kms_key_id: _kmsKeyId,
+    signing_service_id: _signingServiceId,
+    signing_key_reference: _signingKeyReference,
+    ...contractData
+  } = data;
   const claims = Array.isArray(data.claims)
     ? data.claims.map((claim) => ({
         ...claim,
         display_name: claim.display_name || claim.display?.label || claim.name,
       }))
     : [];
-  const artifactsStatus = data.artifacts_status
-    || data.artifact_status
-    || (data.hasArtifacts === false
-      ? 'missing'
-      : (data.issuer_key_id || data.issuer_certificate_chain_pem || data.remote_signing_config)
-        ? 'valid'
-        : (data.issuer_did ? 'invalid' : 'missing'));
-  const hasArtifacts = data.hasArtifacts ?? artifactsStatus !== 'missing';
-  const artifactsValidated = data.artifactsValidated ?? artifactsStatus === 'valid';
 
   return {
-    ...data,
+    ...contractData,
     status: data.status ? String(data.status).toLowerCase() : data.status,
-    artifacts_status: artifactsStatus,
-    hasArtifacts,
-    artifactsValidated,
     usedByFlowsCount: data.usedByFlowsCount ?? data.used_by_flows_count ?? 0,
     claims,
     validity_rules: normalizeCredentialTemplateValidityRules(data.validity_rules || {}),
@@ -425,12 +456,12 @@ function normalizePresentationPolicy(data = {}) {
 export function buildPresentationPolicyPayload(data = {}) {
   const organizationId = requireOrganizationId(data);
   const {
-    activate_immediately,
-    status,
+    activate_immediately: _activateImmediately,
+    status: _status,
     holder_binding,
     freshness_requirements,
-    single_presentation,
-    template_id,
+    single_presentation: _singlePresentation,
+    template_id: _templateId,
     metadata,
     ...rest
   } = data;
@@ -501,6 +532,13 @@ function isActiveResource(resource) {
 export function buildCredentialTemplatePayload(data = {}) {
   const {
     status: _status,
+    id: _id,
+    created_at: _createdAt,
+    updated_at: _updatedAt,
+    createdAt: _createdAtAlias,
+    updatedAt: _updatedAtAlias,
+    usedByFlowsCount: _usedByFlowsCount,
+    used_by_flows_count: _usedByFlowsCountAlias,
     activate_immediately: _activateImmediately,
     generate_artifacts_automatically: _generateArtifactsAutomatically,
     auto_generate_artifacts: _autoGenerateArtifacts,
@@ -512,9 +550,19 @@ export function buildCredentialTemplatePayload(data = {}) {
     issuer_key_id: _issuerKeyId,
     issuer_key_algorithm: _issuerKeyAlgorithm,
     issuer_algorithm: _issuerAlgorithm,
+    signing_algorithm: _signingAlgorithm,
     key_access_mode: _keyAccessMode,
     remote_signing_config: _remoteSigningConfig,
     issuer_certificate_chain_pem: _issuerCertificateChain,
+    issuer_certificate_chain_configured: _issuerCertificateChainConfigured,
+    artifacts_status: _artifactsStatus,
+    artifact_status: _artifactStatus,
+    hasArtifacts: _hasArtifacts,
+    artifactsValidated: _artifactsValidated,
+    kms_provider: _kmsProvider,
+    kms_key_id: _kmsKeyId,
+    signing_service_id: _signingServiceId,
+    signing_key_reference: _signingKeyReference,
     ...contractData
   } = data;
   const issuerDid = String(data.issuer_did || '').trim();
@@ -746,6 +794,13 @@ export async function activateTrustProfile(id) {
 }
 
 /**
+ * Atomically synchronize every external registry source on a trust profile.
+ */
+export async function synchronizeTrustProfileRegistries(id) {
+  return post(`${TRUST_PROFILE_BASE}/${id}/registry-sync`, {});
+}
+
+/**
  * List organization trust profiles
  */
 export async function listTrustProfiles(params = {}) {
@@ -788,17 +843,67 @@ export async function deleteTrustProfile(id) {
 /**
  * List trusted issuers for a trust profile.
  */
-export async function listTrustProfileIssuers(profileId) {
-  const result = await get(`${TRUST_PROFILE_BASE}/${profileId}/issuers`);
-  return Array.isArray(result) ? result.map((issuer) => normalizeTrustedIssuer(issuer)) : result;
+export async function listIssuerEntities(organizationId) {
+  const scopedOrganizationId = requireOrganizationId({ organization_id: organizationId });
+  const result = await get(ISSUER_ENTITY_BASE, {
+    params: { organization_id: scopedOrganizationId },
+  });
+  return requireDirectArray(result, 'Issuer Entity');
+}
+
+export async function listTrustProfileIssuers(profileId, organizationId) {
+  const [relationships, entities] = await Promise.all([
+    get(`${TRUST_PROFILE_BASE}/${profileId}/issuers`),
+    listIssuerEntities(organizationId),
+  ]);
+  const directRelationships = requireDirectArray(relationships, 'Trust Profile Issuer');
+  const entitiesById = new Map(entities.map((entity) => [entity.id, entity]));
+  return directRelationships.map((relationship) => (
+    composeTrustProfileIssuer(relationship, entitiesById.get(relationship.issuer_id))
+  ));
 }
 
 /**
  * Add a trusted issuer to a trust profile.
  */
-export async function addTrustProfileIssuer(profileId, data) {
-  const result = await post(`${TRUST_PROFILE_BASE}/${profileId}/issuers`, data);
-  return normalizeTrustedIssuer(result);
+export async function addTrustProfileIssuer(profileId, organizationId, data) {
+  const scopedOrganizationId = requireOrganizationId({ organization_id: organizationId });
+  const issuerDid = String(data?.issuer_did || data?.did || '').trim();
+  if (!issuerDid) {
+    const error = new Error('An issuer DID is required before linking a trusted issuer.');
+    error.code = 'ISSUER_DID_REQUIRED';
+    throw error;
+  }
+
+  const entities = await listIssuerEntities(scopedOrganizationId);
+  let issuerEntity = entities.find((entity) => (
+    entity.organization_id === scopedOrganizationId && entity.issuer_id === issuerDid
+  ));
+  if (!issuerEntity) {
+    issuerEntity = await post(ISSUER_ENTITY_BASE, {
+      organization_id: scopedOrganizationId,
+      issuer_id: issuerDid,
+      issuer_type: data.issuer_type || 'ORGANIZATION',
+      display_name: data.name || issuerDid,
+      description: data.description || null,
+      accreditation_body: data.accreditation_body || null,
+      accreditations: Array.isArray(data.accreditations) ? data.accreditations : [],
+      metadata: {
+        ...(data.issuer_url ? { issuer_url: data.issuer_url } : {}),
+      },
+    });
+  }
+
+  const relationship = await post(`${TRUST_PROFILE_BASE}/${profileId}/issuers`, {
+    issuer_id: issuerEntity.id,
+    trust_level: data.trust_level ?? 100,
+    relationship_status: data.relationship_status || 'TRUSTED',
+    cascade_revocation_policy: data.cascade_revocation_policy || 'NOTIFY_ONLY',
+    metadata: {
+      credential_template_ids: data.credential_template_ids || [],
+    },
+  });
+  return composeTrustProfileIssuer(relationship, issuerEntity);
 }
 
 /**

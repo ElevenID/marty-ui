@@ -16,7 +16,7 @@ import { getOrganizationMembers } from '../organizationsApi'
 import { requireOrganizationId as requireCredentialSetupOrganizationId } from '../presentationPolicyApi'
 import { listRoles } from '../rbacApi'
 import { listMembers } from '../teamApi'
-import { createWebhook, listWebhooks } from '../webhooksApi'
+import { createWebhook, deleteWebhook, listWebhooks, updateWebhook } from '../webhooksApi'
 
 async function expectOrgRequired(operation: Promise<unknown>) {
   await expect(operation).rejects.toMatchObject({
@@ -49,6 +49,8 @@ describe('org-scoped service guards', () => {
     await expectOrgRequired(listDeliveryDestinations({ activeOnly: true }))
     await expectOrgRequired(createDeliveryDestination({ name: 'Canvas Credentials' }))
     await expectOrgRequired(createWebhook('', { url: 'https://example.com/hook', eventTypes: ['credential.issued'] }))
+    await expectOrgRequired(updateWebhook('', 'webhook-1', { description: 'blocked' }))
+    await expectOrgRequired(deleteWebhook('undefined', 'webhook-1'))
   })
 
   it('fails locally before org application requests can drop their org filter', async () => {

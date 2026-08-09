@@ -1,5 +1,9 @@
 """Trust Profile, Issuer Entity, Trust Framework, Trust Registry, and API Key routes."""
+
 from __future__ import annotations
+
+import json
+import logging
 
 from fastapi import APIRouter, Query, Request, Response
 
@@ -10,16 +14,13 @@ from gateway.models import (
     IssuerEntityCreate,
     IssuerEntityResponse,
     IssuerEntityUpdate,
-    KeyConnectionTestRequest,
-    KeyConnectionTestResponse,
-    KeyCreateAssociateRequest,
-    KeyCreateAssociateResponse,
     OrganizationTrustProfileCreate,
     OrganizationTrustProfileResponse,
     OrganizationTrustProfileUpdate,
-    TrustedIssuerCreate,
-    TrustedIssuerResponse,
-    TrustedIssuerUpdate,
+    TrustProfileIssuerCreate,
+    TrustProfileIssuerResponse,
+    TrustProfileIssuerUpdate,
+    TrustProfileRegistrySyncResponse,
     TrustFrameworkResponse,
     TrustProfileCreate,
     TrustProfileResponse,
@@ -28,19 +29,186 @@ from gateway.models import (
     TrustRegistryStatusResponse,
     TrustRegistrySyncResponse,
 )
+from gateway.middleware import mip_error_response
 from gateway.proxy import get_registry, proxy_request
 
 trust_profile_router = APIRouter(prefix="/v1/trust-profiles", tags=["Trust Profiles"])
-organization_trust_profile_router = APIRouter(prefix="/v1/organizations/{organization_id}/trust-profiles", tags=["Organization Trust Profiles"])
+organization_trust_profile_router = APIRouter(
+    prefix="/v1/organizations/{organization_id}/trust-profiles",
+    tags=["Organization Trust Profiles"],
+)
 issuer_entity_router = APIRouter(prefix="/v1/issuer-entities", tags=["Issuer Entities"])
-trust_framework_router = APIRouter(prefix="/v1/trust-frameworks", tags=["Trust Frameworks"])
+trust_framework_router = APIRouter(
+    prefix="/v1/trust-frameworks", tags=["Trust Frameworks"]
+)
 api_key_router = APIRouter(prefix="/v1/api-keys", tags=["API Keys"])
 trust_registry_router = APIRouter(prefix="/v1/trust-registry", tags=["Trust Registry"])
+
+logger = logging.getLogger(__name__)
+
+
+def _validated_issuer_entity_payload(
+    body: IssuerEntityCreate | IssuerEntityUpdate,
+) -> bytes:
+    """Serialize only fields accepted by the public IssuerEntity operation."""
+    payload = body.model_dump(
+        mode="json",
+        exclude_unset=isinstance(body, IssuerEntityUpdate),
+    )
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+
+
+def _validated_trust_profile_issuer_payload(
+    body: TrustProfileIssuerCreate | TrustProfileIssuerUpdate,
+) -> bytes:
+    """Serialize only fields defined by the protocol relationship operation."""
+    payload = body.model_dump(
+        mode="json",
+        exclude_unset=isinstance(body, TrustProfileIssuerUpdate),
+    )
+    return json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+
+
+def _sanitize_issuer_entity_response(
+    response: Response, *, many: bool = False
+) -> Response:
+    """Validate successful trust-service responses before returning public data."""
+    if response.status_code >= 400:
+        return response
+
+    try:
+        raw = json.loads(bytes(response.body))
+        if many:
+            if not isinstance(raw, list):
+                raise ValueError("expected an issuer entity list")
+            public = [
+                IssuerEntityResponse.model_validate(item).model_dump(
+                    mode="json", exclude_none=True
+                )
+                for item in raw
+            ]
+        else:
+            public = IssuerEntityResponse.model_validate(raw).model_dump(
+                mode="json", exclude_none=True
+            )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        logger.warning(
+            "Trust service returned an IssuerEntity response outside the public contract"
+        )
+        return mip_error_response(
+            status_code=502,
+            error="invalid_service_response",
+            message="Trust service returned an invalid public IssuerEntity response",
+        )
+
+    return Response(
+        content=json.dumps(public, separators=(",", ":")),
+        status_code=response.status_code,
+        headers={
+            key: value
+            for key, value in response.headers.items()
+            if key.lower()
+            not in {
+                "content-encoding",
+                "transfer-encoding",
+                "content-length",
+                "content-type",
+            }
+        },
+        media_type="application/json",
+    )
+
+
+def _sanitize_trust_profile_issuer_response(
+    response: Response, *, many: bool = False
+) -> Response:
+    """Fail closed when the trust service drifts from marty-protocol."""
+    if response.status_code >= 400:
+        return response
+
+    try:
+        raw = json.loads(bytes(response.body))
+        if many:
+            if not isinstance(raw, list):
+                raise ValueError("expected a trust profile issuer list")
+            public = [
+                TrustProfileIssuerResponse.model_validate(item).model_dump(
+                    mode="json", exclude_none=True
+                )
+                for item in raw
+            ]
+        else:
+            public = TrustProfileIssuerResponse.model_validate(raw).model_dump(
+                mode="json", exclude_none=True
+            )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        logger.warning(
+            "Trust service returned a TrustProfileIssuer response outside the public contract"
+        )
+        return mip_error_response(
+            status_code=502,
+            error="invalid_service_response",
+            message="Trust service returned an invalid public TrustProfileIssuer response",
+        )
+
+    return Response(
+        content=json.dumps(public, separators=(",", ":")),
+        status_code=response.status_code,
+        headers={
+            key: value
+            for key, value in response.headers.items()
+            if key.lower()
+            not in {
+                "content-encoding",
+                "transfer-encoding",
+                "content-length",
+                "content-type",
+            }
+        },
+        media_type="application/json",
+    )
+
+
+def _sanitize_registry_sync_response(response: Response) -> Response:
+    """Fail closed when a registry refresh result drifts from the contract."""
+    if response.status_code >= 400:
+        return response
+    try:
+        raw = json.loads(bytes(response.body))
+        public = TrustProfileRegistrySyncResponse.model_validate(raw).model_dump(
+            mode="json"
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        logger.warning("Trust service returned an invalid registry sync response")
+        return mip_error_response(
+            status_code=502,
+            error="invalid_service_response",
+            message="Trust service returned an invalid registry sync response",
+        )
+    return Response(
+        content=json.dumps(public, separators=(",", ":")),
+        status_code=response.status_code,
+        headers={
+            key: value
+            for key, value in response.headers.items()
+            if key.lower()
+            not in {
+                "content-encoding",
+                "transfer-encoding",
+                "content-length",
+                "content-type",
+            }
+        },
+        media_type="application/json",
+    )
 
 
 # ── Trust Profile ────────────────────────────────────────────────────
 
-@trust_profile_router.post("", response_model=TrustProfileResponse, summary="Create Trust Profile")
+
+@trust_profile_router.post(
+    "", response_model=TrustProfileResponse, summary="Create Trust Profile"
+)
 async def create_trust_profile(body: TrustProfileCreate, request: Request) -> Response:
     """Create a new Trust Profile for configuring trust relationships."""
     registry = get_registry()
@@ -48,7 +216,9 @@ async def create_trust_profile(body: TrustProfileCreate, request: Request) -> Re
     return await proxy_request(request, service_url, "/v1/trust-profiles")
 
 
-@trust_profile_router.get("", response_model=list[TrustProfileResponse], summary="List Trust Profiles")
+@trust_profile_router.get(
+    "", response_model=list[TrustProfileResponse], summary="List Trust Profiles"
+)
 async def list_trust_profiles(
     organization_id: str = Query(..., description="Organization ID"),
     request: Request = None,
@@ -59,7 +229,9 @@ async def list_trust_profiles(
     return await proxy_request(request, service_url, "/v1/trust-profiles")
 
 
-@trust_profile_router.get("/{profile_id}", response_model=TrustProfileResponse, summary="Get Trust Profile")
+@trust_profile_router.get(
+    "/{profile_id}", response_model=TrustProfileResponse, summary="Get Trust Profile"
+)
 async def get_trust_profile(profile_id: str, request: Request) -> Response:
     """Get a Trust Profile by ID."""
     registry = get_registry()
@@ -67,16 +239,45 @@ async def get_trust_profile(profile_id: str, request: Request) -> Response:
     return await proxy_request(request, service_url, f"/v1/trust-profiles/{profile_id}")
 
 
-@trust_profile_router.post("/{profile_id}/activate", response_model=TrustProfileResponse, summary="Activate Trust Profile")
+@trust_profile_router.post(
+    "/{profile_id}/activate",
+    response_model=TrustProfileResponse,
+    summary="Activate Trust Profile",
+)
 async def activate_trust_profile(profile_id: str, request: Request) -> Response:
     """Activate a Trust Profile."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/trust-profiles/{profile_id}/activate")
+    return await proxy_request(
+        request, service_url, f"/v1/trust-profiles/{profile_id}/activate"
+    )
 
 
-@trust_profile_router.patch("/{profile_id}", response_model=TrustProfileResponse, summary="Update Trust Profile")
-async def update_trust_profile(profile_id: str, body: TrustProfileUpdate, request: Request) -> Response:
+@trust_profile_router.post(
+    "/{profile_id}/registry-sync",
+    response_model=TrustProfileRegistrySyncResponse,
+    summary="Synchronize Trust Profile Registries",
+)
+async def synchronize_trust_profile_registries(
+    profile_id: str, request: Request
+) -> Response:
+    """Refresh every configured external registry feed atomically."""
+    registry = get_registry()
+    service_url = registry.get_service_url("trust-profiles")
+    response = await proxy_request(
+        request,
+        service_url,
+        f"/v1/trust-profiles/{profile_id}/registry-sync",
+    )
+    return _sanitize_registry_sync_response(response)
+
+
+@trust_profile_router.patch(
+    "/{profile_id}", response_model=TrustProfileResponse, summary="Update Trust Profile"
+)
+async def update_trust_profile(
+    profile_id: str, body: TrustProfileUpdate, request: Request
+) -> Response:
     """Update a Trust Profile."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
@@ -93,49 +294,101 @@ async def delete_trust_profile(profile_id: str, request: Request) -> Response:
 
 # ── Trusted Issuers (nested under Trust Profile) ─────────────────────
 
-@trust_profile_router.post("/{profile_id}/issuers", response_model=TrustedIssuerResponse, summary="Add Trusted Issuer")
-async def add_trusted_issuer(profile_id: str, body: TrustedIssuerCreate, request: Request) -> Response:
-    """Add a Trusted Issuer to a Trust Profile."""
+
+@trust_profile_router.post(
+    "/{profile_id}/issuers",
+    response_model=TrustProfileIssuerResponse,
+    summary="Link Issuer Entity",
+)
+async def add_trusted_issuer(
+    profile_id: str, body: TrustProfileIssuerCreate, request: Request
+) -> Response:
+    """Link an existing IssuerEntity to a Trust Profile."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/trust-profiles/{profile_id}/issuers")
+    response = await proxy_request(
+        request,
+        service_url,
+        f"/v1/trust-profiles/{profile_id}/issuers",
+        body_override=_validated_trust_profile_issuer_payload(body),
+    )
+    return _sanitize_trust_profile_issuer_response(response)
 
 
-@trust_profile_router.get("/{profile_id}/issuers", response_model=list[TrustedIssuerResponse], summary="List Trusted Issuers")
+@trust_profile_router.get(
+    "/{profile_id}/issuers",
+    response_model=list[TrustProfileIssuerResponse],
+    summary="List Trusted Issuer Relationships",
+)
 async def list_trusted_issuers(profile_id: str, request: Request) -> Response:
-    """List Trusted Issuers for a Trust Profile."""
+    """List protocol-defined issuer relationships for a Trust Profile."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/trust-profiles/{profile_id}/issuers")
+    response = await proxy_request(
+        request, service_url, f"/v1/trust-profiles/{profile_id}/issuers"
+    )
+    return _sanitize_trust_profile_issuer_response(response, many=True)
 
 
-@trust_profile_router.get("/{profile_id}/issuers/{issuer_id}", response_model=TrustedIssuerResponse, summary="Get Trusted Issuer")
-async def get_trusted_issuer(profile_id: str, issuer_id: str, request: Request) -> Response:
-    """Get a Trusted Issuer by ID."""
+@trust_profile_router.get(
+    "/{profile_id}/issuers/{issuer_id}",
+    response_model=TrustProfileIssuerResponse,
+    summary="Get Trusted Issuer Relationship",
+)
+async def get_trusted_issuer(
+    profile_id: str, issuer_id: str, request: Request
+) -> Response:
+    """Get a TrustProfileIssuer relationship by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/trust-profiles/{profile_id}/issuers/{issuer_id}")
+    response = await proxy_request(
+        request, service_url, f"/v1/trust-profiles/{profile_id}/issuers/{issuer_id}"
+    )
+    return _sanitize_trust_profile_issuer_response(response)
 
 
-@trust_profile_router.put("/{profile_id}/issuers/{issuer_id}", response_model=TrustedIssuerResponse, summary="Update Trusted Issuer")
-async def update_trusted_issuer(profile_id: str, issuer_id: str, body: TrustedIssuerUpdate, request: Request) -> Response:
-    """Update a Trusted Issuer."""
+@trust_profile_router.patch(
+    "/{profile_id}/issuers/{issuer_id}",
+    response_model=TrustProfileIssuerResponse,
+    summary="Update Trusted Issuer Relationship",
+)
+async def update_trusted_issuer(
+    profile_id: str, issuer_id: str, body: TrustProfileIssuerUpdate, request: Request
+) -> Response:
+    """Update trust policy without mutating the linked IssuerEntity."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/trust-profiles/{profile_id}/issuers/{issuer_id}")
+    response = await proxy_request(
+        request,
+        service_url,
+        f"/v1/trust-profiles/{profile_id}/issuers/{issuer_id}",
+        body_override=_validated_trust_profile_issuer_payload(body),
+    )
+    return _sanitize_trust_profile_issuer_response(response)
 
 
-@trust_profile_router.delete("/{profile_id}/issuers/{issuer_id}", summary="Delete Trusted Issuer")
-async def delete_trusted_issuer(profile_id: str, issuer_id: str, request: Request) -> Response:
+@trust_profile_router.delete(
+    "/{profile_id}/issuers/{issuer_id}", summary="Delete Trusted Issuer"
+)
+async def delete_trusted_issuer(
+    profile_id: str, issuer_id: str, request: Request
+) -> Response:
     """Delete a Trusted Issuer from a Trust Profile."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/trust-profiles/{profile_id}/issuers/{issuer_id}")
+    return await proxy_request(
+        request, service_url, f"/v1/trust-profiles/{profile_id}/issuers/{issuer_id}"
+    )
 
 
 # ── Organization Trust Profiles ──────────────────────────────────────
 
-@organization_trust_profile_router.post("", response_model=OrganizationTrustProfileResponse, summary="Create Organization Trust Profile")
+
+@organization_trust_profile_router.post(
+    "",
+    response_model=OrganizationTrustProfileResponse,
+    summary="Create Organization Trust Profile",
+)
 async def create_organization_trust_profile(
     organization_id: str,
     body: OrganizationTrustProfileCreate,
@@ -143,24 +396,48 @@ async def create_organization_trust_profile(
 ) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/trust-profiles")
+    return await proxy_request(
+        request, service_url, f"/v1/organizations/{organization_id}/trust-profiles"
+    )
 
 
-@organization_trust_profile_router.get("", response_model=list[OrganizationTrustProfileResponse], summary="List Organization Trust Profiles")
-async def list_organization_trust_profiles(organization_id: str, request: Request) -> Response:
+@organization_trust_profile_router.get(
+    "",
+    response_model=list[OrganizationTrustProfileResponse],
+    summary="List Organization Trust Profiles",
+)
+async def list_organization_trust_profiles(
+    organization_id: str, request: Request
+) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/trust-profiles")
+    return await proxy_request(
+        request, service_url, f"/v1/organizations/{organization_id}/trust-profiles"
+    )
 
 
-@organization_trust_profile_router.get("/{profile_id}", response_model=OrganizationTrustProfileResponse, summary="Get Organization Trust Profile")
-async def get_organization_trust_profile(organization_id: str, profile_id: str, request: Request) -> Response:
+@organization_trust_profile_router.get(
+    "/{profile_id}",
+    response_model=OrganizationTrustProfileResponse,
+    summary="Get Organization Trust Profile",
+)
+async def get_organization_trust_profile(
+    organization_id: str, profile_id: str, request: Request
+) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/trust-profiles/{profile_id}")
+    return await proxy_request(
+        request,
+        service_url,
+        f"/v1/organizations/{organization_id}/trust-profiles/{profile_id}",
+    )
 
 
-@organization_trust_profile_router.put("/{profile_id}", response_model=OrganizationTrustProfileResponse, summary="Update Organization Trust Profile")
+@organization_trust_profile_router.put(
+    "/{profile_id}",
+    response_model=OrganizationTrustProfileResponse,
+    summary="Update Organization Trust Profile",
+)
 async def update_organization_trust_profile(
     organization_id: str,
     profile_id: str,
@@ -169,84 +446,81 @@ async def update_organization_trust_profile(
 ) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/trust-profiles/{profile_id}")
-
-
-@organization_trust_profile_router.post(
-    "/{profile_id}/test-key-connection",
-    response_model=KeyConnectionTestResponse,
-    summary="Test Organization Trust Profile Key Connection",
-)
-async def test_organization_trust_profile_key_connection(
-    organization_id: str,
-    profile_id: str,
-    body: KeyConnectionTestRequest,
-    request: Request,
-) -> Response:
-    registry = get_registry()
-    service_url = registry.get_service_url("trust-profiles")
     return await proxy_request(
         request,
         service_url,
-        f"/v1/organizations/{organization_id}/trust-profiles/{profile_id}/test-key-connection",
-    )
-
-
-@organization_trust_profile_router.post(
-    "/{profile_id}/create-or-associate-key",
-    response_model=KeyCreateAssociateResponse,
-    summary="Create Or Associate Organization Trust Profile Key",
-)
-async def create_or_associate_organization_trust_profile_key(
-    organization_id: str,
-    profile_id: str,
-    body: KeyCreateAssociateRequest,
-    request: Request,
-) -> Response:
-    registry = get_registry()
-    service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(
-        request,
-        service_url,
-        f"/v1/organizations/{organization_id}/trust-profiles/{profile_id}/create-or-associate-key",
+        f"/v1/organizations/{organization_id}/trust-profiles/{profile_id}",
     )
 
 
 # ── Issuer Entities ──────────────────────────────────────────────────
 
-@issuer_entity_router.post("", response_model=IssuerEntityResponse, summary="Create Issuer Entity")
+
+@issuer_entity_router.post(
+    "", response_model=IssuerEntityResponse, summary="Create Issuer Entity"
+)
 async def create_issuer_entity(body: IssuerEntityCreate, request: Request) -> Response:
     """Create a protocol-aligned issuer registry entry."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, "/v1/issuer-entities")
+    response = await proxy_request(
+        request,
+        service_url,
+        "/v1/issuer-entities",
+        body_override=_validated_issuer_entity_payload(body),
+    )
+    return _sanitize_issuer_entity_response(response)
 
 
-@issuer_entity_router.get("", response_model=list[IssuerEntityResponse], summary="List Issuer Entities")
+@issuer_entity_router.get(
+    "", response_model=list[IssuerEntityResponse], summary="List Issuer Entities"
+)
 async def list_issuer_entities(
-    organization_id: str | None = Query(None, description="Optional organization scope"),
+    organization_id: str | None = Query(
+        None, description="Optional organization scope"
+    ),
     request: Request = None,
 ) -> Response:
     """List issuer registry entities, optionally scoped to an organization."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, "/v1/issuer-entities")
+    response = await proxy_request(request, service_url, "/v1/issuer-entities")
+    return _sanitize_issuer_entity_response(response, many=True)
 
 
-@issuer_entity_router.get("/{issuer_entity_id}", response_model=IssuerEntityResponse, summary="Get Issuer Entity")
+@issuer_entity_router.get(
+    "/{issuer_entity_id}",
+    response_model=IssuerEntityResponse,
+    summary="Get Issuer Entity",
+)
 async def get_issuer_entity(issuer_entity_id: str, request: Request) -> Response:
     """Get a single issuer registry entity."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/issuer-entities/{issuer_entity_id}")
+    response = await proxy_request(
+        request, service_url, f"/v1/issuer-entities/{issuer_entity_id}"
+    )
+    return _sanitize_issuer_entity_response(response)
 
 
-@issuer_entity_router.put("/{issuer_entity_id}", response_model=IssuerEntityResponse, summary="Update Issuer Entity")
-async def update_issuer_entity(issuer_entity_id: str, body: IssuerEntityUpdate, request: Request) -> Response:
+@issuer_entity_router.patch(
+    "/{issuer_entity_id}",
+    response_model=IssuerEntityResponse,
+    summary="Update Issuer Entity",
+)
+async def update_issuer_entity(
+    issuer_entity_id: str, body: IssuerEntityUpdate, request: Request
+) -> Response:
     """Update an issuer registry entity."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/issuer-entities/{issuer_entity_id}")
+    response = await proxy_request(
+        request,
+        service_url,
+        f"/v1/issuer-entities/{issuer_entity_id}",
+        body_override=_validated_issuer_entity_payload(body),
+    )
+    return _sanitize_issuer_entity_response(response)
 
 
 @issuer_entity_router.delete("/{issuer_entity_id}", summary="Delete Issuer Entity")
@@ -254,12 +528,17 @@ async def delete_issuer_entity(issuer_entity_id: str, request: Request) -> Respo
     """Delete an issuer registry entity."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/issuer-entities/{issuer_entity_id}")
+    return await proxy_request(
+        request, service_url, f"/v1/issuer-entities/{issuer_entity_id}"
+    )
 
 
 # ── Trust Frameworks ─────────────────────────────────────────────────
 
-@trust_framework_router.get("", response_model=list[TrustFrameworkResponse], summary="List Trust Frameworks")
+
+@trust_framework_router.get(
+    "", response_model=list[TrustFrameworkResponse], summary="List Trust Frameworks"
+)
 async def list_trust_frameworks(request: Request) -> Response:
     """List system-managed trust frameworks."""
     registry = get_registry()
@@ -267,17 +546,26 @@ async def list_trust_frameworks(request: Request) -> Response:
     return await proxy_request(request, service_url, "/v1/trust-frameworks")
 
 
-@trust_framework_router.get("/{framework_id}", response_model=TrustFrameworkResponse, summary="Get Trust Framework")
+@trust_framework_router.get(
+    "/{framework_id}",
+    response_model=TrustFrameworkResponse,
+    summary="Get Trust Framework",
+)
 async def get_trust_framework(framework_id: str, request: Request) -> Response:
     """Get a trust framework by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/trust-frameworks/{framework_id}")
+    return await proxy_request(
+        request, service_url, f"/v1/trust-frameworks/{framework_id}"
+    )
 
 
 # ── Trust Registry ───────────────────────────────────────────────────
 
-@trust_registry_router.get("/sync", response_model=TrustRegistrySyncResponse, summary="Sync Trust Registry")
+
+@trust_registry_router.get(
+    "/sync", response_model=TrustRegistrySyncResponse, summary="Sync Trust Registry"
+)
 async def sync_trust_registry(request: Request) -> Response:
     """Delta-sync trust anchors for wallet offline verification."""
     registry = get_registry()
@@ -285,7 +573,9 @@ async def sync_trust_registry(request: Request) -> Response:
     return await proxy_request(request, service_url, "/v1/trust-registry/sync")
 
 
-@trust_registry_router.get("/csca", response_model=list[TrustRegistryEntryResponse], summary="List CSCAs")
+@trust_registry_router.get(
+    "/csca", response_model=list[TrustRegistryEntryResponse], summary="List CSCAs"
+)
 async def list_csca_entries(request: Request) -> Response:
     """List current CSCA trust anchors."""
     registry = get_registry()
@@ -293,7 +583,9 @@ async def list_csca_entries(request: Request) -> Response:
     return await proxy_request(request, service_url, "/v1/trust-registry/csca")
 
 
-@trust_registry_router.get("/dsc", response_model=list[TrustRegistryEntryResponse], summary="List DSCs")
+@trust_registry_router.get(
+    "/dsc", response_model=list[TrustRegistryEntryResponse], summary="List DSCs"
+)
 async def list_dsc_entries(request: Request) -> Response:
     """List current DSC trust anchors."""
     registry = get_registry()
@@ -301,15 +593,25 @@ async def list_dsc_entries(request: Request) -> Response:
     return await proxy_request(request, service_url, "/v1/trust-registry/dsc")
 
 
-@trust_registry_router.get("/csca/{country_code}", response_model=list[TrustRegistryEntryResponse], summary="List CSCAs By Country")
+@trust_registry_router.get(
+    "/csca/{country_code}",
+    response_model=list[TrustRegistryEntryResponse],
+    summary="List CSCAs By Country",
+)
 async def list_country_csca_entries(country_code: str, request: Request) -> Response:
     """List current CSCAs for a specific country."""
     registry = get_registry()
     service_url = registry.get_service_url("trust-profiles")
-    return await proxy_request(request, service_url, f"/v1/trust-registry/csca/{country_code}")
+    return await proxy_request(
+        request, service_url, f"/v1/trust-registry/csca/{country_code}"
+    )
 
 
-@trust_registry_router.get("/status", response_model=TrustRegistryStatusResponse, summary="Trust Registry Status")
+@trust_registry_router.get(
+    "/status",
+    response_model=TrustRegistryStatusResponse,
+    summary="Trust Registry Status",
+)
 async def get_trust_registry_status(request: Request) -> Response:
     """Get trust registry health and sequence metadata."""
     registry = get_registry()
@@ -319,6 +621,7 @@ async def get_trust_registry_status(request: Request) -> Response:
 
 # ── API Keys ─────────────────────────────────────────────────────────
 
+
 @api_key_router.get("", response_model=list[ApiKeyResponse], summary="List API Keys")
 async def list_api_keys(
     organization_id: str = Query(..., description="Organization ID"),
@@ -327,7 +630,9 @@ async def list_api_keys(
     """List API keys for an organization using the protocol top-level route."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/api-keys")
+    return await proxy_request(
+        request, service_url, f"/v1/organizations/{organization_id}/api-keys"
+    )
 
 
 @api_key_router.post("", response_model=ApiKeyCreatedResponse, summary="Create API Key")
@@ -339,7 +644,9 @@ async def create_api_key(
     """Create an API key for an organization using the protocol top-level route."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/api-keys")
+    return await proxy_request(
+        request, service_url, f"/v1/organizations/{organization_id}/api-keys"
+    )
 
 
 @api_key_router.delete("/{key_id}", summary="Delete API Key")
@@ -351,4 +658,6 @@ async def delete_api_key(
     """Delete or revoke an API key for an organization using the protocol top-level route."""
     registry = get_registry()
     service_url = registry.get_service_url("organizations")
-    return await proxy_request(request, service_url, f"/v1/organizations/{organization_id}/api-keys/{key_id}")
+    return await proxy_request(
+        request, service_url, f"/v1/organizations/{organization_id}/api-keys/{key_id}"
+    )

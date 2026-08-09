@@ -46,7 +46,7 @@ describe('TrustComplianceStep', () => {
     renderWithoutRouter(
       <MemoryRouter>
         <TrustComplianceStep
-          data={{ trust_profile_id: null, signing_algorithm: 'ES256' }}
+          data={{ trust_profile_id: null }}
           onChange={vi.fn()}
         />
       </MemoryRouter>
@@ -66,11 +66,9 @@ describe('TrustComplianceStep', () => {
       })
       .mockReturnValueOnce({
         data: [{
-          id: 'issuer-1',
-          name: 'Production Issuer',
           issuer_did: 'did:web:issuer.example.com',
-          signing_service_id: 'managed-openbao-transit',
-          signing_key_reference: 'issuer-key',
+          key_purpose: 'vc_jwt_issuer',
+          algorithm: 'ES256',
           status: 'active',
         }],
         loading: false,
@@ -89,7 +87,7 @@ describe('TrustComplianceStep', () => {
     renderWithoutRouter(
       <MemoryRouter>
         <TrustComplianceStep
-          data={{ trust_profile_id: 'trust-1', issuer_did: 'did:web:issuer.example.com', signing_algorithm: 'ES256' }}
+          data={{ trust_profile_id: 'trust-1', issuer_did: 'did:web:issuer.example.com' }}
           onChange={onChange}
         />
       </MemoryRouter>
@@ -103,7 +101,7 @@ describe('TrustComplianceStep', () => {
     expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument()
   })
 
-  it('does not offer active issuer profiles that are missing a KMS signing service', () => {
+  it('does not offer malformed public issuer identities', () => {
     mockUseAsyncData
       .mockReturnValueOnce({
         data: [{ id: 'trust-1', name: 'Production Trust', status: 'active' }],
@@ -113,9 +111,9 @@ describe('TrustComplianceStep', () => {
       })
       .mockReturnValueOnce({
         data: [{
-          id: 'issuer-1',
-          name: 'Unbound Issuer',
-          issuer_did: 'did:web:issuer.example.com',
+          issuer_did: 'not-a-did',
+          key_purpose: 'vc_jwt_issuer',
+          algorithm: 'ES256',
           status: 'active',
         }],
         loading: false,
@@ -132,14 +130,14 @@ describe('TrustComplianceStep', () => {
     renderWithoutRouter(
       <MemoryRouter>
         <TrustComplianceStep
-          data={{ trust_profile_id: 'trust-1', issuer_profile_id: null, signing_algorithm: 'ES256' }}
+          data={{ trust_profile_id: 'trust-1' }}
           onChange={vi.fn()}
         />
       </MemoryRouter>
     )
 
-    expect(screen.getByText(/active issuer profile required/i)).toBeInTheDocument()
-    expect(screen.getByText(/registered KMS signing service/i)).toBeInTheDocument()
+    expect(screen.getByText(/active issuer DID required/i)).toBeInTheDocument()
+    expect(screen.getByText(/organization registry resolves its managed custody profile/i)).toBeInTheDocument()
     expect(screen.queryByText(/optional compliance profile/i)).not.toBeInTheDocument()
   })
 
@@ -154,11 +152,9 @@ describe('TrustComplianceStep', () => {
       })
       .mockReturnValueOnce({
         data: [{
-          id: 'issuer-1',
-          name: 'Production Issuer',
           issuer_did: 'did:web:issuer.example.com',
-          signing_service_id: 'managed-openbao-transit',
-          signing_key_reference: 'issuer-key',
+          key_purpose: 'vc_jwt_issuer',
+          algorithm: 'ES256',
           status: 'active',
         }],
         loading: false,
@@ -175,20 +171,19 @@ describe('TrustComplianceStep', () => {
     renderWithoutRouter(
       <MemoryRouter>
         <TrustComplianceStep
-          data={{ trust_profile_id: 'trust-1', issuer_did: null, signing_algorithm: 'ES256' }}
+          data={{ trust_profile_id: 'trust-1', issuer_did: null }}
           onChange={onChange}
         />
       </MemoryRouter>
     )
 
     await waitFor(() => {
-      expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
-        issuer_profile_id: null,
+      expect(onChange).toHaveBeenCalledWith({
         issuer_did: 'did:web:issuer.example.com',
-        issuer_key_id: null,
-        key_access_mode: null,
-        remote_signing_config: null,
-      }))
+      })
     })
+    const patchKeys = onChange.mock.calls.flatMap(([patch]) => Object.keys(patch))
+    expect(patchKeys).not.toContain('issuer_profile_id')
+    expect(patchKeys).not.toContain('signing_algorithm')
   })
 })

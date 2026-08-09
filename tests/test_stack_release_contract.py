@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -45,6 +46,38 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
     assert "runs-on: ubuntu-latest" in workflow
 
 
+def test_ci_verifies_the_pinned_mdoc_binding_evidence_contract() -> None:
+    workflow = _text(".github/workflows/ci.yml")
+
+    assert 'select(.name == "marty-core-python")' in workflow
+    assert 'select(.type == "python") | .uri' in workflow
+    assert 'select(.type == "python") | .digest' in workflow
+    assert "sha256sum --check --strict" in workflow
+    assert (
+        'pip install pytest pyyaml jsonschema cryptography playwright "$marty_rs_wheel"'
+        in workflow
+    )
+    assert "Verify released mdoc binding evidence contract" in workflow
+    assert "from marty_rs import _marty_rs" in workflow
+    assert "_marty_rs.MdocDocumentVerificationEvidence" in workflow
+    assert '"issuer_certificate_sha256"' in workflow
+    assert '"valid_at_verification_time"' in workflow
+    assert "result.document_evidence == []" in workflow
+    assert "result.revocation_checked is False" in workflow
+    assert "result.not_revoked is None" in workflow
+
+
+def test_cli_and_api_core_use_the_same_monorepo_release() -> None:
+    lock = json.loads(_text("release/stack-lock.json"))
+    components = {component["name"]: component for component in lock["components"]}
+
+    api_core = components["marty-api-core"]
+    cli = components["marty-cli"]
+    assert api_core["repository"] == cli["repository"] == "ElevenID/marty-cli"
+    assert api_core["version"] == cli["version"]
+    assert api_core["commit"] == cli["commit"]
+
+
 def test_stack_release_publishes_signed_evidence() -> None:
     workflow = _text(".github/workflows/cd.yml")
 
@@ -72,16 +105,22 @@ def test_stack_release_allows_only_successful_one_shot_exits() -> None:
 def test_stack_release_is_tag_only_and_targets_the_validated_tag() -> None:
     workflow = _text(".github/workflows/cd.yml")
 
-    assert "workflow_dispatch:" not in workflow
-    assert 'test "$GITHUB_EVENT_NAME" = "push"' in workflow
+    assert "workflow_dispatch:" in workflow
+    assert (
+        'test "$GITHUB_EVENT_NAME" = "push" || '
+        'test "$GITHUB_EVENT_NAME" = "workflow_dispatch"'
+    ) in workflow
+    assert 'test "$GITHUB_REF_TYPE" = "tag"' in workflow
     assert 'test "$GITHUB_REF_NAME" = "v$version"' in workflow
     assert "tag_name: v${{ needs.validate-stack.outputs.version }}" in workflow
     assert "Reject any existing release" in workflow
     assert "python scripts/check_release_absent.py" in workflow
-    assert "draft: true" in workflow
     assert "overwrite_files: false" in workflow
-    assert 'gh release edit "$RELEASE_TAG"' in workflow
-    assert "--draft=false" in workflow
+    # action-gh-release v3 stages assets before finalizing a standard release.
+    # A second API edit is incompatible with GitHub immutable releases.
+    assert "draft: true" not in workflow
+    assert 'gh release edit "$RELEASE_TAG"' not in workflow
+    assert "--draft=false" not in workflow
     assert "inputs.lock_file" not in workflow
 
 

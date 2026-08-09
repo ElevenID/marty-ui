@@ -1,12 +1,13 @@
 name: CI
 
 env:
-  MARTY_API_CORE_URI: https://github.com/ElevenID/marty-cli/releases/download/v0.1.0/elevenid-marty-api-core-0.1.0.tgz
-  MARTY_API_CORE_DIGEST: sha256:c048d482faee350e984bc647c7e99948d894bae5c3355c976909ffe2a62c3dcc
-  MARTY_BLOG_URI: https://github.com/ElevenID/marty-blog/releases/download/v0.1.3/elevenid-marty-blog-0.1.3.tgz
-  MARTY_BLOG_DIGEST: sha256:ae68d11b38fc0387c07eb6629197ba226cbca9cfe65efc23e6a97cce81a20a57
-  MARTY_COMMON_URI: https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.0/marty_common-0.2.0-py3-none-any.whl
-  MARTY_COMMON_DIGEST: sha256:123452b401144ff2c7b13c4c8f2eea1370a34a60c259e49795d5dfe295747a2f
+  MARTY_API_CORE_URI: https://github.com/ElevenID/marty-cli/releases/download/v0.2.3/elevenid-marty-api-core-0.2.3.tgz
+  MARTY_API_CORE_DIGEST: sha256:d3fed82fbd58d9106ea198511d1facec2c5e4d9aa703868ee57d1a9a4a4d9fdd
+  MARTY_BLOG_URI: https://github.com/ElevenID/marty-blog/releases/download/v0.1.5/elevenid-marty-blog-0.1.5.tgz
+  MARTY_BLOG_DIGEST: sha256:37ef3b45e289198022c2ccc83dcb618959a68644ee72366a00d6a4a6f331aaca
+  MARTY_COMMON_URI: https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.4/marty_common-0.2.4-py3-none-any.whl
+  MARTY_COMMON_DIGEST: sha256:1163a215f53dad95b73a5f67be4c5cca2573e049396edd71156b517d7d43595b
+  MARTY_PROTOCOL_REF: 6387a02fe4a6eaa08b4743cae97590adee11190c
 
 on:
   push:
@@ -78,13 +79,105 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$RUNNER_TEMP/marty_common-0.2.0-py3-none-any.whl"
-          echo "${MARTY_COMMON_DIGEST#sha256:}  $RUNNER_TEMP/marty_common-0.2.0-py3-none-any.whl" | sha256sum --check --strict
+          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl"
+          echo "${MARTY_COMMON_DIGEST#sha256:}  $RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl" | sha256sum --check --strict
           pip install -r requirements-services.txt
-          pip install "$RUNNER_TEMP/marty_common-0.2.0-py3-none-any.whl"
+          pip install "$RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl"
       - name: Run tests
         working-directory: services
         run: python -m pytest -v --tb=short -x
+
+  flow-idempotency-contract:
+    name: Flow Idempotency PostgreSQL Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      FLOW_IDEMPOTENCY_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+      COMPOSE_PROJECT_NAME: flow-idempotency-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: marty-ui
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Validate disposable Flow idempotency topology
+        working-directory: marty-ui
+        run: docker compose --file docker-compose.flow-idempotency-contract.yml config --quiet
+
+      - name: Build Flow idempotency contract image
+        working-directory: marty-ui
+        run: |
+          mkdir -p tests/artifacts/flow-idempotency
+          chmod 0777 tests/artifacts/flow-idempotency
+          docker compose --file docker-compose.flow-idempotency-contract.yml build --pull flow-idempotency-contract
+
+      - name: Race Flow reservations and durable artifacts in PostgreSQL
+        working-directory: marty-ui
+        run: >-
+          docker compose --file docker-compose.flow-idempotency-contract.yml
+          up --force-recreate --abort-on-container-exit
+          --exit-code-from flow-idempotency-contract flow-idempotency-contract
+
+      - name: Require sanitized Flow idempotency evidence
+        working-directory: marty-ui
+        run: |
+          test "$(jq -r '.status' tests/artifacts/flow-idempotency/contract-result.json)" = passed
+          test "$(jq -r '.migration_revision' tests/artifacts/flow-idempotency/contract-result.json)" = 20260809_0001
+          test "$(jq -r '.production_repository_exercised' tests/artifacts/flow-idempotency/contract-result.json)" = true
+          test "$(jq -r '.instance_created_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
+          test "$(jq -r '.instance_recovered_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
+          test "$(jq -r '.same_instance' tests/artifacts/flow-idempotency/contract-result.json)" = true
+          test "$(jq -r '.event_receipt_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
+          test "$(jq -r '.same_durable_plan' tests/artifacts/flow-idempotency/contract-result.json)" = true
+          test "$(jq -r '.artifact_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
+          test "$(jq -r '.same_artifact' tests/artifacts/flow-idempotency/contract-result.json)" = true
+          test "$(jq -r '.cross_instance_rebind_rejected' tests/artifacts/flow-idempotency/contract-result.json)" = true
+          test "$(jq -r '.semantic_conflict_rolled_back' tests/artifacts/flow-idempotency/contract-result.json)" = true
+          test "$(jq -r '.changed_payload_rejected' tests/artifacts/flow-idempotency/contract-result.json)" = true
+          test "$(jq -r '.source_revision' tests/artifacts/flow-idempotency/contract-result.json)" = "$FLOW_IDEMPOTENCY_SOURCE_REVISION"
+
+      - name: Upload Flow idempotency evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: flow-idempotency-${{ github.run_id }}-${{ github.run_attempt }}
+          path: marty-ui/tests/artifacts/flow-idempotency/contract-result.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove disposable Flow idempotency stack
+        if: always()
+        working-directory: marty-ui
+        run: docker compose --file docker-compose.flow-idempotency-contract.yml down --volumes --remove-orphans
+
+  public-protocol-contract:
+    name: Public Protocol Contract
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Require immutable protocol revision
+        shell: bash
+        run: |
+          if [[ ! "$MARTY_PROTOCOL_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "MARTY_PROTOCOL_REF must be a full 40-character commit SHA." >&2
+            exit 1
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: Marty-Protocol/Marty-Protocol
+          ref: ${{ env.MARTY_PROTOCOL_REF }}
+          path: marty-protocol
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Install contract-check dependencies
+        run: pip install -r requirements-services.txt jsonschema
+      - name: Enforce public response contract
+        run: python scripts/check_public_protocol_contract.py --protocol-root marty-protocol
 
   test-release-contracts:
     name: Release Contract Tests
@@ -100,16 +193,57 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$RUNNER_TEMP/marty_common-0.2.0-py3-none-any.whl"
-          echo "${MARTY_COMMON_DIGEST#sha256:}  $RUNNER_TEMP/marty_common-0.2.0-py3-none-any.whl" | sha256sum --check --strict
-          pip install pytest pyyaml jsonschema cryptography playwright "$RUNNER_TEMP/marty_common-0.2.0-py3-none-any.whl"
+          marty_rs_uri="$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
+          marty_rs_digest="$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
+          marty_rs_wheel="$RUNNER_TEMP/${marty_rs_uri##*/}"
+          curl --fail --location --silent --show-error "$marty_rs_uri" --output "$marty_rs_wheel"
+          echo "${marty_rs_digest#sha256:}  $marty_rs_wheel" | sha256sum --check --strict
+          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl"
+          echo "${MARTY_COMMON_DIGEST#sha256:}  $RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl" | sha256sum --check --strict
+          pip install pytest pyyaml jsonschema cryptography playwright "$marty_rs_wheel" "$RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl"
+      - name: Verify released mdoc binding evidence contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from marty_rs import _marty_rs
+
+          evidence_type = _marty_rs.MdocDocumentVerificationEvidence
+          for attribute in (
+              "document_type",
+              "signature_algorithm",
+              "digest_algorithm",
+              "signed_at",
+              "valid_from",
+              "valid_until",
+              "issuer_certificate_sha256",
+              "validity_checked",
+              "valid_at_verification_time",
+              "revocation_checked",
+              "not_revoked",
+          ):
+              assert hasattr(evidence_type, attribute), attribute
+
+          result = _marty_rs.verify_mdoc_presentation(
+              b"\xff",
+              bytes([0x83, 0xF6, 0xF6, 0x82, 0x71]),
+              [],
+          )
+          assert result.issuer_signature_valid is False
+          assert result.issuer_trusted is False
+          assert result.device_authentication_valid is False
+          assert result.document_evidence == []
+          assert result.revocation_checked is False
+          assert result.not_revoked is None
+          assert result.error
+          PY
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
       - name: Run repository release checks
         run: python -m pytest tests -v --tb=short
 
   test-credential-lifecycle-browser:
-    name: MIP 0.3 Credential Lifecycle Browser Gate
+    name: MIP 0.4 Credential Lifecycle Browser Gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0

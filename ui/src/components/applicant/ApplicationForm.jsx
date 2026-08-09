@@ -57,6 +57,7 @@ import {
   enrollMyBiometric,
   getMyApplicantProfile,
   listApplications as listApplicationsApi,
+  submitApplicationEvidence as submitApplicationEvidenceApi,
   submitApplication as submitApplicationApi,
   upsertMyApplicantProfile,
   withdrawApplication,
@@ -76,6 +77,7 @@ import {
   getWalletOfferDialogError,
   getOneClickSummaryFields,
   groupFieldsIntoSteps,
+  normalizeApplicationTemplateToFormConfig,
   normalizeCredentialConfigInput,
   validateApplicationStep,
 } from '../../application/applications';
@@ -233,9 +235,15 @@ export default function ApplicationForm() {
   const [submitted, setSubmitted] = useState(false);
   const [applicationId, setApplicationId] = useState(null);
   const [applicationReference, setApplicationReference] = useState(null);
-  const [credentialConfig, setCredentialConfig] = useState(
-    normalizeCredentialConfigInput(initialApplyState?.credential) || null
-  );
+  const [credentialConfig, setCredentialConfig] = useState(() => {
+    const initialCredential = normalizeCredentialConfigInput(initialApplyState?.credential) || null;
+    const initialTemplate = initialApplyState?.applicationTemplate
+      || initialApplyState?.credential?.application_template
+      || null;
+    return initialTemplate
+      ? normalizeApplicationTemplateToFormConfig(initialTemplate, initialCredential)
+      : initialCredential;
+  });
   const [configLoading, setConfigLoading] = useState(false);
   const [canvasLtiSession, setCanvasLtiSession] = useState(initialApplyState?.canvasLtiSession || null);
   const [canvasLtiBootstrap, setCanvasLtiBootstrap] = useState(initialApplyState?.canvasLtiBootstrap || null);
@@ -494,7 +502,9 @@ export default function ApplicationForm() {
   useEffect(() => {
     // Pre-fill user email if email field exists
     if (user?.email && allFields.some(f => f.name === 'email')) {
-      setFormData(prev => ({ ...prev, email: user.email }));
+      setFormData(prev => (
+        prev.email === user.email ? prev : { ...prev, email: user.email }
+      ));
     }
   }, [user, allFields]);
 
@@ -665,6 +675,7 @@ export default function ApplicationForm() {
         updateApplicantProfile: (_applicantId, data) => upsertMyApplicantProfile(data),
         getApplicantByUser: () => getMyApplicantProfile(),
         createApplication: createApplicationApi,
+        submitApplicationEvidence: submitApplicationEvidenceApi,
         submitApplication: submitApplicationApi,
         listApplicantApplications: () => listApplicationsApi({ limit: 100 }).then((page) => page.items),
         supersedeApplication: withdrawApplication,

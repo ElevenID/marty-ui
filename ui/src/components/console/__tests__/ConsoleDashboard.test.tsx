@@ -53,7 +53,7 @@ vi.mock('react-router', async () => {
 const emptyDashboardData = {
   trustProfiles: [],
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
-  issuerProfiles: [],
+  issuerIdentities: [],
   keyManagementConfig: {
     default_service_id: 'managed-openbao-transit',
     services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
@@ -74,10 +74,10 @@ const emptyDashboardData = {
 const partialDashboardData = {
   trustProfiles: [{ id: 1, name: 'Active Profile', status: 'active' }],
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
-  issuerProfiles: [{
-    id: 'issuer_1',
+  issuerIdentities: [{
     issuer_did: 'did:web:issuer.example.com',
-    signing_service_id: 'managed-openbao-transit',
+    key_purpose: 'vc_jwt_issuer',
+    algorithm: 'ES256',
     status: 'active',
   }],
   keyManagementConfig: {
@@ -107,10 +107,10 @@ const partialDashboardData = {
 const fullDashboardData = {
   trustProfiles: [{ id: 1, name: 'Active Profile', status: 'active' }],
   signingKeys: [{ id: 'key_1', name: 'Issuer Key' }],
-  issuerProfiles: [{
-    id: 'issuer_1',
+  issuerIdentities: [{
     issuer_did: 'did:web:issuer.example.com',
-    signing_service_id: 'managed-openbao-transit',
+    key_purpose: 'vc_jwt_issuer',
+    algorithm: 'ES256',
     status: 'active',
   }],
   keyManagementConfig: {
@@ -283,9 +283,7 @@ describe('ConsoleDashboard', () => {
       const checkmarks = screen.getAllByTestId('CheckCircleIcon')
       expect(checkmarks.length).toBeGreaterThanOrEqual(1)
 
-      // Template is BLOCKED — should have WarningIcon
-      const warnings = screen.getAllByTestId('WarningIcon')
-      expect(warnings.length).toBeGreaterThanOrEqual(1)
+      expect(screen.getByText(/4 of 5 steps complete/i)).toBeInTheDocument()
     })
 
     it('should show quick actions', () => {
@@ -293,10 +291,9 @@ describe('ConsoleDashboard', () => {
       expect(screen.getByText(/Next Step/i)).toBeInTheDocument()
     })
 
-    it('should show blocking issues for blocked template', () => {
+    it('does not treat legacy artifact metadata as a public template blocker', () => {
       render(<ConsoleDashboard />)
-      // Template has artifacts_status: 'missing' — computeBlockers returns blocker
-      expect(screen.getByText(/Blocking Issues/i)).toBeInTheDocument()
+      expect(screen.queryByText(/Blocking Issues/i)).not.toBeInTheDocument()
     })
 
     it('should show team with one member', () => {
@@ -569,7 +566,7 @@ describe('ConsoleDashboard', () => {
           ...emptyDashboardData,
           setupIntent: 'issue',
           signingKeys: [],
-          issuerProfiles: [],
+          issuerIdentities: [],
           keyManagementConfig: {
             default_service_id: null,
             services: [],
@@ -592,7 +589,7 @@ describe('ConsoleDashboard', () => {
           ...emptyDashboardData,
           setupIntent: 'issue',
           signingKeys: [],
-          issuerProfiles: [],
+          issuerIdentities: [],
         },
         loading: false,
         error: null,

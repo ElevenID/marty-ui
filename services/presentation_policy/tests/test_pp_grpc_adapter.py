@@ -83,6 +83,7 @@ def _build_servicer(**overrides) -> PresentationPolicyServiceGrpc:
         repo=MagicMock(),
         evaluate_fn=AsyncMock(),
         to_response_fn=_to_response_fn,
+        cedar_engine=MagicMock(),
     )
     defaults.update(overrides)
     return PresentationPolicyServiceGrpc(**defaults)
@@ -223,6 +224,8 @@ class TestEvaluatePresentation:
         claims = json.loads(resp.verified_claims_json)
         assert claims["email"] == "alice@example.com"
         assert ctx.code is None
+        evaluate_fn.assert_awaited_once()
+        assert evaluate_fn.await_args.kwargs["cedar_engine"] is servicer._cedar_engine
 
     async def test_policy_not_found(self, ctx):
         repo = MagicMock()

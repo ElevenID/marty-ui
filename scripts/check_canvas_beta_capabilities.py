@@ -177,7 +177,6 @@ def validate(expected_organization_id: str) -> dict[str, Any]:
 
     signer_settings = (
         "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
-        "CANVAS_LTI_TOOL_ISSUER_PROFILE_ID",
         "CANVAS_LTI_TOOL_ISSUER_DID",
         "CANVAS_LTI_TOOL_ACTIVE_KID",
         "CANVAS_LTI_TOOL_PUBLIC_JWKS",
@@ -186,18 +185,11 @@ def validate(expected_organization_id: str) -> dict[str, Any]:
     for setting in signer_settings:
         _require(bool(issuance.get(setting, "").strip()), f"Deployed beta issuance is missing {setting}")
         _require(worker.get(setting) == issuance.get(setting), f"Canvas worker {setting} differs from deployed issuance")
-    issuer_profile_id = issuance["CANVAS_LTI_TOOL_ISSUER_PROFILE_ID"].strip()
     issuer_did = issuance["CANVAS_LTI_TOOL_ISSUER_DID"].strip()
     _require(issuer_did.startswith("did:"), "Canvas LTI issuer identity is not a DID")
-    credential_profile_ids = set(
-        _csv(
-            issuance["CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS"],
-            "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
-        )
-    )
-    _require(
-        issuer_profile_id not in credential_profile_ids,
-        "LTI issuer profile overlaps a credential issuer profile",
+    _csv(
+        issuance["CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS"],
+        "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
     )
     active_kid = issuance["CANVAS_LTI_TOOL_ACTIVE_KID"].strip()
     _require(
@@ -239,9 +231,8 @@ def validate(expected_organization_id: str) -> dict[str, Any]:
             "pilot_organization_admitted": True,
             "self_managed_origin_allowlisted": True,
             "legacy_event_ingest_disabled": True,
-            "issuer_profile_did_rs256_signer": True,
+            "issuer_did_rs256_signer": True,
             "public_jwks_matches_deployment": True,
-            "credential_and_lti_profiles_distinct": True,
             "canvas_worker_running_same_image": True,
             "readiness_and_evidence_ttls_fail_closed": True,
             "worker_job_deadline_fail_closed": True,

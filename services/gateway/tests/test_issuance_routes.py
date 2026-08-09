@@ -9,14 +9,11 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi import HTTPException
+from gateway.models import PUBLIC_ISSUANCE_RESERVED_CLAIMS, DidcommDeliverRequest
+from gateway.registry import get_route_config
+from gateway.routes import applicants, canvas_integrations, issuance, signing_keys
 from pydantic import ValidationError
 from starlette.responses import JSONResponse
-
-from gateway.routes import applicants
-from gateway.routes import canvas_integrations
-from gateway.routes import issuance
-from gateway.routes import signing_keys
-from gateway.registry import get_route_config
 
 
 def _build_request(
@@ -45,6 +42,7 @@ def _build_request(
 
     request = Request(scope, receive)
     request.state.session_organization_id = session_org_id
+    request.state.organization_id = session_org_id
     return request
 
 
@@ -428,21 +426,12 @@ def test_canvas_mirror_provenance_route_requires_authentication():
     assert route_config["requires_auth"] is True
 
 
-@pytest.mark.asyncio
-async def test_create_issuance_rejects_missing_issuer_did():
-    request = _build_request(session_org_id="org_123")
-
-    with pytest.raises(issuance.HTTPException) as exc_info:
-        await issuance.create_issuance(
-            issuance.IssuanceCreate(
-                organization_id="org_123",
-                claims={"credential_format": "sd_jwt_vc"},
-            ),
-            request,
+def test_issuance_model_rejects_missing_public_signing_identity():
+    with pytest.raises(ValidationError, match="credential_template_id or issuer_did"):
+        issuance.IssuanceCreate(
+            organization_id="org_123",
+            claims={"credential_format": "sd_jwt_vc"},
         )
-
-    assert exc_info.value.status_code == 422
-    assert "issuer_did is required" in exc_info.value.detail
 
 
 def test_issuance_model_rejects_claims_only_issuer_profile_id():
@@ -485,13 +474,24 @@ async def test_create_issuance_resolves_did_without_forwarding_profile_selectors
             "algorithm": "ES256",
         }
 
-    async def _proxy(request, service_url, path, body_override=None, inject_headers=None):
+    async def _proxy(
+        request, service_url, path, body_override=None, inject_headers=None
+    ):
         captured["service_url"] = service_url
         captured["path"] = path
         captured["body"] = json.loads(body_override)
         captured["inject_headers"] = inject_headers
         return JSONResponse(
-            {"id": "iss-1", "organization_id": "org_123", "status": "PENDING"}
+            {
+                "id": "iss-1",
+                "organization_id": "org_123",
+                "credential_template_id": "default",
+                "status": "pending",
+                "credential_offer_uri": "openid-credential-offer://example",
+                "credential_offer_uris": {},
+                "credential_offer_labels": {},
+                "expires_at": "2026-08-01T00:00:00Z",
+            }
         )
 
     monkeypatch.setattr(issuance, "_resolve_issuer_identity", fake_resolve_identity)
@@ -567,7 +567,16 @@ async def test_create_issuance_registers_public_wallet_key_and_binds_offer(
         captured["body"] = json.loads(body_override)
         captured["inject_headers"] = inject_headers
         return JSONResponse(
-            {"id": "iss-1", "organization_id": "org_123", "status": "PENDING"}
+            {
+                "id": "iss-1",
+                "organization_id": "org_123",
+                "credential_template_id": "default",
+                "status": "pending",
+                "credential_offer_uri": "openid-credential-offer://example",
+                "credential_offer_uris": {},
+                "credential_offer_labels": {},
+                "expires_at": "2026-08-01T00:00:00Z",
+            }
         )
 
     monkeypatch.setattr(issuance, "_resolve_issuer_identity", fake_resolve_identity)
@@ -717,11 +726,22 @@ async def test_create_issuance_uses_template_bound_issuer_did(
             "signing_service_id": "svc-bao",
         }
 
-    async def _proxy(request, service_url, path, body_override=None, inject_headers=None):
+    async def _proxy(
+        request, service_url, path, body_override=None, inject_headers=None
+    ):
         captured["body"] = json.loads(body_override)
         captured["inject_headers"] = inject_headers
         return JSONResponse(
-            {"id": "iss-1", "organization_id": "org_123", "status": "PENDING"}
+            {
+                "id": "iss-1",
+                "organization_id": "org_123",
+                "credential_template_id": "template-1",
+                "status": "pending",
+                "credential_offer_uri": "openid-credential-offer://example",
+                "credential_offer_uris": {},
+                "credential_offer_labels": {},
+                "expires_at": "2026-08-01T00:00:00Z",
+            }
         )
 
     monkeypatch.setattr(issuance, "_load_credential_template", fake_load_template)
@@ -749,6 +769,69 @@ async def test_create_issuance_uses_template_bound_issuer_did(
     assert captured["inject_headers"] == {"X-API-Key": "secret"}
     assert captured["body"]["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:acme"
     assert "X-Signing-Service-Id" not in captured["inject_headers"]
+
+
+def test_public_issuance_response_removes_internal_redemption_and_custody_state() -> (
+    None
+):
+    response = JSONResponse(
+        {
+            "id": "iss-1",
+            "organization_id": "org_123",
+            "credential_template_id": "template-1",
+            "status": "pending",
+            "credential_offer_uri": "openid-credential-offer://example",
+            "credential_offer_uris": {},
+            "credential_offer_labels": {},
+            "expires_at": "2026-08-01T00:00:00Z",
+            "pre_auth_code": "must-not-leak",
+            "issuer_profile_id": "must-not-leak",
+            "signing_key_reference": "must-not-leak",
+        }
+    )
+
+    public = issuance._sanitize_management_response(
+        response,
+        issuance.IssuanceResponse,
+    )
+    payload = json.loads(public.body)
+
+    assert "pre_auth_code" not in payload
+    assert "issuer_profile_id" not in payload
+    assert "signing_key_reference" not in payload
+    assert payload["credential_offer_uri"] == "openid-credential-offer://example"
+
+
+def test_public_issued_credential_response_removes_delivery_routing_state() -> None:
+    response = JSONResponse(
+        {
+            "id": "credential-1",
+            "organization_id": "org_123",
+            "credential_id": "credential-1",
+            "credential_type": "EmployeeCredential",
+            "credential_format": "SD_JWT_VC",
+            "flow_execution_id": "iss-1",
+            "credential_template_id": "template-1",
+            "subject_id": "did:example:holder",
+            "issued_at": "2026-07-31T00:00:00Z",
+            "status": "ACTIVE",
+            "status_list_entries": [],
+            "created_at": "2026-07-31T00:00:00Z",
+            "deliveries": [
+                {
+                    "delivery_target": "canvas_credentials",
+                    "external_credential_id": "private-routing-id",
+                }
+            ],
+        }
+    )
+
+    public = issuance._sanitize_management_response(
+        response,
+        issuance.IssuedCredentialRecordResponse,
+    )
+
+    assert "deliveries" not in json.loads(public.body)
 
 
 @pytest.mark.asyncio
@@ -840,6 +923,21 @@ def test_issuance_model_rejects_claims_issuer_profile_override_for_template():
         )
 
 
+@pytest.mark.parametrize(
+    "reserved_claim",
+    sorted(PUBLIC_ISSUANCE_RESERVED_CLAIMS),
+)
+def test_issuance_model_rejects_every_reserved_custody_claim(
+    reserved_claim: str,
+) -> None:
+    with pytest.raises(ValidationError, match="not a public issuance input"):
+        issuance.IssuanceCreate(
+            organization_id="org_123",
+            issuer_did="did:web:issuer.example",
+            claims={reserved_claim: "must-not-cross-public-boundary"},
+        )
+
+
 @pytest.mark.asyncio
 async def test_authorize_issuance_proxies_without_management_header(
     monkeypatch: pytest.MonkeyPatch,
@@ -874,6 +972,77 @@ def test_authorize_route_precedes_issuance_id_catch_all() -> None:
     assert paths.index("/v1/issuance/authorize") < paths.index(
         "/v1/issuance/{issuance_id}"
     )
+
+
+def test_didcomm_delivery_contract_requires_tenant_and_rejects_resolver_selector() -> None:
+    request = DidcommDeliverRequest(
+        organization_id="org_123",
+        transaction_id="tx-123",
+        holder_did="did:peer:2.EzExample",
+    )
+    assert request.model_dump() == {
+        "organization_id": "org_123",
+        "transaction_id": "tx-123",
+        "holder_did": "did:peer:2.EzExample",
+    }
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        DidcommDeliverRequest(
+            organization_id="org_123",
+            transaction_id="tx-123",
+            holder_did="did:peer:2.EzExample",
+            universal_resolver_url="https://attacker.example/resolve",
+        )
+
+
+@pytest.mark.asyncio
+async def test_didcomm_delivery_uses_authenticated_public_gateway_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    async def _proxy(request, service_url, path, inject_headers=None):
+        captured.update(
+            service_url=service_url,
+            path=path,
+            inject_headers=inject_headers,
+        )
+        return JSONResponse({"status": "delivered"})
+
+    monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(issuance, "proxy_request", _proxy)
+    monkeypatch.setattr(issuance, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
+
+    await issuance.didcomm_deliver(
+        DidcommDeliverRequest(
+            organization_id="org_123",
+            transaction_id="tx-123",
+            holder_did="did:peer:2.EzExample",
+        ),
+        _build_request(session_org_id="org_123"),
+    )
+
+    assert captured == {
+        "service_url": "http://issuance-service",
+        "path": "/v1/issuance/didcomm/deliver",
+        "inject_headers": {"X-API-Key": "secret"},
+    }
+
+
+def test_didcomm_boundary_exposes_only_authenticated_outbound_delivery() -> None:
+    paths = {route.path for route in issuance.issuance_router.routes}
+    assert "/v1/issuance/didcomm/deliver" in paths
+    assert "/v1/issuance/didcomm/receive" not in paths
+
+    assert get_route_config("/v1/issuance/didcomm/deliver") == {
+        "service": "issuance",
+        "requires_auth": True,
+    }
+    # Prefix fallback remains authenticated, but there is no callable route.
+    assert get_route_config("/v1/issuance/didcomm/receive") == {
+        "service": "issuance",
+        "requires_auth": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -1108,12 +1277,10 @@ async def test_resolve_issuer_identity_uses_org_scoped_did(
                 "ok": True,
                 "organization_id": "org_acme",
                 "issuer_did": issuer_did,
-                "verification_method_id": "",
-                "issuer_profile": {
-                    "id": "ip-2",
-                    "key_purpose": "vc_jwt_issuer",
-                },
-                "signing_service": {"id": "svc-2"},
+                "verification_method_id": f"{issuer_did}#key-2",
+                "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256",
             }
         )
 
@@ -1125,17 +1292,13 @@ async def test_resolve_issuer_identity_uses_org_scoped_did(
     request = _build_request(session_org_id="org_acme")
     assert await issuance._resolve_issuer_identity(request, "org_acme", None) is None
 
-    identity = await issuance._resolve_issuer_identity(
-        request, "org_acme", issuer_did
-    )
+    identity = await issuance._resolve_issuer_identity(request, "org_acme", issuer_did)
     assert identity == {
-        "issuer_profile_id": "ip-2",
         "issuer_did": issuer_did,
-        "signing_service_id": "svc-2",
-        "signing_key_reference": "",
-        "verification_method_id": "",
+        "verification_method_id": f"{issuer_did}#key-2",
+        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
         "key_purpose": "vc_jwt_issuer",
-        "algorithm": "",
+        "algorithm": "ES256",
     }
 
 
@@ -1156,13 +1319,9 @@ async def test_resolve_issuer_identity_prefers_format_scoped_profile(
                 "organization_id": "org_acme",
                 "issuer_did": issuer_did,
                 "verification_method_id": "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary",
-                "issuer_profile": {
-                    "id": "ip-mdoc",
-                    "signing_key_reference": "cred-dsc-acme-primary",
-                    "key_purpose": "mdoc_dsc",
-                    "algorithm": "ES256",
-                },
-                "signing_service": {"id": "svc-mdoc"},
+                "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+                "key_purpose": "mdoc_dsc",
+                "algorithm": "ES256",
             }
         )
 
@@ -1179,8 +1338,6 @@ async def test_resolve_issuer_identity_prefers_format_scoped_profile(
         credential_format="mso_mdoc",
     )
 
-    assert identity["signing_service_id"] == "svc-mdoc"
-    assert identity["signing_key_reference"] == "cred-dsc-acme-primary"
     assert (
         identity["verification_method_id"]
         == "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary"
@@ -1218,10 +1375,10 @@ def test_public_signing_format_normalizes_template_and_wire_names(
 
 
 @pytest.mark.asyncio
-async def test_resolve_issuer_identity_returns_internal_profile_only(
+async def test_resolve_issuer_identity_returns_public_identity_only(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """The resolver returns a profile only as trusted internal routing state."""
+    """The gateway caller never receives private custody routing state."""
     issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
 
     async def fake_resolve_issuer_did(**kwargs):
@@ -1231,8 +1388,9 @@ async def test_resolve_issuer_identity_returns_internal_profile_only(
                 "organization_id": "org_x",
                 "issuer_did": issuer_did,
                 "verification_method_id": f"{issuer_did}#key-1",
-                "issuer_profile": {"id": "resolved-profile"},
-                "signing_service": {"id": "svc-1"},
+                "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256",
             }
         )
 
@@ -1245,8 +1403,10 @@ async def test_resolve_issuer_identity_returns_internal_profile_only(
     identity = await issuance._resolve_issuer_identity(request, "org_x", issuer_did)
 
     assert identity is not None
-    assert identity["issuer_profile_id"] == "resolved-profile"
     assert identity["issuer_did"] == issuer_did
+    assert "issuer_profile_id" not in identity
+    assert "signing_service_id" not in identity
+    assert "signing_key_reference" not in identity
 
 
 @pytest.mark.asyncio

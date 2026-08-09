@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Marty UI web application image
-FROM oven/bun:alpine AS builder
+FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS builder
 
 ARG UI_VARIANT=public
 ARG MARTY_RELEASE_VERSION=development
@@ -52,7 +52,7 @@ RUN if [ "$UI_VARIANT" = "selfhost" ]; then bun run build:selfhost && mv dist-se
       "$MARTY_RELEASE_VERSION" "$MARTY_UI_SHA" > dist-final/marty-ui-release.json
 
 # Use nginx to serve the built application
-FROM nginx:alpine
+FROM nginx:1.29.1-alpine@sha256:42a516af16b852e33b7682d5ef8acbd5d13fe08fecadc7ed98605ba5e3b26ab8
 
 ARG MARTY_RELEASE_VERSION=development
 ARG MARTY_UI_SHA=unknown

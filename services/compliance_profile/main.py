@@ -856,24 +856,77 @@ def _profile_to_response(profile: ComplianceProfile) -> ComplianceProfileRespons
 
 
 async def seed_system_profiles(repo: InMemoryComplianceProfileRepository) -> None:
-    profile = ComplianceProfile(
-        id="10000000-0000-0000-0000-000000000001",
-        organization_id=None,
-        name="OID4VC Core",
-        description="System baseline for standards-based OID4VC issuance and verification.",
-        compliance_code="OID4VC",
-        credential_format=CredentialFormat.SD_JWT_VC,
-        issuance_protocol=IssuanceProtocol.OID4VCI_PRE_AUTH,
-        issuer_artifact_requirements=IssuerArtifactRequirements(
-            requires_did=True,
-            requires_jwk=True,
-            recommended_algorithms=["ES256"],
+    profiles = (
+        ComplianceProfile(
+            id="10000000-0000-0000-0000-000000000001",
+            organization_id=None,
+            name="OID4VC Core",
+            description="System baseline for standards-based OID4VC issuance and verification.",
+            compliance_code="OID4VC",
+            credential_format=CredentialFormat.SD_JWT_VC,
+            issuance_protocol=IssuanceProtocol.OID4VCI_PRE_AUTH,
+            issuer_artifact_requirements=IssuerArtifactRequirements(
+                requires_did=True,
+                requires_jwk=True,
+                recommended_algorithms=["ES256"],
+            ),
+            discoverable=True,
+            is_system=True,
+            status=ComplianceProfileStatus.ACTIVE,
         ),
-        discoverable=True,
-        is_system=True,
-        status=ComplianceProfileStatus.ACTIVE,
+        ComplianceProfile(
+            id="10000000-0000-0000-0000-000000000002",
+            organization_id=None,
+            name="ISO 18013-5 mdoc",
+            description="System baseline for ISO 18013-5 mobile documents.",
+            compliance_code="ISO_18013_5",
+            credential_format=CredentialFormat.MDOC,
+            issuance_protocol=IssuanceProtocol.OID4VCI_PRE_AUTH,
+            issuer_artifact_requirements=IssuerArtifactRequirements(
+                requires_x509_cert=True,
+                requires_did=True,
+                recommended_algorithms=["ES256"],
+            ),
+            discoverable=True,
+            is_system=True,
+            status=ComplianceProfileStatus.ACTIVE,
+        ),
+        ComplianceProfile(
+            id="10000000-0000-0000-0000-000000000003",
+            organization_id=None,
+            name="Open Badges 3.0",
+            description="System baseline for Open Badges 3.0 credentials.",
+            compliance_code="OPEN_BADGES_3",
+            credential_format=CredentialFormat.SD_JWT_VC,
+            issuance_protocol=IssuanceProtocol.OID4VCI_PRE_AUTH,
+            issuer_artifact_requirements=IssuerArtifactRequirements(
+                requires_did=True,
+                requires_jwk=True,
+                recommended_algorithms=["ES256"],
+            ),
+            discoverable=True,
+            is_system=True,
+            status=ComplianceProfileStatus.ACTIVE,
+        ),
+        ComplianceProfile(
+            id="10000000-0000-0000-0000-000000000004",
+            organization_id=None,
+            name="ICAO VDS-NC",
+            description="System baseline for ICAO Visible Digital Seals for non-constrained environments.",
+            compliance_code="ICAO_VDS_NC",
+            credential_format=CredentialFormat.VDS_NC,
+            issuance_protocol=IssuanceProtocol.DIRECT,
+            issuer_artifact_requirements=IssuerArtifactRequirements(
+                requires_x509_cert=True,
+                recommended_algorithms=["ES256"],
+            ),
+            discoverable=True,
+            is_system=True,
+            status=ComplianceProfileStatus.ACTIVE,
+        ),
     )
-    await repo.save(profile)
+    for profile in profiles:
+        await repo.save(profile)
 
 
 # =============================================================================

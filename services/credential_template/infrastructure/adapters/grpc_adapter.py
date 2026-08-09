@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-from types import SimpleNamespace
 from typing import Any
 
 import grpc
@@ -38,10 +37,8 @@ def _payload_format_to_wire(value: str | None) -> str:
     return _PAYLOAD_FORMAT_WIRE_NAMES.get(normalized.upper(), normalized)
 
 
-def _has_kms_backed_issuer(template: Any) -> bool:
-    issuer_profile_id = str(getattr(template, "issuer_profile_id", "") or "").strip()
-    key_access_mode = str(getattr(template, "key_access_mode", "") or "").strip().upper()
-    return bool(issuer_profile_id and key_access_mode == "REMOTE_SIGNING")
+def _has_managed_issuer_did(template: Any) -> bool:
+    return str(getattr(template, "issuer_did", "") or "").strip().startswith("did:")
 
 
 def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateResponse:
@@ -133,49 +130,18 @@ def _template_to_pb(template: Any, to_response_fn: Any) -> ct_pb2.TemplateRespon
         created_at=resp.created_at,
         updated_at=resp.updated_at,
         wallet_configs_json=getattr(resp, "wallet_configs_json", None) or "[]",
-        issuer_algorithm=getattr(resp, "issuer_algorithm", None) or "",
+        # ``to_response_fn`` deliberately returns the public-sanitized shape,
+        # which omits signing-algorithm details.  This protobuf is the private
+        # service-to-service contract used by issuance, so preserve the
+        # algorithm that was resolved from the organization-owned issuer DID
+        # and stored on the domain template.
+        issuer_algorithm=(
+            getattr(template, "issuer_algorithm", None)
+            or getattr(resp, "issuer_algorithm", None)
+            or ""
+        ),
         revocation_profile_id=getattr(resp, "revocation_profile_id", None) or "",
         issuer_did=getattr(resp, "issuer_did", None) or "",
-    )
-
-
-async def _resolve_grpc_issuer_fields(
-    *,
-    context: Any,
-    organization_id: str,
-    issuer_did: str | None,
-    credential_payload_format: str | None,
-    issuer_algorithm: str | None,
-) -> dict[str, Any] | None:
-    from credential_template.main import (  # noqa: PLC0415
-        _canonical_issuer_fields,
-        _require_active_issuer_profile,
-        payload_format_to_wire,
-    )
-
-    try:
-        issuer_context = await _require_active_issuer_profile(
-            SimpleNamespace(state=SimpleNamespace()),
-            organization_id=organization_id,
-            issuer_did=issuer_did,
-            credential_format=payload_format_to_wire(credential_payload_format),
-            algorithm=issuer_algorithm or None,
-        )
-    except Exception as exc:  # noqa: BLE001
-        status_code = getattr(exc, "status_code", 500)
-        if status_code in {400, 422}:
-            grpc_code = grpc.StatusCode.INVALID_ARGUMENT
-        elif status_code == 409:
-            grpc_code = grpc.StatusCode.FAILED_PRECONDITION
-        else:
-            grpc_code = grpc.StatusCode.UNAVAILABLE
-        context.set_code(grpc_code)
-        context.set_details(str(getattr(exc, "detail", exc)))
-        return None
-
-    return _canonical_issuer_fields(
-        issuer_context,
-        requested_algorithm=issuer_algorithm or None,
     )
 
 
@@ -225,9 +191,9 @@ class CredentialTemplateServiceGrpc(
 
         configs: dict[str, Any] = {}
         for t in templates:
-            if not _has_kms_backed_issuer(t):
+            if not _has_managed_issuer_did(t):
                 logger.warning(
-                    "Skipping active credential template %s in credential configurations because it lacks a KMS-backed issuer profile",
+                    "Skipping active credential template %s in credential configurations because it lacks a managed issuer DID",
                     getattr(t, "id", None) or getattr(t, "name", None) or "unknown",
                 )
                 continue
@@ -243,315 +209,6 @@ class CredentialTemplateServiceGrpc(
         return ct_pb2.GetCredentialConfigurationsResponse(
             configurations_json=json.dumps(configs),
         )
-
-    # ------------------------------------------------------------------
-    # Commands
-    # ------------------------------------------------------------------
-
-    async def CreateTemplate(self, request, context):
-        from credential_template.main import (
-            ClaimDefinition,
-            ClaimType,
-            CredentialTemplate,
-            DisplayStyle,
-            PrivacyPosture,
-            ValidityRules,
-            normalize_credential_payload_format,
-            normalize_credential_format,
-        )
-
-        try:
-            supported_formats = [
-                normalize_credential_format(f)
-                for f in request.supported_formats
-            ]
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(str(exc))
-            return ct_pb2.TemplateResponse()
-
-        try:
-            credential_payload_format = normalize_credential_payload_format(
-                request.credential_payload_format or None,
-                supported_formats,
-            )
-        except ValueError as exc:
-            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-            context.set_details(str(exc))
-            return ct_pb2.TemplateResponse()
-
-        issuer_fields = await _resolve_grpc_issuer_fields(
-            context=context,
-            organization_id=request.organization_id,
-            issuer_did=getattr(request, "issuer_did", "") or None,
-            credential_payload_format=credential_payload_format,
-            issuer_algorithm=getattr(request, "issuer_algorithm", "") or None,
-        )
-        if issuer_fields is None:
-            return ct_pb2.TemplateResponse()
-
-        template = CredentialTemplate(
-            organization_id=request.organization_id,
-            name=request.name,
-            description=request.description or None,
-            credential_type=request.credential_type,
-            vct=request.vct or f"https://credentials.example.com/{request.credential_type}",
-            doctype=request.doctype or "",
-            privacy_posture=PrivacyPosture(request.privacy_posture) if request.privacy_posture else PrivacyPosture.SELECTIVE_DISCLOSURE,
-            supported_formats=supported_formats,
-            issuance_protocol=request.issuance_protocol or "oid4vci",
-            credential_payload_format=credential_payload_format,
-            selective_disclosure_fields=list(request.selective_disclosure_fields),
-            zk_predicate_claims=list(request.zk_predicate_claims),
-            issuer_profile_id=issuer_fields["issuer_profile_id"],
-            issuer_key_id=issuer_fields["issuer_key_id"],
-            issuer_algorithm=issuer_fields["issuer_algorithm"],
-            key_access_mode=issuer_fields["key_access_mode"],
-            remote_signing_config=issuer_fields["remote_signing_config"],
-            issuer_did=issuer_fields["issuer_did"],
-        )
-
-        for c in request.claims:
-            template.claims.append(ClaimDefinition(
-                name=c.name,
-                display_name=c.display_name,
-                description=c.description or None,
-                claim_type=ClaimType(c.claim_type) if c.claim_type else ClaimType.STRING,
-                required=c.required,
-                selectively_disclosable=c.selectively_disclosable,
-                derivable=c.derivable or bool(c.derived_from),
-                derived_from=c.derived_from or None,
-                pattern=c.pattern or None,
-                enum_values=list(c.enum_values) if c.enum_values else None,
-                mdoc_namespace=c.mdoc_namespace or None,
-                mdoc_element_identifier=c.mdoc_element_identifier or None,
-                display_icon=c.display_icon or None,
-            ))
-
-        if request.HasField("display_style"):
-            ds = request.display_style
-            template.display_style = DisplayStyle(
-                background_color=ds.background_color,
-                text_color=ds.text_color,
-                logo_url=ds.logo_url,
-                background_image_url=ds.background_image_url,
-                icon=ds.icon,
-            )
-
-        if request.HasField("validity_rules"):
-            vr = request.validity_rules
-            template.validity_rules = ValidityRules(
-                default_validity_days=vr.default_validity_days,
-                max_validity_days=vr.max_validity_days,
-                renewable=vr.renewable,
-                renewal_window_days=vr.renewal_window_days,
-                require_revalidation=vr.require_revalidation,
-                revalidation_interval_days=vr.revalidation_interval_days,
-            )
-
-        await self._repo.save(template)
-        logger.info("gRPC CreateTemplate: %s", template.id)
-        return _template_to_pb(template, self._to_response_fn)
-
-    async def UpdateTemplate(self, request, context):
-        from credential_template.main import TemplateStatus
-
-        template = await self._repo.get(request.template_id)
-        if not template:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"Template {request.template_id} not found")
-            return ct_pb2.TemplateResponse()
-
-        if template.status != TemplateStatus.DRAFT:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(
-                "Only draft templates can be modified. Create a new version instead."
-            )
-            return ct_pb2.TemplateResponse()
-
-        if request.name:
-            template.name = request.name
-        if request.description:
-            template.description = request.description
-        if request.supported_formats:
-            from credential_template.main import (
-                normalize_credential_format,
-                normalize_credential_payload_format,
-            )
-
-            try:
-                template.supported_formats = [
-                    normalize_credential_format(f) for f in request.supported_formats
-                ]
-            except ValueError as exc:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details(str(exc))
-                return ct_pb2.TemplateResponse()
-            if not request.credential_payload_format:
-                template.credential_payload_format = normalize_credential_payload_format(
-                    None,
-                    template.supported_formats,
-                )
-
-        if request.credential_payload_format:
-            from credential_template.main import normalize_credential_payload_format
-
-            try:
-                template.credential_payload_format = normalize_credential_payload_format(
-                    request.credential_payload_format,
-                    template.supported_formats,
-                )
-            except ValueError as exc:
-                context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
-                context.set_details(str(exc))
-                return ct_pb2.TemplateResponse()
-
-        if getattr(request, "issuer_did", ""):
-            template.issuer_did = request.issuer_did
-        if getattr(request, "issuer_algorithm", ""):
-            template.issuer_algorithm = request.issuer_algorithm
-
-        if request.claims:
-            from credential_template.main import ClaimDefinition, ClaimType
-
-            template.claims = [
-                ClaimDefinition(
-                    name=c.name,
-                    display_name=c.display_name,
-                    description=c.description or None,
-                    claim_type=ClaimType(c.claim_type) if c.claim_type else ClaimType.STRING,
-                    required=c.required,
-                    selectively_disclosable=c.selectively_disclosable,
-                    derivable=c.derivable or bool(c.derived_from),
-                    derived_from=c.derived_from or None,
-                    pattern=c.pattern or None,
-                    enum_values=list(c.enum_values) if c.enum_values else None,
-                    mdoc_namespace=c.mdoc_namespace or None,
-                    mdoc_element_identifier=c.mdoc_element_identifier or None,
-                    display_icon=c.display_icon or None,
-                )
-                for c in request.claims
-            ]
-
-        if request.HasField("display_style"):
-            from credential_template.main import DisplayStyle
-
-            ds = request.display_style
-            template.display_style = DisplayStyle(
-                background_color=ds.background_color,
-                text_color=ds.text_color,
-                logo_url=ds.logo_url,
-                background_image_url=ds.background_image_url,
-                icon=ds.icon,
-            )
-
-        if request.HasField("validity_rules"):
-            from credential_template.main import ValidityRules
-
-            vr = request.validity_rules
-            template.validity_rules = ValidityRules(
-                default_validity_days=vr.default_validity_days,
-                max_validity_days=vr.max_validity_days,
-                renewable=vr.renewable,
-                renewal_window_days=vr.renewal_window_days,
-                require_revalidation=vr.require_revalidation,
-                revalidation_interval_days=vr.revalidation_interval_days,
-            )
-
-        issuer_fields = await _resolve_grpc_issuer_fields(
-            context=context,
-            organization_id=template.organization_id,
-            issuer_did=getattr(template, "issuer_did", None),
-            credential_payload_format=template.credential_payload_format,
-            issuer_algorithm=getattr(template, "issuer_algorithm", None),
-        )
-        if issuer_fields is None:
-            return ct_pb2.TemplateResponse()
-        template.issuer_profile_id = issuer_fields["issuer_profile_id"]
-        template.issuer_key_id = issuer_fields["issuer_key_id"]
-        template.issuer_algorithm = issuer_fields["issuer_algorithm"]
-        template.key_access_mode = issuer_fields["key_access_mode"]
-        template.remote_signing_config = issuer_fields["remote_signing_config"]
-        template.issuer_did = issuer_fields["issuer_did"]
-
-        from datetime import datetime, timezone
-
-        template.updated_at = datetime.now(timezone.utc)
-        await self._repo.save(template)
-        logger.info("gRPC UpdateTemplate: %s", template.id)
-        return _template_to_pb(template, self._to_response_fn)
-
-    async def ActivateTemplate(self, request, context):
-        template = await self._repo.get(request.template_id)
-        if not template:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"Template {request.template_id} not found")
-            return ct_pb2.TemplateResponse()
-
-        if not template.claims:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details("Template must have at least one claim")
-            return ct_pb2.TemplateResponse()
-
-        issuer_fields = await _resolve_grpc_issuer_fields(
-            context=context,
-            organization_id=template.organization_id,
-            issuer_did=getattr(template, "issuer_did", None),
-            credential_payload_format=template.credential_payload_format,
-            issuer_algorithm=getattr(template, "issuer_algorithm", None),
-        )
-        if issuer_fields is None:
-            return ct_pb2.TemplateResponse()
-        template.issuer_profile_id = issuer_fields["issuer_profile_id"]
-        template.issuer_key_id = issuer_fields["issuer_key_id"]
-        template.issuer_algorithm = issuer_fields["issuer_algorithm"]
-        template.key_access_mode = issuer_fields["key_access_mode"]
-        template.remote_signing_config = issuer_fields["remote_signing_config"]
-        template.issuer_did = issuer_fields["issuer_did"]
-
-        template.activate()
-        await self._repo.save(template)
-        logger.info("gRPC ActivateTemplate: %s", template.id)
-        return _template_to_pb(template, self._to_response_fn)
-
-    async def DeprecateTemplate(self, request, context):
-        template = await self._repo.get(request.template_id)
-        if not template:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"Template {request.template_id} not found")
-            return ct_pb2.TemplateResponse()
-
-        template.deprecate()
-        await self._repo.save(template)
-        logger.info("gRPC DeprecateTemplate: %s", template.id)
-        return _template_to_pb(template, self._to_response_fn)
-
-    async def NewVersion(self, request, context):
-        template = await self._repo.get(request.template_id)
-        if not template:
-            context.set_code(grpc.StatusCode.NOT_FOUND)
-            context.set_details(f"Template {request.template_id} not found")
-            return ct_pb2.TemplateResponse()
-
-        new_template = template.new_version()
-        await self._repo.save(new_template)
-        logger.info("gRPC NewVersion: %s → %s", template.id, new_template.id)
-        return _template_to_pb(new_template, self._to_response_fn)
-
-    async def DeleteTemplate(self, request, context):
-        from credential_template.main import TemplateStatus
-
-        template = await self._repo.get(request.template_id)
-        if template and template.status != TemplateStatus.DRAFT:
-            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(
-                "Only draft templates can be deleted. Deprecate active templates instead."
-            )
-            return ct_pb2.DeleteTemplateResponse(success=False)
-
-        await self._repo.delete(request.template_id)
-        logger.info("gRPC DeleteTemplate: %s", request.template_id)
-        return ct_pb2.DeleteTemplateResponse(success=True)
 
     # ------------------------------------------------------------------
     # Health

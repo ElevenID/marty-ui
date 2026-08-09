@@ -64,13 +64,6 @@ function PreviewCredentialContent() {
           </Alert>
         )}
 
-        {!template?.hasArtifacts && (
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            <strong>Missing Artifacts:</strong> Required artifacts (schemas, proofs) are not configured. 
-            The applicant will not be able to complete applications until these are added.
-          </Alert>
-        )}
-
         <Typography variant="h6" sx={{ mt: 3, mb: 2 }}>
           Required Information
         </Typography>

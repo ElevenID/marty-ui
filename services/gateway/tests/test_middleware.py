@@ -11,19 +11,18 @@ import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from marty_common import cedar_actions
-from marty_common.middleware import IdempotencyMiddleware
-
 from gateway import main as gateway_main
 from gateway.middleware import (
+    _RATE_LIMIT_RPM,
     AuthMiddleware,
     ContentTypeEnforcementMiddleware,
     MIPVersionMiddleware,
     RateLimitMiddleware,
     SessionCache,
-    _RATE_LIMIT_RPM,
     mip_error_response,
 )
+from marty_common import cedar_actions
+from marty_common.middleware import IdempotencyMiddleware
 
 # ---------------------------------------------------------------------------
 # Helpers: fake gRPC response objects
@@ -335,6 +334,33 @@ def test_signing_key_routes_have_exact_cedar_permissions(method: str, permission
 
 
 @pytest.mark.parametrize(
+    ("path", "permission"),
+    [
+        (
+            "/v1/organizations/11111111-1111-1111-1111-111111111111/audit-events",
+            "audit:view",
+        ),
+        (
+            "/v1/organizations/11111111-1111-1111-1111-111111111111/audit-events/event-1",
+            "audit:view",
+        ),
+        (
+            "/v1/organizations/11111111-1111-1111-1111-111111111111/audit-events/export",
+            "audit:export",
+        ),
+    ],
+)
+def test_audit_routes_have_exact_tenant_scoped_permissions(
+    path: str,
+    permission: str,
+) -> None:
+    assert cedar_actions.resolve_action_and_resource("GET", path) == (
+        permission,
+        "audit",
+    )
+
+
+@pytest.mark.parametrize(
     ("path", "permission", "resource"),
     [
         ("/v1/vc-api/credentials/issue", "issuance:initiate", "issuance"),
@@ -367,6 +393,98 @@ def test_vc_api_cedar_registration_is_idempotent():
     gateway_main._register_vc_api_cedar_routes()
 
     assert cedar_actions.SPECIAL_ROUTE_RULES == before
+
+
+@pytest.mark.parametrize(
+    ("method", "permission"),
+    [
+        ("GET", "wallet:view"),
+        ("HEAD", "wallet:view"),
+        ("OPTIONS", "wallet:view"),
+        ("POST", "wallet:write"),
+        ("PUT", "wallet:write"),
+        ("PATCH", "wallet:write"),
+        ("DELETE", "wallet:write"),
+    ],
+)
+def test_wallet_registry_routes_have_exact_cedar_permissions(
+    method: str,
+    permission: str,
+) -> None:
+    assert cedar_actions.resolve_action_and_resource(
+        method,
+        "/v1/wallet-registry/example",
+    ) == (permission, "wallet")
+
+
+def test_wallet_registry_cedar_registration_is_idempotent() -> None:
+    rules_before = list(cedar_actions.SPECIAL_ROUTE_RULES)
+    lookups_before = dict(cedar_actions.RESOURCE_LOOKUP_MAP)
+
+    gateway_main._register_wallet_registry_cedar_routes()
+
+    assert cedar_actions.SPECIAL_ROUTE_RULES == rules_before
+    assert cedar_actions.RESOURCE_LOOKUP_MAP == lookups_before
+
+
+def test_every_wallet_registry_endpoint_has_a_protected_mapping() -> None:
+    assert gateway_main.wallet_registry_router.routes
+
+    for route in gateway_main.wallet_registry_router.routes:
+        assert route.path.startswith("/v1/wallet-registry")
+        for method in route.methods:
+            permission = gateway_main._WALLET_REGISTRY_ROUTE_PERMISSIONS[method]
+            assert cedar_actions.resolve_action_and_resource(method, route.path) == (
+                permission,
+                "wallet",
+            )
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (
+            "/v1/wallet-registry/example",
+            ("credential-templates", "/v1/wallet-registry/example"),
+        ),
+        (
+            "/v1/wallet-registry/example/open-link",
+            ("credential-templates", "/v1/wallet-registry/example"),
+        ),
+        ("/v1/wallet-registry/resolve/profile", None),
+        ("/v1/wallet-registry", None),
+    ],
+)
+def test_wallet_registry_resource_lookups_resolve_real_tenant(
+    path: str,
+    expected: tuple[str, str] | None,
+) -> None:
+    assert cedar_actions.resolve_resource_lookup(path) == expected
+
+
+@pytest.mark.parametrize(
+    ("permission", "scopes", "allowed"),
+    [
+        ("wallet:view", ["wallet:read"], True),
+        ("wallet:view", ["wallet:write"], True),
+        ("wallet:write", ["wallet:write"], True),
+        ("wallet:write", ["wallet:read"], False),
+        ("wallet:view", ["templates:read"], False),
+        ("wallet:delete", ["wallet:write"], False),
+    ],
+)
+def test_wallet_registry_routes_use_published_api_key_scopes(
+    permission: str,
+    scopes: list[str],
+    allowed: bool,
+) -> None:
+    assert (
+        gateway_main.GatewayCedarAuthMiddleware._api_key_allowed(
+            permission,
+            scopes,
+        )
+        is allowed
+    )
 
 
 @pytest.mark.parametrize(
@@ -456,6 +574,203 @@ def test_every_signing_key_management_endpoint_uses_protected_prefix_and_mapping
                 expected[method],
                 "signing-key",
             )
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "expected"),
+    [
+        ("GET", "/v1/webhooks", ("webhook:view", "webhook")),
+        ("POST", "/v1/webhooks", ("webhook:create", "webhook")),
+        ("PATCH", "/v1/webhooks/id", ("webhook:edit", "webhook")),
+        ("DELETE", "/v1/webhooks/id", ("webhook:delete", "webhook")),
+        ("POST", "/v1/webhooks/id/test", ("webhook:test", "webhook")),
+        (
+            "GET",
+            "/v1/subscriptions",
+            ("notification:view", "notification"),
+        ),
+        (
+            "POST",
+            "/v1/subscriptions",
+            ("notification:send", "notification"),
+        ),
+        (
+            "GET",
+            "/v1/notifications",
+            ("notification:view", "notification"),
+        ),
+        (
+            "POST",
+            "/v1/notifications/send",
+            ("notification:send", "notification"),
+        ),
+        (
+            "GET",
+            "/v1/notifications/events/push",
+            ("notification:view", "notification"),
+        ),
+    ],
+)
+def test_notification_routes_have_exact_cedar_permissions(
+    method: str,
+    path: str,
+    expected: tuple[str, str],
+):
+    assert cedar_actions.resolve_action_and_resource(method, path) == expected
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (
+            "/v1/webhooks/webhook-1",
+            ("notifications", "/v1/webhooks/webhook-1"),
+        ),
+        (
+            "/v1/subscriptions/subscription-1",
+            ("notifications", "/v1/subscriptions/subscription-1"),
+        ),
+        (
+            "/v1/notifications/notification-1",
+            ("notifications", "/v1/notifications/notification-1"),
+        ),
+        ("/v1/notifications/events/push", None),
+        ("/v1/notifications/send", None),
+    ],
+)
+def test_notification_resource_lookups_resolve_real_tenant(
+    path: str,
+    expected: tuple[str, str] | None,
+):
+    assert cedar_actions.resolve_resource_lookup(path) == expected
+
+
+@pytest.mark.parametrize(
+    ("permission", "scopes", "allowed"),
+    [
+        ("webhook:view", ["webhooks:read"], True),
+        ("webhook:create", ["webhooks:write"], True),
+        ("webhook:test", ["webhooks:write"], True),
+        ("webhook:test", ["webhooks:read"], False),
+        ("notification:view", ["notifications:read"], True),
+        ("notification:send", ["notifications:send"], True),
+        ("notification:send", ["notifications:read"], False),
+    ],
+)
+def test_notification_routes_use_published_api_key_scopes(
+    permission: str,
+    scopes: list[str],
+    allowed: bool,
+):
+    assert (
+        gateway_main.GatewayCedarAuthMiddleware._api_key_allowed(
+            permission,
+            scopes,
+        )
+        is allowed
+    )
+
+
+@pytest.mark.asyncio
+async def test_webhook_list_rejects_cross_tenant_query_scope():
+    class Membership:
+        status = "active"
+        is_owner = False
+        role_names = {"access-admin"}
+        permissions = {"webhook:view"}
+
+        def is_active(self) -> bool:
+            return True
+
+        def has_permission(self, requested: str) -> bool:
+            return requested in self.permissions
+
+    membership_requests: list[tuple[str, str]] = []
+
+    async def get_membership(user_id: str, organization_id: str):
+        membership_requests.append((user_id, organization_id))
+        return Membership() if organization_id == "org-a" else None
+
+    app = FastAPI()
+    app.state.org_client = SimpleNamespace(get_membership=get_membership)
+    reached: list[str] = []
+
+    @app.get("/v1/webhooks")
+    async def protected_route(request: Request):
+        reached.append(request.state.organization_id)
+        return JSONResponse({"ok": True})
+
+    app.add_middleware(gateway_main.GatewayCedarAuthMiddleware)
+
+    @app.middleware("http")
+    async def authenticated_session(request: Request, call_next):
+        request.state.user_id = "user-a"
+        request.state.session_organization_id = "org-a"
+        return await call_next(request)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        denied = await client.get("/v1/webhooks?organization_id=org-b")
+        allowed = await client.get("/v1/webhooks?organization_id=org-a")
+
+    assert denied.status_code == 403
+    assert denied.json()["detail"] == "Not a member of this organization"
+    assert allowed.status_code == 200
+    assert reached == ["org-a"]
+    assert membership_requests == [
+        ("user-a", "org-b"),
+        ("user-a", "org-a"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_webhook_resource_id_uses_owning_tenant_before_query_scope():
+    async def get_membership(_user_id: str, organization_id: str):
+        assert organization_id == "org-b"
+        return None
+
+    resource_response = httpx.Response(
+        200,
+        json={"id": "webhook-b", "organization_id": "org-b"},
+    )
+    http_client = SimpleNamespace(get=AsyncMock(return_value=resource_response))
+    app = FastAPI()
+    app.state.org_client = SimpleNamespace(get_membership=get_membership)
+    app.state.service_registry = SimpleNamespace(
+        get_service_url=lambda service: (
+            "http://notifications" if service == "notifications" else None
+        )
+    )
+    app.state.http_client = http_client
+
+    @app.get("/v1/webhooks/webhook-b")
+    async def protected_route():
+        return JSONResponse({"unexpected": True})
+
+    app.add_middleware(gateway_main.GatewayCedarAuthMiddleware)
+
+    @app.middleware("http")
+    async def authenticated_session(request: Request, call_next):
+        request.state.user_id = "user-a"
+        request.state.session_organization_id = "org-a"
+        return await call_next(request)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as client:
+        response = await client.get("/v1/webhooks/webhook-b?organization_id=org-a")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Not a member of this organization"
+    http_client.get.assert_awaited_once()
+    assert http_client.get.await_args.args[0] == (
+        "http://notifications/v1/webhooks/webhook-b"
+    )
 
 
 @pytest.mark.asyncio
@@ -969,6 +1284,19 @@ class TestContentTypeEnforcementMiddleware:
         assert resp.status_code == 415
         assert resp.json()["error"] == "unsupported_media_type"
 
+    async def test_didcomm_delivery_requires_json(self, content_type_app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=content_type_app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/issuance/didcomm/deliver",
+                headers={"Content-Type": "application/didcomm-plain+json"},
+                content=b"{}",
+            )
+
+        assert resp.status_code == 415
+        assert resp.json()["error"] == "unsupported_media_type"
+
 
 # ---------------------------------------------------------------------------
 # MIP Compliance tests (MIP 10, 17.7)
@@ -1002,7 +1330,7 @@ class TestMIPCompliance:
             base_url="http://test",
         ) as client:
             resp = await client.get("/v1/test")
-        assert resp.headers.get("X-MIP-Version") == "0.3.1"
+        assert resp.headers.get("X-MIP-Version") == "0.4.1"
 
     async def test_mip_version_header_on_health(self, mip_app):
         """MIP 20 - Health endpoints also carry MIP version."""
@@ -1011,7 +1339,7 @@ class TestMIPCompliance:
             base_url="http://test",
         ) as client:
             resp = await client.get("/health")
-        assert resp.headers.get("X-MIP-Version") == "0.3.1"
+        assert resp.headers.get("X-MIP-Version") == "0.4.1"
 
     def test_mip_error_response_format(self):
         """MIP 17.7 - Error responses MUST include error, error_description, message_id."""
@@ -1026,7 +1354,7 @@ class TestMIPCompliance:
         assert data["error_description"] == "Missing required field"
         assert "message_id" in data
         assert data["field"] == "email"
-        assert resp.headers.get("X-MIP-Version") == "0.3.1"
+        assert resp.headers.get("X-MIP-Version") == "0.4.1"
 
     def test_mip_error_response_503_format(self):
         """MIP 17.7 - Service unavailable errors follow the same envelope."""
@@ -1039,7 +1367,7 @@ class TestMIPCompliance:
         assert data["error"] == "service_unavailable"
         assert "message_id" in data
         assert resp.status_code == 503
-        assert resp.headers.get("X-MIP-Version") == "0.3.1"
+        assert resp.headers.get("X-MIP-Version") == "0.4.1"
 
     def test_mip_error_response_includes_details(self):
         """MIP 17.7 - Validation errors include details array."""
@@ -1061,4 +1389,4 @@ class TestMIPCompliance:
         assert data["error"] == "validation_error"
         assert len(data["details"]) == 2
         assert data["details"][0]["field"] == "email"
-        assert resp.headers.get("X-MIP-Version") == "0.3.1"
+        assert resp.headers.get("X-MIP-Version") == "0.4.1"

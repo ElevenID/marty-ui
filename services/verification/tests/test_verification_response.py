@@ -203,7 +203,7 @@ def test_get_request_object_returns_dcql_only() -> None:
             "input_descriptors": [
                 {
                     "id": "req-member-credential",
-                    "format": {"spruce-vc+sd-jwt": {"sd-jwt_alg_values": ["ES256"]}},
+                    "format": {"dc+sd-jwt": {"sd-jwt_alg_values": ["ES256"]}},
                     "constraints": {
                         "fields": [
                             {

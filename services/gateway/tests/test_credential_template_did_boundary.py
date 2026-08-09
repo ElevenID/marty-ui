@@ -116,7 +116,6 @@ async def test_template_create_resolves_did_and_hides_profile_from_caller(
     assert public_body == {
         "id": "template-1",
         "issuer_did": "did:web:issuer.example:orgs:org-1",
-        "issuer_algorithm": "ES256",
     }
 
 
@@ -131,6 +130,7 @@ def test_template_list_response_hides_internal_custody_metadata() -> None:
                     "issuer_key_id": "managed-key-reference",
                     "key_access_mode": "REMOTE_SIGNING",
                     "remote_signing_config": {"signing_service_id": "managed-openbao"},
+                    "future_internal_metadata": {"must_not_leak": True},
                 }
             ],
             headers={"ETag": '"template-list-v1"'},
@@ -179,7 +179,6 @@ async def test_mdoc_template_infers_signing_wire_format_from_supported_formats(
         request,
         organization_id,
         issuer_did,
-        legacy_issuer_profile_id=None,
         credential_format=None,
         key_purpose=None,
         algorithm=None,
@@ -460,6 +459,7 @@ def test_public_template_response_schema_exposes_mdoc_doctype() -> None:
         "issuer_key_id",
         "issuer_key_algorithm",
         "issuer_algorithm",
+        "signing_algorithm",
         "key_access_mode",
         "remote_signing_config",
         "issuer_certificate_chain_pem",
@@ -485,6 +485,7 @@ def test_template_public_contract_rejects_custody_selectors(
     [
         "issuer_key_id",
         "issuer_algorithm",
+        "signing_algorithm",
         "key_access_mode",
         "remote_signing_config",
         "issuer_certificate_chain_pem",

@@ -6,7 +6,7 @@ Following hexagonal architecture: infrastructure layer defines persistence schem
 
 from datetime import datetime
 from sqlalchemy import (
-    Boolean, Column, DateTime, Enum, ForeignKey, Integer, 
+    Boolean, Column, DateTime, Index, Integer,
     JSON, MetaData, String, Table, Text
 )
 from sqlalchemy.orm import registry
@@ -69,16 +69,9 @@ credential_templates_table = Table(
     Column("application_template_id", String(36), nullable=True),
     Column("trust_profile_id", String(36), nullable=True),
     Column("revocation_profile_id", String(36), nullable=True),
-    Column("issuer_profile_id", String(128), nullable=True),
-    
-    # Key management (BYOK support)
-    Column("key_access_mode", String(20), nullable=True),  # KEY_VAULT | HSM | LOCAL | REMOTE_SIGNING
-    Column("issuer_key_id", String(255), nullable=True),
+    # Algorithm is a protocol selector. Custody routing is resolved live from issuer_did.
     Column("issuer_algorithm", String(20), nullable=True),  # ES256 | EdDSA | RS256 | ES384
-    Column("remote_signing_config", JSON, nullable=True),   # {provider, key_name, key_version, ...}
-    Column("issuer_certificate_chain_pem", Text, nullable=True),
     Column("issuer_did", Text, nullable=True),
-    Column("auto_generate_artifacts", Boolean, nullable=False, server_default="false"),
     
     # Version control
     Column("version", Integer, nullable=False, default=1),
@@ -91,8 +84,6 @@ credential_templates_table = Table(
 )
 
 # Create indexes for common queries
-from sqlalchemy import Index
-
 Index("ix_credential_templates_org_status", 
       credential_templates_table.c.organization_id, 
       credential_templates_table.c.status)

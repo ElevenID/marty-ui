@@ -12,13 +12,13 @@ from __future__ import annotations
 import json
 import os
 from typing import Any
-from urllib.parse import unquote_to_bytes
+from urllib.parse import parse_qs, unquote_to_bytes, urlsplit
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from gateway.models import IssuanceCreate
 from gateway.proxy import get_http_client, get_registry, proxy_request
-from gateway.routes.issuance import create_issuance
+from gateway.routes.issuance import _create_issuance_service_response
 from pydantic import BaseModel, Field, ValidationError
 
 router = APIRouter(prefix="/v1/vc-api", tags=["W3C VC API"])
@@ -50,6 +50,51 @@ def _require_organization_authorization(
             status_code=403,
             detail="Request is not authorized for this organization",
         )
+
+
+def _parse_inline_credential_offer(
+    offer_uri: Any,
+    *,
+    expected_issuer: str,
+) -> tuple[str, str]:
+    """Return the exact OID4VCI configuration and pre-authorized code offered."""
+
+    if not isinstance(offer_uri, str) or not offer_uri:
+        raise ValueError("credential_offer_uri is missing")
+    parameters = parse_qs(urlsplit(offer_uri).query, keep_blank_values=True)
+    encoded_offers = parameters.get("credential_offer")
+    if not isinstance(encoded_offers, list) or len(encoded_offers) != 1:
+        raise ValueError(
+            "credential_offer_uri must contain one inline credential_offer"
+        )
+    try:
+        offer = json.loads(encoded_offers[0])
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("credential_offer_uri contains invalid JSON") from exc
+    if not isinstance(offer, dict) or offer.get("credential_issuer") != expected_issuer:
+        raise ValueError(
+            "credential offer issuer does not match the selected organization"
+        )
+    configuration_ids = offer.get("credential_configuration_ids")
+    if (
+        not isinstance(configuration_ids, list)
+        or len(configuration_ids) != 1
+        or not isinstance(configuration_ids[0], str)
+        or not configuration_ids[0]
+    ):
+        raise ValueError("credential offer must select exactly one configuration")
+    grants = offer.get("grants")
+    grant = (
+        grants.get("urn:ietf:params:oauth:grant-type:pre-authorized_code")
+        if isinstance(grants, dict)
+        else None
+    )
+    pre_auth_code = (
+        grant.get("pre-authorized_code") if isinstance(grant, dict) else None
+    )
+    if not isinstance(pre_auth_code, str) or not pre_auth_code:
+        raise ValueError("credential offer has no pre-authorized code")
+    return configuration_ids[0], pre_auth_code
 
 
 def _credential_issuer_id(credential: dict[str, Any]) -> str | None:
@@ -268,7 +313,9 @@ async def _issue_data_integrity_credential(
                 ),
             },
         ) from None
-    initiated = await create_issuance(body, request)
+    # The VC-API adapter redeems the code immediately inside the trusted
+    # service path. Public issuance responses deliberately omit this secret.
+    initiated = await _create_issuance_service_response(body, request)
     if initiated.status_code >= 400:
         raise HTTPException(
             status_code=initiated.status_code,
@@ -281,12 +328,20 @@ async def _issue_data_integrity_credential(
             status_code=502,
             detail="Marty general issuance API returned an invalid response",
         ) from None
-    pre_auth_code = transaction.get("pre_auth_code")
-    if not isinstance(pre_auth_code, str) or not pre_auth_code:
+    issuer_base_url = os.environ.get("ISSUER_BASE_URL", "http://gateway:8000").rstrip(
+        "/"
+    )
+    issuer_url = f"{issuer_base_url}/org/{organization_id}"
+    try:
+        credential_configuration_id, pre_auth_code = _parse_inline_credential_offer(
+            transaction.get("credential_offer_uri"),
+            expected_issuer=issuer_url,
+        )
+    except ValueError as exc:
         raise HTTPException(
             status_code=502,
-            detail="Marty issuance did not return a pre-authorized code",
-        )
+            detail=f"Marty issuance returned an invalid credential offer: {exc}",
+        ) from None
 
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
@@ -324,15 +379,15 @@ async def _issue_data_integrity_credential(
         raise HTTPException(
             status_code=502, detail="Marty issuance did not return a proof nonce"
         )
-    issuer_base_url = os.environ.get("ISSUER_BASE_URL", "http://gateway:8000").rstrip(
-        "/"
-    )
-    proof = _create_oid4vci_proof(f"{issuer_base_url}/org/{organization_id}", nonce)
+    proof = _create_oid4vci_proof(issuer_url, nonce)
 
     issued = await client.post(
         f"{service_url}/v1/issuance/credential",
         headers={"Authorization": f"Bearer {access_token}"},
-        json={"format": "ldp_vc", "proofs": {"jwt": [proof]}},
+        json={
+            "credential_configuration_id": credential_configuration_id,
+            "proofs": {"jwt": [proof]},
+        },
         timeout=30.0,
     )
     if issued.status_code >= 400:

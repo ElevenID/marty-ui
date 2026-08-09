@@ -15,6 +15,151 @@ from starlette.responses import JSONResponse
 from gateway.routes import signing_keys
 
 
+def _key_attestation_root_pem() -> str:
+    from datetime import timedelta
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Wallet Provider Root")])
+    now = datetime.now(timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM).decode()
+
+
+def test_issuer_profile_key_attestation_policy_is_provider_neutral_and_fail_closed() -> (
+    None
+):
+    root_pem = _key_attestation_root_pem()
+    profile = signing_keys._normalize_issuer_profile(
+        {
+            "issuer_did": "did:web:issuer.example",
+            "signing_service_id": "managed-openbao-transit",
+            "key_attestation_policy": {
+                "mode": "required",
+                "trusted_root_certificates_pem": [root_pem],
+                "allowed_algorithms": ["ES256"],
+                "required_key_storage": ["iso_18045_high"],
+                "required_user_authentication": ["iso_18045_high"],
+                "max_age_seconds": 600,
+                "require_nonce": True,
+                "status_validation": "required",
+                "status_list_allowed_origins": [
+                    "https://status.wallet-provider.example/"
+                ],
+                "status_list_trusted_root_certificates_pem": [root_pem],
+                "status_list_allowed_algorithms": ["ES256"],
+                "status_list_max_age_seconds": 43200,
+                "status_list_allow_private_hosts": False,
+                "status_list_tls_ca_certificates_pem": [],
+            },
+        },
+        org_id="org-a",
+    )
+
+    assert profile["organization_id"] == "org-a"
+    assert profile["key_attestation_policy"] == {
+        "mode": "required",
+        "trusted_root_certificates_pem": [root_pem.strip()],
+        "allowed_algorithms": ["ES256"],
+        "required_key_storage": ["iso_18045_high"],
+        "required_user_authentication": ["iso_18045_high"],
+        "max_age_seconds": 600,
+        "require_nonce": True,
+        "status_validation": "required",
+        "status_list_allowed_origins": ["https://status.wallet-provider.example"],
+        "status_list_trusted_root_certificates_pem": [root_pem.strip()],
+        "status_list_allowed_algorithms": ["ES256"],
+        "status_list_max_age_seconds": 43200,
+        "status_list_allow_private_hosts": False,
+        "status_list_tls_ca_certificates_pem": [],
+    }
+    serialized = json.dumps(profile)
+    assert "signing_key_reference" in profile
+    assert "private_key" not in serialized
+    assert "kms_key" not in serialized
+
+
+def test_issuer_profile_key_attestation_policy_defaults_disabled() -> None:
+    profile = signing_keys._normalize_issuer_profile(
+        {
+            "issuer_did": "did:web:issuer.example",
+            "signing_service_id": "managed-openbao-transit",
+        },
+        org_id="org-a",
+    )
+
+    assert profile["key_attestation_policy"]["mode"] == "disabled"
+    assert profile["key_attestation_policy"]["trusted_root_certificates_pem"] == []
+
+
+@pytest.mark.parametrize(
+    ("policy", "message"),
+    [
+        (
+            {"mode": "required", "allowed_algorithms": ["ES256"]},
+            "requires trusted roots",
+        ),
+        (
+            {
+                "mode": "required",
+                "trusted_root_certificates_pem": ["not a certificate"],
+                "allowed_algorithms": ["ES256"],
+            },
+            "invalid trusted root certificate",
+        ),
+        (
+            {
+                "mode": "required",
+                "trusted_root_certificates_pem": ["unused"],
+                "allowed_algorithms": ["HS256"],
+            },
+            "Unsupported key attestation algorithms",
+        ),
+        (
+            {
+                "mode": "required",
+                "trusted_root_certificates_pem": [_key_attestation_root_pem()],
+                "allowed_algorithms": ["ES256"],
+                "status_validation": "required",
+            },
+            "requires at least one status-list allowed origin",
+        ),
+        ({"mode": "bypass"}, "Invalid key attestation mode"),
+    ],
+)
+def test_issuer_profile_rejects_unsafe_key_attestation_policy(
+    policy: dict[str, object], message: str
+) -> None:
+    with pytest.raises(HTTPException, match=message):
+        signing_keys._normalize_issuer_profile(
+            {
+                "issuer_did": "did:web:issuer.example",
+                "signing_service_id": "managed-openbao-transit",
+                "key_attestation_policy": policy,
+            },
+            org_id="org-a",
+        )
+
+
+def test_public_holder_key_api_never_exposes_derived_key_references() -> None:
+    paths = {route.path for route in signing_keys.signing_key_router.routes}
+    assert "/v1/signing-keys/holder-keys/derive" not in paths
+
+
 def test_oid4vp_profile_key_is_part_of_managed_signing_inventory() -> None:
     key_name = "oid4vp-verifier-marty-es256"
 
@@ -32,65 +177,26 @@ def test_oid4vp_profile_key_is_part_of_managed_signing_inventory() -> None:
     assert normalized["provider_key_name"] == key_name
     assert normalized["algorithm"] == "ES256"
     assert normalized["name"] == "Marty OID4VP verifier request key"
+    assert (
+        signing_keys._openbao_key_prefix_for_purpose("oid4vp_request_signing")
+        == "oid4vp-verifier-"
+    )
+    assert signing_keys._managed_key_purposes_for_reference(key_name) == (
+        "oid4vp_request_signing",
+    )
 
 
-@pytest.mark.asyncio
-async def test_internal_issuer_profile_signing_hides_kms_routing(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
-    profile = {
-        "id": "ip-verifier",
-        "issuer_did": "did:web:verifier.example",
-        "signing_service_id": "managed-openbao-transit",
-        "signing_key_reference": "oid4vp-verifier-marty-es256",
-        "verification_method_id": "did:web:verifier.example#oid4vp",
-        "key_purpose": "oid4vp_request_signing",
-        "algorithm": "ES256",
-        "status": "active",
+def test_internal_signing_router_exposes_only_did_mediated_identity_signing() -> None:
+    paths = {
+        route.path
+        for route in signing_keys.internal_signing_key_router.routes
+        if "sign" in route.path
     }
-    identity = {
-        "issuer_profile": profile,
-        "issuer_did": profile["issuer_did"],
-        "verification_method_id": profile["verification_method_id"],
-        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
-    }
-    monkeypatch.setattr(
-        signing_keys,
-        "_resolve_exact_issuer_profile_identity",
-        AsyncMock(return_value=(profile, identity)),
-    )
-    captured = {}
 
-    async def fake_sign_payload_with_service(**kwargs):
-        captured.update(kwargs)
-        return JSONResponse(
-            content={
-                "ok": True,
-                "service_id": "managed-openbao-transit",
-                "algorithm": "ES256",
-                "signature_encoding": "raw_ieee_p1363",
-                "signature_b64": "signature",
-            }
-        )
-
-    monkeypatch.setattr(
-        signing_keys, "sign_payload_with_service", fake_sign_payload_with_service
+    assert any(path.endswith("/issuer-dids/sign") for path in paths)
+    assert not any(
+        "issuer-profiles" in path and path.endswith("/sign") for path in paths
     )
-    response = await signing_keys.internal_sign_payload_with_issuer_profile(
-        request=_build_request("org-1"),
-        issuer_profile_id="ip-verifier",
-        body={"payload_b64": "cGF5bG9hZA", "algorithm": "ES256"},
-        organization_id="org-1",
-        x_api_key="test-internal-key",
-    )
-    data = json.loads(response.body)
-
-    assert captured["body"]["key_reference"] == "oid4vp-verifier-marty-es256"
-    assert captured["body"]["key_purpose"] == "oid4vp_request_signing"
-    assert data["issuer_profile_id"] == "ip-verifier"
-    assert data["issuer_did"] == "did:web:verifier.example"
-    assert "service_id" not in data
 
 
 @pytest.mark.asyncio
@@ -141,6 +247,7 @@ async def test_internal_issuer_did_signing_resolves_profile_without_exposing_it(
             "issuer_did": "did:web:issuer.example",
             "credential_format": "ldp_vc",
             "key_purpose": "vc_jwt_issuer",
+            "algorithm": "ES256",
             "payload_b64": "cGF5bG9hZA",
         },
         organization_id="org-1",
@@ -156,8 +263,23 @@ async def test_internal_issuer_did_signing_resolves_profile_without_exposing_it(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "private_selector",
+    (
+        "issuer_profile_id",
+        "service_id",
+        "signing_service_id",
+        "key_reference",
+        "signing_key_reference",
+        "key_id",
+        "kms_key_id",
+        "kms_provider",
+        "provider",
+    ),
+)
 async def test_internal_issuer_did_signing_rejects_profile_and_kms_overrides(
     monkeypatch: pytest.MonkeyPatch,
+    private_selector: str,
 ):
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
 
@@ -167,15 +289,48 @@ async def test_internal_issuer_did_signing_rejects_profile_and_kms_overrides(
             body={
                 "issuer_did": "did:web:issuer.example",
                 "credential_format": "ldp_vc",
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256",
                 "payload_b64": "cGF5bG9hZA",
-                "issuer_profile_id": "attacker-selected-profile",
+                private_selector: "",
             },
             organization_id="org-1",
             x_api_key="test-internal-key",
         )
 
     assert exc_info.value.status_code == 422
-    assert "routing overrides" in str(exc_info.value.detail)
+    assert "only public signing inputs" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing_field", ("key_purpose", "algorithm"))
+async def test_internal_issuer_did_signing_requires_complete_selector_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+    missing_field: str,
+):
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+    resolve = AsyncMock()
+    monkeypatch.setattr(signing_keys, "_resolve_org_scoped_issuer_identity", resolve)
+    body = {
+        "issuer_did": "did:web:issuer.example",
+        "credential_format": "ldp_vc",
+        "key_purpose": "vc_jwt_issuer",
+        "algorithm": "ES256",
+        "payload_b64": "cGF5bG9hZA",
+    }
+    body.pop(missing_field)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys.internal_sign_payload_with_issuer_did(
+            request=_build_request("org-1"),
+            body=body,
+            organization_id="org-1",
+            x_api_key="test-internal-key",
+        )
+
+    assert exc_info.value.status_code == 422
+    assert f"{missing_field} is required" in str(exc_info.value.detail)
+    resolve.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -232,6 +387,7 @@ def _format_iso_datetime(dt: datetime) -> str:
 def _build_request(
     session_org_id: str | None = "org_123",
     redis_client: AsyncMock | None = None,
+    query_string: bytes = b"",
 ) -> Request:
     scope = {
         "type": "http",
@@ -239,7 +395,7 @@ def _build_request(
         "method": "GET",
         "path": "/v1/signing-keys",
         "headers": [],
-        "query_string": b"",
+        "query_string": query_string,
         "scheme": "http",
         "client": ("testclient", 1234),
         "server": ("testserver", 80),
@@ -881,6 +1037,74 @@ def test_resolve_key_reference_selects_mdoc_dsc_in_multi_key_service():
     )
 
 
+def test_managed_inventory_resolves_unbound_oid4vp_key_after_issuer_binding():
+    """A first tenant binding must not hide other managed KMS capabilities."""
+
+    service = {
+        "id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        "key_reference": "cred-issuer-marty-es256",
+        "key_aliases": [
+            "cred-issuer-marty-es256",
+            "oid4vp-verifier-marty-es256",
+        ],
+    }
+    registry = {
+        "key_reference_purposes": {
+            signing_keys.MANAGED_OPENBAO_SERVICE_ID: {
+                "cred-issuer-marty-es256": ["vc_jwt_issuer"],
+            }
+        }
+    }
+    keys = [
+        {"provider_key_name": "cred-issuer-marty-es256", "algorithm": "ES256"},
+        {
+            "provider_key_name": "oid4vp-verifier-marty-es256",
+            "algorithm": "ES256",
+        },
+    ]
+
+    assert (
+        signing_keys._resolve_key_reference_for_purpose(
+            registry,
+            service,
+            keys,
+            key_purpose="oid4vp_request_signing",
+            algorithm="ES256",
+        )
+        == "oid4vp-verifier-marty-es256"
+    )
+
+
+def test_managed_service_capabilities_come_from_inventory_and_tenant_bindings():
+    snapshot = {
+        "config": {
+            "hsm_enabled": True,
+            "hsm_settings": {"service_url": "http://openbao", "mount": "transit"},
+        },
+        "keys": [
+            {"provider_key_name": "cred-issuer-marty-es256", "algorithm": "ES256"},
+            {
+                "provider_key_name": "oid4vp-verifier-marty-es256",
+                "algorithm": "ES256",
+            },
+        ],
+        "provider_metadata": {"status": "configured"},
+    }
+    service = signing_keys._managed_openbao_service(
+        snapshot,
+        "org-new",
+        {
+            signing_keys.MANAGED_OPENBAO_SERVICE_ID: {
+                "cred-issuer-marty-es256": ["vc_jwt_issuer"]
+            }
+        },
+    )
+
+    assert service is not None
+    assert "vc_jwt_issuer" in service["key_purposes"]
+    assert "oid4vp_request_signing" in service["key_purposes"]
+
+
 def test_resolve_key_reference_honors_requested_algorithm():
     service = {
         "id": "svc",
@@ -958,6 +1182,74 @@ async def test_resolve_endpoint_returns_matching_service(
     assert data["service"]["id"] == "svc-mdoc"
     assert data["resolved_by"]["credential_format"] == "mso_mdoc"
     assert data["resolved_by"]["key_purpose"] == "mdoc_dsc"
+
+
+@pytest.mark.asyncio
+async def test_resolve_endpoint_discovers_managed_service_for_clean_organization(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A tenant without copied registry rows resolves live managed KMS inventory."""
+
+    async def fake_registry(request, org_id):
+        assert org_id == "org_new"
+        return {
+            "services": [],
+            "default_service_id": None,
+            "format_defaults": {},
+            "type_defaults": {},
+            "key_reference_purposes": {},
+        }
+
+    snapshot = {
+        "keys": [
+            {
+                "provider_key_name": "cred-issuer-marty-es256",
+                "algorithm": "ES256",
+            }
+        ]
+    }
+
+    async def fake_snapshot(org_id):
+        assert org_id == "org_new"
+        return snapshot
+
+    async def fake_build_config(request, org_id, received_snapshot, registry_override):
+        assert org_id == "org_new"
+        assert received_snapshot is snapshot
+        assert registry_override["services"] == []
+        return {
+            "services": [
+                {
+                    "id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+                    "key_reference": "cred-issuer-marty-es256",
+                    "key_aliases": ["cred-issuer-marty-es256"],
+                    "algorithms": ["ES256"],
+                    "key_purposes": [],
+                    "credential_formats": [],
+                }
+            ],
+            "default_service_id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        }
+
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_registry
+    )
+    monkeypatch.setattr(signing_keys, "_load_signing_key_snapshot", fake_snapshot)
+    monkeypatch.setattr(signing_keys, "_build_key_management_config", fake_build_config)
+
+    response = await signing_keys.resolve_signing_service(
+        request=_build_request("org_new"),
+        body={
+            "credential_format": "dc+sd-jwt",
+            "key_purpose": "vc_jwt_issuer",
+            "algorithm": "ES256",
+        },
+        organization_id=None,
+    )
+
+    data = json.loads(response.body)
+    assert data["service"]["id"] == signing_keys.MANAGED_OPENBAO_SERVICE_ID
+    assert data["service"]["key_reference"] == "cred-issuer-marty-es256"
 
 
 @pytest.mark.asyncio
@@ -1074,7 +1366,56 @@ def test_lti_tool_signing_is_distinct_and_rs256_only():
     assert signing_keys.KEY_PURPOSE_ALGORITHM_CONSTRAINTS[
         "lti_tool_signing"
     ] == frozenset({"RS256"})
-    assert signing_keys.KEY_PURPOSE_CREDENTIAL_FORMATS["lti_tool_signing"] == ()
+    assert signing_keys.KEY_PURPOSE_CREDENTIAL_FORMATS["lti_tool_signing"] == (
+        "lti_tool_jwt",
+    )
+
+
+def test_lti_tool_signing_profile_is_did_resolvable_but_key_is_exclusive() -> None:
+    profile = signing_keys._normalize_issuer_profile(
+        {
+            "issuer_did": "did:web:canvas.example:tool",
+            "signing_service_id": "shared-kms",
+            "signing_key_reference": "lti-tool-canvas-rs256",
+            "verification_method_id": (
+                "did:web:canvas.example:tool#lti-tool-canvas-rs256"
+            ),
+            "key_purpose": "lti_tool_signing",
+            "algorithm": "RS256",
+            "status": "active",
+        },
+        org_id="org-1",
+    )
+
+    signing_keys._assert_issuer_profile_key_compatible(
+        profile,
+        {
+            "key_reference_purposes": {
+                "shared-kms": {
+                    "lti-tool-canvas-rs256": ["lti_tool_signing"],
+                }
+            }
+        },
+    )
+    signing_keys._assert_issuer_profile_key_compatible(
+        profile,
+        {"key_reference_purposes": {}},
+    )
+
+    with pytest.raises(HTTPException, match="exclusively"):
+        signing_keys._assert_issuer_profile_key_compatible(
+            profile,
+            {
+                "key_reference_purposes": {
+                    "shared-kms": {
+                        "lti-tool-canvas-rs256": [
+                            "lti_tool_signing",
+                            "vc_jwt_issuer",
+                        ],
+                    }
+                }
+            },
+        )
 
 
 def test_normalize_requested_registry_persists_format_and_type_defaults():
@@ -3758,6 +4099,76 @@ async def test_publish_service_to_did_rejects_malformed_or_mismatched_local_iden
 
 
 @pytest.mark.asyncio
+async def test_managed_profile_algorithm_uses_purpose_specific_live_kms_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        signing_keys,
+        "_load_signing_key_snapshot",
+        AsyncMock(
+            return_value={
+                "keys": [
+                    {
+                        "provider_key_name": "oid4vp-verifier-marty-es256",
+                        "algorithm": "ES256",
+                    }
+                ]
+            }
+        ),
+    )
+    profile = {
+        "signing_key_reference": "oid4vp-verifier-marty-es256",
+        "key_purpose": "oid4vp_request_signing",
+        "algorithm": "",
+    }
+
+    await signing_keys._complete_issuer_profile_algorithm(
+        _build_request("org-new"),
+        organization_id="org-new",
+        profile=profile,
+        service={"id": signing_keys.MANAGED_OPENBAO_SERVICE_ID},
+    )
+
+    assert profile["algorithm"] == "ES256"
+
+
+@pytest.mark.asyncio
+async def test_managed_profile_rejects_key_from_another_protocol_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        signing_keys,
+        "_load_signing_key_snapshot",
+        AsyncMock(
+            return_value={
+                "keys": [
+                    {
+                        "provider_key_name": "cred-issuer-marty-es256",
+                        "algorithm": "ES256",
+                    }
+                ]
+            }
+        ),
+    )
+    profile = {
+        "signing_key_reference": "cred-issuer-marty-es256",
+        "key_purpose": "oid4vp_request_signing",
+        "algorithm": "",
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys._complete_issuer_profile_algorithm(
+            _build_request("org-new"),
+            organization_id="org-new",
+            profile=profile,
+            service={"id": signing_keys.MANAGED_OPENBAO_SERVICE_ID},
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "not provisioned for key_purpose" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPatch):
     """create_issuer_profile should persist a new profile in Redis."""
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
@@ -3776,7 +4187,11 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
         return (
             {"services": []},
             {"id": "svc-bao"},
-            {"id": "svc-bao", "key_reference": "cred-issuer-test-es256"},
+            {
+                "id": "svc-bao",
+                "key_reference": "cred-issuer-test-es256",
+                "algorithms": ["ES256"],
+            },
             True,
         )
 
@@ -3818,10 +4233,17 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
     assert profile["signing_service_id"] == "svc-bao"
     assert profile["issuer_mode"] == "org_managed"
     assert profile["status"] == "active"
+    assert profile["algorithm"] == "ES256"
     assert profile["id"].startswith("ip-")
 
     # Verify stored in Redis
     assert "org:org_issuer:issuer-profiles" in stored
+    registry = json.loads(stored["org:org_issuer:signing-key-services"])
+    assert registry["key_reference_purposes"] == {
+        "svc-bao": {"cred-issuer-test-es256": ["vc_jwt_issuer"]}
+    }
+    assert registry["type_defaults"]["vc_jwt_issuer"] == "svc-bao"
+    assert registry["format_defaults"]["dc+sd-jwt"] == "svc-bao"
     assert published_body["org_slug"] == "acme"
 
 
@@ -3836,7 +4258,11 @@ async def test_create_issuer_profile_requires_local_path_did_only_for_auto_publi
         return (
             {"services": []},
             {"id": "svc-bao"},
-            {"id": "svc-bao", "key_reference": "cred-issuer-test-es256"},
+            {
+                "id": "svc-bao",
+                "key_reference": "cred-issuer-test-es256",
+                "algorithms": ["ES256"],
+            },
             True,
         )
 
@@ -4032,7 +4458,11 @@ async def test_create_issuer_profile_duplicate_tuple_returns_existing_without_re
         return (
             {"services": []},
             {"id": "svc-bao"},
-            {"id": "svc-bao", "key_reference": "cred-issuer-test-es256"},
+            {
+                "id": "svc-bao",
+                "key_reference": "cred-issuer-test-es256",
+                "algorithms": ["ES256"],
+            },
             True,
         )
 
@@ -4131,7 +4561,11 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
         return (
             {"services": []},
             {"id": "svc-bao"},
-            {"id": "svc-bao", "key_reference": "cred-issuer-test-es256"},
+            {
+                "id": "svc-bao",
+                "key_reference": "cred-issuer-test-es256",
+                "algorithms": ["ES256"],
+            },
             True,
         )
 
@@ -4166,6 +4600,7 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
             "issuer_did": "did:web:beta.elevenidllc.com:orgs:acme",
             "signing_service_id": "svc-bao",
             "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
             "status": "active",
         },
         organization_id=None,
@@ -4177,6 +4612,8 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
     assert response_body["profile"]["status"] == "active"
     assert response_body["profile"]["signing_key_reference"] == "cred-issuer-test-es256"
     assert response_body["profile"]["key_purpose"] == "vc_jwt_issuer"
+    assert response_body["profile"]["credential_format"] == "SD_JWT_VC"
+    assert response_body["profile"]["algorithm"] == "ES256"
     assert (
         response_body["profile"]["verification_method_id"]
         == "did:web:beta.elevenidllc.com:orgs:acme#cred-issuer-test-es256"
@@ -4188,6 +4625,8 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
     assert saved_profiles[0]["id"] == "ip-stale"
     assert saved_profiles[0]["status"] == "active"
     assert saved_profiles[0]["key_purpose"] == "vc_jwt_issuer"
+    assert saved_profiles[0]["credential_format"] == "SD_JWT_VC"
+    assert saved_profiles[0]["algorithm"] == "ES256"
     assert (
         saved_profiles[0]["verification_method_id"]
         == "did:web:beta.elevenidllc.com:orgs:acme#cred-issuer-test-es256"
@@ -4524,7 +4963,6 @@ async def test_internal_resolve_issuer_context_resolves_exact_did(
     response = await signing_keys.internal_resolve_issuer_context(
         request=request,
         organization_id="org_issuer",
-        issuer_profile_id="ip-selected",
         issuer_did="did:web:beta.elevenidllc.com:orgs:elevenid",
         issuer_mode="org_managed",
         credential_format="dc+sd-jwt",
@@ -4540,7 +4978,7 @@ async def test_internal_resolve_issuer_context_resolves_exact_did(
     assert data["issuer_did"] == "did:web:beta.elevenidllc.com:orgs:elevenid"
     assert data["signing_service_id"] == "svc-selected"
     assert data["issuer_x5c"] == ["issuer-leaf-x5c", "issuer-intermediate-x5c"]
-    assert data["mdoc_x5c"] == ["issuer-leaf-x5c", "issuer-intermediate-x5c"]
+    assert "mdoc_x5c" not in data
 
 
 @pytest.mark.asyncio
@@ -4730,7 +5168,6 @@ async def test_internal_resolve_issuer_context_defaults_to_org_managed_mode(
     response = await signing_keys.internal_resolve_issuer_context(
         request=request,
         organization_id="org_issuer",
-        issuer_profile_id=None,
         issuer_mode="org_managed",
         credential_format="dc+sd-jwt",
         key_purpose="vc_jwt_issuer",
@@ -4746,44 +5183,20 @@ async def test_internal_resolve_issuer_context_defaults_to_org_managed_mode(
 
 
 @pytest.mark.asyncio
-async def test_internal_resolve_issuer_context_rejects_unknown_explicit_profile(
+async def test_internal_resolve_issuer_context_rejects_removed_profile_selector(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
-    redis_mock = AsyncMock()
-    redis_mock.get = AsyncMock(return_value=json.dumps({"profiles": []}))
-    request = _build_request("org_issuer", redis_client=redis_mock)
-
-    from fastapi import HTTPException as FastAPIHTTPException
-
-    with pytest.raises(FastAPIHTTPException) as exc_info:
-        await signing_keys.internal_resolve_issuer_context(
-            request=request,
-            organization_id="org_issuer",
-            issuer_profile_id="ip-missing",
-            issuer_did="did:web:beta.elevenidllc.com:orgs:missing",
-            issuer_mode="org_managed",
-            credential_format="dc+sd-jwt",
-            key_purpose="vc_jwt_issuer",
-            algorithm="ES256",
-            x_api_key="test-internal-key",
-        )
-
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_internal_resolve_issuer_context_rejects_legacy_profile_without_did(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+    request = _build_request(
+        "org_issuer",
+        query_string=b"organization_id=org_issuer&issuer_profile_id=ip-removed",
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await signing_keys.internal_resolve_issuer_context(
-            request=_build_request("org_issuer"),
+            request=request,
             organization_id="org_issuer",
-            issuer_profile_id="ip-legacy",
-            issuer_did=None,
+            issuer_did="did:web:beta.elevenidllc.com:orgs:acme",
             issuer_mode="org_managed",
             credential_format="dc+sd-jwt",
             key_purpose="vc_jwt_issuer",
@@ -4792,7 +5205,7 @@ async def test_internal_resolve_issuer_context_rejects_legacy_profile_without_di
         )
 
     assert exc_info.value.status_code == 422
-    assert "requires issuer_did" in str(exc_info.value.detail)
+    assert "issuer_profile_id is not accepted" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -4842,7 +5255,6 @@ async def test_internal_resolve_issuer_context_rejects_profile_without_requested
         await signing_keys.internal_resolve_issuer_context(
             request=request,
             organization_id="org_issuer",
-            issuer_profile_id="ip-unscoped",
             issuer_did="did:web:beta.elevenidllc.com:orgs:acme",
             issuer_mode="org_managed",
             credential_format="dc+sd-jwt",
@@ -4851,7 +5263,7 @@ async def test_internal_resolve_issuer_context_rejects_profile_without_requested
             x_api_key="test-internal-key",
         )
 
-    assert exc_info.value.status_code == 409
+    assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -4862,6 +5274,7 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
     issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
     vm_id = f"{issuer_did}#cred-issuer-acme-es256"
+    lti_vm_id = f"{issuer_did}#lti-tool-acme-rs256"
     docs = {
         "org:org_issuer:issuer-profiles": {
             "profiles": [
@@ -4873,9 +5286,22 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
                     "signing_key_reference": "cred-issuer-acme-es256",
                     "verification_method_id": vm_id,
                     "key_purpose": "vc_jwt_issuer",
+                    "credential_format": "SD_JWT_VC",
                     "algorithm": "ES256",
                     "status": "active",
-                }
+                },
+                {
+                    "id": "ip-lti",
+                    "organization_id": "org_issuer",
+                    "issuer_did": issuer_did,
+                    "signing_service_id": "svc-lti",
+                    "signing_key_reference": "lti-tool-acme-rs256",
+                    "verification_method_id": lti_vm_id,
+                    "key_purpose": "lti_tool_signing",
+                    "credential_format": "SD_JWT_VC",
+                    "algorithm": "RS256",
+                    "status": "active",
+                },
             ]
         },
         "org:org_issuer:signing-key-services": {
@@ -4890,7 +5316,16 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
                     "key_purposes": ["vc_jwt_issuer"],
                     "credential_formats": ["dc+sd-jwt"],
                     "algorithms": ["ES256"],
-                }
+                },
+                {
+                    "id": "svc-lti",
+                    "name": "Acme Canvas LTI signer",
+                    "service_type": "custom-transit-compatible",
+                    "key_reference": "lti-tool-acme-rs256",
+                    "key_purposes": ["lti_tool_signing"],
+                    "credential_formats": ["lti_tool_jwt"],
+                    "algorithms": ["RS256"],
+                },
             ],
             "default_service_id": "svc-bao",
         },
@@ -4908,9 +5343,19 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
                         "x": "abc",
                         "y": "def",
                     },
-                }
+                },
+                {
+                    "id": lti_vm_id,
+                    "type": "JsonWebKey",
+                    "controller": issuer_did,
+                    "publicKeyJwk": {
+                        "kty": "RSA",
+                        "n": "abc",
+                        "e": "AQAB",
+                    },
+                },
             ],
-            "assertionMethod": [vm_id],
+            "assertionMethod": [vm_id, lti_vm_id],
         },
     }
 
@@ -4937,7 +5382,6 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
         request=request,
         organization_id="org_issuer",
         issuer_did=issuer_did,
-        issuer_profile_id="ip-1",
         verification_method_id=vm_id,
         credential_format="dc+sd-jwt",
         key_purpose="vc_jwt_issuer",
@@ -4952,40 +5396,48 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
     assert data["verification_method_id"] == vm_id
     assert data["public_jwk"]["kid"] == vm_id
     assert data["public_jwk"]["kty"] == "EC"
+    assert data["key_purpose"] == "vc_jwt_issuer"
+    assert data["algorithm"] == "ES256"
     assert data["issuer_profile"]["algorithm"] == "ES256"
     assert data["signing_service"]["id"] == "svc-bao"
     assert data["issuer_x5c"] == ["issuer-leaf-x5c", "issuer-root-x5c"]
-    assert data["mdoc_x5c"] == ["issuer-leaf-x5c", "issuer-root-x5c"]
+    assert "mdoc_x5c" not in data
     assert "auth_reference" not in data["signing_service"]
+
+    lti_response = await signing_keys.internal_resolve_issuer_did(
+        request=request,
+        organization_id="org_issuer",
+        issuer_did=issuer_did,
+        verification_method_id=None,
+        credential_format="lti_tool_jwt",
+        key_purpose="lti_tool_signing",
+        algorithm="RS256",
+        x_api_key="test-internal-key",
+    )
+    lti_data = json.loads(lti_response.body)
+    assert lti_data["verification_method_id"] == lti_vm_id
+    assert lti_data["public_jwk"]["kty"] == "RSA"
+    assert lti_data["key_purpose"] == "lti_tool_signing"
+    assert lti_data["algorithm"] == "RS256"
+    assert lti_data["issuer_profile"]["key_purpose"] == "lti_tool_signing"
 
 
 @pytest.mark.asyncio
-async def test_internal_resolve_issuer_did_rejects_mismatched_legacy_profile(
+async def test_internal_resolve_issuer_did_rejects_removed_profile_selector(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
     issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
-
-    async def resolve(*_args, **_kwargs):
-        return {
-            "ok": True,
-            "organization_id": "org_issuer",
-            "issuer_did": issuer_did,
-            "issuer_profile": {"id": "profile-selected-by-did"},
-        }
-
-    monkeypatch.setattr(
-        signing_keys,
-        "_resolve_org_scoped_issuer_identity",
-        resolve,
+    request = _build_request(
+        "org_issuer",
+        query_string=b"organization_id=org_issuer&issuer_profile_id=profile-stale",
     )
 
     with pytest.raises(HTTPException) as exc_info:
         await signing_keys.internal_resolve_issuer_did(
-            request=_build_request("org_issuer"),
+            request=request,
             organization_id="org_issuer",
             issuer_did=issuer_did,
-            issuer_profile_id="profile-stale",
             verification_method_id=None,
             credential_format="dc+sd-jwt",
             key_purpose="vc_jwt_issuer",
@@ -4993,8 +5445,8 @@ async def test_internal_resolve_issuer_did_rejects_mismatched_legacy_profile(
             x_api_key="test-internal-key",
         )
 
-    assert exc_info.value.status_code == 409
-    assert "does not match" in str(exc_info.value.detail)
+    assert exc_info.value.status_code == 422
+    assert "issuer_profile_id is not accepted" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -5012,6 +5464,7 @@ async def test_internal_resolve_issuer_did_rejects_ambiguous_active_profiles(
         "signing_key_reference": "cred-issuer-acme-es256",
         "verification_method_id": vm_id,
         "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
         "algorithm": "ES256",
         "status": "active",
     }
@@ -5079,6 +5532,51 @@ async def test_internal_resolve_issuer_did_rejects_ambiguous_active_profiles(
 
     assert exc_info.value.status_code == 409
     assert "multiple active issuer profiles" in str(exc_info.value.detail)
+    assert "ip-1" not in str(exc_info.value.detail)
+    assert "ip-2" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_internal_resolve_issuer_did_rejects_cross_tenant_profile_record(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A corrupt tenant bucket cannot lend another organization its signer."""
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "test-internal-key")
+    issuer_did = "did:web:issuer.example:orgs:other"
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(
+        return_value=json.dumps(
+            {
+                "profiles": [
+                    {
+                        "id": "profile-other",
+                        "organization_id": "org-other",
+                        "issuer_did": issuer_did,
+                        "signing_service_id": "svc-other",
+                        "signing_key_reference": "key-other",
+                        "key_purpose": "vc_jwt_issuer",
+                        "algorithm": "ES256",
+                        "status": "active",
+                    }
+                ]
+            }
+        )
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys.internal_resolve_issuer_did(
+            request=_build_request("org-requesting", redis_client=redis_mock),
+            organization_id="org-requesting",
+            issuer_did=issuer_did,
+            verification_method_id=None,
+            credential_format="dc+sd-jwt",
+            key_purpose="vc_jwt_issuer",
+            algorithm="ES256",
+            x_api_key="test-internal-key",
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "profile-other" not in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -5168,7 +5666,8 @@ async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
                         "organization_id": "org_issuer",
                         "issuer_did": "did:web:issuer.example",
                         "key_purpose": "oid4vp_request_signing",
-                        "algorithm": "ES256",
+                        "credential_format": "SD_JWT_VC",
+                        "algorithm": "EDDSA",
                         "status": "active",
                         "signing_service_id": "kms-service-internal",
                         "signing_key_reference": "kms-key-internal",
@@ -5178,6 +5677,7 @@ async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
                         "organization_id": "org_issuer",
                         "issuer_did": "did:web:inactive.example",
                         "key_purpose": "oid4vp_request_signing",
+                        "credential_format": "SD_JWT_VC",
                         "algorithm": "ES256",
                         "status": "inactive",
                         "signing_service_id": "kms-service-internal",
@@ -5191,16 +5691,17 @@ async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
         request=_build_request("org_issuer", redis_client=redis_mock),
         organization_id=None,
         key_purpose="oid4vp_request_signing",
-        algorithm="ES256",
+        algorithm="EdDSA",
     )
 
-    data = json.loads(response.body)
+    data = response.model_dump(mode="json")
     assert data == {
         "identities": [
             {
                 "issuer_did": "did:web:issuer.example",
                 "key_purpose": "oid4vp_request_signing",
-                "algorithm": "ES256",
+                "credential_format": "SD_JWT_VC",
+                "algorithm": "EdDSA",
                 "status": "active",
             }
         ]
@@ -5217,11 +5718,67 @@ async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
 
 
 @pytest.mark.asyncio
+async def test_matching_public_identity_preserves_eddsa_exact_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation = signing_keys.IssuerIdentityOperationRequest(
+        organization_id="org_issuer",
+        issuer_did="did:web:issuer.example",
+        key_purpose="vc_jwt_issuer",
+        credential_format="SD_JWT_VC",
+        algorithm="EdDSA",
+    )
+    profile = {
+        "id": "internal-profile",
+        "organization_id": operation.organization_id,
+        "issuer_did": operation.issuer_did,
+        "key_purpose": operation.key_purpose,
+        "credential_format": operation.credential_format,
+        "algorithm": "EDDSA",
+        "status": "active",
+        "signing_service_id": "internal-service",
+        "signing_key_reference": "internal-key",
+    }
+    monkeypatch.setattr(
+        signing_keys,
+        "_load_json_document",
+        AsyncMock(return_value={"profiles": [profile]}),
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "_resolve_effective_service",
+        AsyncMock(
+            return_value=(
+                {"keys": [{"id": "internal-key", "algorithm": "EdDSA"}]},
+                None,
+                {
+                    "credential_formats": ["dc+sd-jwt"],
+                    "key_purposes": ["vc_jwt_issuer"],
+                    "algorithms": ["EdDSA"],
+                },
+                None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        signing_keys, "_assert_issuer_profile_key_compatible", lambda *_: None
+    )
+
+    matches = await signing_keys._matching_issuer_identity_profiles(
+        _build_request("org_issuer"), operation
+    )
+
+    assert matches == [profile]
+    assert signing_keys._issuer_identity_projection(profile).algorithm == "EdDSA"
+
+
+@pytest.mark.asyncio
 async def test_public_issuer_identities_fail_closed_on_ambiguous_profiles():
     profile = {
         "organization_id": "org_issuer",
         "issuer_did": "did:web:issuer.example",
         "key_purpose": "oid4vp_request_signing",
+        "credential_format": "SD_JWT_VC",
         "algorithm": "ES256",
         "status": "active",
     }
@@ -5294,3 +5851,178 @@ async def test_org_scoped_signing_key_routes_require_org_context(
 
     assert exc_info.value.status_code == 422
     assert "organization_id is required" in str(exc_info.value.detail)
+
+
+def test_public_router_exposes_identities_not_private_issuer_profiles() -> None:
+    public_paths = {route.path for route in signing_keys.signing_key_router.routes}
+    internal_paths = {
+        route.path for route in signing_keys.internal_signing_key_router.routes
+    }
+
+    assert "/v1/signing-keys/issuer-identities" in public_paths
+    assert "/v1/signing-keys/issuer-identities/resolve" in public_paths
+    assert "/v1/signing-keys/issuer-identities/certificate" in public_paths
+    assert not any(path.startswith("/v1/signing-keys/issuer-profiles") for path in public_paths)
+    assert "/internal/signing-keys/issuer-profiles" in internal_paths
+    assert "/internal/signing-keys/issuer-profiles/{profile_id}" in internal_paths
+
+
+def test_public_identity_request_rejects_every_private_custody_selector() -> None:
+    request = {
+        "organization_id": "org-a",
+        "issuer_did": "did:web:issuer.example:orgs:a",
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256",
+    }
+    for field in (
+        "issuer_profile_id",
+        "signing_service_id",
+        "signing_key_reference",
+        "kms_provider",
+        "key_name",
+    ):
+        with pytest.raises(ValueError):
+            signing_keys.IssuerIdentityCreateRequest.model_validate(
+                {**request, field: "private"}
+            )
+
+
+@pytest.mark.asyncio
+async def test_public_identity_creation_returns_only_provider_neutral_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation = signing_keys.IssuerIdentityCreateRequest(
+        organization_id="org-a",
+        issuer_did="did:web:issuer.example:orgs:a",
+        key_purpose="vc_jwt_issuer",
+        credential_format="SD_JWT_VC",
+        algorithm="EdDSA",
+    )
+    monkeypatch.setenv("PUBLIC_DOMAIN", "issuer.example")
+    monkeypatch.setattr(
+        signing_keys, "_matching_issuer_identity_profiles", AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "_managed_custody_for_new_identity",
+        AsyncMock(return_value=("private-service", "private-key")),
+    )
+    create_profile = AsyncMock(
+        return_value=JSONResponse(
+            content={
+                "created": True,
+                "profile": {
+                    "id": "private-profile",
+                    "organization_id": "org-a",
+                    "issuer_did": operation.issuer_did,
+                    "key_purpose": operation.key_purpose,
+                    "credential_format": operation.credential_format,
+                    "algorithm": operation.algorithm,
+                    "status": "active",
+                    "signing_service_id": "private-service",
+                    "signing_key_reference": "private-key",
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(signing_keys, "create_issuer_profile", create_profile)
+
+    response = await signing_keys.create_public_issuer_identity(
+        _build_request("org-a"), operation
+    )
+
+    assert response.model_dump() == {
+        "identity": {
+            "issuer_did": operation.issuer_did,
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "EdDSA",
+            "status": "active",
+        },
+        "created": True,
+    }
+    serialized = json.dumps(response.model_dump())
+    assert "private-profile" not in serialized
+    assert "private-service" not in serialized
+    assert "private-key" not in serialized
+    create_profile.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_public_identity_creation_rejects_cross_tenant_context() -> None:
+    operation = signing_keys.IssuerIdentityCreateRequest(
+        organization_id="org-b",
+        issuer_did="did:web:issuer.example:orgs:b",
+        key_purpose="vc_jwt_issuer",
+        credential_format="SD_JWT_VC",
+        algorithm="ES256",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys.create_public_issuer_identity(
+            _build_request("org-a"), operation
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_public_identity_resolution_returns_only_tuple_selected_public_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operation = signing_keys.IssuerIdentityOperationRequest(
+        organization_id="org-a",
+        issuer_did="did:web:issuer.example:orgs:a",
+        key_purpose="mdoc_dsc",
+        credential_format="MDOC",
+        algorithm="ES256",
+    )
+    profile = {
+        "id": "private-profile",
+        "organization_id": "org-a",
+        "issuer_did": operation.issuer_did,
+        "key_purpose": operation.key_purpose,
+        "credential_format": operation.credential_format,
+        "algorithm": operation.algorithm,
+        "status": "active",
+        "signing_service_id": "private-service",
+        "signing_key_reference": "private-key",
+    }
+    monkeypatch.setattr(
+        signing_keys,
+        "_matching_issuer_identity_profiles",
+        AsyncMock(return_value=[profile]),
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "_resolve_exact_issuer_profile_identity",
+        AsyncMock(
+            return_value=(
+                profile,
+                {
+                    "public_jwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "public-x",
+                        "y": "public-y",
+                        "kid": f"{operation.issuer_did}#private-key",
+                    }
+                },
+            )
+        ),
+    )
+
+    response = await signing_keys.resolve_public_issuer_identity(
+        _build_request("org-a"), operation
+    )
+    data = response.model_dump()
+    assert data["public_jwk"] == {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "public-x",
+        "y": "public-y",
+    }
+    serialized = json.dumps(data)
+    for private_value in ("private-profile", "private-service", "private-key"):
+        assert private_value not in serialized

@@ -1,7 +1,7 @@
 /**
  * Trust & Compliance Step - Credential Template Wizard
  * 
- * Select the required trust, issuer, and compliance profiles.
+ * Select the required trust, public issuer DID, and compliance profiles.
  * The step blocks when any required active dependency is unavailable.
  */
 
@@ -35,46 +35,27 @@ const firstNonEmpty = (...values) => values
   .map((value) => (typeof value === 'string' ? value.trim() : value))
   .find((value) => value);
 
-const isActiveKmsBackedIssuerProfile = (profile) => {
-  if (!profile) {
+const isActiveIssuerIdentity = (identity) => {
+  if (!identity) {
     return false;
   }
-  const issuerDid = firstNonEmpty(profile.issuer_did, profile.did);
-  const signingServiceId = firstNonEmpty(
-    profile.signing_service_id,
-    profile.service_id,
-    profile.metadata?.signing_service_id
-  );
+  const issuerDid = firstNonEmpty(identity.issuer_did);
   return (
-    String(profile.status || '').toLowerCase() === 'active' &&
+    String(identity.status || '').toLowerCase() === 'active' &&
     typeof issuerDid === 'string' &&
-    issuerDid.startsWith('did:') &&
-    Boolean(signingServiceId)
+    issuerDid.startsWith('did:')
   );
 };
 
-const buildIssuerProfilePatch = (profile, currentAlgorithm = 'ES256') => {
-  if (!profile) {
+const buildIssuerIdentityPatch = (identity) => {
+  if (!identity) {
     return {
-      issuer_profile_id: null,
       issuer_did: null,
-      issuer_key_id: null,
-      issuer_algorithm: currentAlgorithm || null,
-      key_access_mode: null,
-      remote_signing_config: null,
     };
   }
 
-  const algorithm = firstNonEmpty(profile.algorithm, currentAlgorithm, 'ES256');
-
   return {
-    issuer_profile_id: null,
-    issuer_did: firstNonEmpty(profile.issuer_did, profile.did) || null,
-    issuer_key_id: null,
-    issuer_algorithm: null,
-    signing_algorithm: algorithm || currentAlgorithm || null,
-    key_access_mode: null,
-    remote_signing_config: null,
+    issuer_did: firstNonEmpty(identity.issuer_did) || null,
   };
 };
 
@@ -95,18 +76,20 @@ const TrustComplianceStep = ({ data, onChange }) => {
   );
 
   const {
-    data: issuerProfilesData = [],
-    loading: issuerProfilesLoading,
-    error: issuerProfilesError,
-    reload: reloadIssuerProfiles,
+    data: issuerIdentitiesData = [],
+    loading: issuerIdentitiesLoading,
+    error: issuerIdentitiesError,
+    reload: reloadIssuerIdentities,
   } = useAsyncData(
     async () => {
       if (!activeOrgId) {
-        throw new Error('Select an organization before loading issuer profiles.');
+        throw new Error('Select an organization before loading issuer identities.');
       }
-      const response = await signingKeysApi.listIssuerProfiles({ organization_id: activeOrgId });
-      const profiles = response?.profiles || [];
-      return profiles.filter(isActiveKmsBackedIssuerProfile);
+      const response = await signingKeysApi.listPublicIssuerIdentities({
+        organization_id: activeOrgId,
+      });
+      const identities = response?.identities || [];
+      return identities.filter(isActiveIssuerIdentity);
     },
     [activeOrgId]
   );
@@ -132,13 +115,13 @@ const TrustComplianceStep = ({ data, onChange }) => {
   );
 
   const trustProfiles = Array.isArray(trustProfilesData) ? trustProfilesData : [];
-  const issuerProfiles = Array.isArray(issuerProfilesData)
-    ? issuerProfilesData.filter(isActiveKmsBackedIssuerProfile)
+  const activeIssuerIdentities = Array.isArray(issuerIdentitiesData)
+    ? issuerIdentitiesData.filter(isActiveIssuerIdentity)
     : [];
   const issuerIdentities = [...new Map(
-    issuerProfiles.map((profile) => [
-      firstNonEmpty(profile.issuer_did, profile.did),
-      profile,
+    activeIssuerIdentities.map((identity) => [
+      firstNonEmpty(identity.issuer_did),
+      identity,
     ])
   ).values()];
   const complianceProfiles = Array.isArray(complianceProfilesData) ? complianceProfilesData : [];
@@ -152,7 +135,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
 
   useEffect(() => {
     if (issuerIdentities.length === 1 && !data.issuer_did) {
-      onChange(buildIssuerProfilePatch(issuerIdentities[0], data.signing_algorithm));
+      onChange(buildIssuerIdentityPatch(issuerIdentities[0]));
     }
   }, [issuerIdentities]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -233,7 +216,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
     );
   }
 
-  if (issuerProfilesLoading) {
+  if (issuerIdentitiesLoading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
         <CircularProgress />
@@ -241,37 +224,37 @@ const TrustComplianceStep = ({ data, onChange }) => {
     );
   }
 
-  if (issuerProfilesError) {
+  if (issuerIdentitiesError) {
     return (
       <Box sx={{ py: 4 }}>
         <Alert severity="error" sx={{ mb: 3 }}>
-          {issuerProfilesError?.message || 'Issuer profiles could not be loaded.'}
+          {issuerIdentitiesError?.message || 'Issuer identities could not be loaded.'}
         </Alert>
-        <Button variant="outlined" onClick={reloadIssuerProfiles}>
+        <Button variant="outlined" onClick={reloadIssuerIdentities}>
           {t('wizards.credentialTemplate.trustComplianceStep.blocked.refreshButton')}
         </Button>
       </Box>
     );
   }
 
-  if (issuerProfiles.length === 0) {
+  if (issuerIdentities.length === 0) {
     return (
       <Box sx={{ textAlign: 'center', py: 4 }}>
         <LanguageIcon sx={{ fontSize: 80, color: 'warning.main', mb: 3 }} />
         <Typography variant="h5" gutterBottom>
-          Active issuer profile required
+          Active issuer DID required
         </Typography>
         <Typography color="text.secondary" paragraph sx={{ maxWidth: 640, mx: 'auto' }}>
-          Credential templates must reference an active DID issuer profile backed by a registered KMS signing service.
+          Credential templates must reference an active issuer DID. The organization registry resolves its managed custody profile.
         </Typography>
         <Alert severity="warning" sx={{ maxWidth: 640, mx: 'auto', mb: 3 }}>
-          Create an issuer identity first, then return to bind this template to that issuer profile.
+          Create an issuer identity first, then return to select its public DID.
         </Alert>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center' }}>
           <Button variant="contained" startIcon={<AddCircleOutlineIcon />} onClick={handleGoToIssuerProfiles}>
             Create issuer identity
           </Button>
-          <Button variant="outlined" onClick={reloadIssuerProfiles}>
+          <Button variant="outlined" onClick={reloadIssuerIdentities}>
             {t('wizards.credentialTemplate.trustComplianceStep.blocked.refreshButton')}
           </Button>
         </Box>
@@ -340,24 +323,24 @@ const TrustComplianceStep = ({ data, onChange }) => {
         <Select
           value={data.issuer_did || ''}
           onChange={(e) => {
-            const selectedProfile = issuerIdentities.find(
-              (profile) => firstNonEmpty(profile.issuer_did, profile.did) === e.target.value
+            const selectedIdentity = issuerIdentities.find(
+              (identity) => firstNonEmpty(identity.issuer_did) === e.target.value
             );
-            onChange(buildIssuerProfilePatch(selectedProfile, data.signing_algorithm));
+            onChange(buildIssuerIdentityPatch(selectedIdentity));
           }}
           label="Issuer DID"
-          disabled={issuerProfilesLoading}
+          disabled={issuerIdentitiesLoading}
           SelectDisplayProps={{ 'data-testid': 'template-issuer-profile-select' }}
         >
-          {issuerIdentities.map((profile) => (
+          {issuerIdentities.map((identity) => (
             <MenuItem
-              key={firstNonEmpty(profile.issuer_did, profile.did)}
-              value={firstNonEmpty(profile.issuer_did, profile.did)}
+              key={firstNonEmpty(identity.issuer_did)}
+              value={firstNonEmpty(identity.issuer_did)}
             >
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, width: '100%' }}>
-                <span>{profile.name || profile.issuer_did}</span>
+                <span>{identity.issuer_did}</span>
                 <Chip
-                  label={profile.issuer_did?.split(':').slice(0, 3).join(':')}
+                  label={identity.issuer_did?.split(':').slice(0, 3).join(':')}
                   size="small"
                   sx={{ ml: 'auto', fontFamily: 'monospace', fontSize: '0.75rem' }}
                 />
@@ -377,7 +360,7 @@ const TrustComplianceStep = ({ data, onChange }) => {
             Selected issuer identity
           </Typography>
           <Chip
-            label={issuerIdentities.find((p) => firstNonEmpty(p.issuer_did, p.did) === data.issuer_did)?.name || 'Issuer identity'}
+            label={data.issuer_did}
             color="primary"
             icon={<LanguageIcon />}
           />

@@ -22,6 +22,7 @@ BASE_FILES = (
     "docker-compose.profile.oidf.yml",
 )
 GHCR_FILE = "docker-compose.profile.ghcr.yml"
+LOCAL_BUILD_FILE = "docker-compose.profile.local-build.yml"
 IMMUTABLE_INFRA_FILE = "docker-compose.profile.conformance-images.yml"
 HAIP_FILE = "docker-compose.profile.oidf-haip.yml"
 ISOLATION_FILE = "docker-compose.profile.conformance.yml"
@@ -70,6 +71,13 @@ def compose_command(
     if use_ghcr:
         files.insert(1, GHCR_FILE)
         files.insert(2, IMMUTABLE_INFRA_FILE)
+    else:
+        # The base stack defines every source-built Python service. The UI is
+        # deliberately supplied by a mode-specific profile because released
+        # runs replace it with an immutable GHCR image. Without this profile,
+        # --local-build cannot even render: the public TLS proxy depends on an
+        # undefined ``ui`` service.
+        files.insert(1, LOCAL_BUILD_FILE)
     if include_haip:
         files.append(HAIP_FILE)
     files.append(ISOLATION_FILE)
@@ -251,7 +259,7 @@ def project_container_ids(project: str) -> list[str]:
     return [line for line in completed.stdout.splitlines() if line]
 
 
-def issuer_profile_identity(command: list[str]) -> dict[str, Any]:
+def issuer_did_identity(command: list[str]) -> dict[str, Any]:
     """Resolve the conformance verifier's public DID through the org registry.
 
     The query executes inside the gateway container, so the internal API key is
@@ -291,7 +299,6 @@ request = urllib.request.Request(
 )
 with urllib.request.urlopen(request, timeout=15) as response:
     payload = json.loads(response.read().decode("utf-8"))
-profile = payload.get("issuer_profile") or {}
 if payload.get("issuer_did") != issuer_did:
     raise RuntimeError("issuer DID response did not match the configured public identity")
 public_identity = {
@@ -299,8 +306,8 @@ public_identity = {
     "verification_method_id": payload.get("verification_method_id"),
     "public_jwk": payload.get("public_jwk"),
     "did_document": payload.get("did_document"),
-    "key_purpose": profile.get("key_purpose"),
-    "algorithm": profile.get("algorithm"),
+    "key_purpose": payload.get("key_purpose"),
+    "algorithm": payload.get("algorithm"),
 }
 print(json.dumps(public_identity, separators=(",", ":"), sort_keys=True))
 """.strip()
@@ -457,7 +464,7 @@ def main() -> int:
         "command",
         choices=(
             "bootstrap-reviewer",
-            "issuer-profile-identity",
+            "issuer-did-identity",
             "config",
             "up",
             "ps",
@@ -493,12 +500,12 @@ def main() -> int:
     if args.command == "config":
         print(json.dumps(config, indent=2, sort_keys=True))
         return 0
-    if args.command == "issuer-profile-identity":
+    if args.command == "issuer-did-identity":
         if not project_container_ids(project):
             raise ValueError(
-                "issuer-profile-identity requires an existing exact conformance project"
+                "issuer-did-identity requires an existing exact conformance project"
             )
-        print(json.dumps(issuer_profile_identity(command), sort_keys=True))
+        print(json.dumps(issuer_did_identity(command), sort_keys=True))
         return 0
     if args.command == "up":
         assert_ports_available(ports, project, resume=args.resume)

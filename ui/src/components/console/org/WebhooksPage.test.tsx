@@ -122,7 +122,7 @@ describe('WebhooksPage', () => {
     await user.click(confirmButton)
 
     await waitFor(() => {
-      expect(mockDeleteWebhook).toHaveBeenCalledWith('wh-1')
+      expect(mockDeleteWebhook).toHaveBeenCalledWith('org-123', 'wh-1')
     })
   })
 })

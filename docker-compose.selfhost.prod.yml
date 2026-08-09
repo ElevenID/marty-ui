@@ -12,6 +12,7 @@ x-runtime-env: &runtime-env
   ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://localhost}
   MARTY_ISSUER_BASE_URL: ${MARTY_ISSUER_BASE_URL:-https://localhost}
   ORGANIZATION_CREATION_ENABLED: ${ORGANIZATION_CREATION_ENABLED:-false}
+  ES_GRPC_TARGET: event-stream:9015
 
 x-database-url-template: &database-url-template postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
 x-database-url-sync-template: &database-url-sync-template postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
@@ -220,6 +221,7 @@ services:
         SERVICE_NAME: gateway
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       GATEWAY_PORT: "8000"
       AUTH_SERVICE_URL: http://auth:8001
       ORGANIZATION_SERVICE_URL: http://organization:8002
@@ -249,6 +251,7 @@ services:
     secrets:
       - issuance_api_key
       - openbao_service_token
+      - grpc_service_token
     ports:
       - "127.0.0.1:${SELFHOST_GATEWAY_HOST_PORT:-18000}:8000"
     depends_on:
@@ -295,6 +298,7 @@ services:
         SERVICE_NAME: auth
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       AUTH_SERVICE_PORT: "8001"
       UI_BASE_URL: ${UI_BASE_URL:?UI_BASE_URL must be set}
       UI_ADDITIONAL_BASE_URLS: ${UI_ADDITIONAL_BASE_URLS:-}
@@ -331,6 +335,7 @@ services:
       AUTH_GRPC_PORT: "9001"
     secrets:
       - marty_api_client_secret
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -355,6 +360,7 @@ services:
         SERVICE_NAME: organization
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       ORGANIZATION_SERVICE_PORT: "8002"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -364,6 +370,7 @@ services:
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
     secrets:
       - marty_db_password
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -384,6 +391,7 @@ services:
         SERVICE_NAME: credential-template
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       CREDENTIAL_TEMPLATE_SERVICE_PORT: "8003"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -394,6 +402,7 @@ services:
     secrets:
       - marty_db_password
       - issuance_api_key
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -413,6 +422,7 @@ services:
     entrypoint: ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       TRUST_PROFILE_SERVICE_PORT: "8004"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -422,6 +432,7 @@ services:
     secrets:
       - marty_db_password
       - openbao_service_token
+      - grpc_service_token
     volumes:
       - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
     depends_on:
@@ -440,6 +451,7 @@ services:
     command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8005"]
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       ISSUANCE_SERVICE_PORT: "8005"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -447,7 +459,6 @@ services:
       CANVAS_LTI_EXPERIENCE_BASE_URL: ${CANVAS_LTI_EXPERIENCE_BASE_URL:-}
       CANVAS_OAUTH_COMPLETION_REDIRECT_URL: ${CANVAS_OAUTH_COMPLETION_REDIRECT_URL:-${CANVAS_LTI_EXPERIENCE_BASE_URL:-https://prod.example.com}/console/org/deploy/canvas}
       CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
-      CANVAS_LTI_TOOL_ISSUER_PROFILE_ID: ${CANVAS_LTI_TOOL_ISSUER_PROFILE_ID:-}
       CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
       CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS: ${CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS:-}
       CANVAS_LTI_TOOL_ACTIVE_KID: ${CANVAS_LTI_TOOL_ACTIVE_KID:-}
@@ -489,6 +500,7 @@ services:
       CANVAS_ALLOW_PRIVATE_BASE_URLS: ${CANVAS_ALLOW_PRIVATE_BASE_URLS:-false}
       CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-false}
       UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
+      DIDCOMM_ALLOW_PRIVATE_ENDPOINTS: "false"
     secrets:
       - marty_db_password
       - openbao_service_token
@@ -496,6 +508,7 @@ services:
       - integration_secret_master_key
       - token_hmac_key
       - canvas_credentials_shared_secret
+      - grpc_service_token
     volumes:
       - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
     depends_on:
@@ -532,7 +545,6 @@ services:
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
-      CANVAS_LTI_TOOL_ISSUER_PROFILE_ID: ${CANVAS_LTI_TOOL_ISSUER_PROFILE_ID:-}
       CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
       CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS: ${CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS:-}
       CANVAS_LTI_TOOL_ACTIVE_KID: ${CANVAS_LTI_TOOL_ACTIVE_KID:-}
@@ -576,6 +588,7 @@ services:
         SERVICE_NAME: applicant
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       APPLICANT_SERVICE_PORT: "8006"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -584,8 +597,11 @@ services:
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
+      FLOW_APPLICATION_EVENT_HMAC_KEY_FILE: /run/secrets/flow_application_event_hmac_key
     secrets:
       - marty_db_password
+      - grpc_service_token
+      - flow_application_event_hmac_key
     volumes:
       - type: bind
         source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/applicant
@@ -609,6 +625,7 @@ services:
         SERVICE_NAME: notification
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       NOTIFICATION_SERVICE_PORT: "8007"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -619,6 +636,7 @@ services:
       SMTP_PASSWORD_FILE: /run/secrets/smtp_password
     secrets:
       - marty_db_password
+      - grpc_service_token
       - smtp_password
     depends_on:
       db-migrate:
@@ -638,12 +656,14 @@ services:
         SERVICE_NAME: compliance-profile
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
     secrets:
       - marty_db_password
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -662,12 +682,15 @@ services:
         SERVICE_NAME: presentation-policy
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       PRESENTATION_POLICY_SERVICE_PORT: "8009"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_PORT: "9009"
       DID_RESOLUTION_BASE_URL: http://gateway:8000
+      DID_PUBLIC_FALLBACK_ENABLED: ${DID_PUBLIC_FALLBACK_ENABLED:-false}
+      DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
       MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
       MIP_MANAGED_ISSUER_DIDS: ${MIP_MANAGED_ISSUER_DIDS:-}
@@ -676,6 +699,7 @@ services:
       ISSUANCE_SERVICE_URL: http://issuance:8005
     secrets:
       - marty_db_password
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -694,12 +718,14 @@ services:
         SERVICE_NAME: deployment-profile
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       DEPLOYMENT_PROFILE_SERVICE_PORT: "8010"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
     secrets:
       - marty_db_password
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -718,6 +744,7 @@ services:
         SERVICE_NAME: flow
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       FLOW_SERVICE_PORT: "8011"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -730,8 +757,11 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_DB_FLOW: "3"
       FLOW_GRPC_PORT: "9011"
+      FLOW_APPLICATION_EVENT_HMAC_KEY_FILE: /run/secrets/flow_application_event_hmac_key
     secrets:
       - marty_db_password
+      - grpc_service_token
+      - flow_application_event_hmac_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -758,6 +788,7 @@ services:
         SERVICE_NAME: verification
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       VERIFICATION_SERVICE_PORT: "8012"
       PP_GRPC_TARGET: presentation-policy:9009
       VERIF_GRPC_PORT: "9017"
@@ -768,6 +799,7 @@ services:
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
     secrets:
       - issuance_api_key
+      - grpc_service_token
     depends_on:
       presentation-policy:
         condition: service_healthy
@@ -788,6 +820,7 @@ services:
         SERVICE_NAME: revocation-profile
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       REVOCATION_PROFILE_SERVICE_PORT: "8013"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -796,6 +829,7 @@ services:
       RP_GRPC_PORT: "9013"
     secrets:
       - marty_db_password
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -816,12 +850,14 @@ services:
         SERVICE_NAME: device_registration
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
     secrets:
       - marty_db_password
+      - grpc_service_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -840,8 +876,11 @@ services:
         SERVICE_NAME: event_stream
     environment:
       <<: *runtime-env
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       EVENT_STREAM_GRPC_ENABLED: "true"
       EVENT_STREAM_GRPC_PORT: "9015"
+    secrets:
+      - grpc_service_token
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8015/health"]
       interval: 30s
@@ -965,6 +1004,10 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/marty_api_client_secret
   issuance_api_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/issuance_api_key
+  grpc_service_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/grpc_service_token
+  flow_application_event_hmac_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_application_event_hmac_key
   integration_secret_master_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/integration_secret_master_key
   token_hmac_key:

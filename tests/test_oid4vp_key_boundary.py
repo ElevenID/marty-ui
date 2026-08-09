@@ -28,3 +28,21 @@ def test_oid4vp_signing_and_flow_envelopes_have_dedicated_kms_keys() -> None:
     assert '"oid4vp_request_signing"' in migrations
     assert '"flow-response-envelope-marty-aes256"' in migrations
     assert '"exportable": False' in migrations
+
+
+def test_protocol_services_cannot_select_an_issuer_profile_for_signing() -> None:
+    gateway = (ROOT / "services" / "gateway" / "routes" / "signing_keys.py").read_text(
+        encoding="utf-8"
+    )
+    flow = (ROOT / "services" / "flow" / "main.py").read_text(encoding="utf-8")
+
+    obsolete_route = "/issuer-" + "profiles/{issuer_profile_id}/sign"
+    obsolete_helper = "sign_payload_with_" + "issuer_profile"
+    assert obsolete_route not in gateway
+    assert obsolete_route not in flow
+    assert obsolete_helper not in gateway
+    assert obsolete_helper not in flow
+    assert 'f"{base_url}/issuer-dids/sign"' in flow
+    assert '"credential_format": "oauth-authz-req+jwt"' in flow
+    assert '"key_purpose": "oid4vp_request_signing"' in flow
+    assert '"oid4vp_issuer_profile_id"' not in flow

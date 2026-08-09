@@ -60,8 +60,7 @@ describe('CredentialTemplatesPage', () => {
           format: 'vc_jwt',
           version: '1.0',
           claims: [{ name: 'employee_id' }],
-          hasArtifacts: true,
-          artifactsValidated: true,
+          issuer_did: 'did:web:issuer.example.com',
           usedByFlowsCount: 2,
           status: 'active',
           updated_at: '2026-04-15T18:00:00Z',
@@ -78,5 +77,6 @@ describe('CredentialTemplatesPage', () => {
     })
 
     expect(screen.getByText('VC_JWT')).toBeInTheDocument()
+    expect(screen.getByText('templates.issuerDidStatus.configured')).toBeInTheDocument()
   })
 })

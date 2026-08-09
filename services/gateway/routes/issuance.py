@@ -2,24 +2,34 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-import json
+
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-
 from gateway.models import (
     ApplicationTemplateCreate,
     ApplicationTemplatePatch,
     ApplicationTemplateResponse,
+    CredentialRenewalOfferResponse,
     DidcommDeliverRequest,
     DidcommDeliveryResponse,
     IssuanceCreate,
     IssuanceResponse,
+    IssuanceTransactionResponse,
+    IssuedCredentialLifecycleRequest,
     IssuedCredentialRecordResponse,
 )
-from gateway.proxy import _resource_org_id, get_http_client, get_registry, proxy_request
+from gateway.proxy import (
+    _forward_headers,
+    _resource_org_id,
+    get_http_client,
+    get_registry,
+    proxy_request,
+)
+from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +60,6 @@ _ISSUANCE_HEADERS: dict[str, str] | None = (
 _FORMAT_KEY_PURPOSE: dict[str, str] = {
     "jwt_vc_json": "vc_jwt_issuer",
     "vc+sd-jwt": "vc_jwt_issuer",
-    "spruce-vc+sd-jwt": "vc_jwt_issuer",
     "dc+sd-jwt": "vc_jwt_issuer",
     "w3c_vcdm_v2_sd_jwt": "vc_jwt_issuer",
     "w3c_vcdm_v2_di": "vc_jwt_issuer",
@@ -106,9 +115,7 @@ def _public_signing_credential_format(
             if not isinstance(value, str) or not value.strip():
                 continue
             normalized = value.strip().lower()
-            candidates.add(
-                _PUBLIC_SIGNING_FORMAT_ALIASES.get(normalized, normalized)
-            )
+            candidates.add(_PUBLIC_SIGNING_FORMAT_ALIASES.get(normalized, normalized))
     if len(candidates) == 1:
         return candidates.pop()
     return None
@@ -135,8 +142,8 @@ async def _resolve_issuer_identity(
     credential_format: str | None = None,
     key_purpose: str | None = None,
     algorithm: str | None = None,
-) -> dict[str, str] | None:
-    """Resolve a public DID to exactly one org-owned active issuer profile."""
+) -> dict[str, object] | None:
+    """Resolve a public DID to exactly one organization-owned signing identity."""
     if not issuer_did:
         return None
     if not organization_id:
@@ -152,7 +159,7 @@ async def _resolve_issuer_identity(
     except ImportError:
         raise HTTPException(
             status_code=503,
-            detail="Signing-keys issuer profile resolver is unavailable.",
+            detail="Signing-keys issuer DID resolver is unavailable.",
         )
 
     try:
@@ -177,27 +184,28 @@ async def _resolve_issuer_identity(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=503,
-            detail="Signing-keys issuer profile resolver returned an invalid response.",
+            detail="Signing-keys issuer DID resolver returned an invalid response.",
         ) from exc
 
-    profile = (
-        payload.get("issuer_profile")
-        if isinstance(payload.get("issuer_profile"), dict)
-        else {}
-    )
-    service = (
-        payload.get("signing_service")
-        if isinstance(payload.get("signing_service"), dict)
-        else {}
-    )
-    resolved_profile_id = _clean_optional_id(profile.get("id"))
     resolved_issuer_did = _clean_optional_id(payload.get("issuer_did"))
     resolved_organization_id = _clean_optional_id(payload.get("organization_id"))
+    resolved_verification_method_id = _clean_optional_id(
+        payload.get("verification_method_id")
+    )
+    resolved_key_purpose = _clean_optional_id(payload.get("key_purpose"))
+    resolved_algorithm = _clean_optional_id(payload.get("algorithm"))
+    public_jwk = payload.get("public_jwk")
+    expected_key_purpose = (
+        key_purpose or _key_purpose_for_format(credential_format) or "vc_jwt_issuer"
+    )
     if (
-        not payload.get("ok")
-        or not resolved_profile_id
+        payload.get("ok") is not True
         or not resolved_issuer_did
-        or not service.get("id")
+        or not resolved_verification_method_id
+        or not resolved_key_purpose
+        or not resolved_algorithm
+        or not isinstance(public_jwk, dict)
+        or any(secret in public_jwk for secret in ("d", "p", "q", "k"))
     ):
         return None
     if resolved_organization_id != organization_id or resolved_issuer_did != issuer_did:
@@ -205,20 +213,18 @@ async def _resolve_issuer_identity(
             status_code=409,
             detail="Issuer DID resolver returned an identity outside the requested organization scope.",
         )
-    algorithm_value = profile.get("algorithm") or ""
+    if (
+        resolved_key_purpose != expected_key_purpose
+        or (algorithm and resolved_algorithm != algorithm)
+        or not resolved_verification_method_id.startswith(f"{resolved_issuer_did}#")
+    ):
+        return None
     return {
-        "issuer_profile_id": resolved_profile_id,
         "issuer_did": resolved_issuer_did,
-        "signing_service_id": str(service["id"]),
-        "signing_key_reference": str(profile.get("signing_key_reference") or ""),
-        "verification_method_id": str(payload.get("verification_method_id") or ""),
-        "key_purpose": str(
-            profile.get("key_purpose")
-            or key_purpose
-            or _key_purpose_for_format(credential_format)
-            or "vc_jwt_issuer"
-        ),
-        "algorithm": str(algorithm_value),
+        "verification_method_id": resolved_verification_method_id,
+        "public_jwk": public_jwk,
+        "key_purpose": resolved_key_purpose,
+        "algorithm": resolved_algorithm,
     }
 
 
@@ -226,14 +232,7 @@ async def _load_credential_template(template_id: str, request: Request) -> dict:
     registry = get_registry()
     client = get_http_client()
     url = f"{registry.get_service_url('credential-templates')}/v1/credential-templates/{template_id}"
-    headers: dict[str, str] = {}
-    if getattr(request.state, "user_id", None):
-        headers["X-User-Id"] = request.state.user_id
-    if getattr(request.state, "user_email", None):
-        headers["X-User-Email"] = request.state.user_email
-    auth = request.headers.get("authorization")
-    if auth:
-        headers["Authorization"] = auth
+    headers = _forward_headers(request)
     response = await client.get(url, timeout=10.0, headers=headers)
     if response.status_code == 404:
         raise HTTPException(
@@ -284,10 +283,7 @@ def _select_issuer_identity_request(
                     "issuer_did; migrate this legacy template before issuance."
                 ),
             )
-        if (
-            body_issuer_did
-            and body_issuer_did != template_issuer_did
-        ):
+        if body_issuer_did and body_issuer_did != template_issuer_did:
             raise HTTPException(
                 status_code=422,
                 detail="issuer_did cannot override the credential template issuer DID.",
@@ -306,6 +302,75 @@ issuance_router = APIRouter(prefix="/v1/issuance", tags=["Issuance"])
 issued_credential_router = APIRouter(
     prefix="/v1/issued-credentials", tags=["Issued Credentials"]
 )
+
+
+def _require_selected_organization(request: Request, organization_id: str) -> None:
+    """Bind an issuance management request to the authenticated tenant."""
+    state = getattr(request, "state", None)
+    selected = str(getattr(state, "organization_id", "") or "").strip()
+    if selected and selected != organization_id:
+        raise HTTPException(
+            status_code=403,
+            detail="organization_id does not match the authorized organization context",
+        )
+
+
+def _validated_json_body(body) -> bytes:
+    return json.dumps(
+        body.model_dump(mode="json", exclude_none=True),
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+
+
+def _sanitize_management_response(
+    response: Response,
+    model: type,
+    *,
+    many: bool = False,
+) -> Response:
+    """Project successful issuance-service output onto a strict public model."""
+    body = getattr(response, "body", None)
+    if response.status_code >= 400 or response.status_code == 204 or body is None:
+        return response
+    if not body:
+        return response
+    try:
+        raw = json.loads(bytes(body))
+
+        def validate_item(item):
+            if not isinstance(item, dict):
+                raise ValueError("public response item is not an object")
+            projected = {
+                field: item[field] for field in model.model_fields if field in item
+            }
+            return model.model_validate(projected).model_dump(mode="json")
+
+        if many:
+            if not isinstance(raw, list):
+                raise ValueError("public response is not a list")
+            public = [validate_item(item) for item in raw]
+        else:
+            public = validate_item(raw)
+    except (TypeError, ValueError, UnicodeDecodeError, ValidationError) as exc:
+        logger.warning(
+            "Issuance service returned a response outside the public contract"
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Issuance service returned an invalid public response.",
+        ) from exc
+
+    return Response(
+        content=json.dumps(public, separators=(",", ":")),
+        status_code=response.status_code,
+        headers={
+            key: value
+            for key, value in response.headers.items()
+            if key.lower() not in {"content-length", "content-type"}
+        },
+        media_type="application/json",
+    )
 
 
 def _issuance_service_url() -> str:
@@ -504,14 +569,17 @@ application_template_router = APIRouter(
 # ── Issuance ─────────────────────────────────────────────────────────
 
 
-@issuance_router.post("", response_model=IssuanceResponse, summary="Create Issuance")
-async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
+async def _create_issuance_service_response(
+    body: IssuanceCreate,
+    request: Request,
+) -> Response:
     """Initiate credential issuance for a subject (directly or via Application).
 
     The gateway forwards only the canonical DID identity. The issuance service
     resolves the authorized issuer profile and signs through that profile's
     managed custody configuration.
     """
+    _require_selected_organization(request, body.organization_id)
     credential_template: dict = {}
     if body.credential_template_id:
         credential_template = await _load_credential_template(
@@ -531,9 +599,7 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
         credential_template.get("credential_payload_format"),
         credential_template.get("supported_formats"),
     ) or _public_signing_credential_format(
-        body.claims.get("credential_format")
-        if isinstance(body.claims, dict)
-        else None
+        body.claims.get("credential_format") if isinstance(body.claims, dict) else None
     )
     issuer_did = _select_issuer_identity_request(body, credential_template)
     issuer_identity = await _resolve_issuer_identity(
@@ -546,8 +612,8 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
         raise HTTPException(
             status_code=422,
             detail=(
-                "issuer_did must resolve to exactly one active KMS-backed issuer "
-                "profile for this organization."
+                "issuer_did must resolve to exactly one active organization-owned "
+                "signing identity."
             ),
         )
     inject_headers: dict[str, str] = dict(_ISSUANCE_HEADERS or {})
@@ -574,33 +640,50 @@ async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
             request,
             service_url,
             "/v1/issuance/initiate",
-            body_override=json.dumps(downstream_body, separators=(",", ":")).encode("utf-8"),
+            body_override=json.dumps(downstream_body, separators=(",", ":")).encode(
+                "utf-8"
+            ),
             inject_headers=inject_headers or None,
         )
     return await proxy_request(
         request,
         service_url,
         "/v1/issuance/initiate",
-        body_override=json.dumps(downstream_body, separators=(",", ":")).encode("utf-8"),
+        body_override=json.dumps(downstream_body, separators=(",", ":")).encode(
+            "utf-8"
+        ),
         inject_headers=inject_headers or None,
     )
 
 
+@issuance_router.post("", response_model=IssuanceResponse, summary="Create Issuance")
+async def create_issuance(body: IssuanceCreate, request: Request) -> Response:
+    """Initiate issuance and expose only the public wallet handoff."""
+    response = await _create_issuance_service_response(body, request)
+    return _sanitize_management_response(response, IssuanceResponse)
+
+
 @issuance_router.get(
-    "", response_model=list[IssuanceResponse], summary="List Issuances"
+    "", response_model=list[IssuanceTransactionResponse], summary="List Issuances"
 )
 async def list_issuances(
     organization_id: str = Query(..., description="Organization ID"),
     request: Request = None,
 ) -> Response:
     """List issuance records for an organization."""
+    _require_selected_organization(request, organization_id)
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(
+    response = await proxy_request(
         request,
         service_url,
         "/v1/issuance/transactions",
         inject_headers=_ISSUANCE_HEADERS,
+    )
+    return _sanitize_management_response(
+        response,
+        IssuanceTransactionResponse,
+        many=True,
     )
 
 
@@ -619,18 +702,19 @@ async def authorize_issuance(request: Request) -> Response:
 
 
 @issuance_router.get(
-    "/{issuance_id}", response_model=IssuanceResponse, summary="Get Issuance"
+    "/{issuance_id}", response_model=IssuanceTransactionResponse, summary="Get Issuance"
 )
 async def get_issuance(issuance_id: str, request: Request) -> Response:
     """Get an issuance record by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(
+    response = await proxy_request(
         request,
         service_url,
         f"/v1/issuance/transactions/{issuance_id}",
         inject_headers=_ISSUANCE_HEADERS,
     )
+    return _sanitize_management_response(response, IssuanceTransactionResponse)
 
 
 @issuance_router.post("/{issuance_id}/revoke", summary="Revoke Issuance")
@@ -688,18 +772,6 @@ async def didcomm_deliver(body: DidcommDeliverRequest, request: Request) -> Resp
     )
 
 
-@issuance_router.post("/didcomm/receive", summary="DIDComm V2 Receive")
-async def didcomm_receive(request: Request) -> Response:
-    """Receive inbound DIDComm v2 messages (acks, problem-reports, etc.).
-
-    This is the public-facing DIDComm endpoint that other agents POST to.
-    No authentication required — DIDComm agents use DID-based trust.
-    """
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/didcomm/receive")
-
-
 # ── Issued Credentials ──────────────────────────────────────────────
 
 
@@ -714,10 +786,16 @@ async def list_issued_credentials(
     request: Request = None,
 ) -> Response:
     """List issued credential lifecycle records for an organization."""
+    _require_selected_organization(request, organization_id)
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(
+    response = await proxy_request(
         request, service_url, "/v1/issued-credentials", inject_headers=_ISSUANCE_HEADERS
+    )
+    return _sanitize_management_response(
+        response,
+        IssuedCredentialRecordResponse,
+        many=True,
     )
 
 
@@ -738,12 +816,13 @@ async def get_issued_credential(credential_id: str, request: Request) -> Respons
     """Get an issued credential lifecycle record by ID."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(
+    response = await proxy_request(
         request,
         service_url,
         f"/v1/issued-credentials/{credential_id}",
         inject_headers=_ISSUANCE_HEADERS,
     )
+    return _sanitize_management_response(response, IssuedCredentialRecordResponse)
 
 
 @issued_credential_router.post(
@@ -751,16 +830,22 @@ async def get_issued_credential(credential_id: str, request: Request) -> Respons
     response_model=IssuedCredentialRecordResponse,
     summary="Revoke Issued Credential",
 )
-async def revoke_issued_credential(credential_id: str, request: Request) -> Response:
+async def revoke_issued_credential(
+    credential_id: str,
+    body: IssuedCredentialLifecycleRequest,
+    request: Request,
+) -> Response:
     """Revoke an issued credential lifecycle record."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(
+    response = await proxy_request(
         request,
         service_url,
         f"/v1/issued-credentials/{credential_id}/revoke",
+        body_override=_validated_json_body(body),
         inject_headers=_ISSUANCE_HEADERS,
     )
+    return _sanitize_management_response(response, IssuedCredentialRecordResponse)
 
 
 @issued_credential_router.post(
@@ -768,16 +853,22 @@ async def revoke_issued_credential(credential_id: str, request: Request) -> Resp
     response_model=IssuedCredentialRecordResponse,
     summary="Suspend Issued Credential",
 )
-async def suspend_issued_credential(credential_id: str, request: Request) -> Response:
+async def suspend_issued_credential(
+    credential_id: str,
+    body: IssuedCredentialLifecycleRequest,
+    request: Request,
+) -> Response:
     """Suspend an issued credential lifecycle record."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(
+    response = await proxy_request(
         request,
         service_url,
         f"/v1/issued-credentials/{credential_id}/suspend",
+        body_override=_validated_json_body(body),
         inject_headers=_ISSUANCE_HEADERS,
     )
+    return _sanitize_management_response(response, IssuedCredentialRecordResponse)
 
 
 @issued_credential_router.post(
@@ -785,30 +876,39 @@ async def suspend_issued_credential(credential_id: str, request: Request) -> Res
     response_model=IssuedCredentialRecordResponse,
     summary="Reinstate Issued Credential",
 )
-async def reinstate_issued_credential(credential_id: str, request: Request) -> Response:
+async def reinstate_issued_credential(
+    credential_id: str,
+    body: IssuedCredentialLifecycleRequest,
+    request: Request,
+) -> Response:
     """Reinstate a suspended issued credential lifecycle record."""
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(
+    response = await proxy_request(
         request,
         service_url,
         f"/v1/issued-credentials/{credential_id}/reinstate",
+        body_override=_validated_json_body(body),
         inject_headers=_ISSUANCE_HEADERS,
     )
+    return _sanitize_management_response(response, IssuedCredentialRecordResponse)
 
 
 @issued_credential_router.post(
-    "/{credential_id}/renew", summary="Renew Issued Credential"
+    "/{credential_id}/renew",
+    response_model=CredentialRenewalOfferResponse,
+    summary="Renew Issued Credential",
 )
 async def renew_issued_credential(credential_id: str, request: Request) -> Response:
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(
+    response = await proxy_request(
         request,
         service_url,
         f"/v1/issued-credentials/{credential_id}/renew",
         inject_headers=_ISSUANCE_HEADERS,
     )
+    return _sanitize_management_response(response, CredentialRenewalOfferResponse)
 
 
 @issuance_router.get(

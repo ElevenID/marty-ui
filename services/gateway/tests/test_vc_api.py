@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import types
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -114,7 +115,7 @@ async def test_issuer_adapter_rejects_document_issuer_mismatch() -> None:
 
 def test_issuer_adapter_calls_the_general_issuance_application_path() -> None:
     names = adapter._issue_data_integrity_credential.__code__.co_names
-    assert "create_issuance" in names
+    assert "_create_issuance_service_response" in names
     assert "_resolve_issuer_identity" not in names
     assert "_load_credential_template" not in names
 
@@ -205,15 +206,35 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
 
     captured_issuance: dict[str, object] = {}
 
-    async def create_issuance(body, request: Request) -> Response:
+    async def create_issuance_service_response(body, request: Request) -> Response:
         captured_issuance["body"] = body
         captured_issuance["request"] = request
+        offer = {
+            "credential_issuer": "http://gateway:8000/org/fixture-org",
+            "credential_configuration_ids": ["EmployeeCredential#ldp-vc"],
+            "grants": {
+                "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                    "pre-authorized_code": "pre-auth"
+                }
+            },
+        }
         return Response(
-            content=json.dumps({"pre_auth_code": "pre-auth"}),
+            content=json.dumps(
+                {
+                    "credential_offer_uri": (
+                        "openid-credential-offer://?credential_offer="
+                        f"{quote(json.dumps(offer, separators=(',', ':')))}"
+                    )
+                }
+            ),
             media_type="application/json",
         )
 
-    monkeypatch.setattr(adapter, "create_issuance", create_issuance)
+    monkeypatch.setattr(
+        adapter,
+        "_create_issuance_service_response",
+        create_issuance_service_response,
+    )
     monkeypatch.setattr(
         adapter, "_create_oid4vci_proof", lambda issuer, nonce: "proof.jwt.value"
     )
@@ -245,9 +266,31 @@ async def test_issuer_adapter_sends_complete_unsigned_document_to_production_iss
     }.isdisjoint(initiate_body)
     credential_request = captured[2][1]["json"]
     assert credential_request == {
-        "format": "ldp_vc",
+        "credential_configuration_id": "EmployeeCredential#ldp-vc",
         "proofs": {"jwt": ["proof.jwt.value"]},
     }
+
+
+def test_issuer_adapter_rejects_an_offer_for_another_tenant() -> None:
+    offer = {
+        "credential_issuer": "https://issuer.example/org/other",
+        "credential_configuration_ids": ["EmployeeCredential#ldp-vc"],
+        "grants": {
+            "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                "pre-authorized_code": "pre-auth"
+            }
+        },
+    }
+    offer_uri = (
+        "openid-credential-offer://?credential_offer="
+        f"{quote(json.dumps(offer, separators=(',', ':')))}"
+    )
+
+    with pytest.raises(ValueError, match="issuer does not match"):
+        adapter._parse_inline_credential_offer(
+            offer_uri,
+            expected_issuer="https://issuer.example/org/fixture-org",
+        )
 
 
 @pytest.mark.asyncio

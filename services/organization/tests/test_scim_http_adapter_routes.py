@@ -77,6 +77,36 @@ def test_list_users_supports_required_scim_filter_and_extension_mapping():
     assert sorted(user[adapter.SCIM_USER_EXTENSION_SCHEMA]["role_ids"]) == ["role-issuer", "role-owner"]
 
 
+def test_create_user_preserves_a_non_uuid_scim_external_identifier():
+    member_repo = SimpleNamespace(
+        get_by_email_and_org=AsyncMock(return_value=None),
+        save=AsyncMock(),
+    )
+    member_use_case = SimpleNamespace(member_repo=member_repo)
+    role_use_case = SimpleNamespace(
+        list_roles=AsyncMock(return_value=[]),
+        get_member_roles=AsyncMock(return_value=[]),
+        role_repo=SimpleNamespace(set_member_roles=AsyncMock()),
+    )
+    external_id = "foreign-user-" + "0" * 32
+
+    client = _build_app(member_use_case, role_use_case)
+    response = client.post(
+        "/v1/organizations/org-1/scim/v2/Users",
+        json={
+            "schemas": [adapter.SCIM_USER_SCHEMA],
+            "userName": "foreign@example.test",
+            "externalId": external_id,
+            "active": True,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["externalId"] == external_id
+    saved_member = member_repo.save.await_args.args[0]
+    assert saved_member.user_id == external_id
+
+
 def test_patch_user_deprovisions_member_and_clears_roles():
     member = Member(
         id="member-1",
