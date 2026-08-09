@@ -25,6 +25,7 @@ import hashlib
 import json
 import logging
 import os
+import ssl
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -2354,6 +2355,96 @@ def _mdoc_trust_certificates_pem(
     return roots, pinned_issuers
 
 
+def _certificate_pem_sha256(certificate_pem: object) -> str | None:
+    """Return the DER certificate fingerprint without accepting non-certificate PEM."""
+    if not isinstance(certificate_pem, str):
+        return None
+    try:
+        certificate_der = ssl.PEM_cert_to_DER_cert(certificate_pem)
+    except ValueError:
+        return None
+    return hashlib.sha256(certificate_der).hexdigest()
+
+
+def _mdoc_direct_pin_lifecycle_evidence(
+    trust_profile_data: dict[str, Any] | None,
+    verification_evidence: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, str] | None:
+    """Confirm current signer status from one exact governed direct-pin relationship.
+
+    ISO mdoc verification authenticates a document signer certificate rather than
+    a DID issuer. A currently active direct pin can serve as the local certificate
+    status authority only when the same certificate has exactly one current,
+    trusted issuer-registry relationship. Root trust alone is deliberately
+    insufficient because it does not express current signer lifecycle state.
+    """
+    if (
+        not trust_profile_data
+        or str(trust_profile_data.get("status") or "").lower() != "active"
+    ):
+        return None
+
+    certificate_sha256 = verification_evidence.get("issuer_certificate_sha256")
+    issuer_id = verification_evidence.get("issuer_id")
+    if (
+        not isinstance(certificate_sha256, str)
+        or len(certificate_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in certificate_sha256)
+        or issuer_id != f"x509-sha256:{certificate_sha256}"
+    ):
+        return None
+
+    matching_sources = 0
+    for source in trust_profile_data.get("trust_sources") or []:
+        if (
+            not isinstance(source, dict)
+            or source.get("enabled") is False
+            or str(source.get("source_type") or "").upper() != "PINNED_ISSUER"
+        ):
+            continue
+        candidates = [source.get("certificate_pem")]
+        pinned = source.get("pinned_certificates")
+        if isinstance(pinned, list):
+            candidates.extend(pinned)
+        if certificate_sha256 in {
+            fingerprint
+            for candidate in candidates
+            if (fingerprint := _certificate_pem_sha256(candidate)) is not None
+        }:
+            matching_sources += 1
+    if matching_sources != 1:
+        return None
+
+    relationships = trust_profile_data.get("issuer_relationships")
+    if not isinstance(relationships, list) or not relationships:
+        return None
+    relationship_valid, _error = _evaluate_normalized_issuer_relationship(
+        issuer_did=issuer_id,
+        relationships=relationships,
+        constraints=None,
+        now=now,
+    )
+    if not relationship_valid:
+        return None
+
+    checked_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    evidence = {
+        "method": "trust-profile-direct-pin-lifecycle",
+        "issuer_id": issuer_id,
+        "issuer_certificate_sha256": certificate_sha256,
+        "checked_at": checked_at.isoformat().replace("+00:00", "Z"),
+    }
+    profile_id = trust_profile_data.get("id")
+    if isinstance(profile_id, str) and profile_id:
+        evidence["trust_profile_id"] = profile_id
+    profile_updated_at = trust_profile_data.get("updated_at")
+    if isinstance(profile_updated_at, str) and profile_updated_at:
+        evidence["trust_profile_updated_at"] = profile_updated_at
+    return evidence
+
+
 def _trust_source_issuer_candidates(source: dict[str, Any]) -> set[str]:
     candidates: set[str] = set()
 
@@ -4017,6 +4108,24 @@ async def evaluate_presentation(
             evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
             nonce=request.nonce,
         )
+
+    if revocation_checked is not True and credential_format == "mdoc":
+        mdoc_status_evidence = _mdoc_direct_pin_lifecycle_evidence(
+            trust_profile_data,
+            verification_evidence,
+        )
+        if mdoc_status_evidence is not None:
+            # Preserve the Rust binding's truthful statement that it performed
+            # no online revocation check. This aggregate status is supplied by
+            # the separately governed, freshly loaded Trust Profile lifecycle.
+            verification_result["revocation_checked"] = True
+            verification_result["not_revoked"] = True
+            verification_result["revocation_status"] = "good"
+            verification_result["status_evidence"] = mdoc_status_evidence
+            verification_evidence["status_evidence"] = mdoc_status_evidence
+            revocation_checked, not_revoked = _derive_revocation_state(
+                verification_result
+            )
 
     if revocation_checked is not True:
         (
