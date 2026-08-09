@@ -791,9 +791,61 @@ def _jwt_verification_evidence(
     }
 
 
+class _ResolvedDidDocument(dict[str, Any]):
+    """DID document plus service-observed resolution provenance."""
+
+    resolution_provenance: dict[str, str]
+
+
+def _did_resolution_provenance(
+    document: dict[str, Any],
+) -> dict[str, str] | None:
+    provenance = getattr(document, "resolution_provenance", None)
+    if not isinstance(provenance, dict):
+        return None
+    required = ("did", "source", "retrieved_at", "content_sha256")
+    if any(
+        not isinstance(provenance.get(field), str) or not provenance[field]
+        for field in required
+    ):
+        return None
+    if provenance["did"] != document.get("id") or provenance["source"] not in {
+        "embedded:did:jwk",
+        "configured_internal_resolver",
+        "allowlisted_public_did_web",
+    }:
+        return None
+    try:
+        retrieved_at = datetime.fromisoformat(
+            provenance["retrieved_at"].replace("Z", "+00:00")
+        )
+    except ValueError:
+        return None
+    digest = provenance["content_sha256"].lower()
+    if retrieved_at.tzinfo is None or len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
+        return None
+    provenance = {**provenance, "content_sha256": digest}
+    return {field: provenance[field] for field in required}
+
+
 async def _resolve_did_document(did: str) -> dict[str, Any]:
     result = await resolve_did_document(did)
-    return result.document
+    document = _ResolvedDidDocument(result.document)
+    result_provenance = getattr(result, "provenance", None)
+    if isinstance(result_provenance, dict):
+        document.resolution_provenance = {
+            "did": did,
+            **{
+                key: value
+                for key, value in result_provenance.items()
+                if key in {"source", "retrieved_at", "content_sha256"}
+                and isinstance(value, str)
+                and value
+            },
+        }
+    return document
 
 
 async def _await_verification_result(value: Any) -> dict[str, Any]:
@@ -896,6 +948,7 @@ def _resolved_public_method(
 
 async def _resolved_data_integrity_methods(
     document: dict[str, Any],
+    resolution_provenance: list[dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Resolve non-did:key proof methods through the product DID resolver.
 
@@ -950,8 +1003,16 @@ async def _resolved_data_integrity_methods(
                 raise RuntimeError(
                     "DID resolution failed: proof controller does not match document signer"
                 )
+            did_document = await _resolve_did_document(controller)
+            provenance = _did_resolution_provenance(did_document)
+            if (
+                provenance is not None
+                and resolution_provenance is not None
+                and provenance not in resolution_provenance
+            ):
+                resolution_provenance.append(provenance)
             method = _resolved_public_method(
-                await _resolve_did_document(controller),
+                did_document,
                 controller,
                 method_id,
                 relationship,
@@ -1285,9 +1346,13 @@ async def _verify_vcdm_data_integrity(
             "error": "marty-rs VCDM Data Integrity binding is not installed",
         }
 
+    did_resolution_provenance: list[dict[str, str]] = []
     try:
         request: dict[str, Any] = {"document": document}
-        resolved_methods = await _resolved_data_integrity_methods(document)
+        resolved_methods = await _resolved_data_integrity_methods(
+            document,
+            did_resolution_provenance,
+        )
         if resolved_methods:
             request["resolved_verification_methods"] = resolved_methods
         types = document.get("type")
@@ -1306,6 +1371,9 @@ async def _verify_vcdm_data_integrity(
             "issuer_did": "unknown",
             "format": "w3c-vcdm-di",
             "error": "VCDM Data Integrity verification failed",
+            "verification_evidence": {
+                "did_resolution": did_resolution_provenance,
+            },
         }
 
     verified = result.get("valid") is True
@@ -1371,6 +1439,7 @@ async def _verify_vcdm_data_integrity(
                 and is_presentation
                 and (nonce is not None or audience is not None)
             ),
+            "did_resolution": did_resolution_provenance,
         },
     }
 
@@ -1399,6 +1468,7 @@ async def _verify_w3c_vc(
             "error": "marty-rs bindings not installed",
         }
 
+    did_resolution_provenance: dict[str, str] | None = None
     try:
         if not hasattr(_marty_rs, "verify_vcdm_jwt"):
             raise RuntimeError(
@@ -1414,6 +1484,7 @@ async def _verify_w3c_vc(
         public_jwk = issuer_public_jwk
         if public_jwk is None and not issuer.startswith("did:key:"):
             did_document = await _resolve_did_document(issuer)
+            did_resolution_provenance = _did_resolution_provenance(did_document)
             public_jwk = _select_public_jwk_from_did_document(
                 did_document,
                 issuer,
@@ -1455,6 +1526,13 @@ async def _verify_w3c_vc(
                 ",".join(categories),
                 error_count,
             )
+        verification_evidence = (
+            _jwt_verification_evidence(header, verified_payload, verified_vc)
+            if is_valid and isinstance(verified_payload, dict)
+            else {}
+        )
+        if did_resolution_provenance is not None:
+            verification_evidence["did_resolution"] = did_resolution_provenance
 
         return {
             "verified": is_valid,
@@ -1467,11 +1545,7 @@ async def _verify_w3c_vc(
             # status record without trusting the caller or exposing KMS routing.
             "credential_id": credential_id,
             "format": "w3c-vc",
-            "verification_evidence": (
-                _jwt_verification_evidence(header, verified_payload, verified_vc)
-                if is_valid and isinstance(verified_payload, dict)
-                else {}
-            ),
+            "verification_evidence": verification_evidence,
             "error": (
                 None
                 if is_valid
@@ -1486,6 +1560,11 @@ async def _verify_w3c_vc(
             "issuer_did": "unknown",
             "format": "w3c-vc",
             "error": str(e),
+            "verification_evidence": (
+                {"did_resolution": did_resolution_provenance}
+                if did_resolution_provenance is not None
+                else {}
+            ),
         }
 
 
@@ -1618,6 +1697,7 @@ async def _verify_sd_jwt(
                 "error": "marty-rs SD-JWT verification bindings are not installed",
             }
 
+        did_resolution_provenance: dict[str, str] | None = None
         try:
             if issuer_public_jwk is not None:
                 # A non-DID issuer is accepted only with a JWK explicitly
@@ -1626,6 +1706,7 @@ async def _verify_sd_jwt(
                 public_jwk = issuer_public_jwk
             elif issuer.startswith("did:"):
                 did_document = await _resolve_did_document(issuer)
+                did_resolution_provenance = _did_resolution_provenance(did_document)
                 public_jwk = _select_public_jwk_from_did_document(
                     did_document, issuer, header.get("kid")
                 )
@@ -1663,6 +1744,11 @@ async def _verify_sd_jwt(
                     "subject": subject,
                     "format": "sd-jwt",
                     "error": error_message,
+                    "verification_evidence": (
+                        {"did_resolution": did_resolution_provenance}
+                        if did_resolution_provenance is not None
+                        else {}
+                    ),
                 }
             if isinstance(rust_result, dict):
                 claims.update(
@@ -1683,22 +1769,30 @@ async def _verify_sd_jwt(
                 "subject": subject,
                 "format": "sd-jwt",
                 "error": error_message,
+                "verification_evidence": (
+                    {"did_resolution": did_resolution_provenance}
+                    if did_resolution_provenance is not None
+                    else {}
+                ),
             }
 
         kb_jwt_present = any(segment and "." in segment for segment in segments[1:])
+        verification_evidence = _jwt_verification_evidence(
+            header,
+            payload,
+            holder_binding_verified=bool(
+                kb_jwt_present and (nonce is not None or audience is not None)
+            ),
+        )
+        if did_resolution_provenance is not None:
+            verification_evidence["did_resolution"] = did_resolution_provenance
         return {
             "verified": True,
             "claims": claims,
             "issuer_did": issuer,
             "subject": subject,
             "format": "sd-jwt",
-            "verification_evidence": _jwt_verification_evidence(
-                header,
-                payload,
-                holder_binding_verified=bool(
-                    kb_jwt_present and (nonce is not None or audience is not None)
-                ),
-            ),
+            "verification_evidence": verification_evidence,
             "error": None,
         }
 

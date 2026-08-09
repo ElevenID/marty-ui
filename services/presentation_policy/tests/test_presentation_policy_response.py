@@ -778,10 +778,17 @@ async def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
         ],
         "assertionMethod": [method_id],
     }
+    resolved_document = pp._ResolvedDidDocument(did_document)
+    resolved_document.resolution_provenance = {
+        "did": issuer,
+        "source": "configured_internal_resolver",
+        "retrieved_at": "2026-08-09T07:00:00+00:00",
+        "content_sha256": "b" * 64,
+    }
     captured: list[dict] = []
 
     monkeypatch.setattr(
-        pp, "_resolve_did_document", AsyncMock(return_value=did_document)
+        pp, "_resolve_did_document", AsyncMock(return_value=resolved_document)
     )
     monkeypatch.setattr(
         pp,
@@ -817,6 +824,9 @@ async def test_vcdm_data_integrity_resolves_exact_did_web_assertion_method(
             ],
         }
     ]
+    assert result["verification_evidence"]["did_resolution"] == [
+        resolved_document.resolution_provenance
+    ]
 
 
 @pytest.mark.asyncio
@@ -825,10 +835,22 @@ async def test_did_resolver_delegates_to_controlled_common_boundary(
 ) -> None:
     did = "did:web:issuer.example:orgs:tenant-a"
     document = {"id": did, "verificationMethod": []}
-    resolver = AsyncMock(return_value=SimpleNamespace(document=document))
+    provenance = {
+        "source": "configured_internal_resolver",
+        "retrieved_at": "2026-08-09T07:00:00+00:00",
+        "content_sha256": "a" * 64,
+    }
+    resolver = AsyncMock(
+        return_value=SimpleNamespace(document=document, provenance=provenance)
+    )
     monkeypatch.setattr(pp, "resolve_did_document", resolver)
 
-    assert (await pp._resolve_did_document(did))["id"] == did
+    resolved = await pp._resolve_did_document(did)
+
+    assert resolved["id"] == did
+    assert pp._did_resolution_provenance(resolved) == {"did": did, **provenance}
+    resolved.resolution_provenance["content_sha256"] = "not-a-digest"
+    assert pp._did_resolution_provenance(resolved) is None
     resolver.assert_awaited_once_with(did)
 
 
@@ -1105,6 +1127,30 @@ async def test_w3c_vc_does_not_expose_unverified_credential_id(
             "signature",
         ]
     )
+    resolved_document = pp._ResolvedDidDocument(
+        {
+            "id": issuer,
+            "verificationMethod": [
+                {
+                    "id": f"{issuer}#key-1",
+                    "controller": issuer,
+                    "publicKeyJwk": {
+                        "kty": "EC",
+                        "crv": "P-256",
+                        "x": "public-x",
+                        "y": "public-y",
+                    },
+                }
+            ],
+            "assertionMethod": [f"{issuer}#key-1"],
+        }
+    )
+    resolved_document.resolution_provenance = {
+        "did": issuer,
+        "source": "configured_internal_resolver",
+        "retrieved_at": "2026-08-09T07:00:00+00:00",
+        "content_sha256": "c" * 64,
+    }
     monkeypatch.setattr(
         pp,
         "_load_marty_rs_binding",
@@ -1125,24 +1171,7 @@ async def test_w3c_vc_does_not_expose_unverified_credential_id(
     monkeypatch.setattr(
         pp,
         "_resolve_did_document",
-        AsyncMock(
-            return_value={
-                "id": issuer,
-                "verificationMethod": [
-                    {
-                        "id": f"{issuer}#key-1",
-                        "controller": issuer,
-                        "publicKeyJwk": {
-                            "kty": "EC",
-                            "crv": "P-256",
-                            "x": "public-x",
-                            "y": "public-y",
-                        },
-                    }
-                ],
-                "assertionMethod": [f"{issuer}#key-1"],
-            }
-        ),
+        AsyncMock(return_value=resolved_document),
     )
 
     result = await pp._verify_w3c_vc(token, None, None)
@@ -1150,6 +1179,10 @@ async def test_w3c_vc_does_not_expose_unverified_credential_id(
     assert result["verified"] is False
     assert result["credential_id"] is None
     assert result["claims"] == {}
+    assert (
+        result["verification_evidence"]["did_resolution"]
+        == resolved_document.resolution_provenance
+    )
 
 
 @pytest.mark.asyncio
@@ -1399,6 +1432,11 @@ async def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
     assert result["issuer_did"] == did
     assert result["claims"]["email"] == "member@example.com"
     assert result["claims"]["given_name"] == "Marty"
+    did_resolution = result["verification_evidence"]["did_resolution"]
+    assert did_resolution["did"] == did
+    assert did_resolution["source"] == "embedded:did:jwk"
+    assert len(did_resolution["content_sha256"]) == 64
+    assert did_resolution["retrieved_at"]
     assert captured == {
         "token": token,
         "issuer_jwk": public_jwk,
