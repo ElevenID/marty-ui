@@ -679,10 +679,12 @@ def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
                 context=context,
             ),
             repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
         )
     )
 
-    assert response.result == "passed"
+    assert response.result == "failed"
+    assert "Cedar policy evidence is incomplete" in response.decision_reason
     assert captured == {
         "nonce": "nonce-1",
         "audience": "did:web:verifier.example",
@@ -1479,6 +1481,42 @@ def _normalized_issuer_relationship(
     return relationship
 
 
+def _complete_verification_result(
+    *,
+    claims: dict[str, object] | None = None,
+    issuer_did: str = "did:web:beta.elevenidllc.com:orgs:marty",
+    credential_format: str = "sd-jwt",
+) -> dict[str, object]:
+    return {
+        "verified": True,
+        "claims": claims or {"email": "member@example.com"},
+        "issuer_did": issuer_did,
+        "format": credential_format,
+        "error": None,
+        "revocation_checked": True,
+        "not_revoked": True,
+        "verification_evidence": {
+            "algorithm": "EdDSA",
+            "issued_at": int(datetime.now(timezone.utc).timestamp()),
+            "expires_at": None,
+            "validity_checked": True,
+            "is_expired": False,
+            "holder_binding_verified": False,
+            "credential_count": 1,
+        },
+    }
+
+
+def _allowing_cedar_engine() -> SimpleNamespace:
+    return SimpleNamespace(
+        is_authorized=lambda **_kwargs: SimpleNamespace(
+            allowed=True,
+            reasons=[],
+            errors=[],
+        )
+    )
+
+
 def test_normalized_trusted_issuer_satisfies_policy_constraints() -> None:
     passed, error = pp._evaluate_issuer_trust(
         trust_profile_data={
@@ -1719,24 +1757,23 @@ def test_evaluator_rejects_trust_profile_without_unambiguous_org(
 def test_open_badge_login_policy_allows_verified_sd_jwt_badge(monkeypatch) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
-    _install_marty_trust_profile(monkeypatch)
+    _install_marty_trust_profile(
+        monkeypatch,
+        issuer_relationships=[_normalized_issuer_relationship()],
+    )
 
     monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
-        lambda *_args, **_kwargs: {
-            "verified": True,
-            "claims": {
+        lambda *_args, **_kwargs: _complete_verification_result(
+            claims={
                 "email": "member@example.com",
                 "member_id": "member-123",
                 "organization_id": "org-1",
                 "role": "applicant",
             },
-            "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
-            "format": "sd-jwt",
-            "error": None,
-        },
+        ),
     )
 
     response = asyncio.run(
@@ -1744,6 +1781,7 @@ def test_open_badge_login_policy_allows_verified_sd_jwt_badge(monkeypatch) -> No
             policy.id,
             pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
             repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
         )
     )
 
@@ -1774,13 +1812,7 @@ def test_evaluation_uses_normalized_trusted_issuer_relationship(monkeypatch) -> 
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
-        lambda *_args, **_kwargs: {
-            "verified": True,
-            "claims": {"email": "member@example.com"},
-            "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
-            "format": "sd-jwt",
-            "error": None,
-        },
+        lambda *_args, **_kwargs: _complete_verification_result(),
     )
 
     response = asyncio.run(
@@ -1788,6 +1820,7 @@ def test_evaluation_uses_normalized_trusted_issuer_relationship(monkeypatch) -> 
             policy.id,
             pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
             repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
         )
     )
 
@@ -1808,13 +1841,7 @@ def test_relationship_revocation_takes_effect_on_next_evaluation(monkeypatch) ->
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
-        lambda *_args, **_kwargs: {
-            "verified": True,
-            "claims": {"email": "member@example.com"},
-            "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
-            "format": "sd-jwt",
-            "error": None,
-        },
+        lambda *_args, **_kwargs: _complete_verification_result(),
     )
 
     first = asyncio.run(
@@ -1822,6 +1849,7 @@ def test_relationship_revocation_takes_effect_on_next_evaluation(monkeypatch) ->
             policy.id,
             pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
             repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
         )
     )
     assert first.decision == "allow"
@@ -1974,19 +2002,20 @@ def test_open_badge_login_policy_allows_issuer_url_alias(monkeypatch) -> None:
     _install_marty_trust_profile(
         monkeypatch,
         allowed_issuers=["https://canvas.example.edu/issuers/issuer-123"],
+        issuer_relationships=[
+            _normalized_issuer_relationship(
+                issuer_id="https://canvas.example.edu/issuers/issuer-123"
+            )
+        ],
     )
 
     monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
-        lambda *_args, **_kwargs: {
-            "verified": True,
-            "claims": {"email": "member@example.com"},
-            "issuer_did": "https://canvas.example.edu/issuers/issuer-123",
-            "format": "sd-jwt",
-            "error": None,
-        },
+        lambda *_args, **_kwargs: _complete_verification_result(
+            issuer_did="https://canvas.example.edu/issuers/issuer-123"
+        ),
     )
 
     response = asyncio.run(
@@ -1994,6 +2023,7 @@ def test_open_badge_login_policy_allows_issuer_url_alias(monkeypatch) -> None:
             policy.id,
             pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
             repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
         )
     )
 
@@ -2006,19 +2036,17 @@ def test_open_badge_login_policy_allows_did_web_issuer_by_domain_alias(
 ) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
-    _install_marty_trust_profile(monkeypatch, allowed_issuers=["beta.elevenidllc.com"])
+    _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=["beta.elevenidllc.com"],
+        issuer_relationships=[_normalized_issuer_relationship()],
+    )
 
     monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
-        lambda *_args, **_kwargs: {
-            "verified": True,
-            "claims": {"email": "member@example.com"},
-            "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
-            "format": "sd-jwt",
-            "error": None,
-        },
+        lambda *_args, **_kwargs: _complete_verification_result(),
     )
 
     response = asyncio.run(
@@ -2026,6 +2054,7 @@ def test_open_badge_login_policy_allows_did_web_issuer_by_domain_alias(
             policy.id,
             pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
             repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
         )
     )
 
@@ -2083,19 +2112,20 @@ def test_open_badge_login_policy_allows_pinned_issuer_url_trust_source(
                 "url": "https://canvas.example.edu/issuers/issuer-123",
             }
         ],
+        issuer_relationships=[
+            _normalized_issuer_relationship(
+                issuer_id="https://canvas.example.edu/issuers/issuer-123"
+            )
+        ],
     )
 
     monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
-        lambda *_args, **_kwargs: {
-            "verified": True,
-            "claims": {"email": "member@example.com"},
-            "issuer_did": "https://canvas.example.edu/issuers/issuer-123",
-            "format": "sd-jwt",
-            "error": None,
-        },
+        lambda *_args, **_kwargs: _complete_verification_result(
+            issuer_did="https://canvas.example.edu/issuers/issuer-123"
+        ),
     )
 
     response = asyncio.run(
@@ -2103,6 +2133,7 @@ def test_open_badge_login_policy_allows_pinned_issuer_url_trust_source(
             policy.id,
             pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
             repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
         )
     )
 
@@ -2232,7 +2263,13 @@ def test_policy_freshness_accepts_managed_issuer_active_credential_status(
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
     issuer_did = "did:web:issuer.example:orgs:demo"
-    _install_marty_trust_profile(monkeypatch, allowed_issuers=[issuer_did])
+    _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=[issuer_did],
+        issuer_relationships=[
+            _normalized_issuer_relationship(issuer_id=issuer_did)
+        ],
+    )
     policy.freshness = pp.FreshnessPolicy(require_not_revoked=True)
     policy.credential_requirements[0].credential_payload_format = "jwt_vc"
     asyncio.run(repo.save(policy))
@@ -2242,16 +2279,14 @@ def test_policy_freshness_accepts_managed_issuer_active_credential_status(
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
-        lambda *_args, **_kwargs: {
-            "verified": True,
-            "claims": {
+        lambda *_args, **_kwargs: _complete_verification_result(
+            claims={
                 "email": "member@example.com",
                 "credential_id": "credential-123",
             },
-            "issuer_did": issuer_did,
-            "format": "w3c-vc",
-            "error": None,
-        },
+            issuer_did=issuer_did,
+            credential_format="w3c-vc",
+        ),
     )
     monkeypatch.setattr(
         pp,
@@ -2264,6 +2299,7 @@ def test_policy_freshness_accepts_managed_issuer_active_credential_status(
             policy.id,
             pp.EvaluatePresentationRequest(vp_token="{}", nonce="nonce-1"),
             repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
         )
     )
 
@@ -2414,22 +2450,29 @@ def _inline_evaluation_payload() -> dict:
 def test_inline_evaluation_uses_real_verifier_output(monkeypatch) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     client = _build_client(repo)
+    client.app.state.cedar_engine = _allowing_cedar_engine()
+    _install_marty_trust_profile(
+        monkeypatch,
+        issuer_relationships=[
+            _normalized_issuer_relationship(issuer_id="did:web:issuer.example")
+        ],
+    )
     monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "jwt-vc")
     monkeypatch.setattr(
         pp,
         "_verify_credential_by_format",
-        lambda *_args, **_kwargs: {
-            "verified": True,
-            "claims": {"name": "Alice"},
-            "issuer_did": "did:web:issuer.example",
-            "format": "jwt-vc",
-            "error": None,
-        },
+        lambda *_args, **_kwargs: _complete_verification_result(
+            claims={"name": "Alice"},
+            issuer_did="did:web:issuer.example",
+            credential_format="jwt-vc",
+        ),
     )
 
+    payload = _inline_evaluation_payload()
+    payload["trust_profile_id"] = "60000000-0000-0000-0000-000000000001"
     response = client.post(
         "/v1/presentation-policies/evaluate",
-        json=_inline_evaluation_payload(),
+        json=payload,
     )
 
     assert response.status_code == 200
@@ -2603,6 +2646,56 @@ def test_single_token_cannot_satisfy_multiple_credential_requirements(
     assert response.decision == "deny"
     assert response.satisfied_requirements == 0
     assert "Exactly one credential requirement" in response.decision_reason
+
+
+def test_optional_only_credential_requirement_cannot_vacuously_allow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.credential_requirements[0].required = False
+    asyncio.run(repo.save(policy))
+    monkeypatch.setattr(
+        pp,
+        "_detect_credential_format",
+        lambda _token: pytest.fail("verifier must not run"),
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.required_total == 0
+    assert "required credential requirement" in response.decision_reason
+
+
+def test_missing_cedar_engine_cannot_bypass_policy_evidence_reducer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(monkeypatch)
+    _install_successful_policy_verification(
+        monkeypatch,
+        issued_at=int(datetime.now(timezone.utc).timestamp()),
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+        )
+    )
+
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
+    assert "policy engine is unavailable" in response.decision_reason
 
 
 def test_unevaluated_alternative_requirements_fail_closed(

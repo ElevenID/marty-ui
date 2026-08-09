@@ -3667,6 +3667,12 @@ async def evaluate_presentation(
             request,
             "Exactly one credential requirement is supported per presentation token",
         )
+    if not policy.credential_requirements[0].required:
+        return _failed_policy_response(
+            policy,
+            request,
+            "At least one required credential requirement is necessary for a decision",
+        )
 
     # Auto-detect credential format
     credential_format = _detect_credential_format(request.vp_token)
@@ -4100,15 +4106,23 @@ async def evaluate_presentation(
         decision_reason = "Required credentials not satisfied"
         all_satisfied = False
 
-    # Cedar policy evaluation for credential verification trust rules
+    # Cedar policy evaluation for credential verification trust rules. Keep
+    # specific verifier/trust/freshness denials above, but never let omission
+    # of the final authorization reducer turn a tentative allow into success.
     if (
         cedar_engine is None
         and http_request
         and hasattr(http_request.app.state, "cedar_engine")
     ):
         cedar_engine = http_request.app.state.cedar_engine
+    if decision == "allow" and cedar_engine is None:
+        return _failed_policy_response(
+            policy,
+            request,
+            "Cedar credential-verification policy engine is unavailable",
+        )
 
-    if cedar_engine and decision == "allow":
+    if decision == "allow":
         issuer_policy_evidence = _normalized_issuer_policy_evidence(
             trust_profile_data,
             issuer_did,
