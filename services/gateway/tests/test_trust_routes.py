@@ -12,8 +12,33 @@ from gateway.models import (
     OrganizationTrustProfileCreate,
     OrganizationTrustProfileResponse,
     TrustProfileCreate,
+    TrustProfileResponse,
 )
 from gateway.routes import trust as trust_routes
+
+
+def test_trust_profile_response_requires_canonical_lowercase_status() -> None:
+    payload = {
+        "id": "profile-1",
+        "organization_id": "org-1",
+        "name": "Public trust profile",
+        "description": None,
+        "status": "ACTIVE",
+        "profile_type": "CUSTOM",
+        "compliance_status": "COMPLIANT",
+        "trust_sources": [],
+        "allowed_algorithms": ["ES256"],
+        "revocation_policy": {},
+        "supported_formats": ["SD_JWT_VC"],
+        "created_at": "2026-08-07T00:00:00Z",
+        "updated_at": "2026-08-07T00:00:00Z",
+    }
+
+    with pytest.raises(ValidationError):
+        TrustProfileResponse.model_validate(payload)
+
+    response = TrustProfileResponse.model_validate({**payload, "status": "active"})
+    assert response.status == "active"
 
 
 @pytest.mark.asyncio
@@ -187,6 +212,17 @@ def test_public_trust_profile_model_rejects_placeholder_registry_imports() -> No
     }
     validated = TrustProfileCreate.model_validate(base)
     assert validated.trust_sources[0].registry_sync is not None
+
+    current_policy = TrustProfileCreate.model_validate(
+        {
+            **base,
+            "revocation_policy": {"check_mode": "SKIP"},
+            "revocation_profile_id": "revocation-profile-1",
+        }
+    )
+    assert current_policy.revocation_policy is not None
+    assert current_policy.revocation_policy.check_mode == "SKIP"
+    assert current_policy.revocation_profile_id == "revocation-profile-1"
 
     with pytest.raises(ValidationError, match="extra_forbidden"):
         TrustProfileCreate.model_validate(

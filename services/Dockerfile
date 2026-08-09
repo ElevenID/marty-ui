@@ -45,7 +45,8 @@ COPY packages/marty_proto /app/packages/marty_proto
 COPY services /app/services
 COPY scripts/load-secrets-env.sh /app/load-secrets-env.sh
 RUN chmod +x /app/services/entrypoint.sh /app/load-secrets-env.sh \
-    && adduser --disabled-password --gecos '' appuser
+    && adduser --disabled-password --gecos '' appuser \
+    && install -d -o appuser -g appuser -m 0700 /app/data
 
 USER appuser
 WORKDIR /app/services

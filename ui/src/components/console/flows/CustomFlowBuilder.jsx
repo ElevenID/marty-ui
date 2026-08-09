@@ -118,7 +118,7 @@ const CustomFlowBuilder = () => {
         Standard flows
       </Button>
       <Typography variant="h4" gutterBottom>Custom flow extension</Typography>
-      <Typography color="text.secondary" sx={{ mb: 3 }}>MIP 0.3 extension envelope</Typography>
+      <Typography color="text.secondary" sx={{ mb: 3 }}>MIP 0.4 extension envelope</Typography>
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
       <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
