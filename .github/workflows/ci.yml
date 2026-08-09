@@ -193,9 +193,50 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          marty_rs_uri="$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
+          marty_rs_digest="$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
+          marty_rs_wheel="$RUNNER_TEMP/${marty_rs_uri##*/}"
+          curl --fail --location --silent --show-error "$marty_rs_uri" --output "$marty_rs_wheel"
+          echo "${marty_rs_digest#sha256:}  $marty_rs_wheel" | sha256sum --check --strict
           curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl"
           echo "${MARTY_COMMON_DIGEST#sha256:}  $RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl" | sha256sum --check --strict
-          pip install pytest pyyaml jsonschema cryptography playwright "$RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl"
+          pip install pytest pyyaml jsonschema cryptography playwright "$marty_rs_wheel" "$RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl"
+      - name: Verify released mdoc binding evidence contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from marty_rs import _marty_rs
+
+          evidence_type = _marty_rs.MdocDocumentVerificationEvidence
+          for attribute in (
+              "document_type",
+              "signature_algorithm",
+              "digest_algorithm",
+              "signed_at",
+              "valid_from",
+              "valid_until",
+              "issuer_certificate_sha256",
+              "validity_checked",
+              "valid_at_verification_time",
+              "revocation_checked",
+              "not_revoked",
+          ):
+              assert hasattr(evidence_type, attribute), attribute
+
+          result = _marty_rs.verify_mdoc_presentation(
+              b"\xff",
+              bytes([0x83, 0xF6, 0xF6, 0x82, 0x71]),
+              [],
+          )
+          assert result.issuer_signature_valid is False
+          assert result.issuer_trusted is False
+          assert result.device_authentication_valid is False
+          assert result.document_evidence == []
+          assert result.revocation_checked is False
+          assert result.not_revoked is None
+          assert result.error
+          PY
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
       - name: Run repository release checks
