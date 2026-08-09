@@ -1036,6 +1036,10 @@ def validate_protocol_routes_do_not_spa_fallback(env_values: dict[str, str]) -> 
 
 def validate_openbao(env_values: dict[str, str], secret_dir: Path, env_file: Path, compose_file: Path) -> str:
     read_required_secret(secret_dir / "openbao_service_token", "OpenBao service token")
+    read_required_secret(
+        secret_dir / "notification_openbao_token",
+        "Notification OpenBao workload token",
+    )
     services = get_compose_services(env_file, compose_file)
     openbao_service = next((entry for entry in services if entry.get("Service") == "openbao"), None)
     if openbao_service is None:
