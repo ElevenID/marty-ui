@@ -596,13 +596,14 @@ services:
       APPLICATION_TEMPLATE_MIGRATION_MAP: ${APPLICATION_TEMPLATE_MIGRATION_MAP:-}
       ISSUANCE_SERVICE_URL: http://issuance:8005
       NOTIFICATION_SERVICE_URL: http://notification:8007
-      NOTIFICATION_EVENT_INGEST_TOKEN_FILE: /run/secrets/notification_event_ingest_token
+      NOTIFICATION_EVENT_PRODUCER_ID: applicant
+      NOTIFICATION_APPLICANT_EVENT_TOKEN_FILE: /run/secrets/notification_applicant_event_token
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
     secrets:
       - marty_db_password
       - grpc_service_token
-      - notification_event_ingest_token
+      - notification_applicant_event_token
     volumes:
       - type: bind
         source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/applicant
@@ -636,7 +637,7 @@ services:
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD_FILE: /run/secrets/smtp_password
       NOTIFICATION_WEBHOOK_SECRET_FILE: /run/secrets/notification_webhook_secret
-      NOTIFICATION_EVENT_INGEST_TOKEN_FILE: /run/secrets/notification_event_ingest_token
+      NOTIFICATION_APPLICANT_EVENT_TOKEN_FILE: /run/secrets/notification_applicant_event_token
       BAO_ADDR: ${BAO_ADDR:-}
       NOTIFICATION_OPENBAO_TOKEN_FILE: /run/secrets/notification_openbao_token
     secrets:
@@ -644,7 +645,7 @@ services:
       - grpc_service_token
       - smtp_password
       - notification_webhook_secret
-      - notification_event_ingest_token
+      - notification_applicant_event_token
       - notification_openbao_token
     depends_on:
       db-migrate:
@@ -1012,8 +1013,8 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/grpc_service_token
   notification_webhook_secret:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_webhook_secret
-  notification_event_ingest_token:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_event_ingest_token
+  notification_applicant_event_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_applicant_event_token
   integration_secret_master_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/integration_secret_master_key
   token_hmac_key:

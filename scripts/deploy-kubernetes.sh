@@ -224,7 +224,7 @@ cmd_setup_secrets() {
   local postgres_password keycloak_db_password marty_db_password keycloak_admin_password
   local marty_api_client_secret rabbitmq_password rabbitmq_erlang_cookie
   local google_client_id google_client_secret smtp_username smtp_password
-  local issuance_api_key grpc_service_token notification_webhook_secret notification_event_ingest_token integration_secret_master_key canvas_credentials_shared_secret openbao_service_token notification_openbao_token
+  local issuance_api_key grpc_service_token notification_webhook_secret notification_applicant_event_token integration_secret_master_key canvas_credentials_shared_secret openbao_service_token notification_openbao_token
   local session_secret_key
   local cloudflare_tunnel_token
 
@@ -243,7 +243,7 @@ cmd_setup_secrets() {
   issuance_api_key="$(resolve_secret_input ISSUANCE_API_KEY)"
   grpc_service_token="$(resolve_secret_input GRPC_SERVICE_TOKEN)"
   notification_webhook_secret="$(resolve_secret_input NOTIFICATION_WEBHOOK_SECRET)"
-  notification_event_ingest_token="$(resolve_secret_input NOTIFICATION_EVENT_INGEST_TOKEN)"
+  notification_applicant_event_token="$(resolve_secret_input NOTIFICATION_APPLICANT_EVENT_TOKEN)"
   integration_secret_master_key="$(resolve_secret_input INTEGRATION_SECRET_MASTER_KEY)"
   canvas_credentials_shared_secret="$(resolve_secret_input CANVAS_CREDENTIALS_SHARED_SECRET)"
   openbao_service_token="$(resolve_secret_input OPENBAO_SERVICE_TOKEN)"
@@ -275,7 +275,7 @@ cmd_setup_secrets() {
     --from-literal=SIGNING_KEYS_INTERNAL_API_KEY="$issuance_api_key" \
     --from-literal=GRPC_SERVICE_TOKEN="$grpc_service_token" \
     --from-literal=NOTIFICATION_WEBHOOK_SECRET="$notification_webhook_secret" \
-    --from-literal=NOTIFICATION_EVENT_INGEST_TOKEN="$notification_event_ingest_token" \
+    --from-literal=NOTIFICATION_APPLICANT_EVENT_TOKEN="$notification_applicant_event_token" \
     --from-literal=INTEGRATION_SECRET_MASTER_KEY="$integration_secret_master_key" \
     --from-literal=CANVAS_CREDENTIALS_SHARED_SECRET="$canvas_credentials_shared_secret" \
     --from-literal=OPENBAO_SERVICE_TOKEN="$openbao_service_token" \
