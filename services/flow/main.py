@@ -1487,6 +1487,7 @@ class FlowInstance:
 
     # External references
     external_reference: str | None = None
+    application_flow_key_hash: str | None = None
 
     # Timing
     started_at: datetime | None = None
@@ -1554,11 +1555,15 @@ class FlowInstanceArtifact:
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     flow_instance_id: str = ""
+    issuance_transaction_id: str | None = None
 
     # OID4VCI-specific fields
     credential_offer_uri: str | None = None
+    credential_offer_uris: dict[str, str] = field(default_factory=dict)
+    credential_offer_labels: dict[str, str] = field(default_factory=dict)
     qr_payload: str | None = None  # Base64-encoded QR image data URI
     pre_authorized_code: str | None = None
+    issuance_status: str | None = None
 
     # Timing
     expires_at: datetime | None = None
@@ -1591,6 +1596,9 @@ class InMemoryFlowRepository:
         self._definitions: dict[str, FlowDefinition] = {}
         self._instances: dict[str, FlowInstance] = {}
         self._artifacts: dict[str, FlowInstanceArtifact] = {}
+        self._application_flow_instances: dict[tuple[str, str], str] = {}
+        self._application_flow_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._artifact_locks: dict[str, asyncio.Lock] = {}
 
     # Flow Definition operations
     async def save_definition(self, flow: FlowDefinition) -> None:
@@ -1608,6 +1616,32 @@ class InMemoryFlowRepository:
     # Flow Instance operations
     async def save_instance(self, instance: FlowInstance) -> None:
         self._instances[instance.id] = instance
+
+    async def reserve_application_flow_instance(
+        self,
+        instance: FlowInstance,
+        application_flow_key_hash: str,
+    ) -> tuple[FlowInstance, bool]:
+        logical_key = (instance.organization_id, application_flow_key_hash)
+        lock = self._application_flow_locks.setdefault(logical_key, asyncio.Lock())
+        async with lock:
+            existing_id = self._application_flow_instances.get(logical_key)
+            if existing_id is not None:
+                return self._instances[existing_id], False
+            instance.application_flow_key_hash = application_flow_key_hash
+            self._instances[instance.id] = instance
+            self._application_flow_instances[logical_key] = instance.id
+            return instance, True
+
+    async def get_application_flow_instance(
+        self,
+        organization_id: str,
+        application_flow_key_hash: str,
+    ) -> FlowInstance | None:
+        instance_id = self._application_flow_instances.get(
+            (organization_id, application_flow_key_hash)
+        )
+        return self._instances.get(instance_id) if instance_id else None
 
     async def get_instance(self, instance_id: str) -> FlowInstance | None:
         return self._instances.get(instance_id)
@@ -1628,8 +1662,35 @@ class InMemoryFlowRepository:
         return instances
 
     # Flow Instance Artifact operations
-    async def save_artifact(self, artifact: FlowInstanceArtifact) -> None:
-        self._artifacts[artifact.id] = artifact
+    async def save_artifact(self, artifact: FlowInstanceArtifact) -> FlowInstanceArtifact:
+        lock = self._artifact_locks.setdefault(artifact.flow_instance_id, asyncio.Lock())
+        async with lock:
+            existing = next(
+                (
+                    item
+                    for item in self._artifacts.values()
+                    if item.id == artifact.id
+                    or (
+                        artifact.issuance_transaction_id is not None
+                        and item.issuance_transaction_id
+                        == artifact.issuance_transaction_id
+                    )
+                ),
+                None,
+            )
+            if existing is not None:
+                if existing.flow_instance_id != artifact.flow_instance_id:
+                    raise ValueError(
+                        "issuance transaction is already bound to another flow instance"
+                    )
+                persisted_id = existing.id
+                persisted_flow_instance_id = existing.flow_instance_id
+                existing.__dict__.update(artifact.__dict__)
+                existing.id = persisted_id
+                existing.flow_instance_id = persisted_flow_instance_id
+                return existing
+            self._artifacts[artifact.id] = artifact
+            return artifact
 
     async def get_artifact(self, artifact_id: str) -> FlowInstanceArtifact | None:
         return self._artifacts.get(artifact_id)
@@ -2444,6 +2505,29 @@ async def _initiate_credential_layer_issuance(
         list(claims.keys()),
     )
 
+    application_id = str(instance.context.get("application_id") or "").strip()
+    idempotency_key = (
+        f"application-flow-offer-v1:{instance.application_flow_key_hash}"
+        if instance.application_flow_key_hash and application_id
+        else ""
+    )
+    if not flow_def.credential_template_id:
+        raise HTTPException(status_code=500, detail="credential template is required")
+    template = await _get_credential_template_reference(flow_def.credential_template_id)
+    issuer_did = str(getattr(template, "issuer_did", "") or "").strip()
+    if not issuer_did.startswith("did:"):
+        raise HTTPException(
+            status_code=502,
+            detail="credential template did not return a valid issuer DID",
+        )
+    claims_json = json.dumps(
+        claims,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
     try:
         from marty_proto.v1 import issuance_service_pb2 as iss_pb2
         from marty_proto.v1 import issuance_service_pb2_grpc as iss_grpc
@@ -2466,7 +2550,11 @@ async def _initiate_credential_layer_issuance(
                     applicant_id=instance.subject_id or "",
                     subject_did=str(instance.context.get("subject_did") or ""),
                     holder_did=str(instance.context.get("holder_did") or ""),
-                    claims={k: str(v) for k, v in claims.items()},
+                    application_id=application_id,
+                    issuer_did=issuer_did,
+                    delivery_mode="wallet_only",
+                    idempotency_key=idempotency_key,
+                    claims_json=claims_json,
                 ),
                 timeout=10.0,
             )
@@ -2494,15 +2582,28 @@ async def _initiate_credential_layer_issuance(
             grpc_err,
         )
 
+    issuance_api_key = _read_secret_value("ISSUANCE_API_KEY")
+    if not issuance_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="credential issuance HTTP fallback is not authenticated",
+        )
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.post(
             f"{ISSUANCE_SERVICE_URL}/v1/issuance/initiate",
+            headers={
+                "X-API-Key": issuance_api_key,
+                **({"Idempotency-Key": idempotency_key} if idempotency_key else {}),
+            },
             json={
                 "organization_id": instance.organization_id,
                 "credential_template_id": flow_def.credential_template_id,
+                "application_id": application_id,
                 "applicant_id": instance.subject_id,
                 "subject_did": instance.context.get("subject_did"),
                 "holder_did": instance.context.get("holder_did"),
+                "issuer_did": issuer_did,
+                "delivery_mode": "wallet_only",
                 "claims": claims,
             },
         )
@@ -2649,6 +2750,23 @@ async def _create_oid4vci_artifact(
 
     await _assert_issuance_preconditions(instance, flow_def)
 
+    existing_artifacts = await repo.list_artifacts(instance.id)
+    if instance.application_flow_key_hash and existing_artifacts:
+        artifact = existing_artifacts[0]
+        instance.context["oid4vci_artifact_id"] = artifact.id
+        instance.context["credential_offer_transaction_id"] = (
+            artifact.issuance_transaction_id
+        )
+        instance.context["offer_id"] = artifact.issuance_transaction_id
+        instance.context["credential_offer_uri"] = artifact.credential_offer_uri
+        instance.context["credential_offer_uris"] = artifact.credential_offer_uris
+        instance.context["credential_offer_labels"] = artifact.credential_offer_labels
+        instance.context["issuance_status"] = artifact.issuance_status
+        if artifact.pre_authorized_code:
+            instance.context["pre_auth_code"] = artifact.pre_authorized_code
+        await repo.save_instance(instance)
+        return artifact
+
     issuance = await _initiate_credential_layer_issuance(instance, flow_def)
     pre_auth_code = issuance.get("pre_auth_code") or None
     state = issuance.get("id") or str(uuid.uuid4())
@@ -2708,24 +2826,28 @@ async def _create_oid4vci_artifact(
 
     artifact = FlowInstanceArtifact(
         flow_instance_id=instance.id,
+        issuance_transaction_id=issuance.get("id"),
         credential_offer_uri=credential_offer_uri,
+        credential_offer_uris=credential_offer_uris or {},
+        credential_offer_labels=credential_offer_labels or {},
         pre_authorized_code=pre_auth_code,
+        issuance_status=issuance.get("status"),
         state=state,
         expires_at=expires_at,
         status=ArtifactStatus.ACTIVE,
         attempt_number=attempt_number,
     )
 
-    await repo.save_artifact(artifact)
+    artifact = await repo.save_artifact(artifact)
 
     # Store artifact ID and offer details in instance context
     instance.context["oid4vci_artifact_id"] = artifact.id
-    instance.context["credential_offer_transaction_id"] = issuance.get("id")
-    instance.context["offer_id"] = issuance.get("id")
-    instance.context["credential_offer_uri"] = credential_offer_uri
-    instance.context["credential_offer_uris"] = credential_offer_uris or {}
-    instance.context["credential_offer_labels"] = credential_offer_labels or {}
-    instance.context["issuance_status"] = issuance.get("status")
+    instance.context["credential_offer_transaction_id"] = artifact.issuance_transaction_id
+    instance.context["offer_id"] = artifact.issuance_transaction_id
+    instance.context["credential_offer_uri"] = artifact.credential_offer_uri
+    instance.context["credential_offer_uris"] = artifact.credential_offer_uris
+    instance.context["credential_offer_labels"] = artifact.credential_offer_labels
+    instance.context["issuance_status"] = artifact.issuance_status
     if pre_auth_code:
         instance.context["pre_auth_code"] = pre_auth_code
 
@@ -6587,6 +6709,10 @@ async def _authenticate_application_approved_event(
     )
 
 
+class ApplicationOfferConflictError(RuntimeError):
+    """One application/flow identity was reused with different offer semantics."""
+
+
 @router.post("/webhooks/application-approved")
 async def receive_application_approved(
     event: ApplicationApprovedWebhook,
@@ -6600,6 +6726,24 @@ async def receive_application_approved(
             dict(request.headers),
         )
     except ApplicationEventAuthError as exc:
+        if exc.code == "replayed_event" and exc.evidence is not None:
+            try:
+                recovered = await handle_application_approved(
+                    event=event,
+                    repo=repo,
+                    auth_evidence=exc.evidence,
+                    replay_recovery_only=True,
+                )
+            except ApplicationOfferConflictError as conflict:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "APPLICATION_OFFER_CONFLICT",
+                        "message": str(conflict),
+                    },
+                ) from conflict
+            if recovered.get("flows_triggered", 0) > 0:
+                return recovered
         status_code = 401
         if exc.code == "replayed_event":
             status_code = 409
@@ -6609,17 +6753,24 @@ async def receive_application_approved(
             status_code=status_code,
             detail={"error": exc.code, "message": str(exc)},
         ) from exc
-    return await handle_application_approved(
-        event=event,
-        repo=repo,
-        auth_evidence=evidence,
-    )
+    try:
+        return await handle_application_approved(
+            event=event,
+            repo=repo,
+            auth_evidence=evidence,
+        )
+    except ApplicationOfferConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "APPLICATION_OFFER_CONFLICT", "message": str(exc)},
+        ) from exc
 
 
 async def handle_application_approved(
     event: ApplicationApprovedWebhook,
     repo: InMemoryFlowRepository,
     auth_evidence: ApplicationEventEvidence,
+    replay_recovery_only: bool = False,
 ) -> dict:
     """
     Handle APPLICATION_APPROVED event from applicant service.
@@ -6681,6 +6832,30 @@ async def handle_application_approved(
 
     for flow_def in matching_flows:
         try:
+            logical_material = json.dumps(
+                [event.organization_id, event.aggregate_id, flow_def.id],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            application_flow_key_hash = hashlib.sha256(
+                f"marty:application-flow-offer:v1:{logical_material}".encode()
+            ).hexdigest()
+            offer_semantics = json.dumps(
+                {
+                    "application_id": event.aggregate_id,
+                    "flow_definition_id": flow_def.id,
+                    "credential_template_id": flow_def.credential_template_id,
+                    "applicant_id": applicant_id,
+                    "claims": event.data.get("claims") or {},
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            offer_semantics_hash = hashlib.sha256(
+                f"marty:application-offer-semantics:v1:{offer_semantics}".encode()
+            ).hexdigest()
             # Credential content crosses this boundary only through the
             # canonical claim map assembled by the applicant service.
             raw_event_claims = event.data.get("claims")
@@ -6712,6 +6887,7 @@ async def handle_application_approved(
                 _PRECONDITION_EVIDENCE_KEY: {
                     "application_approved": auth_evidence.as_dict(),
                 },
+                "_marty_application_offer_semantics_hash_v1": offer_semantics_hash,
             }
 
             # Start flow instance
@@ -6723,7 +6899,8 @@ async def handle_application_approved(
                 context=initial_context,
                 subject_id=applicant_id,
                 subject_type="applicant",
-                external_reference=f"auto-approved-{applicant_id}",
+                external_reference=f"application-flow:{application_flow_key_hash}",
+                application_flow_key_hash=application_flow_key_hash,
                 started_at=datetime.now(timezone.utc),
             )
             _sync_protocol_context(instance, flow_def)
@@ -6745,7 +6922,46 @@ async def handle_application_approved(
                     }
                 )
 
-            await repo.save_instance(instance)
+            if replay_recovery_only:
+                existing = await repo.get_application_flow_instance(
+                    event.organization_id,
+                    application_flow_key_hash,
+                )
+                if existing is not None:
+                    instance = existing
+                else:
+                    instance, _created = await repo.reserve_application_flow_instance(
+                        instance,
+                        application_flow_key_hash,
+                    )
+            else:
+                instance, _created = await repo.reserve_application_flow_instance(
+                    instance,
+                    application_flow_key_hash,
+                )
+
+            stored_evidence = (
+                instance.context.get(_PRECONDITION_EVIDENCE_KEY, {}).get(
+                    "application_approved"
+                )
+            )
+            if (
+                instance.context.get(
+                    "_marty_application_offer_semantics_hash_v1"
+                )
+                != offer_semantics_hash
+            ):
+                raise ApplicationOfferConflictError(
+                    "application and flow were already bound to different issuance claims"
+                )
+            if replay_recovery_only and (
+                not isinstance(stored_evidence, dict)
+                or stored_evidence.get("payload_sha256")
+                != auth_evidence.payload_sha256
+            ):
+                raise RuntimeError(
+                    "durable application-flow receipt does not match the authenticated event"
+                )
 
             # Create OID4VCI artifact if needed
             artifact = None
@@ -6789,6 +7005,8 @@ async def handle_application_approved(
                 f"instance {instance.id}"
             )
 
+        except ApplicationOfferConflictError:
+            raise
         except Exception as e:
             logger.error(
                 f"Failed to trigger flow {flow_def.id} for applicant {applicant_id}: {e}"

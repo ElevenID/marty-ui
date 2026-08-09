@@ -619,7 +619,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
     # ------------------------------------------------------------------ #
 
     async def ApplicationApproved(self, request, context):
-        from flow.main import ApplicationApprovedWebhook
+        from flow.main import ApplicationApprovedWebhook, ApplicationOfferConflictError
         from common.application_event_auth import ApplicationEventAuthError
 
         raw_event = {
@@ -630,6 +630,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             "data": _decode_application_event_data(request.data),
             "timestamp": request.timestamp,
         }
+        webhook = None
         try:
             invocation_metadata = (
                 context.invocation_metadata()
@@ -651,6 +652,32 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
                 auth_evidence=auth_evidence,
             )
         except ApplicationEventAuthError as exc:
+            if exc.code == "replayed_event" and exc.evidence is not None:
+                try:
+                    webhook = ApplicationApprovedWebhook(**raw_event)
+                except ValueError:
+                    webhook = None
+            if (
+                exc.code == "replayed_event"
+                and webhook is not None
+                and exc.evidence is not None
+            ):
+                try:
+                    result = await self._application_approved(
+                        event=webhook,
+                        repo=self._get_repo(),
+                        auth_evidence=exc.evidence,
+                        replay_recovery_only=True,
+                    )
+                except ApplicationOfferConflictError as conflict:
+                    context.set_code(grpc.StatusCode.ALREADY_EXISTS)
+                    context.set_details(str(conflict))
+                    return flow_service_pb2.ApplicationApprovedResponse()
+                if result.get("flows_triggered", 0) > 0:
+                    return flow_service_pb2.ApplicationApprovedResponse(
+                        success=result.get("success", False),
+                        flows_triggered=result.get("flows_triggered", 0),
+                    )
             code = grpc.StatusCode.UNAUTHENTICATED
             if exc.code == "replayed_event":
                 code = grpc.StatusCode.ALREADY_EXISTS
@@ -661,6 +688,10 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             return flow_service_pb2.ApplicationApprovedResponse()
         except ValueError as exc:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(str(exc))
+            return flow_service_pb2.ApplicationApprovedResponse()
+        except ApplicationOfferConflictError as exc:
+            context.set_code(grpc.StatusCode.ALREADY_EXISTS)
             context.set_details(str(exc))
             return flow_service_pb2.ApplicationApprovedResponse()
         except Exception as exc:

@@ -38,9 +38,16 @@ _DEFAULT_REPLAY_TTL_SECONDS = 300
 class ApplicationEventAuthError(Exception):
     """A stable authentication failure suitable for transport mapping."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        evidence: ApplicationEventEvidence | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.evidence = evidence
 
 
 @dataclass(frozen=True)
@@ -283,17 +290,21 @@ async def authenticate_application_event(
         raise ApplicationEventAuthError(
             "replay_store_unavailable", "application event replay store is unavailable"
         ) from exc
-    if not was_new:
-        raise ApplicationEventAuthError("replayed_event", "application event was already consumed")
-
     authenticated_at = datetime_from_unix(current_time)
-    return ApplicationEventEvidence(
+    evidence = ApplicationEventEvidence(
         producer=PRODUCER,
         audience=AUDIENCE,
         event_id_sha256=event_id_sha256,
         payload_sha256=payload_sha256,
         authenticated_at=authenticated_at,
     )
+    if not was_new:
+        raise ApplicationEventAuthError(
+            "replayed_event",
+            "application event was already consumed",
+            evidence=evidence,
+        )
+    return evidence
 
 
 def datetime_from_unix(value: int) -> str:
