@@ -71,6 +71,14 @@ from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
 from flow.infrastructure.adapters import PostgresFlowRepository
 from protocol_version import MIP_VERSION
+from common.application_event_auth import (
+    AUDIENCE as APPLICATION_EVENT_AUDIENCE,
+    PRODUCER as APPLICATION_EVENT_PRODUCER,
+    ApplicationEventAuthError,
+    ApplicationEventEvidence,
+    authenticate_application_event,
+    validate_application_event_configuration,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1919,8 +1927,19 @@ class VerificationResultResponse(BaseModel):
 
 
 class AdvanceFlowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     step_result: str = Field("success", max_length=50)  # success, failure, etc.
     data: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_private_context(self) -> "AdvanceFlowRequest":
+        forbidden_path = _private_flow_context_path(self.data)
+        if forbidden_path:
+            raise ValueError(
+                f"data.{forbidden_path} is private service state and cannot be supplied"
+            )
+        return self
 
 
 class FlowInstanceArtifactResponse(BaseModel):
@@ -1983,36 +2002,83 @@ async def check_preconditions(
         return True, []
 
     unmet = []
+    evidence = context.get(_PRECONDITION_EVIDENCE_KEY)
+    if not isinstance(evidence, dict):
+        evidence = {}
 
     for precondition in preconditions:
         met = False
 
         if precondition == "application_approved":
-            # Check if application is approved in context
-            met = context.get("application_status") == "approved"
+            approval = evidence.get("application_approved")
+            met = (
+                isinstance(approval, dict)
+                and approval.get("producer") == APPLICATION_EVENT_PRODUCER
+                and approval.get("audience") == APPLICATION_EVENT_AUDIENCE
+                and bool(
+                    re.fullmatch(
+                        r"[0-9a-f]{64}", str(approval.get("event_id_sha256") or "")
+                    )
+                )
+                and bool(
+                    re.fullmatch(
+                        r"[0-9a-f]{64}", str(approval.get("payload_sha256") or "")
+                    )
+                )
+                and bool(str(approval.get("authenticated_at") or "").strip())
+            )
 
         elif precondition == "identity_verified":
-            # Check if identity verification passed
-            met = context.get("identity_verified") is True
+            # No authoritative setter/evidence schema exists yet.
+            met = False
 
         elif precondition == "manual_admin_approval":
-            # Check if admin explicitly approved
-            met = context.get("admin_approved") is True
+            met = False
 
         elif precondition == "external_verification":
-            # Check if external verification callback received
-            met = context.get("external_verification_result") == "success"
+            met = False
 
         else:
-            # Unknown precondition, log warning but don't block
+            # An unknown required control cannot be safely assumed satisfied.
             logger.warning(f"Unknown precondition: {precondition}")
-            met = True  # Treat unknown as met to avoid blocking
+            met = False
 
         if not met:
             unmet.append(precondition)
 
     all_met = len(unmet) == 0
     return all_met, unmet
+
+
+def _required_issuance_preconditions(flow_def: FlowDefinition) -> list[str]:
+    """Collect every required control that must precede offer creation."""
+    required = list(flow_def.preconditions or [])
+    for step in flow_def.steps:
+        if step.step_type != StepType.APPROVAL or not isinstance(step.config, dict):
+            continue
+        configured = step.config.get("required_preconditions", [])
+        if isinstance(configured, list):
+            required.extend(str(value) for value in configured if str(value).strip())
+        elif configured:
+            required.append("invalid_required_preconditions_configuration")
+    return list(dict.fromkeys(required))
+
+
+async def _assert_issuance_preconditions(
+    instance: FlowInstance,
+    flow_def: FlowDefinition,
+) -> None:
+    """Fail closed before any OID4VCI offer or pre-authorized code exists."""
+    required = _required_issuance_preconditions(flow_def)
+    met, unmet = await check_preconditions(required, instance.context)
+    if not met:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "ISSUANCE_PRECONDITIONS_NOT_MET",
+                "unmet_preconditions": unmet,
+            },
+        )
 
 
 def _protocol_status_for_instance(status: FlowInstanceStatus) -> str:
@@ -2058,6 +2124,8 @@ _PRIVATE_FLOW_CONTEXT_KEYS = frozenset(
         "api_key",
     }
 )
+_PRIVATE_FLOW_CONTEXT_PREFIX = "_marty_"
+_PRECONDITION_EVIDENCE_KEY = "_marty_precondition_evidence_v1"
 
 
 def _private_flow_context_path(value: Any, prefix: str = "") -> str | None:
@@ -2066,7 +2134,10 @@ def _private_flow_context_path(value: Any, prefix: str = "") -> str | None:
         for key, entry in value.items():
             key_text = str(key)
             path = f"{prefix}.{key_text}" if prefix else key_text
-            if key_text.casefold() in _PRIVATE_FLOW_CONTEXT_KEYS:
+            if (
+                key_text.casefold() in _PRIVATE_FLOW_CONTEXT_KEYS
+                or key_text.casefold().startswith(_PRIVATE_FLOW_CONTEXT_PREFIX)
+            ):
                 return path
             nested = _private_flow_context_path(entry, path)
             if nested:
@@ -2087,6 +2158,7 @@ def _public_flow_value(value: Any) -> Any:
             str(key): _public_flow_value(entry)
             for key, entry in value.items()
             if str(key).casefold() not in _PRIVATE_FLOW_CONTEXT_KEYS
+            and not str(key).casefold().startswith(_PRIVATE_FLOW_CONTEXT_PREFIX)
         }
     if isinstance(value, list):
         return [_public_flow_value(entry) for entry in value]
@@ -2550,6 +2622,8 @@ async def _create_oid4vci_artifact(
     """
     if _effective_flow_type(flow_def) != FlowType.OID4VCI_PRE_AUTHORIZED:
         return None
+
+    await _assert_issuance_preconditions(instance, flow_def)
 
     issuance = await _initiate_credential_layer_issuance(instance, flow_def)
     pre_auth_code = issuance.get("pre_auth_code") or None
@@ -3194,6 +3268,9 @@ async def start_flow(
     if _effective_flow_type(flow_def) == FlowType.PHYSICAL_DOCUMENT_ISSUANCE:
         await _initialize_physical_document_job(instance, flow_def)
     _sync_protocol_context(instance, flow_def)
+
+    if _effective_flow_type(flow_def) == FlowType.OID4VCI_PRE_AUTHORIZED:
+        await _assert_issuance_preconditions(instance, flow_def)
 
     # Set expiry
     from datetime import timedelta
@@ -6227,12 +6304,14 @@ async def submit_digital_credential_response(
 class ApplicationApprovedWebhook(BaseModel):
     """Webhook payload for application approved event."""
 
-    event_type: str
-    aggregate_id: str
-    aggregate_type: str
-    organization_id: str
-    data: dict
-    timestamp: str
+    model_config = ConfigDict(extra="forbid")
+
+    event_type: Literal["application.approved"]
+    aggregate_id: str = Field(min_length=1, max_length=255)
+    aggregate_type: Literal["application"]
+    organization_id: str = Field(min_length=1, max_length=255)
+    data: dict[str, Any]
+    timestamp: str = Field(min_length=1, max_length=64)
 
 
 @router.post("/siop")
@@ -6467,10 +6546,56 @@ async def submit_siop_id_token(
     }
 
 
+async def _authenticate_application_approved_event(
+    event: ApplicationApprovedWebhook | dict[str, Any],
+    metadata: dict[str, str],
+) -> ApplicationEventEvidence:
+    """Authenticate and consume an approval event using shared Redis state."""
+    payload = (
+        event.model_dump(mode="json")
+        if isinstance(event, ApplicationApprovedWebhook)
+        else dict(event)
+    )
+    return await authenticate_application_event(
+        payload,
+        metadata,
+        replay_store=_nonce_redis,
+    )
+
+
 @router.post("/webhooks/application-approved")
+async def receive_application_approved(
+    event: ApplicationApprovedWebhook,
+    request: Request,
+    repo: InMemoryFlowRepository = Depends(get_repo),
+) -> dict:
+    """Authenticate the Applicant workload before invoking issuance logic."""
+    try:
+        evidence = await _authenticate_application_approved_event(
+            event,
+            dict(request.headers),
+        )
+    except ApplicationEventAuthError as exc:
+        status_code = 401
+        if exc.code == "replayed_event":
+            status_code = 409
+        elif exc.code in {"configuration_error", "replay_store_unavailable"}:
+            status_code = 503
+        raise HTTPException(
+            status_code=status_code,
+            detail={"error": exc.code, "message": str(exc)},
+        ) from exc
+    return await handle_application_approved(
+        event=event,
+        repo=repo,
+        auth_evidence=evidence,
+    )
+
+
 async def handle_application_approved(
     event: ApplicationApprovedWebhook,
-    repo: InMemoryFlowRepository = Depends(get_repo),
+    repo: InMemoryFlowRepository,
+    auth_evidence: ApplicationEventEvidence,
 ) -> dict:
     """
     Handle APPLICATION_APPROVED event from applicant service.
@@ -6574,6 +6699,9 @@ async def handle_application_approved(
                 "vetting_level": event.data.get("vetting_level"),
                 "triggered_by_event": triggered_by_event or "application.approved",
                 "claims": _event_claims,
+                _PRECONDITION_EVIDENCE_KEY: {
+                    "application_approved": auth_evidence.as_dict(),
+                },
             }
 
             # Start flow instance
@@ -6673,6 +6801,7 @@ async def handle_application_approved(
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo, _nonce_redis
     logger.info(f"Starting {SERVICE_NAME}...")
+    validate_application_event_configuration()
 
     # Initialize Redis for nonce replay prevention (shared across replicas)
     import redis.asyncio as aioredis
@@ -6738,6 +6867,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     flow_servicer = FlowServiceGrpc(
         start_verification_fn=start_verification_flow,
         application_approved_fn=handle_application_approved,
+        authenticate_application_approved_fn=_authenticate_application_approved_event,
         get_repo_fn=get_repo,
     )
     add_FlowServiceServicer_to_server(flow_servicer, grpc_server)
