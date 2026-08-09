@@ -103,6 +103,24 @@ def test_start_session_includes_operational_fields() -> None:
     assert body["request_uri"].endswith("/request")
 
 
+def test_start_session_rejects_standalone_callback_destinations() -> None:
+    store = verification.SessionStore()
+    client = _build_client(store)
+
+    response = client.post(
+        "/v1/verify",
+        json={
+            "organization_id": "org-1",
+            "presentation_policy_id": "policy-1",
+            "callback_url": "https://attacker.example/collect",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Flow service transactional callback outbox" in response.json()["detail"]
+    assert store._fallback == {}
+
+
 def test_submit_presentation_returns_protocol_result() -> None:
     store = verification.SessionStore()
     session = verification.VerificationSession(
@@ -167,10 +185,11 @@ def test_submit_presentation_returns_protocol_result() -> None:
     }
     assert body["completed_at"] is not None
     assert body["updated_at"] == body["completed_at"]
-    assert session.vp_token_sha256 == hashlib.sha256(b"vp.jwt.token").hexdigest()
-    assert not hasattr(session, "vp_token")
-    assert session.verified_claims == {"age_over_18": True, "given_name": True}
-    assert "Marty" not in json.dumps(verification._session_to_redis_dict(session))
+    stored = store._fallback[session.session_id]
+    assert stored.vp_token_sha256 == hashlib.sha256(b"vp.jwt.token").hexdigest()
+    assert not hasattr(stored, "vp_token")
+    assert stored.verified_claims == {"age_over_18": True, "given_name": True}
+    assert "Marty" not in json.dumps(verification._session_to_redis_dict(stored))
 
 
 def test_terminal_session_projection_excludes_raw_identity_material() -> None:

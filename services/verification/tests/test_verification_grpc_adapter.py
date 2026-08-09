@@ -26,6 +26,35 @@ class _Context:
 
 
 @pytest.mark.asyncio
+async def test_grpc_start_rejects_standalone_callback_destinations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        sys.modules,
+        "verification",
+        SimpleNamespace(main=verification),
+    )
+    monkeypatch.setitem(sys.modules, "verification.main", verification)
+    store = verification.SessionStore()
+    context = _Context()
+    servicer = VerificationServiceGrpc(lambda: store)
+
+    result = await servicer.StartVerification(
+        vs_pb2.StartVerificationRequest(
+            organization_id="org-1",
+            presentation_policy_id="policy-1",
+            callback_url="https://attacker.example/collect",
+        ),
+        context,
+    )
+
+    assert context.code.name == "INVALID_ARGUMENT"
+    assert "Flow service transactional callback outbox" in context.details
+    assert not result.session_id
+    assert store._fallback == {}
+
+
+@pytest.mark.asyncio
 async def test_grpc_session_store_is_awaited_and_terminal_data_is_minimized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -81,9 +110,8 @@ async def test_grpc_session_store_is_awaited_and_terminal_data_is_minimized(
     stored = await store.get(started.session_id)
 
     assert context.code is None
-    assert json.loads(result.verified_claims_json) == {
-        "email": "alice@example.com"
-    }
+    assert json.loads(result.verified_claims_json) == {"email": True}
+    assert "alice@example.com" not in result.verified_claims_json
     assert stored is not None
     assert stored.verified_claims == {"email": True}
     assert "alice@example.com" not in json.dumps(stored.credential_results)
