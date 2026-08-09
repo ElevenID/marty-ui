@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -43,6 +44,38 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
     assert "marty-subscriptions" not in workflow
     assert "self-hosted" not in workflow
     assert "runs-on: ubuntu-latest" in workflow
+
+
+def test_ci_verifies_the_pinned_mdoc_binding_evidence_contract() -> None:
+    workflow = _text(".github/workflows/ci.yml")
+
+    assert 'select(.name == "marty-core-python")' in workflow
+    assert 'select(.type == "python") | .uri' in workflow
+    assert 'select(.type == "python") | .digest' in workflow
+    assert "sha256sum --check --strict" in workflow
+    assert (
+        'pip install pytest pyyaml jsonschema cryptography playwright "$marty_rs_wheel"'
+        in workflow
+    )
+    assert "Verify released mdoc binding evidence contract" in workflow
+    assert "from marty_rs import _marty_rs" in workflow
+    assert "_marty_rs.MdocDocumentVerificationEvidence" in workflow
+    assert '"issuer_certificate_sha256"' in workflow
+    assert '"valid_at_verification_time"' in workflow
+    assert "result.document_evidence == []" in workflow
+    assert "result.revocation_checked is False" in workflow
+    assert "result.not_revoked is None" in workflow
+
+
+def test_cli_and_api_core_use_the_same_monorepo_release() -> None:
+    lock = json.loads(_text("release/stack-lock.json"))
+    components = {component["name"]: component for component in lock["components"]}
+
+    api_core = components["marty-api-core"]
+    cli = components["marty-cli"]
+    assert api_core["repository"] == cli["repository"] == "ElevenID/marty-cli"
+    assert api_core["version"] == cli["version"]
+    assert api_core["commit"] == cli["commit"]
 
 
 def test_stack_release_publishes_signed_evidence() -> None:

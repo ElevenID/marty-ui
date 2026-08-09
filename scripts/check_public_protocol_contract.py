@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,7 @@ from gateway.models import (  # noqa: E402
     PresentationPolicyResponse,
     PresentationPolicyUpdate,
     StartVerificationFlowRequest,
+    TrustProfileResponse,
     TrustProfileIssuerCreate,
     TrustProfileIssuerResponse,
     TrustProfileIssuerUpdate,
@@ -79,6 +81,7 @@ from gateway.routes.verification import (  # noqa: E402
     _sanitize_presentation_policy_response,
     _validated_policy_payload,
 )
+from protocol_version import MIP_SUPPORTED_VERSIONS, MIP_VERSION  # noqa: E402
 
 FORBIDDEN_PUBLIC_FIELDS = {
     "auto_generate_artifacts",
@@ -133,6 +136,34 @@ TRUST_CONFIGURATION_UI_PATHS = (
     "ui/src/components/console/trust/TrustProfileWizard.jsx",
     "ui/src/components/console/trust/steps/TrustSourcesStep.jsx",
 )
+
+
+def _assert_protocol_version(protocol_root: Path) -> None:
+    """Require runtime discovery to match the exact pinned protocol release."""
+    metadata = tomllib.loads(
+        (protocol_root / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    protocol_version = metadata["project"]["version"]
+    if protocol_version != MIP_VERSION:
+        raise AssertionError(
+            "runtime MIP version drifted from the pinned public contract: "
+            f"runtime={MIP_VERSION}, protocol={protocol_version}"
+        )
+    if tuple(MIP_SUPPORTED_VERSIONS) != (MIP_VERSION,):
+        raise AssertionError(
+            "pre-1.0 runtime must advertise only the exact current MIP version"
+        )
+
+    fixture = json.loads(
+        (protocol_root / "conformance" / "valid" / "mip-configuration.json")
+        .read_text(encoding="utf-8")
+    )
+    if fixture.get("mip_version") != MIP_VERSION or fixture.get(
+        "supported_versions"
+    ) != [MIP_VERSION]:
+        raise AssertionError(
+            "public MIP discovery fixture does not declare the pinned release only"
+        )
 
 FORBIDDEN_TRUST_CONFIGURATION_TOKENS = {
     "issuer_profile_id",
@@ -269,6 +300,7 @@ def _public_response(
 
 
 def check_contract(protocol_root: Path) -> None:
+    _assert_protocol_version(protocol_root)
     assert_generated_bindings_current(protocol_root)
     assert_documented_public_boundary()
 
@@ -757,18 +789,54 @@ def check_contract(protocol_root: Path) -> None:
                 f"runtime response exposes custody selectors: {sorted(leaked)}"
             )
 
-    trust_profile_schema_path = (
+    trust_profile_schema, trust_profile_validator = _validator(
+        protocol_root,
+        registry,
+        "trust-profile.json",
+    )
+    _assert_model_shape(
+        model=TrustProfileResponse,
+        schema=trust_profile_schema,
+        label="TrustProfileResponse",
+    )
+    leaked_schema_fields = FORBIDDEN_PUBLIC_FIELDS & _property_names(
+        trust_profile_schema
+    )
+    if leaked_schema_fields:
+        raise AssertionError(
+            "marty-protocol Trust Profile exposes custody selectors: "
+            f"{sorted(leaked_schema_fields)}"
+        )
+    trust_profile_fixture = json.loads(
+        (
+            protocol_root / "conformance" / "valid" / "trust-profile.json"
+        ).read_text(encoding="utf-8")
+    )
+    trust_profile_response = TrustProfileResponse.model_validate(
+        trust_profile_fixture
+    ).model_dump(mode="json", exclude_none=True)
+    trust_profile_validator.validate(trust_profile_response)
+    leaked = FORBIDDEN_PUBLIC_FIELDS & _property_names(trust_profile_response)
+    if leaked:
+        raise AssertionError(
+            "runtime Trust Profile response exposes custody selectors: "
+            f"{sorted(leaked)}"
+        )
+
+    organization_trust_profile_schema_path = (
         protocol_root / "schemas" / "organization-trust-profile.json"
     )
-    trust_profile_schema = json.loads(
-        trust_profile_schema_path.read_text(encoding="utf-8")
+    organization_trust_profile_schema = json.loads(
+        organization_trust_profile_schema_path.read_text(encoding="utf-8")
     )
-    trust_profile_validator = Draft202012Validator(
-        trust_profile_schema,
+    organization_trust_profile_validator = Draft202012Validator(
+        organization_trust_profile_schema,
         registry=registry,
         format_checker=FormatChecker(),
     )
-    trust_profile_schema_fields = set(trust_profile_schema["properties"])
+    trust_profile_schema_fields = set(
+        organization_trust_profile_schema["properties"]
+    )
     trust_profile_runtime_fields = set(OrganizationTrustProfileResponse.model_fields)
     if trust_profile_runtime_fields != trust_profile_schema_fields:
         raise AssertionError(
@@ -777,7 +845,9 @@ def check_contract(protocol_root: Path) -> None:
             f"runtime_only={sorted(trust_profile_runtime_fields - trust_profile_schema_fields)}"
         )
 
-    trust_profile_schema_required = set(trust_profile_schema["required"])
+    trust_profile_schema_required = set(
+        organization_trust_profile_schema["required"]
+    )
     trust_profile_runtime_required = {
         name
         for name, field in OrganizationTrustProfileResponse.model_fields.items()
@@ -792,7 +862,7 @@ def check_contract(protocol_root: Path) -> None:
         )
 
     leaked_schema_fields = FORBIDDEN_PUBLIC_FIELDS & _property_names(
-        trust_profile_schema
+        organization_trust_profile_schema
     )
     if leaked_schema_fields:
         raise AssertionError(
@@ -800,7 +870,7 @@ def check_contract(protocol_root: Path) -> None:
             f"{sorted(leaked_schema_fields)}"
         )
 
-    trust_profile_response = OrganizationTrustProfileResponse(
+    organization_trust_profile_response = OrganizationTrustProfileResponse(
         id="40000000-0000-4000-8000-000000000001",
         organization_id="20000000-0000-4000-8000-000000000001",
         framework_id="50000000-0000-4000-8000-000000000001",
@@ -812,8 +882,12 @@ def check_contract(protocol_root: Path) -> None:
         metadata={"owner": "trust-team"},
         created_at="2026-01-01T00:00:00Z",
     ).model_dump(mode="json", exclude_none=True)
-    trust_profile_validator.validate(trust_profile_response)
-    leaked = FORBIDDEN_PUBLIC_FIELDS & _property_names(trust_profile_response)
+    organization_trust_profile_validator.validate(
+        organization_trust_profile_response
+    )
+    leaked = FORBIDDEN_PUBLIC_FIELDS & _property_names(
+        organization_trust_profile_response
+    )
     if leaked:
         raise AssertionError(
             "runtime Organization Trust Profile response exposes custody selectors: "

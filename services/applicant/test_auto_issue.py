@@ -1,4 +1,4 @@
-"""MIP 0.3 application lifecycle and authorization regressions."""
+"""MIP 0.4 application lifecycle and authorization regressions."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from common.application_event_auth import authenticate_application_event
 
 try:
     from applicant.main import (
@@ -35,6 +36,86 @@ except ModuleNotFoundError:
 
 def run(coro):
     return asyncio.run(coro)
+
+
+def test_manual_issuance_trigger_signs_exact_payload(monkeypatch):
+    captured = {}
+
+    class Response:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {
+                "offers": [
+                    {
+                        "credential_offer_transaction_id": "tx-1",
+                        "flow_instance_id": "flow-instance-1",
+                        "credential_offer_uri": "openid-credential-offer://offer-1",
+                        "expires_at": "2099-01-01T00:00:00Z",
+                    }
+                ]
+            }
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, url, **kwargs):
+            captured.update(url=url, **kwargs)
+            return Response()
+
+    monkeypatch.setattr(service.httpx, "AsyncClient", Client)
+    monkeypatch.setenv(
+        "FLOW_APPLICATION_EVENT_HMAC_KEY",
+        "test-application-event-key-that-is-distinct-and-long",
+    )
+    application = SimpleNamespace(
+        id="application-1",
+        organization_id="org-1",
+        credential_template_id="template-1",
+        status=SimpleNamespace(value="APPROVED"),
+        reviewed_at=None,
+    )
+    applicant = SimpleNamespace(
+        id="applicant-1",
+        email="holder@example.test",
+        given_name="Ada",
+        family_name="Lovelace",
+        vetting_level=SimpleNamespace(value="STANDARD"),
+    )
+
+    result = run(
+        service._initiate_issuance_via_flow(
+            application=application,
+            applicant=applicant,
+            claims={"given_name": "Ada", "roles": ["member"]},
+        )
+    )
+
+    assert result["id"] == "tx-1"
+    assert captured["url"].endswith("/v1/flows/webhooks/application-approved")
+
+    class ReplayStore:
+        async def set(self, *_args, **_kwargs):
+            return True
+
+    evidence = run(
+        authenticate_application_event(
+            captured["json"],
+            captured["headers"],
+            replay_store=ReplayStore(),
+        )
+    )
+    assert len(evidence.payload_sha256) == 64
+    assert captured["json"]["data"]["claims"]["roles"] == ["member"]
 
 
 @pytest.fixture()

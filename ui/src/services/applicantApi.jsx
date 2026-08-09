@@ -1,4 +1,4 @@
-/** MIP 0.3 applicant and reviewer API client. */
+/** MIP 0.4 applicant and reviewer API client. */
 import { get, post, patch, del } from './api';
 import { buildTruthyQueryString, requireOrganizationId, withQuery } from './queryUtils';
 

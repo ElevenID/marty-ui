@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from gateway.registry import get_route_config
+from protocol_version import MIP_SUPPORTED_VERSIONS, MIP_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -67,14 +68,6 @@ class SessionCache:
     def clear(self, session_id: str) -> None:
         """Clear cached session."""
         self._cache.pop(session_id, None)
-
-
-# =============================================================================
-# MIP Version Constants
-# =============================================================================
-
-MIP_VERSION = "0.3.1"
-MIP_SUPPORTED_VERSIONS = ["0.3.1"]
 
 
 # =============================================================================

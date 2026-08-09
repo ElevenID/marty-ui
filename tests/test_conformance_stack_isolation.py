@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
+from yaml.nodes import MappingNode, ScalarNode
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +20,36 @@ if SPEC is None or SPEC.loader is None:
     raise RuntimeError("could not load conformance stack helper")
 stack = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(stack)
+
+
+def _assert_unique_yaml_keys(node: yaml.Node, path: Path, location: str = "root") -> None:
+    if isinstance(node, MappingNode):
+        seen: dict[str, int] = {}
+        for key_node, value_node in node.value:
+            if isinstance(key_node, ScalarNode):
+                key = key_node.value
+                line = key_node.start_mark.line + 1
+                if key in seen:
+                    pytest.fail(
+                        f"{path.name}:{line}: duplicate mapping key {key!r}; "
+                        f"first declared at line {seen[key]} ({location})"
+                    )
+                seen[key] = line
+                child_location = f"{location}.{key}"
+            else:
+                child_location = location
+            _assert_unique_yaml_keys(value_node, path, child_location)
+    else:
+        for child in getattr(node, "value", ()):
+            if isinstance(child, yaml.Node):
+                _assert_unique_yaml_keys(child, path, location)
+
+
+def test_compose_files_have_no_duplicate_mapping_keys() -> None:
+    for path in sorted(ROOT.glob("docker-compose*.yml")):
+        document = yaml.compose(path.read_text(encoding="utf-8"))
+        assert document is not None, f"{path.name} is empty"
+        _assert_unique_yaml_keys(document, path)
 
 
 def test_issuer_did_identity_returns_only_public_did_material(
@@ -247,6 +279,27 @@ def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
         assert "DIDCOMM_ALLOW_PRIVATE_IPS" not in (
             ROOT / production_file
         ).read_text(encoding="utf-8")
+
+
+def test_trust_registry_private_adapter_is_conformance_only() -> None:
+    isolation = (ROOT / stack.ISOLATION_FILE).read_text(encoding="utf-8")
+    trust_profile = isolation.split("  trust-profile:\n", 1)[1].split(
+        "  deployment-profile:\n", 1
+    )[0]
+
+    assert "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST: trust-registry-fixture" in trust_profile
+    assert "TRUST_REGISTRY_TLS_CA_FILE:" in trust_profile
+    assert 'TRUST_REGISTRY_SYNC_POLL_SECONDS: "86400"' in trust_profile
+    assert "trust-registry-conformance-root-ca.pem:ro" in trust_profile
+    for production_file in (
+        "docker-compose.base.yml",
+        "docker-compose.selfhost.prod.yml",
+        "docker-compose.ui-prod.yml",
+        "docker-compose.ui-release.yml",
+    ):
+        production = (ROOT / production_file).read_text(encoding="utf-8")
+        assert "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST" not in production
+        assert "TRUST_REGISTRY_TLS_CA_FILE" not in production
 
 
 def test_local_build_defines_ui_without_release_image_overlays() -> None:
