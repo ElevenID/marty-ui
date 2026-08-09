@@ -600,10 +600,12 @@ services:
       NOTIFICATION_APPLICANT_EVENT_TOKEN_FILE: /run/secrets/notification_applicant_event_token
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
+      FLOW_APPLICATION_EVENT_HMAC_KEY_FILE: /run/secrets/flow_application_event_hmac_key
     secrets:
       - marty_db_password
       - grpc_service_token
       - notification_applicant_event_token
+      - flow_application_event_hmac_key
     volumes:
       - type: bind
         source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/applicant
@@ -698,6 +700,8 @@ services:
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_PORT: "9009"
       DID_RESOLUTION_BASE_URL: http://gateway:8000
+      DID_PUBLIC_FALLBACK_ENABLED: ${DID_PUBLIC_FALLBACK_ENABLED:-false}
+      DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
       MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
       MIP_MANAGED_ISSUER_DIDS: ${MIP_MANAGED_ISSUER_DIDS:-}
@@ -764,9 +768,11 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_DB_FLOW: "3"
       FLOW_GRPC_PORT: "9011"
+      FLOW_APPLICATION_EVENT_HMAC_KEY_FILE: /run/secrets/flow_application_event_hmac_key
     secrets:
       - marty_db_password
       - grpc_service_token
+      - flow_application_event_hmac_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1015,6 +1021,8 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_webhook_secret
   notification_applicant_event_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_applicant_event_token
+  flow_application_event_hmac_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_application_event_hmac_key
   integration_secret_master_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/integration_secret_master_key
   token_hmac_key:

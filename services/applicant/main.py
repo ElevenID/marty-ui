@@ -218,10 +218,17 @@ async def _initiate_issuance_via_flow(
         },
     }
 
+    # This endpoint can mint a pre-authorized credential offer. Bind the exact
+    # payload to the dedicated Applicant workload identity before sending it.
+    from common.application_event_auth import sign_application_event
+
+    event_auth_headers = sign_application_event(event_payload)
+
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.post(
             f"{FLOW_SERVICE_URL}/v1/flows/webhooks/application-approved",
             json=event_payload,
+            headers=event_auth_headers,
         )
 
     if response.status_code >= 400:
@@ -3862,6 +3869,9 @@ async def post_organization_applicant_withdraw(
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
+    from common.application_event_auth import validate_application_event_configuration
+
+    validate_application_event_configuration()
     _repo = InMemoryApplicantRepository()
     
     # Initialize Cedar engine for approval policies
