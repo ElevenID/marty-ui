@@ -25,6 +25,7 @@ import hashlib
 import json
 import logging
 import os
+import ssl
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -1822,6 +1823,16 @@ def _classify_mdoc_verification_error(error: object) -> str:
         ("error verifying device signature", "device-signature-processing-error"),
         ("malformed signature", "device-signature-malformed"),
         ("algorithm in protected headers", "device-signature-algorithm-mismatch"),
+        ("issuer-signed value digest mismatch", "issuer-disclosure-digest-mismatch"),
+        ("no value digests", "issuer-disclosure-commitment-missing"),
+        ("no digest for disclosed element", "issuer-disclosure-commitment-missing"),
+        ("document-signer certificate profile", "issuer-certificate-profile-invalid"),
+        ("issuer signature algorithm is not protected", "issuer-algorithm-unprotected"),
+        ("unsupported issuer signature algorithm", "issuer-algorithm-unsupported"),
+        ("mso document type", "mso-document-type-mismatch"),
+        ("mso validity window is contradictory", "mso-validity-contradictory"),
+        ("mso is not yet valid", "mso-not-yet-valid"),
+        ("mso is expired", "mso-expired"),
         ("cryptographic error", "device-key-invalid"),
         ("cbor", "device-auth-cbor-error"),
     )
@@ -1829,6 +1840,63 @@ def _classify_mdoc_verification_error(error: object) -> str:
         if marker in normalized:
             return category
     return "unclassified"
+
+
+def _authenticated_mdoc_evidence(result: object) -> dict[str, Any] | None:
+    """Normalize exactly one complete binding-authenticated mdoc evidence record."""
+    try:
+        document_types = list(getattr(result, "document_types"))
+        records = list(getattr(result, "document_evidence"))
+    except (AttributeError, TypeError):
+        return None
+    if len(document_types) != 1 or len(records) != 1:
+        return None
+
+    record = records[0]
+    document_type = getattr(record, "document_type", None)
+    algorithm = getattr(record, "signature_algorithm", None)
+    digest_algorithm = getattr(record, "digest_algorithm", None)
+    signed_at = getattr(record, "signed_at", None)
+    valid_from = getattr(record, "valid_from", None)
+    valid_until = getattr(record, "valid_until", None)
+    certificate_sha256 = getattr(record, "issuer_certificate_sha256", None)
+    if (
+        not isinstance(document_type, str)
+        or not document_type
+        or document_types != [document_type]
+        or not isinstance(algorithm, str)
+        or not algorithm
+        or not isinstance(digest_algorithm, str)
+        or not digest_algorithm
+        or _verification_datetime(signed_at) is None
+        or _verification_datetime(valid_from) is None
+        or _verification_datetime(valid_until) is None
+        or not isinstance(certificate_sha256, str)
+        or len(certificate_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in certificate_sha256)
+        or getattr(record, "validity_checked", None) is not True
+        or getattr(record, "valid_at_verification_time", None) is not True
+        or getattr(record, "revocation_checked", None) is not False
+        or getattr(record, "not_revoked", "missing") is not None
+        or getattr(result, "revocation_checked", None) is not False
+        or getattr(result, "not_revoked", "missing") is not None
+    ):
+        return None
+
+    return {
+        "issuer_id": f"x509-sha256:{certificate_sha256}",
+        "issuer_certificate_sha256": certificate_sha256,
+        "document_type": document_type,
+        "algorithm": algorithm,
+        "digest_algorithm": digest_algorithm,
+        "issued_at": signed_at,
+        "valid_from": valid_from,
+        "expires_at": valid_until,
+        "validity_checked": True,
+        "is_expired": False,
+        "revocation_checked": False,
+        "not_revoked": None,
+    }
 
 
 def _verify_mdoc(
@@ -1897,12 +1965,16 @@ def _verify_mdoc(
             bool(result.issuer_trusted),
             bool(result.device_authentication_valid),
         )
-        is_valid = bool(
+        authenticated_evidence = _authenticated_mdoc_evidence(result)
+        issuer_authentication_valid = bool(
             result.issuer_signature_valid
             and result.issuer_trusted
             and result.device_authentication_valid
         )
+        is_valid = bool(issuer_authentication_valid and authenticated_evidence)
         error = result.error
+        if issuer_authentication_valid and authenticated_evidence is None and not error:
+            error = "Authenticated mdoc evidence is incomplete"
         logger.info(
             "mDoc verification outcome device_auth_error_kind=%s",
             _classify_mdoc_verification_error(error),
@@ -1916,21 +1988,21 @@ def _verify_mdoc(
         return {
             "verified": is_valid,
             "claims": claims,
-            "issuer_did": "unknown",
+            "issuer_did": (
+                authenticated_evidence["issuer_id"]
+                if authenticated_evidence is not None
+                else "unknown"
+            ),
             "format": "mdoc",
             "error": error,
             "document_types": list(result.document_types),
             "issuer_signature_valid": bool(result.issuer_signature_valid),
             "issuer_trusted": bool(result.issuer_trusted),
             "device_authentication_valid": bool(result.device_authentication_valid),
+            "revocation_checked": False,
+            "not_revoked": None,
             "verification_evidence": {
-                # The current binding proves device authentication but does not
-                # expose MSO signing-algorithm or validity-window evidence.
-                "algorithm": None,
-                "issued_at": None,
-                "expires_at": None,
-                "validity_checked": False,
-                "is_expired": None,
+                **(authenticated_evidence or {}),
                 "holder_binding_verified": bool(
                     is_valid and result.device_authentication_valid
                 ),
@@ -2281,6 +2353,96 @@ def _mdoc_trust_certificates_pem(
             ):
                 target.append(candidate)
     return roots, pinned_issuers
+
+
+def _certificate_pem_sha256(certificate_pem: object) -> str | None:
+    """Return the DER certificate fingerprint without accepting non-certificate PEM."""
+    if not isinstance(certificate_pem, str):
+        return None
+    try:
+        certificate_der = ssl.PEM_cert_to_DER_cert(certificate_pem)
+    except ValueError:
+        return None
+    return hashlib.sha256(certificate_der).hexdigest()
+
+
+def _mdoc_direct_pin_lifecycle_evidence(
+    trust_profile_data: dict[str, Any] | None,
+    verification_evidence: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, str] | None:
+    """Confirm current signer status from one exact governed direct-pin relationship.
+
+    ISO mdoc verification authenticates a document signer certificate rather than
+    a DID issuer. A currently active direct pin can serve as the local certificate
+    status authority only when the same certificate has exactly one current,
+    trusted issuer-registry relationship. Root trust alone is deliberately
+    insufficient because it does not express current signer lifecycle state.
+    """
+    if (
+        not trust_profile_data
+        or str(trust_profile_data.get("status") or "").lower() != "active"
+    ):
+        return None
+
+    certificate_sha256 = verification_evidence.get("issuer_certificate_sha256")
+    issuer_id = verification_evidence.get("issuer_id")
+    if (
+        not isinstance(certificate_sha256, str)
+        or len(certificate_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in certificate_sha256)
+        or issuer_id != f"x509-sha256:{certificate_sha256}"
+    ):
+        return None
+
+    matching_sources = 0
+    for source in trust_profile_data.get("trust_sources") or []:
+        if (
+            not isinstance(source, dict)
+            or source.get("enabled") is False
+            or str(source.get("source_type") or "").upper() != "PINNED_ISSUER"
+        ):
+            continue
+        candidates = [source.get("certificate_pem")]
+        pinned = source.get("pinned_certificates")
+        if isinstance(pinned, list):
+            candidates.extend(pinned)
+        if certificate_sha256 in {
+            fingerprint
+            for candidate in candidates
+            if (fingerprint := _certificate_pem_sha256(candidate)) is not None
+        }:
+            matching_sources += 1
+    if matching_sources != 1:
+        return None
+
+    relationships = trust_profile_data.get("issuer_relationships")
+    if not isinstance(relationships, list) or not relationships:
+        return None
+    relationship_valid, _error = _evaluate_normalized_issuer_relationship(
+        issuer_did=issuer_id,
+        relationships=relationships,
+        constraints=None,
+        now=now,
+    )
+    if not relationship_valid:
+        return None
+
+    checked_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    evidence = {
+        "method": "trust-profile-direct-pin-lifecycle",
+        "issuer_id": issuer_id,
+        "issuer_certificate_sha256": certificate_sha256,
+        "checked_at": checked_at.isoformat().replace("+00:00", "Z"),
+    }
+    profile_id = trust_profile_data.get("id")
+    if isinstance(profile_id, str) and profile_id:
+        evidence["trust_profile_id"] = profile_id
+    profile_updated_at = trust_profile_data.get("updated_at")
+    if isinstance(profile_updated_at, str) and profile_updated_at:
+        evidence["trust_profile_updated_at"] = profile_updated_at
+    return evidence
 
 
 def _trust_source_issuer_candidates(source: dict[str, Any]) -> set[str]:
@@ -3946,6 +4108,24 @@ async def evaluate_presentation(
             evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
             nonce=request.nonce,
         )
+
+    if revocation_checked is not True and credential_format == "mdoc":
+        mdoc_status_evidence = _mdoc_direct_pin_lifecycle_evidence(
+            trust_profile_data,
+            verification_evidence,
+        )
+        if mdoc_status_evidence is not None:
+            # Preserve the Rust binding's truthful statement that it performed
+            # no online revocation check. This aggregate status is supplied by
+            # the separately governed, freshly loaded Trust Profile lifecycle.
+            verification_result["revocation_checked"] = True
+            verification_result["not_revoked"] = True
+            verification_result["revocation_status"] = "good"
+            verification_result["status_evidence"] = mdoc_status_evidence
+            verification_evidence["status_evidence"] = mdoc_status_evidence
+            revocation_checked, not_revoked = _derive_revocation_state(
+                verification_result
+            )
 
     if revocation_checked is not True:
         (

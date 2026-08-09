@@ -484,6 +484,23 @@ def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
             issuer_trusted=True,
             device_authentication_valid=True,
             document_types=["org.iso.18013.5.1.mDL"],
+            document_evidence=[
+                SimpleNamespace(
+                    document_type="org.iso.18013.5.1.mDL",
+                    signature_algorithm="ES256",
+                    digest_algorithm="SHA-256",
+                    signed_at="2026-08-09T06:00:00Z",
+                    valid_from="2026-08-09T06:00:00Z",
+                    valid_until="2027-08-09T06:00:00Z",
+                    issuer_certificate_sha256="a" * 64,
+                    validity_checked=True,
+                    valid_at_verification_time=True,
+                    revocation_checked=False,
+                    not_revoked=None,
+                )
+            ],
+            revocation_checked=False,
+            not_revoked=None,
             error=None,
         )
 
@@ -513,6 +530,25 @@ def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
 
     assert result["verified"] is True
     assert result["claims"] == {"given_name": "Ada"}
+    assert result["issuer_did"] == f"x509-sha256:{'a' * 64}"
+    assert result["revocation_checked"] is False
+    assert result["not_revoked"] is None
+    assert result["verification_evidence"] == {
+        "issuer_id": f"x509-sha256:{'a' * 64}",
+        "issuer_certificate_sha256": "a" * 64,
+        "document_type": "org.iso.18013.5.1.mDL",
+        "algorithm": "ES256",
+        "digest_algorithm": "SHA-256",
+        "issued_at": "2026-08-09T06:00:00Z",
+        "valid_from": "2026-08-09T06:00:00Z",
+        "expires_at": "2027-08-09T06:00:00Z",
+        "validity_checked": True,
+        "is_expired": False,
+        "revocation_checked": False,
+        "not_revoked": None,
+        "holder_binding_verified": True,
+        "credential_count": 1,
+    }
     assert calls == [
         (
             mdoc_bytes,
@@ -574,6 +610,52 @@ def test_mdoc_verification_logs_only_stable_error_category(
     assert "nonce-secret" not in caplog.text
 
 
+def test_mdoc_verification_rejects_legacy_or_incomplete_binding_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extracted: list[bytes] = []
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_mdoc_presentation=lambda *_args: SimpleNamespace(
+                issuer_signature_valid=True,
+                issuer_trusted=True,
+                device_authentication_valid=True,
+                document_types=["org.iso.18013.5.1.mDL"],
+                error=None,
+            ),
+            verify_mdoc_cbor=lambda value: extracted.append(bytes(value)),
+        ),
+    )
+    mdoc_bytes = b"\xa1aa\x01"
+    transcript = b"\x83\xf6\xf6\x82qOpenID4VPHandoverX"
+
+    result = pp._verify_mdoc(
+        base64.urlsafe_b64encode(mdoc_bytes).rstrip(b"=").decode(),
+        "nonce-1",
+        "did:web:verifier.example",
+        {
+            "mdoc_session_transcript_b64url": base64.urlsafe_b64encode(transcript)
+            .rstrip(b"=")
+            .decode(),
+            "oid4vp_client_id": "did:web:verifier.example",
+        },
+        ["-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----"],
+        [],
+    )
+
+    assert result["verified"] is False
+    assert result["claims"] == {}
+    assert result["issuer_did"] == "unknown"
+    assert result["error"] == "Authenticated mdoc evidence is incomplete"
+    assert result["verification_evidence"] == {
+        "holder_binding_verified": False,
+        "credential_count": 1,
+    }
+    assert extracted == []
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
@@ -584,6 +666,11 @@ def test_mdoc_verification_logs_only_stable_error_category(
             "algorithm in protected headers did not match",
             "device-signature-algorithm-mismatch",
         ),
+        (
+            "issuer-signed value digest mismatch for family_name",
+            "issuer-disclosure-digest-mismatch",
+        ),
+        ("MSO is expired", "mso-expired"),
         ("an unfamiliar internal failure", "unclassified"),
     ],
 )
@@ -623,6 +710,91 @@ def test_mdoc_trust_material_preserves_root_and_direct_pin_semantics() -> None:
 
     assert roots == [root]
     assert pinned_issuers == [pinned]
+
+
+def test_mdoc_direct_pin_lifecycle_requires_one_current_governed_relationship() -> None:
+    certificate_pem = (
+        "-----BEGIN CERTIFICATE-----\n"
+        "Y2VydGlmaWNhdGU=\n"
+        "-----END CERTIFICATE-----\n"
+    )
+    certificate_sha256 = hashlib.sha256(b"certificate").hexdigest()
+    issuer_id = f"x509-sha256:{certificate_sha256}"
+    checked_at = datetime(2026, 8, 9, 12, 0, tzinfo=timezone.utc)
+    relationship = _normalized_issuer_relationship(
+        issuer_id=issuer_id,
+        valid_from="2026-08-08T00:00:00Z",
+        valid_until="2026-08-10T00:00:00Z",
+    )
+    profile = {
+        "id": "60000000-0000-0000-0000-000000000001",
+        "status": "active",
+        "updated_at": "2026-08-09T11:59:00Z",
+        "trust_sources": [
+            {
+                "source_type": "PINNED_ISSUER",
+                "certificate_pem": certificate_pem,
+            }
+        ],
+        "issuer_relationships": [relationship],
+    }
+    verification_evidence = {
+        "issuer_id": issuer_id,
+        "issuer_certificate_sha256": certificate_sha256,
+    }
+
+    assert pp._mdoc_direct_pin_lifecycle_evidence(
+        profile,
+        verification_evidence,
+        now=checked_at,
+    ) == {
+        "method": "trust-profile-direct-pin-lifecycle",
+        "issuer_id": issuer_id,
+        "issuer_certificate_sha256": certificate_sha256,
+        "checked_at": "2026-08-09T12:00:00Z",
+        "trust_profile_id": "60000000-0000-0000-0000-000000000001",
+        "trust_profile_updated_at": "2026-08-09T11:59:00Z",
+    }
+
+    profile["issuer_relationships"] = []
+    assert (
+        pp._mdoc_direct_pin_lifecycle_evidence(
+            profile,
+            verification_evidence,
+            now=checked_at,
+        )
+        is None
+    )
+    profile["issuer_relationships"] = [relationship]
+    profile["trust_sources"][0]["source_type"] = "ROOT_CA"
+    assert (
+        pp._mdoc_direct_pin_lifecycle_evidence(
+            profile,
+            verification_evidence,
+            now=checked_at,
+        )
+        is None
+    )
+    profile["trust_sources"][0]["source_type"] = "PINNED_ISSUER"
+    profile["trust_sources"] = [*profile["trust_sources"], *profile["trust_sources"]]
+    assert (
+        pp._mdoc_direct_pin_lifecycle_evidence(
+            profile,
+            verification_evidence,
+            now=checked_at,
+        )
+        is None
+    )
+    profile["trust_sources"] = [profile["trust_sources"][0]]
+    relationship["revoked_at"] = "2026-08-09T11:00:00Z"
+    assert (
+        pp._mdoc_direct_pin_lifecycle_evidence(
+            profile,
+            verification_evidence,
+            now=checked_at,
+        )
+        is None
+    )
 
 
 def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
@@ -2955,6 +3127,95 @@ def test_cedar_receives_only_verified_policy_evidence(
     assert context["is_expired"] is False
     assert context["holder_binding_present"] is False
     assert context["algorithm"] == "EdDSA"
+
+
+def test_mdoc_direct_pin_lifecycle_supplies_separate_status_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.credential_requirements[0].credential_payload_format = "MDOC"
+    asyncio.run(repo.save(policy))
+
+    certificate_pem = (
+        "-----BEGIN CERTIFICATE-----\n"
+        "Y2VydGlmaWNhdGU=\n"
+        "-----END CERTIFICATE-----\n"
+    )
+    certificate_sha256 = hashlib.sha256(b"certificate").hexdigest()
+    issuer_id = f"x509-sha256:{certificate_sha256}"
+    _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=[],
+        trust_sources=[
+            {
+                "source_type": "PINNED_ISSUER",
+                "certificate_pem": certificate_pem,
+            }
+        ],
+        issuer_relationships=[
+            _normalized_issuer_relationship(issuer_id=issuer_id, trust_level=87)
+        ],
+    )
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "mdoc")
+    issued_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+    raw_result = {
+        "verified": True,
+        "claims": {"email": "member@example.com"},
+        "issuer_did": issuer_id,
+        "format": "mdoc",
+        "error": None,
+        # The cryptographic binding truthfully performs no status lookup.
+        "revocation_checked": False,
+        "not_revoked": None,
+        "verification_evidence": {
+            "issuer_id": issuer_id,
+            "issuer_certificate_sha256": certificate_sha256,
+            "algorithm": "ES256",
+            "issued_at": issued_at.isoformat(),
+            "expires_at": (issued_at + timedelta(days=1)).isoformat(),
+            "validity_checked": True,
+            "is_expired": False,
+            "revocation_checked": False,
+            "not_revoked": None,
+            "holder_binding_verified": True,
+            "credential_count": 1,
+        },
+    }
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: raw_result,
+    )
+    captured: dict[str, object] = {}
+
+    def is_authorized(**kwargs: object) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(allowed=True, reasons=[], errors=[])
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+            cedar_engine=SimpleNamespace(is_authorized=is_authorized),
+        )
+    )
+
+    assert response.decision == "allow"
+    assert raw_result["revocation_checked"] is True
+    assert raw_result["not_revoked"] is True
+    assert raw_result["status_evidence"]["method"] == (
+        "trust-profile-direct-pin-lifecycle"
+    )
+    assert raw_result["verification_evidence"]["revocation_checked"] is False
+    assert raw_result["verification_evidence"]["not_revoked"] is None
+    context = captured["context"]
+    assert isinstance(context, dict)
+    assert context["issuer_id"] == issuer_id
+    assert context["issuer_trust_level"] == 87
+    assert context["is_revoked"] is False
+    assert context["algorithm"] == "ES256"
 
 
 def test_cedar_denies_when_numeric_trust_evidence_is_unavailable(
