@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,10 +15,19 @@ from common.events import (
     get_event_publisher,
 )
 from common.grpc_event_bus import GrpcEventStreamPublisher
+from common.application_event_auth import (
+    HEADER_AUDIENCE,
+    HEADER_SIGNATURE,
+    authenticate_application_event,
+)
 
 
 @pytest.fixture(autouse=True)
 def event_stream_publish(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    monkeypatch.setenv(
+        "FLOW_APPLICATION_EVENT_HMAC_KEY",
+        "test-application-event-key-that-is-distinct-and-long",
+    )
     publish = AsyncMock(return_value=0)
     monkeypatch.setattr(GrpcEventStreamPublisher, "publish_fields", publish)
     return publish
@@ -27,7 +37,7 @@ def _make_event(event_type=EventType.APPLICATION_APPROVED, **overrides):
     defaults = dict(
         event_type=event_type,
         aggregate_id="app-1",
-        aggregate_type="Application",
+        aggregate_type="application",
         organization_id="org-1",
         data={"applicant_id": "a-1", "credential_type": "MemberCredential"},
         timestamp=datetime(2026, 3, 14, tzinfo=timezone.utc),
@@ -40,6 +50,54 @@ def _make_event(event_type=EventType.APPLICATION_APPROVED, **overrides):
 
 
 class TestApplicationApprovedGrpc:
+    async def test_grpc_payload_preserves_nested_claims_and_is_signed(self):
+        from marty_proto.v1 import flow_service_pb2_grpc
+
+        publisher = EventPublisher()
+        publisher._flow_grpc_channel = MagicMock()
+        event = _make_event(
+            data={
+                "applicant_id": "a-1",
+                "claims": {"given_name": "Ada", "roles": ["member"]},
+            }
+        )
+        stub = MagicMock()
+        stub.ApplicationApproved = AsyncMock(
+            return_value=MagicMock(success=True, flows_triggered=1)
+        )
+
+        with patch.object(flow_service_pb2_grpc, "FlowServiceStub", return_value=stub):
+            await publisher._publish_to_flow_grpc(event)
+
+        call = stub.ApplicationApproved.await_args
+        request = call.args[0]
+        metadata = dict(call.kwargs["metadata"])
+        assert json.loads(request.data["claims"]) == {
+            "given_name": "Ada",
+            "roles": ["member"],
+        }
+        assert metadata[HEADER_AUDIENCE] == "marty-flow-application-approved"
+        assert len(metadata[HEADER_SIGNATURE]) == 64
+
+        class ReplayStore:
+            async def set(self, *_args, **_kwargs):
+                return True
+
+        reconstructed = {
+            "event_type": request.event_type,
+            "aggregate_id": request.aggregate_id,
+            "aggregate_type": request.aggregate_type,
+            "organization_id": request.organization_id,
+            "data": {key: json.loads(value) for key, value in request.data.items()},
+            "timestamp": request.timestamp,
+        }
+        evidence = await authenticate_application_event(
+            reconstructed,
+            metadata,
+            replay_store=ReplayStore(),
+        )
+        assert len(evidence.payload_sha256) == 64
+
     async def test_all_events_are_published_to_central_stream(
         self, event_stream_publish: AsyncMock
     ):
@@ -51,7 +109,7 @@ class TestApplicationApprovedGrpc:
         event_stream_publish.assert_awaited_once_with(
             event_type="credential.issued",
             aggregate_id="app-1",
-            aggregate_type="Application",
+            aggregate_type="application",
             organization_id="org-1",
             data={
                 "applicant_id": "a-1",
