@@ -67,6 +67,14 @@ def test_shared_service_image_installs_released_credentials_bindings() -> None:
     assert "COPY marty-credentials" not in dockerfile
 
 
+def test_shared_service_image_provisions_private_writable_runtime_state() -> None:
+    dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
+
+    provision = "install -d -o appuser -g appuser -m 0700 /app/data"
+    assert provision in dockerfile
+    assert dockerfile.index(provision) < dockerfile.index("USER appuser")
+
+
 def test_migration_image_preserves_released_wheel_filename() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile.migrations").read_text(encoding="utf-8")
 

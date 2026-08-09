@@ -156,7 +156,6 @@ ROUTE_CONFIG = {
         "requires_auth": True,
     },
     "/v1/issuance/didcomm/deliver": {"service": "issuance", "requires_auth": True},
-    "/v1/issuance/didcomm/receive": {"service": "issuance", "requires_auth": False},
     "/v1/issuance": {"service": "issuance", "requires_auth": True},
     # Authenticated VC-API shape adapter. Its operations still execute through
     # normal issuance and presentation-policy services.

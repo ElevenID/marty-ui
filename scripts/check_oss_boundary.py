@@ -25,6 +25,7 @@ ROOT_FILES = (
     ".env.selfhost.production.example",
     "docker-compose.base.yml",
     "docker-compose.profile.ghcr.yml",
+    "docker-compose.profile.local-build.yml",
     "docker-compose.selfhost.bundle.override.yml",
     "docker-compose.selfhost.prod.yml",
     "ui/package.json",

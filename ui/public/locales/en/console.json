@@ -1235,19 +1235,19 @@
           "helper": "Enter a DID (Decentralized Identifier) for a trusted issuer"
         },
         "addButton": "Add",
-        "importButton": "Import from Registry",
+        "importButton": "Connect Registry Feed",
         "trustedIssuersTitle": "Trusted Issuers ({{count}})",
-        "registryImportsTitle": "Registry Imports ({{count}})",
+        "registryImportsTitle": "Registry Feeds ({{count}})",
         "emptyState": "No trusted issuers configured yet. Add DIDs above or skip this step.",
-        "noRegistriesState": "No registries imported yet. Click 'Import from Registry' to add one.",
+        "noRegistriesState": "No compatible registry feeds configured yet.",
         "registryAlert": {
-          "title": "Automatically import issuers from trusted registries",
-          "description": "Import issuers from known registries like ICAO PKD, EU Trust Lists, or AAMVA. These will be automatically synchronized based on the selected registry schedule."
+          "title": "Connect a Marty Trust Registry Sync v1 feed",
+          "description": "The organization-scoped production API validates and imports this feed. Native ICAO PKD, EU LoTL, and AAMVA website formats are not represented as compatible feeds."
         },
         "registryDialog": {
-          "title": "Import from Registry",
-          "label": "Select a Registry",
-          "info": "Select one of the available registries to import trusted issuers. Credentials will be auto-synced based on the registry's sync interval."
+          "title": "Connect Registry Feed",
+          "label": "Registry Sync Endpoint",
+          "info": "Use an HTTPS endpoint implementing the published Marty Trust Registry Sync v1 contract."
         }
       },
       "validationRulesStep": {

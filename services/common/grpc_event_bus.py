@@ -9,7 +9,9 @@ streaming subscriber receives matching events through an asyncio queue.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -60,17 +62,19 @@ class GrpcEventBus:
         organization_id: str,
         data: dict[str, str],
         correlation_id: str = "",
+        event_id: str = "",
+        timestamp: str = "",
     ) -> int:
         """Publish an event to all matching subscribers.  Returns the
         number of subscribers that received the event."""
         event = {
-            "event_id": str(uuid.uuid4()),
+            "event_id": event_id or str(uuid.uuid4()),
             "event_type": event_type,
             "aggregate_id": aggregate_id,
             "aggregate_type": aggregate_type,
             "organization_id": organization_id,
             "data": data,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": timestamp or datetime.now(timezone.utc).isoformat(),
             "correlation_id": correlation_id,
         }
         notified = 0
@@ -155,23 +159,128 @@ def get_event_bus() -> GrpcEventBus:
     return _event_bus
 
 
-class GrpcEventBusPublisher:
-    """Publishes domain events to the gRPC event bus.
+def _stringify_event_value(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if value is None or isinstance(value, (bool, int, float, list, dict)):
+        return json.dumps(value, separators=(",", ":"), sort_keys=True)
+    return str(value)
 
-    Shared adapter used by services that don't need a custom port interface.
+
+class GrpcEventStreamPublisher:
+    """Publish events to the central event-stream service over gRPC.
+
+    Producers run in separate containers from the event-stream service. They
+    must therefore call its Publish RPC; writing to this module's in-process
+    queue would only notify subscribers in the producer's own process.
     """
 
-    async def publish(self, event) -> None:
-        try:
-            event_dict = event.to_dict() if hasattr(event, "to_dict") else {}
-            event_type = event_dict.get("event_type", type(event).__name__)
-            await get_event_bus().publish(
-                event_type=event_type,
-                aggregate_id=event_dict.get("aggregate_id", ""),
-                aggregate_type=event_dict.get("aggregate_type", ""),
-                organization_id=event_dict.get("organization_id", ""),
-                data={k: str(v) for k, v in event_dict.items()},
+    def __init__(self, target: str | None = None) -> None:
+        self._target = target
+        self._channel = None
+
+    def _get_channel(self):
+        if self._channel is None:
+            from common.grpc_factory import create_grpc_channel
+
+            target = self._target or os.environ.get(
+                "ES_GRPC_TARGET", "event-stream:9015"
             )
-            logger.debug("Published event %s via gRPC event bus", event_type)
+            self._channel = create_grpc_channel(target)
+        return self._channel
+
+    async def publish_fields(
+        self,
+        *,
+        event_type: str,
+        aggregate_id: str,
+        aggregate_type: str,
+        organization_id: str,
+        data: dict[str, object],
+        event_id: str = "",
+        timestamp: str = "",
+        correlation_id: str = "",
+    ) -> int:
+        """Publish normalized fields and return the subscriber count."""
+        if not organization_id:
+            logger.warning(
+                "Refusing to publish unscoped event %s to the event stream",
+                event_type,
+            )
+            return 0
+
+        try:
+            from marty_proto.v1 import (
+                event_stream_service_pb2 as es_pb2,
+                event_stream_service_pb2_grpc,
+            )
+
+            stub = event_stream_service_pb2_grpc.EventStreamServiceStub(
+                self._get_channel()
+            )
+            response = await stub.Publish(
+                es_pb2.PublishEventRequest(
+                    event=es_pb2.DomainEvent(
+                        event_id=event_id or str(uuid.uuid4()),
+                        event_type=event_type,
+                        aggregate_id=aggregate_id,
+                        aggregate_type=aggregate_type,
+                        organization_id=organization_id,
+                        data={
+                            key: _stringify_event_value(value)
+                            for key, value in data.items()
+                        },
+                        timestamp=timestamp
+                        or datetime.now(timezone.utc).isoformat(),
+                        correlation_id=correlation_id,
+                    )
+                ),
+                timeout=float(os.environ.get("ES_GRPC_TIMEOUT_SECONDS", "5")),
+            )
+            if not response.success:
+                logger.warning("Event-stream service rejected event %s", event_type)
+                return 0
+            return int(response.subscribers_notified)
         except Exception as exc:
-            logger.warning("Failed to publish event via gRPC event bus: %s", exc)
+            # Domain writes remain available during a transient notification
+            # outage; event delivery is observable through this warning.
+            logger.warning("Failed to publish event via event-stream gRPC: %s", exc)
+            return 0
+
+    async def publish(self, event) -> None:
+        """Normalize a marty-common domain event and publish it remotely."""
+        event_dict = event.to_dict() if hasattr(event, "to_dict") else {}
+        raw_data = event_dict.get("data")
+        data = dict(raw_data) if isinstance(raw_data, dict) else {}
+        organization_id = str(
+            event_dict.get("organization_id")
+            or data.get("organization_id")
+            or ""
+        )
+        aggregate_id = str(
+            event_dict.get("aggregate_id")
+            or data.get("aggregate_id")
+            or data.get("application_id")
+            or data.get("applicant_id")
+            or data.get("member_id")
+            or data.get("user_id")
+            or organization_id
+        )
+        aggregate_type = str(
+            event_dict.get("aggregate_type")
+            or data.get("aggregate_type")
+            or getattr(event, "source_service", "domain")
+            or "domain"
+        )
+        await self.publish_fields(
+            event_type=str(
+                event_dict.get("event_type") or type(event).__name__
+            ),
+            aggregate_id=aggregate_id,
+            aggregate_type=aggregate_type,
+            organization_id=organization_id,
+            data=data,
+            event_id=str(event_dict.get("event_id") or ""),
+            timestamp=str(event_dict.get("timestamp") or ""),
+            correlation_id=str(event_dict.get("correlation_id") or ""),
+        )

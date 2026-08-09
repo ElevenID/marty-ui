@@ -22,7 +22,7 @@ EvidenceError = PROMOTION.EvidenceError
 promote = PROMOTION.promote
 validate_wallet_evidence = PROMOTION.validate_wallet_evidence
 UI_SHA = "a" * 40
-RELEASE_VERSION = "mip-0.3.1-beta-test"
+RELEASE_VERSION = "mip-0.4.1-beta-test"
 BETA_RUN_ID = "123456"
 CD_RUN_ID = "123455"
 PROMOTION_RUN_ID = "123457"
@@ -41,7 +41,7 @@ def _wallet_evidence(requirements: dict) -> dict:
     return {
         "schema_version": requirements["schema_version"],
         "release_version": RELEASE_VERSION,
-        "mip_version": "0.3.1",
+        "mip_version": "0.4.1",
         "beta_origin": BETA_ORIGIN,
         "marty_ui_sha": UI_SHA,
         "beta_lifecycle_run_id": BETA_RUN_ID,
@@ -108,7 +108,7 @@ def _attachment_verification(evidence: dict, evidence_sha: str) -> dict:
 def _build_manifest() -> dict:
     return {
         "release_version": RELEASE_VERSION,
-        "mip_version": "0.3.1",
+        "mip_version": "0.4.1",
         "repositories": {
             "marty_ui": UI_SHA,
             "marty_protocol": "1" * 40,
@@ -151,7 +151,7 @@ def _beta_evidence(root: Path) -> None:
         "marty_ui_sha": UI_SHA,
         "marty_core_sha": "3" * 40,
         "beta_origin": BETA_ORIGIN,
-        "mip_version": "0.3.1",
+        "mip_version": "0.4.1",
     })
     _write_json(root / "services-release.json", {
         "component": "services",
@@ -447,7 +447,7 @@ def test_wallet_evidence_fails_closed(mutation, message: str) -> None:
             beta_run_id=BETA_RUN_ID,
             marty_ui_sha=UI_SHA,
             beta_origin=BETA_ORIGIN,
-            mip_version="0.3.1",
+            mip_version="0.4.1",
         )
 
 

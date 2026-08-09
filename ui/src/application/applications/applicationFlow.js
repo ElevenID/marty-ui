@@ -179,11 +179,28 @@ function mergeFieldsByName(...fieldGroups) {
 
 export function normalizeApplicationTemplateToFormConfig(applicationTemplate, credentialConfig = null) {
   const baseConfig = normalizeCredentialConfigInput(credentialConfig) || {};
+  const evidenceRequirements = parseListField(applicationTemplate?.evidence_requirements);
   const templateFormFields = parseListField(applicationTemplate?.form_fields)
     .map(normalizeCanonicalApplicationField)
     .filter(Boolean);
-  const requiredTemplateFields = templateFormFields.filter((field) => field.required);
-  const optionalTemplateFields = templateFormFields.filter((field) => !field.required);
+  const evidenceUploadFields = evidenceRequirements
+    .filter((requirement) => ['DOCUMENT_SCAN', 'BIOMETRIC', 'SELFIE', 'THIRD_PARTY_VERIFICATION'].includes(
+      String(requirement?.evidence_type || '').toUpperCase()
+    ))
+    .filter((requirement) => requirement?.evidence_id)
+    .map((requirement) => ({
+      name: requirement.evidence_id,
+      label: requirement.description || requirement.evidence_id,
+      type: 'file',
+      required: Boolean(requirement.required),
+      accept: Array.isArray(requirement.accepted_formats)
+        ? requirement.accepted_formats.join(',')
+        : undefined,
+      evidenceRequirementId: requirement.evidence_id,
+    }));
+  const allTemplateFields = mergeFieldsByName(templateFormFields, evidenceUploadFields);
+  const requiredTemplateFields = allTemplateFields.filter((field) => field.required);
+  const optionalTemplateFields = allTemplateFields.filter((field) => !field.required);
   const baseRequiredFields = normalizeFieldList(baseConfig.required_fields, true);
   const baseOptionalFields = normalizeFieldList(baseConfig.optional_fields, false);
   const baseCustomFields = normalizeFieldList(baseConfig.custom_fields, false);
@@ -191,7 +208,6 @@ export function normalizeApplicationTemplateToFormConfig(applicationTemplate, cr
   const requiredFieldNames = new Set(requiredFields.map((field) => field.name));
   const optionalFields = mergeFieldsByName(baseOptionalFields, optionalTemplateFields)
     .filter((field) => !requiredFieldNames.has(field.name));
-  const evidenceRequirements = parseListField(applicationTemplate?.evidence_requirements);
   const uiConfig = applicationTemplate?.ui_config && typeof applicationTemplate.ui_config === 'object'
     ? applicationTemplate.ui_config
     : {};
@@ -292,10 +308,22 @@ export function buildApplicantProfileData({ user, formData }) {
 }
 
 export function buildStandardApplicationPayload({ organizationId, credentialConfig, formData, canvasLtiContext = null }) {
+  const canonicalFields = credentialConfig?.application_template?.form_fields;
+  const allowedFields = Array.isArray(canonicalFields)
+    ? new Set(canonicalFields.map((field) => field?.field_id).filter(Boolean))
+    : null;
+  const publicFormData = Object.fromEntries(
+    Object.entries(formData || {}).filter(([name, value]) => (
+      name !== 'acceptTerms'
+      && (allowedFields === null || allowedFields.has(name))
+      && !(typeof File !== 'undefined' && value instanceof File)
+      && !(value && typeof value === 'object' && typeof value.name === 'string' && typeof value.arrayBuffer === 'function')
+    ))
+  );
   return {
     organization_id: organizationId,
     application_template_id: credentialConfig?.application_template_id,
-    form_data: { ...formData },
+    form_data: publicFormData,
     integration_context: canvasLtiContext ? { canvas_lti: canvasLtiContext } : {},
   };
 }

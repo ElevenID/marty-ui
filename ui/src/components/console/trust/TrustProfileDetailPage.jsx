@@ -236,24 +236,24 @@ function ProvenanceSection({ trustProfile }) {
 /**
  * Add Trusted Issuer Dialog
  */
-function AddIssuerDialog({ open, profileId, onClose, onAdded }) {
+function AddIssuerDialog({ open, profileId, organizationId, onClose, onAdded }) {
   const { t } = useTranslation('console');
   const [form, setForm] = useState({ name: '', issuer_did: '', description: '' });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
 
-  const handleClose = () => {
+  const handleClose = useCallback(() => {
     setForm({ name: '', issuer_did: '', description: '' });
     setError(null);
     onClose();
-  };
+  }, [onClose]);
 
   const handleSubmit = useCallback(async () => {
     if (!form.name.trim() || !form.issuer_did.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
-      const added = await addTrustProfileIssuer(profileId, {
+      const added = await addTrustProfileIssuer(profileId, organizationId, {
         name: form.name.trim(),
         issuer_did: form.issuer_did.trim(),
         description: form.description.trim() || null,
@@ -265,7 +265,7 @@ function AddIssuerDialog({ open, profileId, onClose, onAdded }) {
     } finally {
       setSubmitting(false);
     }
-  }, [form, profileId, onAdded, t]);
+  }, [form, profileId, organizationId, onAdded, handleClose, t]);
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
@@ -333,14 +333,16 @@ function AddIssuerDialog({ open, profileId, onClose, onAdded }) {
 /**
  * Trusted Issuers Section
  */
-function TrustedIssuersSection({ profileId }) {
+function TrustedIssuersSection({ profileId, organizationId }) {
   const { t } = useTranslation('console');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [extraIssuers, setExtraIssuers] = useState([]);
 
   const { data: loadedIssuers = [], loading, error } = useAsyncData(
-    () => (profileId ? listTrustProfileIssuers(profileId) : Promise.resolve([])),
-    [profileId]
+    () => (profileId && organizationId
+      ? listTrustProfileIssuers(profileId, organizationId)
+      : Promise.resolve([])),
+    [profileId, organizationId]
   );
 
   const safeIssuers = [...(Array.isArray(loadedIssuers) ? loadedIssuers : []), ...extraIssuers];
@@ -414,6 +416,7 @@ function TrustedIssuersSection({ profileId }) {
       <AddIssuerDialog
         open={dialogOpen}
         profileId={profileId}
+        organizationId={organizationId}
         onClose={() => setDialogOpen(false)}
         onAdded={handleIssuerAdded}
       />
@@ -542,7 +545,10 @@ export function TrustProfileDetailPage() {
       <ProvenanceSection trustProfile={profile} />
 
       {/* Trusted Issuers */}
-      <TrustedIssuersSection profileId={id} />
+      <TrustedIssuersSection
+        profileId={id}
+        organizationId={profile.organization_id}
+      />
 
       {/* Wallet Compatibility */}
       <WalletCompatibilityPanel trustProfileId={id} />

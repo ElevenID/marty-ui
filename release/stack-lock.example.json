@@ -50,7 +50,7 @@
         "type": "npm",
         "uri": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.0/elevenid-marty-api-core-0.2.0.tgz",
         "digest": "sha256:3456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef012",
-        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.0/api-core-sbom.cdx.json",
+        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.0/marty-api-core-sbom.cdx.json",
         "provenance": "https://github.com/ElevenID/marty-cli/attestations/1"
       }]
     },

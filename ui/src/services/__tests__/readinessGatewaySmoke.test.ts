@@ -10,12 +10,15 @@ import {
   updateOrganizationEnvironment,
 } from '../dashboardApi'
 import {
+  createIssuerIdentity,
+  deleteIssuerIdentity,
   getCertificateExpiryAlerts,
   getKeyManagementConfig,
-  listIssuerProfiles,
+  listPublicIssuerIdentities,
   listSigningKeys,
   rotateSigningKey,
   setServiceCertificate,
+  storeIssuerIdentityCertificate,
   updateKeyManagementConfig,
 } from '../signingKeysApi'
 
@@ -141,7 +144,7 @@ describe('readiness gateway smoke', () => {
     })
   })
 
-  it('exercises signing-key, key-management, and issuer-profile gateway endpoints', async () => {
+  it('exercises signing-key, key-management, and public issuer-identity gateway endpoints', async () => {
     let queryParams: URLSearchParams | undefined
     let rotatedKeyId: string | undefined
     let rotationBody: unknown
@@ -162,11 +165,11 @@ describe('readiness gateway smoke', () => {
         default_service_id: 'managed-openbao-transit',
         services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
       })),
-      http.get('*/v1/signing-keys/issuer-profiles', () => HttpResponse.json({
-        profiles: [{
-          id: 'issuer_1',
+      http.get('*/v1/signing-keys/issuer-identities', () => HttpResponse.json({
+        identities: [{
           issuer_did: 'did:web:issuer.example.com',
-          signing_service_id: 'managed-openbao-transit',
+          key_purpose: 'vc_jwt_issuer',
+          algorithm: 'ES256',
           status: 'active',
         }],
       })),
@@ -199,7 +202,7 @@ describe('readiness gateway smoke', () => {
 
     const listedKeys = await listSigningKeys({ organization_id: 'org_live', status: 'active', limit: 25, offset: 50 })
     const keyManagementConfig = await getKeyManagementConfig({ organization_id: 'org_live' })
-    const issuerProfiles = await listIssuerProfiles({ organization_id: 'org_live' })
+    const issuerIdentities = await listPublicIssuerIdentities({ organization_id: 'org_live' })
     const rotatedKey = await rotateSigningKey('key_1', { organization_id: 'org_live', immediate: true })
     const config = await updateKeyManagementConfig({
       organization_id: 'org_live',
@@ -226,11 +229,11 @@ describe('readiness gateway smoke', () => {
       default_service_id: 'managed-openbao-transit',
       services: [{ id: 'managed-openbao-transit', name: 'Managed OpenBao', status: 'configured' }],
     })
-    expect(issuerProfiles).toEqual({
-      profiles: [{
-        id: 'issuer_1',
+    expect(issuerIdentities).toEqual({
+      identities: [{
         issuer_did: 'did:web:issuer.example.com',
-        signing_service_id: 'managed-openbao-transit',
+        key_purpose: 'vc_jwt_issuer',
+        algorithm: 'ES256',
         status: 'active',
       }],
     })
@@ -265,5 +268,78 @@ describe('readiness gateway smoke', () => {
     expect(expiryAlerts).toEqual({
       alerts: [{ service_id: 'managed-openbao-transit', status: 'warning' }],
     })
+  })
+
+  it('keeps issuer identity lifecycle requests provider-neutral', async () => {
+    const requests: Array<{ method: string; body: Record<string, unknown> }> = []
+    server.use(
+      http.post('*/v1/signing-keys/issuer-identities', async ({ request }) => {
+        const body = await request.json() as Record<string, unknown>
+        requests.push({ method: request.method, body })
+        return HttpResponse.json({
+          created: true,
+          identity: {
+            issuer_did: body.issuer_did,
+            key_purpose: body.key_purpose,
+            algorithm: body.algorithm,
+            status: 'active',
+          },
+        })
+      }),
+      http.put('*/v1/signing-keys/issuer-identities/certificate', async ({ request }) => {
+        const body = await request.json() as Record<string, unknown>
+        requests.push({ method: request.method, body })
+        return HttpResponse.json({
+          issuer_did: body.issuer_did,
+          key_purpose: body.key_purpose,
+          algorithm: body.algorithm,
+          status: 'active',
+        })
+      }),
+      http.delete('*/v1/signing-keys/issuer-identities', async ({ request }) => {
+        const body = await request.json() as Record<string, unknown>
+        requests.push({ method: request.method, body })
+        return HttpResponse.json({ deleted: {
+          issuer_did: body.issuer_did,
+          key_purpose: body.key_purpose,
+          algorithm: body.algorithm,
+          status: 'active',
+        } })
+      }),
+    )
+
+    const selector = {
+      organization_id: 'org_live',
+      issuer_did: 'did:web:issuer.example.com:orgs:live',
+      key_purpose: 'vc_jwt_issuer',
+      credential_format: 'SD_JWT_VC',
+      algorithm: 'ES256',
+      issuer_profile_id: 'must-not-cross',
+      signing_service_id: 'must-not-cross',
+      signing_key_reference: 'must-not-cross',
+    }
+    await createIssuerIdentity(selector)
+    await storeIssuerIdentityCertificate({
+      ...selector,
+      cert_pem: 'certificate',
+      cert_chain_pem: 'chain',
+    })
+    await deleteIssuerIdentity(selector)
+
+    expect(requests.map(({ method }) => method)).toEqual(['POST', 'PUT', 'DELETE'])
+    for (const { body } of requests) {
+      expect(body).not.toHaveProperty('issuer_profile_id')
+      expect(body).not.toHaveProperty('signing_service_id')
+      expect(body).not.toHaveProperty('signing_key_reference')
+      expect(body).not.toHaveProperty('kms_provider')
+      expect(body).not.toHaveProperty('key_name')
+      expect(body).toMatchObject({
+        organization_id: 'org_live',
+        issuer_did: 'did:web:issuer.example.com:orgs:live',
+        key_purpose: 'vc_jwt_issuer',
+        credential_format: 'SD_JWT_VC',
+        algorithm: 'ES256',
+      })
+    }
   })
 })

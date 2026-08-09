@@ -1069,7 +1069,7 @@ class CredentialTemplateResponse(BaseModel):
     revocation_profile_id: str | None = None
     claims: list[dict]
     validity_rules: dict
-    issuer_did: str | None = None
+    issuer_did: str = Field(pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
     privacy_posture: dict | None = None
     created_at: str
     updated_at: str
@@ -2148,6 +2148,16 @@ async def add_claim(
 
 
 def _template_to_response(template: CredentialTemplate) -> CredentialTemplateResponse:
+    issuer_did = str(template.issuer_did or "").strip()
+    if re.fullmatch(r"did:[a-z0-9]+:.+", issuer_did) is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Credential Template has no managed issuer_did. Migrate the "
+                "template to an active organization-owned issuer DID before use."
+            ),
+        )
+
     canonical_payload_format = normalize_credential_payload_format(
         template.credential_payload_format,
         template.supported_formats,
@@ -2172,7 +2182,7 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
         application_template_id=template.application_template_id,
         trust_profile_id=template.trust_profile_id,
         revocation_profile_id=template.revocation_profile_id,
-        issuer_did=template.issuer_did,
+        issuer_did=issuer_did,
         claims=[
             {
                 "name": c.name,
@@ -2766,30 +2776,61 @@ def _render_wallet_open_uri(template: str, inner_uri: str, wallet_id: str, platf
 # Wallet Registry Router
 # =============================================================================
 
+async def _require_wallet_admin(
+    organization_id: str,
+    request: Request,
+    user_id: str,
+) -> OrganizationContext:
+    """Require tenant membership plus an explicit wallet-management grant."""
+
+    context = await require_org_membership(organization_id, request, user_id)
+    if (
+        context.is_owner
+        or context.has_org_console_access
+        or context.has_permission("wallet", "write")
+    ):
+        return context
+    raise HTTPException(
+        status_code=403,
+        detail="Wallet management requires organization console access",
+    )
+
+
 @wallet_router.get("", response_model=list[WalletRegistryEntryResponse], response_model_exclude_none=True, summary="List Wallet Registry")
 async def list_wallets(
+    request: Request,
     active_only: bool = Query(True, description="Return only active wallets"),
     organization_id: str | None = Query(None, description="Optional organization scope for override entries"),
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryWalletRegistryRepository | PostgresWalletRegistryRepository = Depends(get_wallet_repo),
 ) -> list[WalletRegistryEntryResponse]:
-    """List all wallets in the global registry."""
+    """List global wallets plus overrides owned by one authorized organization."""
     wallets = await repo.list(active_only=active_only)
     if organization_id is not None:
+        await require_org_membership(organization_id, request, user_id)
         wallets = [wallet for wallet in wallets if wallet.organization_id in {None, organization_id}]
+    else:
+        # An omitted scope means the global catalogue, not every tenant's
+        # private override inventory.
+        wallets = [wallet for wallet in wallets if wallet.organization_id is None]
     return [_wallet_to_response(w) for w in wallets]
 
 
 @wallet_router.get("/{wallet_id}/open-link", response_model=WalletOpenLinkResponse, summary="Build Wallet Open Link")
 async def build_wallet_open_link(
     wallet_id: str,
+    request: Request,
     inner_uri: str = Query(..., description="Standard OID4VP/OID4VCI/HAIP inner URI"),
     platform: str | None = Query(None, description="Optional platform hint such as ios or android"),
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryWalletRegistryRepository | PostgresWalletRegistryRepository = Depends(get_wallet_repo),
 ) -> WalletOpenLinkResponse:
     """Build a wallet-specific outer link while preserving the standard inner URI."""
     wallet = await repo.get(wallet_id)
     if not wallet or not wallet.is_active:
         raise HTTPException(status_code=404, detail="Wallet not found")
+    if wallet.organization_id:
+        await require_org_membership(wallet.organization_id, request, user_id)
     if not wallet.supports_deeplink:
         raise HTTPException(status_code=400, detail="Wallet does not support deep links")
 
@@ -2807,12 +2848,16 @@ async def build_wallet_open_link(
 @wallet_router.get("/{wallet_id}", response_model=WalletRegistryEntryResponse, response_model_exclude_none=True, summary="Get Wallet")
 async def get_wallet(
     wallet_id: str,
+    request: Request,
+    user_id: str = Depends(get_current_user_id),
     repo: InMemoryWalletRegistryRepository | PostgresWalletRegistryRepository = Depends(get_wallet_repo),
 ) -> WalletRegistryEntryResponse:
     """Get a wallet registry entry by ID."""
     wallet = await repo.get(wallet_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
+    if wallet.organization_id:
+        await require_org_membership(wallet.organization_id, request, user_id)
     return _wallet_to_response(wallet)
 
 
@@ -2876,7 +2921,7 @@ async def create_wallet(
     """Create a new wallet registry entry. Requires admin authentication."""
     if not body.organization_id:
         raise HTTPException(status_code=422, detail="organization_id is required for wallet overrides")
-    await require_org_membership(body.organization_id, request, user_id)
+    await _require_wallet_admin(body.organization_id, request, user_id)
     deep_link_pattern = body.deep_link_pattern or body.deep_link_template
     supported_platforms = body.supported_platforms if body.supported_platforms is not None else body.platforms
     entry = WalletRegistryEntry(
@@ -2924,10 +2969,11 @@ async def update_wallet(
     entry = await repo.get(wallet_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Wallet not found")
-    if entry.organization_id:
-        await require_org_membership(entry.organization_id, request, user_id)
-    if body.organization_id is not None:
-        entry.organization_id = body.organization_id
+    if not entry.organization_id:
+        raise HTTPException(status_code=403, detail="System wallet entries are read-only")
+    await _require_wallet_admin(entry.organization_id, request, user_id)
+    if body.organization_id is not None and body.organization_id != entry.organization_id:
+        raise HTTPException(status_code=409, detail="Wallet ownership cannot be transferred")
     if body.credential_format is not None:
         entry.credential_format = body.credential_format.upper() if body.credential_format else None
     if body.issuance_protocol is not None:
@@ -2994,8 +3040,9 @@ async def delete_wallet(
     entry = await repo.get(wallet_id)
     if not entry:
         raise HTTPException(status_code=404, detail="Wallet not found")
-    if entry.organization_id:
-        await require_org_membership(entry.organization_id, request, user_id)
+    if not entry.organization_id:
+        raise HTTPException(status_code=403, detail="System wallet entries are read-only")
+    await _require_wallet_admin(entry.organization_id, request, user_id)
     await repo.delete(wallet_id)
     return {"success": True}
 
@@ -3175,6 +3222,73 @@ async def delete_delivery_destination(
 
 
 internal_router = APIRouter(prefix="/internal", tags=["internal"])
+
+
+def _template_to_internal_issuance_context(
+    template: CredentialTemplate,
+) -> dict[str, Any]:
+    """Return the safe server-owned context needed to prepare issuance.
+
+    The public template shape deliberately omits the resolved signing
+    algorithm. Protocol services still need the algorithm together with the
+    issuer DID, credential format, and purpose to perform an exact live
+    issuer-profile resolution. This internal shape contains those public
+    cryptographic identity facts but never cached profile, service, provider,
+    or KMS key coordinates.
+    """
+
+    public = _template_to_response(template).model_dump(exclude_none=True)
+    public.update(
+        {
+            "issuer_algorithm": str(template.issuer_algorithm or "").strip(),
+            "supported_formats": [item.value for item in template.supported_formats],
+            "issuance_protocol": template.issuance_protocol,
+            "selective_disclosure_fields": list(
+                template.selective_disclosure_fields
+            ),
+            "zk_predicate_claims": list(template.zk_predicate_claims),
+            "wallet_configs": [
+                {
+                    "wallet_id": item.wallet_id,
+                    "deep_link_scheme": item.deep_link_scheme,
+                    **(
+                        {"format_variant": item.format_variant}
+                        if item.format_variant
+                        else {}
+                    ),
+                }
+                for item in template.wallet_configs
+            ],
+            "validity_rules": {
+                "default_validity_days": template.validity_rules.default_validity_days,
+                "max_validity_days": template.validity_rules.max_validity_days,
+                "renewable": template.validity_rules.renewable,
+                "renewal_window_days": template.validity_rules.renewal_window_days,
+                "not_before_offset_seconds": (
+                    template.validity_rules.not_before_offset_seconds
+                ),
+                "require_revalidation": template.validity_rules.require_revalidation,
+                "revalidation_interval_days": (
+                    template.validity_rules.revalidation_interval_days
+                ),
+            },
+        }
+    )
+    return public
+
+
+@internal_router.get("/credential-templates/{template_id}/issuance-context")
+async def get_internal_credential_template_issuance_context(
+    template_id: str,
+    repo: InMemoryCredentialTemplateRepository
+    | PostgresCredentialTemplateRepository = Depends(get_repo),
+) -> dict[str, Any]:
+    """Return a DID-first template snapshot for internal issuance services."""
+
+    template = await repo.get(template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="Credential Template not found")
+    return _template_to_internal_issuance_context(template)
 
 
 def _has_managed_issuer_did(template: Any) -> bool:

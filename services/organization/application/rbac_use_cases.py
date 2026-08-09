@@ -11,6 +11,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from .._migration_permissions import PERMISSION_CATALOG as _CATALOG
 from ..domain.entities import APPLICANT_PERMISSION_KEYS, Permission, Role
 from ..domain.events import (
     RoleAssignedEvent,
@@ -360,9 +361,6 @@ def _build_system_templates() -> list[dict]:
     pass
 
 
-# Import the canonical list to stay in sync
-from .._migration_permissions import PERMISSION_CATALOG as _CATALOG
-
 _ALL_PERMISSION_KEYS = [f"{resource}:{action}" for resource, action, _desc in _CATALOG]
 _PERMISSIONS_BY_RESOURCE: dict[str, list[str]] = {}
 for resource, action, _desc in _CATALOG:
@@ -403,6 +401,7 @@ _CATALOG_ADMIN_PERMISSION_KEYS = _keys_for(
     "policy-set",
     "trusted-issuer",
     "credential-template",
+    "wallet",
     "compliance-profile",
     "presentation-policy",
     "revocation-profile",
@@ -419,6 +418,7 @@ _REVIEWER_PERMISSION_KEYS = sorted(
             "trust-profile",
             "trusted-issuer",
             "credential-template",
+            "wallet",
             "compliance-profile",
             "presentation-policy",
             "revocation-profile",
@@ -436,6 +436,7 @@ _OPERATOR_PERMISSION_KEYS = sorted(
             "organization",
             "trust-profile",
             "credential-template",
+            "wallet",
             "application-template",
             "deployment-profile",
             "flow-definition",

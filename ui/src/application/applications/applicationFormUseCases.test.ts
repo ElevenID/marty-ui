@@ -321,6 +321,65 @@ describe('applicationForm use cases', () => {
     }));
   });
 
+  it('uploads required evidence through the public application path before submission', async () => {
+    const createApplication = vi.fn().mockResolvedValue({ id: 'application-1' });
+    const submitApplicationEvidence = vi.fn().mockResolvedValue({ id: 'evidence-1', status: 'ACTIVE' });
+    const submitApplication = vi.fn().mockResolvedValue({ id: 'application-1', reference_number: 'APP-EVIDENCE' });
+    const evidenceFile = {
+      name: 'identity.png',
+      type: 'image/png',
+      arrayBuffer: vi.fn(),
+    };
+
+    await expect(submitCredentialApplication({
+      organizationId: 'org-1',
+      user: { user_id: 'user-1', email: 'user@example.com' },
+      formData: { first_name: 'Ada', identity_scan: evidenceFile, acceptTerms: true },
+      credentialConfig: {
+        id: 'cfg-1',
+        application_template_id: 'app-template-1',
+        application_template: {
+          form_fields: [{ field_id: 'first_name' }],
+        },
+        evidence_requirements: [{
+          evidence_id: 'identity_scan',
+          evidence_type: 'DOCUMENT_SCAN',
+          description: 'Identity scan',
+          required: true,
+          accepted_formats: ['image/png'],
+        }],
+      },
+      credentialConfigId: 'cfg-fallback',
+      allFields: [{ name: 'identity_scan', type: 'file' }],
+      resolveApplicantId: vi.fn().mockResolvedValue('app-1'),
+      createApplicant: vi.fn(),
+      updateApplicantProfile: vi.fn().mockResolvedValue({ id: 'app-1' }),
+      getApplicantByUser: vi.fn(),
+      createApplication,
+      submitApplicationEvidence,
+      submitApplication,
+      enrollBiometric: vi.fn(),
+      readFileAsBase64: vi.fn().mockResolvedValue('aWRlbnRpdHk='),
+    })).resolves.toEqual({
+      applicationId: 'application-1',
+      applicationReference: 'APP-EVIDENCE',
+      submitted: true,
+    });
+
+    expect(createApplication).toHaveBeenCalledWith(expect.objectContaining({
+      form_data: { first_name: 'Ada' },
+    }));
+    expect(submitApplicationEvidence).toHaveBeenCalledWith('application-1', expect.objectContaining({
+      evidence_requirement_id: 'identity_scan',
+      media_type: 'image/png',
+      filename: 'identity.png',
+      content_base64: 'aWRlbnRpdHk=',
+    }));
+    expect(submitApplicationEvidence.mock.invocationCallOrder[0]).toBeLessThan(
+      submitApplication.mock.invocationCallOrder[0]
+    );
+  });
+
   it('detects active duplicate applications for the same credential', () => {
     expect(findActiveApplicationForCredential([
       { id: 'old-rejected', credential_template_id: 'cfg-1', status: 'REJECTED', updated_at: '2026-01-01T00:00:00.000Z' },

@@ -8,17 +8,20 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Literal
+from urllib.parse import urlsplit
+from uuid import UUID
 
 from pydantic import (
-    AnyHttpUrl,
     AliasChoices,
+    AwareDatetime,
+    AnyHttpUrl,
     BaseModel,
     ConfigDict,
     EmailStr,
     Field,
+    field_validator,
     model_validator,
 )
-
 
 # =============================================================================
 # Base Classes
@@ -50,14 +53,77 @@ class BaseResourceResponse(BaseModel):
 # =============================================================================
 
 
+class RegistrySyncConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocol: Literal["MARTY_TRUST_REGISTRY_SYNC_V1"]
+    refresh_interval_hours: int = Field(ge=1, le=720)
+
+
 class TrustSourceModel(BaseModel):
-    name: str = ""
-    source_type: str = "TRUST_LIST"
+    model_config = ConfigDict(extra="forbid")
+
+    source_type: Literal["TRUST_LIST", "PINNED_ISSUER", "ROOT_CA", "PKD_URL"]
     url: str | None = None
     certificate_pem: str | None = None
     issuer_did: str | None = None
-    description: str | None = None
-    enabled: bool = True
+    description: str | None = Field(default=None, max_length=256)
+    registry_sync: RegistrySyncConfigModel | None = None
+
+    @field_validator("source_type", mode="before")
+    @classmethod
+    def normalize_source_type(cls, value: object) -> object:
+        return value.upper() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "TrustSourceModel":
+        if (
+            sum(
+                value is not None
+                for value in (self.url, self.certificate_pem, self.issuer_did)
+            )
+            != 1
+        ):
+            raise ValueError(
+                "exactly one of url, certificate_pem, or issuer_did is required"
+            )
+        if self.url is not None:
+            try:
+                parsed = urlsplit(self.url)
+                port = parsed.port
+            except ValueError as exc:
+                raise ValueError("registry URL is invalid") from exc
+            if (
+                parsed.scheme.lower() != "https"
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or port not in {None, 443}
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "URL trust sources require a credential-free standard-port HTTPS URL without query or fragment"
+                )
+        if self.registry_sync is not None and (
+            self.url is None or self.source_type not in {"TRUST_LIST", "PKD_URL"}
+        ):
+            raise ValueError("registry_sync requires a TRUST_LIST or PKD_URL URL")
+        if (
+            self.registry_sync is None
+            and self.url is not None
+            and self.source_type in {"TRUST_LIST", "PKD_URL"}
+        ):
+            raise ValueError(
+                "URL trust registries require an explicit supported registry_sync protocol"
+            )
+        if self.certificate_pem is not None and not self.certificate_pem.startswith(
+            "-----BEGIN CERTIFICATE-----"
+        ):
+            raise ValueError("certificate_pem must contain a PEM certificate")
+        if self.issuer_did is not None and not self.issuer_did.startswith("did:"):
+            raise ValueError("issuer_did must be a DID")
+        return self
 
 
 class ValidationRulesModel(BaseModel):
@@ -71,7 +137,15 @@ class ValidationRulesModel(BaseModel):
     allow_self_signed: bool = False
 
 
+class RevocationPolicyModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    check_mode: Literal["HARD_FAIL", "SOFT_FAIL", "SKIP"] = "HARD_FAIL"
+
+
 class TrustProfileCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     organization_id: str = Field(min_length=1, max_length=255)
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
@@ -85,6 +159,8 @@ class TrustProfileCreate(BaseModel):
     require_key_usage: bool | None = None
     max_chain_depth: int | None = None
     allow_self_signed: bool | None = None
+    revocation_policy: RevocationPolicyModel | None = None
+    revocation_profile_id: str | None = None
     supported_formats: list[str] = Field(default_factory=lambda: ["SD_JWT_VC", "MDOC"])
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
@@ -95,6 +171,8 @@ class TrustProfileCreate(BaseModel):
 
 
 class TrustProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = Field(None, max_length=2000)
     profile_type: str | None = Field(None, max_length=50)
@@ -107,6 +185,8 @@ class TrustProfileUpdate(BaseModel):
     require_key_usage: bool | None = None
     max_chain_depth: int | None = None
     allow_self_signed: bool | None = None
+    revocation_policy: RevocationPolicyModel | None = None
+    revocation_profile_id: str | None = None
     supported_formats: list[str] | None = None
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
@@ -117,22 +197,21 @@ class TrustProfileUpdate(BaseModel):
 
 
 class TrustProfileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     name: str
-    description: str | None
-    status: str
+    description: str | None = None
+    status: Literal["draft", "active", "suspended", "archived"]
     profile_type: str
     compliance_status: str
     trust_sources: list[dict]
-    validation_rules: dict
     allowed_algorithms: list[str]
-    min_key_size_rsa: int
-    min_key_size_ec: int
-    require_key_usage: bool
-    max_chain_depth: int
-    allow_self_signed: bool
-    revocation_policy: dict
+    revocation_policy: dict | None = None
+    revocation_services: dict | None = None
+    revocation_profile_id: str | None = None
+    time_policy: dict | None = None
     supported_formats: list[str]
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
@@ -141,54 +220,77 @@ class TrustProfileResponse(BaseModel):
     verification_policy_set_id: str | None = None
     auto_generated: bool = False
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
 
 
-class TrustedIssuerCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=255)
-    description: str | None = Field(None, max_length=2000)
-    issuer_did: str = Field(min_length=1, max_length=2048)
-    issuer_url: str | None = Field(None, max_length=2048)
-    credential_template_ids: list[str] = Field(default_factory=list)
-    # A pinned issuer must carry its public verification material through the
-    # public gateway.  Dropping this field at the gateway made an apparently
-    # configured OID4VP trust profile unverifiable by the downstream service.
-    verification_keys: list[dict] = Field(default_factory=list)
+class TrustProfileIssuerCreate(BaseModel):
+    """Create a protocol-defined link to an existing IssuerEntity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    issuer_id: str = Field(
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    trust_level: int = Field(default=100, ge=0, le=100)
+    relationship_status: Literal["TRUSTED", "DENIED", "UNDER_REVIEW"] = "TRUSTED"
+    cascade_revocation_policy: Literal["AUTO_CASCADE", "MANUAL", "NOTIFY_ONLY"] = (
+        "NOTIFY_ONLY"
+    )
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> "TrustProfileIssuerCreate":
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
-class TrustedIssuerUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    issuer_did: str | None = None
-    issuer_url: str | None = None
-    credential_template_ids: list[str] | None = None
-    verification_keys: list[dict] | None = None
-    valid_from: str | None = None
-    valid_until: str | None = None
-    trust_level: int | None = None
-    relationship_status: str | None = None
-    cascade_revocation_policy: str | None = None
+class TrustProfileIssuerUpdate(BaseModel):
+    """Update relationship policy without mutating the linked issuer entity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trust_level: int | None = Field(default=None, ge=0, le=100)
+    relationship_status: Literal["TRUSTED", "DENIED", "UNDER_REVIEW"] | None = None
+    cascade_revocation_policy: (
+        Literal["AUTO_CASCADE", "MANUAL", "NOTIFY_ONLY"] | None
+    ) = None
+    metadata: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_update(self) -> "TrustProfileIssuerUpdate":
+        if not self.model_fields_set:
+            raise ValueError("at least one trust relationship field is required")
+        if "metadata" in self.model_fields_set and self.metadata is None:
+            raise ValueError("metadata cannot be null")
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
-class TrustedIssuerResponse(BaseModel):
-    id: str
-    trust_profile_id: str
-    issuer_id: str | None = None
-    issuer_entity_id: str | None = None
-    name: str
-    description: str | None = None
-    issuer_did: str
-    issuer_type: str | None = None
-    issuer_url: str | None = None
-    status: str
-    compliance_status: str | None = None
-    trust_level: int = 100
-    relationship_status: str = "TRUSTED"
-    cascade_revocation_policy: str = "NOTIFY_ONLY"
-    credential_template_ids: list[str] = Field(default_factory=list)
+class TrustProfileIssuerResponse(BaseModel):
+    """marty-protocol TrustProfileIssuer resource."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    trust_profile_id: str = Field(
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    issuer_id: str = Field(
+        pattern=r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    )
+    trust_level: int = Field(ge=0, le=100)
+    relationship_status: Literal["TRUSTED", "DENIED", "UNDER_REVIEW"]
+    cascade_revocation_policy: Literal["AUTO_CASCADE", "MANUAL", "NOTIFY_ONLY"]
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
+
+    @model_validator(mode="after")
+    def reject_private_custody_metadata(self) -> "TrustProfileIssuerResponse":
+        _reject_private_custody_metadata(self.metadata)
+        return self
 
 
 _PRIVATE_CUSTODY_METADATA_FIELDS = {
@@ -215,9 +317,16 @@ _PRIVATE_CUSTODY_METADATA_FIELDS = {
     "verification_method_id",
 }
 
+_PRIVATE_JWK_PARAMETERS = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+
 
 def _find_private_custody_metadata(value: Any) -> str | None:
     if isinstance(value, dict):
+        normalized_keys = {str(key).lower() for key in value}
+        if "kty" in normalized_keys:
+            private_parameters = normalized_keys & _PRIVATE_JWK_PARAMETERS
+            if private_parameters:
+                return f"private JWK parameter '{sorted(private_parameters)[0]}'"
         for key, nested_value in value.items():
             if str(key).lower() in _PRIVATE_CUSTODY_METADATA_FIELDS:
                 return str(key)
@@ -236,9 +345,28 @@ def _reject_private_custody_metadata(metadata: dict[str, Any] | None) -> None:
     field = _find_private_custody_metadata(metadata)
     if field is not None:
         raise ValueError(
-            f"Public metadata cannot contain private custody selector '{field}'; "
+            f"Public metadata cannot contain private custody selector or private key material '{field}'; "
             "signing is resolved from the issuer DID through an issuer profile"
         )
+
+
+def _normalize_accreditations(values: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("accreditation identifiers cannot be blank")
+        if len(cleaned) > 128:
+            raise ValueError("accreditation identifiers cannot exceed 128 characters")
+        comparison_key = cleaned.casefold()
+        if comparison_key in seen:
+            raise ValueError(
+                "accreditation identifiers must be unique case-insensitively"
+            )
+        seen.add(comparison_key)
+        normalized.append(cleaned)
+    return normalized
 
 
 class IssuerEntityCreate(BaseModel):
@@ -251,11 +379,17 @@ class IssuerEntityCreate(BaseModel):
     description: str | None = Field(None, max_length=1024)
     compliance_status: Literal["ACCREDITED", "COMPLIANT", "SUSPENDED"] = "COMPLIANT"
     accreditation_body: str | None = Field(None, max_length=256)
+    accreditations: list[str] = Field(default_factory=list, max_length=64)
     accreditation_date: str | None = None
     valid_from: str | None = None
     valid_until: str | None = None
     trust_anchor_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("accreditations")
+    @classmethod
+    def validate_accreditations(cls, values: list[str]) -> list[str]:
+        return _normalize_accreditations(values)
 
     @model_validator(mode="after")
     def reject_private_custody_metadata(self) -> "IssuerEntityCreate":
@@ -274,12 +408,18 @@ class IssuerEntityUpdate(BaseModel):
         Literal["ACCREDITED", "COMPLIANT", "SUSPENDED", "REVOKED"] | None
     ) = None
     accreditation_body: str | None = Field(None, max_length=256)
+    accreditations: list[str] | None = Field(None, max_length=64)
     accreditation_date: str | None = None
     valid_from: str | None = None
     valid_until: str | None = None
     trust_anchor_id: str | None = None
     metadata: dict[str, Any] | None = None
     revocation_reason: str | None = Field(None, max_length=512)
+
+    @field_validator("accreditations")
+    @classmethod
+    def validate_accreditations(cls, values: list[str] | None) -> list[str] | None:
+        return None if values is None else _normalize_accreditations(values)
 
     @model_validator(mode="after")
     def validate_update(self) -> "IssuerEntityUpdate":
@@ -289,6 +429,7 @@ class IssuerEntityUpdate(BaseModel):
             "display_name",
             "issuer_type",
             "compliance_status",
+            "accreditations",
             "valid_from",
             "metadata",
         ):
@@ -317,6 +458,7 @@ class IssuerEntityResponse(BaseModel):
     is_system_issuer: bool
     compliance_status: str
     accreditation_body: str | None = None
+    accreditations: list[str] = Field(max_length=64)
     accreditation_date: str | None = None
     valid_from: str
     valid_until: str | None = None
@@ -332,6 +474,11 @@ class IssuerEntityResponse(BaseModel):
     def reject_private_custody_metadata(self) -> "IssuerEntityResponse":
         _reject_private_custody_metadata(self.metadata)
         return self
+
+    @field_validator("accreditations")
+    @classmethod
+    def validate_accreditations(cls, values: list[str]) -> list[str]:
+        return _normalize_accreditations(values)
 
 
 class IssuerIdentityResponse(BaseModel):
@@ -353,7 +500,106 @@ class IssuerIdentityResponse(BaseModel):
         "lti_tool_signing",
     ]
     algorithm: Literal["ES256", "ES384", "RS256", "EdDSA"]
+    credential_format: Literal[
+        "MDOC", "SD_JWT_VC", "VC_JWT", "JSON_LD", "ZK_MDOC", "ICAO_EMRTD"
+    ]
     status: Literal["active"]
+
+
+class IssuerIdentityOperationRequest(BaseModel):
+    """Complete public selector for exactly one managed issuer identity."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(min_length=1, max_length=255)
+    issuer_did: str = Field(pattern=r"^did:", max_length=2048)
+    key_purpose: Literal[
+        "vc_jwt_issuer",
+        "mdoc_dsc",
+        "x509_doc_signer",
+        "holder_binding",
+        "presentation_signing",
+        "oid4vp_request_signing",
+        "vdsnc_signing",
+        "csca",
+        "jwks_signing",
+        "lti_tool_signing",
+    ]
+    credential_format: Literal[
+        "MDOC", "SD_JWT_VC", "VC_JWT", "JSON_LD", "ZK_MDOC", "ICAO_EMRTD"
+    ]
+    algorithm: Literal["ES256", "ES384", "RS256", "EdDSA"]
+
+
+class KeyAttestationPolicy(BaseModel):
+    """Public holder-key trust policy; never an issuer custody selector."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["disabled", "optional", "required"]
+    trusted_root_certificates_pem: list[str] = Field(
+        default_factory=list, max_length=64
+    )
+    allowed_algorithms: list[Literal["ES256", "ES384", "RS256", "EdDSA"]] = Field(
+        default_factory=list
+    )
+    required_key_storage: list[str] = Field(default_factory=list)
+    required_user_authentication: list[str] = Field(default_factory=list)
+    max_age_seconds: int = Field(default=300, ge=1, le=86_400)
+    require_nonce: bool = True
+    status_validation: Literal["disabled", "if_present", "required"] = "required"
+    status_list_allowed_origins: list[str] = Field(default_factory=list)
+    status_list_trusted_root_certificates_pem: list[str] = Field(
+        default_factory=list, max_length=64
+    )
+    status_list_allowed_algorithms: list[
+        Literal["ES256", "ES384", "RS256", "EdDSA"]
+    ] = Field(default_factory=list)
+    status_list_max_age_seconds: int = Field(default=86_400, ge=1, le=604_800)
+    status_list_allow_private_hosts: bool = False
+    status_list_tls_ca_certificates_pem: list[str] = Field(
+        default_factory=list, max_length=64
+    )
+
+
+class IssuerIdentityCreateRequest(IssuerIdentityOperationRequest):
+    """Provider-neutral request to ensure a managed issuer identity."""
+
+    key_attestation_policy: KeyAttestationPolicy | None = None
+
+
+class IssuerIdentityCertificateRequest(IssuerIdentityOperationRequest):
+    """Attach a public certificate chain to a DID-selected managed identity."""
+
+    cert_pem: str = Field(min_length=1, max_length=1_048_576)
+    cert_chain_pem: str | None = Field(default=None, max_length=1_048_576)
+
+
+class IssuerIdentityCreateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    identity: IssuerIdentityResponse
+    created: bool
+
+
+class IssuerIdentityResolutionResponse(BaseModel):
+    """Provider-neutral public key resolved from the complete identity tuple."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    identity: IssuerIdentityResponse
+    public_jwk: dict[str, Any]
+
+    @model_validator(mode="after")
+    def reject_private_key_material(self) -> "IssuerIdentityResolutionResponse":
+        _reject_private_custody_metadata(self.public_jwk)
+        return self
+
+
+class IssuerIdentityDeleteResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    deleted: IssuerIdentityResponse
 
 
 class IssuerIdentityListResponse(BaseModel):
@@ -542,6 +788,45 @@ class TrustRegistryStatusResponse(BaseModel):
     csca_entries: int
     dsc_entries: int
     generated_at: str
+
+
+class TrustProfileRegistrySourceSyncResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str = Field(pattern=r"^https://")
+    protocol: Literal["MARTY_TRUST_REGISTRY_SYNC_V1"]
+    sequence: int = Field(ge=0)
+    csca_entries: int = Field(ge=0)
+    dsc_entries: int = Field(ge=0)
+    synchronized_at: AwareDatetime
+
+    @field_validator("url")
+    @classmethod
+    def validate_result_url(cls, value: str) -> str:
+        try:
+            parsed = urlsplit(value)
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError("registry URL is invalid") from exc
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or port not in {None, 443}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("registry result URL is unsafe")
+        return value
+
+
+class TrustProfileRegistrySyncResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    trust_profile_id: UUID
+    sources: list[TrustProfileRegistrySourceSyncResponse] = Field(min_length=1)
+    synchronized_at: AwareDatetime
 
 
 # =============================================================================
@@ -793,7 +1078,7 @@ class CredentialTemplateResponse(BaseModel):
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
     validity_rules: dict
-    issuer_did: str | None = None
+    issuer_did: str = Field(pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
     credential_payload_format: str | None = None
     created_at: str
     updated_at: str | None = None
@@ -2235,9 +2520,11 @@ class IssuanceCreate(BaseModel):
 class DidcommDeliverRequest(BaseModel):
     """Deliver a credential via DIDComm v2 push."""
 
-    transaction_id: str
-    holder_did: str
-    universal_resolver_url: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = Field(min_length=1)
+    transaction_id: str = Field(min_length=1)
+    holder_did: str = Field(min_length=1, pattern=r"^did:")
 
 
 class DidcommDeliveryResponse(BaseModel):
@@ -2371,7 +2658,7 @@ class ApplicationUIConfigModel(BaseModel):
 
 
 class ApplicationFormFieldModel(BaseModel):
-    """Canonical MIP 0.3 applicant form field."""
+    """Canonical MIP 0.4 applicant form field."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -2484,7 +2771,7 @@ class ApplicationTemplateCreate(BaseModel):
 
 
 class ApplicationTemplatePatch(BaseModel):
-    """Patch mutable fields on a draft MIP 0.3 Application Template."""
+    """Patch mutable fields on a draft MIP 0.4 Application Template."""
 
     model_config = ConfigDict(extra="forbid")
 

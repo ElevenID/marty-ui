@@ -19,7 +19,10 @@ import {
   getCredentialTemplate,
   activateTrustProfile,
   createTrustProfile,
+  synchronizeTrustProfileRegistries,
   listTrustProfiles,
+  addTrustProfileIssuer,
+  listTrustProfileIssuers,
 } from '../presentationPolicyApi'
 import {
   mockPolicies,
@@ -743,18 +746,76 @@ describe('presentationPolicyApi', () => {
   })
 
   describe('Trust Profiles', () => {
-    it('should create trust profile', async () => {
+    it('creates only the public trust-profile contract and preserves registry sync configuration', async () => {
+      let requestBody: any
+      server.use(
+        http.post('http://localhost:8000/v1/trust-profiles', async ({ request }) => {
+          requestBody = await request.json()
+          return HttpResponse.json({
+            id: 'trust-profile-1',
+            status: 'DRAFT',
+            ...requestBody,
+          })
+        })
+      )
       const newProfile = {
         organization_id: 'org-1',
         name: 'Production Trust',
-        trust_list_url: 'https://example.com/trust-list',
         status: 'active',
+        registry_imports: [{ registry_type: 'EU_TRUST_LIST' }],
+        supported_wallet_ids: ['ui-only-wallet'],
+        trust_sources: [{
+          source_type: 'TRUST_LIST',
+          url: 'https://registry.example/sync',
+          registry_sync: {
+            protocol: 'MARTY_TRUST_REGISTRY_SYNC_V1',
+            refresh_interval_hours: 24,
+          },
+          metadata: { ui_only: true },
+        }],
       }
 
       const result = await createTrustProfile(newProfile)
 
       expect(result.name).toBeDefined()
       expect(result).toHaveProperty('id')
+      expect(requestBody).not.toHaveProperty('status')
+      expect(requestBody).not.toHaveProperty('registry_imports')
+      expect(requestBody).not.toHaveProperty('supported_wallet_ids')
+      expect(requestBody.trust_sources).toEqual([{
+        source_type: 'TRUST_LIST',
+        url: 'https://registry.example/sync',
+        registry_sync: {
+          protocol: 'MARTY_TRUST_REGISTRY_SYNC_V1',
+          refresh_interval_hours: 24,
+        },
+      }])
+    })
+
+    it('synchronizes registries through the trust-profile production API', async () => {
+      let synchronizedId: string | undefined
+      server.use(
+        http.post('http://localhost:8000/v1/trust-profiles/:id/registry-sync', ({ params }) => {
+          synchronizedId = params.id as string
+          return HttpResponse.json({
+            trust_profile_id: params.id,
+            sources: [{
+              url: 'https://registry.example/sync',
+              protocol: 'MARTY_TRUST_REGISTRY_SYNC_V1',
+              sequence: 2,
+              csca_entries: 1,
+              dsc_entries: 0,
+              synchronized_at: '2026-08-07T12:00:00Z',
+            }],
+            synchronized_at: '2026-08-07T12:00:00Z',
+          })
+        })
+      )
+
+      const result = await synchronizeTrustProfileRegistries('trust-profile-1')
+
+      expect(synchronizedId).toBe('trust-profile-1')
+      expect(result.sources[0].sequence).toBe(2)
     })
 
     it('fails locally instead of creating trust profiles without an active organization', async () => {
@@ -811,6 +872,108 @@ describe('presentationPolicyApi', () => {
       expect(profile).toHaveProperty('name')
       expect(profile).toHaveProperty('status')
       expect(profile).toHaveProperty('trust_list_url')
+    })
+
+    it('composes trust-profile issuer relationships with organization-scoped issuer entities', async () => {
+      server.use(
+        http.get('http://localhost:8000/v1/issuer-entities', ({ request }) => {
+          expect(new URL(request.url).searchParams.get('organization_id')).toBe('org-1')
+          return HttpResponse.json([{
+            id: '10000000-0000-4000-8000-000000000001',
+            organization_id: 'org-1',
+            issuer_id: 'did:web:issuer.example.com',
+            issuer_type: 'ORGANIZATION',
+            display_name: 'Example Issuer',
+            description: 'Resolved issuer identity',
+            compliance_status: 'COMPLIANT',
+            accreditation_body: 'National Identity Authority',
+            accreditations: ['ISO27001', 'FIPS140-2'],
+            metadata: { issuer_url: 'https://issuer.example.com' },
+          }])
+        }),
+        http.get('http://localhost:8000/v1/trust-profiles/:id/issuers', () => HttpResponse.json([{
+          id: '20000000-0000-4000-8000-000000000001',
+          trust_profile_id: '30000000-0000-4000-8000-000000000001',
+          issuer_id: '10000000-0000-4000-8000-000000000001',
+          trust_level: 100,
+          relationship_status: 'TRUSTED',
+          cascade_revocation_policy: 'NOTIFY_ONLY',
+          metadata: { credential_template_ids: [] },
+        }])),
+      )
+
+      const issuers = await listTrustProfileIssuers(
+        '30000000-0000-4000-8000-000000000001',
+        'org-1',
+      )
+
+      expect(issuers).toHaveLength(1)
+      expect(issuers[0]).toMatchObject({
+        issuer_id: '10000000-0000-4000-8000-000000000001',
+        issuer_did: 'did:web:issuer.example.com',
+        did: 'did:web:issuer.example.com',
+        name: 'Example Issuer',
+        accreditation_body: 'National Identity Authority',
+        accreditations: ['ISO27001', 'FIPS140-2'],
+      })
+    })
+
+    it('creates an issuer entity and links only its public relationship fields', async () => {
+      let entityPayload: any
+      let relationshipPayload: any
+      server.use(
+        http.get('http://localhost:8000/v1/issuer-entities', () => HttpResponse.json([])),
+        http.post('http://localhost:8000/v1/issuer-entities', async ({ request }) => {
+          entityPayload = await request.json()
+          return HttpResponse.json({
+            id: '10000000-0000-4000-8000-000000000002',
+            compliance_status: 'PENDING',
+            ...entityPayload,
+          }, { status: 201 })
+        }),
+        http.post('http://localhost:8000/v1/trust-profiles/:id/issuers', async ({ request }) => {
+          relationshipPayload = await request.json()
+          return HttpResponse.json({
+            id: '20000000-0000-4000-8000-000000000002',
+            trust_profile_id: '30000000-0000-4000-8000-000000000002',
+            ...relationshipPayload,
+          }, { status: 201 })
+        }),
+      )
+
+      await addTrustProfileIssuer(
+        '30000000-0000-4000-8000-000000000002',
+        'org-1',
+        {
+          issuer_did: 'did:web:new.example.com',
+          name: 'New Issuer',
+          accreditation_body: 'National Identity Authority',
+          accreditations: ['ISO27001', 'FIPS140-2'],
+          issuer_profile_id: 'must-not-cross-the-public-boundary',
+          signing_service_id: 'must-not-cross-the-public-boundary',
+          signing_key_reference: 'must-not-cross-the-public-boundary',
+          kms_provider: 'must-not-cross-the-public-boundary',
+          verification_keys: [{ kty: 'EC', d: 'private-key-material' }],
+        },
+      )
+
+      expect(entityPayload).toEqual({
+        organization_id: 'org-1',
+        issuer_id: 'did:web:new.example.com',
+        issuer_type: 'ORGANIZATION',
+        display_name: 'New Issuer',
+        description: null,
+        accreditation_body: 'National Identity Authority',
+        accreditations: ['ISO27001', 'FIPS140-2'],
+        metadata: {},
+      })
+      expect(relationshipPayload).toEqual({
+        issuer_id: '10000000-0000-4000-8000-000000000002',
+        trust_level: 100,
+        relationship_status: 'TRUSTED',
+        cascade_revocation_policy: 'NOTIFY_ONLY',
+        metadata: { credential_template_ids: [] },
+      })
     })
   })
 

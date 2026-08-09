@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import logging
 import os
+import base64
+import binascii
+import hashlib
 import json
 import re
 import uuid
@@ -19,11 +22,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Annotated, Any, AsyncGenerator
+from typing import Any, AsyncGenerator
 
 import httpx
-from fastapi import APIRouter, Body, Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import APIRouter, Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from marty_common.service_setup import create_service_app
 
@@ -31,14 +33,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 try:
-    from common.events import EventPublisher, DomainEvent, EventType, get_event_publisher
+    from common.events import DomainEvent, EventType, get_event_publisher
 except ImportError:
     logger.info("common.events not available; event publishing disabled")
     # Fallback if common module not available
-    EventPublisher = None
     DomainEvent = None
     EventType = None
-    get_event_publisher = lambda: None
+    def get_event_publisher() -> None:
+        return None
 
 SERVICE_NAME = "applicant-service"
 SERVICE_PORT = int(os.environ.get("APPLICANT_SERVICE_PORT", "8006"))
@@ -216,10 +218,17 @@ async def _initiate_issuance_via_flow(
         },
     }
 
+    # This endpoint can mint a pre-authorized credential offer. Bind the exact
+    # payload to the dedicated Applicant workload identity before sending it.
+    from common.application_event_auth import sign_application_event
+
+    event_auth_headers = sign_application_event(event_payload)
+
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.post(
             f"{FLOW_SERVICE_URL}/v1/flows/webhooks/application-approved",
             json=event_payload,
+            headers=event_auth_headers,
         )
 
     if response.status_code >= 400:
@@ -315,6 +324,19 @@ class ClaimState(str, Enum):
     EXPIRED = "EXPIRED"
 
 
+class EvidenceStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    REVOKED = "REVOKED"
+    EXPIRED = "EXPIRED"
+    DELETED = "DELETED"
+
+
+class EvidenceSource(str, Enum):
+    APPLICANT_UPLOAD = "APPLICANT_UPLOAD"
+    VERIFIED_EXTERNAL_FACT = "VERIFIED_EXTERNAL_FACT"
+    VERIFIED_EXTERNAL_API = "VERIFIED_EXTERNAL_API"
+
+
 LEGACY_APPLICANT_STATUS_MAP = {
     "pending": ApplicantStatus.SUBMITTED,
     "in_review": ApplicantStatus.UNDER_REVIEW,
@@ -343,9 +365,23 @@ LEGACY_APPLICATION_STATUS_MAP = {
 
 APPLICANT_ALLOWED_TRANSITIONS: dict[ApplicantStatus, set[ApplicantStatus]] = {
     ApplicantStatus.DRAFT: {ApplicantStatus.SUBMITTED, ApplicantStatus.WITHDRAWN},
-    ApplicantStatus.SUBMITTED: {ApplicantStatus.UNDER_REVIEW, ApplicantStatus.PENDING_INFORMATION, ApplicantStatus.WITHDRAWN, ApplicantStatus.SUSPENDED},
+    ApplicantStatus.SUBMITTED: {
+        ApplicantStatus.UNDER_REVIEW,
+        ApplicantStatus.APPROVED,
+        ApplicantStatus.REJECTED,
+        ApplicantStatus.PENDING_INFORMATION,
+        ApplicantStatus.WITHDRAWN,
+        ApplicantStatus.SUSPENDED,
+    },
     ApplicantStatus.UNDER_REVIEW: {ApplicantStatus.APPROVED, ApplicantStatus.REJECTED, ApplicantStatus.PENDING_INFORMATION, ApplicantStatus.SUSPENDED},
-    ApplicantStatus.PENDING_INFORMATION: {ApplicantStatus.SUBMITTED, ApplicantStatus.UNDER_REVIEW, ApplicantStatus.WITHDRAWN, ApplicantStatus.SUSPENDED},
+    ApplicantStatus.PENDING_INFORMATION: {
+        ApplicantStatus.SUBMITTED,
+        ApplicantStatus.UNDER_REVIEW,
+        ApplicantStatus.APPROVED,
+        ApplicantStatus.REJECTED,
+        ApplicantStatus.WITHDRAWN,
+        ApplicantStatus.SUSPENDED,
+    },
     ApplicantStatus.APPROVED: {ApplicantStatus.OFFERED, ApplicantStatus.CREDENTIALED, ApplicantStatus.SUSPENDED},
     ApplicantStatus.OFFERED: {ApplicantStatus.CREDENTIALED, ApplicantStatus.SUSPENDED},
     ApplicantStatus.REJECTED: set(),
@@ -358,7 +394,14 @@ APPLICATION_ALLOWED_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]]
     ApplicationStatus.DRAFT: {ApplicationStatus.SUBMITTED, ApplicationStatus.WITHDRAWN},
     ApplicationStatus.SUBMITTED: {ApplicationStatus.UNDER_REVIEW, ApplicationStatus.APPROVED, ApplicationStatus.REJECTED, ApplicationStatus.PENDING_INFORMATION, ApplicationStatus.WITHDRAWN, ApplicationStatus.SUSPENDED},
     ApplicationStatus.UNDER_REVIEW: {ApplicationStatus.APPROVED, ApplicationStatus.REJECTED, ApplicationStatus.PENDING_INFORMATION, ApplicationStatus.SUSPENDED},
-    ApplicationStatus.PENDING_INFORMATION: {ApplicationStatus.SUBMITTED, ApplicationStatus.UNDER_REVIEW, ApplicationStatus.WITHDRAWN, ApplicationStatus.SUSPENDED},
+    ApplicationStatus.PENDING_INFORMATION: {
+        ApplicationStatus.SUBMITTED,
+        ApplicationStatus.UNDER_REVIEW,
+        ApplicationStatus.APPROVED,
+        ApplicationStatus.REJECTED,
+        ApplicationStatus.WITHDRAWN,
+        ApplicationStatus.SUSPENDED,
+    },
     ApplicationStatus.APPROVED: {ApplicationStatus.OFFERED, ApplicationStatus.CREDENTIALED, ApplicationStatus.SUSPENDED},
     ApplicationStatus.OFFERED: {ApplicationStatus.CREDENTIALED, ApplicationStatus.SUSPENDED},
     ApplicationStatus.REJECTED: set(),
@@ -440,11 +483,13 @@ def _build_credential_claims(
 ) -> dict[str, Any]:
     """Map applicant form fields to credential claims using the active template."""
     claims: dict[str, Any] = {}
-    for field in template.get("form_fields") or []:
-        if not isinstance(field, dict):
+    for field_definition in template.get("form_fields") or []:
+        if not isinstance(field_definition, dict):
             continue
-        field_id = str(field.get("field_id") or "").strip()
-        claim_name = str(field.get("claim_mapping") or field_id).strip()
+        field_id = str(field_definition.get("field_id") or "").strip()
+        claim_name = str(
+            field_definition.get("claim_mapping") or field_id
+        ).strip()
         if field_id and claim_name and field_id in application.form_data:
             claims[claim_name] = application.form_data[field_id]
 
@@ -718,12 +763,39 @@ class ApplicantApplication:
     integration_context: dict[str, Any] = field(default_factory=dict)
     system_data: dict[str, Any] = field(default_factory=dict)
     required_checks: list[dict[str, Any]] = field(default_factory=list)
+    evidence_requirements: list[dict[str, Any]] = field(default_factory=list)
     claim_state: ClaimState = ClaimState.NOT_READY
     claim_blocker: dict[str, Any] | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     submitted_at: datetime | None = None
     reviewed_at: datetime | None = None
     issued_at: datetime | None = None
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class ApplicationEvidence:
+    """Application-scoped evidence with private bytes kept out of public responses."""
+
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    application_id: str = ""
+    applicant_id: str = ""
+    organization_id: str = ""
+    evidence_requirement_id: str = ""
+    evidence_type: str = "DOCUMENT_SCAN"
+    source: EvidenceSource = EvidenceSource.APPLICANT_UPLOAD
+    media_type: str = "application/octet-stream"
+    filename: str = "evidence.bin"
+    content: bytes = b""
+    size_bytes: int = 0
+    sha256: str = ""
+    status: EvidenceStatus = EvidenceStatus.ACTIVE
+    submitted_by: str = ""
+    captured_at: datetime | None = None
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+    revocation_reason: str | None = None
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -786,6 +858,7 @@ class InMemoryApplicantRepository:
         self._biometrics: dict[str, list[ApplicantBiometric]] = {}
         self._checks: dict[str, list[VettingCheck]] = {}   # keyed by application_id
         self._all_checks: dict[str, VettingCheck] = {}     # keyed by check_id
+        self._evidence: dict[str, ApplicationEvidence] = {}
         self._locks: dict[str, ReviewerLock] = {}           # keyed by application_id
         data_file = os.environ.get("APPLICANT_DATA_FILE", "/app/data/applicant_store.json")
         self._data_file = Path(data_file)
@@ -883,6 +956,7 @@ class InMemoryApplicantRepository:
             "integration_context": application.integration_context,
             "system_data": application.system_data,
             "required_checks": application.required_checks,
+            "evidence_requirements": application.evidence_requirements,
             "claim_state": application.claim_state.value,
             "claim_blocker": application.claim_blocker,
             "created_at": self._dt_to_str(application.created_at),
@@ -909,12 +983,65 @@ class InMemoryApplicantRepository:
             integration_context=payload.get("integration_context", {}),
             system_data=payload.get("system_data", {}),
             required_checks=payload.get("required_checks", []),
+            evidence_requirements=payload.get("evidence_requirements", []),
             claim_state=ClaimState(payload.get("claim_state", ClaimState.NOT_READY.value)),
             claim_blocker=payload.get("claim_blocker"),
             created_at=self._str_to_dt(payload.get("created_at")) or datetime.now(timezone.utc),
             submitted_at=self._str_to_dt(payload.get("submitted_at")),
             reviewed_at=self._str_to_dt(payload.get("reviewed_at")),
             issued_at=self._str_to_dt(payload.get("issued_at")),
+            updated_at=self._str_to_dt(payload.get("updated_at")) or datetime.now(timezone.utc),
+        )
+
+    def _serialize_evidence(self, evidence: ApplicationEvidence) -> dict[str, Any]:
+        return {
+            "id": evidence.id,
+            "application_id": evidence.application_id,
+            "applicant_id": evidence.applicant_id,
+            "organization_id": evidence.organization_id,
+            "evidence_requirement_id": evidence.evidence_requirement_id,
+            "evidence_type": evidence.evidence_type,
+            "source": evidence.source.value,
+            "media_type": evidence.media_type,
+            "filename": evidence.filename,
+            "content_base64": base64.b64encode(evidence.content).decode("ascii"),
+            "size_bytes": evidence.size_bytes,
+            "sha256": evidence.sha256,
+            "status": evidence.status.value,
+            "submitted_by": evidence.submitted_by,
+            "captured_at": self._dt_to_str(evidence.captured_at),
+            "expires_at": self._dt_to_str(evidence.expires_at),
+            "revoked_at": self._dt_to_str(evidence.revoked_at),
+            "revocation_reason": evidence.revocation_reason,
+            "created_at": self._dt_to_str(evidence.created_at),
+            "updated_at": self._dt_to_str(evidence.updated_at),
+        }
+
+    def _deserialize_evidence(self, payload: dict[str, Any]) -> ApplicationEvidence:
+        try:
+            content = base64.b64decode(payload.get("content_base64", ""), validate=True)
+        except (binascii.Error, ValueError):
+            content = b""
+        return ApplicationEvidence(
+            id=payload.get("id", str(uuid.uuid4())),
+            application_id=payload.get("application_id", ""),
+            applicant_id=payload.get("applicant_id", ""),
+            organization_id=payload.get("organization_id", ""),
+            evidence_requirement_id=payload.get("evidence_requirement_id", ""),
+            evidence_type=payload.get("evidence_type", "DOCUMENT_SCAN"),
+            source=EvidenceSource(payload.get("source", EvidenceSource.APPLICANT_UPLOAD.value)),
+            media_type=payload.get("media_type", "application/octet-stream"),
+            filename=payload.get("filename", "evidence.bin"),
+            content=content,
+            size_bytes=payload.get("size_bytes", len(content)),
+            sha256=payload.get("sha256", hashlib.sha256(content).hexdigest()),
+            status=EvidenceStatus(payload.get("status", EvidenceStatus.ACTIVE.value)),
+            submitted_by=payload.get("submitted_by", ""),
+            captured_at=self._str_to_dt(payload.get("captured_at")),
+            expires_at=self._str_to_dt(payload.get("expires_at")),
+            revoked_at=self._str_to_dt(payload.get("revoked_at")),
+            revocation_reason=payload.get("revocation_reason"),
+            created_at=self._str_to_dt(payload.get("created_at")) or datetime.now(timezone.utc),
             updated_at=self._str_to_dt(payload.get("updated_at")) or datetime.now(timezone.utc),
         )
 
@@ -1007,6 +1134,10 @@ class InMemoryApplicantRepository:
                 check = self._deserialize_check(row)
                 self._all_checks[check.id] = check
                 self._checks.setdefault(check.application_id, []).append(check)
+            self._evidence = {
+                row["id"]: self._deserialize_evidence(row)
+                for row in payload.get("evidence", [])
+            }
             logger.info("Loaded applicant repository state from %s", self._data_file)
         except Exception as exc:
             logger.error("Failed loading applicant persistence file %s: %s", self._data_file, exc)
@@ -1020,6 +1151,7 @@ class InMemoryApplicantRepository:
                 for applicant_id, rows in self._biometrics.items()
             },
             "checks": [self._serialize_check(c) for c in self._all_checks.values()],
+            "evidence": [self._serialize_evidence(e) for e in self._evidence.values()],
         }
         temp_file = self._data_file.with_suffix(".tmp")
         temp_file.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
@@ -1087,6 +1219,27 @@ class InMemoryApplicantRepository:
         if status:
             applications = [a for a in applications if a.status == status]
         return applications
+
+    async def save_evidence(self, evidence: ApplicationEvidence) -> None:
+        self._evidence[evidence.id] = evidence
+        self._flush()
+
+    async def get_evidence(self, evidence_id: str) -> ApplicationEvidence | None:
+        return self._evidence.get(evidence_id)
+
+    async def list_evidence_for_application(
+        self,
+        application_id: str,
+        *,
+        include_deleted: bool = False,
+    ) -> list[ApplicationEvidence]:
+        evidence = [
+            item
+            for item in self._evidence.values()
+            if item.application_id == application_id
+            and (include_deleted or item.status != EvidenceStatus.DELETED)
+        ]
+        return sorted(evidence, key=lambda item: item.created_at)
 
     async def save_biometric(self, biometric: ApplicantBiometric) -> None:
         self._biometrics.setdefault(biometric.applicant_id, []).append(biometric)
@@ -1202,12 +1355,6 @@ class UpdateApplicantRequest(BaseModel):
     vetting_data: dict[str, Any] | None = None
 
 
-class ReviewRequest(BaseModel):
-    decision: str  # "approve" or "reject"
-    notes: str | None = None
-    reason: str | None = None
-
-
 class ApplicantResponse(BaseModel):
     id: str
     organization_id: str
@@ -1272,6 +1419,44 @@ class ApplicationResponse(BaseModel):
     # Display labels for each wallet tab, sourced from the credential template's
     # wallet_configs display_name field (e.g. {"wr-marty-001": "SpruceKit"}).
     credential_offer_labels: dict[str, str] = Field(default_factory=dict)
+
+
+class SubmitApplicationEvidenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_requirement_id: str = Field(min_length=1, max_length=128)
+    media_type: str = Field(min_length=1, max_length=255)
+    filename: str = Field(min_length=1, max_length=255)
+    content_base64: str = Field(min_length=1, max_length=14 * 1024 * 1024)
+    captured_at: str | None = None
+
+
+class ApplicationEvidenceResponse(BaseModel):
+    id: str
+    organization_id: str
+    application_id: str
+    evidence_requirement_id: str
+    evidence_type: str
+    source: str
+    media_type: str
+    filename: str
+    size_bytes: int
+    sha256: str
+    status: str
+    submitted_by: str
+    captured_at: str | None = None
+    expires_at: str | None = None
+    revoked_at: str | None = None
+    revocation_reason: str | None = None
+    content_url: str
+    created_at: str
+    updated_at: str
+
+
+class RevokeApplicationEvidenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=1000)
 
 
 class EnrollBiometricRequest(BaseModel):
@@ -1356,6 +1541,7 @@ class CompleteCheckRequest(BaseModel):
     notes: str | None = None
     performed_by: str | None = None
     result: dict[str, Any] = Field(default_factory=dict)
+    evidence_submission_ids: list[str] = Field(default_factory=list, max_length=100)
 
 
 class RequestInfoRequest(BaseModel):
@@ -1411,6 +1597,226 @@ class EnrichedApplicationResponse(BaseModel):
     applicant_status: str | None = None
     applicant_vetting_level: str | None = None
     verification_results: list[dict[str, Any]] = Field(default_factory=list)
+
+
+APPLICANT_UPLOAD_EVIDENCE_TYPES = {
+    "DOCUMENT_SCAN",
+    "BIOMETRIC",
+    "SELFIE",
+    "THIRD_PARTY_VERIFICATION",
+}
+# Keep downloads within the gateway's enforced response ceiling. Individual
+# application templates can configure a smaller limit, never a larger one.
+MAX_EVIDENCE_BYTES = 10 * 1024 * 1024
+
+
+def _evidence_requirement(
+    application: ApplicantApplication,
+    evidence_requirement_id: str,
+) -> dict[str, Any]:
+    matches = [
+        requirement
+        for requirement in application.evidence_requirements
+        if isinstance(requirement, dict)
+        and str(requirement.get("evidence_id") or "") == evidence_requirement_id
+    ]
+    if len(matches) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "EVIDENCE_REQUIREMENT_NOT_FOUND",
+                "message": "Evidence requirement is not defined for this application.",
+            },
+        )
+    return matches[0]
+
+
+def _safe_evidence_filename(filename: str) -> str:
+    value = filename.strip()
+    if (
+        not value
+        or value in {".", ".."}
+        or Path(value).name != value
+        or any(character in value for character in ('/', '\\', '"', ';'))
+        or any(ord(character) < 32 for character in value)
+    ):
+        raise HTTPException(status_code=422, detail="Evidence filename is invalid")
+    return value
+
+
+def _decode_evidence_content(content_base64: str) -> bytes:
+    try:
+        content = base64.b64decode(content_base64, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise HTTPException(status_code=422, detail="Evidence content is not valid base64") from error
+    if not content:
+        raise HTTPException(status_code=422, detail="Evidence content is empty")
+    if len(content) > MAX_EVIDENCE_BYTES:
+        raise HTTPException(status_code=413, detail="Evidence exceeds the service upload limit")
+    return content
+
+
+def _validate_evidence_upload(
+    application: ApplicantApplication,
+    request: SubmitApplicationEvidenceRequest,
+) -> tuple[dict[str, Any], bytes, datetime | None, datetime | None]:
+    if application.status not in {ApplicationStatus.DRAFT, ApplicationStatus.PENDING_INFORMATION}:
+        raise HTTPException(status_code=409, detail="Evidence can only be changed before submission")
+    requirement = _evidence_requirement(application, request.evidence_requirement_id)
+    evidence_type = str(requirement.get("evidence_type") or "").upper()
+    if evidence_type not in APPLICANT_UPLOAD_EVIDENCE_TYPES:
+        raise HTTPException(
+            status_code=422,
+            detail="This requirement must be satisfied by its verified external evidence source",
+        )
+
+    filename = _safe_evidence_filename(request.filename)
+    media_type = request.media_type.strip().lower()
+    if re.fullmatch(r"[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*", media_type) is None:
+        raise HTTPException(status_code=422, detail="Evidence media type is invalid")
+    content = _decode_evidence_content(request.content_base64)
+
+    maximum = int(requirement.get("max_file_size_bytes") or 10 * 1024 * 1024)
+    maximum = min(maximum, MAX_EVIDENCE_BYTES)
+    if len(content) > maximum:
+        raise HTTPException(status_code=413, detail="Evidence exceeds the configured size limit")
+
+    accepted_formats = [
+        str(value).strip().lower()
+        for value in requirement.get("accepted_formats") or []
+        if str(value).strip()
+    ]
+    if accepted_formats:
+        suffix = Path(filename).suffix.lower()
+        accepted = media_type in accepted_formats or suffix in {
+            value if value.startswith(".") else f".{value}"
+            for value in accepted_formats
+            if "/" not in value
+        }
+        if not accepted:
+            raise HTTPException(status_code=422, detail="Evidence format is not accepted")
+
+    captured_at = _parse_iso_datetime(request.captured_at)
+    if request.captured_at and captured_at is None:
+        raise HTTPException(status_code=422, detail="Evidence captured_at must be an ISO 8601 date-time")
+    if captured_at and captured_at.tzinfo is None:
+        captured_at = captured_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    if captured_at and captured_at > now + timedelta(minutes=5):
+        raise HTTPException(status_code=422, detail="Evidence captured_at cannot be in the future")
+
+    freshness = requirement.get("freshness") if isinstance(requirement.get("freshness"), dict) else {}
+    max_age_seconds = freshness.get("max_age_seconds")
+    if max_age_seconds is None and freshness.get("max_age_days") is not None:
+        max_age_seconds = float(freshness["max_age_days"]) * 86400
+    expires_at = None
+    if max_age_seconds is not None:
+        if captured_at is None:
+            raise HTTPException(status_code=422, detail="Fresh evidence requires captured_at")
+        try:
+            max_age = float(max_age_seconds)
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=503, detail="Evidence freshness policy is invalid") from error
+        if max_age <= 0:
+            raise HTTPException(status_code=503, detail="Evidence freshness policy is invalid")
+        expires_at = captured_at + timedelta(seconds=max_age)
+        if expires_at <= now:
+            raise HTTPException(status_code=422, detail="Evidence is stale")
+
+    return requirement, content, captured_at, expires_at
+
+
+def _refresh_evidence_status(evidence: ApplicationEvidence) -> None:
+    if (
+        evidence.status == EvidenceStatus.ACTIVE
+        and evidence.expires_at
+        and evidence.expires_at <= datetime.now(timezone.utc)
+    ):
+        evidence.status = EvidenceStatus.EXPIRED
+        evidence.updated_at = datetime.now(timezone.utc)
+
+
+def _evidence_to_response(
+    evidence: ApplicationEvidence,
+    *,
+    reviewer: bool,
+) -> ApplicationEvidenceResponse:
+    _refresh_evidence_status(evidence)
+    if reviewer:
+        base = (
+            f"/v1/organizations/{evidence.organization_id}/applicants/"
+            f"{evidence.application_id}/evidence/{evidence.id}"
+        )
+    else:
+        base = f"/v1/me/applications/{evidence.application_id}/evidence/{evidence.id}"
+    return ApplicationEvidenceResponse(
+        id=evidence.id,
+        organization_id=evidence.organization_id,
+        application_id=evidence.application_id,
+        evidence_requirement_id=evidence.evidence_requirement_id,
+        evidence_type=evidence.evidence_type,
+        source=evidence.source.value,
+        media_type=evidence.media_type,
+        filename=evidence.filename,
+        size_bytes=evidence.size_bytes,
+        sha256=evidence.sha256,
+        status=evidence.status.value,
+        submitted_by=evidence.submitted_by,
+        captured_at=evidence.captured_at.isoformat() if evidence.captured_at else None,
+        expires_at=evidence.expires_at.isoformat() if evidence.expires_at else None,
+        revoked_at=evidence.revoked_at.isoformat() if evidence.revoked_at else None,
+        revocation_reason=evidence.revocation_reason,
+        content_url=f"{base}/content",
+        created_at=evidence.created_at.isoformat(),
+        updated_at=evidence.updated_at.isoformat(),
+    )
+
+
+async def _validate_required_application_evidence(
+    application: ApplicantApplication,
+    repo: InMemoryApplicantRepository,
+) -> None:
+    submissions = await repo.list_evidence_for_application(application.id)
+    errors: list[dict[str, str]] = []
+    for requirement in application.evidence_requirements:
+        if not isinstance(requirement, dict) or not requirement.get("required"):
+            continue
+        evidence_type = str(requirement.get("evidence_type") or "").upper()
+        if evidence_type not in APPLICANT_UPLOAD_EVIDENCE_TYPES:
+            continue
+        requirement_id = str(requirement.get("evidence_id") or "")
+        matching = [
+            evidence
+            for evidence in submissions
+            if evidence.evidence_requirement_id == requirement_id
+        ]
+        for evidence in matching:
+            _refresh_evidence_status(evidence)
+        valid = [
+            evidence
+            for evidence in matching
+            if evidence.status == EvidenceStatus.ACTIVE
+            and evidence.application_id == application.id
+            and evidence.organization_id == application.organization_id
+            and evidence.applicant_id == application.applicant_id
+            and evidence.size_bytes == len(evidence.content)
+            and evidence.sha256 == hashlib.sha256(evidence.content).hexdigest()
+        ]
+        if not valid:
+            errors.append({
+                "evidence_requirement_id": requirement_id,
+                "code": "REQUIRED_EVIDENCE_MISSING_OR_INVALID",
+                "message": "Required evidence is missing, stale, revoked, or invalid.",
+            })
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "EVIDENCE_VALIDATION_FAILED",
+                "message": "Application evidence failed validation.",
+                "evidence_errors": errors,
+            },
+        )
 
 
 async def create_applicant(
@@ -1594,6 +2000,11 @@ async def create_application(
             for check in (template.get("required_checks") or [])
             if isinstance(check, dict)
         ],
+        evidence_requirements=[
+            requirement
+            for requirement in (template.get("evidence_requirements") or [])
+            if isinstance(requirement, dict)
+        ],
     )
     await repo.save_application(application)
     return _application_to_response(application)
@@ -1659,6 +2070,7 @@ async def submit_application(
     template = await _load_application_template(application.application_template_id)
     form_fields = template.get("form_fields") if isinstance(template.get("form_fields"), list) else []
     _validate_form_data(application.form_data, form_fields)
+    await _validate_required_application_evidence(application, repo)
     auto_approve = str(application.system_data.get("approval_strategy") or "").upper() in {
         "AUTO",
         "AUTO_APPROVE",
@@ -1831,6 +2243,7 @@ async def auto_issue_application(
 async def review_application(
     application_id: str,
     request: ApplicationReviewRequest,
+    reviewer_id: str,
     http_request: Request = None,
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> ApplicationResponse:
@@ -1845,6 +2258,8 @@ async def review_application(
             detail=f"Cannot review application in {application.status.value} status",
         )
     decision = request.decision.lower().strip()
+    if decision == "approve":
+        await _validate_required_application_evidence(application, repo)
     
     # Cedar policy evaluation for approval decisions
     if decision == "approve" and http_request and hasattr(http_request.app.state, "cedar_engine"):
@@ -1857,17 +2272,33 @@ async def review_application(
             "evidence_count": int(meta.get("evidence_count", 1)),
             "applicant_country": str(meta.get("applicant_country", "US")),
         }
-        org_id = str(meta.get("organization_id", application.applicant_id))
+        # Tenant ownership is an authoritative property of the persisted
+        # application. Form data and integration context are applicant-controlled
+        # inputs and must never select the Cedar organization or resource parent.
+        org_id = application.organization_id
+        # The canonical route has already authenticated the reviewer, verified
+        # organization ownership, checked application:approve, and enforced the
+        # reviewer lock. Project that trusted capability into the bundled Cedar
+        # member role while preserving the real principal ID for auditability.
+        cedar_role_id = "member"
         cedar_entities = [
             {
-                "uid": {"type": "MIP::User", "id": "reviewer"},
+                "uid": {"type": "MIP::User", "id": reviewer_id},
                 "attrs": {"email": "", "status": "ACTIVE"},
-                "parents": [{"type": "MIP::Organization", "id": org_id}],
+                "parents": [
+                    {"type": "MIP::Organization", "id": org_id},
+                    {"type": "MIP::Role", "id": cedar_role_id},
+                ],
             },
             {
                 "uid": {"type": "MIP::Organization", "id": org_id},
                 "attrs": {},
                 "parents": [],
+            },
+            {
+                "uid": {"type": "MIP::Role", "id": cedar_role_id},
+                "attrs": {"is_system_role": True},
+                "parents": [{"type": "MIP::Organization", "id": org_id}],
             },
             {
                 "uid": {"type": "MIP::Application", "id": application_id},
@@ -1879,9 +2310,9 @@ async def review_application(
             },
         ]
         cedar_decision = cedar_engine.is_authorized(
-            principal='MIP::User::"reviewer"',
+            principal=f"MIP::User::{json.dumps(reviewer_id)}",
             action='MIP::Action::"applications:approve"',
-            resource=f'MIP::Application::"{application_id}"',
+            resource=f"MIP::Application::{json.dumps(application_id)}",
             context=cedar_context,
             entities=cedar_entities,
         )
@@ -1891,12 +2322,12 @@ async def review_application(
                 detail=f"Approval denied by policy: {cedar_decision.reasons or cedar_decision.errors}",
             )
     
+    applicant = await repo.get_by_id(application.applicant_id)
     if decision == "approve":
         _set_application_status(application, ApplicationStatus.APPROVED)
         application.reviewed_at = datetime.now(timezone.utc)
         if request.notes:
             application.system_data["review_notes"] = request.notes
-        applicant = await repo.get_by_id(application.applicant_id)
         if applicant and applicant.status != ApplicantStatus.APPROVED:
             _set_applicant_status(applicant, ApplicantStatus.APPROVED)
             await repo.save(applicant)
@@ -1908,7 +2339,6 @@ async def review_application(
         application.system_data["rejection_reason"] = request.reason
         if request.notes:
             application.system_data["review_notes"] = request.notes
-        applicant = await repo.get_by_id(application.applicant_id)
         if applicant:
             _set_applicant_status(applicant, ApplicantStatus.REJECTED)
             await repo.save(applicant)
@@ -1916,6 +2346,50 @@ async def review_application(
         raise HTTPException(status_code=400, detail="Invalid decision")
 
     await repo.save_application(application)
+    if DomainEvent and EventType:
+        event_type = (
+            EventType.APPLICATION_APPROVED
+            if decision == "approve"
+            else EventType.APPLICATION_REJECTED
+        )
+        event_data = {
+            "applicant_id": application.applicant_id,
+            "application_id": application.id,
+            "credential_template_id": application.credential_template_id,
+            "status": application.status.value,
+            "reviewer_notes": request.notes,
+        }
+        if applicant:
+            event_data.update(
+                {
+                    "email": applicant.email,
+                    "given_name": applicant.given_name,
+                    "family_name": applicant.family_name,
+                    "vetting_level": applicant.vetting_level.value,
+                }
+            )
+        if request.reason:
+            event_data["rejection_reason"] = request.reason
+        try:
+            await get_event_publisher().publish(
+                DomainEvent(
+                    event_type=event_type,
+                    aggregate_id=application.id,
+                    aggregate_type="application",
+                    organization_id=application.organization_id,
+                    data=event_data,
+                    timestamp=application.reviewed_at,
+                )
+            )
+        except Exception as exc:
+            # The durable review decision is authoritative. A temporary event
+            # transport outage must be visible without rolling it back.
+            logger.warning(
+                "Failed to publish %s for application %s: %s",
+                event_type.value,
+                application.id,
+                exc,
+            )
     return _application_to_response(application)
 
 
@@ -2098,11 +2572,11 @@ async def get_application(
 
 async def list_checks(
     application_id: str,
-    limit: int = Query(default=100, le=500, description="Max items to return"),
-    offset: int = Query(default=0, ge=0, description="Number of items to skip"),
+    limit: int = 100,
+    offset: int = 0,
     repo: InMemoryApplicantRepository = Depends(get_repo),
 ) -> list[VettingCheckResponse]:
-    """List vetting checks for an application."""
+    """List vetting checks for an application from canonical route code."""
     application = await repo.get_application(application_id)
     if not application:
         raise HTTPException(status_code=404, detail="Application not found")
@@ -2137,7 +2611,10 @@ async def complete_check(
     check.status = VettingCheckStatus.COMPLETED_PASSED if request.passed else VettingCheckStatus.COMPLETED_FAILED
     check.notes = request.notes
     check.performed_by = request.performed_by
-    check.result = request.result
+    check.result = {
+        **request.result,
+        "evidence_submission_ids": list(dict.fromkeys(request.evidence_submission_ids)),
+    }
     check.completed_at = datetime.now(timezone.utc)
     check.updated_at = datetime.now(timezone.utc)
     await repo.save_check(check)
@@ -2277,60 +2754,6 @@ async def update_applicant(
     return _to_response(applicant)
 
 
-async def review_applicant(
-    applicant_id: str,
-    request: ReviewRequest,
-    repo: InMemoryApplicantRepository = Depends(get_repo),
-) -> ApplicantResponse:
-    """Review an applicant (approve/reject)."""
-    applicant = await repo.get_by_id(applicant_id)
-    if not applicant:
-        raise HTTPException(status_code=404, detail="Applicant not found")
-
-    if applicant.status == ApplicantStatus.DRAFT:
-        _set_applicant_status(applicant, ApplicantStatus.SUBMITTED)
-    if applicant.status in {ApplicantStatus.SUBMITTED, ApplicantStatus.PENDING_INFORMATION}:
-        _set_applicant_status(applicant, ApplicantStatus.UNDER_REVIEW)
-    
-    if request.decision == "approve":
-        applicant.approve(request.notes)
-        
-        # Publish APPLICATION_APPROVED event
-        if EventPublisher and get_event_publisher():
-            try:
-                event = DomainEvent(
-                    event_type=EventType.APPLICATION_APPROVED,
-                    aggregate_id=applicant.id,
-                    aggregate_type="applicant",
-                    organization_id=applicant.organization_id,
-                    data={
-                        "applicant_id": applicant.id,
-                        "email": applicant.email,
-                        "given_name": applicant.given_name,
-                        "family_name": applicant.family_name,
-                        "status": applicant.status.value,
-                        "vetting_level": applicant.vetting_level.value,
-                        "reviewer_notes": request.notes,
-                    }
-                )
-                publisher = get_event_publisher()
-                await publisher.publish(event)
-                logger.info(f"Published APPLICATION_APPROVED event for applicant {applicant.id}")
-            except Exception as e:
-                logger.error(f"Failed to publish event: {e}")
-                # Don't fail the approval if event publishing fails
-        
-    elif request.decision == "reject":
-        if not request.reason:
-            raise HTTPException(status_code=400, detail="Rejection reason required")
-        applicant.reject(request.reason)
-    else:
-        raise HTTPException(status_code=400, detail="Invalid decision")
-    
-    await repo.save(applicant)
-    return _to_response(applicant)
-
-
 async def revoke_applicant(
     applicant_id: str,
     reason: str = Query(...),
@@ -2418,6 +2841,11 @@ def _check_to_response(check: VettingCheck) -> VettingCheckResponse:
         check_type=check.check_type.value,
         provider=check.external_provider,
         status=check.status.value,
+        evidence_refs=[
+            str(value)
+            for value in check.result.get("evidence_submission_ids", [])
+            if str(value)
+        ],
         performed_by=check.performed_by,
         started_at=check.started_at.isoformat() if check.started_at else None,
         completed_at=check.completed_at.isoformat() if check.completed_at else None,
@@ -2459,7 +2887,7 @@ def _enriched_application_to_response(
 
 
 # =============================================================================
-# MIP 0.3 HTTP Adapter
+# MIP 0.4 HTTP Adapter
 # =============================================================================
 
 canonical_router = APIRouter(tags=["applicants"])
@@ -2745,6 +3173,207 @@ async def get_my_application_detail(
     return _enriched_application_to_response(application, applicant)
 
 
+async def _application_evidence(
+    application: ApplicantApplication,
+    evidence_id: str,
+    repo: InMemoryApplicantRepository,
+) -> ApplicationEvidence:
+    evidence = await repo.get_evidence(evidence_id)
+    if (
+        not evidence
+        or evidence.status == EvidenceStatus.DELETED
+        or evidence.application_id != application.id
+        or evidence.organization_id != application.organization_id
+        or evidence.applicant_id != application.applicant_id
+    ):
+        raise HTTPException(status_code=404, detail="Application evidence not found")
+    _refresh_evidence_status(evidence)
+    return evidence
+
+
+async def _self_application_evidence_context(
+    application_id: str,
+    user_id: str,
+    repo: InMemoryApplicantRepository,
+) -> tuple[ApplicantApplication, Applicant]:
+    """Resolve applicant-owned evidence without revealing foreign applications."""
+    application = await repo.get_application(application_id)
+    if not application:
+        raise HTTPException(status_code=404, detail="Application evidence not found")
+    applicant = await repo.get_by_id(application.applicant_id)
+    if (
+        not applicant
+        or (applicant.user_id != user_id and applicant.oidc_subject != user_id)
+    ):
+        logger.warning(
+            "Applicant evidence authorization denied user=%s application=%s org=%s",
+            user_id,
+            application_id,
+            application.organization_id,
+        )
+        raise HTTPException(status_code=404, detail="Application evidence not found")
+    return application, applicant
+
+
+async def _organization_application_evidence_context(
+    organization_id: str,
+    application_id: str,
+    x_user_id: str | None,
+    x_organization_id: str | None,
+    x_org_permissions: str | None,
+    repo: InMemoryApplicantRepository,
+) -> ApplicantApplication:
+    """Resolve reviewer evidence while concealing cross-tenant resources."""
+    user_id, header_org_id, permissions = _identity_headers(
+        x_user_id,
+        x_organization_id=x_organization_id,
+        x_org_permissions=x_org_permissions,
+    )
+    if header_org_id != organization_id or "application:review" not in permissions:
+        raise HTTPException(status_code=403, detail="Action not authorized")
+    application = await repo.get_application(application_id)
+    if not application or application.organization_id != organization_id:
+        logger.warning(
+            "Cross-organization evidence access concealed user=%s application=%s requested_org=%s",
+            user_id,
+            application_id,
+            organization_id,
+        )
+        raise HTTPException(status_code=404, detail="Application evidence not found")
+    return application
+
+
+@canonical_router.post(
+    "/v1/me/applications/{application_id}/evidence",
+    response_model=ApplicationEvidenceResponse,
+    response_model_exclude_none=True,
+)
+async def post_my_application_evidence(
+    application_id: str,
+    body: SubmitApplicationEvidenceRequest,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationEvidenceResponse:
+    user_id, _, _ = _identity_headers(x_user_id)
+    application, applicant = await _self_application_evidence_context(application_id, user_id, repo)
+    requirement, content, captured_at, expires_at = _validate_evidence_upload(application, body)
+
+    for existing in await repo.list_evidence_for_application(application.id):
+        if (
+            existing.evidence_requirement_id == body.evidence_requirement_id
+            and existing.status == EvidenceStatus.ACTIVE
+        ):
+            existing.status = EvidenceStatus.REVOKED
+            existing.revoked_at = datetime.now(timezone.utc)
+            existing.revocation_reason = "Superseded by a newer applicant submission"
+            existing.updated_at = existing.revoked_at
+            await repo.save_evidence(existing)
+
+    now = datetime.now(timezone.utc)
+    evidence = ApplicationEvidence(
+        application_id=application.id,
+        applicant_id=applicant.id,
+        organization_id=application.organization_id,
+        evidence_requirement_id=body.evidence_requirement_id,
+        evidence_type=str(requirement.get("evidence_type") or "").upper(),
+        media_type=body.media_type.strip().lower(),
+        filename=_safe_evidence_filename(body.filename),
+        content=content,
+        size_bytes=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+        submitted_by=user_id,
+        captured_at=captured_at,
+        expires_at=expires_at,
+        created_at=now,
+        updated_at=now,
+    )
+    await repo.save_evidence(evidence)
+    logger.info(
+        "Application evidence submitted user=%s application=%s org=%s requirement=%s evidence=%s",
+        user_id,
+        application.id,
+        application.organization_id,
+        evidence.evidence_requirement_id,
+        evidence.id,
+    )
+    return _evidence_to_response(evidence, reviewer=False)
+
+
+@canonical_router.get(
+    "/v1/me/applications/{application_id}/evidence",
+    response_model=list[ApplicationEvidenceResponse],
+    response_model_exclude_none=True,
+)
+async def get_my_application_evidence_list(
+    application_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> list[ApplicationEvidenceResponse]:
+    user_id, _, _ = _identity_headers(x_user_id)
+    application, _ = await _self_application_evidence_context(application_id, user_id, repo)
+    evidence = await repo.list_evidence_for_application(application.id)
+    return [_evidence_to_response(item, reviewer=False) for item in evidence]
+
+
+@canonical_router.get(
+    "/v1/me/applications/{application_id}/evidence/{evidence_id}",
+    response_model=ApplicationEvidenceResponse,
+    response_model_exclude_none=True,
+)
+async def get_my_application_evidence(
+    application_id: str,
+    evidence_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationEvidenceResponse:
+    user_id, _, _ = _identity_headers(x_user_id)
+    application, _ = await _self_application_evidence_context(application_id, user_id, repo)
+    evidence = await _application_evidence(application, evidence_id, repo)
+    return _evidence_to_response(evidence, reviewer=False)
+
+
+@canonical_router.get("/v1/me/applications/{application_id}/evidence/{evidence_id}/content")
+async def get_my_application_evidence_content(
+    application_id: str,
+    evidence_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> Response:
+    user_id, _, _ = _identity_headers(x_user_id)
+    application, _ = await _self_application_evidence_context(application_id, user_id, repo)
+    evidence = await _application_evidence(application, evidence_id, repo)
+    if evidence.status != EvidenceStatus.ACTIVE:
+        raise HTTPException(status_code=410, detail="Application evidence is no longer available")
+    return Response(
+        content=evidence.content,
+        media_type=evidence.media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{evidence.filename}"',
+            "Digest": f"sha-256={base64.b64encode(bytes.fromhex(evidence.sha256)).decode('ascii')}",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@canonical_router.delete("/v1/me/applications/{application_id}/evidence/{evidence_id}")
+async def delete_my_application_evidence(
+    application_id: str,
+    evidence_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> dict[str, bool]:
+    user_id, _, _ = _identity_headers(x_user_id)
+    application, _ = await _self_application_evidence_context(application_id, user_id, repo)
+    if application.status not in {ApplicationStatus.DRAFT, ApplicationStatus.PENDING_INFORMATION}:
+        raise HTTPException(status_code=409, detail="Evidence can only be deleted before submission")
+    evidence = await _application_evidence(application, evidence_id, repo)
+    evidence.status = EvidenceStatus.DELETED
+    evidence.content = b""
+    evidence.updated_at = datetime.now(timezone.utc)
+    await repo.save_evidence(evidence)
+    return {"deleted": True}
+
+
 @canonical_router.post("/v1/me/applications/{application_id}/submit", response_model=ApplicationResponse, response_model_exclude_none=True)
 async def post_my_application_submit(
     application_id: str,
@@ -2852,6 +3481,125 @@ async def get_organization_applicant_detail(
     return _enriched_application_to_response(application, applicant)
 
 
+@canonical_router.get(
+    "/v1/organizations/{organization_id}/applicants/{application_id}/evidence",
+    response_model=list[ApplicationEvidenceResponse],
+    response_model_exclude_none=True,
+)
+async def get_organization_applicant_evidence_list(
+    organization_id: str,
+    application_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> list[ApplicationEvidenceResponse]:
+    application = await _organization_application_evidence_context(
+        organization_id,
+        application_id,
+        x_user_id,
+        x_organization_id,
+        x_org_permissions,
+        repo,
+    )
+    evidence = await repo.list_evidence_for_application(application.id)
+    return [_evidence_to_response(item, reviewer=True) for item in evidence]
+
+
+@canonical_router.get(
+    "/v1/organizations/{organization_id}/applicants/{application_id}/evidence/{evidence_id}",
+    response_model=ApplicationEvidenceResponse,
+    response_model_exclude_none=True,
+)
+async def get_organization_applicant_evidence(
+    organization_id: str,
+    application_id: str,
+    evidence_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationEvidenceResponse:
+    application = await _organization_application_evidence_context(
+        organization_id,
+        application_id,
+        x_user_id,
+        x_organization_id,
+        x_org_permissions,
+        repo,
+    )
+    evidence = await _application_evidence(application, evidence_id, repo)
+    return _evidence_to_response(evidence, reviewer=True)
+
+
+@canonical_router.get(
+    "/v1/organizations/{organization_id}/applicants/{application_id}/evidence/{evidence_id}/content"
+)
+async def get_organization_applicant_evidence_content(
+    organization_id: str,
+    application_id: str,
+    evidence_id: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> Response:
+    application = await _organization_application_evidence_context(
+        organization_id,
+        application_id,
+        x_user_id,
+        x_organization_id,
+        x_org_permissions,
+        repo,
+    )
+    evidence = await _application_evidence(application, evidence_id, repo)
+    if evidence.status != EvidenceStatus.ACTIVE:
+        raise HTTPException(status_code=410, detail="Application evidence is no longer available")
+    return Response(
+        content=evidence.content,
+        media_type=evidence.media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{evidence.filename}"',
+            "Digest": f"sha-256={base64.b64encode(bytes.fromhex(evidence.sha256)).decode('ascii')}",
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@canonical_router.post(
+    "/v1/organizations/{organization_id}/applicants/{application_id}/evidence/{evidence_id}/revoke",
+    response_model=ApplicationEvidenceResponse,
+    response_model_exclude_none=True,
+)
+async def post_organization_applicant_evidence_revoke(
+    organization_id: str,
+    application_id: str,
+    evidence_id: str,
+    body: RevokeApplicationEvidenceRequest,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    x_organization_id: str | None = Header(default=None, alias="X-Organization-Id"),
+    x_org_permissions: str | None = Header(default=None, alias="X-Org-Permissions"),
+    repo: InMemoryApplicantRepository = Depends(get_repo),
+) -> ApplicationEvidenceResponse:
+    application = await _organization_application_evidence_context(
+        organization_id,
+        application_id,
+        x_user_id,
+        x_organization_id,
+        x_org_permissions,
+        repo,
+    )
+    evidence = await _application_evidence(application, evidence_id, repo)
+    if evidence.status != EvidenceStatus.ACTIVE:
+        raise HTTPException(status_code=409, detail="Only active evidence can be revoked")
+    evidence.status = EvidenceStatus.REVOKED
+    evidence.revoked_at = datetime.now(timezone.utc)
+    evidence.revocation_reason = body.reason
+    evidence.updated_at = evidence.revoked_at
+    await repo.save_evidence(evidence)
+    return _evidence_to_response(evidence, reviewer=True)
+
+
 @canonical_router.post("/v1/organizations/{organization_id}/applicants/{application_id}/lock", response_model=LockResponse, response_model_exclude_none=True)
 async def post_organization_applicant_lock(
     organization_id: str,
@@ -2946,6 +3694,7 @@ async def _canonical_review_decision(
     response = await review_application(
         application.id,
         ApplicationReviewRequest(decision=decision, notes=notes, reason=reason),
+        reviewer_id=user_id,
         http_request=http_request,
         repo=repo,
     )
@@ -3032,7 +3781,7 @@ async def _canonical_check_action(
     x_org_permissions: str | None,
     repo: InMemoryApplicantRepository,
 ) -> VettingCheckResponse:
-    await _organization_application(
+    application = await _organization_application(
         organization_id, application_id, "application:review",
         x_user_id, x_organization_id, x_org_permissions, repo,
     )
@@ -3043,6 +3792,13 @@ async def _canonical_check_action(
         raise HTTPException(status_code=404, detail="Vetting check not found")
     if body is None:
         return await start_check(check_id, repo=repo)
+    for evidence_id in dict.fromkeys(body.evidence_submission_ids):
+        evidence = await _application_evidence(application, evidence_id, repo)
+        if evidence.status != EvidenceStatus.ACTIVE:
+            raise HTTPException(
+                status_code=422,
+                detail="Vetting checks may reference only active evidence from this application",
+            )
     body.performed_by = user_id
     return await complete_check(check_id, body, repo=repo)
 
@@ -3125,6 +3881,9 @@ async def post_organization_applicant_withdraw(
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
+    from common.application_event_auth import validate_application_event_configuration
+
+    validate_application_event_configuration()
     _repo = InMemoryApplicantRepository()
     
     # Initialize Cedar engine for approval policies
