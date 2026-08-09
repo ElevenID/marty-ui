@@ -107,7 +107,13 @@ class PresentationPolicyServiceGrpc(
 ):
     """gRPC inbound adapter for the presentation-policy service."""
 
-    def __init__(self, repo: Any, evaluate_fn: Any, to_response_fn: Any) -> None:
+    def __init__(
+        self,
+        repo: Any,
+        evaluate_fn: Any,
+        to_response_fn: Any,
+        cedar_engine: Any,
+    ) -> None:
         """
         Parameters
         ----------
@@ -117,10 +123,13 @@ class PresentationPolicyServiceGrpc(
             ``evaluate_presentation`` coroutine (the REST handler).
         to_response_fn:
             ``_policy_to_response`` helper.
+        cedar_engine:
+            Credential-verification policy engine owned by the service runtime.
         """
         self._repo = repo
         self._evaluate_fn = evaluate_fn
         self._to_response_fn = to_response_fn
+        self._cedar_engine = cedar_engine
 
     # -- GetPolicy -----------------------------------------------------------
 
@@ -176,6 +185,7 @@ class PresentationPolicyServiceGrpc(
                 request=eval_req,
                 http_request=None,
                 repo=self._repo,
+                cedar_engine=self._cedar_engine,
             )
         except HTTPException as exc:
             status_mapping = {
@@ -187,7 +197,9 @@ class PresentationPolicyServiceGrpc(
                 422: grpc.StatusCode.INVALID_ARGUMENT,
                 503: grpc.StatusCode.UNAVAILABLE,
             }
-            context.set_code(status_mapping.get(exc.status_code, grpc.StatusCode.INTERNAL))
+            context.set_code(
+                status_mapping.get(exc.status_code, grpc.StatusCode.INTERNAL)
+            )
             context.set_details(str(exc.detail))
             return presentation_policy_service_pb2.PolicyEvaluationResponse()
         except Exception as exc:
@@ -221,10 +233,7 @@ class PresentationPolicyServiceGrpc(
     # -- CreatePolicy --------------------------------------------------------
 
     async def CreatePolicy(self, request, context):
-        from datetime import datetime, timezone
-
         from presentation_policy.main import (
-            AlternativeRequirement,
             DisplayMetadata,
             PresentationPolicy,
             RequestPurpose,

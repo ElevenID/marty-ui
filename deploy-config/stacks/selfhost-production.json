@@ -25,6 +25,7 @@
     "flow_workload_client_key",
     "verification_workload_client_cert",
     "verification_workload_client_key",
+    "flow_application_event_hmac_key",
     "integration_secret_master_key",
     "token_hmac_key",
     "openbao_service_token",

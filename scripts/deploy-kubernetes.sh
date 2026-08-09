@@ -228,6 +228,7 @@ cmd_setup_secrets() {
   local workload_identity_ca_cert pp_workload_server_cert pp_workload_server_key
   local flow_workload_client_cert flow_workload_client_key
   local verification_workload_client_cert verification_workload_client_key
+  local issuance_api_key grpc_service_token flow_application_event_hmac_key integration_secret_master_key canvas_credentials_shared_secret openbao_service_token
   local session_secret_key
   local cloudflare_tunnel_token
 
@@ -252,6 +253,7 @@ cmd_setup_secrets() {
   flow_workload_client_key="$(resolve_secret_input FLOW_WORKLOAD_CLIENT_KEY)"
   verification_workload_client_cert="$(resolve_secret_input VERIFICATION_WORKLOAD_CLIENT_CERT)"
   verification_workload_client_key="$(resolve_secret_input VERIFICATION_WORKLOAD_CLIENT_KEY)"
+  flow_application_event_hmac_key="$(resolve_secret_input FLOW_APPLICATION_EVENT_HMAC_KEY)"
   integration_secret_master_key="$(resolve_secret_input INTEGRATION_SECRET_MASTER_KEY)"
   canvas_credentials_shared_secret="$(resolve_secret_input CANVAS_CREDENTIALS_SHARED_SECRET)"
   openbao_service_token="$(resolve_secret_input OPENBAO_SERVICE_TOKEN)"
@@ -281,6 +283,7 @@ cmd_setup_secrets() {
     --from-literal=ISSUANCE_API_KEY="$issuance_api_key" \
     --from-literal=SIGNING_KEYS_INTERNAL_API_KEY="$issuance_api_key" \
     --from-literal=GRPC_SERVICE_TOKEN="$grpc_service_token" \
+    --from-literal=FLOW_APPLICATION_EVENT_HMAC_KEY="$flow_application_event_hmac_key" \
     --from-literal=INTEGRATION_SECRET_MASTER_KEY="$integration_secret_master_key" \
     --from-literal=CANVAS_CREDENTIALS_SHARED_SECRET="$canvas_credentials_shared_secret" \
     --from-literal=OPENBAO_SERVICE_TOKEN="$openbao_service_token" \

@@ -28,6 +28,9 @@ Required files:
 - `flow_workload_client_key`
 - `verification_workload_client_cert`
 - `verification_workload_client_key`
+- `flow_application_event_hmac_key`
+- `integration_secret_master_key`
+- `token_hmac_key`
 - `openbao_service_token`
 - `cloudflare_tunnel_token`
 
@@ -38,6 +41,10 @@ Required files:
 ```bash
 python -c "import os, base64; print(base64.b64encode(os.urandom(32)).decode())"
 ```
+
+`flow_application_event_hmac_key` is a distinct random value of at least 32
+bytes shared only by the Applicant and Flow services. It authenticates approval
+events that can create credential offers; do not reuse `grpc_service_token`.
 
 Optional files may be left empty when the related integration is disabled:
 
