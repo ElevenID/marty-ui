@@ -23,6 +23,18 @@ ISSUANCE_TRANSACTION_ID = str(uuid.uuid4())
 def _upgrade() -> None:
     with psycopg.connect(DATABASE_URL) as connection:
         connection.execute("CREATE SCHEMA IF NOT EXISTS flow_service")
+        connection.execute(
+            "CREATE SCHEMA IF NOT EXISTS deployment_profile_service"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deployment_profile_service.deployment_profiles (
+                id VARCHAR PRIMARY KEY,
+                enabled_flow_ids JSON NOT NULL DEFAULT '[]'::json,
+                updated_at TIMESTAMPTZ
+            )
+            """
+        )
         connection.commit()
 
     config = Config("/contract/migrations/alembic.ini")
