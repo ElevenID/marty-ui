@@ -642,6 +642,8 @@ services:
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_PORT: "9009"
       DID_RESOLUTION_BASE_URL: http://gateway:8000
+      DID_PUBLIC_FALLBACK_ENABLED: ${DID_PUBLIC_FALLBACK_ENABLED:-false}
+      DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       ISSUANCE_SERVICE_URL: http://issuance:8005
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
