@@ -619,7 +619,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
     # ------------------------------------------------------------------ #
 
     async def ApplicationApproved(self, request, context):
-        from flow.main import ApplicationApprovedWebhook
+        from flow.main import ApplicationApprovedWebhook, ApplicationOfferConflictError
         from common.application_event_auth import ApplicationEventAuthError
 
         raw_event = {
@@ -649,6 +649,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
                 event=webhook,
                 repo=self._get_repo(),
                 auth_evidence=auth_evidence,
+                enforce_replay=True,
             )
         except ApplicationEventAuthError as exc:
             code = grpc.StatusCode.UNAUTHENTICATED
@@ -661,6 +662,10 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             return flow_service_pb2.ApplicationApprovedResponse()
         except ValueError as exc:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(str(exc))
+            return flow_service_pb2.ApplicationApprovedResponse()
+        except ApplicationOfferConflictError as exc:
+            context.set_code(grpc.StatusCode.ALREADY_EXISTS)
             context.set_details(str(exc))
             return flow_service_pb2.ApplicationApprovedResponse()
         except Exception as exc:
