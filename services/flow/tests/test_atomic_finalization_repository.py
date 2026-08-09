@@ -92,10 +92,15 @@ async def test_postgres_finalization_commits_replay_and_result_together() -> Non
     assert committed is True
     assert session.rolled_back is False
     assert len(session.statements) == 3
-    assert "ON CONFLICT DO NOTHING" in str(session.statements[1])
+    assert "clock_timestamp()" in str(session.statements[0])
+    replay_insert_sql = str(session.statements[1])
+    assert "ON CONFLICT DO NOTHING" in replay_insert_sql
+    assert "clock_timestamp()" in replay_insert_sql
     update_sql = str(session.statements[2])
     assert "flow_instances.status" in update_sql
     assert "flow_instances.id" in update_sql
+    assert "flow_instances.expires_at" in update_sql
+    assert "clock_timestamp()" in update_sql
 
 
 @pytest.mark.asyncio
@@ -149,3 +154,60 @@ async def test_in_memory_finalization_rejects_a_stale_expected_status() -> None:
     assert committed is False
     assert stored.status is FlowInstanceStatus.IN_PROGRESS
     assert repository._consumed_nonce_digests == {}
+
+
+@pytest.mark.asyncio
+async def test_in_memory_finalization_rejects_expiry_at_commit() -> None:
+    repository = InMemoryFlowRepository()
+    stored = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+    )
+    await repository.save_instance(stored)
+    terminal = _terminal_instance()
+    terminal.id = stored.id
+
+    committed = await repository.finalize_verification(
+        terminal,
+        nonce_digest="d" * 64,
+        replay_expires_at=terminal.completed_at + timedelta(minutes=5),
+        expected_status=FlowInstanceStatus.AWAITING_WALLET,
+    )
+
+    assert committed is False
+    assert (await repository.get_instance(stored.id)).status is (
+        FlowInstanceStatus.AWAITING_WALLET
+    )
+    assert repository._consumed_nonce_digests == {}
+
+
+@pytest.mark.asyncio
+async def test_in_memory_stale_save_cannot_overwrite_terminal_decision() -> None:
+    repository = InMemoryFlowRepository()
+    stored = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repository.save_instance(stored)
+    stale = await repository.get_instance(stored.id)
+    terminal = _terminal_instance()
+    terminal.id = stored.id
+
+    committed = await repository.finalize_verification(
+        terminal,
+        nonce_digest="e" * 64,
+        replay_expires_at=terminal.completed_at + timedelta(minutes=5),
+        expected_status=FlowInstanceStatus.AWAITING_WALLET,
+    )
+    assert committed is True
+
+    stale.status = FlowInstanceStatus.EXPIRED
+    await repository.save_instance(stale)
+
+    persisted = await repository.get_instance(stored.id)
+    assert persisted.status is FlowInstanceStatus.COMPLETED
+    assert persisted.result == terminal.result

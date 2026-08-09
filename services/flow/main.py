@@ -1543,6 +1543,7 @@ class InMemoryFlowRepository:
         self._finalization_lock = asyncio.Lock()
         self._consumed_nonce_digests: dict[str, datetime] = {}
         self._finalized_instance_ids: set[str] = set()
+        self._terminal_instance_snapshots: dict[str, FlowInstance] = {}
 
     # Flow Definition operations
     async def save_definition(self, flow: FlowDefinition) -> None:
@@ -1559,7 +1560,20 @@ class InMemoryFlowRepository:
 
     # Flow Instance operations
     async def save_instance(self, instance: FlowInstance) -> None:
-        self._instances[instance.id] = instance
+        async with self._finalization_lock:
+            terminal_snapshot = self._terminal_instance_snapshots.get(instance.id)
+            if terminal_snapshot is not None:
+                # Keep the development repository's historical shared-object
+                # behavior while restoring the immutable committed decision if
+                # a stale handler mutates that object before calling save.
+                instance.__dict__.update(copy.deepcopy(terminal_snapshot.__dict__))
+                self._instances[instance.id] = instance
+                return
+            self._instances[instance.id] = instance
+            if instance.status in TERMINAL_STATES:
+                self._terminal_instance_snapshots[instance.id] = copy.deepcopy(
+                    instance
+                )
 
     async def get_instance(self, instance_id: str) -> FlowInstance | None:
         return self._instances.get(instance_id)
@@ -1574,17 +1588,22 @@ class InMemoryFlowRepository:
     ) -> bool:
         """Development repository equivalent of the database transaction."""
         async with self._finalization_lock:
-            now = instance.completed_at or datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc)
             self._consumed_nonce_digests = {
                 digest: expiry
                 for digest, expiry in self._consumed_nonce_digests.items()
                 if expiry > now
             }
+            stored_instance = self._instances.get(instance.id)
             if (
                 nonce_digest in self._consumed_nonce_digests
                 or instance.id in self._finalized_instance_ids
-                or instance.id not in self._instances
-                or self._instances[instance.id].status is not expected_status
+                or stored_instance is None
+                or stored_instance.status is not expected_status
+                or (
+                    stored_instance.expires_at is not None
+                    and now > stored_instance.expires_at
+                )
                 or expected_status
                 not in {
                     FlowInstanceStatus.AWAITING_WALLET,
@@ -1594,8 +1613,10 @@ class InMemoryFlowRepository:
                 return False
             self._consumed_nonce_digests[nonce_digest] = replay_expires_at
             self._finalized_instance_ids.add(instance.id)
-            stored_instance = self._instances[instance.id]
             stored_instance.__dict__.update(copy.deepcopy(instance.__dict__))
+            self._terminal_instance_snapshots[instance.id] = copy.deepcopy(
+                stored_instance
+            )
             self._instances[instance.id] = stored_instance
             return True
 
