@@ -35,14 +35,39 @@ async def _resolve_with_handler(
 
 @pytest.mark.asyncio
 async def test_resolves_did_jwk_without_network() -> None:
-    jwk = {"kty": "OKP", "crv": "Ed25519", "x": "abc", "d": "private"}
+    jwk = {"kty": "OKP", "crv": "Ed25519", "x": "abc"}
     encoded = base64.urlsafe_b64encode(json.dumps(jwk).encode()).rstrip(b"=").decode()
 
     result = await did_resolution.resolve_did_document(f"did:jwk:{encoded}")
 
     assert result.source == "embedded:did:jwk"
-    assert "d" not in result.document["verificationMethod"][0]["publicKeyJwk"]
+    assert result.document["verificationMethod"][0]["publicKeyJwk"] == jwk
     assert len(result.content_sha256) == 64
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "jwk",
+    [
+        {"kty": "OKP", "crv": "Ed25519", "x": "abc", "d": "private"},
+        {"kty": "oct", "k": "symmetric-secret"},
+        {"kty": "EC", "crv": "P-256", "x": "missing-y"},
+    ],
+)
+async def test_rejects_did_jwk_without_a_complete_public_key(jwk: dict) -> None:
+    encoded = base64.urlsafe_b64encode(json.dumps(jwk).encode()).rstrip(b"=").decode()
+
+    with pytest.raises(did_resolution.DidResolutionError, match="public|private"):
+        await did_resolution.resolve_did_document(f"did:jwk:{encoded}")
+
+
+@pytest.mark.asyncio
+async def test_rejects_noncanonical_did_jwk_base64url() -> None:
+    jwk = {"kty": "OKP", "crv": "Ed25519", "x": "abc"}
+    encoded = base64.urlsafe_b64encode(json.dumps(jwk).encode()).rstrip(b"=").decode()
+
+    with pytest.raises(did_resolution.DidResolutionError, match="canonical"):
+        await did_resolution.resolve_did_document(f"did:jwk:{encoded}!")
 
 
 @pytest.mark.asyncio

@@ -832,6 +832,79 @@ async def test_did_resolver_delegates_to_controlled_common_boundary(
     resolver.assert_awaited_once_with(did)
 
 
+def _purpose_scoped_did_document() -> tuple[str, dict[str, object]]:
+    issuer = "did:web:issuer.example:orgs:tenant-a"
+    return issuer, {
+        "id": issuer,
+        "verificationMethod": [
+            {
+                "id": "#authentication-key",
+                "controller": issuer,
+                "publicKeyJwk": {
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "x": "authentication-key",
+                },
+            },
+            {
+                "id": "#assertion-key",
+                "controller": issuer,
+                "publicKeyJwk": {
+                    "kty": "OKP",
+                    "crv": "Ed25519",
+                    "x": "assertion-key",
+                },
+            },
+        ],
+        "authentication": ["#authentication-key"],
+        "assertionMethod": [f"{issuer}#assertion-key"],
+    }
+
+
+def test_jwt_key_selection_rejects_authentication_only_kid() -> None:
+    issuer, document = _purpose_scoped_did_document()
+
+    with pytest.raises(RuntimeError, match="kid does not select"):
+        pp._select_public_jwk_from_did_document(
+            document,
+            issuer,
+            f"{issuer}#authentication-key",
+        )
+
+
+def test_jwt_key_selection_rejects_unknown_kid_instead_of_fallback() -> None:
+    issuer, document = _purpose_scoped_did_document()
+
+    with pytest.raises(RuntimeError, match="kid does not select"):
+        pp._select_public_jwk_from_did_document(
+            document,
+            issuer,
+            f"{issuer}#missing",
+        )
+
+
+def test_jwt_key_selection_rejects_ambiguous_assertion_without_kid() -> None:
+    issuer, document = _purpose_scoped_did_document()
+    assertion = document["assertionMethod"]
+    assert isinstance(assertion, list)
+    assertion.append(f"{issuer}#authentication-key")
+
+    with pytest.raises(RuntimeError, match="kid is required"):
+        pp._select_public_jwk_from_did_document(document, issuer, None)
+
+
+def test_jwt_key_selection_normalizes_relative_assertion_method_ids() -> None:
+    issuer, document = _purpose_scoped_did_document()
+
+    selected = pp._select_public_jwk_from_did_document(
+        document,
+        issuer,
+        "#assertion-key",
+    )
+
+    assert selected["x"] == "assertion-key"
+
+
 @pytest.mark.asyncio
 async def test_vcdm_data_integrity_rejects_cross_tenant_proof_before_rust(
     monkeypatch: pytest.MonkeyPatch,
@@ -1067,6 +1140,7 @@ async def test_w3c_vc_does_not_expose_unverified_credential_id(
                         },
                     }
                 ],
+                "assertionMethod": [f"{issuer}#key-1"],
             }
         ),
     )

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import hashlib
 import ipaddress
 import json
@@ -147,21 +148,41 @@ def _result(document: dict[str, Any], source: str) -> DidResolutionResult:
 
 def _resolve_did_jwk(did: str) -> DidResolutionResult:
     encoded = did[len("did:jwk:") :]
+    if not encoded or any(
+        character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        for character in encoded
+    ):
+        raise DidResolutionError("did:jwk payload is not canonical base64url")
     try:
         padding = "=" * (-len(encoded) % 4)
+        decoded = base64.b64decode(
+            encoded + padding,
+            altchars=b"-_",
+            validate=True,
+        )
+        if base64.urlsafe_b64encode(decoded).rstrip(b"=").decode() != encoded:
+            raise DidResolutionError("did:jwk payload is not canonical base64url")
         jwk = json.loads(
-            base64.urlsafe_b64decode(encoded + padding),
+            decoded.decode("utf-8"),
             object_pairs_hook=_reject_duplicate_keys,
         )
-    except (ValueError, json.JSONDecodeError) as exc:
+    except (binascii.Error, UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
         raise DidResolutionError("did:jwk payload is invalid") from exc
-    if not isinstance(jwk, dict) or not jwk.get("kty"):
+    if not isinstance(jwk, dict):
         raise DidResolutionError("did:jwk payload is not a public JWK")
-    public_jwk = {
-        key: value
-        for key, value in jwk.items()
-        if key not in {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
-    }
+    if {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}.intersection(jwk):
+        raise DidResolutionError("did:jwk payload contains private key material")
+    kty = jwk.get("kty")
+    required_members = {
+        "OKP": ("crv", "x"),
+        "EC": ("crv", "x", "y"),
+        "RSA": ("n", "e"),
+    }.get(kty)
+    if required_members is None or any(
+        not isinstance(jwk.get(member), str) or not jwk[member]
+        for member in required_members
+    ):
+        raise DidResolutionError("did:jwk payload is not a supported public JWK")
     document = {
         "@context": ["https://www.w3.org/ns/did/v1"],
         "id": did,
@@ -170,7 +191,7 @@ def _resolve_did_jwk(did: str) -> DidResolutionResult:
                 "id": did,
                 "type": "JsonWebKey2020",
                 "controller": did,
-                "publicKeyJwk": public_jwk,
+                "publicKeyJwk": jwk,
             }
         ],
         "authentication": [did],

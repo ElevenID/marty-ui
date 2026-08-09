@@ -987,35 +987,64 @@ def _select_public_jwk_from_did_document(
         if isinstance(did_document.get("verificationMethod"), list)
         else []
     )
-    method_by_id = {
-        method.get("id"): method
-        for method in methods
-        if isinstance(method, dict) and isinstance(method.get("id"), str)
-    }
-
-    if kid:
-        for method_id, method in method_by_id.items():
-            if _method_id_matches_kid(method_id, kid, issuer_did) and isinstance(
-                method.get("publicKeyJwk"), dict
-            ):
-                return dict(method["publicKeyJwk"])
+    method_by_id: dict[str, dict[str, Any]] = {}
+    for method in methods:
+        if not isinstance(method, dict) or not isinstance(method.get("id"), str):
+            continue
+        method_id = _absolute_did_method_id(method["id"], issuer_did)
+        if method_id in method_by_id:
+            raise RuntimeError(
+                f"DID resolution failed for {issuer_did}: duplicate verification method id"
+            )
+        method_by_id[method_id] = method
 
     assertion = (
         did_document.get("assertionMethod")
         if isinstance(did_document.get("assertionMethod"), list)
         else []
     )
+    authorized_ids: set[str] = set()
     for entry in assertion:
-        method = entry if isinstance(entry, dict) else method_by_id.get(entry)
-        if isinstance(method, dict) and isinstance(method.get("publicKeyJwk"), dict):
-            return dict(method["publicKeyJwk"])
+        value = entry.get("id") if isinstance(entry, dict) else entry
+        if not isinstance(value, str):
+            continue
+        method_id = _absolute_did_method_id(value, issuer_did)
+        if method_id not in method_by_id:
+            raise RuntimeError(
+                f"DID resolution failed for {issuer_did}: assertion method was not found"
+            )
+        authorized_ids.add(method_id)
 
-    for method in methods:
-        if isinstance(method, dict) and isinstance(method.get("publicKeyJwk"), dict):
-            return dict(method["publicKeyJwk"])
+    if kid:
+        selected_ids = {
+            method_id
+            for method_id in authorized_ids
+            if _method_id_matches_kid(method_id, kid, issuer_did)
+        }
+        if len(selected_ids) != 1:
+            raise RuntimeError(
+                f"DID resolution failed for {issuer_did}: kid does not select exactly one assertion method"
+            )
+    else:
+        if len(authorized_ids) != 1:
+            raise RuntimeError(
+                f"DID resolution failed for {issuer_did}: kid is required when assertion methods are ambiguous"
+            )
+        selected_ids = authorized_ids
+
+    selected = method_by_id[next(iter(selected_ids))].get("publicKeyJwk")
+    if isinstance(selected, dict) and selected.get("kty"):
+        prohibited = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}.intersection(
+            selected
+        )
+        if prohibited:
+            raise RuntimeError(
+                f"DID resolution failed for {issuer_did}: assertion method contains private key material"
+            )
+        return dict(selected)
 
     raise RuntimeError(
-        f"DID resolution failed for {issuer_did}: no publicKeyJwk assertion method found"
+        f"DID resolution failed for {issuer_did}: assertion method has no public JWK"
     )
 
 
