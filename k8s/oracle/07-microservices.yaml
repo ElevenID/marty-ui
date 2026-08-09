@@ -1040,6 +1040,13 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: NOTIFICATION_EVENT_PRODUCER_ID
+              value: "applicant"
+            - name: NOTIFICATION_APPLICANT_EVENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: NOTIFICATION_APPLICANT_EVENT_TOKEN
             - name: APPLICANT_SERVICE_PORT
               value: "8006"
             - name: DATABASE_URL
@@ -1150,6 +1157,16 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: NOTIFICATION_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: NOTIFICATION_WEBHOOK_SECRET
+            - name: NOTIFICATION_APPLICANT_EVENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: NOTIFICATION_APPLICANT_EVENT_TOKEN
             - name: NOTIFICATION_SERVICE_PORT
               value: "8007"
             - name: DATABASE_URL
@@ -1182,6 +1199,12 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SMTP_PASSWORD
+            - name: NOTIFICATION_OPENBAO_TOKEN_FILE
+              value: /run/secrets/notification_openbao_token
+          volumeMounts:
+            - name: notification-openbao-token
+              mountPath: /run/secrets
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -1201,6 +1224,13 @@ spec:
               port: 8007
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: notification-openbao-token
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: NOTIFICATION_OPENBAO_TOKEN
+                path: notification_openbao_token
 ---
 apiVersion: v1
 kind: Service

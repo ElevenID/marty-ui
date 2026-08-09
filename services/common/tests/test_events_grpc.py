@@ -57,16 +57,13 @@ class TestApplicationApprovedGrpc:
                 "applicant_id": "a-1",
                 "credential_type": "MemberCredential",
             },
+            event_id=event.event_id,
             timestamp="2026-03-14T00:00:00+00:00",
         )
 
     async def test_routes_to_grpc_not_http(self):
-        """APPLICATION_APPROVED events are routed to _publish_to_flow_grpc, not HTTP."""
+        """APPLICATION_APPROVED events are routed to the Flow RPC."""
         publisher = EventPublisher()
-        # Add an HTTP subscriber that should NOT be called
-        publisher.subscribers[EventType.APPLICATION_APPROVED] = [
-            "http://should-not-call.example.com/events",
-        ]
         event = _make_event()
 
         with patch.object(publisher, "_publish_to_flow_grpc", new_callable=AsyncMock) as mock_grpc:
@@ -118,38 +115,29 @@ class TestApplicationApprovedGrpc:
             await publisher.publish(event)
 
 
-# ── Other events → HTTP webhooks ─────────────────────────────────────
+# ── External fan-out governance ──────────────────────────────────────
 
 
-class TestHttpWebhookPublish:
-    async def test_no_subscribers_is_noop(self):
+class TestExternalFanoutGovernance:
+    async def test_retired_environment_subscriber_cannot_trigger_direct_http(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv(
+            "CREDENTIAL_ISSUED_SUBSCRIBERS",
+            "https://legacy.example/events",
+        )
         publisher = EventPublisher()
+        publisher._publish_to_notification_service = AsyncMock()
         event = _make_event(event_type=EventType.CREDENTIAL_ISSUED)
 
-        # No subscribers configured → silent no-op
-        await publisher.publish(event)
-
-    async def test_delivers_to_http_subscribers(self):
-        publisher = EventPublisher()
-        publisher.subscribers[EventType.CREDENTIAL_ISSUED] = [
-            "http://hook1.example.com/events",
-        ]
-        event = _make_event(event_type=EventType.CREDENTIAL_ISSUED)
-
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-
-        with patch("common.events.httpx.AsyncClient") as MockClient:
-            client_instance = AsyncMock()
-            client_instance.post = AsyncMock(return_value=mock_response)
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=client_instance)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
-
+        with patch("common.events.httpx.AsyncClient") as direct_client:
             await publisher.publish(event)
 
-            client_instance.post.assert_awaited_once()
-            call_kwargs = client_instance.post.call_args
-            assert call_kwargs[0][0] == "http://hook1.example.com/events"
+        direct_client.assert_not_called()
+        publisher._publish_to_notification_service.assert_awaited_once_with(event)
+        assert "Ignoring retired direct subscriber variables" in caplog.text
 
 
 # ── Lazy gRPC channel ───────────────────────────────────────────────

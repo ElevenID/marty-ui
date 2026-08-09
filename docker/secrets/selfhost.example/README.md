@@ -19,11 +19,17 @@ Required files:
 - `keycloak_admin_password`
 - `marty_api_client_secret`
 - `issuance_api_key`
+- `grpc_service_token`
+- `notification_webhook_secret`
+- `notification_applicant_event_token`
 - `integration_secret_master_key`
 - `openbao_service_token`
+- `notification_openbao_token`
 - `cloudflare_tunnel_token`
 
 `openbao_service_token` should contain the scoped `credential-service` token for your operator-managed external Vault/OpenBao instance. The helper script `scripts/bootstrap-selfhost-vault.sh` can create it from a bootstrap token without keeping the bootstrap credential in the stack.
+
+`notification_openbao_token` is the narrower `notification-webhook-service` token. Only the Notification workload receives it; other services and the migration job must not mount it.
 
 `integration_secret_master_key` is a base64-encoded 32-byte AES key used by issuance to encrypt organization-managed integration secrets, such as Canvas Credentials API tokens. Generate it with:
 

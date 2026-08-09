@@ -1,0 +1,1 @@
+"""Notification schema revisions."""
