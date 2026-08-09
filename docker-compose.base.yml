@@ -545,6 +545,7 @@ services:
     container_name: marty-applicant
     environment:
       APPLICANT_SERVICE_PORT: "8006"
+      FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-dev-flow-application-event-hmac-key-change-before-production}
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
       APPLICANT_DATA_FILE: /app/data/applicant_store.json
       ISSUANCE_SERVICE_URL: http://issuance:8005
@@ -720,6 +721,7 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_DB_FLOW: "3"
       FLOW_GRPC_PORT: "9011"
+      FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-dev-flow-application-event-hmac-key-change-before-production}
     ports:
       - "8011:8011"
       - "9011:9011"
