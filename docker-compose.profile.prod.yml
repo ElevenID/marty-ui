@@ -6,6 +6,12 @@ services:
   auth:
     environment:
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      FLOW_WEBHOOK_SECRET: ${FLOW_WEBHOOK_SECRET:?FLOW_WEBHOOK_SECRET must be set}
+
+  flow:
+    environment:
+      FLOW_WEBHOOK_SECRET: ${FLOW_WEBHOOK_SECRET:?FLOW_WEBHOOK_SECRET must be set}
+      FLOW_CALLBACK_DESTINATIONS: ${FLOW_CALLBACK_DESTINATIONS:?FLOW_CALLBACK_DESTINATIONS must be set}
 
   keycloak:
     environment:

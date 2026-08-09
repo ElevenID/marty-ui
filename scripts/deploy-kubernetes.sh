@@ -224,7 +224,7 @@ cmd_setup_secrets() {
   local postgres_password keycloak_db_password marty_db_password keycloak_admin_password
   local marty_api_client_secret rabbitmq_password rabbitmq_erlang_cookie
   local google_client_id google_client_secret smtp_username smtp_password
-  local issuance_api_key grpc_service_token integration_secret_master_key canvas_credentials_shared_secret openbao_service_token
+  local issuance_api_key grpc_service_token flow_webhook_secret integration_secret_master_key canvas_credentials_shared_secret openbao_service_token
   local session_secret_key
   local cloudflare_tunnel_token
 
@@ -242,11 +242,18 @@ cmd_setup_secrets() {
   smtp_password="$(resolve_secret_input SMTP_PASSWORD)"
   issuance_api_key="$(resolve_secret_input ISSUANCE_API_KEY)"
   grpc_service_token="$(resolve_secret_input GRPC_SERVICE_TOKEN)"
+  flow_webhook_secret="$(resolve_secret_input FLOW_WEBHOOK_SECRET)"
   integration_secret_master_key="$(resolve_secret_input INTEGRATION_SECRET_MASTER_KEY)"
   canvas_credentials_shared_secret="$(resolve_secret_input CANVAS_CREDENTIALS_SHARED_SECRET)"
   openbao_service_token="$(resolve_secret_input OPENBAO_SERVICE_TOKEN)"
   cloudflare_tunnel_token="$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"
 
+  if is_placeholder_secret "$flow_webhook_secret"; then
+    error "FLOW_WEBHOOK_SECRET must be set to a non-placeholder value before deployment."
+  fi
+  if (( ${#flow_webhook_secret} < 32 )); then
+    error "FLOW_WEBHOOK_SECRET must be at least 32 characters."
+  fi
   require_catalog_required_secrets "$K8S_STACK_NAME"
 
   kubectl create secret generic marty-secrets \
@@ -271,6 +278,7 @@ cmd_setup_secrets() {
     --from-literal=ISSUANCE_API_KEY="$issuance_api_key" \
     --from-literal=SIGNING_KEYS_INTERNAL_API_KEY="$issuance_api_key" \
     --from-literal=GRPC_SERVICE_TOKEN="$grpc_service_token" \
+    --from-literal=FLOW_WEBHOOK_SECRET="$flow_webhook_secret" \
     --from-literal=INTEGRATION_SECRET_MASTER_KEY="$integration_secret_master_key" \
     --from-literal=CANVAS_CREDENTIALS_SHARED_SECRET="$canvas_credentials_shared_secret" \
     --from-literal=OPENBAO_SERVICE_TOKEN="$openbao_service_token" \
