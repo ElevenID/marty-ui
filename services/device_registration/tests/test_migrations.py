@@ -66,14 +66,17 @@ def test_runtime_model_has_immutable_version_and_single_current_constraints() ->
 
 def test_device_migration_generates_backfill_and_atomicity_ddl_offline() -> None:
     code = f"""
+import logging
 from alembic import command
 from alembic.config import Config
 from device_registration.infrastructure.models import mapper_registry
+probe_logger = logging.getLogger('marty.device-migration.probe')
 config = Config({str(MIGRATIONS / "alembic.ini")!r})
 config.set_main_option('script_location', {str(MIGRATIONS)!r})
 config.set_main_option('sqlalchemy.url', 'postgresql+psycopg2://user:pass@localhost/db')
 config.attributes['target_metadata'] = mapper_registry.metadata
 command.upgrade(config, 'head', sql=True)
+print(f'probe_logger_disabled={{probe_logger.disabled}}')
 """
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join(
@@ -93,6 +96,7 @@ command.upgrade(config, 'head', sql=True)
     assert "ux_device_key_one_current" in result.stdout
     assert "key_version = 1" in result.stdout
     assert "device_key_transitions" in result.stdout
+    assert "probe_logger_disabled=False" in result.stdout
 
 
 def test_device_startup_requires_owned_migration_and_versioned_projection(

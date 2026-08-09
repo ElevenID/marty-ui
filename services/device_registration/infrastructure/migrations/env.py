@@ -8,7 +8,9 @@ from sqlalchemy import engine_from_config, pool, text
 config = context.config
 target_metadata = config.attributes.get("target_metadata")
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Alembic runs in-process during startup and some verification paths. Keep
+    # service and audit loggers alive when loading Alembic's logging settings.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 
 def run_migrations_offline() -> None:
