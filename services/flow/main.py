@@ -82,6 +82,15 @@ from flow.callback_outbox import (
 )
 from flow.infrastructure.adapters import PostgresFlowRepository
 from protocol_version import MIP_VERSION
+from common.application_event_auth import (
+    AUDIENCE as APPLICATION_EVENT_AUDIENCE,
+    PRODUCER as APPLICATION_EVENT_PRODUCER,
+    ApplicationEventAuthError,
+    ApplicationEventEvidence,
+    authenticate_application_event,
+    consume_application_event_replay,
+    validate_application_event_configuration,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -343,6 +352,7 @@ VERIFIER_CLIENT_ID = os.environ.get(
 
 # Replay state is committed by the repository with the terminal decision.
 _NONCE_TTL_SECONDS = int(os.environ.get("NONCE_TTL_SECONDS", "3600"))
+_nonce_redis: Any = None  # Set during lifespan when Redis is available.
 
 
 def get_config() -> dict[str, Any]:
@@ -1445,6 +1455,7 @@ class FlowInstance:
 
     # External references
     external_reference: str | None = None
+    application_flow_key_hash: str | None = None
 
     # Timing
     started_at: datetime | None = None
@@ -1512,11 +1523,15 @@ class FlowInstanceArtifact:
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     flow_instance_id: str = ""
+    issuance_transaction_id: str | None = None
 
     # OID4VCI-specific fields
     credential_offer_uri: str | None = None
+    credential_offer_uris: dict[str, str] = field(default_factory=dict)
+    credential_offer_labels: dict[str, str] = field(default_factory=dict)
     qr_payload: str | None = None  # Base64-encoded QR image data URI
     pre_authorized_code: str | None = None
+    issuance_status: str | None = None
 
     # Timing
     expires_at: datetime | None = None
@@ -1533,6 +1548,19 @@ class FlowInstanceArtifact:
     attempt_number: int = 1
 
     # Timestamps
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class ApplicationEventPlanReceipt:
+    """Durable, minimized snapshot of flows selected by one authenticated event."""
+
+    event_id_sha256: str
+    payload_sha256: str
+    organization_id: str
+    application_id: str
+    flow_plan: list[dict[str, str]] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -1554,6 +1582,10 @@ class InMemoryFlowRepository:
         self._finalized_instance_ids: set[str] = set()
         self._callback_events: dict[str, CallbackOutboxEvent] = {}
         self._terminal_instance_snapshots: dict[str, FlowInstance] = {}
+        self._application_flow_instances: dict[tuple[str, str], str] = {}
+        self._application_event_receipts: dict[str, ApplicationEventPlanReceipt] = {}
+        self._application_event_plan_lock = asyncio.Lock()
+        self._artifact_locks: dict[str, asyncio.Lock] = {}
 
     # Flow Definition operations
     async def save_definition(self, flow: FlowDefinition) -> None:
@@ -1581,9 +1613,55 @@ class InMemoryFlowRepository:
                 return
             self._instances[instance.id] = instance
             if instance.status in TERMINAL_STATES:
-                self._terminal_instance_snapshots[instance.id] = copy.deepcopy(
-                    instance
+                self._terminal_instance_snapshots[instance.id] = copy.deepcopy(instance)
+
+    async def reserve_application_event_plan(
+        self,
+        receipt: ApplicationEventPlanReceipt,
+        planned_instances: list[tuple[FlowInstance, dict[str, str]]],
+    ) -> tuple[ApplicationEventPlanReceipt, bool]:
+        async with self._application_event_plan_lock:
+            existing_receipt = self._application_event_receipts.get(
+                receipt.event_id_sha256
+            )
+            if existing_receipt is not None:
+                if (
+                    existing_receipt.payload_sha256 != receipt.payload_sha256
+                    or existing_receipt.organization_id != receipt.organization_id
+                    or existing_receipt.application_id != receipt.application_id
+                ):
+                    raise ApplicationOfferConflictError(
+                        "application event identity was already bound to another payload"
+                    )
+                return existing_receipt, False
+
+            staged_instances: list[tuple[tuple[str, str], FlowInstance]] = []
+            final_plan: list[dict[str, str]] = []
+            for candidate, plan_entry in planned_instances:
+                logical_key = (
+                    candidate.organization_id,
+                    candidate.application_flow_key_hash or "",
                 )
+                existing_id = self._application_flow_instances.get(logical_key)
+                selected = self._instances.get(existing_id) if existing_id else None
+                if selected is None:
+                    selected = candidate
+                    staged_instances.append((logical_key, selected))
+                if (
+                    selected.context.get("_marty_application_offer_semantics_hash_v1")
+                    != plan_entry["offer_semantics_hash"]
+                ):
+                    raise ApplicationOfferConflictError(
+                        "application and flow were already bound to different issuance claims"
+                    )
+                final_plan.append({**plan_entry, "instance_id": selected.id})
+
+            for logical_key, instance in staged_instances:
+                self._instances[instance.id] = instance
+                self._application_flow_instances[logical_key] = instance.id
+            receipt.flow_plan = final_plan
+            self._application_event_receipts[receipt.event_id_sha256] = receipt
+            return receipt, True
 
     async def get_instance(self, instance_id: str) -> FlowInstance | None:
         return self._instances.get(instance_id)
@@ -1763,8 +1841,39 @@ class InMemoryFlowRepository:
         return instances
 
     # Flow Instance Artifact operations
-    async def save_artifact(self, artifact: FlowInstanceArtifact) -> None:
-        self._artifacts[artifact.id] = artifact
+    async def save_artifact(
+        self, artifact: FlowInstanceArtifact
+    ) -> FlowInstanceArtifact:
+        lock = self._artifact_locks.setdefault(
+            artifact.flow_instance_id, asyncio.Lock()
+        )
+        async with lock:
+            existing = next(
+                (
+                    item
+                    for item in self._artifacts.values()
+                    if item.id == artifact.id
+                    or (
+                        artifact.issuance_transaction_id is not None
+                        and item.issuance_transaction_id
+                        == artifact.issuance_transaction_id
+                    )
+                ),
+                None,
+            )
+            if existing is not None:
+                if existing.flow_instance_id != artifact.flow_instance_id:
+                    raise ValueError(
+                        "issuance transaction is already bound to another flow instance"
+                    )
+                persisted_id = existing.id
+                persisted_flow_instance_id = existing.flow_instance_id
+                existing.__dict__.update(artifact.__dict__)
+                existing.id = persisted_id
+                existing.flow_instance_id = persisted_flow_instance_id
+                return existing
+            self._artifacts[artifact.id] = artifact
+            return artifact
 
     async def get_artifact(self, artifact_id: str) -> FlowInstanceArtifact | None:
         return self._artifacts.get(artifact_id)
@@ -2062,8 +2171,19 @@ class VerificationResultResponse(BaseModel):
 
 
 class AdvanceFlowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     step_result: str = Field("success", max_length=50)  # success, failure, etc.
     data: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def reject_private_context(self) -> "AdvanceFlowRequest":
+        forbidden_path = _private_flow_context_path(self.data)
+        if forbidden_path:
+            raise ValueError(
+                f"data.{forbidden_path} is private service state and cannot be supplied"
+            )
+        return self
 
 
 class FlowInstanceArtifactResponse(BaseModel):
@@ -2126,36 +2246,107 @@ async def check_preconditions(
         return True, []
 
     unmet = []
+    evidence = context.get(_PRECONDITION_EVIDENCE_KEY)
+    if not isinstance(evidence, dict):
+        evidence = {}
 
     for precondition in preconditions:
         met = False
 
         if precondition == "application_approved":
-            # Check if application is approved in context
-            met = context.get("application_status") == "approved"
+            approval = evidence.get("application_approved")
+            met = (
+                isinstance(approval, dict)
+                and approval.get("producer") == APPLICATION_EVENT_PRODUCER
+                and approval.get("audience") == APPLICATION_EVENT_AUDIENCE
+                and bool(
+                    re.fullmatch(
+                        r"[0-9a-f]{64}", str(approval.get("event_id_sha256") or "")
+                    )
+                )
+                and bool(
+                    re.fullmatch(
+                        r"[0-9a-f]{64}", str(approval.get("payload_sha256") or "")
+                    )
+                )
+                and bool(str(approval.get("authenticated_at") or "").strip())
+            )
 
         elif precondition == "identity_verified":
-            # Check if identity verification passed
-            met = context.get("identity_verified") is True
+            # No authoritative setter/evidence schema exists yet.
+            met = False
 
         elif precondition == "manual_admin_approval":
-            # Check if admin explicitly approved
-            met = context.get("admin_approved") is True
+            met = False
 
         elif precondition == "external_verification":
-            # Check if external verification callback received
-            met = context.get("external_verification_result") == "success"
+            met = False
 
         else:
-            # Unknown precondition, log warning but don't block
+            # An unknown required control cannot be safely assumed satisfied.
             logger.warning(f"Unknown precondition: {precondition}")
-            met = True  # Treat unknown as met to avoid blocking
+            met = False
 
         if not met:
             unmet.append(precondition)
 
     all_met = len(unmet) == 0
     return all_met, unmet
+
+
+def _is_application_approved_issuance_trigger(flow_def: FlowDefinition) -> bool:
+    """Identify flows whose trigger grants application-approval authority."""
+    if (
+        flow_def.flow_type != FlowType.CUSTOM
+        or not flow_def.extension
+        or _effective_flow_type(flow_def) != FlowType.OID4VCI_PRE_AUTHORIZED
+    ):
+        return False
+    trigger = flow_def.trigger if isinstance(flow_def.trigger, dict) else {}
+    trigger_config = (
+        trigger.get("config") if isinstance(trigger.get("config"), dict) else {}
+    )
+    return (
+        str(trigger.get("trigger_type") or "").upper() == "WEBHOOK"
+        and str(trigger_config.get("event_type") or "").upper()
+        == "APPLICATION_APPROVED"
+    )
+
+
+def _required_issuance_preconditions(flow_def: FlowDefinition) -> list[str]:
+    """Collect every required control that must precede offer creation."""
+    required = list(flow_def.preconditions or [])
+    # The trigger is part of the server-owned flow contract. An administrator
+    # must not be able to accidentally author an APPLICATION_APPROVED issuance
+    # flow whose direct-start path bypasses authenticated approval evidence.
+    if _is_application_approved_issuance_trigger(flow_def):
+        required.append("application_approved")
+    for step in flow_def.steps:
+        if step.step_type != StepType.APPROVAL or not isinstance(step.config, dict):
+            continue
+        configured = step.config.get("required_preconditions", [])
+        if isinstance(configured, list):
+            required.extend(str(value) for value in configured if str(value).strip())
+        elif configured:
+            required.append("invalid_required_preconditions_configuration")
+    return list(dict.fromkeys(required))
+
+
+async def _assert_issuance_preconditions(
+    instance: FlowInstance,
+    flow_def: FlowDefinition,
+) -> None:
+    """Fail closed before any OID4VCI offer or pre-authorized code exists."""
+    required = _required_issuance_preconditions(flow_def)
+    met, unmet = await check_preconditions(required, instance.context)
+    if not met:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "ISSUANCE_PRECONDITIONS_NOT_MET",
+                "unmet_preconditions": unmet,
+            },
+        )
 
 
 def _protocol_status_for_instance(status: FlowInstanceStatus) -> str:
@@ -2201,6 +2392,8 @@ _PRIVATE_FLOW_CONTEXT_KEYS = frozenset(
         "api_key",
     }
 )
+_PRIVATE_FLOW_CONTEXT_PREFIX = "_marty_"
+_PRECONDITION_EVIDENCE_KEY = "_marty_precondition_evidence_v1"
 
 
 def _private_flow_context_path(value: Any, prefix: str = "") -> str | None:
@@ -2209,7 +2402,10 @@ def _private_flow_context_path(value: Any, prefix: str = "") -> str | None:
         for key, entry in value.items():
             key_text = str(key)
             path = f"{prefix}.{key_text}" if prefix else key_text
-            if key_text.casefold() in _PRIVATE_FLOW_CONTEXT_KEYS:
+            if (
+                key_text.casefold() in _PRIVATE_FLOW_CONTEXT_KEYS
+                or key_text.casefold().startswith(_PRIVATE_FLOW_CONTEXT_PREFIX)
+            ):
                 return path
             nested = _private_flow_context_path(entry, path)
             if nested:
@@ -2230,6 +2426,7 @@ def _public_flow_value(value: Any) -> Any:
             str(key): _public_flow_value(entry)
             for key, entry in value.items()
             if str(key).casefold() not in _PRIVATE_FLOW_CONTEXT_KEYS
+            and not str(key).casefold().startswith(_PRIVATE_FLOW_CONTEXT_PREFIX)
         }
     if isinstance(value, list):
         return [_public_flow_value(entry) for entry in value]
@@ -2491,6 +2688,29 @@ async def _initiate_credential_layer_issuance(
         list(claims.keys()),
     )
 
+    application_id = str(instance.context.get("application_id") or "").strip()
+    idempotency_key = (
+        f"application-flow-offer-v1:{instance.application_flow_key_hash}"
+        if instance.application_flow_key_hash and application_id
+        else ""
+    )
+    if not flow_def.credential_template_id:
+        raise HTTPException(status_code=500, detail="credential template is required")
+    template = await _get_credential_template_reference(flow_def.credential_template_id)
+    issuer_did = str(getattr(template, "issuer_did", "") or "").strip()
+    if not issuer_did.startswith("did:"):
+        raise HTTPException(
+            status_code=502,
+            detail="credential template did not return a valid issuer DID",
+        )
+    claims_json = json.dumps(
+        claims,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
     try:
         from marty_proto.v1 import issuance_service_pb2 as iss_pb2
         from marty_proto.v1 import issuance_service_pb2_grpc as iss_grpc
@@ -2513,7 +2733,11 @@ async def _initiate_credential_layer_issuance(
                     applicant_id=instance.subject_id or "",
                     subject_did=str(instance.context.get("subject_did") or ""),
                     holder_did=str(instance.context.get("holder_did") or ""),
-                    claims={k: str(v) for k, v in claims.items()},
+                    application_id=application_id,
+                    issuer_did=issuer_did,
+                    delivery_mode="wallet_only",
+                    idempotency_key=idempotency_key,
+                    claims_json=claims_json,
                 ),
                 timeout=10.0,
             )
@@ -2541,15 +2765,28 @@ async def _initiate_credential_layer_issuance(
             grpc_err,
         )
 
+    issuance_api_key = _read_secret_value("ISSUANCE_API_KEY")
+    if not issuance_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="credential issuance HTTP fallback is not authenticated",
+        )
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.post(
             f"{ISSUANCE_SERVICE_URL}/v1/issuance/initiate",
+            headers={
+                "X-API-Key": issuance_api_key,
+                **({"Idempotency-Key": idempotency_key} if idempotency_key else {}),
+            },
             json={
                 "organization_id": instance.organization_id,
                 "credential_template_id": flow_def.credential_template_id,
+                "application_id": application_id,
                 "applicant_id": instance.subject_id,
                 "subject_did": instance.context.get("subject_did"),
                 "holder_did": instance.context.get("holder_did"),
+                "issuer_did": issuer_did,
+                "delivery_mode": "wallet_only",
                 "claims": claims,
             },
         )
@@ -2694,6 +2931,25 @@ async def _create_oid4vci_artifact(
     if _effective_flow_type(flow_def) != FlowType.OID4VCI_PRE_AUTHORIZED:
         return None
 
+    await _assert_issuance_preconditions(instance, flow_def)
+
+    existing_artifacts = await repo.list_artifacts(instance.id)
+    if instance.application_flow_key_hash and existing_artifacts:
+        artifact = existing_artifacts[0]
+        instance.context["oid4vci_artifact_id"] = artifact.id
+        instance.context["credential_offer_transaction_id"] = (
+            artifact.issuance_transaction_id
+        )
+        instance.context["offer_id"] = artifact.issuance_transaction_id
+        instance.context["credential_offer_uri"] = artifact.credential_offer_uri
+        instance.context["credential_offer_uris"] = artifact.credential_offer_uris
+        instance.context["credential_offer_labels"] = artifact.credential_offer_labels
+        instance.context["issuance_status"] = artifact.issuance_status
+        if artifact.pre_authorized_code:
+            instance.context["pre_auth_code"] = artifact.pre_authorized_code
+        await repo.save_instance(instance)
+        return artifact
+
     issuance = await _initiate_credential_layer_issuance(instance, flow_def)
     pre_auth_code = issuance.get("pre_auth_code") or None
     state = issuance.get("id") or str(uuid.uuid4())
@@ -2753,24 +3009,30 @@ async def _create_oid4vci_artifact(
 
     artifact = FlowInstanceArtifact(
         flow_instance_id=instance.id,
+        issuance_transaction_id=issuance.get("id"),
         credential_offer_uri=credential_offer_uri,
+        credential_offer_uris=credential_offer_uris or {},
+        credential_offer_labels=credential_offer_labels or {},
         pre_authorized_code=pre_auth_code,
+        issuance_status=issuance.get("status"),
         state=state,
         expires_at=expires_at,
         status=ArtifactStatus.ACTIVE,
         attempt_number=attempt_number,
     )
 
-    await repo.save_artifact(artifact)
+    artifact = await repo.save_artifact(artifact)
 
     # Store artifact ID and offer details in instance context
     instance.context["oid4vci_artifact_id"] = artifact.id
-    instance.context["credential_offer_transaction_id"] = issuance.get("id")
-    instance.context["offer_id"] = issuance.get("id")
-    instance.context["credential_offer_uri"] = credential_offer_uri
-    instance.context["credential_offer_uris"] = credential_offer_uris or {}
-    instance.context["credential_offer_labels"] = credential_offer_labels or {}
-    instance.context["issuance_status"] = issuance.get("status")
+    instance.context["credential_offer_transaction_id"] = (
+        artifact.issuance_transaction_id
+    )
+    instance.context["offer_id"] = artifact.issuance_transaction_id
+    instance.context["credential_offer_uri"] = artifact.credential_offer_uri
+    instance.context["credential_offer_uris"] = artifact.credential_offer_uris
+    instance.context["credential_offer_labels"] = artifact.credential_offer_labels
+    instance.context["issuance_status"] = artifact.issuance_status
     if pre_auth_code:
         instance.context["pre_auth_code"] = pre_auth_code
 
@@ -3337,6 +3599,9 @@ async def start_flow(
     if _effective_flow_type(flow_def) == FlowType.PHYSICAL_DOCUMENT_ISSUANCE:
         await _initialize_physical_document_job(instance, flow_def)
     _sync_protocol_context(instance, flow_def)
+
+    if _effective_flow_type(flow_def) == FlowType.OID4VCI_PRE_AUTHORIZED:
+        await _assert_issuance_preconditions(instance, flow_def)
 
     # Set expiry
     from datetime import timedelta
@@ -6541,12 +6806,14 @@ async def submit_digital_credential_response(
 class ApplicationApprovedWebhook(BaseModel):
     """Webhook payload for application approved event."""
 
-    event_type: str
-    aggregate_id: str
-    aggregate_type: str
-    organization_id: str
-    data: dict
-    timestamp: str
+    model_config = ConfigDict(extra="forbid")
+
+    event_type: Literal["application.approved"]
+    aggregate_id: str = Field(min_length=1, max_length=255)
+    aggregate_type: Literal["application"]
+    organization_id: str = Field(min_length=1, max_length=255)
+    data: dict[str, Any]
+    timestamp: str = Field(min_length=1, max_length=64)
 
 
 @router.post("/siop")
@@ -6867,10 +7134,68 @@ async def submit_siop_id_token(
     }
 
 
+async def _authenticate_application_approved_event(
+    event: ApplicationApprovedWebhook | dict[str, Any],
+    metadata: dict[str, str],
+) -> ApplicationEventEvidence:
+    """Verify an approval event before its durable execution plan is reserved."""
+    payload = (
+        event.model_dump(mode="json")
+        if isinstance(event, ApplicationApprovedWebhook)
+        else dict(event)
+    )
+    return await authenticate_application_event(
+        payload,
+        metadata,
+        replay_store=_nonce_redis,
+        consume_replay=False,
+    )
+
+
+class ApplicationOfferConflictError(RuntimeError):
+    """One application/flow identity was reused with different offer semantics."""
+
+
 @router.post("/webhooks/application-approved")
+async def receive_application_approved(
+    event: ApplicationApprovedWebhook,
+    request: Request,
+    repo: InMemoryFlowRepository = Depends(get_repo),
+) -> dict:
+    """Authenticate the Applicant workload before invoking issuance logic."""
+    try:
+        evidence = await _authenticate_application_approved_event(
+            event,
+            dict(request.headers),
+        )
+        return await handle_application_approved(
+            event=event,
+            repo=repo,
+            auth_evidence=evidence,
+            enforce_replay=True,
+        )
+    except ApplicationEventAuthError as exc:
+        status_code = 401
+        if exc.code == "replayed_event":
+            status_code = 409
+        elif exc.code in {"configuration_error", "replay_store_unavailable"}:
+            status_code = 503
+        raise HTTPException(
+            status_code=status_code,
+            detail={"error": exc.code, "message": str(exc)},
+        ) from exc
+    except ApplicationOfferConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "APPLICATION_OFFER_CONFLICT", "message": str(exc)},
+        ) from exc
+
+
 async def handle_application_approved(
     event: ApplicationApprovedWebhook,
-    repo: InMemoryFlowRepository = Depends(get_repo),
+    repo: InMemoryFlowRepository,
+    auth_evidence: ApplicationEventEvidence,
+    enforce_replay: bool = False,
 ) -> dict:
     """
     Handle APPLICATION_APPROVED event from applicant service.
@@ -6899,35 +7224,190 @@ async def handle_application_approved(
     all_flows = await repo.list_definitions(event.organization_id)
 
     def handles_application_approved(flow: FlowDefinition) -> bool:
-        if (
-            flow.status != FlowStatus.ACTIVE
-            or flow.flow_type != FlowType.CUSTOM
-            or not flow.extension
-        ):
-            return False
-        if (
-            flow.extension.get("extends_flow_type")
-            != FlowType.OID4VCI_PRE_AUTHORIZED.value
-        ):
-            return False
-        trigger = flow.trigger if isinstance(flow.trigger, dict) else {}
-        trigger_config = (
-            trigger.get("config") if isinstance(trigger.get("config"), dict) else {}
+        return (
+            flow.status == FlowStatus.ACTIVE
+            and _is_application_approved_issuance_trigger(flow)
         )
-        configured_event = str(trigger_config.get("event_type") or "").upper()
-        return configured_event == "APPLICATION_APPROVED"
 
-    matching_flows = [
-        flow
-        for flow in all_flows
-        if handles_application_approved(flow)
-        and (
-            not requested_template_id
-            or str(flow.credential_template_id or "").strip() == requested_template_id
+    matching_flows = sorted(
+        (
+            flow
+            for flow in all_flows
+            if handles_application_approved(flow)
+            and (
+                not requested_template_id
+                or str(flow.credential_template_id or "").strip()
+                == requested_template_id
+            )
+        ),
+        key=lambda flow: flow.id,
+    )
+
+    raw_event_claims = event.data.get("claims")
+    if raw_event_claims is not None and not isinstance(raw_event_claims, dict):
+        raise ApplicationOfferConflictError("application claims must be a JSON object")
+    event_claims = dict(raw_event_claims or {})
+    logger.info("[auto-trigger] event claim keys=%s", list(event_claims.keys()))
+
+    def logical_key(flow_def: FlowDefinition) -> str:
+        material = json.dumps(
+            [event.organization_id, event.aggregate_id, flow_def.id],
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
-    ]
+        return hashlib.sha256(
+            f"marty:application-flow-offer:v1:{material}".encode()
+        ).hexdigest()
 
-    if not matching_flows:
+    def semantics_hash(flow_def: FlowDefinition) -> str:
+        def enum_value(value: Any) -> Any:
+            return value.value if isinstance(value, Enum) else value
+
+        semantics = json.dumps(
+            {
+                "application_id": event.aggregate_id,
+                "organization_id": flow_def.organization_id,
+                "flow_definition_id": flow_def.id,
+                "flow_definition_name": flow_def.name,
+                "flow_definition_description": flow_def.description,
+                "flow_definition_version": flow_def.version,
+                "flow_status": enum_value(flow_def.status),
+                "flow_type": enum_value(flow_def.flow_type),
+                "flow_extension": flow_def.extension or {},
+                "steps": [
+                    {
+                        "id": step.id,
+                        "name": step.name,
+                        "description": step.description,
+                        "step_type": enum_value(step.step_type),
+                        "config": step.config,
+                        "approval_strategy": step.approval_strategy,
+                        "timeout_seconds": step.timeout_seconds,
+                        "conditions": step.conditions,
+                    }
+                    for step in flow_def.steps
+                ],
+                "transitions": [
+                    {
+                        "id": transition.id,
+                        "from_step_id": transition.from_step_id,
+                        "to_step_id": transition.to_step_id,
+                        "condition": enum_value(transition.condition),
+                        "condition_expression": transition.condition_expression,
+                    }
+                    for transition in flow_def.transitions
+                ],
+                "start_step_id": flow_def.start_step_id,
+                "preconditions": flow_def.preconditions,
+                "credential_template_id": flow_def.credential_template_id,
+                "application_template_id": flow_def.application_template_id,
+                "presentation_policy_id": flow_def.presentation_policy_id,
+                "delivery_destination_profile_id": (
+                    flow_def.delivery_destination_profile_id
+                ),
+                "deployment_profile_id": flow_def.deployment_profile_id,
+                "deployment_profile_ids": flow_def.deployment_profile_ids,
+                "trust_profile_id": flow_def.trust_profile_id,
+                "approval_strategy": flow_def.approval_strategy,
+                "hooks": flow_def.hooks,
+                "trigger": flow_def.trigger,
+                "default_timeout_seconds": flow_def.default_timeout_seconds,
+                "max_retries": flow_def.max_retries,
+                "retry_cooldown_minutes": flow_def.retry_cooldown_minutes,
+                "enable_resume": flow_def.enable_resume,
+                "applicant_id": applicant_id,
+                "claims": event_claims,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return hashlib.sha256(
+            f"marty:application-offer-semantics:v1:{semantics}".encode()
+        ).hexdigest()
+
+    from datetime import timedelta
+
+    planned_instances: list[tuple[FlowInstance, dict[str, str]]] = []
+    for flow_def in matching_flows:
+        application_flow_key_hash = logical_key(flow_def)
+        offer_semantics_hash = semantics_hash(flow_def)
+        initial_context = {
+            "applicant_id": applicant_id,
+            "application_id": event.aggregate_id or "",
+            "application_status": "approved",
+            "application_approved_at": event.timestamp,
+            "applicant_email": event.data.get("email"),
+            "applicant_given_name": event.data.get("given_name"),
+            "applicant_family_name": event.data.get("family_name"),
+            "vetting_level": event.data.get("vetting_level"),
+            "triggered_by_event": triggered_by_event or "application.approved",
+            "claims": event_claims,
+            _PRECONDITION_EVIDENCE_KEY: {
+                "application_approved": auth_evidence.as_dict(),
+            },
+            "_marty_application_offer_semantics_hash_v1": offer_semantics_hash,
+        }
+        instance = FlowInstance(
+            flow_definition_id=flow_def.id,
+            organization_id=flow_def.organization_id,
+            status=FlowInstanceStatus.IN_PROGRESS,
+            current_step_id=flow_def.start_step_id,
+            context=initial_context,
+            subject_id=applicant_id,
+            subject_type="applicant",
+            external_reference=f"application-flow:{application_flow_key_hash}",
+            application_flow_key_hash=application_flow_key_hash,
+            started_at=datetime.now(timezone.utc),
+        )
+        _sync_protocol_context(instance, flow_def)
+        instance.expires_at = instance.started_at + timedelta(
+            seconds=flow_def.default_timeout_seconds
+        )
+        if flow_def.start_step_id:
+            instance.step_history.append(
+                {
+                    "step_id": flow_def.start_step_id,
+                    "entered_at": datetime.now(timezone.utc).isoformat(),
+                    "status": "entered",
+                }
+            )
+        planned_instances.append(
+            (
+                instance,
+                {
+                    "flow_definition_id": flow_def.id,
+                    "application_flow_key_hash": application_flow_key_hash,
+                    "offer_semantics_hash": offer_semantics_hash,
+                    "flow_definition_version": str(flow_def.version),
+                },
+            )
+        )
+
+    receipt, _receipt_created = await repo.reserve_application_event_plan(
+        ApplicationEventPlanReceipt(
+            event_id_sha256=auth_evidence.event_id_sha256,
+            payload_sha256=auth_evidence.payload_sha256,
+            organization_id=event.organization_id,
+            application_id=event.aggregate_id,
+        ),
+        planned_instances,
+    )
+
+    if enforce_replay:
+        was_new = await consume_application_event_replay(
+            auth_evidence,
+            replay_store=_nonce_redis,
+        )
+        if not was_new and not receipt.flow_plan:
+            raise ApplicationEventAuthError(
+                "replayed_event",
+                "application event was already consumed",
+                evidence=auth_evidence,
+            )
+
+    if not receipt.flow_plan:
         detail = (
             "No active custom OID4VCI extension handling APPLICATION_APPROVED "
             f"matched org {event.organization_id}"
@@ -6941,83 +7421,32 @@ async def handle_application_approved(
             "reason": detail,
         }
 
-    triggered_instances = []
+    flow_by_id = {flow.id: flow for flow in all_flows}
+    triggered_instances: list[str] = []
     offers: list[dict[str, Any]] = []
-
-    for flow_def in matching_flows:
+    failed_flow_ids: list[str] = []
+    for plan_entry in receipt.flow_plan:
+        flow_def = flow_by_id.get(plan_entry["flow_definition_id"])
+        if (
+            flow_def is None
+            or semantics_hash(flow_def) != plan_entry["offer_semantics_hash"]
+        ):
+            raise ApplicationOfferConflictError(
+                "the durably selected application flow is unavailable or has changed"
+            )
+        instance = await repo.get_instance(plan_entry["instance_id"])
+        if instance is None:
+            raise RuntimeError(
+                "durable application event plan references a missing instance"
+            )
         try:
-            # Credential content crosses this boundary only through the
-            # canonical claim map assembled by the applicant service.
-            raw_event_claims = event.data.get("claims")
-            _event_claims = (
-                dict(raw_event_claims) if isinstance(raw_event_claims, dict) else {}
-            )
-            logger.info(
-                "[auto-trigger] event claims keys=%s values_preview=%s",
-                list(_event_claims.keys()),
-                {
-                    k: v
-                    for k, v in _event_claims.items()
-                    if k in ("email", "given_name", "family_name")
-                },
-            )
-
-            # Create initial context with application approval status
-            initial_context = {
-                "applicant_id": applicant_id,
-                "application_id": event.aggregate_id or "",
-                "application_status": "approved",
-                "application_approved_at": event.timestamp,
-                "applicant_email": event.data.get("email"),
-                "applicant_given_name": event.data.get("given_name"),
-                "applicant_family_name": event.data.get("family_name"),
-                "vetting_level": event.data.get("vetting_level"),
-                "triggered_by_event": triggered_by_event or "application.approved",
-                "claims": _event_claims,
-            }
-
-            # Start flow instance
-            instance = FlowInstance(
-                flow_definition_id=flow_def.id,
-                organization_id=flow_def.organization_id,
-                status=FlowInstanceStatus.IN_PROGRESS,
-                current_step_id=flow_def.start_step_id,
-                context=initial_context,
-                subject_id=applicant_id,
-                subject_type="applicant",
-                external_reference=f"auto-approved-{applicant_id}",
-                started_at=datetime.now(timezone.utc),
-            )
-            _sync_protocol_context(instance, flow_def)
-
-            # Set expiry
-            from datetime import timedelta
-
-            instance.expires_at = instance.started_at + timedelta(
-                seconds=flow_def.default_timeout_seconds
-            )
-
-            # Record first step
-            if flow_def.start_step_id:
-                instance.step_history.append(
-                    {
-                        "step_id": flow_def.start_step_id,
-                        "entered_at": datetime.now(timezone.utc).isoformat(),
-                        "status": "entered",
-                    }
-                )
-
-            await repo.save_instance(instance)
-
-            # Create OID4VCI artifact if needed
             artifact = None
             if _effective_flow_type(flow_def) == FlowType.OID4VCI_PRE_AUTHORIZED:
                 artifact = await _create_oid4vci_artifact(instance, flow_def, repo)
                 if artifact:
-                    logger.info(f"Created OID4VCI artifact: {artifact.id}")
+                    logger.info("Created OID4VCI artifact: %s", artifact.id)
 
             triggered_instances.append(instance.id)
-
             if artifact:
                 offers.append(
                     {
@@ -7045,22 +7474,30 @@ async def handle_application_approved(
                         or "pending",
                     }
                 )
-
             logger.info(
-                f"Auto-triggered flow {flow_def.id} ({flow_def.name}) for applicant {applicant_id}: "
-                f"instance {instance.id}"
+                "Auto-triggered flow %s (%s) for applicant %s: instance %s",
+                flow_def.id,
+                flow_def.name,
+                applicant_id,
+                instance.id,
             )
-
-        except Exception as e:
+        except ApplicationOfferConflictError:
+            raise
+        except Exception as exc:
+            failed_flow_ids.append(flow_def.id)
             logger.error(
-                f"Failed to trigger flow {flow_def.id} for applicant {applicant_id}: {e}"
+                "Failed to trigger flow %s for applicant %s: %s",
+                flow_def.id,
+                applicant_id,
+                exc,
             )
 
     return {
-        "success": True,
+        "success": not failed_flow_ids,
         "flows_triggered": len(triggered_instances),
         "instance_ids": triggered_instances,
         "offers": offers,
+        **({"failed_flow_ids": failed_flow_ids} if failed_flow_ids else {}),
     }
 
 
@@ -7071,7 +7508,7 @@ async def handle_application_approved(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _repo
+    global _repo, _nonce_redis
     logger.info(f"Starting {SERVICE_NAME}...")
     callback_secret = _read_secret_value("FLOW_WEBHOOK_SECRET")
     if (
@@ -7081,6 +7518,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         raise RuntimeError(
             "FLOW_WEBHOOK_SECRET must contain at least 32 bytes in production"
         )
+    validate_application_event_configuration()
+
+    # Initialize Redis for nonce replay prevention (shared across replicas)
+    import redis.asyncio as aioredis
+
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379")
+    redis_db = int(os.environ.get("REDIS_DB_FLOW", "3"))
+    try:
+        _nonce_redis = aioredis.from_url(
+            f"{redis_url}/{redis_db}", encoding="utf-8", decode_responses=True
+        )
+        await _nonce_redis.ping()
+        logger.info("Flow nonce store: Redis at %s/%s", redis_url, redis_db)
+    except Exception as exc:
+        logger.warning("Redis unavailable (%s) — using process-local nonce store", exc)
+        _nonce_redis = None
 
     # Initialize PostgreSQL adapter
     config = get_config()
@@ -7147,6 +7600,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     flow_servicer = FlowServiceGrpc(
         start_verification_fn=start_verification_flow,
         application_approved_fn=handle_application_approved,
+        authenticate_application_approved_fn=_authenticate_application_approved_event,
         get_repo_fn=get_repo,
     )
     add_FlowServiceServicer_to_server(flow_servicer, grpc_server)

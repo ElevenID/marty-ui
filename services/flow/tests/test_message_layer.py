@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -17,10 +18,15 @@ from starlette.requests import Request
 
 import flow.main as flow_main
 import flow.callback_outbox as callback_outbox
+from common.application_event_auth import (
+    ApplicationEventEvidence,
+    sign_application_event,
+)
 from marty_common.messages import MessageType
 from common.webhook_signatures import verify_event_signature
 from flow.main import (
     ApplicationApprovedWebhook,
+    AdvanceFlowRequest,
     _DC_API_PROTOCOL,
     CreateFlowDefinitionRequest,
     FlowDefinition,
@@ -29,6 +35,7 @@ from flow.main import (
     FlowInstanceStatus,
     FlowType,
     StartVerificationFlowRequest,
+    StartFlowRequest,
     DigitalCredentialSubmissionRequest,
     InMemoryFlowRepository,
     _build_openid4vp_mdoc_session_transcript,
@@ -41,6 +48,8 @@ from flow.main import (
     _select_vp_token_for_evaluation,
     _validate_credential_layer_references,
     handle_application_approved,
+    receive_application_approved,
+    check_preconditions,
     get_verification_request_object,
     submit_digital_credential_response,
     start_verification_flow,
@@ -51,6 +60,216 @@ from flow.main import (
 _DID_SIGNER_UNDER_TEST = flow_main._sign_request_object_with_issuer_did
 _DID_IDENTITY_UNDER_TEST = flow_main._oid4vp_issuer_identity
 _TEMPLATE_IDENTITY_UNDER_TEST = flow_main._validate_template_issuer_identity
+
+
+def _application_event_evidence() -> ApplicationEventEvidence:
+    return ApplicationEventEvidence(
+        producer="marty-applicant-service",
+        audience="marty-flow-application-approved",
+        event_id_sha256="a" * 64,
+        payload_sha256="b" * 64,
+        authenticated_at="2026-05-05T12:00:00+00:00",
+    )
+
+
+@pytest.mark.asyncio
+async def test_preconditions_ignore_caller_boole_and_unknown_controls_fail_closed() -> (
+    None
+):
+    caller_context = {
+        "application_status": "approved",
+        "identity_verified": True,
+        "admin_approved": True,
+        "external_verification_result": "success",
+    }
+
+    met, unmet = await check_preconditions(
+        [
+            "application_approved",
+            "identity_verified",
+            "manual_admin_approval",
+            "external_verification",
+            "future_required_control",
+        ],
+        caller_context,
+    )
+
+    assert met is False
+    assert unmet == [
+        "application_approved",
+        "identity_verified",
+        "manual_admin_approval",
+        "external_verification",
+        "future_required_control",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_authenticated_server_evidence_satisfies_application_approval_only() -> (
+    None
+):
+    context = {
+        flow_main._PRECONDITION_EVIDENCE_KEY: {
+            "application_approved": _application_event_evidence().as_dict(),
+        }
+    }
+
+    assert await check_preconditions(["application_approved"], context) == (True, [])
+    assert await check_preconditions(["identity_verified"], context) == (
+        False,
+        ["identity_verified"],
+    )
+    assert await check_preconditions(
+        ["application_approved"],
+        {flow_main._PRECONDITION_EVIDENCE_KEY: {"application_approved": {}}},
+    ) == (False, ["application_approved"])
+
+
+def test_public_start_and_advance_reject_reserved_service_evidence() -> None:
+    with pytest.raises(ValidationError, match="private service state"):
+        StartFlowRequest.model_validate(
+            {
+                "organization_id": "org-1",
+                "flow_definition_id": "flow-1",
+                "initial_context": {
+                    "nested": {
+                        "_MARTY_PRECONDITION_EVIDENCE_V1": {"application_approved": {}}
+                    }
+                },
+            }
+        )
+
+    with pytest.raises(ValidationError, match="private service state"):
+        AdvanceFlowRequest.model_validate(
+            {"data": {"_marty_precondition_evidence_v1": {}}}
+        )
+
+
+def test_private_precondition_evidence_is_not_returned_publicly() -> None:
+    projected = flow_main._public_flow_value(
+        {
+            "claims": {"given_name": "Ada"},
+            flow_main._PRECONDITION_EVIDENCE_KEY: {
+                "application_approved": _application_event_evidence().as_dict()
+            },
+        }
+    )
+
+    assert projected == {"claims": {"given_name": "Ada"}}
+
+
+@pytest.mark.asyncio
+async def test_oid4vci_offer_creation_cannot_outrun_server_preconditions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    async def forbidden_issuance(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("issuance must not be reached")
+
+    monkeypatch.setattr(
+        flow_main,
+        "_initiate_credential_layer_issuance",
+        forbidden_issuance,
+    )
+    repo = InMemoryFlowRepository()
+    flow_def = _application_approved_custom_flow(
+        name="Approval-gated issuance",
+        credential_template_id="template-1",
+    )
+    instance = FlowInstance(
+        flow_definition_id=flow_def.id,
+        organization_id="org-1",
+        context={"application_status": "approved"},
+    )
+
+    with pytest.raises(HTTPException) as blocked:
+        await _create_oid4vci_artifact(instance, flow_def, repo)
+
+    assert blocked.value.status_code == 409
+    assert blocked.value.detail == {
+        "error": "ISSUANCE_PRECONDITIONS_NOT_MET",
+        "unmet_preconditions": ["application_approved"],
+    }
+    assert called is False
+    assert await repo.list_artifacts(instance.id) == []
+
+
+def test_application_approval_trigger_implies_server_owned_precondition() -> None:
+    flow_def = _application_approved_custom_flow(
+        name="Application approval trigger",
+        credential_template_id="template-1",
+    )
+
+    assert flow_def.preconditions == []
+    assert flow_main._required_issuance_preconditions(flow_def) == [
+        "application_approved"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_http_application_approval_requires_auth_and_rejects_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ReplayStore:
+        def __init__(self) -> None:
+            self.keys: set[str] = set()
+
+        async def set(self, key, _value, *, nx, ex):
+            assert nx is True
+            assert ex >= 60
+            if key in self.keys:
+                return False
+            self.keys.add(key)
+            return True
+
+    event = ApplicationApprovedWebhook(
+        event_type="application.approved",
+        aggregate_id="application-auth-boundary",
+        aggregate_type="application",
+        organization_id="org-1",
+        data={"applicant_id": "applicant-1"},
+        timestamp="2026-08-09T12:00:00+00:00",
+    )
+    repo = InMemoryFlowRepository()
+    monkeypatch.setenv(
+        "FLOW_APPLICATION_EVENT_HMAC_KEY",
+        "test-application-event-key-that-is-distinct-and-long",
+    )
+    monkeypatch.setattr(flow_main, "_nonce_redis", ReplayStore())
+
+    missing_request = Request({"type": "http", "headers": []})
+    with pytest.raises(HTTPException) as missing:
+        await receive_application_approved(event, missing_request, repo)
+    assert missing.value.status_code == 401
+    assert missing.value.detail["error"] == "missing_authentication"
+
+    headers = sign_application_event(
+        event.model_dump(mode="json"), now=int(time.time())
+    )
+    scope = {
+        "type": "http",
+        "headers": [
+            (name.encode("ascii"), value.encode("ascii"))
+            for name, value in headers.items()
+        ],
+    }
+    result = await receive_application_approved(event, Request(scope), repo)
+    assert result == {
+        "success": True,
+        "flows_triggered": 0,
+        "reason": (
+            "No active custom OID4VCI extension handling APPLICATION_APPROVED "
+            "matched org org-1"
+        ),
+    }
+
+    with pytest.raises(HTTPException) as replay:
+        await receive_application_approved(event, Request(scope), repo)
+    assert replay.value.status_code == 409
+    assert replay.value.detail["error"] == "replayed_event"
 
 
 def test_verification_runtime_accepts_public_did_not_kms_coordinates() -> None:
@@ -1232,6 +1451,7 @@ async def test_application_approved_webhook_filters_by_credential_template_id(
         name="Issue Open Badge",
         credential_template_id="template-open-badge",
     )
+    matching_flow.preconditions = ["application_approved"]
     matching_flow.activate()
     await repo.save_definition(matching_flow)
 
@@ -1264,6 +1484,7 @@ async def test_application_approved_webhook_filters_by_credential_template_id(
             },
         ),
         repo=repo,
+        auth_evidence=_application_event_evidence(),
     )
 
     assert result["success"] is True
@@ -1329,6 +1550,7 @@ async def test_application_approved_webhook_skips_malformed_trigger(monkeypatch)
             },
         ),
         repo=repo,
+        auth_evidence=_application_event_evidence(),
     )
 
     assert result["success"] is True
@@ -1359,6 +1581,7 @@ async def test_application_approved_webhook_returns_zero_when_template_not_found
             },
         ),
         repo=repo,
+        auth_evidence=_application_event_evidence(),
     )
 
     assert result["success"] is True
@@ -1419,6 +1642,7 @@ async def test_application_approved_webhook_requires_explicit_custom_trigger(
             },
         ),
         repo=repo,
+        auth_evidence=_application_event_evidence(),
     )
 
     assert result["success"] is False
@@ -1476,8 +1700,8 @@ async def test_application_approved_webhook_ignores_other_template_flows(monkeyp
             },
         ),
         repo=repo,
+        auth_evidence=_application_event_evidence(),
     )
-
     assert result["success"] is True
     assert result["flows_triggered"] == 0
     assert "template-open-badge" in result["reason"]
@@ -1525,6 +1749,7 @@ async def test_application_approved_webhook_manual_issue_does_not_bootstrap_defa
             },
         ),
         repo=repo,
+        auth_evidence=_application_event_evidence(),
     )
 
     assert result["success"] is False
