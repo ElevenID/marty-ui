@@ -25,13 +25,14 @@ import hashlib
 import json
 import logging
 import os
+import ssl
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Annotated, Any, AsyncGenerator
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -47,6 +48,7 @@ from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
 from marty_common.domain_enums import parse_credential_format
 
+from common.did_resolution import resolve_did_document
 from presentation_policy.infrastructure.adapters import (
     PostgresPresentationPolicyRepository,
 )
@@ -751,109 +753,109 @@ def _jwt_header_and_payload(jwt_part: str) -> tuple[dict[str, Any], dict[str, An
     return header, payload
 
 
-def _did_web_resolution_path(did: str) -> str:
-    if not did.startswith("did:web:"):
-        raise ValueError(
-            f"Unsupported issuer DID method for SD-JWT verification: {did}"
-        )
-
-    did_parts = did[len("did:web:") :].split(":")
-    if not did_parts or not did_parts[0]:
-        raise ValueError(f"Malformed did:web issuer DID: {did}")
-
-    path_parts = [unquote(part) for part in did_parts[1:] if part]
-    if not path_parts:
-        return "/.well-known/did.json"
-    return "/" + "/".join(path_parts) + "/did.json"
+def _first_present(*values: Any) -> Any:
+    """Return the first non-empty value without coercing verification evidence."""
+    for value in values:
+        if value is not None and value != "":
+            return value
+    return None
 
 
-def _did_web_external_url(did: str) -> str:
-    did_parts = did[len("did:web:") :].split(":")
-    domain = unquote(did_parts[0])
-    return f"https://{domain}{_did_web_resolution_path(did)}"
+def _jwt_verification_evidence(
+    header: dict[str, Any],
+    payload: dict[str, Any],
+    credential: dict[str, Any] | None = None,
+    *,
+    holder_binding_verified: bool = False,
+) -> dict[str, Any]:
+    """Project facts authenticated by a successful JWT verification."""
+    credential = credential or {}
+    algorithm = header.get("alg")
+    return {
+        "algorithm": algorithm if isinstance(algorithm, str) and algorithm else None,
+        "issued_at": _first_present(
+            payload.get("iat"),
+            payload.get("nbf"),
+            credential.get("validFrom"),
+            credential.get("issuanceDate"),
+        ),
+        "expires_at": _first_present(
+            payload.get("exp"),
+            credential.get("validUntil"),
+            credential.get("expirationDate"),
+        ),
+        # The Rust VCDM/SD-JWT verifier checks time validity. An omitted expiry
+        # is therefore an indefinite credential, not an invented future date.
+        "validity_checked": True,
+        "is_expired": False,
+        "holder_binding_verified": holder_binding_verified,
+    }
 
 
-def _did_resolution_candidate_urls(did: str) -> list[str]:
-    path = _did_web_resolution_path(did)
-    candidates: list[str] = []
-    for base in (
-        os.environ.get("DID_RESOLUTION_BASE_URL"),
-        os.environ.get("PUBLIC_BASE_URL"),
-        os.environ.get("ISSUER_BASE_URL"),
-        os.environ.get("PUBLIC_API_URL"),
-        "http://gateway:8000",
+class _ResolvedDidDocument(dict[str, Any]):
+    """DID document plus service-observed resolution provenance."""
+
+    resolution_provenance: dict[str, str]
+
+
+def _did_resolution_provenance(
+    document: dict[str, Any],
+) -> dict[str, str] | None:
+    provenance = getattr(document, "resolution_provenance", None)
+    if not isinstance(provenance, dict):
+        return None
+    required = ("did", "source", "retrieved_at", "content_sha256")
+    if any(
+        not isinstance(provenance.get(field), str) or not provenance[field]
+        for field in required
     ):
-        if not base:
-            continue
-        url = f"{base.rstrip('/')}{path}"
-        if url not in candidates:
-            candidates.append(url)
+        return None
+    if provenance["did"] != document.get("id") or provenance["source"] not in {
+        "embedded:did:jwk",
+        "configured_internal_resolver",
+        "allowlisted_public_did_web",
+    }:
+        return None
+    try:
+        retrieved_at = datetime.fromisoformat(
+            provenance["retrieved_at"].replace("Z", "+00:00")
+        )
+    except ValueError:
+        return None
+    digest = provenance["content_sha256"].lower()
+    if retrieved_at.tzinfo is None or len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest
+    ):
+        return None
+    provenance = {**provenance, "content_sha256": digest}
+    return {field: provenance[field] for field in required}
 
-    external_url = _did_web_external_url(did)
-    if external_url not in candidates:
-        candidates.append(external_url)
-    return candidates
 
-
-def _resolve_did_document(did: str) -> dict[str, Any]:
-    import httpx
-
-    if did.startswith("did:jwk:"):
-        encoded_jwk = did[len("did:jwk:") :]
-        try:
-            public_jwk = json.loads(_b64decode_unpadded(encoded_jwk))
-        except Exception as exc:
-            raise RuntimeError(
-                f"DID resolution failed for {did}: invalid did:jwk payload"
-            ) from exc
-        if not isinstance(public_jwk, dict) or not public_jwk.get("kty"):
-            raise RuntimeError(f"DID resolution failed for {did}: invalid JWK")
-        public_jwk = {
-            key: value
-            for key, value in public_jwk.items()
-            if key not in {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+async def _resolve_did_document(did: str) -> dict[str, Any]:
+    result = await resolve_did_document(did)
+    document = _ResolvedDidDocument(result.document)
+    result_provenance = getattr(result, "provenance", None)
+    if isinstance(result_provenance, dict):
+        document.resolution_provenance = {
+            "did": did,
+            **{
+                key: value
+                for key, value in result_provenance.items()
+                if key in {"source", "retrieved_at", "content_sha256"}
+                and isinstance(value, str)
+                and value
+            },
         }
-        method_id = did
-        return {
-            "@context": ["https://www.w3.org/ns/did/v1"],
-            "id": did,
-            "verificationMethod": [
-                {
-                    "id": method_id,
-                    "type": "JsonWebKey2020",
-                    "controller": did,
-                    "publicKeyJwk": public_jwk,
-                }
-            ],
-            "authentication": [method_id],
-            "assertionMethod": [method_id],
-        }
+    return document
 
-    errors: list[str] = []
-    for url in _did_resolution_candidate_urls(did):
-        try:
-            response = httpx.get(
-                url,
-                headers={"Accept": "application/did+json, application/json"},
-                timeout=5.0,
-            )
-            if response.status_code == 200:
-                document = response.json()
-                if isinstance(document, dict):
-                    if document.get("id") != did:
-                        errors.append(
-                            f"{url}: resolved DID document id does not match {did}"
-                        )
-                        continue
-                    return document
-                errors.append(f"{url}: DID document was not a JSON object")
-                continue
-            errors.append(f"{url}: HTTP {response.status_code}")
-        except Exception as exc:
-            errors.append(f"{url}: {exc}")
 
-    suffix = "; ".join(errors[-3:]) if errors else "no resolution URLs configured"
-    raise RuntimeError(f"DID resolution failed for {did}: {suffix}")
+async def _await_verification_result(value: Any) -> dict[str, Any]:
+    """Await production verifiers while preserving simple injected test adapters."""
+    if hasattr(value, "__await__"):
+        value = await value
+    if not isinstance(value, dict):
+        raise TypeError("Credential verifier returned a non-object result")
+    return value
 
 
 def _document_identifier(document: dict[str, Any], name: str) -> str | None:
@@ -945,7 +947,10 @@ def _resolved_public_method(
     }
 
 
-def _resolved_data_integrity_methods(document: dict[str, Any]) -> list[dict[str, Any]]:
+async def _resolved_data_integrity_methods(
+    document: dict[str, Any],
+    resolution_provenance: list[dict[str, str]] | None = None,
+) -> list[dict[str, Any]]:
     """Resolve non-did:key proof methods through the product DID resolver.
 
     The proof selects a DID URL, never a key or custody backend. This function
@@ -999,8 +1004,16 @@ def _resolved_data_integrity_methods(document: dict[str, Any]) -> list[dict[str,
                 raise RuntimeError(
                     "DID resolution failed: proof controller does not match document signer"
                 )
+            did_document = await _resolve_did_document(controller)
+            provenance = _did_resolution_provenance(did_document)
+            if (
+                provenance is not None
+                and resolution_provenance is not None
+                and provenance not in resolution_provenance
+            ):
+                resolution_provenance.append(provenance)
             method = _resolved_public_method(
-                _resolve_did_document(controller),
+                did_document,
                 controller,
                 method_id,
                 relationship,
@@ -1036,35 +1049,64 @@ def _select_public_jwk_from_did_document(
         if isinstance(did_document.get("verificationMethod"), list)
         else []
     )
-    method_by_id = {
-        method.get("id"): method
-        for method in methods
-        if isinstance(method, dict) and isinstance(method.get("id"), str)
-    }
-
-    if kid:
-        for method_id, method in method_by_id.items():
-            if _method_id_matches_kid(method_id, kid, issuer_did) and isinstance(
-                method.get("publicKeyJwk"), dict
-            ):
-                return dict(method["publicKeyJwk"])
+    method_by_id: dict[str, dict[str, Any]] = {}
+    for method in methods:
+        if not isinstance(method, dict) or not isinstance(method.get("id"), str):
+            continue
+        method_id = _absolute_did_method_id(method["id"], issuer_did)
+        if method_id in method_by_id:
+            raise RuntimeError(
+                f"DID resolution failed for {issuer_did}: duplicate verification method id"
+            )
+        method_by_id[method_id] = method
 
     assertion = (
         did_document.get("assertionMethod")
         if isinstance(did_document.get("assertionMethod"), list)
         else []
     )
+    authorized_ids: set[str] = set()
     for entry in assertion:
-        method = entry if isinstance(entry, dict) else method_by_id.get(entry)
-        if isinstance(method, dict) and isinstance(method.get("publicKeyJwk"), dict):
-            return dict(method["publicKeyJwk"])
+        value = entry.get("id") if isinstance(entry, dict) else entry
+        if not isinstance(value, str):
+            continue
+        method_id = _absolute_did_method_id(value, issuer_did)
+        if method_id not in method_by_id:
+            raise RuntimeError(
+                f"DID resolution failed for {issuer_did}: assertion method was not found"
+            )
+        authorized_ids.add(method_id)
 
-    for method in methods:
-        if isinstance(method, dict) and isinstance(method.get("publicKeyJwk"), dict):
-            return dict(method["publicKeyJwk"])
+    if kid:
+        selected_ids = {
+            method_id
+            for method_id in authorized_ids
+            if _method_id_matches_kid(method_id, kid, issuer_did)
+        }
+        if len(selected_ids) != 1:
+            raise RuntimeError(
+                f"DID resolution failed for {issuer_did}: kid does not select exactly one assertion method"
+            )
+    else:
+        if len(authorized_ids) != 1:
+            raise RuntimeError(
+                f"DID resolution failed for {issuer_did}: kid is required when assertion methods are ambiguous"
+            )
+        selected_ids = authorized_ids
+
+    selected = method_by_id[next(iter(selected_ids))].get("publicKeyJwk")
+    if isinstance(selected, dict) and selected.get("kty"):
+        prohibited = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}.intersection(
+            selected
+        )
+        if prohibited:
+            raise RuntimeError(
+                f"DID resolution failed for {issuer_did}: assertion method contains private key material"
+            )
+        return dict(selected)
 
     raise RuntimeError(
-        f"DID resolution failed for {issuer_did}: no publicKeyJwk assertion method found"
+        f"DID resolution failed for {issuer_did}: assertion method has no public JWK"
     )
 
 
@@ -1191,7 +1233,7 @@ def _detect_credential_format(vp_token: str | dict[str, Any]) -> str:
     return "unknown"
 
 
-def _verify_credential_by_format(
+async def _verify_credential_by_format(
     vp_token: str | dict[str, Any],
     credential_format: str,
     nonce: str | None,
@@ -1214,20 +1256,22 @@ def _verify_credential_by_format(
         if credential_format == "w3c-vcdm-di":
             if not isinstance(vp_token, dict):
                 raise ValueError("VCDM Data Integrity input must be a JSON object")
-            return _verify_vcdm_data_integrity(vp_token, nonce, audience)
+            return await _verify_vcdm_data_integrity(vp_token, nonce, audience)
         if not isinstance(vp_token, str):
             raise ValueError(
                 f"Credential format {credential_format} requires a string serialization"
             )
         if credential_format == "w3c-vc":
-            return _verify_w3c_vc(
+            return await _verify_w3c_vc(
                 vp_token,
                 nonce,
                 audience,
                 issuer_public_jwk,
             )
         elif credential_format == "sd-jwt":
-            return _verify_sd_jwt(vp_token, nonce, audience, issuer_public_jwk)
+            return await _verify_sd_jwt(
+                vp_token, nonce, audience, issuer_public_jwk
+            )
         elif credential_format == "mdoc":
             return _verify_mdoc(
                 vp_token,
@@ -1287,7 +1331,7 @@ def _vcdm_issuer_and_claims(document: dict[str, Any]) -> tuple[str, dict[str, An
     return issuer, claims
 
 
-def _verify_vcdm_data_integrity(
+async def _verify_vcdm_data_integrity(
     document: dict[str, Any],
     nonce: str | None,
     audience: str | None,
@@ -1303,9 +1347,13 @@ def _verify_vcdm_data_integrity(
             "error": "marty-rs VCDM Data Integrity binding is not installed",
         }
 
+    did_resolution_provenance: list[dict[str, str]] = []
     try:
         request: dict[str, Any] = {"document": document}
-        resolved_methods = _resolved_data_integrity_methods(document)
+        resolved_methods = await _resolved_data_integrity_methods(
+            document,
+            did_resolution_provenance,
+        )
         if resolved_methods:
             request["resolved_verification_methods"] = resolved_methods
         types = document.get("type")
@@ -1324,10 +1372,40 @@ def _verify_vcdm_data_integrity(
             "issuer_did": "unknown",
             "format": "w3c-vcdm-di",
             "error": "VCDM Data Integrity verification failed",
+            "verification_evidence": {
+                "did_resolution": did_resolution_provenance,
+            },
         }
 
     verified = result.get("valid") is True
     issuer, claims = _vcdm_issuer_and_claims(document) if verified else ("unknown", {})
+    types = document.get("type")
+    normalized_types = types if isinstance(types, list) else [types]
+    is_presentation = "VerifiablePresentation" in normalized_types
+    embedded = document.get("verifiableCredential") if is_presentation else None
+    embedded_credentials = (
+        [item for item in embedded if isinstance(item, dict)]
+        if isinstance(embedded, list)
+        else []
+    )
+    evidence_document = (
+        embedded_credentials[0]
+        if len(embedded_credentials) == 1
+        else document
+        if not is_presentation
+        else {}
+    )
+    proof = evidence_document.get("proof")
+    proofs = proof if isinstance(proof, list) else [proof]
+    proof_algorithm = next(
+        (
+            item.get("cryptosuite") or item.get("type")
+            for item in proofs
+            if isinstance(item, dict)
+            and isinstance(item.get("cryptosuite") or item.get("type"), str)
+        ),
+        None,
+    )
     errors = result.get("errors")
     safe_error = None
     if not verified:
@@ -1345,11 +1423,29 @@ def _verify_vcdm_data_integrity(
             "kind": result.get("kind"),
             "verified_proofs": result.get("verified_proofs", 0),
             "verified_credentials": result.get("verified_credentials", 0),
+            "credential_count": len(embedded_credentials) if is_presentation else 1,
+            "algorithm": result.get("algorithm") or proof_algorithm,
+            "issued_at": _first_present(
+                evidence_document.get("validFrom"),
+                evidence_document.get("issuanceDate"),
+            ),
+            "expires_at": _first_present(
+                evidence_document.get("validUntil"),
+                evidence_document.get("expirationDate"),
+            ),
+            "validity_checked": verified,
+            "is_expired": False if verified else None,
+            "holder_binding_verified": bool(
+                verified
+                and is_presentation
+                and (nonce is not None or audience is not None)
+            ),
+            "did_resolution": did_resolution_provenance,
         },
     }
 
 
-def _verify_w3c_vc(
+async def _verify_w3c_vc(
     vp_token: str,
     _nonce: str | None,
     _audience: str | None,
@@ -1373,6 +1469,7 @@ def _verify_w3c_vc(
             "error": "marty-rs bindings not installed",
         }
 
+    did_resolution_provenance: dict[str, str] | None = None
     try:
         if not hasattr(_marty_rs, "verify_vcdm_jwt"):
             raise RuntimeError(
@@ -1387,7 +1484,8 @@ def _verify_w3c_vc(
 
         public_jwk = issuer_public_jwk
         if public_jwk is None and not issuer.startswith("did:key:"):
-            did_document = _resolve_did_document(issuer)
+            did_document = await _resolve_did_document(issuer)
+            did_resolution_provenance = _did_resolution_provenance(did_document)
             public_jwk = _select_public_jwk_from_did_document(
                 did_document,
                 issuer,
@@ -1429,6 +1527,13 @@ def _verify_w3c_vc(
                 ",".join(categories),
                 error_count,
             )
+        verification_evidence = (
+            _jwt_verification_evidence(header, verified_payload, verified_vc)
+            if is_valid and isinstance(verified_payload, dict)
+            else {}
+        )
+        if did_resolution_provenance is not None:
+            verification_evidence["did_resolution"] = did_resolution_provenance
 
         return {
             "verified": is_valid,
@@ -1441,6 +1546,7 @@ def _verify_w3c_vc(
             # status record without trusting the caller or exposing KMS routing.
             "credential_id": credential_id,
             "format": "w3c-vc",
+            "verification_evidence": verification_evidence,
             "error": (
                 None
                 if is_valid
@@ -1455,6 +1561,11 @@ def _verify_w3c_vc(
             "issuer_did": "unknown",
             "format": "w3c-vc",
             "error": str(e),
+            "verification_evidence": (
+                {"did_resolution": did_resolution_provenance}
+                if did_resolution_provenance is not None
+                else {}
+            ),
         }
 
 
@@ -1502,7 +1613,7 @@ def _vcdm_jwt_error_categories(errors: Any) -> list[str]:
     return sorted(categories or {"verifier"})
 
 
-def _verify_sd_jwt(
+async def _verify_sd_jwt(
     vp_token: str,
     nonce: str | None,
     audience: str | None,
@@ -1587,6 +1698,7 @@ def _verify_sd_jwt(
                 "error": "marty-rs SD-JWT verification bindings are not installed",
             }
 
+        did_resolution_provenance: dict[str, str] | None = None
         try:
             if issuer_public_jwk is not None:
                 # A non-DID issuer is accepted only with a JWK explicitly
@@ -1594,7 +1706,8 @@ def _verify_sd_jwt(
                 # remains the default for every other issuer.
                 public_jwk = issuer_public_jwk
             elif issuer.startswith("did:"):
-                did_document = _resolve_did_document(issuer)
+                did_document = await _resolve_did_document(issuer)
+                did_resolution_provenance = _did_resolution_provenance(did_document)
                 public_jwk = _select_public_jwk_from_did_document(
                     did_document, issuer, header.get("kid")
                 )
@@ -1632,6 +1745,11 @@ def _verify_sd_jwt(
                     "subject": subject,
                     "format": "sd-jwt",
                     "error": error_message,
+                    "verification_evidence": (
+                        {"did_resolution": did_resolution_provenance}
+                        if did_resolution_provenance is not None
+                        else {}
+                    ),
                 }
             if isinstance(rust_result, dict):
                 claims.update(
@@ -1652,14 +1770,30 @@ def _verify_sd_jwt(
                 "subject": subject,
                 "format": "sd-jwt",
                 "error": error_message,
+                "verification_evidence": (
+                    {"did_resolution": did_resolution_provenance}
+                    if did_resolution_provenance is not None
+                    else {}
+                ),
             }
 
+        kb_jwt_present = any(segment and "." in segment for segment in segments[1:])
+        verification_evidence = _jwt_verification_evidence(
+            header,
+            payload,
+            holder_binding_verified=bool(
+                kb_jwt_present and (nonce is not None or audience is not None)
+            ),
+        )
+        if did_resolution_provenance is not None:
+            verification_evidence["did_resolution"] = did_resolution_provenance
         return {
             "verified": True,
             "claims": claims,
             "issuer_did": issuer,
             "subject": subject,
             "format": "sd-jwt",
+            "verification_evidence": verification_evidence,
             "error": None,
         }
 
@@ -1689,6 +1823,16 @@ def _classify_mdoc_verification_error(error: object) -> str:
         ("error verifying device signature", "device-signature-processing-error"),
         ("malformed signature", "device-signature-malformed"),
         ("algorithm in protected headers", "device-signature-algorithm-mismatch"),
+        ("issuer-signed value digest mismatch", "issuer-disclosure-digest-mismatch"),
+        ("no value digests", "issuer-disclosure-commitment-missing"),
+        ("no digest for disclosed element", "issuer-disclosure-commitment-missing"),
+        ("document-signer certificate profile", "issuer-certificate-profile-invalid"),
+        ("issuer signature algorithm is not protected", "issuer-algorithm-unprotected"),
+        ("unsupported issuer signature algorithm", "issuer-algorithm-unsupported"),
+        ("mso document type", "mso-document-type-mismatch"),
+        ("mso validity window is contradictory", "mso-validity-contradictory"),
+        ("mso is not yet valid", "mso-not-yet-valid"),
+        ("mso is expired", "mso-expired"),
         ("cryptographic error", "device-key-invalid"),
         ("cbor", "device-auth-cbor-error"),
     )
@@ -1696,6 +1840,63 @@ def _classify_mdoc_verification_error(error: object) -> str:
         if marker in normalized:
             return category
     return "unclassified"
+
+
+def _authenticated_mdoc_evidence(result: object) -> dict[str, Any] | None:
+    """Normalize exactly one complete binding-authenticated mdoc evidence record."""
+    try:
+        document_types = list(getattr(result, "document_types"))
+        records = list(getattr(result, "document_evidence"))
+    except (AttributeError, TypeError):
+        return None
+    if len(document_types) != 1 or len(records) != 1:
+        return None
+
+    record = records[0]
+    document_type = getattr(record, "document_type", None)
+    algorithm = getattr(record, "signature_algorithm", None)
+    digest_algorithm = getattr(record, "digest_algorithm", None)
+    signed_at = getattr(record, "signed_at", None)
+    valid_from = getattr(record, "valid_from", None)
+    valid_until = getattr(record, "valid_until", None)
+    certificate_sha256 = getattr(record, "issuer_certificate_sha256", None)
+    if (
+        not isinstance(document_type, str)
+        or not document_type
+        or document_types != [document_type]
+        or not isinstance(algorithm, str)
+        or not algorithm
+        or not isinstance(digest_algorithm, str)
+        or not digest_algorithm
+        or _verification_datetime(signed_at) is None
+        or _verification_datetime(valid_from) is None
+        or _verification_datetime(valid_until) is None
+        or not isinstance(certificate_sha256, str)
+        or len(certificate_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in certificate_sha256)
+        or getattr(record, "validity_checked", None) is not True
+        or getattr(record, "valid_at_verification_time", None) is not True
+        or getattr(record, "revocation_checked", None) is not False
+        or getattr(record, "not_revoked", "missing") is not None
+        or getattr(result, "revocation_checked", None) is not False
+        or getattr(result, "not_revoked", "missing") is not None
+    ):
+        return None
+
+    return {
+        "issuer_id": f"x509-sha256:{certificate_sha256}",
+        "issuer_certificate_sha256": certificate_sha256,
+        "document_type": document_type,
+        "algorithm": algorithm,
+        "digest_algorithm": digest_algorithm,
+        "issued_at": signed_at,
+        "valid_from": valid_from,
+        "expires_at": valid_until,
+        "validity_checked": True,
+        "is_expired": False,
+        "revocation_checked": False,
+        "not_revoked": None,
+    }
 
 
 def _verify_mdoc(
@@ -1764,12 +1965,16 @@ def _verify_mdoc(
             bool(result.issuer_trusted),
             bool(result.device_authentication_valid),
         )
-        is_valid = bool(
+        authenticated_evidence = _authenticated_mdoc_evidence(result)
+        issuer_authentication_valid = bool(
             result.issuer_signature_valid
             and result.issuer_trusted
             and result.device_authentication_valid
         )
+        is_valid = bool(issuer_authentication_valid and authenticated_evidence)
         error = result.error
+        if issuer_authentication_valid and authenticated_evidence is None and not error:
+            error = "Authenticated mdoc evidence is incomplete"
         logger.info(
             "mDoc verification outcome device_auth_error_kind=%s",
             _classify_mdoc_verification_error(error),
@@ -1783,13 +1988,26 @@ def _verify_mdoc(
         return {
             "verified": is_valid,
             "claims": claims,
-            "issuer_did": "unknown",
+            "issuer_did": (
+                authenticated_evidence["issuer_id"]
+                if authenticated_evidence is not None
+                else "unknown"
+            ),
             "format": "mdoc",
             "error": error,
             "document_types": list(result.document_types),
             "issuer_signature_valid": bool(result.issuer_signature_valid),
             "issuer_trusted": bool(result.issuer_trusted),
             "device_authentication_valid": bool(result.device_authentication_valid),
+            "revocation_checked": False,
+            "not_revoked": None,
+            "verification_evidence": {
+                **(authenticated_evidence or {}),
+                "holder_binding_verified": bool(
+                    is_valid and result.device_authentication_valid
+                ),
+                "credential_count": len(result.document_types),
+            },
         }
     except Exception as e:
         logger.error("mDoc Rust verification failed: %s", e)
@@ -2137,6 +2355,96 @@ def _mdoc_trust_certificates_pem(
     return roots, pinned_issuers
 
 
+def _certificate_pem_sha256(certificate_pem: object) -> str | None:
+    """Return the DER certificate fingerprint without accepting non-certificate PEM."""
+    if not isinstance(certificate_pem, str):
+        return None
+    try:
+        certificate_der = ssl.PEM_cert_to_DER_cert(certificate_pem)
+    except ValueError:
+        return None
+    return hashlib.sha256(certificate_der).hexdigest()
+
+
+def _mdoc_direct_pin_lifecycle_evidence(
+    trust_profile_data: dict[str, Any] | None,
+    verification_evidence: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, str] | None:
+    """Confirm current signer status from one exact governed direct-pin relationship.
+
+    ISO mdoc verification authenticates a document signer certificate rather than
+    a DID issuer. A currently active direct pin can serve as the local certificate
+    status authority only when the same certificate has exactly one current,
+    trusted issuer-registry relationship. Root trust alone is deliberately
+    insufficient because it does not express current signer lifecycle state.
+    """
+    if (
+        not trust_profile_data
+        or str(trust_profile_data.get("status") or "").lower() != "active"
+    ):
+        return None
+
+    certificate_sha256 = verification_evidence.get("issuer_certificate_sha256")
+    issuer_id = verification_evidence.get("issuer_id")
+    if (
+        not isinstance(certificate_sha256, str)
+        or len(certificate_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in certificate_sha256)
+        or issuer_id != f"x509-sha256:{certificate_sha256}"
+    ):
+        return None
+
+    matching_sources = 0
+    for source in trust_profile_data.get("trust_sources") or []:
+        if (
+            not isinstance(source, dict)
+            or source.get("enabled") is False
+            or str(source.get("source_type") or "").upper() != "PINNED_ISSUER"
+        ):
+            continue
+        candidates = [source.get("certificate_pem")]
+        pinned = source.get("pinned_certificates")
+        if isinstance(pinned, list):
+            candidates.extend(pinned)
+        if certificate_sha256 in {
+            fingerprint
+            for candidate in candidates
+            if (fingerprint := _certificate_pem_sha256(candidate)) is not None
+        }:
+            matching_sources += 1
+    if matching_sources != 1:
+        return None
+
+    relationships = trust_profile_data.get("issuer_relationships")
+    if not isinstance(relationships, list) or not relationships:
+        return None
+    relationship_valid, _error = _evaluate_normalized_issuer_relationship(
+        issuer_did=issuer_id,
+        relationships=relationships,
+        constraints=None,
+        now=now,
+    )
+    if not relationship_valid:
+        return None
+
+    checked_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    evidence = {
+        "method": "trust-profile-direct-pin-lifecycle",
+        "issuer_id": issuer_id,
+        "issuer_certificate_sha256": certificate_sha256,
+        "checked_at": checked_at.isoformat().replace("+00:00", "Z"),
+    }
+    profile_id = trust_profile_data.get("id")
+    if isinstance(profile_id, str) and profile_id:
+        evidence["trust_profile_id"] = profile_id
+    profile_updated_at = trust_profile_data.get("updated_at")
+    if isinstance(profile_updated_at, str) and profile_updated_at:
+        evidence["trust_profile_updated_at"] = profile_updated_at
+    return evidence
+
+
 def _trust_source_issuer_candidates(source: dict[str, Any]) -> set[str]:
     candidates: set[str] = set()
 
@@ -2162,6 +2470,70 @@ def _trust_decision_datetime(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _verification_datetime(value: object) -> datetime | None:
+    """Parse verifier-authenticated NumericDate or ISO-8601 evidence."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+    return _trust_decision_datetime(value)
+
+
+def _credential_age_seconds(
+    verification_evidence: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> int | None:
+    issued_at = _verification_datetime(verification_evidence.get("issued_at"))
+    if issued_at is None:
+        return None
+    current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    age = int((current_time - issued_at).total_seconds())
+    return age if age >= 0 else None
+
+
+def _normalized_issuer_policy_evidence(
+    trust_profile_data: dict[str, Any] | None,
+    issuer_did: str,
+) -> dict[str, Any] | None:
+    """Return Cedar facts only from one exact normalized issuer relationship."""
+    if not trust_profile_data:
+        return None
+    relationships = trust_profile_data.get("issuer_relationships")
+    if not isinstance(relationships, list):
+        return None
+    matched = [
+        relationship
+        for relationship in relationships
+        if isinstance(relationship, dict)
+        and isinstance(relationship.get("issuer_id"), str)
+        and _normalized_relationship_issuer_id(relationship["issuer_id"])
+        == _normalized_relationship_issuer_id(issuer_did)
+    ]
+    if len(matched) != 1:
+        return None
+    relationship = matched[0]
+    trust_level = relationship.get("trust_level")
+    if (
+        isinstance(trust_level, bool)
+        or not isinstance(trust_level, int)
+        or not 0 <= trust_level <= 100
+    ):
+        return None
+    compliance_status = relationship.get("compliance_status")
+    return {
+        "issuer_trust_level": trust_level,
+        "compliance_status": (
+            compliance_status.upper()
+            if isinstance(compliance_status, str) and compliance_status
+            else None
+        ),
+    }
 
 
 def _issuer_constraints_require_relationship(
@@ -2270,11 +2642,13 @@ def _evaluate_normalized_issuer_relationship(
         ):
             return False, f"Issuer {issuer_did} has invalid accreditation evidence"
         held_accreditations = {
-            accreditation.strip().casefold()
-            for accreditation in raw_accreditations
+            accreditation.strip().casefold() for accreditation in raw_accreditations
         }
         if not required_accreditations.issubset(held_accreditations):
-            return False, f"Issuer {issuer_did} does not meet accreditation requirements"
+            return (
+                False,
+                f"Issuer {issuer_did} does not meet accreditation requirements",
+            )
 
     return True, None
 
@@ -2311,9 +2685,7 @@ def _evaluate_issuer_trust(
 
     allowed_issuers = trust_profile_data.get("allowed_issuers") or []
     if allowed_issuers:
-        if _matches_configured_issuer_identifiers(
-            issuer_identifiers, allowed_issuers
-        ):
+        if _matches_configured_issuer_identifiers(issuer_identifiers, allowed_issuers):
             return True, None
         return False, f"Issuer {issuer_did} is not in Trust Profile allowed_issuers"
 
@@ -2366,6 +2738,28 @@ def _verify_open_badge(vp_token: str, version: str) -> dict:
     )
     revocation_checked, not_revoked = _derive_revocation_state(result)
     is_revoked = (not_revoked is False) if not_revoked is not None else None
+    algorithm: str | None = None
+    stripped_token = vp_token.strip()
+    if stripped_token.count(".") == 2 and not stripped_token.startswith("{"):
+        try:
+            jwt_header, _jwt_payload = _jwt_header_and_payload(stripped_token)
+            header_algorithm = jwt_header.get("alg")
+            if isinstance(header_algorithm, str) and header_algorithm:
+                algorithm = header_algorithm
+        except Exception:
+            algorithm = None
+    if algorithm is None:
+        proof = credential.get("proof")
+        proofs = proof if isinstance(proof, list) else [proof]
+        algorithm = next(
+            (
+                item.get("cryptosuite") or item.get("type")
+                for item in proofs
+                if isinstance(item, dict)
+                and isinstance(item.get("cryptosuite") or item.get("type"), str)
+            ),
+            None,
+        )
     return {
         "verified": bool(result.get("valid")),
         "claims": claims,
@@ -2376,6 +2770,23 @@ def _verify_open_badge(vp_token: str, version: str) -> dict:
         "not_revoked": not_revoked,
         "is_revoked": is_revoked,
         "credential_results": result,
+        "verification_evidence": {
+            "algorithm": algorithm,
+            "issued_at": _first_present(
+                credential.get("validFrom"),
+                credential.get("issuanceDate"),
+                credential.get("issuedOn"),
+            ),
+            "expires_at": _first_present(
+                credential.get("validUntil"),
+                credential.get("expirationDate"),
+                credential.get("expires"),
+            ),
+            "validity_checked": bool(result.get("valid")),
+            "is_expired": False if result.get("valid") else None,
+            "holder_binding_verified": False,
+            "credential_count": 1,
+        },
     }
 
 
@@ -3283,6 +3694,48 @@ class EvaluateInlineRequest(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+def _failed_policy_response(
+    policy: PresentationPolicy,
+    request: EvaluatePresentationRequest,
+    error: str,
+    *,
+    signature_valid: bool = True,
+    trust_check_passed: bool = True,
+    freshness_check_passed: bool = True,
+) -> PolicyEvaluationResponse:
+    """Build a fail-closed response without releasing unverified claims."""
+    credential_results = [
+        CredentialEvaluationResult(
+            credential_template_id=requirement.credential_template_id,
+            satisfied=False,
+            claim_results=[],
+            signature_valid=signature_valid,
+            trust_check_passed=trust_check_passed,
+            freshness_check_passed=freshness_check_passed,
+            errors=[error],
+        )
+        for requirement in policy.credential_requirements
+    ]
+    required_total = sum(
+        1 for requirement in policy.credential_requirements if requirement.required
+    )
+    return PolicyEvaluationResponse(
+        result=EvaluationResult.FAILED.value,
+        policy_id=policy.id,
+        policy_name=policy.name,
+        credential_results=credential_results,
+        total_requirements=len(policy.credential_requirements),
+        satisfied_requirements=0,
+        required_satisfied=0,
+        required_total=required_total,
+        decision="deny",
+        decision_reason=error,
+        verified_claims={},
+        evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
+        nonce=request.nonce,
+    )
+
+
 _API_KEY_VERIFICATION_SCOPES = frozenset(
     {"credentials:read", "flows:execute", "admin:full"}
 )
@@ -3364,6 +3817,7 @@ async def evaluate_presentation(
     request: EvaluatePresentationRequest,
     http_request: Request = None,
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
+    cedar_engine: Any = None,
 ) -> PolicyEvaluationResponse:
     """
     Evaluate a Verifiable Presentation against a Presentation Policy.
@@ -3395,6 +3849,28 @@ async def evaluate_presentation(
         raise HTTPException(
             status_code=400,
             detail=f"Policy is not active (status: {policy.status.value})",
+        )
+
+    # This endpoint accepts one presentation token and currently returns one
+    # credential evidence record. It cannot safely prove N-of-M alternatives or
+    # bind one authenticated credential to multiple credential requirements.
+    if policy.alternative_requirements:
+        return _failed_policy_response(
+            policy,
+            request,
+            "Alternative credential requirements require descriptor-bound per-credential evidence",
+        )
+    if len(policy.credential_requirements) != 1:
+        return _failed_policy_response(
+            policy,
+            request,
+            "Exactly one credential requirement is supported per presentation token",
+        )
+    if not policy.credential_requirements[0].required:
+        return _failed_policy_response(
+            policy,
+            request,
+            "At least one required credential requirement is necessary for a decision",
         )
 
     # Auto-detect credential format
@@ -3466,15 +3942,17 @@ async def evaluate_presentation(
     mdoc_root_certs_pem, mdoc_pinned_issuer_certs_pem = _mdoc_trust_certificates_pem(
         trust_profile_data
     )
-    verification_result = _verify_credential_by_format(
-        request.vp_token,
-        credential_format,
-        verify_nonce,
-        verify_audience,
-        pinned_issuer_jwk,
-        request.context,
-        mdoc_root_certs_pem,
-        mdoc_pinned_issuer_certs_pem,
+    verification_result = await _await_verification_result(
+        _verify_credential_by_format(
+            request.vp_token,
+            credential_format,
+            verify_nonce,
+            verify_audience,
+            pinned_issuer_jwk,
+            request.context,
+            mdoc_root_certs_pem,
+            mdoc_pinned_issuer_certs_pem,
+        )
     )
     # 4. Check issuer trust using Trust Profile
     # 5. Evaluate claims against policy constraints
@@ -3520,6 +3998,61 @@ async def evaluate_presentation(
             nonce=request.nonce,
         )
 
+    verification_evidence = verification_result.get("verification_evidence")
+    if not isinstance(verification_evidence, dict):
+        verification_evidence = {}
+    credential_count = verification_evidence.get("credential_count", 1)
+    if (
+        isinstance(credential_count, bool)
+        or not isinstance(credential_count, int)
+        or credential_count != 1
+    ):
+        return _failed_policy_response(
+            policy,
+            request,
+            "Presentation must contain exactly one independently verified credential",
+        )
+    if (
+        requires_bound_presentation
+        and verification_evidence.get("holder_binding_verified") is not True
+    ):
+        return _failed_policy_response(
+            policy,
+            request,
+            "Required holder binding was not verified",
+            signature_valid=False,
+        )
+
+    requirement = policy.credential_requirements[0]
+    freshness_limits = [
+        value
+        for value in (
+            policy.freshness.max_age_seconds if policy.freshness else None,
+            requirement.max_age_seconds,
+        )
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0
+    ]
+    requires_issuance_time = bool(
+        freshness_limits or requirement.require_fresh_issuance
+    )
+    credential_age_seconds = _credential_age_seconds(verification_evidence)
+    if requires_issuance_time and credential_age_seconds is None:
+        return _failed_policy_response(
+            policy,
+            request,
+            "Credential issuance-time evidence is unavailable or invalid",
+            freshness_check_passed=False,
+        )
+    if freshness_limits and credential_age_seconds is not None:
+        max_age_seconds = min(freshness_limits)
+        if credential_age_seconds > max_age_seconds:
+            return _failed_policy_response(
+                policy,
+                request,
+                f"Credential exceeds maximum age of {max_age_seconds} seconds",
+                freshness_check_passed=False,
+            )
+
     # Validate issuer DID against the policy's Trust Profile (MIP §8.3).
     # Resolve trust_profile_id: per-requirement override takes precedence over policy-level.
     trust_check_passed = True
@@ -3552,7 +4085,7 @@ async def evaluate_presentation(
                 issuer_did=issuer_did,
                 claim_results=[],
                 trust_check_passed=False,
-                signature_valid=False,
+                signature_valid=True,
                 errors=[str(trust_check_error)],
             )
             for req in policy.credential_requirements
@@ -3575,6 +4108,24 @@ async def evaluate_presentation(
             evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
             nonce=request.nonce,
         )
+
+    if revocation_checked is not True and credential_format == "mdoc":
+        mdoc_status_evidence = _mdoc_direct_pin_lifecycle_evidence(
+            trust_profile_data,
+            verification_evidence,
+        )
+        if mdoc_status_evidence is not None:
+            # Preserve the Rust binding's truthful statement that it performed
+            # no online revocation check. This aggregate status is supplied by
+            # the separately governed, freshly loaded Trust Profile lifecycle.
+            verification_result["revocation_checked"] = True
+            verification_result["not_revoked"] = True
+            verification_result["revocation_status"] = "good"
+            verification_result["status_evidence"] = mdoc_status_evidence
+            verification_evidence["status_evidence"] = mdoc_status_evidence
+            revocation_checked, not_revoked = _derive_revocation_state(
+                verification_result
+            )
 
     if revocation_checked is not True:
         (
@@ -3608,7 +4159,7 @@ async def evaluate_presentation(
                     issuer_did=issuer_did,
                     claim_results=[],
                     freshness_check_passed=False,
-                    signature_valid=False,
+                    signature_valid=True,
                     errors=[verification_error],
                 )
                 for req in policy.credential_requirements
@@ -3646,7 +4197,7 @@ async def evaluate_presentation(
                     issuer_did=issuer_did,
                     claim_results=[],
                     freshness_check_passed=False,
-                    signature_valid=False,
+                    signature_valid=True,
                     errors=[verification_error],
                 )
                 for req in policy.credential_requirements
@@ -3774,22 +4325,71 @@ async def evaluate_presentation(
         decision_reason = "Required credentials not satisfied"
         all_satisfied = False
 
-    # Cedar policy evaluation for credential verification trust rules
-    cedar_engine = None
-    if http_request and hasattr(http_request.app.state, "cedar_engine"):
+    # Cedar policy evaluation for credential verification trust rules. Keep
+    # specific verifier/trust/freshness denials above, but never let omission
+    # of the final authorization reducer turn a tentative allow into success.
+    if (
+        cedar_engine is None
+        and http_request
+        and hasattr(http_request.app.state, "cedar_engine")
+    ):
         cedar_engine = http_request.app.state.cedar_engine
+    if decision == "allow" and cedar_engine is None:
+        return _failed_policy_response(
+            policy,
+            request,
+            "Cedar credential-verification policy engine is unavailable",
+        )
 
-    if cedar_engine and decision == "allow":
+    if decision == "allow":
+        issuer_policy_evidence = _normalized_issuer_policy_evidence(
+            trust_profile_data,
+            issuer_did,
+        )
+        algorithm = verification_evidence.get("algorithm")
+        validity_checked = verification_evidence.get("validity_checked")
+        is_expired = verification_evidence.get("is_expired")
+        missing_evidence: list[str] = []
+        if issuer_policy_evidence is None:
+            missing_evidence.append("numeric issuer trust")
+        if revocation_checked is not True or not_revoked is not True:
+            missing_evidence.append("non-revocation")
+        if validity_checked is not True or not isinstance(is_expired, bool):
+            missing_evidence.append("credential validity")
+        if credential_age_seconds is None:
+            missing_evidence.append("credential issuance time")
+        if not isinstance(algorithm, str) or not algorithm:
+            missing_evidence.append("signature algorithm")
+        if missing_evidence:
+            return _failed_policy_response(
+                policy,
+                request,
+                "Cedar policy evidence is incomplete: " + ", ".join(missing_evidence),
+                trust_check_passed=issuer_policy_evidence is not None,
+                freshness_check_passed=(
+                    revocation_checked is True
+                    and not_revoked is True
+                    and validity_checked is True
+                    and isinstance(is_expired, bool)
+                    and credential_age_seconds is not None
+                ),
+            )
+
+        compliance_code = verified_claims.get("_compliance_code")
+        if not isinstance(compliance_code, str) or not compliance_code:
+            compliance_code = "UNSPECIFIED"
         cedar_context = {
             "credential_format": _detected_format_to_canonical(credential_format),
-            "compliance_code": verified_claims.get("_compliance_code", "CUSTOM"),
+            "compliance_code": compliance_code,
             "issuer_id": credential_results[0].issuer_did if credential_results else "",
-            "issuer_trust_level": 75,
-            "credential_age_seconds": 0,
-            "is_revoked": not_revoked is False,
-            "is_expired": False,
-            "holder_binding_present": True,
-            "algorithm": verified_claims.get("_algorithm", "ES256"),
+            "issuer_trust_level": issuer_policy_evidence["issuer_trust_level"],
+            "credential_age_seconds": credential_age_seconds,
+            "is_revoked": False,
+            "is_expired": is_expired,
+            "holder_binding_present": (
+                verification_evidence.get("holder_binding_verified") is True
+            ),
+            "algorithm": algorithm,
         }
         cedar_entities = [
             {
@@ -3818,13 +4418,21 @@ async def evaluate_presentation(
                 ],
             },
         ]
-        cedar_decision = cedar_engine.is_authorized(
-            principal='MIP::User::"verifier"',
-            action='MIP::Action::"credentials:verify"',
-            resource='MIP::Credential::"presented-credential"',
-            context=cedar_context,
-            entities=cedar_entities,
-        )
+        try:
+            cedar_decision = cedar_engine.is_authorized(
+                principal='MIP::User::"verifier"',
+                action='MIP::Action::"credentials:verify"',
+                resource='MIP::Credential::"presented-credential"',
+                context=cedar_context,
+                entities=cedar_entities,
+            )
+        except Exception:
+            logger.exception("Cedar credential-verification evaluation failed")
+            return _failed_policy_response(
+                policy,
+                request,
+                "Cedar policy evaluation failed",
+            )
         if not cedar_decision.allowed:
             decision = "deny"
             decision_reason = f"Cedar policy denied: {cedar_decision.reasons or cedar_decision.errors}"
@@ -4097,6 +4705,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         repo=_repo,
         evaluate_fn=evaluate_presentation,
         to_response_fn=_policy_to_response,
+        cedar_engine=app.state.cedar_engine,
     )
     add_PresentationPolicyServiceServicer_to_server(servicer, grpc_server)
     start_grpc_server_port(
