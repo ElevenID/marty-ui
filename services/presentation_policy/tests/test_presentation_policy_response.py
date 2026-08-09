@@ -484,6 +484,23 @@ def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
             issuer_trusted=True,
             device_authentication_valid=True,
             document_types=["org.iso.18013.5.1.mDL"],
+            document_evidence=[
+                SimpleNamespace(
+                    document_type="org.iso.18013.5.1.mDL",
+                    signature_algorithm="ES256",
+                    digest_algorithm="SHA-256",
+                    signed_at="2026-08-09T06:00:00Z",
+                    valid_from="2026-08-09T06:00:00Z",
+                    valid_until="2027-08-09T06:00:00Z",
+                    issuer_certificate_sha256="a" * 64,
+                    validity_checked=True,
+                    valid_at_verification_time=True,
+                    revocation_checked=False,
+                    not_revoked=None,
+                )
+            ],
+            revocation_checked=False,
+            not_revoked=None,
             error=None,
         )
 
@@ -513,6 +530,25 @@ def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
 
     assert result["verified"] is True
     assert result["claims"] == {"given_name": "Ada"}
+    assert result["issuer_did"] == f"x509-sha256:{'a' * 64}"
+    assert result["revocation_checked"] is False
+    assert result["not_revoked"] is None
+    assert result["verification_evidence"] == {
+        "issuer_id": f"x509-sha256:{'a' * 64}",
+        "issuer_certificate_sha256": "a" * 64,
+        "document_type": "org.iso.18013.5.1.mDL",
+        "algorithm": "ES256",
+        "digest_algorithm": "SHA-256",
+        "issued_at": "2026-08-09T06:00:00Z",
+        "valid_from": "2026-08-09T06:00:00Z",
+        "expires_at": "2027-08-09T06:00:00Z",
+        "validity_checked": True,
+        "is_expired": False,
+        "revocation_checked": False,
+        "not_revoked": None,
+        "holder_binding_verified": True,
+        "credential_count": 1,
+    }
     assert calls == [
         (
             mdoc_bytes,
@@ -574,6 +610,52 @@ def test_mdoc_verification_logs_only_stable_error_category(
     assert "nonce-secret" not in caplog.text
 
 
+def test_mdoc_verification_rejects_legacy_or_incomplete_binding_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    extracted: list[bytes] = []
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_mdoc_presentation=lambda *_args: SimpleNamespace(
+                issuer_signature_valid=True,
+                issuer_trusted=True,
+                device_authentication_valid=True,
+                document_types=["org.iso.18013.5.1.mDL"],
+                error=None,
+            ),
+            verify_mdoc_cbor=lambda value: extracted.append(bytes(value)),
+        ),
+    )
+    mdoc_bytes = b"\xa1aa\x01"
+    transcript = b"\x83\xf6\xf6\x82qOpenID4VPHandoverX"
+
+    result = pp._verify_mdoc(
+        base64.urlsafe_b64encode(mdoc_bytes).rstrip(b"=").decode(),
+        "nonce-1",
+        "did:web:verifier.example",
+        {
+            "mdoc_session_transcript_b64url": base64.urlsafe_b64encode(transcript)
+            .rstrip(b"=")
+            .decode(),
+            "oid4vp_client_id": "did:web:verifier.example",
+        },
+        ["-----BEGIN CERTIFICATE-----\nroot\n-----END CERTIFICATE-----"],
+        [],
+    )
+
+    assert result["verified"] is False
+    assert result["claims"] == {}
+    assert result["issuer_did"] == "unknown"
+    assert result["error"] == "Authenticated mdoc evidence is incomplete"
+    assert result["verification_evidence"] == {
+        "holder_binding_verified": False,
+        "credential_count": 1,
+    }
+    assert extracted == []
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
@@ -584,6 +666,11 @@ def test_mdoc_verification_logs_only_stable_error_category(
             "algorithm in protected headers did not match",
             "device-signature-algorithm-mismatch",
         ),
+        (
+            "issuer-signed value digest mismatch for family_name",
+            "issuer-disclosure-digest-mismatch",
+        ),
+        ("MSO is expired", "mso-expired"),
         ("an unfamiliar internal failure", "unclassified"),
     ],
 )

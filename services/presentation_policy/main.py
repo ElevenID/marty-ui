@@ -1822,6 +1822,16 @@ def _classify_mdoc_verification_error(error: object) -> str:
         ("error verifying device signature", "device-signature-processing-error"),
         ("malformed signature", "device-signature-malformed"),
         ("algorithm in protected headers", "device-signature-algorithm-mismatch"),
+        ("issuer-signed value digest mismatch", "issuer-disclosure-digest-mismatch"),
+        ("no value digests", "issuer-disclosure-commitment-missing"),
+        ("no digest for disclosed element", "issuer-disclosure-commitment-missing"),
+        ("document-signer certificate profile", "issuer-certificate-profile-invalid"),
+        ("issuer signature algorithm is not protected", "issuer-algorithm-unprotected"),
+        ("unsupported issuer signature algorithm", "issuer-algorithm-unsupported"),
+        ("mso document type", "mso-document-type-mismatch"),
+        ("mso validity window is contradictory", "mso-validity-contradictory"),
+        ("mso is not yet valid", "mso-not-yet-valid"),
+        ("mso is expired", "mso-expired"),
         ("cryptographic error", "device-key-invalid"),
         ("cbor", "device-auth-cbor-error"),
     )
@@ -1829,6 +1839,63 @@ def _classify_mdoc_verification_error(error: object) -> str:
         if marker in normalized:
             return category
     return "unclassified"
+
+
+def _authenticated_mdoc_evidence(result: object) -> dict[str, Any] | None:
+    """Normalize exactly one complete binding-authenticated mdoc evidence record."""
+    try:
+        document_types = list(getattr(result, "document_types"))
+        records = list(getattr(result, "document_evidence"))
+    except (AttributeError, TypeError):
+        return None
+    if len(document_types) != 1 or len(records) != 1:
+        return None
+
+    record = records[0]
+    document_type = getattr(record, "document_type", None)
+    algorithm = getattr(record, "signature_algorithm", None)
+    digest_algorithm = getattr(record, "digest_algorithm", None)
+    signed_at = getattr(record, "signed_at", None)
+    valid_from = getattr(record, "valid_from", None)
+    valid_until = getattr(record, "valid_until", None)
+    certificate_sha256 = getattr(record, "issuer_certificate_sha256", None)
+    if (
+        not isinstance(document_type, str)
+        or not document_type
+        or document_types != [document_type]
+        or not isinstance(algorithm, str)
+        or not algorithm
+        or not isinstance(digest_algorithm, str)
+        or not digest_algorithm
+        or _verification_datetime(signed_at) is None
+        or _verification_datetime(valid_from) is None
+        or _verification_datetime(valid_until) is None
+        or not isinstance(certificate_sha256, str)
+        or len(certificate_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in certificate_sha256)
+        or getattr(record, "validity_checked", None) is not True
+        or getattr(record, "valid_at_verification_time", None) is not True
+        or getattr(record, "revocation_checked", None) is not False
+        or getattr(record, "not_revoked", "missing") is not None
+        or getattr(result, "revocation_checked", None) is not False
+        or getattr(result, "not_revoked", "missing") is not None
+    ):
+        return None
+
+    return {
+        "issuer_id": f"x509-sha256:{certificate_sha256}",
+        "issuer_certificate_sha256": certificate_sha256,
+        "document_type": document_type,
+        "algorithm": algorithm,
+        "digest_algorithm": digest_algorithm,
+        "issued_at": signed_at,
+        "valid_from": valid_from,
+        "expires_at": valid_until,
+        "validity_checked": True,
+        "is_expired": False,
+        "revocation_checked": False,
+        "not_revoked": None,
+    }
 
 
 def _verify_mdoc(
@@ -1897,12 +1964,16 @@ def _verify_mdoc(
             bool(result.issuer_trusted),
             bool(result.device_authentication_valid),
         )
-        is_valid = bool(
+        authenticated_evidence = _authenticated_mdoc_evidence(result)
+        issuer_authentication_valid = bool(
             result.issuer_signature_valid
             and result.issuer_trusted
             and result.device_authentication_valid
         )
+        is_valid = bool(issuer_authentication_valid and authenticated_evidence)
         error = result.error
+        if issuer_authentication_valid and authenticated_evidence is None and not error:
+            error = "Authenticated mdoc evidence is incomplete"
         logger.info(
             "mDoc verification outcome device_auth_error_kind=%s",
             _classify_mdoc_verification_error(error),
@@ -1916,21 +1987,21 @@ def _verify_mdoc(
         return {
             "verified": is_valid,
             "claims": claims,
-            "issuer_did": "unknown",
+            "issuer_did": (
+                authenticated_evidence["issuer_id"]
+                if authenticated_evidence is not None
+                else "unknown"
+            ),
             "format": "mdoc",
             "error": error,
             "document_types": list(result.document_types),
             "issuer_signature_valid": bool(result.issuer_signature_valid),
             "issuer_trusted": bool(result.issuer_trusted),
             "device_authentication_valid": bool(result.device_authentication_valid),
+            "revocation_checked": False,
+            "not_revoked": None,
             "verification_evidence": {
-                # The current binding proves device authentication but does not
-                # expose MSO signing-algorithm or validity-window evidence.
-                "algorithm": None,
-                "issued_at": None,
-                "expires_at": None,
-                "validity_checked": False,
-                "is_expired": None,
+                **(authenticated_evidence or {}),
                 "holder_binding_verified": bool(
                     is_valid and result.device_authentication_valid
                 ),
