@@ -125,6 +125,7 @@ jobs:
         run: |
           test "$(jq -r '.status' tests/artifacts/flow-idempotency/contract-result.json)" = passed
           test "$(jq -r '.migration_revision' tests/artifacts/flow-idempotency/contract-result.json)" = 20260809_0001
+          test "$(jq -r '.production_repository_exercised' tests/artifacts/flow-idempotency/contract-result.json)" = true
           test "$(jq -r '.instance_created_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
           test "$(jq -r '.instance_recovered_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
           test "$(jq -r '.same_instance' tests/artifacts/flow-idempotency/contract-result.json)" = true
@@ -133,6 +134,8 @@ jobs:
           test "$(jq -r '.artifact_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
           test "$(jq -r '.same_artifact' tests/artifacts/flow-idempotency/contract-result.json)" = true
           test "$(jq -r '.cross_instance_rebind_rejected' tests/artifacts/flow-idempotency/contract-result.json)" = true
+          test "$(jq -r '.semantic_conflict_rolled_back' tests/artifacts/flow-idempotency/contract-result.json)" = true
+          test "$(jq -r '.changed_payload_rejected' tests/artifacts/flow-idempotency/contract-result.json)" = true
           test "$(jq -r '.source_revision' tests/artifacts/flow-idempotency/contract-result.json)" = "$FLOW_IDEMPOTENCY_SOURCE_REVISION"
 
       - name: Upload Flow idempotency evidence

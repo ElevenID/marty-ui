@@ -12,12 +12,14 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /contract
+ENV PYTHONPATH=/contract/services
 
 COPY tests/flow-idempotency-contract/requirements.txt /contract/requirements.txt
 RUN python -m pip install --no-deps --only-binary=:all: --require-hashes \
     --requirement /contract/requirements.txt
 
 COPY services/flow/infrastructure/migrations/ /contract/migrations/
+COPY services/flow/infrastructure/ /contract/services/flow/infrastructure/
 COPY tests/flow-idempotency-contract/run_contract.py /contract/run_contract.py
 
 ENTRYPOINT ["python", "/contract/run_contract.py"]
