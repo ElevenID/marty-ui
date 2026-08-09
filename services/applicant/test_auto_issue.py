@@ -1,14 +1,16 @@
-"""MIP 0.3 application lifecycle and authorization regressions."""
+"""MIP 0.4 application lifecycle and authorization regressions."""
 
 from __future__ import annotations
 
 import asyncio
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from common.application_event_auth import authenticate_application_event
 
 try:
     from applicant.main import (
@@ -34,6 +36,86 @@ except ModuleNotFoundError:
 
 def run(coro):
     return asyncio.run(coro)
+
+
+def test_manual_issuance_trigger_signs_exact_payload(monkeypatch):
+    captured = {}
+
+    class Response:
+        status_code = 200
+        content = b"{}"
+
+        @staticmethod
+        def json():
+            return {
+                "offers": [
+                    {
+                        "credential_offer_transaction_id": "tx-1",
+                        "flow_instance_id": "flow-instance-1",
+                        "credential_offer_uri": "openid-credential-offer://offer-1",
+                        "expires_at": "2099-01-01T00:00:00Z",
+                    }
+                ]
+            }
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, url, **kwargs):
+            captured.update(url=url, **kwargs)
+            return Response()
+
+    monkeypatch.setattr(service.httpx, "AsyncClient", Client)
+    monkeypatch.setenv(
+        "FLOW_APPLICATION_EVENT_HMAC_KEY",
+        "test-application-event-key-that-is-distinct-and-long",
+    )
+    application = SimpleNamespace(
+        id="application-1",
+        organization_id="org-1",
+        credential_template_id="template-1",
+        status=SimpleNamespace(value="APPROVED"),
+        reviewed_at=None,
+    )
+    applicant = SimpleNamespace(
+        id="applicant-1",
+        email="holder@example.test",
+        given_name="Ada",
+        family_name="Lovelace",
+        vetting_level=SimpleNamespace(value="STANDARD"),
+    )
+
+    result = run(
+        service._initiate_issuance_via_flow(
+            application=application,
+            applicant=applicant,
+            claims={"given_name": "Ada", "roles": ["member"]},
+        )
+    )
+
+    assert result["id"] == "tx-1"
+    assert captured["url"].endswith("/v1/flows/webhooks/application-approved")
+
+    class ReplayStore:
+        async def set(self, *_args, **_kwargs):
+            return True
+
+    evidence = run(
+        authenticate_application_event(
+            captured["json"],
+            captured["headers"],
+            replay_store=ReplayStore(),
+        )
+    )
+    assert len(evidence.payload_sha256) == 64
+    assert captured["json"]["data"]["claims"]["roles"] == ["member"]
 
 
 @pytest.fixture()
@@ -192,6 +274,9 @@ def test_self_service_is_owner_scoped(client, seeded):
 
 
 def test_review_requires_actual_org_permission_and_callers_lock(client, seeded):
+    from marty_common import CedarEngine
+
+    client.app.state.cedar_engine = CedarEngine.with_defaults()
     application_id = create_application(client).json()["id"]
     submitted = client.post(f"/v1/me/applications/{application_id}/submit", headers=self_headers())
     assert submitted.status_code == 200, submitted.text
@@ -224,6 +309,197 @@ def test_review_requires_actual_org_permission_and_callers_lock(client, seeded):
     )
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == ApplicationStatus.APPROVED.value
+
+
+@pytest.mark.parametrize(
+    ("decision", "payload", "expected_application", "expected_applicant"),
+    [
+        (
+            "approve",
+            {"notes": "verified"},
+            ApplicationStatus.APPROVED,
+            ApplicantStatus.APPROVED,
+        ),
+        (
+            "reject",
+            {"reason": "evidence mismatch"},
+            ApplicationStatus.REJECTED,
+            ApplicantStatus.REJECTED,
+        ),
+    ],
+)
+def test_review_completes_directly_from_submitted_state(
+    client,
+    repo,
+    seeded,
+    monkeypatch,
+    decision,
+    payload,
+    expected_application,
+    expected_applicant,
+):
+    from marty_common import CedarEngine
+
+    seeded.status = ApplicantStatus.SUBMITTED
+    run(repo.save(seeded))
+    client.app.state.cedar_engine = CedarEngine.with_defaults()
+
+    class Publisher:
+        async def publish(self, _event) -> None:
+            return None
+
+    monkeypatch.setattr(service, "get_event_publisher", lambda: Publisher())
+
+    application_id = create_application(client).json()["id"]
+    submitted = client.post(
+        f"/v1/me/applications/{application_id}/submit",
+        headers=self_headers(),
+    )
+    assert submitted.status_code == 200, submitted.text
+
+    lock = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/lock",
+        headers=reviewer_headers(),
+        json={},
+    )
+    assert lock.status_code == 200, lock.text
+
+    reviewed = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/{decision}",
+        headers=reviewer_headers(),
+        json=payload,
+    )
+    assert reviewed.status_code == 200, reviewed.text
+    assert reviewed.json()["status"] == expected_application.value
+    assert run(repo.get_by_id(seeded.id)).status == expected_applicant
+
+
+def test_approval_cedar_scope_uses_persisted_owner_not_untrusted_metadata(
+    client, seeded, monkeypatch
+):
+    response = create_application(
+        client,
+        integration_context={"organization_id": "org-attacker"},
+    )
+    assert response.status_code == 200, response.text
+    application_id = response.json()["id"]
+    submitted = client.post(
+        f"/v1/me/applications/{application_id}/submit",
+        headers=self_headers(),
+    )
+    assert submitted.status_code == 200, submitted.text
+    lock = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/lock",
+        headers=reviewer_headers(),
+        json={},
+    )
+    assert lock.status_code == 200, lock.text
+
+    class CapturingCedar:
+        def __init__(self) -> None:
+            self.entities = []
+
+        def is_authorized(self, **kwargs):
+            self.entities = kwargs["entities"]
+            return SimpleNamespace(allowed=True, reasons=[], errors=[])
+
+    cedar = CapturingCedar()
+    client.app.state.cedar_engine = cedar
+
+    class Publisher:
+        async def publish(self, _event) -> None:
+            return None
+
+    monkeypatch.setattr(service, "get_event_publisher", lambda: Publisher())
+    approved = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/approve",
+        headers=reviewer_headers(),
+        json={"notes": "tenant-scoped"},
+    )
+
+    assert approved.status_code == 200, approved.text
+    assert any(
+        entity["uid"] == {"type": "MIP::User", "id": "reviewer-1"}
+        and {"type": "MIP::Role", "id": "member"} in entity["parents"]
+        for entity in cedar.entities
+    )
+    assert any(
+        entity["uid"] == {"type": "MIP::Role", "id": "member"}
+        and entity["attrs"] == {"is_system_role": True}
+        for entity in cedar.entities
+    )
+    organization_ids = {
+        parent["id"]
+        for entity in cedar.entities
+        for parent in entity.get("parents", [])
+        if parent.get("type") == "MIP::Organization"
+    }
+    assert organization_ids == {"org-1"}
+
+
+def test_canonical_approval_publishes_tenant_scoped_application_event(
+    client, seeded, monkeypatch
+):
+    application_id = create_application(client).json()["id"]
+    submitted = client.post(
+        f"/v1/me/applications/{application_id}/submit", headers=self_headers()
+    )
+    assert submitted.status_code == 200, submitted.text
+    lock = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/lock",
+        headers=reviewer_headers(),
+        json={},
+    )
+    assert lock.status_code == 200, lock.text
+
+    class Publisher:
+        def __init__(self) -> None:
+            self.events = []
+
+        async def publish(self, event) -> None:
+            self.events.append(event)
+
+    publisher = Publisher()
+    monkeypatch.setattr(service, "get_event_publisher", lambda: publisher)
+
+    approved = client.post(
+        f"/v1/organizations/org-1/applicants/{application_id}/approve",
+        headers=reviewer_headers(),
+        json={"notes": "verified"},
+    )
+
+    assert approved.status_code == 200, approved.text
+    assert len(publisher.events) == 1
+    event = publisher.events[0]
+    assert event.event_type == service.EventType.APPLICATION_APPROVED
+    assert event.aggregate_id == application_id
+    assert event.aggregate_type == "application"
+    assert event.organization_id == "org-1"
+    assert event.data["application_id"] == application_id
+    assert event.data["applicant_id"] == "applicant-1"
+    assert event.data["credential_template_id"] == "credential-template-1"
+
+
+def test_submitted_application_checks_use_canonical_reviewer_route(client, seeded):
+    application_id = create_application(client).json()["id"]
+    submitted = client.post(
+        f"/v1/me/applications/{application_id}/submit",
+        headers=self_headers(),
+    )
+    assert submitted.status_code == 200, submitted.text
+
+    response = client.get(
+        f"/v1/organizations/org-1/applicants/{application_id}/checks",
+        headers=reviewer_headers(),
+    )
+
+    assert response.status_code == 200, response.text
+    checks = response.json()
+    assert len(checks) == 1
+    assert checks[0]["check_type"] == "identity_verification"
+    assert checks[0]["status"] == "not_started"
+    assert checks[0]["created_at"]
+    assert checks[0]["updated_at"]
 
 
 def test_claim_blocked_state_is_persisted(client, repo, seeded, monkeypatch):

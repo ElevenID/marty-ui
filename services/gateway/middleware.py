@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from gateway.registry import get_route_config
+from protocol_version import MIP_SUPPORTED_VERSIONS, MIP_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -67,14 +68,6 @@ class SessionCache:
     def clear(self, session_id: str) -> None:
         """Clear cached session."""
         self._cache.pop(session_id, None)
-
-
-# =============================================================================
-# MIP Version Constants
-# =============================================================================
-
-MIP_VERSION = "0.3.1"
-MIP_SUPPORTED_VERSIONS = ["0.3.1"]
 
 
 # =============================================================================
@@ -445,7 +438,6 @@ class ContentTypeEnforcementMiddleware(BaseHTTPMiddleware):
         "/v1/issuance/token",       # OAuth token endpoint: application/x-www-form-urlencoded
         "/v1/issuance/par",         # PAR endpoint (RFC 9126): application/x-www-form-urlencoded
         "/v1/issuance/nonce",       # OID4VCI nonce endpoint: wallets may POST empty/non-JSON bodies
-        "/v1/issuance/didcomm/",    # DIDComm v2: application/didcomm-plain+json
         "/v1/flows/instances/",     # OID4VP submit: application/x-www-form-urlencoded
         "/v1/flows/siop/submit",    # SIOPv2 submit
         "/v1/auth/",               # Auth service may use form data

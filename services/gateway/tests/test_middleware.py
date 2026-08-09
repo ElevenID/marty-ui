@@ -11,19 +11,18 @@ import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from marty_common import cedar_actions
-from marty_common.middleware import IdempotencyMiddleware
-
 from gateway import main as gateway_main
 from gateway.middleware import (
+    _RATE_LIMIT_RPM,
     AuthMiddleware,
     ContentTypeEnforcementMiddleware,
     MIPVersionMiddleware,
     RateLimitMiddleware,
     SessionCache,
-    _RATE_LIMIT_RPM,
     mip_error_response,
 )
+from marty_common import cedar_actions
+from marty_common.middleware import IdempotencyMiddleware
 
 # ---------------------------------------------------------------------------
 # Helpers: fake gRPC response objects
@@ -394,6 +393,98 @@ def test_vc_api_cedar_registration_is_idempotent():
     gateway_main._register_vc_api_cedar_routes()
 
     assert cedar_actions.SPECIAL_ROUTE_RULES == before
+
+
+@pytest.mark.parametrize(
+    ("method", "permission"),
+    [
+        ("GET", "wallet:view"),
+        ("HEAD", "wallet:view"),
+        ("OPTIONS", "wallet:view"),
+        ("POST", "wallet:write"),
+        ("PUT", "wallet:write"),
+        ("PATCH", "wallet:write"),
+        ("DELETE", "wallet:write"),
+    ],
+)
+def test_wallet_registry_routes_have_exact_cedar_permissions(
+    method: str,
+    permission: str,
+) -> None:
+    assert cedar_actions.resolve_action_and_resource(
+        method,
+        "/v1/wallet-registry/example",
+    ) == (permission, "wallet")
+
+
+def test_wallet_registry_cedar_registration_is_idempotent() -> None:
+    rules_before = list(cedar_actions.SPECIAL_ROUTE_RULES)
+    lookups_before = dict(cedar_actions.RESOURCE_LOOKUP_MAP)
+
+    gateway_main._register_wallet_registry_cedar_routes()
+
+    assert cedar_actions.SPECIAL_ROUTE_RULES == rules_before
+    assert cedar_actions.RESOURCE_LOOKUP_MAP == lookups_before
+
+
+def test_every_wallet_registry_endpoint_has_a_protected_mapping() -> None:
+    assert gateway_main.wallet_registry_router.routes
+
+    for route in gateway_main.wallet_registry_router.routes:
+        assert route.path.startswith("/v1/wallet-registry")
+        for method in route.methods:
+            permission = gateway_main._WALLET_REGISTRY_ROUTE_PERMISSIONS[method]
+            assert cedar_actions.resolve_action_and_resource(method, route.path) == (
+                permission,
+                "wallet",
+            )
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (
+            "/v1/wallet-registry/example",
+            ("credential-templates", "/v1/wallet-registry/example"),
+        ),
+        (
+            "/v1/wallet-registry/example/open-link",
+            ("credential-templates", "/v1/wallet-registry/example"),
+        ),
+        ("/v1/wallet-registry/resolve/profile", None),
+        ("/v1/wallet-registry", None),
+    ],
+)
+def test_wallet_registry_resource_lookups_resolve_real_tenant(
+    path: str,
+    expected: tuple[str, str] | None,
+) -> None:
+    assert cedar_actions.resolve_resource_lookup(path) == expected
+
+
+@pytest.mark.parametrize(
+    ("permission", "scopes", "allowed"),
+    [
+        ("wallet:view", ["wallet:read"], True),
+        ("wallet:view", ["wallet:write"], True),
+        ("wallet:write", ["wallet:write"], True),
+        ("wallet:write", ["wallet:read"], False),
+        ("wallet:view", ["templates:read"], False),
+        ("wallet:delete", ["wallet:write"], False),
+    ],
+)
+def test_wallet_registry_routes_use_published_api_key_scopes(
+    permission: str,
+    scopes: list[str],
+    allowed: bool,
+) -> None:
+    assert (
+        gateway_main.GatewayCedarAuthMiddleware._api_key_allowed(
+            permission,
+            scopes,
+        )
+        is allowed
+    )
 
 
 @pytest.mark.parametrize(
@@ -1193,6 +1284,19 @@ class TestContentTypeEnforcementMiddleware:
         assert resp.status_code == 415
         assert resp.json()["error"] == "unsupported_media_type"
 
+    async def test_didcomm_delivery_requires_json(self, content_type_app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=content_type_app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/issuance/didcomm/deliver",
+                headers={"Content-Type": "application/didcomm-plain+json"},
+                content=b"{}",
+            )
+
+        assert resp.status_code == 415
+        assert resp.json()["error"] == "unsupported_media_type"
+
 
 # ---------------------------------------------------------------------------
 # MIP Compliance tests (MIP 10, 17.7)
@@ -1226,7 +1330,7 @@ class TestMIPCompliance:
             base_url="http://test",
         ) as client:
             resp = await client.get("/v1/test")
-        assert resp.headers.get("X-MIP-Version") == "0.3.1"
+        assert resp.headers.get("X-MIP-Version") == "0.4.1"
 
     async def test_mip_version_header_on_health(self, mip_app):
         """MIP 20 - Health endpoints also carry MIP version."""
@@ -1235,7 +1339,7 @@ class TestMIPCompliance:
             base_url="http://test",
         ) as client:
             resp = await client.get("/health")
-        assert resp.headers.get("X-MIP-Version") == "0.3.1"
+        assert resp.headers.get("X-MIP-Version") == "0.4.1"
 
     def test_mip_error_response_format(self):
         """MIP 17.7 - Error responses MUST include error, error_description, message_id."""
@@ -1250,7 +1354,7 @@ class TestMIPCompliance:
         assert data["error_description"] == "Missing required field"
         assert "message_id" in data
         assert data["field"] == "email"
-        assert resp.headers.get("X-MIP-Version") == "0.3.1"
+        assert resp.headers.get("X-MIP-Version") == "0.4.1"
 
     def test_mip_error_response_503_format(self):
         """MIP 17.7 - Service unavailable errors follow the same envelope."""
@@ -1263,7 +1367,7 @@ class TestMIPCompliance:
         assert data["error"] == "service_unavailable"
         assert "message_id" in data
         assert resp.status_code == 503
-        assert resp.headers.get("X-MIP-Version") == "0.3.1"
+        assert resp.headers.get("X-MIP-Version") == "0.4.1"
 
     def test_mip_error_response_includes_details(self):
         """MIP 17.7 - Validation errors include details array."""
@@ -1285,4 +1389,4 @@ class TestMIPCompliance:
         assert data["error"] == "validation_error"
         assert len(data["details"]) == 2
         assert data["details"][0]["field"] == "email"
-        assert resp.headers.get("X-MIP-Version") == "0.3.1"
+        assert resp.headers.get("X-MIP-Version") == "0.4.1"

@@ -139,8 +139,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     applicant_profile_provisioner = ApplicantProfileProvisioningAdapter()
     
     # Initialize event publisher (gRPC event bus)
-    from auth.infrastructure.adapters.event_adapter import GrpcEventBusPublisher
-    event_publisher = GrpcEventBusPublisher()
+    from auth.infrastructure.adapters.event_adapter import EventStreamPublisherAdapter
+
+    event_publisher = EventStreamPublisherAdapter()
     
     # Initialize use cases
     authenticate_use_case = AuthenticateUseCase(

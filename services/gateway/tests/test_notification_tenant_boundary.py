@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from fastapi.responses import JSONResponse
 import pytest
+from marty_proto.v1 import event_stream_service_pb2
 
 import gateway.routes.notifications as notification_routes
 from gateway.routes.notifications import (
@@ -15,6 +16,7 @@ from gateway.routes.notifications import (
 
 def _client() -> TestClient:
     app = FastAPI()
+    app.state.es_grpc_channel = object()
     app.include_router(notification_router)
     app.include_router(subscription_router)
     app.include_router(webhook_router)
@@ -114,6 +116,58 @@ def test_sse_rejects_cross_tenant_and_cross_user_filters() -> None:
     assert wrong_user.json()["detail"] == (
         "User scope does not match authenticated user"
     )
+
+
+def test_sse_subscribes_to_and_returns_only_authorized_organization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    class Stub:
+        def __init__(self, channel) -> None:
+            captured["channel"] = channel
+
+        async def Subscribe(self, request):
+            captured["request"] = request
+            yield event_stream_service_pb2.DomainEvent(
+                event_id="event-b",
+                event_type="application.approved",
+                aggregate_id="application-b",
+                aggregate_type="application",
+                organization_id="org-b",
+                data={"application_id": "application-b"},
+                timestamp="2026-08-06T11:59:00+00:00",
+            )
+            yield event_stream_service_pb2.DomainEvent(
+                event_id="event-a",
+                event_type="application.approved",
+                aggregate_id="application-a",
+                aggregate_type="application",
+                organization_id="org-a",
+                data={"application_id": "application-a"},
+                timestamp="2026-08-06T12:00:00+00:00",
+            )
+
+    monkeypatch.setattr(
+        "marty_proto.v1.event_stream_service_pb2_grpc.EventStreamServiceStub",
+        Stub,
+    )
+
+    response = _client().get(
+        "/v1/notifications/events/push"
+        "?organization_id=org-a&subscriptions=application.approved"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert 'data: {"type": "connected"}' in response.text
+    assert "event: application.approved" in response.text
+    assert '"organization_id": "org-a"' in response.text
+    assert "event-b" not in response.text
+    assert "application-b" not in response.text
+    subscription = captured["request"]
+    assert subscription.organization_id == "org-a"
+    assert list(subscription.event_types) == ["application.approved"]
 
 
 def test_notification_proxy_injects_the_authorized_organization(
