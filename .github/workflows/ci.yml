@@ -87,6 +87,66 @@ jobs:
         working-directory: services
         run: python -m pytest -v --tb=short -x
 
+  flow-idempotency-contract:
+    name: Flow Idempotency PostgreSQL Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      FLOW_IDEMPOTENCY_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+      COMPOSE_PROJECT_NAME: flow-idempotency-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          path: marty-ui
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Validate disposable Flow idempotency topology
+        working-directory: marty-ui
+        run: docker compose --file docker-compose.flow-idempotency-contract.yml config --quiet
+
+      - name: Build Flow idempotency contract image
+        working-directory: marty-ui
+        run: |
+          mkdir -p tests/artifacts/flow-idempotency
+          chmod 0777 tests/artifacts/flow-idempotency
+          docker compose --file docker-compose.flow-idempotency-contract.yml build --pull flow-idempotency-contract
+
+      - name: Race Flow reservations and durable artifacts in PostgreSQL
+        working-directory: marty-ui
+        run: >-
+          docker compose --file docker-compose.flow-idempotency-contract.yml
+          up --force-recreate --abort-on-container-exit
+          --exit-code-from flow-idempotency-contract flow-idempotency-contract
+
+      - name: Require sanitized Flow idempotency evidence
+        working-directory: marty-ui
+        run: |
+          test "$(jq -r '.status' tests/artifacts/flow-idempotency/contract-result.json)" = passed
+          test "$(jq -r '.migration_revision' tests/artifacts/flow-idempotency/contract-result.json)" = 20260809_0001
+          test "$(jq -r '.instance_created_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
+          test "$(jq -r '.instance_recovered_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
+          test "$(jq -r '.same_instance' tests/artifacts/flow-idempotency/contract-result.json)" = true
+          test "$(jq -r '.artifact_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
+          test "$(jq -r '.same_artifact' tests/artifacts/flow-idempotency/contract-result.json)" = true
+          test "$(jq -r '.cross_instance_rebind_rejected' tests/artifacts/flow-idempotency/contract-result.json)" = true
+          test "$(jq -r '.source_revision' tests/artifacts/flow-idempotency/contract-result.json)" = "$FLOW_IDEMPOTENCY_SOURCE_REVISION"
+
+      - name: Upload Flow idempotency evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: flow-idempotency-${{ github.run_id }}-${{ github.run_attempt }}
+          path: marty-ui/tests/artifacts/flow-idempotency/contract-result.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Remove disposable Flow idempotency stack
+        if: always()
+        working-directory: marty-ui
+        run: docker compose --file docker-compose.flow-idempotency-contract.yml down --volumes --remove-orphans
+
   public-protocol-contract:
     name: Public Protocol Contract
     runs-on: ubuntu-latest
