@@ -1,4 +1,4 @@
-"""MIP 0.3 Application Template gateway contract tests."""
+"""MIP 0.4 Application Template gateway contract tests."""
 
 import pytest
 from pydantic import ValidationError

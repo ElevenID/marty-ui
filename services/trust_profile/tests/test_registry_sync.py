@@ -16,6 +16,7 @@ from trust_profile.registry_sync import (
     RegistryImportState,
     RegistrySyncError,
     fetch_registry_page,
+    registry_tls_context,
     require_public_registry_destination,
     synchronize_registry,
     validate_registry_url_structure,
@@ -316,6 +317,75 @@ async def test_destination_validation_rejects_non_public_addresses(monkeypatch) 
     )
     with pytest.raises(RegistrySyncError, match="non-public"):
         await require_public_registry_destination("https://registry.example/sync")
+
+
+@pytest.mark.asyncio
+async def test_operator_allowlist_permits_only_the_exact_private_registry_host(
+    monkeypatch,
+) -> None:
+    def private_lookup(*_args: object, **_kwargs: object) -> list[tuple[object, ...]]:
+        return [(None, None, None, None, ("172.28.0.12", 443))]
+
+    monkeypatch.setattr(
+        "trust_profile.registry_sync.socket.getaddrinfo", private_lookup
+    )
+    monkeypatch.setenv(
+        "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST", "trust-registry-fixture"
+    )
+
+    assert (
+        await require_public_registry_destination(
+            "https://trust-registry-fixture/marty-sync/v1"
+        )
+        == "172.28.0.12"
+    )
+    with pytest.raises(RegistrySyncError, match="non-public"):
+        await require_public_registry_destination("https://other-fixture/marty-sync/v1")
+
+
+@pytest.mark.asyncio
+async def test_operator_allowlist_never_permits_loopback(monkeypatch) -> None:
+    def loopback_lookup(*_args: object, **_kwargs: object) -> list[tuple[object, ...]]:
+        return [(None, None, None, None, ("127.0.0.1", 443))]
+
+    monkeypatch.setattr(
+        "trust_profile.registry_sync.socket.getaddrinfo", loopback_lookup
+    )
+    monkeypatch.setenv(
+        "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST", "trust-registry-fixture"
+    )
+    with pytest.raises(RegistrySyncError, match="non-public"):
+        await require_public_registry_destination(
+            "https://trust-registry-fixture/marty-sync/v1"
+        )
+
+
+@pytest.mark.asyncio
+async def test_operator_allowlist_rejects_ip_literals(monkeypatch) -> None:
+    monkeypatch.setenv("TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST", "10.0.0.8")
+    with pytest.raises(RegistrySyncError, match="DNS hostnames"):
+        await require_public_registry_destination("https://registry.example/sync")
+
+
+def test_registry_tls_context_adds_an_operator_ca_bundle(monkeypatch, tmp_path) -> None:
+    ca_file = tmp_path / "registry-ca.pem"
+    ca_file.write_text(certificate_pem(ca=True), encoding="ascii")
+    monkeypatch.setenv("TRUST_REGISTRY_TLS_CA_FILE", str(ca_file))
+
+    context = registry_tls_context()
+
+    assert context.verify_mode.name == "CERT_REQUIRED"
+    assert context.check_hostname is True
+
+
+def test_registry_tls_context_rejects_an_unreadable_ca_bundle(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv(
+        "TRUST_REGISTRY_TLS_CA_FILE", str(tmp_path / "missing-ca.pem")
+    )
+    with pytest.raises(RegistrySyncError, match="could not be loaded"):
+        registry_tls_context()
 
 
 @pytest.mark.asyncio
