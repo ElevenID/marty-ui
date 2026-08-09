@@ -101,6 +101,26 @@ async def test_tampered_payload_is_rejected_before_replay_consumption(event: dic
 
 
 @pytest.mark.asyncio
+async def test_verified_event_can_defer_replay_consumption_until_after_durable_plan(
+    event: dict,
+) -> None:
+    metadata = sign_application_event(event, now=1_786_291_200)
+    redis = _RedisClient()
+
+    evidence = await authenticate_application_event(
+        event,
+        metadata,
+        replay_store=redis,
+        now=1_786_291_200,
+        consume_replay=False,
+    )
+
+    assert len(evidence.event_id_sha256) == 64
+    assert redis.calls == 0
+    assert redis.state.values == {}
+
+
+@pytest.mark.asyncio
 async def test_wrong_audience_and_stale_events_are_rejected(event: dict) -> None:
     metadata = sign_application_event(event, now=1_786_291_200)
     wrong_audience = dict(metadata)
