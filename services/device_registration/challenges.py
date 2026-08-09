@@ -8,7 +8,6 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-
 CHALLENGE_PREFIX = "device-registration:challenge:"
 CHALLENGE_AUDIENCE = "marty-device-registration"
 _CONSUME_SCRIPT = """
@@ -31,19 +30,45 @@ class ChallengeRecord:
     nonce: str
     created_at: str
     expires_at: str
+    registration_id: str | None = None
+    key_version: int | None = None
+    purpose: str = "device_registration"
+    audience: str = CHALLENGE_AUDIENCE
+    message_version: int = 2
 
     def message(self) -> bytes:
+        if self.message_version == 1:
+            return (
+                "marty-device-registration-v1\n"
+                f"{CHALLENGE_AUDIENCE}\n{self.challenge_id}\n{self.user_id}\n"
+                f"{self.device_id}\n{self.public_key_kid}\n{self.nonce}"
+            ).encode()
         return (
-            "marty-device-registration-v1\n"
-            f"{CHALLENGE_AUDIENCE}\n{self.challenge_id}\n{self.user_id}\n"
-            f"{self.device_id}\n{self.public_key_kid}\n{self.nonce}"
+            "marty-device-registration-v2\n"
+            + json.dumps(
+                {
+                    "audience": self.audience,
+                    "challenge_id": self.challenge_id,
+                    "device_id": self.device_id,
+                    "expires_at": self.expires_at,
+                    "key_version": self.key_version,
+                    "nonce": self.nonce,
+                    "public_key_kid": self.public_key_kid,
+                    "purpose": self.purpose,
+                    "registration_id": self.registration_id,
+                    "user_id": self.user_id,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
         ).encode()
 
     def encoded_message(self) -> str:
         return base64.urlsafe_b64encode(self.message()).decode().rstrip("=")
 
-    def is_expired(self) -> bool:
-        return datetime.now(timezone.utc) >= datetime.fromisoformat(self.expires_at)
+    def is_expired(self, now: datetime | None = None) -> bool:
+        checked_at = now or datetime.now(timezone.utc)
+        return checked_at >= datetime.fromisoformat(self.expires_at)
 
 
 class ChallengeStore:
@@ -61,7 +86,10 @@ class ChallengeStore:
     def _deserialize(raw: str | bytes) -> ChallengeRecord:
         if isinstance(raw, bytes):
             raw = raw.decode()
-        return ChallengeRecord(**json.loads(raw))
+        payload = json.loads(raw)
+        if "message_version" not in payload:
+            payload["message_version"] = 1
+        return ChallengeRecord(**payload)
 
     async def issue(
         self,
@@ -69,6 +97,11 @@ class ChallengeStore:
         device_id: str,
         public_key_kid: str,
         public_key_sha256: str,
+        *,
+        registration_id: str | None = None,
+        key_version: int | None = None,
+        purpose: str = "device_registration",
+        audience: str = CHALLENGE_AUDIENCE,
     ) -> ChallengeRecord:
         now = datetime.now(timezone.utc)
         for _attempt in range(4):
@@ -81,6 +114,10 @@ class ChallengeStore:
                 nonce=secrets.token_urlsafe(32),
                 created_at=now.isoformat(),
                 expires_at=(now + timedelta(seconds=self._ttl_seconds)).isoformat(),
+                registration_id=registration_id,
+                key_version=key_version,
+                purpose=purpose,
+                audience=audience,
             )
             serialized = self._serialize(record)
             key = f"{CHALLENGE_PREFIX}{record.challenge_id}"

@@ -45,8 +45,13 @@ async def test_delete_deactivates_registration_without_removing_audit_record(
     assert stored.is_active is False
     assert stored.updated_at > original_updated_at
     assert stored.fcm_token == "registration-token"
-    assert stored.public_key_der == "stored-public-key"
-    assert stored.public_key_kid == "stored-key-id"
+    assert stored.public_key_der is None
+    assert stored.public_key_kid is None
+    assert stored.key_version is None
+    historical_key = repository._keys[registration.id][1]
+    assert historical_key.public_key_der == "stored-public-key"
+    assert historical_key.public_key_kid == "stored-key-id"
+    assert historical_key.state is device.DeviceKeyState.REVOKED
 
 
 async def test_delete_remains_idempotent_for_inactive_registration(monkeypatch) -> None:

@@ -30,6 +30,12 @@ def test_revocation_schema_precedes_dependent_migrations() -> None:
     assert order.index("revocation_profile") < order.index("trust_profile")
 
 
+def test_device_registration_schema_is_owned_by_the_deployment_migration_runner() -> None:
+    services = {service["name"]: service["module"] for service in migrations.SERVICES}
+
+    assert services["device_registration"] == "device_registration.infrastructure.models"
+
+
 def test_seed_signing_registry_binds_lti_key_inside_multi_key_service() -> None:
     redis = FakeRedis()
     organization_id = "00000000-0000-0000-0000-000000000001"
