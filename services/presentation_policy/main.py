@@ -4097,7 +4097,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     grpc_port = int(os.environ.get("PP_GRPC_PORT", "9009"))
-    grpc_server, health_servicer = create_grpc_server("presentation-policy")
+    policy_service = "marty.ui.presentation_policy.v1.PresentationPolicyService"
+    authorized_verifiers = {
+        "spiffe://marty.internal/service/flow",
+        "spiffe://marty.internal/service/verification",
+    }
+    grpc_server, health_servicer = create_grpc_server(
+        "presentation-policy",
+        workload_identity_authorization={
+            f"/{policy_service}/GetPolicy": authorized_verifiers,
+            f"/{policy_service}/EvaluatePresentation": authorized_verifiers,
+        },
+    )
     servicer = PresentationPolicyServiceGrpc(
         repo=_repo,
         evaluate_fn=evaluate_presentation,
@@ -4107,8 +4118,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     start_grpc_server_port(
         grpc_server,
         grpc_port,
-        service_names=["marty.ui.presentation_policy.v1.PresentationPolicyService"],
+        service_names=[policy_service],
         health_servicer=health_servicer,
+        require_workload_identity=True,
     )
     await grpc_server.start()
     logger.info(f"Presentation-policy gRPC server listening on :{grpc_port}")

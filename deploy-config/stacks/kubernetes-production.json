@@ -20,6 +20,13 @@
     "session_secret_key",
     "issuance_api_key",
     "grpc_service_token",
+    "workload_identity_ca_cert",
+    "pp_workload_server_cert",
+    "pp_workload_server_key",
+    "flow_workload_client_cert",
+    "flow_workload_client_key",
+    "verification_workload_client_cert",
+    "verification_workload_client_key",
     "integration_secret_master_key",
     "openbao_service_token"
   ],

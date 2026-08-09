@@ -313,6 +313,7 @@ async def _evaluate_via_grpc(
         async with create_grpc_channel(
             PP_GRPC_TARGET,
             service_name="verification",
+            require_workload_identity=True,
         ) as channel:
             stub = presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub(
                 channel
@@ -832,6 +833,7 @@ async def _build_presentation_definition(session: VerificationSession) -> dict[s
         async with create_grpc_channel(
             PP_GRPC_TARGET,
             service_name="verification",
+            require_workload_identity=True,
         ) as pp_channel:
             pp_stub = presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub(
                 pp_channel
