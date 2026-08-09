@@ -4,13 +4,25 @@ PostgreSQL adapter for flow repository.
 import logging
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 if TYPE_CHECKING:
-    from flow.main import FlowDefinition, FlowInstance, FlowInstanceArtifact, FlowStatus, FlowType, FlowInstanceStatus
+    from flow.main import (
+        ApplicationEventPlanReceipt,
+        FlowDefinition,
+        FlowInstance,
+        FlowInstanceArtifact,
+        FlowInstanceStatus,
+    )
 
-from flow.infrastructure.models import flow_definitions, flow_instances
+from flow.infrastructure.models import (
+    flow_application_event_receipts,
+    flow_definitions,
+    flow_instance_artifacts,
+    flow_instances,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,25 +68,116 @@ class PostgresFlowRepository:
     
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]):
         self._session_factory = session_factory
-        # Artifacts are kept in-memory until a dedicated table is added.
-        self._artifacts: dict[str, "FlowInstanceArtifact"] = {}
-    
-    # ========== Flow Instance Artifact Operations (in-memory) ==========
 
-    async def save_artifact(self, artifact: "FlowInstanceArtifact") -> None:
-        self._artifacts[artifact.id] = artifact
+    @staticmethod
+    def _artifact_from_row(row) -> "FlowInstanceArtifact":
+        from flow.main import ArtifactStatus, FlowInstanceArtifact
+
+        return FlowInstanceArtifact(
+            id=row.id,
+            flow_instance_id=row.flow_instance_id,
+            issuance_transaction_id=row.issuance_transaction_id,
+            credential_offer_uri=row.credential_offer_uri,
+            credential_offer_uris=row.credential_offer_uris or {},
+            credential_offer_labels=row.credential_offer_labels or {},
+            pre_authorized_code=row.pre_authorized_code,
+            issuance_status=row.issuance_status,
+            qr_payload=row.qr_payload,
+            expires_at=row.expires_at,
+            scanned_at=row.scanned_at,
+            status=ArtifactStatus(row.status),
+            state=row.state,
+            wallet_metadata=row.wallet_metadata or {},
+            attempt_number=row.attempt_number,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+
+    # ========== Flow Instance Artifact Operations ==========
+
+    async def save_artifact(
+        self, artifact: "FlowInstanceArtifact"
+    ) -> "FlowInstanceArtifact":
+        values = {
+            "id": artifact.id,
+            "flow_instance_id": artifact.flow_instance_id,
+            "issuance_transaction_id": artifact.issuance_transaction_id,
+            "credential_offer_uri": artifact.credential_offer_uri,
+            "credential_offer_uris": artifact.credential_offer_uris,
+            "credential_offer_labels": artifact.credential_offer_labels,
+            "pre_authorized_code": artifact.pre_authorized_code,
+            "issuance_status": artifact.issuance_status,
+            "qr_payload": artifact.qr_payload,
+            "expires_at": artifact.expires_at,
+            "scanned_at": artifact.scanned_at,
+            "status": artifact.status.value,
+            "state": artifact.state,
+            "wallet_metadata": artifact.wallet_metadata,
+            "attempt_number": artifact.attempt_number,
+            "created_at": artifact.created_at,
+            "updated_at": artifact.updated_at,
+        }
+        update_values = {
+            key: value
+            for key, value in values.items()
+            if key not in {"id", "flow_instance_id", "created_at"}
+        }
+        async with self._session_factory() as session:
+            insert_statement = pg_insert(flow_instance_artifacts).values(**values)
+            conflict_columns = (
+                ["issuance_transaction_id"]
+                if artifact.issuance_transaction_id
+                else ["id"]
+            )
+            statement = insert_statement.on_conflict_do_update(
+                index_elements=conflict_columns,
+                set_=update_values,
+                where=(
+                    flow_instance_artifacts.c.flow_instance_id
+                    == artifact.flow_instance_id
+                ),
+            ).returning(*flow_instance_artifacts.c)
+            row = (await session.execute(statement)).first()
+            await session.commit()
+            if row is None:
+                raise RuntimeError(
+                    "issuance transaction is already bound to another flow instance"
+                )
+            return self._artifact_from_row(row)
 
     async def get_artifact(self, artifact_id: str) -> "FlowInstanceArtifact | None":
-        return self._artifacts.get(artifact_id)
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    select(flow_instance_artifacts).where(
+                        flow_instance_artifacts.c.id == artifact_id
+                    )
+                )
+            ).first()
+            return self._artifact_from_row(row) if row else None
 
     async def list_artifacts(self, flow_instance_id: str) -> list["FlowInstanceArtifact"]:
-        return [a for a in self._artifacts.values() if a.flow_instance_id == flow_instance_id]
+        async with self._session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(flow_instance_artifacts).where(
+                        flow_instance_artifacts.c.flow_instance_id == flow_instance_id
+                    )
+                )
+            ).all()
+            return [self._artifact_from_row(row) for row in rows]
 
     async def get_artifact_by_code(self, pre_authorized_code: str) -> "FlowInstanceArtifact | None":
-        for a in self._artifacts.values():
-            if a.pre_authorized_code == pre_authorized_code:
-                return a
-        return None
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    select(flow_instance_artifacts).where(
+                        flow_instance_artifacts.c.pre_authorized_code
+                        == pre_authorized_code
+                    )
+                )
+            ).first()
+            return self._artifact_from_row(row) if row else None
 
     # ========== Flow Definition Operations ==========
     
@@ -397,6 +500,7 @@ class PostgresFlowRepository:
                         subject_id=instance.subject_id,
                         subject_type=instance.subject_type,
                         external_reference=instance.external_reference,
+                        application_flow_key_hash=instance.application_flow_key_hash,
                         started_at=instance.started_at,
                         completed_at=instance.completed_at,
                         expires_at=instance.expires_at,
@@ -408,11 +512,165 @@ class PostgresFlowRepository:
                 )
             
             await session.commit()
+
+    async def reserve_application_event_plan(
+        self,
+        receipt: "ApplicationEventPlanReceipt",
+        planned_instances: list[tuple["FlowInstance", dict[str, str]]],
+    ) -> tuple["ApplicationEventPlanReceipt", bool]:
+        from flow.main import ApplicationEventPlanReceipt
+
+        async with self._session_factory() as session:
+            receipt_insert = (
+                pg_insert(flow_application_event_receipts)
+                .values(
+                    event_id_sha256=receipt.event_id_sha256,
+                    payload_sha256=receipt.payload_sha256,
+                    organization_id=receipt.organization_id,
+                    application_id=receipt.application_id,
+                    flow_plan=[],
+                    created_at=receipt.created_at,
+                    updated_at=receipt.updated_at,
+                )
+                .on_conflict_do_nothing(index_elements=["event_id_sha256"])
+                .returning(*flow_application_event_receipts.c)
+            )
+            receipt_row = (await session.execute(receipt_insert)).first()
+            if receipt_row is None:
+                receipt_row = (
+                    await session.execute(
+                        select(flow_application_event_receipts).where(
+                            flow_application_event_receipts.c.event_id_sha256
+                            == receipt.event_id_sha256
+                        )
+                    )
+                ).first()
+                if receipt_row is None:
+                    await session.rollback()
+                    raise RuntimeError("application event plan was not recoverable")
+                existing = ApplicationEventPlanReceipt(
+                    event_id_sha256=receipt_row.event_id_sha256,
+                    payload_sha256=receipt_row.payload_sha256,
+                    organization_id=receipt_row.organization_id,
+                    application_id=receipt_row.application_id,
+                    flow_plan=receipt_row.flow_plan or [],
+                    created_at=receipt_row.created_at,
+                    updated_at=receipt_row.updated_at,
+                )
+                if (
+                    existing.payload_sha256 != receipt.payload_sha256
+                    or existing.organization_id != receipt.organization_id
+                    or existing.application_id != receipt.application_id
+                ):
+                    await session.rollback()
+                    from flow.main import ApplicationOfferConflictError
+
+                    raise ApplicationOfferConflictError(
+                        "application event identity was already bound to another payload"
+                    )
+                await session.commit()
+                return existing, False
+
+            final_plan: list[dict[str, str]] = []
+            for candidate, plan_entry in planned_instances:
+                values = {
+                    "id": candidate.id,
+                    "flow_definition_id": candidate.flow_definition_id,
+                    "organization_id": candidate.organization_id,
+                    "status": candidate.status.value,
+                    "current_step_id": candidate.current_step_id,
+                    "context": candidate.context,
+                    "step_history": candidate.step_history,
+                    "subject_id": candidate.subject_id,
+                    "subject_type": candidate.subject_type,
+                    "external_reference": candidate.external_reference,
+                    "application_flow_key_hash": candidate.application_flow_key_hash,
+                    "started_at": candidate.started_at,
+                    "completed_at": candidate.completed_at,
+                    "expires_at": candidate.expires_at,
+                    "result": candidate.result,
+                    "error": candidate.error,
+                    "created_at": candidate.created_at,
+                    "updated_at": candidate.updated_at,
+                }
+                instance_insert = (
+                    pg_insert(flow_instances)
+                    .values(**values)
+                    .on_conflict_do_nothing(
+                        index_elements=["organization_id", "application_flow_key_hash"]
+                    )
+                    .returning(*flow_instances.c)
+                )
+                instance_row = (await session.execute(instance_insert)).first()
+                if instance_row is None:
+                    instance_row = (
+                        await session.execute(
+                            select(flow_instances).where(
+                                flow_instances.c.organization_id
+                                == candidate.organization_id,
+                                flow_instances.c.application_flow_key_hash
+                                == candidate.application_flow_key_hash,
+                            )
+                        )
+                    ).first()
+                if instance_row is None:
+                    await session.rollback()
+                    raise RuntimeError("application flow reservation was not recoverable")
+                selected = self._instance_from_row(instance_row)
+                if (
+                    selected.context.get(
+                        "_marty_application_offer_semantics_hash_v1"
+                    )
+                    != plan_entry["offer_semantics_hash"]
+                ):
+                    await session.rollback()
+                    from flow.main import ApplicationOfferConflictError
+
+                    raise ApplicationOfferConflictError(
+                        "application and flow were already bound to different issuance claims"
+                    )
+                final_plan.append({**plan_entry, "instance_id": selected.id})
+
+            await session.execute(
+                flow_application_event_receipts.update()
+                .where(
+                    flow_application_event_receipts.c.event_id_sha256
+                    == receipt.event_id_sha256
+                )
+                .values(flow_plan=final_plan, updated_at=receipt.updated_at)
+            )
+            receipt.flow_plan = final_plan
+            await session.commit()
+            return receipt, True
+
+    @staticmethod
+    def _instance_from_row(row) -> "FlowInstance":
+        from flow.main import FlowInstance, FlowInstanceStatus
+
+        return FlowInstance(
+            id=row.id,
+            flow_definition_id=row.flow_definition_id,
+            organization_id=row.organization_id,
+            status=FlowInstanceStatus(row.status),
+            current_step_id=row.current_step_id,
+            context=row.context,
+            step_history=row.step_history,
+            subject_id=row.subject_id,
+            subject_type=row.subject_type,
+            external_reference=row.external_reference,
+            application_flow_key_hash=row.application_flow_key_hash,
+            started_at=row.started_at,
+            completed_at=row.completed_at,
+            expires_at=row.expires_at,
+            result=row.result,
+            error=row.error,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
     
     async def get_instance(self, instance_id: str) -> "FlowInstance | None":
         """Get a flow instance by ID."""
-        from flow.main import FlowInstance, FlowInstanceStatus
-        
+
         async with self._session_factory() as session:
             result = await session.execute(
                 select(flow_instances).where(flow_instances.c.id == instance_id)
@@ -422,25 +680,7 @@ class PostgresFlowRepository:
             if not row:
                 return None
             
-            return FlowInstance(
-                id=row.id,
-                flow_definition_id=row.flow_definition_id,
-                organization_id=row.organization_id,
-                status=FlowInstanceStatus(row.status),
-                current_step_id=row.current_step_id,
-                context=row.context,
-                step_history=row.step_history,
-                subject_id=row.subject_id,
-                subject_type=row.subject_type,
-                external_reference=row.external_reference,
-                started_at=row.started_at,
-                completed_at=row.completed_at,
-                expires_at=row.expires_at,
-                result=row.result,
-                error=row.error,
-                created_at=row.created_at,
-                updated_at=row.updated_at,
-            )
+            return self._instance_from_row(row)
     
     async def list_instances(
         self,
@@ -449,8 +689,7 @@ class PostgresFlowRepository:
         status: "FlowInstanceStatus | None" = None,
     ) -> list["FlowInstance"]:
         """List flow instances with optional filters."""
-        from flow.main import FlowInstance, FlowInstanceStatus
-        
+
         async with self._session_factory() as session:
             query = select(flow_instances).where(flow_instances.c.organization_id == org_id)
             
@@ -468,25 +707,7 @@ class PostgresFlowRepository:
             instances = []
             for row in rows:
                 instances.append(
-                    FlowInstance(
-                        id=row.id,
-                        flow_definition_id=row.flow_definition_id,
-                        organization_id=row.organization_id,
-                        status=FlowInstanceStatus(row.status),
-                        current_step_id=row.current_step_id,
-                        context=row.context,
-                        step_history=row.step_history,
-                        subject_id=row.subject_id,
-                        subject_type=row.subject_type,
-                        external_reference=row.external_reference,
-                        started_at=row.started_at,
-                        completed_at=row.completed_at,
-                        expires_at=row.expires_at,
-                        result=row.result,
-                        error=row.error,
-                        created_at=row.created_at,
-                        updated_at=row.updated_at,
-                    )
+                    self._instance_from_row(row)
                 )
             
             return instances
