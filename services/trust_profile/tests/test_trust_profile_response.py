@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import NameOID
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from services.trust_profile import main as trust_profile
 from trust_profile.registry_sync import (
@@ -923,4 +924,6 @@ def test_activate_trust_profile_keeps_protocol_payload_stable() -> None:
     assert body["status"] == "active"
     assert "validation_rules" not in body
     assert "trusted_issuers" not in body
+    with pytest.raises(ValidationError):
+        trust_profile.TrustProfileResponse.model_validate({**body, "status": "ACTIVE"})
     get_membership.assert_awaited_once_with("user-1", "org-1")

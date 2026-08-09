@@ -2,7 +2,18 @@
 SQLAlchemy models for flow service.
 """
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Integer, DateTime, Text, Boolean, Index, Table
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Table,
+    Text,
+)
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.orm import registry
 
@@ -55,7 +66,6 @@ flow_definitions = Table(
     # Timestamps (timezone-aware)
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow),
-    
     schema="flow_service",
 )
 
@@ -79,6 +89,7 @@ flow_instances = Table(
     
     # External references
     Column("external_reference", String(255), nullable=True),
+    Column("application_flow_key_hash", String(64), nullable=True),
     
     # Timing
     Column("started_at", DateTime(timezone=True), nullable=True),
@@ -92,7 +103,61 @@ flow_instances = Table(
     # Timestamps (timezone-aware)
     Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
     Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow),
+    CheckConstraint(
+        "application_flow_key_hash IS NULL OR "
+        "application_flow_key_hash ~ '^[0-9a-f]{64}$'",
+        name="ck_flow_instances_application_flow_key_hash",
+    ),
     
+    schema="flow_service",
+)
+
+flow_application_event_receipts = Table(
+    "flow_application_event_receipts",
+    mapper_registry.metadata,
+    Column("event_id_sha256", String(64), primary_key=True),
+    Column("payload_sha256", String(64), nullable=False),
+    Column("organization_id", String(255), nullable=False),
+    Column("application_id", String(255), nullable=False),
+    Column("flow_plan", JSON, nullable=False, default=list),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    CheckConstraint(
+        "event_id_sha256 ~ '^[0-9a-f]{64}$'",
+        name="ck_flow_application_event_receipts_event_hash",
+    ),
+    CheckConstraint(
+        "payload_sha256 ~ '^[0-9a-f]{64}$'",
+        name="ck_flow_application_event_receipts_payload_hash",
+    ),
+    schema="flow_service",
+)
+
+flow_instance_artifacts = Table(
+    "flow_instance_artifacts",
+    mapper_registry.metadata,
+    Column("id", String(36), primary_key=True),
+    Column(
+        "flow_instance_id",
+        String(36),
+        ForeignKey("flow_service.flow_instances.id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("issuance_transaction_id", String(36), nullable=True),
+    Column("credential_offer_uri", Text, nullable=True),
+    Column("credential_offer_uris", JSON, nullable=False, default=dict),
+    Column("credential_offer_labels", JSON, nullable=False, default=dict),
+    Column("pre_authorized_code", String(255), nullable=True),
+    Column("issuance_status", String(50), nullable=True),
+    Column("qr_payload", Text, nullable=True),
+    Column("expires_at", DateTime(timezone=True), nullable=True),
+    Column("scanned_at", DateTime(timezone=True), nullable=True),
+    Column("status", String(50), nullable=False),
+    Column("state", String(255), nullable=True),
+    Column("wallet_metadata", JSON, nullable=False, default=dict),
+    Column("attempt_number", Integer, nullable=False, default=1),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
     schema="flow_service",
 )
 
@@ -107,3 +172,23 @@ Index("ix_flow_instances_flow_definition_id", flow_instances.c.flow_definition_i
 Index("ix_flow_instances_status", flow_instances.c.status)
 Index("ix_flow_instances_subject_id", flow_instances.c.subject_id)
 Index("ix_flow_instances_external_reference", flow_instances.c.external_reference)
+Index(
+    "ux_flow_instances_org_application_flow_key",
+    flow_instances.c.organization_id,
+    flow_instances.c.application_flow_key_hash,
+    unique=True,
+)
+Index(
+    "ix_flow_application_event_receipts_org_application",
+    flow_application_event_receipts.c.organization_id,
+    flow_application_event_receipts.c.application_id,
+)
+Index(
+    "ix_flow_instance_artifacts_pre_authorized_code",
+    flow_instance_artifacts.c.pre_authorized_code,
+)
+Index(
+    "ux_flow_instance_artifacts_issuance_transaction_id",
+    flow_instance_artifacts.c.issuance_transaction_id,
+    unique=True,
+)
