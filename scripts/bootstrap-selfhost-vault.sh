@@ -21,6 +21,7 @@ BAO_TOKEN="${BAO_TOKEN:-}"
 BAO_TOKEN_FILE="${BAO_TOKEN_FILE:-}"
 SELFHOST_SECRET_DIR="${SELFHOST_SECRET_DIR:-${REPO_ROOT}/docker/secrets/selfhost.example}"
 SERVICE_TOKEN_OUTPUT_FILE="${SERVICE_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/openbao_service_token}"
+NOTIFICATION_TOKEN_OUTPUT_FILE="${NOTIFICATION_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/notification_openbao_token}"
 
 if [ -z "${BAO_ADDR}" ]; then
     echo "BAO_ADDR must be set to the external Vault/OpenBao address." >&2
@@ -47,17 +48,21 @@ fi
 
 SERVICE_TOKEN_OUTPUT_DIR=$(dirname "${SERVICE_TOKEN_OUTPUT_FILE}")
 SERVICE_TOKEN_OUTPUT_BASENAME=$(basename "${SERVICE_TOKEN_OUTPUT_FILE}")
+NOTIFICATION_TOKEN_OUTPUT_DIR=$(dirname "${NOTIFICATION_TOKEN_OUTPUT_FILE}")
+NOTIFICATION_TOKEN_OUTPUT_BASENAME=$(basename "${NOTIFICATION_TOKEN_OUTPUT_FILE}")
 
-mkdir -p "${SERVICE_TOKEN_OUTPUT_DIR}"
+mkdir -p "${SERVICE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}"
 
 echo "Configuring external Vault/OpenBao at ${BAO_ADDR}..."
 
 docker run --rm \
     -e BAO_ADDR="${BAO_ADDR}" \
     -e BAO_TOKEN="${BAO_TOKEN}" \
-    -e SERVICE_TOKEN_OUTPUT_FILE="/work/${SERVICE_TOKEN_OUTPUT_BASENAME}" \
+    -e SERVICE_TOKEN_OUTPUT_FILE="/work-service/${SERVICE_TOKEN_OUTPUT_BASENAME}" \
+    -e NOTIFICATION_TOKEN_OUTPUT_FILE="/work-notification/${NOTIFICATION_TOKEN_OUTPUT_BASENAME}" \
     -v "${REPO_ROOT}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro" \
-    -v "${SERVICE_TOKEN_OUTPUT_DIR}:/work" \
+    -v "${SERVICE_TOKEN_OUTPUT_DIR}:/work-service" \
+    -v "${NOTIFICATION_TOKEN_OUTPUT_DIR}:/work-notification" \
     quay.io/openbao/openbao:2 \
     /bin/sh -ec '
 json_field() {
@@ -82,7 +87,23 @@ if [ -e "$SERVICE_TOKEN_OUTPUT_FILE" ]; then
 fi
 printf "%s" "$service_token" > "$SERVICE_TOKEN_OUTPUT_FILE"
 chmod 0600 "$SERVICE_TOKEN_OUTPUT_FILE"
+
+notification_token_json="$(bao token create -address="$BAO_ADDR" -policy=notification-webhook-service -orphan -format=json)"
+notification_token="$(json_field "$notification_token_json" client_token)"
+
+if [ -z "$notification_token" ]; then
+    echo "Failed to mint Notification webhook OpenBao token." >&2
+    exit 1
+fi
+
+if [ -e "$NOTIFICATION_TOKEN_OUTPUT_FILE" ]; then
+    chmod u+w "$NOTIFICATION_TOKEN_OUTPUT_FILE" 2>/dev/null || true
+fi
+printf "%s" "$notification_token" > "$NOTIFICATION_TOKEN_OUTPUT_FILE"
+chmod 0600 "$NOTIFICATION_TOKEN_OUTPUT_FILE"
 '
 
 echo "Wrote scoped credential-service token to ${SERVICE_TOKEN_OUTPUT_FILE}"
 echo "Use that file as the openbao_service_token secret in the self-host stack."
+echo "Wrote scoped Notification webhook token to ${NOTIFICATION_TOKEN_OUTPUT_FILE}"
+echo "Use that file as the notification_openbao_token secret in the self-host stack."

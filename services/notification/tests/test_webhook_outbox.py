@@ -10,6 +10,10 @@ import pytest
 
 from services.notification import main as notification
 from services.notification.webhook_outbox import new_webhook_outbox_event
+from notification.webhook_secret_envelope import (
+    InvalidWebhookSecretEnvelope,
+    WebhookSecretEnvelopeUnavailable,
+)
 
 
 EVENT_TYPE = "credential.issued"
@@ -341,4 +345,66 @@ async def test_worker_rejects_corrupted_payload_metadata(
     assert rejected is not None
     assert rejected.last_error_code == "WEBHOOK_PAYLOAD_INVALID"
     assert rejected.payload == {}
+    network_attempt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_kms_outage_retries_without_attempting_external_delivery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, _, webhook = await _configured_repo()
+    webhook.secret_envelope = "vault:v1:opaque"
+    webhook.secret_hint = webhook.secret[:4]
+    await repo.save_webhook(webhook)
+    await notification._dispatch_event_to_subscriptions(_event("kms-outage"), repo)
+
+    class UnavailableEnvelope:
+        async def unwrap(self, **_kwargs: object) -> str:
+            raise WebhookSecretEnvelopeUnavailable("unavailable")
+
+    monkeypatch.setattr(
+        notification, "_webhook_secret_envelope", UnavailableEnvelope()
+    )
+    network_attempt = AsyncMock()
+    monkeypatch.setattr(notification, "_attempt_webhook_request", network_attempt)
+
+    result = await notification._deliver_due_webhook_outbox(
+        repo, now=datetime.now(timezone.utc)
+    )
+    queued = next(iter(repo._webhook_outbox.values()))
+
+    assert result == {"claimed": 1, "delivered": 0, "retried": 1, "dead": 0}
+    assert queued.status == "retry"
+    assert queued.last_error_code == "WEBHOOK_SECRET_KMS_UNAVAILABLE"
+    assert queued.payload["id"] == "kms-outage"
+    network_attempt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_invalid_secret_envelope_dead_letters_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo, _, webhook = await _configured_repo()
+    webhook.secret_envelope = "vault:v1:tampered"
+    webhook.secret_hint = webhook.secret[:4]
+    await repo.save_webhook(webhook)
+    await notification._dispatch_event_to_subscriptions(_event("bad-envelope"), repo)
+
+    class InvalidEnvelope:
+        async def unwrap(self, **_kwargs: object) -> str:
+            raise InvalidWebhookSecretEnvelope("binding mismatch")
+
+    monkeypatch.setattr(notification, "_webhook_secret_envelope", InvalidEnvelope())
+    network_attempt = AsyncMock()
+    monkeypatch.setattr(notification, "_attempt_webhook_request", network_attempt)
+
+    result = await notification._deliver_due_webhook_outbox(
+        repo, now=datetime.now(timezone.utc)
+    )
+    queued = next(iter(repo._webhook_outbox.values()))
+
+    assert result == {"claimed": 1, "delivered": 0, "retried": 0, "dead": 1}
+    assert queued.status == "dead_letter"
+    assert queued.last_error_code == "WEBHOOK_SECRET_ENVELOPE_INVALID"
+    assert queued.payload == {}
     network_attempt.assert_not_awaited()
