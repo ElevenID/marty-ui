@@ -427,7 +427,7 @@ async def get_credential_template_application_template(
 
 @wallet_registry_router.get("", summary="List Wallet Registry")
 async def list_wallet_registry(request: Request) -> Response:
-    """List all wallets in the global registry."""
+    """List global wallets and authorized organization overrides."""
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
     return await proxy_request(request, service_url, "/v1/wallet-registry")

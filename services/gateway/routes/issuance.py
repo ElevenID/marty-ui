@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-import json
+
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
-
 from gateway.models import (
     ApplicationTemplateCreate,
     ApplicationTemplatePatch,
     ApplicationTemplateResponse,
+    CredentialRenewalOfferResponse,
     DidcommDeliverRequest,
     DidcommDeliveryResponse,
-    CredentialRenewalOfferResponse,
     IssuanceCreate,
     IssuanceResponse,
     IssuanceTransactionResponse,
@@ -30,6 +29,7 @@ from gateway.proxy import (
     get_registry,
     proxy_request,
 )
+from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -770,18 +770,6 @@ async def didcomm_deliver(body: DidcommDeliverRequest, request: Request) -> Resp
         "/v1/issuance/didcomm/deliver",
         inject_headers=_ISSUANCE_HEADERS,
     )
-
-
-@issuance_router.post("/didcomm/receive", summary="DIDComm V2 Receive")
-async def didcomm_receive(request: Request) -> Response:
-    """Receive inbound DIDComm v2 messages (acks, problem-reports, etc.).
-
-    This is the public-facing DIDComm endpoint that other agents POST to.
-    No authentication required — DIDComm agents use DID-based trust.
-    """
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/didcomm/receive")
 
 
 # ── Issued Credentials ──────────────────────────────────────────────

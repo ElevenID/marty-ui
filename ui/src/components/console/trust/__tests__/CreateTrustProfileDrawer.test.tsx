@@ -87,16 +87,10 @@ describe('CreateTrustProfileDrawer', () => {
         name: 'Production Trust',
         description: 'Primary production issuer policy',
         supported_formats: ['sd_jwt_vc', 'mdoc'],
-        trusted_issuers: [
-          {
-            did: 'did:web:issuer.example.com',
-            name: 'did:web:issuer.example.com',
-          },
-        ],
       })
     })
 
-    expect(addTrustProfileIssuer).toHaveBeenCalledWith('trust-profile-1', {
+    expect(addTrustProfileIssuer).toHaveBeenCalledWith('trust-profile-1', 'org-1', {
       name: 'did:web:issuer.example.com',
       issuer_did: 'did:web:issuer.example.com',
     })

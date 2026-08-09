@@ -1,4 +1,4 @@
-/** MIP 0.3 applicant and reviewer API client. */
+/** MIP 0.4 applicant and reviewer API client. */
 import { get, post, patch, del } from './api';
 import { buildTruthyQueryString, requireOrganizationId, withQuery } from './queryUtils';
 
@@ -52,6 +52,18 @@ export async function submitApplication(applicationId) {
   return post(`${ME_APPLICATIONS}/${encodeURIComponent(applicationId)}/submit`, {});
 }
 
+export async function submitApplicationEvidence(applicationId, data) {
+  return post(`${ME_APPLICATIONS}/${encodeURIComponent(applicationId)}/evidence`, data);
+}
+
+export async function listApplicationEvidence(applicationId) {
+  return get(`${ME_APPLICATIONS}/${encodeURIComponent(applicationId)}/evidence`);
+}
+
+export async function deleteApplicationEvidence(applicationId, evidenceId) {
+  return del(`${ME_APPLICATIONS}/${encodeURIComponent(applicationId)}/evidence/${encodeURIComponent(evidenceId)}`);
+}
+
 export async function withdrawApplication(applicationId, data = {}) {
   return post(`${ME_APPLICATIONS}/${encodeURIComponent(applicationId)}/withdraw`, data);
 }
@@ -75,6 +87,17 @@ export async function listOrganizationApplications(organizationId, params = {}) 
 
 export async function getOrganizationApplication(organizationId, applicationId) {
   return get(`${orgApplicantsPath(organizationId)}/${encodeURIComponent(applicationId)}`);
+}
+
+export async function listOrganizationApplicationEvidence(organizationId, applicationId) {
+  return get(`${orgApplicantsPath(organizationId)}/${encodeURIComponent(applicationId)}/evidence`);
+}
+
+export async function revokeOrganizationApplicationEvidence(organizationId, applicationId, evidenceId, reason) {
+  return post(
+    `${orgApplicantsPath(organizationId)}/${encodeURIComponent(applicationId)}/evidence/${encodeURIComponent(evidenceId)}/revoke`,
+    { reason },
+  );
 }
 
 export async function reviewOrganizationApplication(organizationId, applicationId, decision, payload = {}) {

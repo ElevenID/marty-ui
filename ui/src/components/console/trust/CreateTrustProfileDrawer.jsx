@@ -1,7 +1,6 @@
 import ResourceCreateDrawer from '../../common/ResourceCreateDrawer';
 import { addTrustProfileIssuer, createTrustProfile } from '../../../services/presentationPolicyApi';
 import { useNotifications } from '../../../hooks/useNotifications';
-import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { useTranslation } from 'react-i18next';
 
@@ -14,7 +13,6 @@ import { useTranslation } from 'react-i18next';
 function CreateTrustProfileDrawer({ open, onClose, onSuccess }) {
   const { t } = useTranslation('console');
   const { showNotification } = useNotifications();
-  const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
   const organizationId = activeOrgId;
 
@@ -56,14 +54,10 @@ function CreateTrustProfileDrawer({ open, onClose, onSuccess }) {
       name: formData.name,
       description: formData.description || '',
       supported_formats: ['sd_jwt_vc', 'mdoc'],
-      trusted_issuers: [{
-        did: formData.issuer_did,
-        name: formData.issuer_did,
-      }],
     };
 
     const result = await createTrustProfile(payload);
-    await addTrustProfileIssuer(result.id, {
+    await addTrustProfileIssuer(result.id, organizationId, {
       name: formData.issuer_did,
       issuer_did: formData.issuer_did,
     });

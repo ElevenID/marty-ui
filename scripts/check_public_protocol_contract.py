@@ -6,22 +6,25 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
+from check_generated_protocol_bindings import assert_generated_bindings_current
+from check_public_protocol_documentation import assert_documented_public_boundary
 from fastapi import Response
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
-
-from check_generated_protocol_bindings import assert_generated_bindings_current
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "services"))
 
 from gateway.models import (  # noqa: E402
+    PUBLIC_ISSUANCE_RESERVED_CLAIMS,
     CredentialRenewalOfferResponse,
     CredentialTemplateResponse,
+    DidcommDeliverRequest,
+    DidcommDeliveryResponse,
     FlowDefinitionCreate,
     FlowDefinitionResponse,
     FlowDefinitionUpdate,
@@ -35,8 +38,15 @@ from gateway.models import (  # noqa: E402
     IssuerEntityCreate,
     IssuerEntityResponse,
     IssuerEntityUpdate,
+    IssuerIdentityCertificateRequest,
+    IssuerIdentityCreateRequest,
+    IssuerIdentityCreateResponse,
+    IssuerIdentityDeleteResponse,
     IssuerIdentityListResponse,
+    IssuerIdentityOperationRequest,
+    IssuerIdentityResolutionResponse,
     IssuerIdentityResponse,
+    KeyAttestationPolicy,
     OrganizationCreate,
     OrganizationResponse,
     OrganizationTrustProfileResponse,
@@ -44,10 +54,13 @@ from gateway.models import (  # noqa: E402
     PresentationPolicyCreate,
     PresentationPolicyResponse,
     PresentationPolicyUpdate,
-    PUBLIC_ISSUANCE_RESERVED_CLAIMS,
     StartVerificationFlowRequest,
-    VerificationResultResponse,
+    TrustProfileResponse,
+    TrustProfileIssuerCreate,
+    TrustProfileIssuerResponse,
+    TrustProfileIssuerUpdate,
     VerificationRequestResponse,
+    VerificationResultResponse,
 )
 from gateway.routes.credentials import (  # noqa: E402
     _PUBLIC_TEMPLATE_RESPONSE_FIELDS,
@@ -59,14 +72,16 @@ from gateway.routes.organizations import (  # noqa: E402
 )
 from gateway.routes.trust import (  # noqa: E402
     _sanitize_issuer_entity_response,
+    _sanitize_trust_profile_issuer_response,
     _validated_issuer_entity_payload,
+    _validated_trust_profile_issuer_payload,
 )
 from gateway.routes.verification import (  # noqa: E402
     _PUBLIC_PRESENTATION_POLICY_FIELDS,
     _sanitize_presentation_policy_response,
     _validated_policy_payload,
 )
-
+from protocol_version import MIP_SUPPORTED_VERSIONS, MIP_VERSION  # noqa: E402
 
 FORBIDDEN_PUBLIC_FIELDS = {
     "auto_generate_artifacts",
@@ -87,12 +102,14 @@ FORBIDDEN_PUBLIC_FIELDS = {
     "provider",
     "remote_key_binding",
     "remote_signing_config",
+    "resolver_url",
     "service_id",
     "signing_agent_auth",
     "signing_agent_url",
     "signing_key_reference",
     "signing_service_id",
     "transit_mount",
+    "universal_resolver_url",
     "verification_method_id",
 }
 
@@ -115,6 +132,48 @@ FORBIDDEN_FLOW_FIELDS = FORBIDDEN_PUBLIC_FIELDS | {
     "session_token",
 }
 
+TRUST_CONFIGURATION_UI_PATHS = (
+    "ui/src/components/console/trust/TrustProfileWizard.jsx",
+    "ui/src/components/console/trust/steps/TrustSourcesStep.jsx",
+)
+
+
+def _assert_protocol_version(protocol_root: Path) -> None:
+    """Require runtime discovery to match the exact pinned protocol release."""
+    metadata = tomllib.loads(
+        (protocol_root / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    protocol_version = metadata["project"]["version"]
+    if protocol_version != MIP_VERSION:
+        raise AssertionError(
+            "runtime MIP version drifted from the pinned public contract: "
+            f"runtime={MIP_VERSION}, protocol={protocol_version}"
+        )
+    if tuple(MIP_SUPPORTED_VERSIONS) != (MIP_VERSION,):
+        raise AssertionError(
+            "pre-1.0 runtime must advertise only the exact current MIP version"
+        )
+
+    fixture = json.loads(
+        (protocol_root / "conformance" / "valid" / "mip-configuration.json")
+        .read_text(encoding="utf-8")
+    )
+    if fixture.get("mip_version") != MIP_VERSION or fixture.get(
+        "supported_versions"
+    ) != [MIP_VERSION]:
+        raise AssertionError(
+            "public MIP discovery fixture does not declare the pinned release only"
+        )
+
+FORBIDDEN_TRUST_CONFIGURATION_TOKENS = {
+    "issuer_profile_id",
+    "issuer_key_id",
+    "kms_key_id",
+    "kms_provider",
+    "signing_key_reference",
+    "signing_service_id",
+    "verification_keys",
+}
 
 def _load_registry(protocol_root: Path) -> Registry:
     registry = Registry()
@@ -241,7 +300,21 @@ def _public_response(
 
 
 def check_contract(protocol_root: Path) -> None:
+    _assert_protocol_version(protocol_root)
     assert_generated_bindings_current(protocol_root)
+    assert_documented_public_boundary()
+
+    for relative_path in TRUST_CONFIGURATION_UI_PATHS:
+        source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        leaked_tokens = {
+            token for token in FORBIDDEN_TRUST_CONFIGURATION_TOKENS if token in source
+        }
+        if leaked_tokens:
+            raise AssertionError(
+                f"{relative_path} bypasses the DID-only trust boundary with: "
+                f"{sorted(leaked_tokens)}"
+            )
+
     schema_path = protocol_root / "schemas" / "credential-template.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     registry = _load_registry(protocol_root)
@@ -373,6 +446,7 @@ def check_contract(protocol_root: Path) -> None:
         "is_system_issuer": False,
         "compliance_status": "COMPLIANT",
         "accreditation_body": None,
+        "accreditations": ["ISO27001", "FIPS140-2"],
         "accreditation_date": None,
         "valid_from": "2026-08-01T00:00:00Z",
         "valid_until": None,
@@ -445,6 +519,76 @@ def check_contract(protocol_root: Path) -> None:
         json.loads(_validated_issuer_entity_payload(issuer_entity_update))
     )
 
+    trust_profile_issuer_schema, trust_profile_issuer_validator = _validator(
+        protocol_root,
+        registry,
+        "trust-profile-issuer.json",
+    )
+    _assert_model_shape(
+        model=TrustProfileIssuerResponse,
+        schema=trust_profile_issuer_schema,
+        label="TrustProfileIssuerResponse",
+    )
+    trust_profile_issuer_internal = {
+        "id": "30000000-0000-4000-8000-000000000001",
+        "trust_profile_id": "40000000-0000-4000-8000-000000000001",
+        "issuer_id": issuer_entity_internal["id"],
+        "trust_level": 100,
+        "relationship_status": "TRUSTED",
+        "cascade_revocation_policy": "NOTIFY_ONLY",
+        "metadata": {"credential_template_ids": ["template-1"]},
+        "created_at": "2026-08-01T00:00:00Z",
+        "updated_at": "2026-08-01T00:00:00Z",
+    }
+    trust_profile_issuer_response = _sanitize_trust_profile_issuer_response(
+        Response(
+            content=json.dumps(trust_profile_issuer_internal),
+            media_type="application/json",
+        )
+    )
+    if trust_profile_issuer_response.status_code != 200:
+        raise AssertionError("valid TrustProfileIssuer failed runtime sanitization")
+    trust_profile_issuer_validator.validate(
+        json.loads(trust_profile_issuer_response.body)
+    )
+
+    trust_profile_issuer_create_schema, trust_profile_issuer_create_validator = (
+        _validator(
+            protocol_root,
+            registry,
+            "trust-profile-issuer-create-request.json",
+        )
+    )
+    _assert_model_shape(
+        model=TrustProfileIssuerCreate,
+        schema=trust_profile_issuer_create_schema,
+        label="TrustProfileIssuerCreate",
+    )
+    trust_profile_issuer_create = TrustProfileIssuerCreate(
+        issuer_id=issuer_entity_internal["id"],
+        metadata={"credential_template_ids": ["template-1"]},
+    )
+    trust_profile_issuer_create_validator.validate(
+        json.loads(_validated_trust_profile_issuer_payload(trust_profile_issuer_create))
+    )
+
+    trust_profile_issuer_update_schema, trust_profile_issuer_update_validator = (
+        _validator(
+            protocol_root,
+            registry,
+            "trust-profile-issuer-update-request.json",
+        )
+    )
+    _assert_model_shape(
+        model=TrustProfileIssuerUpdate,
+        schema=trust_profile_issuer_update_schema,
+        label="TrustProfileIssuerUpdate",
+    )
+    trust_profile_issuer_update = TrustProfileIssuerUpdate(trust_level=80)
+    trust_profile_issuer_update_validator.validate(
+        json.loads(_validated_trust_profile_issuer_payload(trust_profile_issuer_update))
+    )
+
     issuer_identity_schema, issuer_identity_validator = _validator(
         protocol_root,
         registry,
@@ -468,18 +612,92 @@ def check_contract(protocol_root: Path) -> None:
     issuer_identity = IssuerIdentityResponse(
         issuer_did="did:web:issuer.example",
         key_purpose="vc_jwt_issuer",
+        credential_format="SD_JWT_VC",
         algorithm="ES256",
         status="active",
     ).model_dump(mode="json")
     issuer_identity_validator.validate(issuer_identity)
     issuer_identity_list_validator.validate({"identities": [issuer_identity]})
 
+    issuer_operation = {
+        "organization_id": "org-conformance",
+        "issuer_did": "did:web:issuer.example",
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256",
+    }
+    key_attestation_schema, key_attestation_validator = _validator(
+        protocol_root,
+        registry,
+        "key-attestation-policy.json",
+    )
+    _assert_model_shape(
+        model=KeyAttestationPolicy,
+        schema=key_attestation_schema,
+        label="KeyAttestationPolicy",
+    )
+    key_attestation_validator.validate(
+        KeyAttestationPolicy(mode="required").model_dump(mode="json")
+    )
+    lifecycle_contracts = (
+        (
+            IssuerIdentityOperationRequest,
+            "issuer-identity-operation-request.json",
+            issuer_operation,
+        ),
+        (
+            IssuerIdentityCreateRequest,
+            "issuer-identity-create-request.json",
+            issuer_operation,
+        ),
+        (
+            IssuerIdentityCertificateRequest,
+            "issuer-identity-certificate-request.json",
+            {**issuer_operation, "cert_pem": "public certificate"},
+        ),
+        (
+            IssuerIdentityCreateResponse,
+            "issuer-identity-create-response.json",
+            {"identity": issuer_identity, "created": True},
+        ),
+        (
+            IssuerIdentityDeleteResponse,
+            "issuer-identity-delete-response.json",
+            {"deleted": issuer_identity},
+        ),
+        (
+            IssuerIdentityResolutionResponse,
+            "issuer-identity-resolution-response.json",
+            {
+                "identity": issuer_identity,
+                "public_jwk": {"kty": "EC", "crv": "P-256"},
+            },
+        ),
+    )
+    lifecycle_schemas: list[dict[str, Any]] = []
+    for model, schema_name, payload in lifecycle_contracts:
+        lifecycle_schema, lifecycle_validator = _validator(
+            protocol_root, registry, schema_name
+        )
+        _assert_model_shape(
+            model=model, schema=lifecycle_schema, label=model.__name__
+        )
+        lifecycle_validator.validate(
+            model.model_validate(payload).model_dump(mode="json", exclude_none=True)
+        )
+        lifecycle_schemas.append(lifecycle_schema)
+
     for document in (
         issuer_entity_schema,
         issuer_entity_create_schema,
         issuer_entity_update_schema,
+        trust_profile_issuer_schema,
+        trust_profile_issuer_create_schema,
+        trust_profile_issuer_update_schema,
         issuer_identity_schema,
         issuer_identity_list_schema,
+        key_attestation_schema,
+        *lifecycle_schemas,
     ):
         leaked = FORBIDDEN_PUBLIC_FIELDS & set(document.get("properties", {}))
         if leaked:
@@ -490,8 +708,18 @@ def check_contract(protocol_root: Path) -> None:
         IssuerEntityCreate,
         IssuerEntityUpdate,
         IssuerEntityResponse,
+        TrustProfileIssuerCreate,
+        TrustProfileIssuerUpdate,
+        TrustProfileIssuerResponse,
         IssuerIdentityResponse,
         IssuerIdentityListResponse,
+        KeyAttestationPolicy,
+        IssuerIdentityOperationRequest,
+        IssuerIdentityCreateRequest,
+        IssuerIdentityCertificateRequest,
+        IssuerIdentityCreateResponse,
+        IssuerIdentityDeleteResponse,
+        IssuerIdentityResolutionResponse,
     ):
         leaked = FORBIDDEN_PUBLIC_FIELDS & set(model.model_fields)
         if leaked:
@@ -561,18 +789,54 @@ def check_contract(protocol_root: Path) -> None:
                 f"runtime response exposes custody selectors: {sorted(leaked)}"
             )
 
-    trust_profile_schema_path = (
+    trust_profile_schema, trust_profile_validator = _validator(
+        protocol_root,
+        registry,
+        "trust-profile.json",
+    )
+    _assert_model_shape(
+        model=TrustProfileResponse,
+        schema=trust_profile_schema,
+        label="TrustProfileResponse",
+    )
+    leaked_schema_fields = FORBIDDEN_PUBLIC_FIELDS & _property_names(
+        trust_profile_schema
+    )
+    if leaked_schema_fields:
+        raise AssertionError(
+            "marty-protocol Trust Profile exposes custody selectors: "
+            f"{sorted(leaked_schema_fields)}"
+        )
+    trust_profile_fixture = json.loads(
+        (
+            protocol_root / "conformance" / "valid" / "trust-profile.json"
+        ).read_text(encoding="utf-8")
+    )
+    trust_profile_response = TrustProfileResponse.model_validate(
+        trust_profile_fixture
+    ).model_dump(mode="json", exclude_none=True)
+    trust_profile_validator.validate(trust_profile_response)
+    leaked = FORBIDDEN_PUBLIC_FIELDS & _property_names(trust_profile_response)
+    if leaked:
+        raise AssertionError(
+            "runtime Trust Profile response exposes custody selectors: "
+            f"{sorted(leaked)}"
+        )
+
+    organization_trust_profile_schema_path = (
         protocol_root / "schemas" / "organization-trust-profile.json"
     )
-    trust_profile_schema = json.loads(
-        trust_profile_schema_path.read_text(encoding="utf-8")
+    organization_trust_profile_schema = json.loads(
+        organization_trust_profile_schema_path.read_text(encoding="utf-8")
     )
-    trust_profile_validator = Draft202012Validator(
-        trust_profile_schema,
+    organization_trust_profile_validator = Draft202012Validator(
+        organization_trust_profile_schema,
         registry=registry,
         format_checker=FormatChecker(),
     )
-    trust_profile_schema_fields = set(trust_profile_schema["properties"])
+    trust_profile_schema_fields = set(
+        organization_trust_profile_schema["properties"]
+    )
     trust_profile_runtime_fields = set(OrganizationTrustProfileResponse.model_fields)
     if trust_profile_runtime_fields != trust_profile_schema_fields:
         raise AssertionError(
@@ -581,7 +845,9 @@ def check_contract(protocol_root: Path) -> None:
             f"runtime_only={sorted(trust_profile_runtime_fields - trust_profile_schema_fields)}"
         )
 
-    trust_profile_schema_required = set(trust_profile_schema["required"])
+    trust_profile_schema_required = set(
+        organization_trust_profile_schema["required"]
+    )
     trust_profile_runtime_required = {
         name
         for name, field in OrganizationTrustProfileResponse.model_fields.items()
@@ -596,7 +862,7 @@ def check_contract(protocol_root: Path) -> None:
         )
 
     leaked_schema_fields = FORBIDDEN_PUBLIC_FIELDS & _property_names(
-        trust_profile_schema
+        organization_trust_profile_schema
     )
     if leaked_schema_fields:
         raise AssertionError(
@@ -604,7 +870,7 @@ def check_contract(protocol_root: Path) -> None:
             f"{sorted(leaked_schema_fields)}"
         )
 
-    trust_profile_response = OrganizationTrustProfileResponse(
+    organization_trust_profile_response = OrganizationTrustProfileResponse(
         id="40000000-0000-4000-8000-000000000001",
         organization_id="20000000-0000-4000-8000-000000000001",
         framework_id="50000000-0000-4000-8000-000000000001",
@@ -616,8 +882,12 @@ def check_contract(protocol_root: Path) -> None:
         metadata={"owner": "trust-team"},
         created_at="2026-01-01T00:00:00Z",
     ).model_dump(mode="json", exclude_none=True)
-    trust_profile_validator.validate(trust_profile_response)
-    leaked = FORBIDDEN_PUBLIC_FIELDS & _property_names(trust_profile_response)
+    organization_trust_profile_validator.validate(
+        organization_trust_profile_response
+    )
+    leaked = FORBIDDEN_PUBLIC_FIELDS & _property_names(
+        organization_trust_profile_response
+    )
     if leaked:
         raise AssertionError(
             "runtime Organization Trust Profile response exposes custody selectors: "
@@ -666,6 +936,8 @@ def check_contract(protocol_root: Path) -> None:
         ("issued-credential.json", IssuedCredentialRecordResponse),
         ("issued-credential-lifecycle-request.json", IssuedCredentialLifecycleRequest),
         ("credential-renewal-offer-response.json", CredentialRenewalOfferResponse),
+        ("didcomm-deliver-request.json", DidcommDeliverRequest),
+        ("didcomm-delivery-response.json", DidcommDeliveryResponse),
     )
     operation_validators: dict[str, Draft202012Validator] = {}
     for filename, model in operation_models:
