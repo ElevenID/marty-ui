@@ -37,8 +37,10 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from marty_common.service_setup import create_service_app
 from common.notification_event_auth import (
-    read_notification_event_ingest_token,
-    require_notification_event_ingest_token,
+    APPLICANT_PRODUCER_ID,
+    NotificationEventProducerPrincipal,
+    read_applicant_event_token,
+    require_notification_event_producer,
 )
 from notification.infrastructure.adapters.postgres_adapter import (
     PostgresNotificationRepository,
@@ -536,7 +538,7 @@ webhook_router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
 internal_router = APIRouter(
     prefix="/internal",
     tags=["internal-notifications"],
-    dependencies=[Depends(require_notification_event_ingest_token)],
+    dependencies=[Depends(require_notification_event_producer)],
 )
 
 _repo: InMemoryNotificationRepository | PostgresNotificationRepository | None = None
@@ -788,6 +790,45 @@ class EventIngestRequest(BaseModel):
         except NotificationPayloadSecurityError as exc:
             raise ValueError(str(exc)) from exc
         return self
+
+
+_APPLICANT_EVENT_STATUSES = {
+    "application.approved": "APPROVED",
+    "application.rejected": "REJECTED",
+}
+
+
+def _authorize_internal_event_source(
+    producer: NotificationEventProducerPrincipal,
+    event: EventIngestRequest,
+) -> None:
+    """Restrict each producer to events from its authoritative domain records."""
+    expected_status = _APPLICANT_EVENT_STATUSES.get(event.event_type)
+    required_data = {
+        "applicant_id",
+        "application_id",
+        "credential_template_id",
+        "status",
+    }
+    data_values_are_bound = (
+        set(event.data) == required_data
+        and all(
+            isinstance(event.data[field], str) and bool(event.data[field].strip())
+            for field in required_data
+        )
+        and event.data["application_id"] == event.aggregate_id
+        and event.data["status"] == expected_status
+    )
+    if (
+        producer.producer_id != APPLICANT_PRODUCER_ID
+        or expected_status is None
+        or event.aggregate_type != "application"
+        or not data_values_are_bound
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Event producer is not authorized for this event source",
+        )
 
 
 # =============================================================================
@@ -2297,11 +2338,21 @@ async def list_webhook_deliveries(
 @internal_router.post("/events")
 async def ingest_event(
     body: EventIngestRequest,
+    producer: NotificationEventProducerPrincipal = Depends(
+        require_notification_event_producer
+    ),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(
         get_repo
     ),
 ) -> dict[str, int | str]:
+    _authorize_internal_event_source(producer, body)
     result = await _dispatch_event_to_subscriptions(body, repo)
+    logger.info(
+        "Accepted internal event producer=%s event_id=%s event_type=%s",
+        producer.producer_id,
+        body.event_id,
+        body.event_type,
+    )
     return {"status": "accepted", **result}
 
 
@@ -2364,7 +2415,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting %s...", SERVICE_NAME)
     # This route controls external fan-out; a missing credential must make the
     # production service unready instead of leaving an unauthenticated mode.
-    read_notification_event_ingest_token()
+    read_applicant_event_token()
     # Validate the durable delivery policy before accepting events.
     webhook_outbox_retention_seconds()
     webhook_outbox_lease_seconds()

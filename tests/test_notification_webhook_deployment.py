@@ -77,10 +77,11 @@ def test_notification_runtime_receives_openbao_token_as_a_secret_file() -> None:
         (ROOT / "docker-compose.selfhost.prod.yml").read_text(encoding="utf-8")
     )
     notification = compose["services"]["notification"]
-    assert notification["environment"]["OPENBAO_SERVICE_TOKEN_FILE"] == (
-        "/run/secrets/openbao_service_token"
+    assert notification["environment"]["NOTIFICATION_OPENBAO_TOKEN_FILE"] == (
+        "/run/secrets/notification_openbao_token"
     )
-    assert "openbao_service_token" in notification["secrets"]
+    assert "notification_openbao_token" in notification["secrets"]
+    assert "openbao_service_token" not in notification["secrets"]
 
     resources = list(
         yaml.safe_load_all(
@@ -97,8 +98,8 @@ def test_notification_runtime_receives_openbao_token_as_a_secret_file() -> None:
     pod = deployment["spec"]["template"]["spec"]
     container = pod["containers"][0]
     env = {item["name"]: item for item in container["env"]}
-    assert env["OPENBAO_SERVICE_TOKEN_FILE"]["value"] == (
-        "/run/secrets/openbao_service_token"
+    assert env["NOTIFICATION_OPENBAO_TOKEN_FILE"]["value"] == (
+        "/run/secrets/notification_openbao_token"
     )
     assert container["volumeMounts"] == [
         {
@@ -108,7 +109,10 @@ def test_notification_runtime_receives_openbao_token_as_a_secret_file() -> None:
         }
     ]
     assert pod["volumes"][0]["secret"]["items"] == [
-        {"key": "OPENBAO_SERVICE_TOKEN", "path": "openbao_service_token"}
+        {
+            "key": "NOTIFICATION_OPENBAO_TOKEN",
+            "path": "notification_openbao_token",
+        }
     ]
 
 
@@ -122,3 +126,36 @@ def test_openbao_provisions_a_non_exportable_purpose_specific_webhook_key() -> N
     assert f'path "transit/decrypt/{key_id}"' in init_script
     assert f'path "transit/keys/{key_id}"' in init_script
     assert f'path "transit/export/{key_id}"' not in init_script
+    assert init_script.count(f'path "transit/decrypt/{key_id}"') == 1
+    dedicated_policy = init_script.split(
+        "Writing Notification webhook envelope policy...", 1
+    )[1]
+    assert "notification-webhook-service" in dedicated_policy
+    assert f'path "transit/decrypt/{key_id}"' in dedicated_policy
+
+
+def test_notification_openbao_identity_is_required_and_bootstrapped() -> None:
+    catalog = json.loads(
+        (ROOT / "deploy-config/catalog/secrets.json").read_text(encoding="utf-8")
+    )
+    assert catalog["secrets"]["notification_openbao_token"] == {
+        "env": "NOTIFICATION_OPENBAO_TOKEN",
+        "file_env": "NOTIFICATION_OPENBAO_TOKEN_FILE",
+        "compose_secret": "notification_openbao_token",
+        "required_for": ["selfhost-production", "kubernetes-production"],
+        "no_log": True,
+        "placeholder_disallowed": True,
+    }
+
+    selfhost_init = (ROOT / "docker/openbao-selfhost-init.sh").read_text(
+        encoding="utf-8"
+    )
+    external_init = (ROOT / "scripts/bootstrap-selfhost-vault.sh").read_text(
+        encoding="utf-8"
+    )
+    deploy = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
+    assert "-policy=notification-webhook-service" in selfhost_init
+    assert "notification_openbao_token" in external_init
+    assert "-policy=notification-webhook-service" in external_init
+    assert "resolve_secret_input NOTIFICATION_OPENBAO_TOKEN" in deploy
+    assert '--from-literal=NOTIFICATION_OPENBAO_TOKEN="$notification_openbao_token"' in deploy

@@ -28,11 +28,16 @@ class _FakeClient:
 
 def _event() -> DomainEvent:
     return DomainEvent(
-        event_type=EventType.CREDENTIAL_ISSUED,
-        aggregate_id="credential-1",
-        aggregate_type="credential",
+        event_type=EventType.APPLICATION_APPROVED,
+        aggregate_id="application-1",
+        aggregate_type="application",
         organization_id="org-1",
-        data={"credential_type": "MemberCredential"},
+        data={
+            "applicant_id": "applicant-1",
+            "application_id": "application-1",
+            "credential_template_id": "template-1",
+            "status": "APPROVED",
+        },
         timestamp=datetime(2026, 8, 8, tzinfo=timezone.utc),
     )
 
@@ -42,8 +47,9 @@ async def test_notification_producer_attaches_the_purpose_scoped_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("NOTIFICATION_SERVICE_URL", "http://notification:8007")
-    monkeypatch.setenv("NOTIFICATION_EVENT_INGEST_TOKEN", "t" * 48)
-    monkeypatch.delenv("NOTIFICATION_EVENT_INGEST_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("NOTIFICATION_EVENT_PRODUCER_ID", "applicant")
+    monkeypatch.setenv("NOTIFICATION_APPLICANT_EVENT_TOKEN", "t" * 48)
+    monkeypatch.delenv("NOTIFICATION_APPLICANT_EVENT_TOKEN_FILE", raising=False)
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
         "common.events.httpx.AsyncClient",
@@ -58,6 +64,7 @@ async def test_notification_producer_attaches_the_purpose_scoped_token(
     assert calls[0]["headers"] == {
         "Content-Type": "application/json",
         "X-Service-Token": "t" * 48,
+        "X-Marty-Event-Producer": "applicant",
     }
     assert calls[0]["json"]["event_id"] == event.event_id
 
@@ -67,11 +74,28 @@ async def test_notification_producer_never_sends_without_authentication(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("NOTIFICATION_SERVICE_URL", "http://notification:8007")
-    monkeypatch.delenv("NOTIFICATION_EVENT_INGEST_TOKEN", raising=False)
-    monkeypatch.delenv("NOTIFICATION_EVENT_INGEST_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("NOTIFICATION_EVENT_PRODUCER_ID", "applicant")
+    monkeypatch.delenv("NOTIFICATION_APPLICANT_EVENT_TOKEN", raising=False)
+    monkeypatch.delenv("NOTIFICATION_APPLICANT_EVENT_TOKEN_FILE", raising=False)
 
     def unexpected_client(**_kwargs: object) -> None:
         raise AssertionError("an unauthenticated internal event must not be sent")
+
+    monkeypatch.setattr("common.events.httpx.AsyncClient", unexpected_client)
+
+    await EventPublisher()._publish_to_notification_service(_event())
+
+
+@pytest.mark.asyncio
+async def test_notification_producer_never_sends_with_an_unsupported_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NOTIFICATION_SERVICE_URL", "http://notification:8007")
+    monkeypatch.setenv("NOTIFICATION_EVENT_PRODUCER_ID", "credential")
+    monkeypatch.setenv("NOTIFICATION_APPLICANT_EVENT_TOKEN", "t" * 48)
+
+    def unexpected_client(**_kwargs: object) -> None:
+        raise AssertionError("an unsupported producer must not send an event")
 
     monkeypatch.setattr("common.events.httpx.AsyncClient", unexpected_client)
 

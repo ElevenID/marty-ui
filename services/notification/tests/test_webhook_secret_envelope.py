@@ -61,6 +61,38 @@ def test_bound_secret_rejects_schema_or_purpose_substitution() -> None:
         )
 
 
+def test_production_rejects_shared_openbao_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("BAO_ADDR", "https://bao.example")
+    monkeypatch.setenv("OPENBAO_SERVICE_TOKEN", "shared-token")
+    monkeypatch.delenv("NOTIFICATION_OPENBAO_TOKEN", raising=False)
+    monkeypatch.delenv("NOTIFICATION_OPENBAO_TOKEN_FILE", raising=False)
+
+    with pytest.raises(
+        WebhookSecretEnvelopeUnavailable,
+        match="Dedicated Notification OpenBao identity",
+    ):
+        WebhookSecretEnvelope.from_environment()
+
+
+def test_production_loads_only_the_dedicated_notification_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    token_file = tmp_path / "notification_openbao_token"
+    token_file.write_text("notification-token", encoding="utf-8")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("BAO_ADDR", "https://bao.example")
+    monkeypatch.setenv("OPENBAO_SERVICE_TOKEN", "shared-token")
+    monkeypatch.delenv("NOTIFICATION_OPENBAO_TOKEN", raising=False)
+    monkeypatch.setenv("NOTIFICATION_OPENBAO_TOKEN_FILE", str(token_file))
+
+    envelope = WebhookSecretEnvelope.from_environment()
+
+    assert envelope.bao_token == "notification-token"
+
+
 @pytest.mark.asyncio
 async def test_transit_wrap_and_unwrap_preserve_only_ciphertext_between_calls(
     monkeypatch: pytest.MonkeyPatch,

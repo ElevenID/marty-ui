@@ -1040,11 +1040,13 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
-            - name: NOTIFICATION_EVENT_INGEST_TOKEN
+            - name: NOTIFICATION_EVENT_PRODUCER_ID
+              value: "applicant"
+            - name: NOTIFICATION_APPLICANT_EVENT_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
-                  key: NOTIFICATION_EVENT_INGEST_TOKEN
+                  key: NOTIFICATION_APPLICANT_EVENT_TOKEN
             - name: APPLICANT_SERVICE_PORT
               value: "8006"
             - name: DATABASE_URL
@@ -1160,11 +1162,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: NOTIFICATION_WEBHOOK_SECRET
-            - name: NOTIFICATION_EVENT_INGEST_TOKEN
+            - name: NOTIFICATION_APPLICANT_EVENT_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
-                  key: NOTIFICATION_EVENT_INGEST_TOKEN
+                  key: NOTIFICATION_APPLICANT_EVENT_TOKEN
             - name: NOTIFICATION_SERVICE_PORT
               value: "8007"
             - name: DATABASE_URL
@@ -1197,8 +1199,8 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SMTP_PASSWORD
-            - name: OPENBAO_SERVICE_TOKEN_FILE
-              value: /run/secrets/openbao_service_token
+            - name: NOTIFICATION_OPENBAO_TOKEN_FILE
+              value: /run/secrets/notification_openbao_token
           volumeMounts:
             - name: notification-openbao-token
               mountPath: /run/secrets
@@ -1227,8 +1229,8 @@ spec:
           secret:
             secretName: marty-secrets
             items:
-              - key: OPENBAO_SERVICE_TOKEN
-                path: openbao_service_token
+              - key: NOTIFICATION_OPENBAO_TOKEN
+                path: notification_openbao_token
 ---
 apiVersion: v1
 kind: Service

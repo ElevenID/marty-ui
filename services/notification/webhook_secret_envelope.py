@@ -122,9 +122,15 @@ class WebhookSecretEnvelope:
     @classmethod
     def from_environment(cls) -> "WebhookSecretEnvelope":
         bao_addr = os.environ.get("BAO_ADDR", "").strip()
-        token = _read_secret_value("OPENBAO_SERVICE_TOKEN") or _read_secret_value(
-            "BAO_TOKEN"
-        )
+        dedicated_token = _read_secret_value("NOTIFICATION_OPENBAO_TOKEN")
+        environment = os.environ.get("ENVIRONMENT", "development").strip().lower()
+        if environment in {"production", "prod"} and not dedicated_token:
+            raise WebhookSecretEnvelopeUnavailable(
+                "Dedicated Notification OpenBao identity is not configured"
+            )
+        token = dedicated_token or _read_secret_value(
+            "OPENBAO_SERVICE_TOKEN"
+        ) or _read_secret_value("BAO_TOKEN")
         if not bao_addr or not token:
             raise WebhookSecretEnvelopeUnavailable(
                 "OpenBao webhook secret protection is not configured"
