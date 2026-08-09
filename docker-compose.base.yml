@@ -259,6 +259,8 @@ services:
         condition: service_healthy
       openbao:
         condition: service_healthy
+      openbao-init:
+        condition: service_completed_successfully
     restart: "no"
     networks:
       - marty-network
@@ -551,7 +553,8 @@ services:
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       APPLICATION_TEMPLATE_MIGRATION_MAP: ${APPLICATION_TEMPLATE_MIGRATION_MAP:-}
       NOTIFICATION_SERVICE_URL: http://notification:8007
-      NOTIFICATION_EVENT_INGEST_TOKEN: ${NOTIFICATION_EVENT_INGEST_TOKEN:-dev-notification-event-ingest-token-32-chars}
+      NOTIFICATION_EVENT_PRODUCER_ID: applicant
+      NOTIFICATION_APPLICANT_EVENT_TOKEN: ${NOTIFICATION_APPLICANT_EVENT_TOKEN:-dev-notification-applicant-event-token}
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
       ES_GRPC_TARGET: event-stream:9015
@@ -587,11 +590,13 @@ services:
       SMTP_PORT: "1025"
       NOTIF_GRPC_PORT: "9007"
       NOTIFICATION_WEBHOOK_SECRET: ${NOTIFICATION_WEBHOOK_SECRET:-}
-      NOTIFICATION_EVENT_INGEST_TOKEN: ${NOTIFICATION_EVENT_INGEST_TOKEN:-dev-notification-event-ingest-token-32-chars}
+      NOTIFICATION_APPLICANT_EVENT_TOKEN: ${NOTIFICATION_APPLICANT_EVENT_TOKEN:-dev-notification-applicant-event-token}
       NOTIFICATION_WEBHOOK_OUTBOX_RETENTION_SECONDS: ${NOTIFICATION_WEBHOOK_OUTBOX_RETENTION_SECONDS:-86400}
       NOTIFICATION_WEBHOOK_OUTBOX_LEASE_SECONDS: ${NOTIFICATION_WEBHOOK_OUTBOX_LEASE_SECONDS:-30}
       NOTIFICATION_WEBHOOK_OUTBOX_POLL_MILLISECONDS: ${NOTIFICATION_WEBHOOK_OUTBOX_POLL_MILLISECONDS:-1000}
       NOTIFICATION_WEBHOOK_OUTBOX_BATCH_SIZE: ${NOTIFICATION_WEBHOOK_OUTBOX_BATCH_SIZE:-25}
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
     ports:
       - "8007:8007"
       - "9007:9007"
