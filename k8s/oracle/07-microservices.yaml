@@ -1040,6 +1040,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: FLOW_APPLICATION_EVENT_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: FLOW_APPLICATION_EVENT_HMAC_KEY
             - name: APPLICANT_SERVICE_PORT
               value: "8006"
             - name: DATABASE_URL
@@ -1346,6 +1351,8 @@ spec:
               value: "8009"
             - name: DID_RESOLUTION_BASE_URL
               value: "http://gateway:8000"
+            - name: DID_PUBLIC_FALLBACK_ENABLED
+              value: "false"
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -1516,6 +1523,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: FLOW_APPLICATION_EVENT_HMAC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: FLOW_APPLICATION_EVENT_HMAC_KEY
             - name: FLOW_SERVICE_PORT
               value: "8011"
             - name: DATABASE_URL

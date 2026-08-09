@@ -137,6 +137,12 @@ class ValidationRulesModel(BaseModel):
     allow_self_signed: bool = False
 
 
+class RevocationPolicyModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    check_mode: Literal["HARD_FAIL", "SOFT_FAIL", "SKIP"] = "HARD_FAIL"
+
+
 class TrustProfileCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -153,6 +159,8 @@ class TrustProfileCreate(BaseModel):
     require_key_usage: bool | None = None
     max_chain_depth: int | None = None
     allow_self_signed: bool | None = None
+    revocation_policy: RevocationPolicyModel | None = None
+    revocation_profile_id: str | None = None
     supported_formats: list[str] = Field(default_factory=lambda: ["SD_JWT_VC", "MDOC"])
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
@@ -177,6 +185,8 @@ class TrustProfileUpdate(BaseModel):
     require_key_usage: bool | None = None
     max_chain_depth: int | None = None
     allow_self_signed: bool | None = None
+    revocation_policy: RevocationPolicyModel | None = None
+    revocation_profile_id: str | None = None
     supported_formats: list[str] | None = None
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
@@ -187,22 +197,21 @@ class TrustProfileUpdate(BaseModel):
 
 
 class TrustProfileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     name: str
-    description: str | None
-    status: str
+    description: str | None = None
+    status: Literal["draft", "active", "suspended", "archived"]
     profile_type: str
     compliance_status: str
     trust_sources: list[dict]
-    validation_rules: dict
     allowed_algorithms: list[str]
-    min_key_size_rsa: int
-    min_key_size_ec: int
-    require_key_usage: bool
-    max_chain_depth: int
-    allow_self_signed: bool
-    revocation_policy: dict
+    revocation_policy: dict | None = None
+    revocation_services: dict | None = None
+    revocation_profile_id: str | None = None
+    time_policy: dict | None = None
     supported_formats: list[str]
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
@@ -211,7 +220,7 @@ class TrustProfileResponse(BaseModel):
     verification_policy_set_id: str | None = None
     auto_generated: bool = False
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
 
 
 class TrustProfileIssuerCreate(BaseModel):
@@ -2649,7 +2658,7 @@ class ApplicationUIConfigModel(BaseModel):
 
 
 class ApplicationFormFieldModel(BaseModel):
-    """Canonical MIP 0.3 applicant form field."""
+    """Canonical MIP 0.4 applicant form field."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -2762,7 +2771,7 @@ class ApplicationTemplateCreate(BaseModel):
 
 
 class ApplicationTemplatePatch(BaseModel):
-    """Patch mutable fields on a draft MIP 0.3 Application Template."""
+    """Patch mutable fields on a draft MIP 0.4 Application Template."""
 
     model_config = ConfigDict(extra="forbid")
 

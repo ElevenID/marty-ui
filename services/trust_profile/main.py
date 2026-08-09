@@ -61,6 +61,7 @@ from trust_profile.infrastructure.adapters import PostgresTrustProfileRepository
 from trust_profile.infrastructure.models import mapper_registry
 from trust_profile.registry_sync import (
     RegistrySyncError,
+    registry_tls_context,
     state_from_storage,
     synchronize_registry,
     validate_current_registry_entries,
@@ -840,19 +841,21 @@ class UpdateTrustProfileRequest(BaseModel):
 
 
 class TrustProfileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     organization_id: str
     name: str
-    description: str | None
-    status: str
+    description: str | None = None
+    status: Literal["draft", "active", "suspended", "archived"]
     profile_type: str
     compliance_status: str
     trust_sources: list[dict]
     allowed_algorithms: list[str]
     revocation_policy: dict | None = None
     revocation_services: dict | None = None
-    revocation_profile_id: str | None  # NEW
-    time_policy: dict
+    revocation_profile_id: str | None = None
+    time_policy: dict | None = None
     supported_formats: list[str]
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
@@ -861,7 +864,7 @@ class TrustProfileResponse(BaseModel):
     verification_policy_set_id: str | None = None
     auto_generated: bool = False
     created_at: str
-    updated_at: str
+    updated_at: str | None = None
 
 
 def _field_was_provided(model: BaseModel, field_name: str) -> bool:
@@ -2332,6 +2335,7 @@ async def _synchronize_due_registry_sources(
         follow_redirects=False,
         timeout=timeout,
         trust_env=False,
+        verify=registry_tls_context(),
     ) as client:
         for profile in profiles:
             try:
@@ -2408,6 +2412,7 @@ async def synchronize_trust_profile_registries(
             follow_redirects=False,
             timeout=timeout,
             trust_env=False,
+            verify=registry_tls_context(),
         ) as client:
             source_results = await _synchronize_profile_registry_sources(
                 profile,

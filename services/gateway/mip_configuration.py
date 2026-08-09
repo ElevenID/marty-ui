@@ -1,8 +1,10 @@
-"""Canonical MIP 0.3.1 discovery document construction."""
+"""Canonical MIP 0.4.1 discovery document construction."""
 
 from __future__ import annotations
 
 from typing import Any, Iterable
+
+from protocol_version import MIP_SUPPORTED_VERSIONS, MIP_VERSION
 
 
 _API_SURFACE_FIELDS = {
@@ -53,10 +55,10 @@ def mip_configuration_document(
     projected_profiles.sort(key=lambda profile: profile["compliance_code"])
     compliance_codes = sorted({profile["compliance_code"] for profile in projected_profiles})
     return {
-        "mip_version": "0.3.1",
+        "mip_version": MIP_VERSION,
         "issuer": issuer_url,
         "mip_configuration_endpoint": f"{issuer_url}/.well-known/mip-configuration",
-        "supported_versions": ["0.3.1"],
+        "supported_versions": list(MIP_SUPPORTED_VERSIONS),
         "implementation_classes": ["ISSUER", "VERIFIER", "REGISTRY"],
         "issuance_endpoint": f"{issuer_url}/v1/issuance",
         "openid_credential_issuer": f"{issuer_url}/.well-known/openid-credential-issuer",

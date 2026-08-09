@@ -53,7 +53,7 @@ describe('FlowDefinitionWizard', () => {
     expect(screen.queryByRole('button', { name: /add step/i })).not.toBeInTheDocument();
   });
 
-  it('submits only the MIP 0.3 standard-flow contract and creates a draft', async () => {
+  it('submits only the MIP 0.4 standard-flow contract and creates a draft', async () => {
     const user = userEvent.setup();
     let submittedPayload: any;
     server.use(

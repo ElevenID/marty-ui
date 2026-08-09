@@ -42,7 +42,7 @@ const FlowTypeStep = ({ capabilities, selectedType, onSelectType, onOpenCustomBu
         <Box>
           <Typography variant="h6">Choose a flow</Typography>
           <Typography variant="body2" color="text.secondary">
-            Standard flows use the fixed MIP 0.3 sequence shown during review.
+            Standard flows use the fixed MIP 0.4 sequence shown during review.
           </Typography>
         </Box>
         <Button startIcon={<ExtensionIcon />} onClick={onOpenCustomBuilder}>
