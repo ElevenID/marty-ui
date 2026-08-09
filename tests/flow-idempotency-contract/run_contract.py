@@ -17,6 +17,8 @@ RESULT_PATH = Path(os.environ["CONTRACT_RESULT_PATH"])
 SOURCE_REVISION = os.environ.get("CONTRACT_SOURCE_REVISION", "local-worktree")
 FLOW_KEY_HASH = "a" * 64
 SEMANTICS_HASH = "b" * 64
+EVENT_ID_HASH = "c" * 64
+EVENT_PAYLOAD_HASH = "d" * 64
 ISSUANCE_TRANSACTION_ID = str(uuid.uuid4())
 
 
@@ -51,7 +53,34 @@ def _reserve_instance(barrier: threading.Barrier) -> tuple[str, bool]:
     now = datetime.now(UTC)
     barrier.wait(timeout=10)
     with psycopg.connect(DATABASE_URL) as connection:
-        created = connection.execute(
+        receipt_created = connection.execute(
+            """
+            INSERT INTO flow_service.flow_application_event_receipts (
+                event_id_sha256, payload_sha256, organization_id,
+                application_id, flow_plan, created_at, updated_at
+            ) VALUES (
+                %s, %s, 'org-race', 'application-race',
+                '[]'::json, %s, %s
+            )
+            ON CONFLICT (event_id_sha256) DO NOTHING
+            RETURNING event_id_sha256
+            """,
+            (EVENT_ID_HASH, EVENT_PAYLOAD_HASH, now, now),
+        ).fetchone()
+        if receipt_created is None:
+            existing_plan = connection.execute(
+                """
+                SELECT flow_plan
+                FROM flow_service.flow_application_event_receipts
+                WHERE event_id_sha256 = %s
+                """,
+                (EVENT_ID_HASH,),
+            ).fetchone()
+            assert existing_plan is not None and len(existing_plan[0]) == 1
+            connection.commit()
+            return str(existing_plan[0][0]["instance_id"]), False
+
+        instance_row = connection.execute(
             """
             INSERT INTO flow_service.flow_instances (
                 id, flow_definition_id, organization_id, status,
@@ -76,21 +105,37 @@ def _reserve_instance(barrier: threading.Barrier) -> tuple[str, bool]:
                 now,
             ),
         ).fetchone()
-        if created is not None:
-            connection.commit()
-            return str(created[0]), True
-        existing = connection.execute(
+        if instance_row is None:
+            instance_row = connection.execute(
+                """
+                SELECT id
+                FROM flow_service.flow_instances
+                WHERE organization_id = 'org-race'
+                  AND application_flow_key_hash = %s
+                """,
+                (FLOW_KEY_HASH,),
+            ).fetchone()
+        assert instance_row is not None
+        selected_id = str(instance_row[0])
+        flow_plan = [
+            {
+                "flow_definition_id": "flow-contract",
+                "instance_id": selected_id,
+                "application_flow_key_hash": FLOW_KEY_HASH,
+                "offer_semantics_hash": SEMANTICS_HASH,
+                "flow_definition_version": "1",
+            }
+        ]
+        connection.execute(
             """
-            SELECT id
-            FROM flow_service.flow_instances
-            WHERE organization_id = 'org-race'
-              AND application_flow_key_hash = %s
+            UPDATE flow_service.flow_application_event_receipts
+            SET flow_plan = %s::json, updated_at = %s
+            WHERE event_id_sha256 = %s
             """,
-            (FLOW_KEY_HASH,),
-        ).fetchone()
-        assert existing is not None
+            (json.dumps(flow_plan), now, EVENT_ID_HASH),
+        )
         connection.commit()
-        return str(existing[0]), False
+        return selected_id, True
 
 
 def _reserve_artifact(
@@ -211,6 +256,14 @@ def main() -> None:
     assert cross_instance_rebind_rejected
 
     with psycopg.connect(DATABASE_URL) as connection:
+        receipt_count, stored_plan = connection.execute(
+            """
+            SELECT count(*), min(flow_plan::text)
+            FROM flow_service.flow_application_event_receipts
+            WHERE event_id_sha256 = %s
+            """,
+            (EVENT_ID_HASH,),
+        ).fetchone()
         instance_count = connection.execute(
             """
             SELECT count(*)
@@ -233,6 +286,8 @@ def main() -> None:
         ).fetchone()[0]
 
     assert instance_count == 1
+    assert receipt_count == 1
+    assert len(json.loads(stored_plan)) == 1
     assert artifact_count == 1
     assert version == "20260809_0001"
 
@@ -248,6 +303,8 @@ def main() -> None:
                 "instance_recovered_count": len(instance_results)
                 - instance_created_count,
                 "same_instance": True,
+                "event_receipt_count": receipt_count,
+                "same_durable_plan": True,
                 "artifact_count": artifact_count,
                 "same_artifact": True,
                 "cross_instance_rebind_rejected": cross_instance_rebind_rejected,

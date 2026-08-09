@@ -196,12 +196,14 @@ async def authenticate_application_event(
     now: int | None = None,
     max_age_seconds: int | None = None,
     replay_ttl_seconds: int | None = None,
+    consume_replay: bool = True,
 ) -> ApplicationEventEvidence:
-    """Authenticate and atomically consume an application approval event.
+    """Authenticate an application approval event and optionally consume it.
 
-    Replay storage is mandatory and must be shared by every Flow replica.  A
-    storage outage therefore fails closed rather than creating a process-local
-    acceptance window.
+    Replay storage is mandatory whenever ``consume_replay`` is true and must be
+    shared by every Flow replica.  Flow uses verify-only mode while it commits
+    the event's durable execution plan, then consumes replay state before any
+    issuance side effect.
     """
     values = _normalized_metadata(metadata)
     required = (
@@ -262,34 +264,7 @@ async def authenticate_application_event(
             "invalid_signature", "application event signature is invalid"
         )
 
-    if replay_store is None:
-        raise ApplicationEventAuthError(
-            "replay_store_unavailable", "application event replay store is unavailable"
-        )
-    ttl = (
-        _positive_setting(
-            "FLOW_APPLICATION_EVENT_REPLAY_TTL_SECONDS",
-            _DEFAULT_REPLAY_TTL_SECONDS,
-        )
-        if replay_ttl_seconds is None
-        else replay_ttl_seconds
-    )
-    if ttl < age_limit:
-        raise ApplicationEventAuthError(
-            "configuration_error", "application event replay TTL must cover the freshness window"
-        )
     event_id_sha256 = hashlib.sha256(event_id.encode("utf-8")).hexdigest()
-    try:
-        was_new = await replay_store.set(
-            f"marty:application-approved:v1:{event_id_sha256}",
-            payload_sha256,
-            nx=True,
-            ex=ttl,
-        )
-    except Exception as exc:
-        raise ApplicationEventAuthError(
-            "replay_store_unavailable", "application event replay store is unavailable"
-        ) from exc
     authenticated_at = datetime_from_unix(current_time)
     evidence = ApplicationEventEvidence(
         producer=PRODUCER,
@@ -298,6 +273,15 @@ async def authenticate_application_event(
         payload_sha256=payload_sha256,
         authenticated_at=authenticated_at,
     )
+    if not consume_replay:
+        return evidence
+
+    was_new = await consume_application_event_replay(
+        evidence,
+        replay_store=replay_store,
+        max_age_seconds=age_limit,
+        replay_ttl_seconds=replay_ttl_seconds,
+    )
     if not was_new:
         raise ApplicationEventAuthError(
             "replayed_event",
@@ -305,6 +289,54 @@ async def authenticate_application_event(
             evidence=evidence,
         )
     return evidence
+
+
+async def consume_application_event_replay(
+    evidence: ApplicationEventEvidence,
+    *,
+    replay_store: Any,
+    max_age_seconds: int | None = None,
+    replay_ttl_seconds: int | None = None,
+) -> bool:
+    """Atomically consume verified evidence after its durable Flow plan exists."""
+
+    if replay_store is None:
+        raise ApplicationEventAuthError(
+            "replay_store_unavailable", "application event replay store is unavailable"
+        )
+    age_limit = (
+        _positive_setting(
+            "FLOW_APPLICATION_EVENT_MAX_AGE_SECONDS",
+            _DEFAULT_MAX_AGE_SECONDS,
+        )
+        if max_age_seconds is None
+        else max_age_seconds
+    )
+    ttl = (
+        _positive_setting(
+            "FLOW_APPLICATION_EVENT_REPLAY_TTL_SECONDS",
+            _DEFAULT_REPLAY_TTL_SECONDS,
+        )
+        if replay_ttl_seconds is None
+        else replay_ttl_seconds
+    )
+    if age_limit <= 0 or ttl < age_limit:
+        raise ApplicationEventAuthError(
+            "configuration_error", "application event replay TTL must cover the freshness window"
+        )
+    try:
+        return bool(
+            await replay_store.set(
+                f"marty:application-approved:v1:{evidence.event_id_sha256}",
+                evidence.payload_sha256,
+                nx=True,
+                ex=ttl,
+            )
+        )
+    except Exception as exc:
+        raise ApplicationEventAuthError(
+            "replay_store_unavailable", "application event replay store is unavailable"
+        ) from exc
 
 
 def datetime_from_unix(value: int) -> str:

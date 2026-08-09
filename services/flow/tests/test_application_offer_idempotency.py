@@ -7,7 +7,9 @@ import pytest
 
 import flow.main as flow_main
 from common.application_event_auth import ApplicationEventEvidence
+from common.application_event_auth import ApplicationEventAuthError
 from flow.infrastructure.models import (
+    flow_application_event_receipts,
     flow_definitions,
     flow_instance_artifacts,
     flow_instances,
@@ -155,30 +157,94 @@ async def test_retry_recovers_after_instance_commit_before_artifact_commit(
 async def test_exact_replay_recovers_only_an_existing_durable_receipt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    calls = 0
+
     async def initiate(_instance, _flow_definition):
+        nonlocal calls
+        calls += 1
         return _issuance_response()
+
+    class ReplayStore:
+        def __init__(self, *, unavailable: bool = False):
+            self.unavailable = unavailable
+            self.values: dict[str, str] = {}
+
+        async def set(self, key, value, *, nx, ex):
+            assert nx is True and ex > 0
+            if self.unavailable:
+                raise RuntimeError("simulated replay outage")
+            if key in self.values:
+                return False
+            self.values[key] = value
+            return True
 
     monkeypatch.setattr(flow_main, "_initiate_credential_layer_issuance", initiate)
     repo = InMemoryFlowRepository()
-    await repo.save_definition(_flow())
+    original_flow = _flow()
+    await repo.save_definition(original_flow)
+    unavailable_store = ReplayStore(unavailable=True)
+    monkeypatch.setattr(flow_main, "_nonce_redis", unavailable_store)
+
+    with pytest.raises(ApplicationEventAuthError, match="replay store is unavailable"):
+        await handle_application_approved(
+            _event(),
+            repo,
+            _evidence(),
+            enforce_replay=True,
+        )
+    assert calls == 0
+
+    newly_active_flow = _flow()
+    await repo.save_definition(newly_active_flow)
+    replay_store = ReplayStore()
+    monkeypatch.setattr(flow_main, "_nonce_redis", replay_store)
 
     recovered_after_early_crash = await handle_application_approved(
-        _event(),
-        repo,
-        _evidence(),
-        replay_recovery_only=True,
+        _event(), repo, _evidence(), enforce_replay=True
     )
     recovered = await handle_application_approved(
-        _event(),
-        repo,
-        _evidence(),
-        replay_recovery_only=True,
+        _event(), repo, _evidence(), enforce_replay=True
     )
 
     assert recovered_after_early_crash["flows_triggered"] == 1
     assert recovered["flows_triggered"] == 1
     assert recovered_after_early_crash["instance_ids"] == recovered["instance_ids"]
     assert recovered["offers"][0]["credential_offer_transaction_id"] == "transaction-1"
+    assert calls == 1
+    assert len(await repo.list_instances("org-1")) == 1
+    assert all(
+        instance.flow_definition_id != newly_active_flow.id
+        for instance in await repo.list_instances("org-1")
+    )
+
+    original_flow.preconditions.append("external_verification")
+    with pytest.raises(ApplicationOfferConflictError, match="unavailable or has changed"):
+        await handle_application_approved(
+            _event(), repo, _evidence(), enforce_replay=True
+        )
+    assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_issuance_failure_is_not_reported_as_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fail_issuance(_instance, _flow_definition):
+        raise RuntimeError("simulated downstream outage")
+
+    monkeypatch.setattr(
+        flow_main, "_initiate_credential_layer_issuance", fail_issuance
+    )
+    repo = InMemoryFlowRepository()
+    flow = _flow()
+    await repo.save_definition(flow)
+
+    result = await handle_application_approved(_event(), repo, _evidence())
+
+    assert result["success"] is False
+    assert result["flows_triggered"] == 0
+    assert result["offers"] == []
+    assert result["failed_flow_ids"] == [flow.id]
 
 
 @pytest.mark.asyncio
@@ -349,6 +415,12 @@ def test_durable_flow_storage_contract_is_tenant_scoped() -> None:
     }
     assert "ck_flow_instances_application_flow_key_hash" in instance_constraints
     assert "ck_flow_instances_application_flow_key_hash" not in definition_constraints
+    receipt_constraints = {
+        constraint.name for constraint in flow_application_event_receipts.constraints
+    }
+    assert "ck_flow_application_event_receipts_event_hash" in receipt_constraints
+    assert "ck_flow_application_event_receipts_payload_hash" in receipt_constraints
+    assert flow_application_event_receipts.c.flow_plan.nullable is False
     unique_indexes = {
         index.name: tuple(column.name for column in index.columns)
         for index in flow_instances.indexes

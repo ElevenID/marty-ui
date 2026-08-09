@@ -77,6 +77,7 @@ from common.application_event_auth import (
     ApplicationEventAuthError,
     ApplicationEventEvidence,
     authenticate_application_event,
+    consume_application_event_replay,
     validate_application_event_configuration,
 )
 
@@ -1584,6 +1585,19 @@ class FlowInstanceArtifact:
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+@dataclass
+class ApplicationEventPlanReceipt:
+    """Durable, minimized snapshot of flows selected by one authenticated event."""
+
+    event_id_sha256: str
+    payload_sha256: str
+    organization_id: str
+    application_id: str
+    flow_plan: list[dict[str, str]] = field(default_factory=list)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 # =============================================================================
 # Application Layer
 # =============================================================================
@@ -1597,7 +1611,8 @@ class InMemoryFlowRepository:
         self._instances: dict[str, FlowInstance] = {}
         self._artifacts: dict[str, FlowInstanceArtifact] = {}
         self._application_flow_instances: dict[tuple[str, str], str] = {}
-        self._application_flow_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._application_event_receipts: dict[str, ApplicationEventPlanReceipt] = {}
+        self._application_event_plan_lock = asyncio.Lock()
         self._artifact_locks: dict[str, asyncio.Lock] = {}
 
     # Flow Definition operations
@@ -1617,31 +1632,55 @@ class InMemoryFlowRepository:
     async def save_instance(self, instance: FlowInstance) -> None:
         self._instances[instance.id] = instance
 
-    async def reserve_application_flow_instance(
+    async def reserve_application_event_plan(
         self,
-        instance: FlowInstance,
-        application_flow_key_hash: str,
-    ) -> tuple[FlowInstance, bool]:
-        logical_key = (instance.organization_id, application_flow_key_hash)
-        lock = self._application_flow_locks.setdefault(logical_key, asyncio.Lock())
-        async with lock:
-            existing_id = self._application_flow_instances.get(logical_key)
-            if existing_id is not None:
-                return self._instances[existing_id], False
-            instance.application_flow_key_hash = application_flow_key_hash
-            self._instances[instance.id] = instance
-            self._application_flow_instances[logical_key] = instance.id
-            return instance, True
+        receipt: ApplicationEventPlanReceipt,
+        planned_instances: list[tuple[FlowInstance, dict[str, str]]],
+    ) -> tuple[ApplicationEventPlanReceipt, bool]:
+        async with self._application_event_plan_lock:
+            existing_receipt = self._application_event_receipts.get(
+                receipt.event_id_sha256
+            )
+            if existing_receipt is not None:
+                if (
+                    existing_receipt.payload_sha256 != receipt.payload_sha256
+                    or existing_receipt.organization_id != receipt.organization_id
+                    or existing_receipt.application_id != receipt.application_id
+                ):
+                    raise ApplicationOfferConflictError(
+                        "application event identity was already bound to another payload"
+                    )
+                return existing_receipt, False
 
-    async def get_application_flow_instance(
-        self,
-        organization_id: str,
-        application_flow_key_hash: str,
-    ) -> FlowInstance | None:
-        instance_id = self._application_flow_instances.get(
-            (organization_id, application_flow_key_hash)
-        )
-        return self._instances.get(instance_id) if instance_id else None
+            staged_instances: list[tuple[tuple[str, str], FlowInstance]] = []
+            final_plan: list[dict[str, str]] = []
+            for candidate, plan_entry in planned_instances:
+                logical_key = (
+                    candidate.organization_id,
+                    candidate.application_flow_key_hash or "",
+                )
+                existing_id = self._application_flow_instances.get(logical_key)
+                selected = self._instances.get(existing_id) if existing_id else None
+                if selected is None:
+                    selected = candidate
+                    staged_instances.append((logical_key, selected))
+                if (
+                    selected.context.get(
+                        "_marty_application_offer_semantics_hash_v1"
+                    )
+                    != plan_entry["offer_semantics_hash"]
+                ):
+                    raise ApplicationOfferConflictError(
+                        "application and flow were already bound to different issuance claims"
+                    )
+                final_plan.append({**plan_entry, "instance_id": selected.id})
+
+            for logical_key, instance in staged_instances:
+                self._instances[instance.id] = instance
+                self._application_flow_instances[logical_key] = instance.id
+            receipt.flow_plan = final_plan
+            self._application_event_receipts[receipt.event_id_sha256] = receipt
+            return receipt, True
 
     async def get_instance(self, instance_id: str) -> FlowInstance | None:
         return self._instances.get(instance_id)
@@ -6696,7 +6735,7 @@ async def _authenticate_application_approved_event(
     event: ApplicationApprovedWebhook | dict[str, Any],
     metadata: dict[str, str],
 ) -> ApplicationEventEvidence:
-    """Authenticate and consume an approval event using shared Redis state."""
+    """Verify an approval event before its durable execution plan is reserved."""
     payload = (
         event.model_dump(mode="json")
         if isinstance(event, ApplicationApprovedWebhook)
@@ -6706,6 +6745,7 @@ async def _authenticate_application_approved_event(
         payload,
         metadata,
         replay_store=_nonce_redis,
+        consume_replay=False,
     )
 
 
@@ -6725,25 +6765,13 @@ async def receive_application_approved(
             event,
             dict(request.headers),
         )
+        return await handle_application_approved(
+            event=event,
+            repo=repo,
+            auth_evidence=evidence,
+            enforce_replay=True,
+        )
     except ApplicationEventAuthError as exc:
-        if exc.code == "replayed_event" and exc.evidence is not None:
-            try:
-                recovered = await handle_application_approved(
-                    event=event,
-                    repo=repo,
-                    auth_evidence=exc.evidence,
-                    replay_recovery_only=True,
-                )
-            except ApplicationOfferConflictError as conflict:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "error": "APPLICATION_OFFER_CONFLICT",
-                        "message": str(conflict),
-                    },
-                ) from conflict
-            if recovered.get("flows_triggered", 0) > 0:
-                return recovered
         status_code = 401
         if exc.code == "replayed_event":
             status_code = 409
@@ -6753,12 +6781,6 @@ async def receive_application_approved(
             status_code=status_code,
             detail={"error": exc.code, "message": str(exc)},
         ) from exc
-    try:
-        return await handle_application_approved(
-            event=event,
-            repo=repo,
-            auth_evidence=evidence,
-        )
     except ApplicationOfferConflictError as exc:
         raise HTTPException(
             status_code=409,
@@ -6770,7 +6792,7 @@ async def handle_application_approved(
     event: ApplicationApprovedWebhook,
     repo: InMemoryFlowRepository,
     auth_evidence: ApplicationEventEvidence,
-    replay_recovery_only: bool = False,
+    enforce_replay: bool = False,
 ) -> dict:
     """
     Handle APPLICATION_APPROVED event from applicant service.
@@ -6803,17 +6825,185 @@ async def handle_application_approved(
             flow
         )
 
-    matching_flows = [
-        flow
-        for flow in all_flows
-        if handles_application_approved(flow)
-        and (
-            not requested_template_id
-            or str(flow.credential_template_id or "").strip() == requested_template_id
-        )
-    ]
+    matching_flows = sorted(
+        (
+            flow
+            for flow in all_flows
+            if handles_application_approved(flow)
+            and (
+                not requested_template_id
+                or str(flow.credential_template_id or "").strip()
+                == requested_template_id
+            )
+        ),
+        key=lambda flow: flow.id,
+    )
 
-    if not matching_flows:
+    raw_event_claims = event.data.get("claims")
+    if raw_event_claims is not None and not isinstance(raw_event_claims, dict):
+        raise ApplicationOfferConflictError("application claims must be a JSON object")
+    event_claims = dict(raw_event_claims or {})
+    logger.info("[auto-trigger] event claim keys=%s", list(event_claims.keys()))
+
+    def logical_key(flow_def: FlowDefinition) -> str:
+        material = json.dumps(
+            [event.organization_id, event.aggregate_id, flow_def.id],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(
+            f"marty:application-flow-offer:v1:{material}".encode()
+        ).hexdigest()
+
+    def semantics_hash(flow_def: FlowDefinition) -> str:
+        def enum_value(value: Any) -> Any:
+            return value.value if isinstance(value, Enum) else value
+
+        semantics = json.dumps(
+            {
+                "application_id": event.aggregate_id,
+                "organization_id": flow_def.organization_id,
+                "flow_definition_id": flow_def.id,
+                "flow_definition_name": flow_def.name,
+                "flow_definition_description": flow_def.description,
+                "flow_definition_version": flow_def.version,
+                "flow_status": enum_value(flow_def.status),
+                "flow_type": enum_value(flow_def.flow_type),
+                "flow_extension": flow_def.extension or {},
+                "steps": [
+                    {
+                        "id": step.id,
+                        "name": step.name,
+                        "description": step.description,
+                        "step_type": enum_value(step.step_type),
+                        "config": step.config,
+                        "approval_strategy": step.approval_strategy,
+                        "timeout_seconds": step.timeout_seconds,
+                        "conditions": step.conditions,
+                    }
+                    for step in flow_def.steps
+                ],
+                "transitions": [
+                    {
+                        "id": transition.id,
+                        "from_step_id": transition.from_step_id,
+                        "to_step_id": transition.to_step_id,
+                        "condition": enum_value(transition.condition),
+                        "condition_expression": transition.condition_expression,
+                    }
+                    for transition in flow_def.transitions
+                ],
+                "start_step_id": flow_def.start_step_id,
+                "preconditions": flow_def.preconditions,
+                "credential_template_id": flow_def.credential_template_id,
+                "application_template_id": flow_def.application_template_id,
+                "presentation_policy_id": flow_def.presentation_policy_id,
+                "delivery_destination_profile_id": (
+                    flow_def.delivery_destination_profile_id
+                ),
+                "deployment_profile_id": flow_def.deployment_profile_id,
+                "deployment_profile_ids": flow_def.deployment_profile_ids,
+                "trust_profile_id": flow_def.trust_profile_id,
+                "approval_strategy": flow_def.approval_strategy,
+                "hooks": flow_def.hooks,
+                "trigger": flow_def.trigger,
+                "default_timeout_seconds": flow_def.default_timeout_seconds,
+                "max_retries": flow_def.max_retries,
+                "retry_cooldown_minutes": flow_def.retry_cooldown_minutes,
+                "enable_resume": flow_def.enable_resume,
+                "applicant_id": applicant_id,
+                "claims": event_claims,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return hashlib.sha256(
+            f"marty:application-offer-semantics:v1:{semantics}".encode()
+        ).hexdigest()
+
+    from datetime import timedelta
+
+    planned_instances: list[tuple[FlowInstance, dict[str, str]]] = []
+    for flow_def in matching_flows:
+        application_flow_key_hash = logical_key(flow_def)
+        offer_semantics_hash = semantics_hash(flow_def)
+        initial_context = {
+            "applicant_id": applicant_id,
+            "application_id": event.aggregate_id or "",
+            "application_status": "approved",
+            "application_approved_at": event.timestamp,
+            "applicant_email": event.data.get("email"),
+            "applicant_given_name": event.data.get("given_name"),
+            "applicant_family_name": event.data.get("family_name"),
+            "vetting_level": event.data.get("vetting_level"),
+            "triggered_by_event": triggered_by_event or "application.approved",
+            "claims": event_claims,
+            _PRECONDITION_EVIDENCE_KEY: {
+                "application_approved": auth_evidence.as_dict(),
+            },
+            "_marty_application_offer_semantics_hash_v1": offer_semantics_hash,
+        }
+        instance = FlowInstance(
+            flow_definition_id=flow_def.id,
+            organization_id=flow_def.organization_id,
+            status=FlowInstanceStatus.IN_PROGRESS,
+            current_step_id=flow_def.start_step_id,
+            context=initial_context,
+            subject_id=applicant_id,
+            subject_type="applicant",
+            external_reference=f"application-flow:{application_flow_key_hash}",
+            application_flow_key_hash=application_flow_key_hash,
+            started_at=datetime.now(timezone.utc),
+        )
+        _sync_protocol_context(instance, flow_def)
+        instance.expires_at = instance.started_at + timedelta(
+            seconds=flow_def.default_timeout_seconds
+        )
+        if flow_def.start_step_id:
+            instance.step_history.append(
+                {
+                    "step_id": flow_def.start_step_id,
+                    "entered_at": datetime.now(timezone.utc).isoformat(),
+                    "status": "entered",
+                }
+            )
+        planned_instances.append(
+            (
+                instance,
+                {
+                    "flow_definition_id": flow_def.id,
+                    "application_flow_key_hash": application_flow_key_hash,
+                    "offer_semantics_hash": offer_semantics_hash,
+                    "flow_definition_version": str(flow_def.version),
+                },
+            )
+        )
+
+    receipt, _receipt_created = await repo.reserve_application_event_plan(
+        ApplicationEventPlanReceipt(
+            event_id_sha256=auth_evidence.event_id_sha256,
+            payload_sha256=auth_evidence.payload_sha256,
+            organization_id=event.organization_id,
+            application_id=event.aggregate_id,
+        ),
+        planned_instances,
+    )
+
+    if enforce_replay:
+        was_new = await consume_application_event_replay(
+            auth_evidence,
+            replay_store=_nonce_redis,
+        )
+        if not was_new and not receipt.flow_plan:
+            raise ApplicationEventAuthError(
+                "replayed_event",
+                "application event was already consumed",
+                evidence=auth_evidence,
+            )
+
+    if not receipt.flow_plan:
         detail = (
             "No active custom OID4VCI extension handling APPLICATION_APPROVED "
             f"matched org {event.organization_id}"
@@ -6827,151 +7017,27 @@ async def handle_application_approved(
             "reason": detail,
         }
 
-    triggered_instances = []
+    flow_by_id = {flow.id: flow for flow in all_flows}
+    triggered_instances: list[str] = []
     offers: list[dict[str, Any]] = []
-
-    for flow_def in matching_flows:
+    failed_flow_ids: list[str] = []
+    for plan_entry in receipt.flow_plan:
+        flow_def = flow_by_id.get(plan_entry["flow_definition_id"])
+        if flow_def is None or semantics_hash(flow_def) != plan_entry["offer_semantics_hash"]:
+            raise ApplicationOfferConflictError(
+                "the durably selected application flow is unavailable or has changed"
+            )
+        instance = await repo.get_instance(plan_entry["instance_id"])
+        if instance is None:
+            raise RuntimeError("durable application event plan references a missing instance")
         try:
-            logical_material = json.dumps(
-                [event.organization_id, event.aggregate_id, flow_def.id],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
-            application_flow_key_hash = hashlib.sha256(
-                f"marty:application-flow-offer:v1:{logical_material}".encode()
-            ).hexdigest()
-            offer_semantics = json.dumps(
-                {
-                    "application_id": event.aggregate_id,
-                    "flow_definition_id": flow_def.id,
-                    "credential_template_id": flow_def.credential_template_id,
-                    "applicant_id": applicant_id,
-                    "claims": event.data.get("claims") or {},
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            )
-            offer_semantics_hash = hashlib.sha256(
-                f"marty:application-offer-semantics:v1:{offer_semantics}".encode()
-            ).hexdigest()
-            # Credential content crosses this boundary only through the
-            # canonical claim map assembled by the applicant service.
-            raw_event_claims = event.data.get("claims")
-            _event_claims = (
-                dict(raw_event_claims) if isinstance(raw_event_claims, dict) else {}
-            )
-            logger.info(
-                "[auto-trigger] event claims keys=%s values_preview=%s",
-                list(_event_claims.keys()),
-                {
-                    k: v
-                    for k, v in _event_claims.items()
-                    if k in ("email", "given_name", "family_name")
-                },
-            )
-
-            # Create initial context with application approval status
-            initial_context = {
-                "applicant_id": applicant_id,
-                "application_id": event.aggregate_id or "",
-                "application_status": "approved",
-                "application_approved_at": event.timestamp,
-                "applicant_email": event.data.get("email"),
-                "applicant_given_name": event.data.get("given_name"),
-                "applicant_family_name": event.data.get("family_name"),
-                "vetting_level": event.data.get("vetting_level"),
-                "triggered_by_event": triggered_by_event or "application.approved",
-                "claims": _event_claims,
-                _PRECONDITION_EVIDENCE_KEY: {
-                    "application_approved": auth_evidence.as_dict(),
-                },
-                "_marty_application_offer_semantics_hash_v1": offer_semantics_hash,
-            }
-
-            # Start flow instance
-            instance = FlowInstance(
-                flow_definition_id=flow_def.id,
-                organization_id=flow_def.organization_id,
-                status=FlowInstanceStatus.IN_PROGRESS,
-                current_step_id=flow_def.start_step_id,
-                context=initial_context,
-                subject_id=applicant_id,
-                subject_type="applicant",
-                external_reference=f"application-flow:{application_flow_key_hash}",
-                application_flow_key_hash=application_flow_key_hash,
-                started_at=datetime.now(timezone.utc),
-            )
-            _sync_protocol_context(instance, flow_def)
-
-            # Set expiry
-            from datetime import timedelta
-
-            instance.expires_at = instance.started_at + timedelta(
-                seconds=flow_def.default_timeout_seconds
-            )
-
-            # Record first step
-            if flow_def.start_step_id:
-                instance.step_history.append(
-                    {
-                        "step_id": flow_def.start_step_id,
-                        "entered_at": datetime.now(timezone.utc).isoformat(),
-                        "status": "entered",
-                    }
-                )
-
-            if replay_recovery_only:
-                existing = await repo.get_application_flow_instance(
-                    event.organization_id,
-                    application_flow_key_hash,
-                )
-                if existing is not None:
-                    instance = existing
-                else:
-                    instance, _created = await repo.reserve_application_flow_instance(
-                        instance,
-                        application_flow_key_hash,
-                    )
-            else:
-                instance, _created = await repo.reserve_application_flow_instance(
-                    instance,
-                    application_flow_key_hash,
-                )
-
-            stored_evidence = (
-                instance.context.get(_PRECONDITION_EVIDENCE_KEY, {}).get(
-                    "application_approved"
-                )
-            )
-            if (
-                instance.context.get(
-                    "_marty_application_offer_semantics_hash_v1"
-                )
-                != offer_semantics_hash
-            ):
-                raise ApplicationOfferConflictError(
-                    "application and flow were already bound to different issuance claims"
-                )
-            if replay_recovery_only and (
-                not isinstance(stored_evidence, dict)
-                or stored_evidence.get("payload_sha256")
-                != auth_evidence.payload_sha256
-            ):
-                raise RuntimeError(
-                    "durable application-flow receipt does not match the authenticated event"
-                )
-
-            # Create OID4VCI artifact if needed
             artifact = None
             if _effective_flow_type(flow_def) == FlowType.OID4VCI_PRE_AUTHORIZED:
                 artifact = await _create_oid4vci_artifact(instance, flow_def, repo)
                 if artifact:
-                    logger.info(f"Created OID4VCI artifact: {artifact.id}")
+                    logger.info("Created OID4VCI artifact: %s", artifact.id)
 
             triggered_instances.append(instance.id)
-
             if artifact:
                 offers.append(
                     {
@@ -6999,24 +7065,30 @@ async def handle_application_approved(
                         or "pending",
                     }
                 )
-
             logger.info(
-                f"Auto-triggered flow {flow_def.id} ({flow_def.name}) for applicant {applicant_id}: "
-                f"instance {instance.id}"
+                "Auto-triggered flow %s (%s) for applicant %s: instance %s",
+                flow_def.id,
+                flow_def.name,
+                applicant_id,
+                instance.id,
             )
-
         except ApplicationOfferConflictError:
             raise
-        except Exception as e:
+        except Exception as exc:
+            failed_flow_ids.append(flow_def.id)
             logger.error(
-                f"Failed to trigger flow {flow_def.id} for applicant {applicant_id}: {e}"
+                "Failed to trigger flow %s for applicant %s: %s",
+                flow_def.id,
+                applicant_id,
+                exc,
             )
 
     return {
-        "success": True,
+        "success": not failed_flow_ids,
         "flows_triggered": len(triggered_instances),
         "instance_ids": triggered_instances,
         "offers": offers,
+        **({"failed_flow_ids": failed_flow_ids} if failed_flow_ids else {}),
     }
 
 

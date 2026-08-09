@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 if TYPE_CHECKING:
     from flow.main import (
+        ApplicationEventPlanReceipt,
         FlowDefinition,
         FlowInstance,
         FlowInstanceArtifact,
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
     )
 
 from flow.infrastructure.models import (
+    flow_application_event_receipts,
     flow_definitions,
     flow_instance_artifacts,
     flow_instances,
@@ -511,75 +513,135 @@ class PostgresFlowRepository:
             
             await session.commit()
 
-    async def reserve_application_flow_instance(
+    async def reserve_application_event_plan(
         self,
-        instance: "FlowInstance",
-        application_flow_key_hash: str,
-    ) -> tuple["FlowInstance", bool]:
-        instance.application_flow_key_hash = application_flow_key_hash
-        values = {
-            "id": instance.id,
-            "flow_definition_id": instance.flow_definition_id,
-            "organization_id": instance.organization_id,
-            "status": instance.status.value,
-            "current_step_id": instance.current_step_id,
-            "context": instance.context,
-            "step_history": instance.step_history,
-            "subject_id": instance.subject_id,
-            "subject_type": instance.subject_type,
-            "external_reference": instance.external_reference,
-            "application_flow_key_hash": application_flow_key_hash,
-            "started_at": instance.started_at,
-            "completed_at": instance.completed_at,
-            "expires_at": instance.expires_at,
-            "result": instance.result,
-            "error": instance.error,
-            "created_at": instance.created_at,
-            "updated_at": instance.updated_at,
-        }
+        receipt: "ApplicationEventPlanReceipt",
+        planned_instances: list[tuple["FlowInstance", dict[str, str]]],
+    ) -> tuple["ApplicationEventPlanReceipt", bool]:
+        from flow.main import ApplicationEventPlanReceipt
+
         async with self._session_factory() as session:
-            statement = (
-                pg_insert(flow_instances)
-                .values(**values)
-                .on_conflict_do_nothing(
-                    index_elements=["organization_id", "application_flow_key_hash"]
+            receipt_insert = (
+                pg_insert(flow_application_event_receipts)
+                .values(
+                    event_id_sha256=receipt.event_id_sha256,
+                    payload_sha256=receipt.payload_sha256,
+                    organization_id=receipt.organization_id,
+                    application_id=receipt.application_id,
+                    flow_plan=[],
+                    created_at=receipt.created_at,
+                    updated_at=receipt.updated_at,
                 )
-                .returning(*flow_instances.c)
+                .on_conflict_do_nothing(index_elements=["event_id_sha256"])
+                .returning(*flow_application_event_receipts.c)
             )
-            row = (await session.execute(statement)).first()
-            created = row is not None
-            if row is None:
-                row = (
+            receipt_row = (await session.execute(receipt_insert)).first()
+            if receipt_row is None:
+                receipt_row = (
                     await session.execute(
-                        select(flow_instances).where(
-                            flow_instances.c.organization_id == instance.organization_id,
-                            flow_instances.c.application_flow_key_hash
-                            == application_flow_key_hash,
+                        select(flow_application_event_receipts).where(
+                            flow_application_event_receipts.c.event_id_sha256
+                            == receipt.event_id_sha256
                         )
                     )
                 ).first()
-            if row is None:
-                await session.rollback()
-                raise RuntimeError("application flow reservation was not recoverable")
-            await session.commit()
-            return self._instance_from_row(row), created
-
-    async def get_application_flow_instance(
-        self,
-        organization_id: str,
-        application_flow_key_hash: str,
-    ) -> "FlowInstance | None":
-        async with self._session_factory() as session:
-            row = (
-                await session.execute(
-                    select(flow_instances).where(
-                        flow_instances.c.organization_id == organization_id,
-                        flow_instances.c.application_flow_key_hash
-                        == application_flow_key_hash,
-                    )
+                if receipt_row is None:
+                    await session.rollback()
+                    raise RuntimeError("application event plan was not recoverable")
+                existing = ApplicationEventPlanReceipt(
+                    event_id_sha256=receipt_row.event_id_sha256,
+                    payload_sha256=receipt_row.payload_sha256,
+                    organization_id=receipt_row.organization_id,
+                    application_id=receipt_row.application_id,
+                    flow_plan=receipt_row.flow_plan or [],
+                    created_at=receipt_row.created_at,
+                    updated_at=receipt_row.updated_at,
                 )
-            ).first()
-            return self._instance_from_row(row) if row else None
+                if (
+                    existing.payload_sha256 != receipt.payload_sha256
+                    or existing.organization_id != receipt.organization_id
+                    or existing.application_id != receipt.application_id
+                ):
+                    await session.rollback()
+                    from flow.main import ApplicationOfferConflictError
+
+                    raise ApplicationOfferConflictError(
+                        "application event identity was already bound to another payload"
+                    )
+                await session.commit()
+                return existing, False
+
+            final_plan: list[dict[str, str]] = []
+            for candidate, plan_entry in planned_instances:
+                values = {
+                    "id": candidate.id,
+                    "flow_definition_id": candidate.flow_definition_id,
+                    "organization_id": candidate.organization_id,
+                    "status": candidate.status.value,
+                    "current_step_id": candidate.current_step_id,
+                    "context": candidate.context,
+                    "step_history": candidate.step_history,
+                    "subject_id": candidate.subject_id,
+                    "subject_type": candidate.subject_type,
+                    "external_reference": candidate.external_reference,
+                    "application_flow_key_hash": candidate.application_flow_key_hash,
+                    "started_at": candidate.started_at,
+                    "completed_at": candidate.completed_at,
+                    "expires_at": candidate.expires_at,
+                    "result": candidate.result,
+                    "error": candidate.error,
+                    "created_at": candidate.created_at,
+                    "updated_at": candidate.updated_at,
+                }
+                instance_insert = (
+                    pg_insert(flow_instances)
+                    .values(**values)
+                    .on_conflict_do_nothing(
+                        index_elements=["organization_id", "application_flow_key_hash"]
+                    )
+                    .returning(*flow_instances.c)
+                )
+                instance_row = (await session.execute(instance_insert)).first()
+                if instance_row is None:
+                    instance_row = (
+                        await session.execute(
+                            select(flow_instances).where(
+                                flow_instances.c.organization_id
+                                == candidate.organization_id,
+                                flow_instances.c.application_flow_key_hash
+                                == candidate.application_flow_key_hash,
+                            )
+                        )
+                    ).first()
+                if instance_row is None:
+                    await session.rollback()
+                    raise RuntimeError("application flow reservation was not recoverable")
+                selected = self._instance_from_row(instance_row)
+                if (
+                    selected.context.get(
+                        "_marty_application_offer_semantics_hash_v1"
+                    )
+                    != plan_entry["offer_semantics_hash"]
+                ):
+                    await session.rollback()
+                    from flow.main import ApplicationOfferConflictError
+
+                    raise ApplicationOfferConflictError(
+                        "application and flow were already bound to different issuance claims"
+                    )
+                final_plan.append({**plan_entry, "instance_id": selected.id})
+
+            await session.execute(
+                flow_application_event_receipts.update()
+                .where(
+                    flow_application_event_receipts.c.event_id_sha256
+                    == receipt.event_id_sha256
+                )
+                .values(flow_plan=final_plan, updated_at=receipt.updated_at)
+            )
+            receipt.flow_plan = final_plan
+            await session.commit()
+            return receipt, True
 
     @staticmethod
     def _instance_from_row(row) -> "FlowInstance":

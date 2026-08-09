@@ -37,6 +37,48 @@ def upgrade() -> None:
         schema="flow_service",
     )
     op.create_table(
+        "flow_application_event_receipts",
+        sa.Column("event_id_sha256", sa.String(length=64), nullable=False),
+        sa.Column("payload_sha256", sa.String(length=64), nullable=False),
+        sa.Column("organization_id", sa.String(length=255), nullable=False),
+        sa.Column("application_id", sa.String(length=255), nullable=False),
+        sa.Column(
+            "flow_plan",
+            postgresql.JSON(astext_type=sa.Text()),
+            nullable=False,
+            server_default="[]",
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("NOW()"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("NOW()"),
+        ),
+        sa.CheckConstraint(
+            "event_id_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_flow_application_event_receipts_event_hash",
+        ),
+        sa.CheckConstraint(
+            "payload_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_flow_application_event_receipts_payload_hash",
+        ),
+        sa.PrimaryKeyConstraint("event_id_sha256"),
+        schema="flow_service",
+    )
+    op.create_index(
+        "ix_flow_application_event_receipts_org_application",
+        "flow_application_event_receipts",
+        ["organization_id", "application_id"],
+        unique=False,
+        schema="flow_service",
+    )
+    op.create_table(
         "flow_instance_artifacts",
         sa.Column("id", sa.String(length=36), nullable=False),
         sa.Column("flow_instance_id", sa.String(length=36), nullable=False),
@@ -116,6 +158,15 @@ def downgrade() -> None:
         schema="flow_service",
     )
     op.drop_table("flow_instance_artifacts", schema="flow_service")
+    op.drop_index(
+        "ix_flow_application_event_receipts_org_application",
+        table_name="flow_application_event_receipts",
+        schema="flow_service",
+    )
+    op.drop_table(
+        "flow_application_event_receipts",
+        schema="flow_service",
+    )
     op.drop_index(
         "ux_flow_instances_org_application_flow_key",
         table_name="flow_instances",

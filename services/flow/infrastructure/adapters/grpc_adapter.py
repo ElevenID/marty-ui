@@ -630,7 +630,6 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             "data": _decode_application_event_data(request.data),
             "timestamp": request.timestamp,
         }
-        webhook = None
         try:
             invocation_metadata = (
                 context.invocation_metadata()
@@ -650,34 +649,9 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
                 event=webhook,
                 repo=self._get_repo(),
                 auth_evidence=auth_evidence,
+                enforce_replay=True,
             )
         except ApplicationEventAuthError as exc:
-            if exc.code == "replayed_event" and exc.evidence is not None:
-                try:
-                    webhook = ApplicationApprovedWebhook(**raw_event)
-                except ValueError:
-                    webhook = None
-            if (
-                exc.code == "replayed_event"
-                and webhook is not None
-                and exc.evidence is not None
-            ):
-                try:
-                    result = await self._application_approved(
-                        event=webhook,
-                        repo=self._get_repo(),
-                        auth_evidence=exc.evidence,
-                        replay_recovery_only=True,
-                    )
-                except ApplicationOfferConflictError as conflict:
-                    context.set_code(grpc.StatusCode.ALREADY_EXISTS)
-                    context.set_details(str(conflict))
-                    return flow_service_pb2.ApplicationApprovedResponse()
-                if result.get("flows_triggered", 0) > 0:
-                    return flow_service_pb2.ApplicationApprovedResponse(
-                        success=result.get("success", False),
-                        flows_triggered=result.get("flows_triggered", 0),
-                    )
             code = grpc.StatusCode.UNAUTHENTICATED
             if exc.code == "replayed_event":
                 code = grpc.StatusCode.ALREADY_EXISTS

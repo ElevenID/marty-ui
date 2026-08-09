@@ -128,6 +128,8 @@ jobs:
           test "$(jq -r '.instance_created_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
           test "$(jq -r '.instance_recovered_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
           test "$(jq -r '.same_instance' tests/artifacts/flow-idempotency/contract-result.json)" = true
+          test "$(jq -r '.event_receipt_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
+          test "$(jq -r '.same_durable_plan' tests/artifacts/flow-idempotency/contract-result.json)" = true
           test "$(jq -r '.artifact_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
           test "$(jq -r '.same_artifact' tests/artifacts/flow-idempotency/contract-result.json)" = true
           test "$(jq -r '.cross_instance_rebind_rejected' tests/artifacts/flow-idempotency/contract-result.json)" = true

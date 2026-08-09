@@ -112,6 +112,27 @@ flow_instances = Table(
     schema="flow_service",
 )
 
+flow_application_event_receipts = Table(
+    "flow_application_event_receipts",
+    mapper_registry.metadata,
+    Column("event_id_sha256", String(64), primary_key=True),
+    Column("payload_sha256", String(64), nullable=False),
+    Column("organization_id", String(255), nullable=False),
+    Column("application_id", String(255), nullable=False),
+    Column("flow_plan", JSON, nullable=False, default=list),
+    Column("created_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    Column("updated_at", DateTime(timezone=True), nullable=False, default=utcnow),
+    CheckConstraint(
+        "event_id_sha256 ~ '^[0-9a-f]{64}$'",
+        name="ck_flow_application_event_receipts_event_hash",
+    ),
+    CheckConstraint(
+        "payload_sha256 ~ '^[0-9a-f]{64}$'",
+        name="ck_flow_application_event_receipts_payload_hash",
+    ),
+    schema="flow_service",
+)
+
 flow_instance_artifacts = Table(
     "flow_instance_artifacts",
     mapper_registry.metadata,
@@ -156,6 +177,11 @@ Index(
     flow_instances.c.organization_id,
     flow_instances.c.application_flow_key_hash,
     unique=True,
+)
+Index(
+    "ix_flow_application_event_receipts_org_application",
+    flow_application_event_receipts.c.organization_id,
+    flow_application_event_receipts.c.application_id,
 )
 Index(
     "ix_flow_instance_artifacts_pre_authorized_code",
