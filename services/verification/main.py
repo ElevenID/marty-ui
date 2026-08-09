@@ -117,8 +117,8 @@ class VerificationSession:
         self.completed_at: datetime | None = None
         self.error: str | None = None
 
-    def is_expired(self) -> bool:
-        return datetime.now(timezone.utc) > self.expires_at
+    def is_expired(self, now: datetime | None = None) -> bool:
+        return (now or datetime.now(timezone.utc)) > self.expires_at
 
     def request_uri(self) -> str:
         return f"{PUBLIC_BASE_URL}/v1/verify/{self.session_id}/request"
@@ -146,6 +146,14 @@ class SubmissionOutcome(str, Enum):
     CONFLICT = "conflict"
     EXPIRED = "expired"
     MISSING = "missing"
+
+
+def _datetime_from_redis_time(value: tuple[int, int] | list[int]) -> datetime:
+    """Convert Redis TIME output to an aware UTC datetime."""
+    seconds, microseconds = (int(part) for part in value)
+    return datetime.fromtimestamp(seconds, tz=timezone.utc) + timedelta(
+        microseconds=microseconds
+    )
 
 
 @dataclass(frozen=True)
@@ -453,13 +461,20 @@ class SessionStore:
             return None
         session = _clone_session(session)
         if (
-            session.is_expired()
-            and session.status == SessionStatus.PENDING
+            session.status == SessionStatus.PENDING
             and session.vp_token_sha256 is None
         ):
+            now = (
+                _datetime_from_redis_time(await self._redis.time())
+                if self._use_redis
+                else datetime.now(timezone.utc)
+            )
+        else:
+            now = None
+        if now is not None and session.is_expired(now):
             session.status = SessionStatus.EXPIRED
             session.error = "Session expired before presentation was submitted"
-            session.updated_at = datetime.now(timezone.utc)
+            session.updated_at = now
             session.processing_token = None
             session.processing_expires_at = None
         return session
@@ -508,7 +523,7 @@ class SessionStore:
         # can take over the session, and the lease token still fences workers.
         if session.vp_token_sha256 == digest:
             return None
-        if session.is_expired():
+        if session.is_expired(now):
             return SubmissionOutcome.EXPIRED
         return None
 
@@ -572,8 +587,17 @@ class SessionStore:
                     raw = await pipe.get(key)
                     if raw is None:
                         return SubmissionTransition(SubmissionOutcome.MISSING)
+                    pending_ttl_ms = await pipe.pttl(key)
+                    pending_ttl_options = (
+                        {"keepttl": True}
+                        if pending_ttl_ms >= 0
+                        else {"ex": SESSION_TTL_SECONDS}
+                    )
                     session = _session_from_dict(json.loads(raw))
-                    now = datetime.now(timezone.utc)
+                    # Redis time is shared by every application replica, so a
+                    # skewed worker cannot expire a session or steal a lease
+                    # early (or indefinitely delay recovery).
+                    now = _datetime_from_redis_time(await pipe.time())
                     outcome = self._submission_state(session, digest, now)
                     if outcome == SubmissionOutcome.EXPIRED:
                         self._expire_session(session, now)
@@ -581,7 +605,9 @@ class SessionStore:
                         pipe.set(
                             key,
                             json.dumps(_session_to_redis_dict(session)),
-                            ex=SESSION_TTL_SECONDS,
+                            # Expiry/claim transitions must not renew the
+                            # unfinished transaction's absolute lifetime.
+                            **pending_ttl_options,
                         )
                         await pipe.execute()
                         return SubmissionTransition(outcome, session)
@@ -599,7 +625,10 @@ class SessionStore:
                     pipe.set(
                         key,
                         json.dumps(_session_to_redis_dict(session)),
-                        ex=SESSION_TTL_SECONDS,
+                        # Same-digest crash recovery is bounded by the TTL set
+                        # when the session was created; repeated claims cannot
+                        # keep an expired transaction alive indefinitely.
+                        **pending_ttl_options,
                     )
                     await pipe.execute()
                     return SubmissionTransition(

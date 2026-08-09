@@ -29,6 +29,35 @@ def _terminal(
     return session
 
 
+def test_redis_time_conversion_is_utc_and_preserves_microseconds():
+    converted = verification._datetime_from_redis_time((1_700_000_000, 123_456))
+
+    assert converted.tzinfo is timezone.utc
+    assert converted.timestamp() == pytest.approx(1_700_000_000.123456)
+
+
+@pytest.mark.asyncio
+async def test_redis_reads_use_shared_server_time_for_expiry():
+    session = verification.VerificationSession("org-clock", "policy-1")
+    session.expires_at = datetime(2099, 1, 1, tzinfo=timezone.utc)
+    raw = json.dumps(verification._session_to_redis_dict(session))
+
+    class ReadOnlyRedis:
+        async def get(self, _key: str) -> str:
+            return raw
+
+        async def time(self) -> tuple[int, int]:
+            server_now = datetime(2100, 1, 1, tzinfo=timezone.utc)
+            return int(server_now.timestamp()), 0
+
+    loaded = await verification.SessionStore(redis_client=ReadOnlyRedis()).get(
+        session.session_id
+    )
+
+    assert loaded is not None
+    assert loaded.status is verification.SessionStatus.EXPIRED
+
+
 async def _real_redis_store():
     url = os.environ.get("VERIFICATION_ATOMIC_TEST_REDIS_URL")
     if not url:
@@ -85,14 +114,17 @@ async def test_real_redis_claim_is_atomic_and_recoverable_after_lease_expiry():
         await redis.set(
             key,
             json.dumps(persisted),
-            ex=verification.SESSION_TTL_SECONDS,
+            ex=120,
         )
+        ttl_before_recovery = await redis.ttl(key)
 
         reclaimed = await store.claim_submission(session.session_id, claimed_digest)
         assert reclaimed.outcome == verification.SubmissionOutcome.CLAIMED
         assert reclaimed.token is not None
         assert reclaimed.token != claimed.token
         assert reclaimed.session is not None
+        ttl_after_recovery = await redis.ttl(key)
+        assert 0 < ttl_after_recovery <= ttl_before_recovery <= 120
 
         stale = await store.finalize_submission(
             session.session_id,
