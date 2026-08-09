@@ -140,7 +140,7 @@ class EventPublisher:
             auth_headers = notification_event_ingest_headers()
         except NotificationEventAuthConfigurationError:
             logger.error(
-                "Notification ingest skipped: service authentication is unavailable"
+                "Notification ingest skipped: producer authentication is unavailable"
             )
             return
         try:

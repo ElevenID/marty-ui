@@ -32,13 +32,15 @@ import httpx
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
 from marty_common.dto import DeleteResponse
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
-from sqlalchemy import text
+from sqlalchemy import inspect
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from marty_common.service_setup import create_service_app
 from common.notification_event_auth import (
-    read_notification_event_ingest_token,
-    require_notification_event_ingest_token,
+    APPLICANT_PRODUCER_ID,
+    NotificationEventProducerPrincipal,
+    read_applicant_event_token,
+    require_notification_event_producer,
 )
 from notification.infrastructure.adapters.postgres_adapter import (
     PostgresNotificationRepository,
@@ -56,6 +58,12 @@ from notification.webhook_security import (
     resolve_webhook_destination,
     validate_webhook_url_structure,
     valid_webhook_signing_secret,
+)
+from notification.webhook_secret_envelope import (
+    InvalidWebhookSecretEnvelope,
+    WebhookSecretEnvelope,
+    WebhookSecretEnvelopeError,
+    WebhookSecretEnvelopeUnavailable,
 )
 from notification.webhook_outbox import (
     WebhookOutboxEvent,
@@ -258,6 +266,8 @@ class WebhookEndpoint:
     name: str = ""
     url: str = ""
     secret: str = field(default_factory=lambda: secrets.token_hex(32))
+    secret_envelope: str | None = None
+    secret_hint: str | None = None
     description: str | None = None
     event_types: list[str] = field(default_factory=list)
     enabled: bool = True
@@ -528,16 +538,38 @@ webhook_router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
 internal_router = APIRouter(
     prefix="/internal",
     tags=["internal-notifications"],
-    dependencies=[Depends(require_notification_event_ingest_token)],
+    dependencies=[Depends(require_notification_event_producer)],
 )
 
 _repo: InMemoryNotificationRepository | PostgresNotificationRepository | None = None
+_webhook_secret_envelope: WebhookSecretEnvelope | None = None
 
 
 def get_repo() -> InMemoryNotificationRepository | PostgresNotificationRepository:
     if _repo is None:
         raise RuntimeError("Service not configured")
     return _repo
+
+
+def _require_webhook_secret_envelope() -> WebhookSecretEnvelope:
+    if _webhook_secret_envelope is None:
+        raise WebhookSecretEnvelopeUnavailable(
+            "Webhook secret protection is unavailable"
+        )
+    return _webhook_secret_envelope
+
+
+async def _protect_webhook_secret(
+    webhook: WebhookEndpoint, secret: str
+) -> None:
+    envelope = await _require_webhook_secret_envelope().wrap(
+        organization_id=webhook.organization_id,
+        webhook_id=webhook.id,
+        secret=secret,
+    )
+    webhook.secret = secret
+    webhook.secret_envelope = envelope
+    webhook.secret_hint = secret[:4]
 
 
 class SendNotificationRequest(BaseModel):
@@ -758,6 +790,45 @@ class EventIngestRequest(BaseModel):
         except NotificationPayloadSecurityError as exc:
             raise ValueError(str(exc)) from exc
         return self
+
+
+_APPLICANT_EVENT_STATUSES = {
+    "application.approved": "APPROVED",
+    "application.rejected": "REJECTED",
+}
+
+
+def _authorize_internal_event_source(
+    producer: NotificationEventProducerPrincipal,
+    event: EventIngestRequest,
+) -> None:
+    """Restrict each producer to events from its authoritative domain records."""
+    expected_status = _APPLICANT_EVENT_STATUSES.get(event.event_type)
+    required_data = {
+        "applicant_id",
+        "application_id",
+        "credential_template_id",
+        "status",
+    }
+    data_values_are_bound = (
+        set(event.data) == required_data
+        and all(
+            isinstance(event.data[field], str) and bool(event.data[field].strip())
+            for field in required_data
+        )
+        and event.data["application_id"] == event.aggregate_id
+        and event.data["status"] == expected_status
+    )
+    if (
+        producer.producer_id != APPLICANT_PRODUCER_ID
+        or expected_status is None
+        or event.aggregate_type != "application"
+        or not data_values_are_bound
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Event producer is not authorized for this event source",
+        )
 
 
 # =============================================================================
@@ -1453,13 +1524,44 @@ async def _deliver_claimed_webhook_event(
             response_time_ms=0,
         )
     else:
-        attempted_endpoint = True
-        result = await _attempt_webhook_request(
-            event.payload,
-            webhook,
-            delivery_id=event.id,
-            attempt_count=event.attempt_count,
-        )
+        delivery_webhook = webhook
+        if webhook.secret_envelope:
+            try:
+                plaintext_secret = await _require_webhook_secret_envelope().unwrap(
+                    organization_id=webhook.organization_id,
+                    webhook_id=webhook.id,
+                    ciphertext=webhook.secret_envelope,
+                )
+            except InvalidWebhookSecretEnvelope:
+                result = _outbox_validation_error("WEBHOOK_SECRET_ENVELOPE_INVALID")
+            except WebhookSecretEnvelopeUnavailable:
+                result = WebhookAttemptResult(
+                    success=False,
+                    retryable=True,
+                    error_code="WEBHOOK_SECRET_KMS_UNAVAILABLE",
+                    response_status_code=None,
+                    response_time_ms=0,
+                )
+            else:
+                delivery_webhook = replace(webhook, secret=plaintext_secret)
+                attempted_endpoint = True
+                result = await _attempt_webhook_request(
+                    event.payload,
+                    delivery_webhook,
+                    delivery_id=event.id,
+                    attempt_count=event.attempt_count,
+                )
+                plaintext_secret = ""
+        else:
+            # In-memory repositories retain plaintext only for isolated tests.
+            # PostgreSQL rows are rejected by the adapter unless enveloped.
+            attempted_endpoint = True
+            result = await _attempt_webhook_request(
+                event.payload,
+                delivery_webhook,
+                delivery_id=event.id,
+                attempt_count=event.attempt_count,
+            )
 
     completed_at = datetime.now(timezone.utc)
     if result.success:
@@ -1624,7 +1726,11 @@ def _webhook_to_response(
         endpoint_url=webhook.url,
         events=webhook.event_types,
         signing_secret=webhook.secret if include_secret else None,
-        signing_secret_masked=f"{webhook.secret[:4]}..." if webhook.secret else None,
+        signing_secret_masked=(
+            f"{webhook.secret_hint or webhook.secret[:4]}..."
+            if webhook.secret_hint or webhook.secret
+            else None
+        ),
         enabled=webhook.enabled,
         status="ACTIVE" if webhook.enabled else "DISABLED",
         failure_count=webhook.failure_count,
@@ -2093,15 +2199,25 @@ async def create_webhook(
 ) -> WebhookResponse:
     # MIP §15.7 — webhook URLs MUST be HTTPS; also block private/loopback (SSRF)
     _validate_webhook_url(body.url)
+    plaintext_secret = body.secret or secrets.token_hex(32)
     webhook = WebhookEndpoint(
         organization_id=body.organization_id,
         name=body.name,
         url=body.url,
-        secret=body.secret or secrets.token_hex(32),
+        secret=plaintext_secret,
+        secret_hint=plaintext_secret[:4],
         description=body.description,
         event_types=body.event_types,
         enabled=body.enabled,
     )
+    if isinstance(repo, PostgresNotificationRepository):
+        try:
+            await _protect_webhook_secret(webhook, plaintext_secret)
+        except WebhookSecretEnvelopeError:
+            raise HTTPException(
+                status_code=503,
+                detail="Webhook signing secret protection is unavailable",
+            ) from None
     await repo.save_webhook(webhook)
     return _webhook_to_response(webhook, include_secret=True)
 
@@ -2163,7 +2279,17 @@ async def update_webhook(
         webhook.event_types = body.event_types
     secret_rotated = False
     if body.secret is not None:
-        webhook.secret = body.secret
+        if isinstance(repo, PostgresNotificationRepository):
+            try:
+                await _protect_webhook_secret(webhook, body.secret)
+            except WebhookSecretEnvelopeError:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Webhook signing secret protection is unavailable",
+                ) from None
+        else:
+            webhook.secret = body.secret
+            webhook.secret_hint = body.secret[:4]
         secret_rotated = True
     if body.enabled is not None:
         webhook.enabled = body.enabled
@@ -2212,11 +2338,21 @@ async def list_webhook_deliveries(
 @internal_router.post("/events")
 async def ingest_event(
     body: EventIngestRequest,
+    producer: NotificationEventProducerPrincipal = Depends(
+        require_notification_event_producer
+    ),
     repo: InMemoryNotificationRepository | PostgresNotificationRepository = Depends(
         get_repo
     ),
 ) -> dict[str, int | str]:
+    _authorize_internal_event_source(producer, body)
     result = await _dispatch_event_to_subscriptions(body, repo)
+    logger.info(
+        "Accepted internal event producer=%s event_id=%s event_type=%s",
+        producer.producer_id,
+        body.event_id,
+        body.event_type,
+    )
     return {"status": "accepted", **result}
 
 
@@ -2234,18 +2370,59 @@ async def _seed_default_templates(
         await repo.save_template(template)
 
 
+def _require_migrated_notification_schema(connection: Any) -> None:
+    schema = "notification_service"
+    inspector = inspect(connection)
+    expected = {
+        table.name
+        for table in mapper_registry.metadata.tables.values()
+        if table.schema == schema
+    }
+    present = set(inspector.get_table_names(schema=schema))
+    missing = sorted(expected - present)
+    if missing or "alembic_version" not in present:
+        detail = f"missing tables: {', '.join(missing)}" if missing else "unversioned"
+        raise RuntimeError(
+            "Notification database schema is not migrated "
+            f"({detail}); run the deployment migration job"
+        )
+    delivery_columns = {
+        column["name"]
+        for column in inspector.get_columns("webhook_deliveries", schema=schema)
+    }
+    if "response_body" in delivery_columns:
+        raise RuntimeError(
+            "Notification database still permits receiver-body retention; "
+            "run the deployment migration job"
+        )
+    webhook_columns = {
+        column["name"]
+        for column in inspector.get_columns("webhook_endpoints", schema=schema)
+    }
+    if (
+        "secret" in webhook_columns
+        or not {"secret_envelope", "secret_hint"}.issubset(webhook_columns)
+    ):
+        raise RuntimeError(
+            "Notification database still permits plaintext webhook secrets; "
+            "run the deployment migration job"
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _repo
+    global _repo, _webhook_secret_envelope
     logger.info("Starting %s...", SERVICE_NAME)
     # This route controls external fan-out; a missing credential must make the
     # production service unready instead of leaving an unauthenticated mode.
-    read_notification_event_ingest_token()
+    read_applicant_event_token()
     # Validate the durable delivery policy before accepting events.
     webhook_outbox_retention_seconds()
     webhook_outbox_lease_seconds()
     webhook_outbox_poll_seconds()
     webhook_outbox_batch_size()
+    _webhook_secret_envelope = WebhookSecretEnvelope.from_environment()
+    await _webhook_secret_envelope.check_ready()
     engine = create_async_engine(
         os.environ.get(
             "DATABASE_URL",
@@ -2257,9 +2434,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         pool_pre_ping=True,
         pool_recycle=3600,
     )
-    async with engine.begin() as conn:
-        await conn.execute(text("CREATE SCHEMA IF NOT EXISTS notification_service"))
-        await conn.run_sync(mapper_registry.metadata.create_all)
+    async with engine.connect() as conn:
+        await conn.run_sync(_require_migrated_notification_schema)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     _repo = PostgresNotificationRepository(session_factory)
     await _seed_default_templates(_repo)
@@ -2301,6 +2477,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if grpc_server:
         await grpc_server.stop(grace=5)
     await engine.dispose()
+    _repo = None
+    _webhook_secret_envelope = None
 
 
 def create_app() -> FastAPI:
