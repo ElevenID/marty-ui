@@ -751,6 +751,45 @@ def _jwt_header_and_payload(jwt_part: str) -> tuple[dict[str, Any], dict[str, An
     return header, payload
 
 
+def _first_present(*values: Any) -> Any:
+    """Return the first non-empty value without coercing verification evidence."""
+    for value in values:
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _jwt_verification_evidence(
+    header: dict[str, Any],
+    payload: dict[str, Any],
+    credential: dict[str, Any] | None = None,
+    *,
+    holder_binding_verified: bool = False,
+) -> dict[str, Any]:
+    """Project facts authenticated by a successful JWT verification."""
+    credential = credential or {}
+    algorithm = header.get("alg")
+    return {
+        "algorithm": algorithm if isinstance(algorithm, str) and algorithm else None,
+        "issued_at": _first_present(
+            payload.get("iat"),
+            payload.get("nbf"),
+            credential.get("validFrom"),
+            credential.get("issuanceDate"),
+        ),
+        "expires_at": _first_present(
+            payload.get("exp"),
+            credential.get("validUntil"),
+            credential.get("expirationDate"),
+        ),
+        # The Rust VCDM/SD-JWT verifier checks time validity. An omitted expiry
+        # is therefore an indefinite credential, not an invented future date.
+        "validity_checked": True,
+        "is_expired": False,
+        "holder_binding_verified": holder_binding_verified,
+    }
+
+
 def _did_web_resolution_path(did: str) -> str:
     if not did.startswith("did:web:"):
         raise ValueError(
@@ -1328,6 +1367,33 @@ def _verify_vcdm_data_integrity(
 
     verified = result.get("valid") is True
     issuer, claims = _vcdm_issuer_and_claims(document) if verified else ("unknown", {})
+    types = document.get("type")
+    normalized_types = types if isinstance(types, list) else [types]
+    is_presentation = "VerifiablePresentation" in normalized_types
+    embedded = document.get("verifiableCredential") if is_presentation else None
+    embedded_credentials = (
+        [item for item in embedded if isinstance(item, dict)]
+        if isinstance(embedded, list)
+        else []
+    )
+    evidence_document = (
+        embedded_credentials[0]
+        if len(embedded_credentials) == 1
+        else document
+        if not is_presentation
+        else {}
+    )
+    proof = evidence_document.get("proof")
+    proofs = proof if isinstance(proof, list) else [proof]
+    proof_algorithm = next(
+        (
+            item.get("cryptosuite") or item.get("type")
+            for item in proofs
+            if isinstance(item, dict)
+            and isinstance(item.get("cryptosuite") or item.get("type"), str)
+        ),
+        None,
+    )
     errors = result.get("errors")
     safe_error = None
     if not verified:
@@ -1345,6 +1411,23 @@ def _verify_vcdm_data_integrity(
             "kind": result.get("kind"),
             "verified_proofs": result.get("verified_proofs", 0),
             "verified_credentials": result.get("verified_credentials", 0),
+            "credential_count": len(embedded_credentials) if is_presentation else 1,
+            "algorithm": result.get("algorithm") or proof_algorithm,
+            "issued_at": _first_present(
+                evidence_document.get("validFrom"),
+                evidence_document.get("issuanceDate"),
+            ),
+            "expires_at": _first_present(
+                evidence_document.get("validUntil"),
+                evidence_document.get("expirationDate"),
+            ),
+            "validity_checked": verified,
+            "is_expired": False if verified else None,
+            "holder_binding_verified": bool(
+                verified
+                and is_presentation
+                and (nonce is not None or audience is not None)
+            ),
         },
     }
 
@@ -1441,6 +1524,11 @@ def _verify_w3c_vc(
             # status record without trusting the caller or exposing KMS routing.
             "credential_id": credential_id,
             "format": "w3c-vc",
+            "verification_evidence": (
+                _jwt_verification_evidence(header, verified_payload, verified_vc)
+                if is_valid and isinstance(verified_payload, dict)
+                else {}
+            ),
             "error": (
                 None
                 if is_valid
@@ -1654,12 +1742,20 @@ def _verify_sd_jwt(
                 "error": error_message,
             }
 
+        kb_jwt_present = any(segment and "." in segment for segment in segments[1:])
         return {
             "verified": True,
             "claims": claims,
             "issuer_did": issuer,
             "subject": subject,
             "format": "sd-jwt",
+            "verification_evidence": _jwt_verification_evidence(
+                header,
+                payload,
+                holder_binding_verified=bool(
+                    kb_jwt_present and (nonce is not None or audience is not None)
+                ),
+            ),
             "error": None,
         }
 
@@ -1790,6 +1886,19 @@ def _verify_mdoc(
             "issuer_signature_valid": bool(result.issuer_signature_valid),
             "issuer_trusted": bool(result.issuer_trusted),
             "device_authentication_valid": bool(result.device_authentication_valid),
+            "verification_evidence": {
+                # The current binding proves device authentication but does not
+                # expose MSO signing-algorithm or validity-window evidence.
+                "algorithm": None,
+                "issued_at": None,
+                "expires_at": None,
+                "validity_checked": False,
+                "is_expired": None,
+                "holder_binding_verified": bool(
+                    is_valid and result.device_authentication_valid
+                ),
+                "credential_count": len(result.document_types),
+            },
         }
     except Exception as e:
         logger.error("mDoc Rust verification failed: %s", e)
@@ -2164,6 +2273,70 @@ def _trust_decision_datetime(value: object) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _verification_datetime(value: object) -> datetime | None:
+    """Parse verifier-authenticated NumericDate or ISO-8601 evidence."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(float(value), timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            return None
+    return _trust_decision_datetime(value)
+
+
+def _credential_age_seconds(
+    verification_evidence: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> int | None:
+    issued_at = _verification_datetime(verification_evidence.get("issued_at"))
+    if issued_at is None:
+        return None
+    current_time = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    age = int((current_time - issued_at).total_seconds())
+    return age if age >= 0 else None
+
+
+def _normalized_issuer_policy_evidence(
+    trust_profile_data: dict[str, Any] | None,
+    issuer_did: str,
+) -> dict[str, Any] | None:
+    """Return Cedar facts only from one exact normalized issuer relationship."""
+    if not trust_profile_data:
+        return None
+    relationships = trust_profile_data.get("issuer_relationships")
+    if not isinstance(relationships, list):
+        return None
+    matched = [
+        relationship
+        for relationship in relationships
+        if isinstance(relationship, dict)
+        and isinstance(relationship.get("issuer_id"), str)
+        and _normalized_relationship_issuer_id(relationship["issuer_id"])
+        == _normalized_relationship_issuer_id(issuer_did)
+    ]
+    if len(matched) != 1:
+        return None
+    relationship = matched[0]
+    trust_level = relationship.get("trust_level")
+    if (
+        isinstance(trust_level, bool)
+        or not isinstance(trust_level, int)
+        or not 0 <= trust_level <= 100
+    ):
+        return None
+    compliance_status = relationship.get("compliance_status")
+    return {
+        "issuer_trust_level": trust_level,
+        "compliance_status": (
+            compliance_status.upper()
+            if isinstance(compliance_status, str) and compliance_status
+            else None
+        ),
+    }
+
+
 def _issuer_constraints_require_relationship(
     constraints: IssuerConstraints | None,
 ) -> bool:
@@ -2270,11 +2443,13 @@ def _evaluate_normalized_issuer_relationship(
         ):
             return False, f"Issuer {issuer_did} has invalid accreditation evidence"
         held_accreditations = {
-            accreditation.strip().casefold()
-            for accreditation in raw_accreditations
+            accreditation.strip().casefold() for accreditation in raw_accreditations
         }
         if not required_accreditations.issubset(held_accreditations):
-            return False, f"Issuer {issuer_did} does not meet accreditation requirements"
+            return (
+                False,
+                f"Issuer {issuer_did} does not meet accreditation requirements",
+            )
 
     return True, None
 
@@ -2311,9 +2486,7 @@ def _evaluate_issuer_trust(
 
     allowed_issuers = trust_profile_data.get("allowed_issuers") or []
     if allowed_issuers:
-        if _matches_configured_issuer_identifiers(
-            issuer_identifiers, allowed_issuers
-        ):
+        if _matches_configured_issuer_identifiers(issuer_identifiers, allowed_issuers):
             return True, None
         return False, f"Issuer {issuer_did} is not in Trust Profile allowed_issuers"
 
@@ -2366,6 +2539,28 @@ def _verify_open_badge(vp_token: str, version: str) -> dict:
     )
     revocation_checked, not_revoked = _derive_revocation_state(result)
     is_revoked = (not_revoked is False) if not_revoked is not None else None
+    algorithm: str | None = None
+    stripped_token = vp_token.strip()
+    if stripped_token.count(".") == 2 and not stripped_token.startswith("{"):
+        try:
+            jwt_header, _jwt_payload = _jwt_header_and_payload(stripped_token)
+            header_algorithm = jwt_header.get("alg")
+            if isinstance(header_algorithm, str) and header_algorithm:
+                algorithm = header_algorithm
+        except Exception:
+            algorithm = None
+    if algorithm is None:
+        proof = credential.get("proof")
+        proofs = proof if isinstance(proof, list) else [proof]
+        algorithm = next(
+            (
+                item.get("cryptosuite") or item.get("type")
+                for item in proofs
+                if isinstance(item, dict)
+                and isinstance(item.get("cryptosuite") or item.get("type"), str)
+            ),
+            None,
+        )
     return {
         "verified": bool(result.get("valid")),
         "claims": claims,
@@ -2376,6 +2571,23 @@ def _verify_open_badge(vp_token: str, version: str) -> dict:
         "not_revoked": not_revoked,
         "is_revoked": is_revoked,
         "credential_results": result,
+        "verification_evidence": {
+            "algorithm": algorithm,
+            "issued_at": _first_present(
+                credential.get("validFrom"),
+                credential.get("issuanceDate"),
+                credential.get("issuedOn"),
+            ),
+            "expires_at": _first_present(
+                credential.get("validUntil"),
+                credential.get("expirationDate"),
+                credential.get("expires"),
+            ),
+            "validity_checked": bool(result.get("valid")),
+            "is_expired": False if result.get("valid") else None,
+            "holder_binding_verified": False,
+            "credential_count": 1,
+        },
     }
 
 
@@ -3283,6 +3495,48 @@ class EvaluateInlineRequest(BaseModel):
     context: dict[str, Any] = Field(default_factory=dict)
 
 
+def _failed_policy_response(
+    policy: PresentationPolicy,
+    request: EvaluatePresentationRequest,
+    error: str,
+    *,
+    signature_valid: bool = True,
+    trust_check_passed: bool = True,
+    freshness_check_passed: bool = True,
+) -> PolicyEvaluationResponse:
+    """Build a fail-closed response without releasing unverified claims."""
+    credential_results = [
+        CredentialEvaluationResult(
+            credential_template_id=requirement.credential_template_id,
+            satisfied=False,
+            claim_results=[],
+            signature_valid=signature_valid,
+            trust_check_passed=trust_check_passed,
+            freshness_check_passed=freshness_check_passed,
+            errors=[error],
+        )
+        for requirement in policy.credential_requirements
+    ]
+    required_total = sum(
+        1 for requirement in policy.credential_requirements if requirement.required
+    )
+    return PolicyEvaluationResponse(
+        result=EvaluationResult.FAILED.value,
+        policy_id=policy.id,
+        policy_name=policy.name,
+        credential_results=credential_results,
+        total_requirements=len(policy.credential_requirements),
+        satisfied_requirements=0,
+        required_satisfied=0,
+        required_total=required_total,
+        decision="deny",
+        decision_reason=error,
+        verified_claims={},
+        evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
+        nonce=request.nonce,
+    )
+
+
 _API_KEY_VERIFICATION_SCOPES = frozenset(
     {"credentials:read", "flows:execute", "admin:full"}
 )
@@ -3364,6 +3618,7 @@ async def evaluate_presentation(
     request: EvaluatePresentationRequest,
     http_request: Request = None,
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
+    cedar_engine: Any = None,
 ) -> PolicyEvaluationResponse:
     """
     Evaluate a Verifiable Presentation against a Presentation Policy.
@@ -3395,6 +3650,28 @@ async def evaluate_presentation(
         raise HTTPException(
             status_code=400,
             detail=f"Policy is not active (status: {policy.status.value})",
+        )
+
+    # This endpoint accepts one presentation token and currently returns one
+    # credential evidence record. It cannot safely prove N-of-M alternatives or
+    # bind one authenticated credential to multiple credential requirements.
+    if policy.alternative_requirements:
+        return _failed_policy_response(
+            policy,
+            request,
+            "Alternative credential requirements require descriptor-bound per-credential evidence",
+        )
+    if len(policy.credential_requirements) != 1:
+        return _failed_policy_response(
+            policy,
+            request,
+            "Exactly one credential requirement is supported per presentation token",
+        )
+    if not policy.credential_requirements[0].required:
+        return _failed_policy_response(
+            policy,
+            request,
+            "At least one required credential requirement is necessary for a decision",
         )
 
     # Auto-detect credential format
@@ -3520,6 +3797,61 @@ async def evaluate_presentation(
             nonce=request.nonce,
         )
 
+    verification_evidence = verification_result.get("verification_evidence")
+    if not isinstance(verification_evidence, dict):
+        verification_evidence = {}
+    credential_count = verification_evidence.get("credential_count", 1)
+    if (
+        isinstance(credential_count, bool)
+        or not isinstance(credential_count, int)
+        or credential_count != 1
+    ):
+        return _failed_policy_response(
+            policy,
+            request,
+            "Presentation must contain exactly one independently verified credential",
+        )
+    if (
+        requires_bound_presentation
+        and verification_evidence.get("holder_binding_verified") is not True
+    ):
+        return _failed_policy_response(
+            policy,
+            request,
+            "Required holder binding was not verified",
+            signature_valid=False,
+        )
+
+    requirement = policy.credential_requirements[0]
+    freshness_limits = [
+        value
+        for value in (
+            policy.freshness.max_age_seconds if policy.freshness else None,
+            requirement.max_age_seconds,
+        )
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0
+    ]
+    requires_issuance_time = bool(
+        freshness_limits or requirement.require_fresh_issuance
+    )
+    credential_age_seconds = _credential_age_seconds(verification_evidence)
+    if requires_issuance_time and credential_age_seconds is None:
+        return _failed_policy_response(
+            policy,
+            request,
+            "Credential issuance-time evidence is unavailable or invalid",
+            freshness_check_passed=False,
+        )
+    if freshness_limits and credential_age_seconds is not None:
+        max_age_seconds = min(freshness_limits)
+        if credential_age_seconds > max_age_seconds:
+            return _failed_policy_response(
+                policy,
+                request,
+                f"Credential exceeds maximum age of {max_age_seconds} seconds",
+                freshness_check_passed=False,
+            )
+
     # Validate issuer DID against the policy's Trust Profile (MIP §8.3).
     # Resolve trust_profile_id: per-requirement override takes precedence over policy-level.
     trust_check_passed = True
@@ -3552,7 +3884,7 @@ async def evaluate_presentation(
                 issuer_did=issuer_did,
                 claim_results=[],
                 trust_check_passed=False,
-                signature_valid=False,
+                signature_valid=True,
                 errors=[str(trust_check_error)],
             )
             for req in policy.credential_requirements
@@ -3608,7 +3940,7 @@ async def evaluate_presentation(
                     issuer_did=issuer_did,
                     claim_results=[],
                     freshness_check_passed=False,
-                    signature_valid=False,
+                    signature_valid=True,
                     errors=[verification_error],
                 )
                 for req in policy.credential_requirements
@@ -3646,7 +3978,7 @@ async def evaluate_presentation(
                     issuer_did=issuer_did,
                     claim_results=[],
                     freshness_check_passed=False,
-                    signature_valid=False,
+                    signature_valid=True,
                     errors=[verification_error],
                 )
                 for req in policy.credential_requirements
@@ -3774,22 +4106,71 @@ async def evaluate_presentation(
         decision_reason = "Required credentials not satisfied"
         all_satisfied = False
 
-    # Cedar policy evaluation for credential verification trust rules
-    cedar_engine = None
-    if http_request and hasattr(http_request.app.state, "cedar_engine"):
+    # Cedar policy evaluation for credential verification trust rules. Keep
+    # specific verifier/trust/freshness denials above, but never let omission
+    # of the final authorization reducer turn a tentative allow into success.
+    if (
+        cedar_engine is None
+        and http_request
+        and hasattr(http_request.app.state, "cedar_engine")
+    ):
         cedar_engine = http_request.app.state.cedar_engine
+    if decision == "allow" and cedar_engine is None:
+        return _failed_policy_response(
+            policy,
+            request,
+            "Cedar credential-verification policy engine is unavailable",
+        )
 
-    if cedar_engine and decision == "allow":
+    if decision == "allow":
+        issuer_policy_evidence = _normalized_issuer_policy_evidence(
+            trust_profile_data,
+            issuer_did,
+        )
+        algorithm = verification_evidence.get("algorithm")
+        validity_checked = verification_evidence.get("validity_checked")
+        is_expired = verification_evidence.get("is_expired")
+        missing_evidence: list[str] = []
+        if issuer_policy_evidence is None:
+            missing_evidence.append("numeric issuer trust")
+        if revocation_checked is not True or not_revoked is not True:
+            missing_evidence.append("non-revocation")
+        if validity_checked is not True or not isinstance(is_expired, bool):
+            missing_evidence.append("credential validity")
+        if credential_age_seconds is None:
+            missing_evidence.append("credential issuance time")
+        if not isinstance(algorithm, str) or not algorithm:
+            missing_evidence.append("signature algorithm")
+        if missing_evidence:
+            return _failed_policy_response(
+                policy,
+                request,
+                "Cedar policy evidence is incomplete: " + ", ".join(missing_evidence),
+                trust_check_passed=issuer_policy_evidence is not None,
+                freshness_check_passed=(
+                    revocation_checked is True
+                    and not_revoked is True
+                    and validity_checked is True
+                    and isinstance(is_expired, bool)
+                    and credential_age_seconds is not None
+                ),
+            )
+
+        compliance_code = verified_claims.get("_compliance_code")
+        if not isinstance(compliance_code, str) or not compliance_code:
+            compliance_code = "UNSPECIFIED"
         cedar_context = {
             "credential_format": _detected_format_to_canonical(credential_format),
-            "compliance_code": verified_claims.get("_compliance_code", "CUSTOM"),
+            "compliance_code": compliance_code,
             "issuer_id": credential_results[0].issuer_did if credential_results else "",
-            "issuer_trust_level": 75,
-            "credential_age_seconds": 0,
-            "is_revoked": not_revoked is False,
-            "is_expired": False,
-            "holder_binding_present": True,
-            "algorithm": verified_claims.get("_algorithm", "ES256"),
+            "issuer_trust_level": issuer_policy_evidence["issuer_trust_level"],
+            "credential_age_seconds": credential_age_seconds,
+            "is_revoked": False,
+            "is_expired": is_expired,
+            "holder_binding_present": (
+                verification_evidence.get("holder_binding_verified") is True
+            ),
+            "algorithm": algorithm,
         }
         cedar_entities = [
             {
@@ -3818,13 +4199,21 @@ async def evaluate_presentation(
                 ],
             },
         ]
-        cedar_decision = cedar_engine.is_authorized(
-            principal='MIP::User::"verifier"',
-            action='MIP::Action::"credentials:verify"',
-            resource='MIP::Credential::"presented-credential"',
-            context=cedar_context,
-            entities=cedar_entities,
-        )
+        try:
+            cedar_decision = cedar_engine.is_authorized(
+                principal='MIP::User::"verifier"',
+                action='MIP::Action::"credentials:verify"',
+                resource='MIP::Credential::"presented-credential"',
+                context=cedar_context,
+                entities=cedar_entities,
+            )
+        except Exception:
+            logger.exception("Cedar credential-verification evaluation failed")
+            return _failed_policy_response(
+                policy,
+                request,
+                "Cedar policy evaluation failed",
+            )
         if not cedar_decision.allowed:
             decision = "deny"
             decision_reason = f"Cedar policy denied: {cedar_decision.reasons or cedar_decision.errors}"
@@ -4097,6 +4486,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         repo=_repo,
         evaluate_fn=evaluate_presentation,
         to_response_fn=_policy_to_response,
+        cedar_engine=app.state.cedar_engine,
     )
     add_PresentationPolicyServiceServicer_to_server(servicer, grpc_server)
     start_grpc_server_port(
