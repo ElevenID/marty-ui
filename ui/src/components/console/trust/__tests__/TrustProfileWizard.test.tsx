@@ -16,10 +16,6 @@ import { http, HttpResponse } from 'msw'
 import TrustProfileWizard from '../TrustProfileWizard'
 
 const mockListWallets = vi.fn()
-const mockListSigningKeys = vi.fn()
-const mockGetKeyManagementConfig = vi.fn()
-const mockListIssuerProfiles = vi.fn()
-const mockCreateIssuerProfile = vi.fn()
 
 const TRANSLATIONS = {
   'wizards.trustProfile.title': 'Build Trust Profile',
@@ -127,9 +123,6 @@ const TRANSLATIONS = {
   'wizards.trustProfile.reviewStep.fields.revocationStrategy': 'Revocation Strategy',
   'wizards.trustProfile.reviewStep.fields.clockSkew': 'Clock Skew Tolerance',
   'wizards.trustProfile.reviewStep.fields.credentialFreshness': 'Credential Freshness',
-  'wizards.trustProfile.reviewStep.fields.issuanceProtocol': 'Issuance Protocol',
-  'wizards.trustProfile.reviewStep.fields.supportedWallets': 'Supported Wallets',
-  'wizards.trustProfile.reviewStep.values.allCompatibleWallets': 'No wallet targeting configured',
   'wizards.trustProfile.reviewStep.activationExplanation.title': 'Activation',
   'wizards.trustProfile.reviewStep.activationExplanation.description': 'Choose whether to activate immediately.',
   'wizards.trustProfile.reviewStep.activateImmediately.label': 'Activate immediately',
@@ -157,15 +150,6 @@ vi.mock('../../../../contexts/ConsoleContext', () => ({
 
 vi.mock('../../../../services/walletRegistryApi', () => ({
   listWallets: (...args) => mockListWallets(...args),
-}))
-
-vi.mock('../../../../services/signingKeysApi', () => ({
-  default: {
-    listSigningKeys: (...args) => mockListSigningKeys(...args),
-    getKeyManagementConfig: (...args) => mockGetKeyManagementConfig(...args),
-    listIssuerProfiles: (...args) => mockListIssuerProfiles(...args),
-    createIssuerProfile: (...args) => mockCreateIssuerProfile(...args),
-  },
 }))
 
 // Mock navigation
@@ -197,55 +181,6 @@ describe('TrustProfileWizard', () => {
         supported_platforms: ['Web'],
       },
     ])
-    mockListSigningKeys.mockResolvedValue({
-      keys: [
-        {
-          id: 'key-1',
-          provider_key_name: 'cred-issuer-test-es256',
-          name: 'Test issuer key',
-          status: 'active',
-          public_jwk: {
-            kty: 'EC',
-            crv: 'P-256',
-            x: 'abc123',
-            y: 'def456',
-            kid: 'cred-issuer-test-es256',
-          },
-        },
-      ],
-      domain_config: {
-        public_domain: 'beta.example.com',
-        issuer_base_url: 'https://beta.example.com',
-      },
-    })
-    mockGetKeyManagementConfig.mockResolvedValue({
-      supports_native_key_management: false,
-      default_service_id: 'managed-openbao-transit',
-      services: [
-        {
-          id: 'managed-openbao-transit',
-          name: 'Marty managed OpenBao transit',
-          service_type: 'openbao-transit',
-          provider: 'openbao',
-          status: 'configured',
-          managed: true,
-        },
-      ],
-      domain_config: {
-        public_domain: 'beta.example.com',
-        issuer_base_url: 'https://beta.example.com',
-      },
-      service_type_catalog: [],
-    })
-    mockListIssuerProfiles.mockResolvedValue({ profiles: [] })
-    mockCreateIssuerProfile.mockResolvedValue({
-      id: 'issuer-profile-created',
-      name: 'Managed issuer identity',
-      issuer_did: 'did:jwk:created',
-      signing_service_id: 'managed-openbao-transit',
-      signing_key_reference: 'cred-issuer-test-es256',
-      status: 'active',
-    })
     lastTrustProfileRequestBody = null
     activatedTrustProfileId = null
     server.use(
@@ -269,12 +204,30 @@ describe('TrustProfileWizard', () => {
           updated_at: '2024-01-01T00:00:00Z',
         })
       }),
+      http.get(`${MSW_BASE}/v1/issuer-entities`, () => HttpResponse.json([])),
+      http.post(`${MSW_BASE}/v1/issuer-entities`, async ({ request }) => {
+        const body = await request.json() as any
+        return HttpResponse.json({
+          id: '10000000-0000-4000-8000-000000000001',
+          is_system_issuer: false,
+          compliance_status: 'COMPLIANT',
+          valid_from: '2024-01-01T00:00:00Z',
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
+          ...body,
+        }, { status: 201 })
+      }),
       http.post(`${MSW_BASE}/v1/trust-profiles/:id/issuers`, async ({ request, params }) => {
         const body = await request.json() as any
         return HttpResponse.json({
           id: 'issuer-link-1',
           trust_profile_id: params.id,
-          status: 'active',
+          trust_level: 100,
+          relationship_status: 'TRUSTED',
+          cascade_revocation_policy: 'NOTIFY_ONLY',
+          metadata: {},
+          created_at: '2024-01-01T00:00:00Z',
+          updated_at: '2024-01-01T00:00:00Z',
           ...body,
         }, { status: 201 })
       })
@@ -675,174 +628,18 @@ describe('TrustProfileWizard', () => {
   })
 
   describe('submission', () => {
-    it('should trust an existing issuer identity from the managed issuer section', async () => {
-      mockListIssuerProfiles.mockResolvedValue({
-        profiles: [
-          {
-            id: 'issuer-profile-1',
-            name: 'Existing managed issuer',
-            issuer_did: 'did:web:issuer.example.com',
-            signing_service_id: 'managed-openbao-transit',
-            signing_key_reference: 'cred-issuer-test-es256',
-            status: 'active',
-          },
-        ],
-      })
-
+    it('keeps custody selectors out of trust-profile configuration', async () => {
       const { user } = render(<TrustProfileWizard />)
 
-      await user.type(screen.getByTestId('wizard.trustProfile.name'), 'Managed Identity Trust Profile')
+      await user.type(screen.getByTestId('wizard.trustProfile.name'), 'DID Trust Profile')
       await user.click(screen.getByTestId('wizard.trustProfile.next'))
 
       await waitFor(() => {
-        expect(screen.getByTestId('wizard.trustProfile.existingIssuerProfile')).toBeInTheDocument()
+        expect(screen.getByTestId('wizard.trustProfile.issuerDid')).toBeInTheDocument()
       })
-
-      fireEvent.mouseDown(within(screen.getByTestId('wizard.trustProfile.existingIssuerProfile')).getByRole('combobox'))
-      await user.click(await screen.findByRole('option', { name: /Existing managed issuer/i }))
-      await user.click(screen.getByTestId('wizard.trustProfile.useIssuerProfile'))
-
-      await waitFor(() => {
-        expect(screen.getByText('1 trusted issuers')).toBeInTheDocument()
-        expect(screen.getAllByText('did:web:issuer.example.com').length).toBeGreaterThan(0)
-      })
-
-      await user.click(screen.getByTestId('wizard.trustProfile.next'))
-      await waitFor(() => {
-        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
-      })
-      await user.click(screen.getByTestId('wizard.trustProfile.skip'))
-
-      await waitFor(() => {
-        expect(screen.getByTestId('wizard.trustProfile.submit')).toBeInTheDocument()
-      })
-      await user.click(screen.getByTestId('wizard.trustProfile.submit'))
-
-      await waitFor(() => {
-        expect(lastTrustProfileRequestBody).toBeTruthy()
-      })
-
-      expect(lastTrustProfileRequestBody.trust_sources).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            issuer_did: 'did:web:issuer.example.com',
-            source_type: 'PINNED_ISSUER',
-          }),
-        ]),
-      )
-      expect(mockCreateIssuerProfile).not.toHaveBeenCalled()
-    })
-
-    it('should trust a ready KMS-derived DID identity even when no issuer profile exists yet', async () => {
-      mockListIssuerProfiles.mockResolvedValue({ profiles: [] })
-
-      const { user } = render(<TrustProfileWizard />)
-
-      await user.type(screen.getByTestId('wizard.trustProfile.name'), 'Derived DID Trust Profile')
-      await user.click(screen.getByTestId('wizard.trustProfile.next'))
-
-      await waitFor(() => {
-        expect(screen.getByTestId('wizard.trustProfile.existingIssuerProfile')).toBeInTheDocument()
-      })
-
-      fireEvent.mouseDown(within(screen.getByTestId('wizard.trustProfile.existingIssuerProfile')).getByRole('combobox'))
-      await user.click(await screen.findByRole('option', { name: /did:web:beta\.example\.com/i }))
-      await user.click(screen.getByTestId('wizard.trustProfile.useIssuerProfile'))
-
-      await waitFor(() => {
-        expect(screen.getByText('1 trusted issuers')).toBeInTheDocument()
-        expect(screen.getAllByText('did:web:beta.example.com').length).toBeGreaterThan(0)
-      })
-
-      await user.click(screen.getByTestId('wizard.trustProfile.next'))
-      await waitFor(() => {
-        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
-      })
-      await user.click(screen.getByTestId('wizard.trustProfile.skip'))
-
-      await waitFor(() => {
-        expect(screen.getByTestId('wizard.trustProfile.submit')).toBeInTheDocument()
-      })
-      await user.click(screen.getByTestId('wizard.trustProfile.submit'))
-
-      await waitFor(() => {
-        expect(lastTrustProfileRequestBody).toBeTruthy()
-      })
-
-      expect(lastTrustProfileRequestBody.trust_sources).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            issuer_did: 'did:web:beta.example.com',
-            source_type: 'PINNED_ISSUER',
-          }),
-        ]),
-      )
-      expect(mockCreateIssuerProfile).not.toHaveBeenCalled()
-    })
-
-    it('should import a DID for an unbound signing key and trust it immediately', async () => {
-      mockCreateIssuerProfile.mockResolvedValue({
-        id: 'issuer-profile-imported',
-        name: 'Imported key DID',
-        issuer_did: 'did:web:imported.example.com',
-        signing_service_id: 'managed-openbao-transit',
-        signing_key_reference: 'cred-issuer-test-es256',
-        status: 'active',
-      })
-
-      const { user } = render(<TrustProfileWizard />)
-
-      await user.type(screen.getByTestId('wizard.trustProfile.name'), 'Imported DID Trust Profile')
-      await user.click(screen.getByTestId('wizard.trustProfile.next'))
-
-      await waitFor(() => {
-        expect(screen.getByTestId('wizard.trustProfile.unboundSigningKey')).toBeInTheDocument()
-      })
-
-      fireEvent.mouseDown(within(screen.getByTestId('wizard.trustProfile.unboundSigningKey')).getByRole('combobox'))
-      await user.click(await screen.findByRole('option', { name: /Test issuer key/i }))
-
-      await user.type(screen.getByTestId('wizard.trustProfile.importManagedDidValue'), 'did:web:imported.example.com')
-      await user.click(screen.getByTestId('wizard.trustProfile.importManagedDid'))
-
-      await waitFor(() => {
-        expect(mockCreateIssuerProfile).toHaveBeenCalledWith(
-          expect.objectContaining({
-            issuer_did: 'did:web:imported.example.com',
-            signing_service_id: 'managed-openbao-transit',
-            signing_key_reference: 'cred-issuer-test-es256',
-          }),
-        )
-      })
-
-      await waitFor(() => {
-        expect(screen.getByText('1 trusted issuers')).toBeInTheDocument()
-        expect(screen.getAllByText('did:web:imported.example.com').length).toBeGreaterThan(0)
-      })
-
-      await user.click(screen.getByTestId('wizard.trustProfile.next'))
-      await waitFor(() => {
-        expect(screen.getByTestId('wizard.trustProfile.skip')).toBeInTheDocument()
-      })
-      await user.click(screen.getByTestId('wizard.trustProfile.skip'))
-
-      await waitFor(() => {
-        expect(screen.getByTestId('wizard.trustProfile.submit')).toBeInTheDocument()
-      })
-      await user.click(screen.getByTestId('wizard.trustProfile.submit'))
-
-      await waitFor(() => {
-        expect(lastTrustProfileRequestBody).toBeTruthy()
-      })
-
-      expect(lastTrustProfileRequestBody.trust_sources).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            issuer_did: 'did:web:imported.example.com',
-            source_type: 'PINNED_ISSUER',
-          }),
-        ]),
-      )
+      expect(screen.queryByTestId('wizard.trustProfile.existingIssuerProfile')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('wizard.trustProfile.unboundSigningKey')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('wizard.trustProfile.importManagedDid')).not.toBeInTheDocument()
     })
 
     it('should require trust sources before activating an empty trust profile', async () => {
@@ -922,7 +719,7 @@ describe('TrustProfileWizard', () => {
       expect(lastTrustProfileRequestBody.allowed_issuers).toBeNull()
     })
 
-    it('should submit wallet compatibility and runtime policy settings', async () => {
+    it('should submit only protocol-backed runtime policy settings', async () => {
       const { user } = render(<TrustProfileWizard />)
 
       await user.type(screen.getByTestId('wizard.trustProfile.name'), 'Runtime Aware Trust Profile')
@@ -933,14 +730,6 @@ describe('TrustProfileWizard', () => {
       })
       await addTrustedIssuer(user)
       await user.click(screen.getByTestId('wizard.trustProfile.next'))
-
-      await waitFor(() => {
-        expect(screen.getByTestId('wizard.trustProfile.issuanceProtocol')).toBeInTheDocument()
-      })
-
-      const walletAutocomplete = await screen.findByRole('combobox', { name: /supported wallets/i })
-      await user.type(walletAutocomplete, 'Acme')
-      await user.click(await screen.findByText('Acme Wallet'))
 
       await user.click(screen.getByRole('button', { name: /show advanced options/i }))
       fireEvent.mouseDown(within(screen.getByTestId('wizard.trustProfile.revocationStrategy')).getByRole('combobox'))
@@ -963,8 +752,8 @@ describe('TrustProfileWizard', () => {
         expect(lastTrustProfileRequestBody).toBeTruthy()
       })
 
-      expect(lastTrustProfileRequestBody.supported_wallet_ids).toEqual(['wallet-1'])
-      expect(lastTrustProfileRequestBody.issuance_protocol).toBe('oid4vci')
+      expect(lastTrustProfileRequestBody).not.toHaveProperty('supported_wallet_ids')
+      expect(lastTrustProfileRequestBody).not.toHaveProperty('issuance_protocol')
       expect(lastTrustProfileRequestBody.revocation_policy).toEqual({ check_mode: 'SOFT_FAIL' })
       expect(lastTrustProfileRequestBody.time_policy).toEqual({
         clock_skew_seconds: 900,

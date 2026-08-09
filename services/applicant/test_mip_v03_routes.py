@@ -9,6 +9,9 @@ def test_only_mip_v03_applicant_routes_are_registered() -> None:
     paths = set(app.openapi()["paths"])
     assert "/v1/me/applicant-profile" in paths
     assert "/v1/me/applications" in paths
+    assert "/v1/me/applications/{application_id}/evidence" in paths
+    assert "/v1/me/applications/{application_id}/evidence/{evidence_id}/content" in paths
+    assert "/v1/organizations/{organization_id}/applicants/{application_id}/evidence" in paths
     assert "/v1/organizations/{organization_id}/applicants/{application_id}/lock" in paths
     assert "/v1/applicants/applications" not in paths
     assert "/v1/applicants/org-applications" not in paths

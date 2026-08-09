@@ -18,6 +18,30 @@ const DUPLICATE_ACTIVE_APPLICATION_STATUSES = new Set([
   'ISSUED',
 ]);
 
+const APPLICANT_UPLOAD_EVIDENCE_TYPES = new Set([
+  'DOCUMENT_SCAN',
+  'BIOMETRIC',
+  'SELFIE',
+  'THIRD_PARTY_VERIFICATION',
+]);
+
+export function applicationEvidenceUploads({ credentialConfig, formData }) {
+  return (credentialConfig?.evidence_requirements || [])
+    .filter((requirement) => APPLICANT_UPLOAD_EVIDENCE_TYPES.has(
+      String(requirement?.evidence_type || '').toUpperCase()
+    ))
+    .map((requirement) => ({
+      requirement,
+      file: formData?.[requirement.evidence_id],
+    }))
+    .filter(({ requirement, file }) => {
+      if (requirement.required && !file) {
+        throw new Error(`Upload ${requirement.description || requirement.evidence_id} before submitting.`);
+      }
+      return Boolean(file);
+    });
+}
+
 function normalizeApplicationsResponse(data) {
   return Array.isArray(data) ? data : [];
 }
@@ -317,6 +341,7 @@ export async function submitCredentialApplication({
   updateApplicantProfile,
   getApplicantByUser,
   createApplication,
+  submitApplicationEvidence,
   submitApplication,
   listApplicantApplications = null,
   supersedeApplication = null,
@@ -372,6 +397,11 @@ export async function submitCredentialApplication({
     }
   }
 
+  const evidenceUploads = applicationEvidenceUploads({ credentialConfig, formData });
+  if (evidenceUploads.length > 0 && !submitApplicationEvidence) {
+    throw new Error('Application evidence upload is unavailable.');
+  }
+
   const createdApplication = await createApplication(
     buildStandardApplicationPayload({
       organizationId,
@@ -380,6 +410,22 @@ export async function submitCredentialApplication({
       canvasLtiContext,
     })
   );
+
+  for (const { requirement, file } of evidenceUploads) {
+    const contentBase64 = await readFileAsBase64(file);
+    if (!contentBase64) {
+      throw new Error(`Unable to read ${requirement.description || requirement.evidence_id}.`);
+    }
+    const acceptedMimeType = (requirement.accepted_formats || [])
+      .find((value) => String(value).includes('/'));
+    await submitApplicationEvidence(createdApplication.id, {
+      evidence_requirement_id: requirement.evidence_id,
+      media_type: file.type || acceptedMimeType || 'application/octet-stream',
+      filename: file.name || `${requirement.evidence_id}.bin`,
+      content_base64: contentBase64,
+      captured_at: new Date().toISOString(),
+    });
+  }
 
   const submittedApplication = await submitApplication(createdApplication.id);
 

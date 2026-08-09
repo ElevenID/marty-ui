@@ -29,15 +29,9 @@ import { Link } from 'react-router';
 import { ResourcePage, StatusChip, EmptyState, EmptyStates } from '../../common';
 import { TrustProvider } from '../../trust';
 import { useAsyncData } from '../../../hooks/useAsyncData';
-import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { listRevocationProfiles, listTrustProfiles } from '../../../services/presentationPolicyApi';
-import { getKeyManagementConfig, listIssuerProfiles, listSigningKeys } from '../../../services/signingKeysApi';
-import {
-  DEFAULT_KEY_MANAGEMENT_CONFIG,
-  getDefaultKeyManagementService,
-  normalizeKeyManagementConfig,
-} from '../deploy/keyManagementServiceCatalog';
+import { listPublicIssuerIdentities } from '../../../services/signingKeysApi';
 
 const getBreadcrumbs = (t) => [
   { label: t('trust.breadcrumbs.console'), path: '/console' },
@@ -47,7 +41,6 @@ const getBreadcrumbs = (t) => [
 
 function TrustProfilesPage() {
   const { t } = useTranslation('console');
-  const { organizationId } = useAuth();
   const { activeOrgId } = useConsole();
   const effectiveOrganizationId = activeOrgId;
 
@@ -64,86 +57,59 @@ function TrustProfilesPage() {
 
   const safeProfiles = Array.isArray(profiles) ? profiles : [];
   const { data: dependencies = {
-    signingKeys: [],
-    issuerProfiles: [],
+    issuerIdentities: [],
     revocationProfiles: [],
-    keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG,
     errors: [],
   } } = useAsyncData(
     async () => {
       if (!effectiveOrganizationId) {
         return {
-          signingKeys: [],
-          issuerProfiles: [],
+          issuerIdentities: [],
           revocationProfiles: [],
-          keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG,
           errors: ['Organization: Select an organization before loading trust profile prerequisites.'],
         };
       }
 
-      const [signingKeysResult, issuerProfilesResult, keyManagementConfigResult, revocationProfilesResult] = await Promise.allSettled([
-        listSigningKeys({ organization_id: effectiveOrganizationId, limit: 1 }),
-        listIssuerProfiles({ organization_id: effectiveOrganizationId }),
-        getKeyManagementConfig({ organization_id: effectiveOrganizationId }),
+      const [issuerIdentitiesResult, revocationProfilesResult] = await Promise.allSettled([
+        listPublicIssuerIdentities({ organization_id: effectiveOrganizationId }),
         listRevocationProfiles({ organization_id: effectiveOrganizationId, limit: 1 }),
       ]);
 
       const dependencyErrors = [
-        ['Key Management signing keys', signingKeysResult],
-        ['Issuer profiles', issuerProfilesResult],
-        ['Key Management configuration', keyManagementConfigResult],
+        ['Issuer identities', issuerIdentitiesResult],
         ['Revocation profiles', revocationProfilesResult],
       ]
         .filter(([, result]) => result.status === 'rejected')
         .map(([label, result]) => `${label}: ${result.reason?.message || String(result.reason)}`);
 
-      const signingKeysValue = signingKeysResult.status === 'fulfilled' ? signingKeysResult.value : { keys: [] };
-      const issuerProfilesValue = issuerProfilesResult.status === 'fulfilled' ? issuerProfilesResult.value : { profiles: [] };
-      const keyManagementConfigValue = keyManagementConfigResult.status === 'fulfilled'
-        ? keyManagementConfigResult.value
-        : DEFAULT_KEY_MANAGEMENT_CONFIG;
+      const issuerIdentitiesValue = issuerIdentitiesResult.status === 'fulfilled' ? issuerIdentitiesResult.value : { identities: [] };
       const revocationProfilesValue = revocationProfilesResult.status === 'fulfilled' ? revocationProfilesResult.value : [];
 
-      const signingKeys = Array.isArray(signingKeysValue)
-        ? signingKeysValue
-        : (Array.isArray(signingKeysValue?.keys) ? signingKeysValue.keys : []);
-      const issuerProfiles = Array.isArray(issuerProfilesValue?.profiles)
-        ? issuerProfilesValue.profiles
+      const issuerIdentities = Array.isArray(issuerIdentitiesValue?.identities)
+        ? issuerIdentitiesValue.identities
         : [];
 
       return {
-        signingKeys,
-        issuerProfiles,
+        issuerIdentities,
         revocationProfiles: Array.isArray(revocationProfilesValue) ? revocationProfilesValue : [],
-        keyManagementConfig: normalizeKeyManagementConfig(keyManagementConfigValue || DEFAULT_KEY_MANAGEMENT_CONFIG),
         errors: dependencyErrors,
       };
     },
     [effectiveOrganizationId]
   );
   const safeDependencies = dependencies ?? {
-    signingKeys: [],
-    issuerProfiles: [],
+    issuerIdentities: [],
     revocationProfiles: [],
-    keyManagementConfig: DEFAULT_KEY_MANAGEMENT_CONFIG,
     errors: [],
   };
   const dependencyErrors = Array.isArray(safeDependencies.errors) ? safeDependencies.errors : [];
-  const defaultSigningService = getDefaultKeyManagementService(safeDependencies.keyManagementConfig);
-  const hasManagedIssuerInput = safeDependencies.issuerProfiles.length > 0 || safeDependencies.signingKeys.length > 0;
-  const signingDependencyFailed = dependencyErrors.some((item) => item.startsWith('Key Management'));
-  const issuerDependencyFailed = dependencyErrors.some((item) => item.startsWith('Issuer profiles'));
+  const issuerDependencyFailed = dependencyErrors.some((item) => item.startsWith('Issuer identities'));
   const revocationDependencyFailed = dependencyErrors.some((item) => item.startsWith('Revocation profiles'));
 
   const trustProfilePrerequisites = [
     {
-      label: t('trust.trustProfilesPage.prerequisites.keyManagement', { defaultValue: 'Key Management Service' }),
-      status: signingDependencyFailed ? 'error' : (defaultSigningService ? 'ready' : 'missing'),
-      path: '/console/org/deploy/key-management',
-    },
-    {
-      label: t('trust.trustProfilesPage.prerequisites.issuerIdentity', { defaultValue: 'Issuer Identity or Signing Key' }),
-      status: issuerDependencyFailed ? 'error' : (hasManagedIssuerInput ? 'ready' : 'missing'),
+      label: t('trust.trustProfilesPage.prerequisites.issuerIdentity', { defaultValue: 'Issuer Identity' }),
+      status: issuerDependencyFailed ? 'error' : (safeDependencies.issuerIdentities.length > 0 ? 'ready' : 'missing'),
       path: '/console/org/deploy/issuer-identity',
     },
     {

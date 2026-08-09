@@ -30,9 +30,7 @@ import {
   Select,
   MenuItem,
   Paper,
-  CircularProgress,
   Stack,
-  Divider,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -41,38 +39,6 @@ import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import LinkIcon from '@mui/icons-material/Link';
 import { useTranslation } from 'react-i18next';
-import { useAsyncData } from '../../../../hooks/useAsyncData';
-import signingKeysApi from '../../../../services/signingKeysApi';
-import {
-  DEFAULT_KEY_MANAGEMENT_CONFIG,
-  getDefaultKeyManagementService,
-  normalizeKeyManagementConfig,
-} from '../../deploy/keyManagementServiceCatalog';
-import { buildDidIdentities } from '../../deploy/didIdentityUtils';
-
-const DEFAULT_REGISTRIES = [
-  {
-    id: 'ICAO_PKD',
-    name: 'ICAO Public Key Directory',
-    description: 'ePassports and travel documents',
-    frameworks: ['ICAO'],
-    credential_types: ['MDOC'],
-  },
-  {
-    id: 'EU_TRUST_LIST',
-    name: 'EU List of Trusted Lists (LoTL)',
-    description: 'EU credential issuers',
-    frameworks: ['EUDI'],
-    credential_types: ['SD_JWT_VC', 'VC_JWT'],
-  },
-  {
-    id: 'AAMVA',
-    name: 'AAMVA Mobile Driver License',
-    description: 'Mobile driver licenses and travel documents',
-    frameworks: ['AAMVA'],
-    credential_types: ['MDOC', 'SD_JWT_VC'],
-  },
-];
 
 const splitCsvLine = (line) => line.split(',').map((value) => value.trim());
 
@@ -125,15 +91,14 @@ const normalizeIssuer = (issuer, importSource = 'manual') => {
     source_type: 'PINNED_ISSUER',
     name: issuer.name || '',
     description: issuer.description || '',
+    accreditation_body: issuer.accreditation_body || '',
+    accreditations: toArray(issuer.accreditations),
     added_at: issuer.added_at || new Date().toISOString(),
     metadata: {
       country: issuer.metadata?.country || issuer.country || '',
       credential_types: toArray(issuer.metadata?.credential_types || issuer.credential_types),
       source: issuer.metadata?.source || issuer.source || importSource,
       url: issuer.metadata?.url || issuer.url || '',
-      issuer_profile_id: issuer.metadata?.issuer_profile_id || issuer.issuer_profile_id || '',
-      signing_key_reference: issuer.metadata?.signing_key_reference || issuer.signing_key_reference || '',
-      signing_service_id: issuer.metadata?.signing_service_id || issuer.signing_service_id || '',
     },
   };
 };
@@ -213,169 +178,36 @@ const parseImportContent = (content, importSource = 'file') => {
     .filter(Boolean);
 };
 
-const getRegistrySyncSummary = (registryImport) => {
-  if (registryImport.sync_enabled === false) {
-    return 'Manual sync only';
-  }
-
-  const intervalHours = Number(registryImport.sync_interval_hours || 24);
-  return `Auto-sync enabled (${intervalHours}h)`;
+const getRegistrySyncSummary = (source) => {
+  const intervalHours = Number(source.registry_sync?.refresh_interval_hours || 24);
+  return `Marty Sync v1 • refresh required every ${intervalHours}h`;
 };
 
-const normalizeStatus = (value) => String(value || '').trim().toLowerCase();
-
-const getSigningKeyReference = (key) => String(key?.provider_key_name || key?.id || '').trim();
-
-const isUsableIssuerProfileStatus = (status) => {
-  const normalized = normalizeStatus(status);
-  return normalized === 'active' || normalized === 'valid' || normalized === 'configured';
-};
-
-const isValidDid = (value) => /^did:[a-z0-9]+:.+/.test(String(value || '').trim());
-
-const TrustSourcesStep = ({ data, onChange, organizationId }) => {
+const TrustSourcesStep = ({ data, onChange }) => {
   const { t } = useTranslation(['console', 'common']);
   const [newIssuerDid, setNewIssuerDid] = useState('');
   const [tabValue, setTabValue] = useState(0);
   const [openRegistryDialog, setOpenRegistryDialog] = useState(false);
-  const [selectedRegistry, setSelectedRegistry] = useState('');
-  const [availableRegistries, setAvailableRegistries] = useState([]);
-  const [loadingRegistries, setLoadingRegistries] = useState(false);
-  const [registryImports, setRegistryImports] = useState(data.registry_imports || []);
+  const [registrySources, setRegistrySources] = useState(data.registry_sources || []);
+  const [registryUrl, setRegistryUrl] = useState('');
+  const [registryDescription, setRegistryDescription] = useState('');
+  const [registryIntervalHours, setRegistryIntervalHours] = useState(24);
+  const [registryFeedback, setRegistryFeedback] = useState('');
   const [newIssuerName, setNewIssuerName] = useState('');
   const [newIssuerCountry, setNewIssuerCountry] = useState('');
   const [newIssuerCredentialTypes, setNewIssuerCredentialTypes] = useState('');
+  const [newIssuerAccreditationBody, setNewIssuerAccreditationBody] = useState('');
+  const [newIssuerAccreditations, setNewIssuerAccreditations] = useState('');
   const [importUrl, setImportUrl] = useState('');
   const [importFeedback, setImportFeedback] = useState({ type: '', message: '' });
   const [loadingUrlImport, setLoadingUrlImport] = useState(false);
   const [entryType, setEntryType] = useState('did'); // 'did' | 'x509'
   const [newCertPem, setNewCertPem] = useState('');
-  const [selectedIssuerProfileId, setSelectedIssuerProfileId] = useState('');
-  const [selectedManagedKeyId, setSelectedManagedKeyId] = useState('');
-  const [selectedManagedDidMethod, setSelectedManagedDidMethod] = useState('');
-  const [importManagedDidValue, setImportManagedDidValue] = useState('');
-  const [importManagedDidLabel, setImportManagedDidLabel] = useState('');
-  const [managedActionLoading, setManagedActionLoading] = useState(false);
-  const [managedActionFeedback, setManagedActionFeedback] = useState({ type: '', message: '' });
   const fileInputRef = useRef(null);
 
   const trustedIssuers = data.trusted_issuers || [];
   const allowAllIssuers = data.allow_all_issuers === true;
   const hasConfiguredPinnedIssuers = trustedIssuers.length > 0;
-
-  const { data: signingKeysData, error: signingKeysError } = useAsyncData(async () => {
-    if (!organizationId) {
-      throw new Error('Select an organization before loading signing keys.');
-    }
-    const response = await signingKeysApi.listSigningKeys({ organization_id: organizationId });
-    if (Array.isArray(response)) {
-      return { keys: response, domain_config: null };
-    }
-    return response || { keys: [], domain_config: null };
-  }, [organizationId]);
-
-  const { data: keyManagementData, error: keyManagementError } = useAsyncData(async () => {
-    if (!organizationId) {
-      throw new Error('Select an organization before loading key management configuration.');
-    }
-    const response = await signingKeysApi.getKeyManagementConfig({ organization_id: organizationId });
-    return normalizeKeyManagementConfig(response || DEFAULT_KEY_MANAGEMENT_CONFIG);
-  }, [organizationId]);
-
-  const {
-    data: issuerProfilesData,
-    loading: issuerProfilesLoading,
-    error: issuerProfilesError,
-    reload: reloadIssuerProfiles,
-  } = useAsyncData(async () => {
-    if (!organizationId) {
-      throw new Error('Select an organization before loading issuer profiles.');
-    }
-    const response = await signingKeysApi.listIssuerProfiles({ organization_id: organizationId });
-    return Array.isArray(response?.profiles) ? response.profiles : [];
-  }, [organizationId]);
-
-  const safeKeys = Array.isArray(signingKeysData?.keys)
-    ? signingKeysData.keys.filter((key) => key && typeof key === 'object')
-    : [];
-  const keyById = new Map(safeKeys.map((key) => [key.id, key]));
-  const keyManagementConfig = normalizeKeyManagementConfig(keyManagementData || DEFAULT_KEY_MANAGEMENT_CONFIG);
-  const domainSummary = keyManagementConfig.domain_config || signingKeysData?.domain_config || null;
-  const defaultSigningService = getDefaultKeyManagementService(keyManagementConfig);
-  const issuerProfiles = Array.isArray(issuerProfilesData) ? issuerProfilesData : [];
-  const managedDependencyErrors = [
-    signingKeysError ? `Signing keys: ${signingKeysError.message || String(signingKeysError)}` : null,
-    keyManagementError ? `Key management: ${keyManagementError.message || String(keyManagementError)}` : null,
-    issuerProfilesError ? `Issuer profiles: ${issuerProfilesError.message || String(issuerProfilesError)}` : null,
-  ].filter(Boolean);
-  const usableIssuerProfiles = issuerProfiles.filter(
-    (profile) => isUsableIssuerProfileStatus(profile?.status) && String(profile?.issuer_did || '').trim(),
-  );
-  const derivedManagedIdentities = buildDidIdentities({ keys: safeKeys, domainSummary })
-    .filter((identity) => identity?.status === 'ready' && String(identity?.did || '').trim());
-  const managedIdentityOptions = [];
-  const seenManagedDids = new Set();
-
-  usableIssuerProfiles.forEach((profile) => {
-    const did = String(profile?.issuer_did || '').trim();
-    if (!did || seenManagedDids.has(did)) {
-      return;
-    }
-
-    managedIdentityOptions.push({
-      id: `profile:${profile.id}`,
-      kind: 'issuer-profile',
-      did,
-      label: profile.name || did,
-      caption: profile.signing_key_reference || profile.signing_service_id || '',
-      method: did.split(':').slice(0, 2).join(':'),
-      profile,
-    });
-    seenManagedDids.add(did);
-  });
-
-  derivedManagedIdentities.forEach((identity) => {
-    if (!identity?.did || seenManagedDids.has(identity.did)) {
-      return;
-    }
-
-    const backingKey = identity.backingKeyId ? keyById.get(identity.backingKeyId) : null;
-    managedIdentityOptions.push({
-      id: `derived:${identity.id}`,
-      kind: 'derived-identity',
-      did: identity.did,
-      label: identity.label || identity.did,
-      caption: identity.associatedWith || getSigningKeyReference(backingKey) || '',
-      method: identity.method || identity.did.split(':').slice(0, 2).join(':'),
-      signingKeyReference: getSigningKeyReference(backingKey),
-      backingKeyId: identity.backingKeyId || '',
-    });
-    seenManagedDids.add(identity.did);
-  });
-
-  const keysWithoutIssuerIdentity = safeKeys.filter((key) => {
-    if (normalizeStatus(key?.status) !== 'active') {
-      return false;
-    }
-    const keyReference = getSigningKeyReference(key);
-    if (!keyReference) {
-      return false;
-    }
-    return !usableIssuerProfiles.some((profile) => {
-      const profileReference = String(profile?.signing_key_reference || '').trim();
-      return profileReference && profileReference === keyReference;
-    });
-  });
-  const selectedManagedIdentityOption = managedIdentityOptions.find((option) => option.id === selectedIssuerProfileId) || null;
-  const selectedManagedKey = keysWithoutIssuerIdentity.find((key) => key.id === selectedManagedKeyId) || null;
-  const availableManagedDids = selectedManagedKey
-    ? buildDidIdentities({ keys: [selectedManagedKey], domainSummary })
-        .filter((identity) => identity.status === 'ready' && identity.method !== 'did:web')
-    : [];
-  const effectiveManagedDidMethod = availableManagedDids.some((identity) => identity.method === selectedManagedDidMethod)
-    ? selectedManagedDidMethod
-    : (availableManagedDids[0]?.method || '');
-  const selectedManagedIdentity = availableManagedDids.find((identity) => identity.method === effectiveManagedDidMethod) || null;
 
   const getEntryKey = (entry) => {
     if (entry.certificate_pem) {
@@ -410,239 +242,63 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
     return added;
   };
 
-  const setManagedFeedback = (type, message) => {
-    setManagedActionFeedback({ type, message });
+  const handleOpenRegistryDialog = () => {
+    setRegistryFeedback('');
+    setOpenRegistryDialog(true);
   };
 
-  const addManagedIssuerToTrust = (profile, source) => {
-    if (!profile?.issuer_did) {
-      return 0;
+  const handleAddRegistry = () => {
+    const candidate = registryUrl.trim();
+    let parsed;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      setRegistryFeedback('Enter a valid HTTPS Marty Trust Registry Sync v1 endpoint.');
+      return;
+    }
+    if (
+      parsed.protocol !== 'https:'
+      || parsed.username
+      || parsed.password
+      || (parsed.port && parsed.port !== '443')
+      || parsed.search
+      || parsed.hash
+    ) {
+      setRegistryFeedback('Use a credential-free HTTPS URL on port 443 without a query or fragment.');
+      return;
+    }
+    if (registrySources.some((source) => source.url === candidate)) {
+      setRegistryFeedback('That registry endpoint is already configured.');
+      return;
+    }
+    const interval = Number(registryIntervalHours);
+    if (!Number.isInteger(interval) || interval < 1 || interval > 720) {
+      setRegistryFeedback('Refresh interval must be from 1 through 720 hours.');
+      return;
     }
 
-    return mergeIssuers([
-      {
-        did: profile.issuer_did,
-        name: profile.name || profile.issuer_did,
-        description: profile.description || '',
-        issuer_profile_id: profile.id || '',
-        signing_key_reference: profile.signing_key_reference || '',
-        signing_service_id: profile.signing_service_id || defaultSigningService?.id || '',
-        metadata: {
-          source,
-          issuer_profile_id: profile.id || '',
-          signing_key_reference: profile.signing_key_reference || '',
-          signing_service_id: profile.signing_service_id || defaultSigningService?.id || '',
-        },
+    const source = {
+      source_type: 'TRUST_LIST',
+      url: candidate,
+      description: registryDescription.trim() || 'External Marty trust registry',
+      registry_sync: {
+        protocol: 'MARTY_TRUST_REGISTRY_SYNC_V1',
+        refresh_interval_hours: interval,
       },
-    ]);
-  };
-
-  const addDerivedManagedIdentityToTrust = (identity, source) => {
-    if (!identity?.did) {
-      return 0;
-    }
-
-    return mergeIssuers([
-      {
-        did: identity.did,
-        name: identity.label || identity.did,
-        description: '',
-        signing_key_reference: identity.signingKeyReference || '',
-        metadata: {
-          source,
-          did_method: identity.method || '',
-          signing_key_reference: identity.signingKeyReference || '',
-          backing_key_id: identity.backingKeyId || '',
-        },
-      },
-    ]);
-  };
-
-  const handleTrustExistingIssuerProfile = () => {
-    if (!selectedManagedIdentityOption) {
-      return;
-    }
-
-    const added = selectedManagedIdentityOption.kind === 'issuer-profile'
-      ? addManagedIssuerToTrust(selectedManagedIdentityOption.profile, 'issuer-profile')
-      : addDerivedManagedIdentityToTrust(selectedManagedIdentityOption, 'kms-derived-identity');
-    setManagedFeedback(
-      added > 0 ? 'success' : 'info',
-      added > 0
-        ? t('wizards.trustProfile.trustSourcesStep.managedIdentity.feedbackTrusted', {
-            defaultValue: 'Issuer identity added to trusted issuers.',
-          })
-        : t('wizards.trustProfile.trustSourcesStep.managedIdentity.feedbackAlreadyTrusted', {
-            defaultValue: 'That issuer identity is already trusted in this profile.',
-          }),
-    );
-  };
-
-  const handleCreateManagedIdentity = async () => {
-    if (!organizationId || !defaultSigningService || !selectedManagedKey || !selectedManagedIdentity) {
-      return;
-    }
-
-    setManagedActionLoading(true);
-    setManagedFeedback('', '');
-
-    try {
-      const response = await signingKeysApi.createIssuerProfile({
-        organization_id: organizationId,
-        name: `${selectedManagedKey.name || getSigningKeyReference(selectedManagedKey) || 'Managed key'} ${selectedManagedIdentity.method.replace('did:', '').toUpperCase()} issuer`,
-        issuer_did: selectedManagedIdentity.did,
-        signing_service_id: defaultSigningService.id,
-        signing_key_reference: getSigningKeyReference(selectedManagedKey) || undefined,
-        key_purpose: 'vc_jwt_issuer',
-        status: 'active',
-      });
-      const createdProfile = response?.profile || response || {};
-      await reloadIssuerProfiles();
-      const added = addManagedIssuerToTrust(
-        {
-          ...createdProfile,
-          name: createdProfile.name || `${selectedManagedKey.name || getSigningKeyReference(selectedManagedKey) || 'Managed key'} issuer`,
-          issuer_did: createdProfile.issuer_did || selectedManagedIdentity.did,
-          signing_service_id: createdProfile.signing_service_id || defaultSigningService.id,
-          signing_key_reference: createdProfile.signing_key_reference || getSigningKeyReference(selectedManagedKey),
-        },
-        'auto-created',
-      );
-      setManagedFeedback(
-        added > 0 ? 'success' : 'info',
-        added > 0
-          ? t('wizards.trustProfile.trustSourcesStep.managedIdentity.feedbackCreated', {
-              defaultValue: 'Created DID identity and added it to trusted issuers.',
-            })
-          : t('wizards.trustProfile.trustSourcesStep.managedIdentity.feedbackCreatedExisting', {
-              defaultValue: 'DID identity was created, but it was already trusted in this profile.',
-            }),
-      );
-      setSelectedIssuerProfileId('');
-    } catch (error) {
-      setManagedFeedback(
-        'error',
-        error?.response?.data?.detail
-          || error?.message
-          || t('wizards.trustProfile.trustSourcesStep.managedIdentity.feedbackCreateError', {
-            defaultValue: 'Failed to create a DID identity for this signing key.',
-          }),
-      );
-    } finally {
-      setManagedActionLoading(false);
-    }
-  };
-
-  const handleImportManagedDid = async () => {
-    if (!organizationId || !defaultSigningService || !selectedManagedKey) {
-      return;
-    }
-
-    const trimmedDid = importManagedDidValue.trim();
-    if (!isValidDid(trimmedDid)) {
-      setManagedFeedback(
-        'error',
-        t('wizards.trustProfile.trustSourcesStep.managedIdentity.feedbackInvalidDid', {
-          defaultValue: 'Enter a valid DID before importing it for the selected signing key.',
-        }),
-      );
-      return;
-    }
-
-    setManagedActionLoading(true);
-    setManagedFeedback('', '');
-
-    try {
-      const response = await signingKeysApi.createIssuerProfile({
-        organization_id: organizationId,
-        name: importManagedDidLabel.trim() || `${selectedManagedKey.name || getSigningKeyReference(selectedManagedKey) || 'Managed key'} imported DID`,
-        issuer_did: trimmedDid,
-        signing_service_id: defaultSigningService.id,
-        signing_key_reference: getSigningKeyReference(selectedManagedKey) || undefined,
-        key_purpose: 'vc_jwt_issuer',
-        status: 'active',
-      });
-      const createdProfile = response?.profile || response || {};
-      await reloadIssuerProfiles();
-      const added = addManagedIssuerToTrust(
-        {
-          ...createdProfile,
-          name: createdProfile.name || importManagedDidLabel.trim() || trimmedDid,
-          issuer_did: createdProfile.issuer_did || trimmedDid,
-          signing_service_id: createdProfile.signing_service_id || defaultSigningService.id,
-          signing_key_reference: createdProfile.signing_key_reference || getSigningKeyReference(selectedManagedKey),
-        },
-        'imported-did',
-      );
-      setManagedFeedback(
-        added > 0 ? 'success' : 'info',
-        added > 0
-          ? t('wizards.trustProfile.trustSourcesStep.managedIdentity.feedbackImported', {
-              defaultValue: 'Imported DID identity and added it to trusted issuers.',
-            })
-          : t('wizards.trustProfile.trustSourcesStep.managedIdentity.feedbackImportedExisting', {
-              defaultValue: 'Imported DID identity, but it was already trusted in this profile.',
-            }),
-      );
-      setSelectedIssuerProfileId('');
-      setImportManagedDidValue('');
-      setImportManagedDidLabel('');
-    } catch (error) {
-      setManagedFeedback(
-        'error',
-        error?.response?.data?.detail
-          || error?.message
-          || t('wizards.trustProfile.trustSourcesStep.managedIdentity.feedbackImportError', {
-            defaultValue: 'Failed to import a DID identity for the selected signing key.',
-          }),
-      );
-    } finally {
-      setManagedActionLoading(false);
-    }
-  };
-
-  // Fetch available registries when dialog opens
-  const handleOpenRegistryDialog = async () => {
-    setLoadingRegistries(true);
-    try {
-      const framework = data.profile_type || 'CUSTOM';
-      const filtered = framework === 'CUSTOM'
-        ? DEFAULT_REGISTRIES
-        : DEFAULT_REGISTRIES.filter((registry) => registry.frameworks.includes(framework));
-      setAvailableRegistries(filtered);
-      setOpenRegistryDialog(true);
-    } finally {
-      setLoadingRegistries(false);
-    }
-  };
-
-  const handleAddRegistry = async () => {
-    if (!selectedRegistry) return;
-
-    // Check for duplicates
-    if (registryImports.some((imp) => imp.registry_type === selectedRegistry)) {
-      return;
-    }
-
-    const newImport = {
-      registry_type: selectedRegistry,
-      sync_enabled: true,
-      sync_interval_hours: 24,
-      credential_format_filter: [],
-      added_at: new Date().toISOString(),
-      metadata: availableRegistries.find((registry) => registry.id === selectedRegistry) || {},
     };
-
-    setRegistryImports([...registryImports, newImport]);
-    onChange({ registry_imports: [...registryImports, newImport] });
-    setSelectedRegistry('');
+    const next = [...registrySources, source];
+    setRegistrySources(next);
+    onChange({ registry_sources: next });
+    setRegistryUrl('');
+    setRegistryDescription('');
+    setRegistryIntervalHours(24);
     setOpenRegistryDialog(false);
   };
 
   const handleRemoveRegistry = (index) => {
-    const newImports = registryImports.filter((_, i) => i !== index);
-    setRegistryImports(newImports);
-    onChange({ registry_imports: newImports });
+    const next = registrySources.filter((_, i) => i !== index);
+    setRegistrySources(next);
+    onChange({ registry_sources: next });
   };
 
   const handleAddIssuer = () => {
@@ -685,6 +341,8 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
           name: newIssuerName.trim(),
           country: newIssuerCountry.trim(),
           credential_types: newIssuerCredentialTypes,
+          accreditation_body: newIssuerAccreditationBody.trim(),
+          accreditations: newIssuerAccreditations,
           source: 'manual',
         },
         'manual',
@@ -696,6 +354,8 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
     setNewIssuerName('');
     setNewIssuerCountry('');
     setNewIssuerCredentialTypes('');
+    setNewIssuerAccreditationBody('');
+    setNewIssuerAccreditations('');
   };
 
   const handleImportFileClick = () => {
@@ -799,18 +459,6 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
           {t('wizards.trustProfile.trustSourcesStep.infoAlert.skippingDescription')}
         </Typography>
       </Alert>
-      {managedDependencyErrors.length > 0 && (
-        <Alert severity="warning" sx={{ mb: 3 }}>
-          {t('wizards.trustProfile.trustSourcesStep.managedIdentity.loadError', {
-            defaultValue: 'Managed issuer prerequisites could not be loaded. Retry before treating key management or issuer identity setup as missing.',
-          })}
-          <Box component="ul" sx={{ mt: 1, mb: 0, pl: 3 }}>
-            {managedDependencyErrors.map((message) => (
-              <li key={message}>{message}</li>
-            ))}
-          </Box>
-        </Alert>
-      )}
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
         <FormControlLabel
           control={(
@@ -849,220 +497,11 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
       {/* Manual Issuers Tab */}
       {tabValue === 0 && (
         <Box>
-          <Paper variant="outlined" sx={{ p: 2.5, mb: 3 }}>
-            <Typography variant="subtitle1" gutterBottom>
-              {t('wizards.trustProfile.trustSourcesStep.managedIdentity.title', {
-                defaultValue: 'Managed issuer identity',
-              })}
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              {t('wizards.trustProfile.trustSourcesStep.managedIdentity.description', {
-                defaultValue: 'Reuse an existing DID issuer profile, or bind a DID to an available signing key and trust it immediately with this profile.',
-              })}
-            </Typography>
-
-                {!defaultSigningService && managedIdentityOptions.length === 0 ? (
-              <Alert severity="warning" sx={{ mb: 2 }}>
-                {t('wizards.trustProfile.trustSourcesStep.managedIdentity.noKms', {
-                  defaultValue: 'No key management service or managed issuer identities are available yet. Configure one in Deploy > Key Management to create or import a DID here.',
-                })}
-              </Alert>
-            ) : null}
-
-            <Stack spacing={2}>
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'flex-start' }}>
-                <FormControl fullWidth size="small" data-testid="wizard.trustProfile.existingIssuerProfile">
-                  <InputLabel>
-                    {t('wizards.trustProfile.trustSourcesStep.managedIdentity.existingLabel', {
-                      defaultValue: 'Existing DID identity',
-                    })}
-                  </InputLabel>
-                  <Select
-                    value={selectedIssuerProfileId}
-                    onChange={(event) => setSelectedIssuerProfileId(event.target.value)}
-                    label={t('wizards.trustProfile.trustSourcesStep.managedIdentity.existingLabel', {
-                      defaultValue: 'Existing DID identity',
-                    })}
-                    disabled={issuerProfilesLoading || managedIdentityOptions.length === 0}
-                  >
-                    <MenuItem value="">
-                      <em>
-                        {t('wizards.trustProfile.trustSourcesStep.managedIdentity.existingPlaceholder', {
-                          defaultValue: managedIdentityOptions.length > 0 ? 'Select a DID identity' : 'No managed DID identities found',
-                        })}
-                      </em>
-                    </MenuItem>
-                    {managedIdentityOptions.map((identity) => (
-                      <MenuItem key={identity.id} value={identity.id}>
-                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-                          <Typography variant="body2">{identity.label || identity.did}</Typography>
-                          <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                            {identity.did}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            {[identity.method, identity.caption].filter(Boolean).join(' | ')}
-                          </Typography>
-                        </Box>
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-                <Button
-                  variant="outlined"
-                  onClick={handleTrustExistingIssuerProfile}
-                  disabled={!selectedManagedIdentityOption}
-                  data-testid="wizard.trustProfile.useIssuerProfile"
-                  sx={{ minWidth: 180 }}
-                >
-                  {t('wizards.trustProfile.trustSourcesStep.managedIdentity.useButton', {
-                    defaultValue: 'Trust selected identity',
-                  })}
-                </Button>
-              </Stack>
-
-              <Divider />
-
-              <Typography variant="subtitle2">
-                {t('wizards.trustProfile.trustSourcesStep.managedIdentity.unboundKeyTitle', {
-                  defaultValue: 'Keys without a DID identity',
-                })}
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {t('wizards.trustProfile.trustSourcesStep.managedIdentity.unboundKeyDescription', {
-                  defaultValue: 'Select an active signing key that is not yet linked to a DID identity. You can auto-create a managed DID or import an existing DID for that key.',
-                })}
-              </Typography>
-
-              <FormControl fullWidth size="small" data-testid="wizard.trustProfile.unboundSigningKey">
-                <InputLabel>
-                  {t('wizards.trustProfile.trustSourcesStep.managedIdentity.keyLabel', {
-                    defaultValue: 'Signing key',
-                  })}
-                </InputLabel>
-                <Select
-                  value={selectedManagedKeyId}
-                  onChange={(event) => {
-                    setSelectedManagedKeyId(event.target.value);
-                    setSelectedManagedDidMethod('');
-                    setManagedFeedback('', '');
-                  }}
-                  label={t('wizards.trustProfile.trustSourcesStep.managedIdentity.keyLabel', {
-                    defaultValue: 'Signing key',
-                  })}
-                  disabled={keysWithoutIssuerIdentity.length === 0}
-                >
-                  <MenuItem value="">
-                    <em>
-                      {t('wizards.trustProfile.trustSourcesStep.managedIdentity.keyPlaceholder', {
-                        defaultValue: keysWithoutIssuerIdentity.length > 0 ? 'Select a signing key' : 'No unbound signing keys found',
-                      })}
-                    </em>
-                  </MenuItem>
-                  {keysWithoutIssuerIdentity.map((key) => (
-                    <MenuItem key={key.id} value={key.id}>
-                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-                        <Typography variant="body2">{key.name || getSigningKeyReference(key)}</Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                          {getSigningKeyReference(key)}
-                        </Typography>
-                      </Box>
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-
-              {selectedManagedKey && availableManagedDids.length === 0 ? (
-                <Alert severity="info">
-                  {t('wizards.trustProfile.trustSourcesStep.managedIdentity.noDerivedDid', {
-                    defaultValue: 'This key does not expose enough public material to auto-create a managed DID. You can still import an existing DID for it below.',
-                  })}
-                </Alert>
-              ) : null}
-
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'flex-start' }}>
-                <FormControl fullWidth size="small" data-testid="wizard.trustProfile.managedDidMethod">
-                  <InputLabel>
-                    {t('wizards.trustProfile.trustSourcesStep.managedIdentity.methodLabel', {
-                      defaultValue: 'Auto-create DID method',
-                    })}
-                  </InputLabel>
-                  <Select
-                    value={effectiveManagedDidMethod}
-                    onChange={(event) => setSelectedManagedDidMethod(event.target.value)}
-                    label={t('wizards.trustProfile.trustSourcesStep.managedIdentity.methodLabel', {
-                      defaultValue: 'Auto-create DID method',
-                    })}
-                    disabled={!selectedManagedKey || availableManagedDids.length === 0}
-                  >
-                    {availableManagedDids.map((identity) => (
-                      <MenuItem key={identity.method} value={identity.method}>
-                        {`${identity.method} — ${identity.did}`}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-                <Button
-                  variant="contained"
-                  onClick={handleCreateManagedIdentity}
-                  disabled={!defaultSigningService || !selectedManagedKey || !selectedManagedIdentity || managedActionLoading}
-                  data-testid="wizard.trustProfile.autoCreateIssuerIdentity"
-                  startIcon={managedActionLoading ? <CircularProgress size={16} /> : null}
-                  sx={{ minWidth: 180 }}
-                >
-                  {t('wizards.trustProfile.trustSourcesStep.managedIdentity.createButton', {
-                    defaultValue: 'Create and trust DID',
-                  })}
-                </Button>
-              </Stack>
-
-              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'flex-start' }}>
-                <TextField
-                  fullWidth
-                  size="small"
-                  label={t('wizards.trustProfile.trustSourcesStep.managedIdentity.importDidLabel', {
-                    defaultValue: 'Import existing DID',
-                  })}
-                  placeholder={t('wizards.trustProfile.trustSourcesStep.managedIdentity.importDidPlaceholder', {
-                    defaultValue: 'did:web:issuer.example.com or did:key:z6Mk…',
-                  })}
-                  value={importManagedDidValue}
-                  onChange={(event) => setImportManagedDidValue(event.target.value)}
-                  slotProps={{ htmlInput: { 'data-testid': 'wizard.trustProfile.importManagedDidValue' } }}
-                  disabled={!selectedManagedKey || managedActionLoading}
-                />
-                <TextField
-                  fullWidth
-                  size="small"
-                  label={t('wizards.trustProfile.trustSourcesStep.managedIdentity.importDidNameLabel', {
-                    defaultValue: 'Identity label (optional)',
-                  })}
-                  placeholder={t('wizards.trustProfile.trustSourcesStep.managedIdentity.importDidNamePlaceholder', {
-                    defaultValue: 'Issuer identity label',
-                  })}
-                  value={importManagedDidLabel}
-                  onChange={(event) => setImportManagedDidLabel(event.target.value)}
-                  disabled={!selectedManagedKey || managedActionLoading}
-                />
-                <Button
-                  variant="outlined"
-                  onClick={handleImportManagedDid}
-                  disabled={!defaultSigningService || !selectedManagedKey || !importManagedDidValue.trim() || managedActionLoading}
-                  data-testid="wizard.trustProfile.importManagedDid"
-                  sx={{ minWidth: 180 }}
-                >
-                  {t('wizards.trustProfile.trustSourcesStep.managedIdentity.importButton', {
-                    defaultValue: 'Import and trust DID',
-                  })}
-                </Button>
-              </Stack>
-
-              {managedActionFeedback.message ? (
-                <Alert severity={managedActionFeedback.type || 'info'}>
-                  {managedActionFeedback.message}
-                </Alert>
-              ) : null}
-            </Stack>
-          </Paper>
+          <Alert severity="info" sx={{ mb: 3 }}>
+            {t('wizards.trustProfile.trustSourcesStep.issuerBoundary', {
+              defaultValue: 'Add the issuer DID you intend to trust. Signing profiles and custody keys are resolved internally and are never selected through a trust profile.',
+            })}
+          </Alert>
 
           {/* Source Type Select */}
           <FormControl size="small" sx={{ mb: 2, minWidth: 220 }}>
@@ -1179,6 +618,23 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
                   fullWidth
                 />
               </Stack>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mb: 2 }}>
+                <TextField
+                  label={t('wizards.trustProfile.trustSourcesStep.accreditationBody.label', { defaultValue: 'Accreditation Authority' })}
+                  placeholder={t('wizards.trustProfile.trustSourcesStep.accreditationBody.placeholder', { defaultValue: 'Authority that certified this issuer' })}
+                  value={newIssuerAccreditationBody}
+                  onChange={(e) => setNewIssuerAccreditationBody(e.target.value)}
+                  fullWidth
+                />
+                <TextField
+                  label={t('wizards.trustProfile.trustSourcesStep.accreditations.label', { defaultValue: 'Accreditations Held' })}
+                  placeholder={t('wizards.trustProfile.trustSourcesStep.accreditations.placeholder', { defaultValue: 'e.g. ISO27001|FIPS140-2' })}
+                  value={newIssuerAccreditations}
+                  onChange={(e) => setNewIssuerAccreditations(e.target.value)}
+                  helperText={t('wizards.trustProfile.trustSourcesStep.accreditations.helper', { defaultValue: 'Use | or ; between multiple identifiers.' })}
+                  fullWidth
+                />
+              </Stack>
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mb: 3 }}>
                 <TextField
                   label={t('wizards.trustProfile.trustSourcesStep.issuerCountry.label', { defaultValue: 'Country' })}
@@ -1286,6 +742,9 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
                             {(issuer.metadata?.credential_types || []).map((type) => (
                               <Chip key={`${getEntryKey(issuer)}-${type}`} label={type} size="small" color="info" variant="outlined" />
                             ))}
+                            {(issuer.accreditations || []).map((accreditation) => (
+                              <Chip key={`${getEntryKey(issuer)}-accreditation-${accreditation}`} label={accreditation} size="small" color="success" variant="outlined" />
+                            ))}
                             {issuer.metadata?.source ? (
                               <Chip label={`${t('wizards.trustProfile.trustSourcesStep.sourceChip', { defaultValue: 'Source' })}: ${issuer.metadata.source}`} size="small" variant="outlined" />
                             ) : null}
@@ -1335,10 +794,14 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
         <Box>
           <Alert severity="success" sx={{ mb: 3 }} icon={<CloudDownloadIcon />}>
             <Typography variant="body2">
-              {t('wizards.trustProfile.trustSourcesStep.registryAlert.title')}
+              {t('wizards.trustProfile.trustSourcesStep.registryAlert.title', {
+                defaultValue: 'Connect a Marty Trust Registry Sync v1 feed',
+              })}
             </Typography>
             <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
-              {t('wizards.trustProfile.trustSourcesStep.registryAlert.description')}
+              {t('wizards.trustProfile.trustSourcesStep.registryAlert.description', {
+                defaultValue: 'The service validates and imports this feed through the organization-scoped production API. Native ICAO PKD, EU LoTL, and AAMVA website formats are not treated as compatible feeds.',
+              })}
             </Typography>
           </Alert>
 
@@ -1347,43 +810,34 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
             variant="contained"
             startIcon={<CloudDownloadIcon />}
             onClick={handleOpenRegistryDialog}
-            disabled={loadingRegistries}
             sx={{ mb: 3 }}
             data-testid="wizard.trustProfile.addRegistry"
           >
-            {loadingRegistries ? (
-              <CircularProgress size={20} sx={{ mr: 1 }} />
-            ) : null}
             {t('wizards.trustProfile.trustSourcesStep.importButton')}
           </Button>
 
           {/* Registry Imports List */}
-          {registryImports && registryImports.length > 0 ? (
+          {registrySources.length > 0 ? (
             <Box>
               <Typography variant="subtitle2" gutterBottom>
                 {t('wizards.trustProfile.trustSourcesStep.registryImportsTitle', {
-                  count: registryImports.length,
+                  count: registrySources.length,
                 })}
               </Typography>
               <List>
-                {registryImports.map((imp, index) => (
-                  <Paper key={index} sx={{ p: 2, mb: 1 }}>
+                {registrySources.map((source, index) => (
+                  <Paper key={source.url} sx={{ p: 2, mb: 1 }}>
                     <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <Box>
                         <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                            {imp.metadata?.name || imp.registry_type.replace(/_/g, ' ')}
+                          {source.description || 'External Marty trust registry'}
                         </Typography>
                         <Typography variant="caption" color="text.secondary" data-testid={`wizard.trustProfile.registryImport.sync.${index}`}>
-                          {getRegistrySyncSummary(imp)}
+                          {getRegistrySyncSummary(source)}
                         </Typography>
-                          <Box sx={{ mt: 0.5, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                            {(imp.metadata?.frameworks || []).map((framework) => (
-                              <Chip key={`${imp.registry_type}-${framework}`} label={framework} size="small" variant="outlined" />
-                            ))}
-                            {(imp.metadata?.credential_types || []).map((format) => (
-                              <Chip key={`${imp.registry_type}-${format}`} label={format} size="small" color="info" variant="outlined" />
-                            ))}
-                          </Box>
+                        <Typography variant="caption" color="text.secondary" display="block" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                          {source.url}
+                        </Typography>
                       </Box>
                       <IconButton
                         onClick={() => handleRemoveRegistry(index)}
@@ -1419,39 +873,37 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
       <Dialog open={openRegistryDialog} onClose={() => setOpenRegistryDialog(false)} maxWidth="sm" fullWidth data-testid="wizard.trustProfile.registryDialog">
         <DialogTitle>{t('wizards.trustProfile.trustSourcesStep.registryDialog.title')}</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
-          <FormControl fullWidth>
-            <InputLabel>{t('wizards.trustProfile.trustSourcesStep.registryDialog.label')}</InputLabel>
-            <Select
-              value={selectedRegistry}
-              onChange={(e) => setSelectedRegistry(e.target.value)}
-              data-testid="wizard.trustProfile.registrySelect"
-              label={t('wizards.trustProfile.trustSourcesStep.registryDialog.label')}
-            >
-              {availableRegistries.map((reg) => (
-                <MenuItem key={reg.id} value={reg.id}>
-                  <Box>
-                    <Typography variant="body2">{reg.name}</Typography>
-                    <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary' }}>
-                      {reg.description}
-                    </Typography>
-                    <Box sx={{ mt: 0.5, display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                      {reg.frameworks.map((framework) => (
-                        <Chip key={`${reg.id}-${framework}`} label={framework} size="small" variant="outlined" />
-                      ))}
-                      {reg.credential_types.map((format) => (
-                        <Chip key={`${reg.id}-${format}`} label={format} size="small" color="info" variant="outlined" />
-                      ))}
-                    </Box>
-                  </Box>
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+          <Stack spacing={2}>
+            <TextField
+              label="Registry sync endpoint"
+              value={registryUrl}
+              onChange={(event) => setRegistryUrl(event.target.value)}
+              placeholder="https://registry.example.org/v1/trust-registry/sync"
+              inputProps={{ 'data-testid': 'wizard.trustProfile.registrySelect' }}
+              fullWidth
+            />
+            <TextField
+              label="Description"
+              value={registryDescription}
+              onChange={(event) => setRegistryDescription(event.target.value)}
+              placeholder="Production travel-document trust registry"
+              fullWidth
+            />
+            <TextField
+              label="Required refresh interval (hours)"
+              type="number"
+              value={registryIntervalHours}
+              onChange={(event) => setRegistryIntervalHours(event.target.value)}
+              inputProps={{ min: 1, max: 720 }}
+              fullWidth
+            />
+          </Stack>
           <Alert severity="info" sx={{ mt: 2 }}>
             <Typography variant="caption">
-              {t('wizards.trustProfile.trustSourcesStep.registryDialog.info')}
+              The endpoint must serve the published Marty Trust Registry Sync v1 JSON contract over public CA-validated HTTPS. The profile remains unusable for verification if the first refresh fails or imported trust becomes stale.
             </Typography>
           </Alert>
+          {registryFeedback ? <Alert severity="error" sx={{ mt: 2 }}>{registryFeedback}</Alert> : null}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpenRegistryDialog(false)}>
@@ -1460,7 +912,7 @@ const TrustSourcesStep = ({ data, onChange, organizationId }) => {
           <Button
             onClick={handleAddRegistry}
             variant="contained"
-            disabled={!selectedRegistry}
+            disabled={!registryUrl.trim()}
             data-testid="wizard.trustProfile.registryDialog.add"
           >
             {t('add', { ns: 'common', defaultValue: 'Add' })}

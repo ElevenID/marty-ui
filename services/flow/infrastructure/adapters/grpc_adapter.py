@@ -22,6 +22,19 @@ from marty_proto.v1 import flow_service_pb2, flow_service_pb2_grpc
 logger = logging.getLogger(__name__)
 
 
+def _decode_application_event_data(values: Any) -> dict[str, Any]:
+    """Restore values JSON-encoded into protobuf's string-valued map."""
+    decoded: dict[str, Any] = {}
+    for key, value in dict(values).items():
+        try:
+            decoded[key] = json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            # Accept legacy scalar senders; authentication still binds the
+            # resulting transport-neutral payload exactly.
+            decoded[key] = value
+    return decoded
+
+
 def _normalize_grpc_callback_url(value: str | None) -> str | None:
     """Validate callback URLs accepted through the internal gRPC API.
 
@@ -162,6 +175,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
         self,
         start_verification_fn: Any,
         application_approved_fn: Any,
+        authenticate_application_approved_fn: Any,
         get_repo_fn: Any,
     ) -> None:
         """
@@ -176,6 +190,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
         """
         self._start_verification = start_verification_fn
         self._application_approved = application_approved_fn
+        self._authenticate_application_approved = authenticate_application_approved_fn
         self._get_repo = get_repo_fn
         # Active streaming subscribers: subscriber_id → asyncio.Queue
         self._stream_queues: dict[str, asyncio.Queue] = {}
@@ -298,7 +313,25 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
     # ------------------------------------------------------------------ #
 
     async def StartFlowInstance(self, request, context):
-        from flow.main import FlowInstance, FlowInstanceStatus, FlowStatus, FlowType
+        from flow.main import _private_flow_context_path
+
+        forbidden_path = _private_flow_context_path(dict(request.initial_context))
+        if forbidden_path:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(
+                f"initial_context.{forbidden_path} is private service state and cannot be supplied"
+            )
+            return flow_service_pb2.FlowInstanceResponse()
+
+        from flow.main import (
+            FlowInstance,
+            FlowInstanceStatus,
+            FlowStatus,
+            FlowType,
+            _assert_issuance_preconditions,
+            _effective_flow_type,
+        )
+        from fastapi import HTTPException
 
         repo = self._get_repo()
         flow_def = await repo.get_definition(request.flow_definition_id)
@@ -333,10 +366,18 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
                 "status": "entered",
             })
 
+        if _effective_flow_type(flow_def) == FlowType.OID4VCI_PRE_AUTHORIZED:
+            try:
+                await _assert_issuance_preconditions(instance, flow_def)
+            except HTTPException as exc:
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(str(exc))
+                return flow_service_pb2.FlowInstanceResponse()
+
         await repo.save_instance(instance)
 
         # Auto-create OID4VCI artifact if applicable
-        if flow_def.flow_type == FlowType.OID4VCI_PRE_AUTHORIZED:
+        if _effective_flow_type(flow_def) == FlowType.OID4VCI_PRE_AUTHORIZED:
             from flow.main import _create_oid4vci_artifact
             await _create_oid4vci_artifact(instance, flow_def, repo)
 
@@ -369,7 +410,22 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
         )
 
     async def AdvanceFlowInstance(self, request, context):
-        from flow.main import FlowInstanceStatus, StepType, TransitionCondition
+        from flow.main import _private_flow_context_path
+
+        forbidden_path = _private_flow_context_path(dict(request.data))
+        if forbidden_path:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(
+                f"data.{forbidden_path} is private service state and cannot be supplied"
+            )
+            return flow_service_pb2.FlowInstanceResponse()
+
+        from flow.main import (
+            FlowInstanceStatus,
+            StepType,
+            TransitionCondition,
+            check_preconditions,
+        )
 
         repo = self._get_repo()
         instance = await repo.get_instance(request.instance_id)
@@ -388,6 +444,20 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details("Flow definition not found")
             return flow_service_pb2.FlowInstanceResponse()
+
+        current_step = next(
+            (step for step in flow_def.steps if step.id == instance.current_step_id),
+            None,
+        )
+        if current_step and current_step.step_type == StepType.APPROVAL:
+            required = flow_def.preconditions or current_step.config.get(
+                "required_preconditions", []
+            )
+            met, unmet = await check_preconditions(required, instance.context)
+            if not met:
+                context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+                context.set_details(f"Preconditions not met: {', '.join(unmet)}")
+                return flow_service_pb2.FlowInstanceResponse()
 
         condition = TransitionCondition(request.step_result) if request.step_result else TransitionCondition.SUCCESS
         next_step_id = None
@@ -549,22 +619,55 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
     # ------------------------------------------------------------------ #
 
     async def ApplicationApproved(self, request, context):
-        from flow.main import ApplicationApprovedWebhook
+        from flow.main import ApplicationApprovedWebhook, ApplicationOfferConflictError
+        from common.application_event_auth import ApplicationEventAuthError
 
-        webhook = ApplicationApprovedWebhook(
-            event_type=request.event_type,
-            aggregate_id=request.aggregate_id,
-            aggregate_type=request.aggregate_type,
-            organization_id=request.organization_id,
-            data=dict(request.data),
-            timestamp=request.timestamp,
-        )
-
+        raw_event = {
+            "event_type": request.event_type,
+            "aggregate_id": request.aggregate_id,
+            "aggregate_type": request.aggregate_type,
+            "organization_id": request.organization_id,
+            "data": _decode_application_event_data(request.data),
+            "timestamp": request.timestamp,
+        }
         try:
+            invocation_metadata = (
+                context.invocation_metadata()
+                if hasattr(context, "invocation_metadata")
+                else ()
+            )
+            metadata = {
+                str(item.key).lower(): str(item.value)
+                for item in invocation_metadata
+            }
+            auth_evidence = await self._authenticate_application_approved(
+                event=raw_event,
+                metadata=metadata,
+            )
+            webhook = ApplicationApprovedWebhook(**raw_event)
             result = await self._application_approved(
                 event=webhook,
                 repo=self._get_repo(),
+                auth_evidence=auth_evidence,
+                enforce_replay=True,
             )
+        except ApplicationEventAuthError as exc:
+            code = grpc.StatusCode.UNAUTHENTICATED
+            if exc.code == "replayed_event":
+                code = grpc.StatusCode.ALREADY_EXISTS
+            elif exc.code in {"configuration_error", "replay_store_unavailable"}:
+                code = grpc.StatusCode.UNAVAILABLE
+            context.set_code(code)
+            context.set_details(str(exc))
+            return flow_service_pb2.ApplicationApprovedResponse()
+        except ValueError as exc:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(str(exc))
+            return flow_service_pb2.ApplicationApprovedResponse()
+        except ApplicationOfferConflictError as exc:
+            context.set_code(grpc.StatusCode.ALREADY_EXISTS)
+            context.set_details(str(exc))
+            return flow_service_pb2.ApplicationApprovedResponse()
         except Exception as exc:
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(str(exc))

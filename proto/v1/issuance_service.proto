@@ -91,14 +91,6 @@ service IssuanceService {
   // Server pushes issuance, revocation, suspension, and reinstatement events.
   rpc StreamCredentialEvents(StreamCredentialEventsRequest) returns (stream CredentialEvent) {}
 
-  // Deliver a credential via DIDComm v2 push.
-  rpc DidcommDeliver(DidcommDeliverRequest) returns (DidcommDeliverResponse) {
-    option (google.api.http) = {
-      post: "/v1/issuance/didcomm/deliver"
-      body: "*"
-    };
-  }
-
   // Health check.
   rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {
     option (google.api.http) = {
@@ -137,6 +129,18 @@ message InitiateIssuanceRequest {
   // Internal client-registry reference. Public callers register a public JWK
   // through the authenticated gateway and never select this identifier.
   string authorized_client_id = 7;
+  // Canonical application identity, when issuance follows an application.
+  string application_id = 8;
+  // Public issuer DID selected by the credential template. Internal custody
+  // selectors never cross this boundary.
+  string issuer_did = 9;
+  string delivery_mode = 10;
+  // Opaque retry identity. The issuance service hashes this before storage and
+  // binds it to the canonical request semantics.
+  string idempotency_key = 11;
+  // Canonical JSON object for nested claim fidelity. The legacy string map is
+  // read only when this field is empty.
+  string claims_json = 12;
 }
 
 message IssuanceResponse {
@@ -245,23 +249,6 @@ message CredentialStatusResponse {
   string status = 2;
   string status_updated_at = 3;
   string reason = 4;
-}
-
-// DIDComm v2 push delivery
-message DidcommDeliverRequest {
-  string transaction_id = 1;
-  string holder_did = 2;
-  string universal_resolver_url = 3;  // Optional: custom Universal Resolver
-}
-
-message DidcommDeliverResponse {
-  string transaction_id = 1;
-  string credential_id = 2;
-  string holder_did = 3;
-  string service_endpoint = 4;
-  string didcomm_message_id = 5;
-  string status = 6;  // "delivered" or "delivery_failed"
-  string error = 7;
 }
 
 message HealthCheckRequest {}

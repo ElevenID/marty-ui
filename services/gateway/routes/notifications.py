@@ -132,6 +132,13 @@ async def sse_events(
             async for event in stub.Subscribe(sub_req):
                 if await request.is_disconnected():
                     break
+                if event.organization_id != authorized_org:
+                    logger.error(
+                        "Discarded cross-tenant event %s for SSE tenant %s",
+                        event.event_id,
+                        authorized_org,
+                    )
+                    continue
                 payload = {
                     "event_id": event.event_id,
                     "aggregate_id": event.aggregate_id,

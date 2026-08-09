@@ -1,4 +1,4 @@
-﻿# Exact reviewed false positives from the pre-publication full-history audit.
+# Exact reviewed false positives from the pre-publication full-history audit.
 # Each entry binds one finding to its commit, path, rule, and line; new findings still fail.
 
 175340a78ed80d7064fd426f13340a20fb9c2565:services/auth/tests/test_oidc_claims_and_http_user.py:generic-api-key:236

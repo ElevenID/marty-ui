@@ -43,7 +43,6 @@ import {
   DEFAULT_KEY_MANAGEMENT_CONFIG,
   KEY_MANAGEMENT_ALGORITHM_OPTIONS,
   KEY_MANAGEMENT_PURPOSES,
-  PURPOSES_REQUIRING_CERTIFICATE,
   PURPOSES_REQUIRING_AUTHORITY,
   createKeyManagementServicePayload,
   getServiceTypeDefinition,
@@ -326,31 +325,26 @@ const KeyManagementServiceWizard = () => {
       navigate('/console/org/deploy/key-management/services');
     },
   });
+  const updateWizardData = wizard.updateData;
 
   useEffect(() => {
     if (configLoading || defaultSelectionSynced) {
       return;
     }
 
-    wizard.updateData({ make_default: !currentConfig.default_service_id });
+    updateWizardData({ make_default: !currentConfig.default_service_id });
     setDefaultSelectionSynced(true);
-  }, [configLoading, currentConfig.default_service_id, defaultSelectionSynced, wizard.updateData]);
+  }, [configLoading, currentConfig.default_service_id, defaultSelectionSynced, updateWizardData]);
 
   const selectedDefinition = getServiceTypeDefinition(serviceCatalog, wizard.data.service_type);
   const providerRunbook = useMemo(
     () => getProviderRunbook(wizard.data, selectedDefinition),
     [selectedDefinition, wizard.data]
   );
-  const postRegistrationDefaultService = wizard.data.make_default
-    ? registeredService
-    : (currentDefaultService || registeredService);
   const registeredServiceIsManagedOpenBao = registeredService?.id === MANAGED_OPENBAO_SERVICE_ID;
   const currentDefaultIsManagedOpenBao = currentDefaultService?.id === MANAGED_OPENBAO_SERVICE_ID;
-  const suggestedIssuerKeyName = wizard.data.key_reference?.trim()
-    || wizard.data.name?.trim()
-    || 'issuer signing key';
-  const issuerIdentityCreateUrl = `/console/org/deploy/issuer-identity/new?key_source=create&signing_service_id=${encodeURIComponent(registeredServiceIsManagedOpenBao ? MANAGED_OPENBAO_SERVICE_ID : (postRegistrationDefaultService?.id || MANAGED_OPENBAO_SERVICE_ID))}&key_name=${encodeURIComponent(suggestedIssuerKeyName)}`;
-  const managedIssuerIdentityCreateUrl = `/console/org/deploy/issuer-identity/new?key_source=create&signing_service_id=${encodeURIComponent(MANAGED_OPENBAO_SERVICE_ID)}&key_name=${encodeURIComponent(suggestedIssuerKeyName)}`;
+  const issuerIdentityCreateUrl = '/console/org/deploy/issuer-identity/new';
+  const managedIssuerIdentityCreateUrl = '/console/org/deploy/issuer-identity/new';
 
   const copyText = useCallback(async (text) => {
     try {

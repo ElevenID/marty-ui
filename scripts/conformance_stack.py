@@ -22,6 +22,7 @@ BASE_FILES = (
     "docker-compose.profile.oidf.yml",
 )
 GHCR_FILE = "docker-compose.profile.ghcr.yml"
+LOCAL_BUILD_FILE = "docker-compose.profile.local-build.yml"
 IMMUTABLE_INFRA_FILE = "docker-compose.profile.conformance-images.yml"
 HAIP_FILE = "docker-compose.profile.oidf-haip.yml"
 ISOLATION_FILE = "docker-compose.profile.conformance.yml"
@@ -70,6 +71,13 @@ def compose_command(
     if use_ghcr:
         files.insert(1, GHCR_FILE)
         files.insert(2, IMMUTABLE_INFRA_FILE)
+    else:
+        # The base stack defines every source-built Python service. The UI is
+        # deliberately supplied by a mode-specific profile because released
+        # runs replace it with an immutable GHCR image. Without this profile,
+        # --local-build cannot even render: the public TLS proxy depends on an
+        # undefined ``ui`` service.
+        files.insert(1, LOCAL_BUILD_FILE)
     if include_haip:
         files.append(HAIP_FILE)
     files.append(ISOLATION_FILE)

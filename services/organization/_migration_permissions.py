@@ -39,6 +39,9 @@ PERMISSION_CATALOG: list[tuple[str, str, str]] = [
     ("credential-template", "activate", "Activate credential templates"),
     ("credential-template", "deprecate", "Deprecate credential templates"),
     ("credential-template", "version", "Create new version of credential templates"),
+    # Wallet registry
+    ("wallet", "view", "View wallet registry and compatibility entries"),
+    ("wallet", "write", "Create and manage organization wallet registry overrides"),
     # Compliance profiles
     ("compliance-profile", "view", "View compliance profiles"),
     ("compliance-profile", "create", "Create compliance profiles"),
