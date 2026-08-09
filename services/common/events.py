@@ -1,13 +1,14 @@
 """
 Event Publishing Utilities
 
-Simple event bus for inter-service communication.
-Uses HTTP callbacks for event delivery.
+Publishes to the central event stream, the authenticated Notification ingest
+boundary, and the application-approved Flow RPC.
 """
 
 import logging
 import os
-from dataclasses import dataclass
+import uuid
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
@@ -48,6 +49,7 @@ class DomainEvent:
     organization_id: str
     data: dict[str, Any]
     timestamp: datetime = None
+    event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
 
     def __post_init__(self):
         if self.timestamp is None:
@@ -56,30 +58,32 @@ class DomainEvent:
 
 class EventPublisher:
     """
-    Event publisher using gRPC for known services and HTTP for generic
-    webhooks. All streaming events go through the central event-stream RPC.
+    Event publisher using governed internal service boundaries.
+
+    External webhook fan-out belongs to Notification, where destinations are
+    tenant-bound, signed, minimized, and durably retried.
     """
 
     def __init__(self):
-        self.subscribers: dict[EventType, list[str]] = {}
         self._flow_grpc_channel = None
         from common.grpc_event_bus import GrpcEventStreamPublisher
 
         self._event_stream_publisher = GrpcEventStreamPublisher()
-        self._load_subscriptions()
+        self._warn_about_retired_subscriber_configuration()
 
-    def _load_subscriptions(self):
-        """Load event subscriptions from environment variables."""
-        # Can add webhook subscriptions from environment
-        for event_type in EventType:
-            env_key = f"{event_type.name}_SUBSCRIBERS"
-            urls = os.environ.get(env_key, "")
-            if urls:
-                if event_type not in self.subscribers:
-                    self.subscribers[event_type] = []
-                self.subscribers[event_type].extend(
-                    [u.strip() for u in urls.split(",") if u.strip()]
-                )
+    @staticmethod
+    def _warn_about_retired_subscriber_configuration() -> None:
+        retired = [
+            f"{event_type.name}_SUBSCRIBERS"
+            for event_type in EventType
+            if os.environ.get(f"{event_type.name}_SUBSCRIBERS", "").strip()
+        ]
+        if retired:
+            logger.error(
+                "Ignoring retired direct subscriber variables %s; register "
+                "tenant-owned webhooks and subscriptions through Notification",
+                ", ".join(retired),
+            )
 
     def _get_flow_grpc_channel(self):
         """Lazy-create gRPC channel to flow service."""
@@ -100,13 +104,14 @@ class EventPublisher:
         return f"{base.rstrip('/')}/internal/events"
 
     async def publish(self, event: DomainEvent) -> None:
-        """Publish an event through central gRPC and configured subscribers."""
+        """Publish through the central stream and governed service boundaries."""
         await self._event_stream_publisher.publish_fields(
             event_type=event.event_type.value,
             aggregate_id=event.aggregate_id,
             aggregate_type=event.aggregate_type,
             organization_id=event.organization_id,
             data=event.data,
+            event_id=event.event_id,
             timestamp=event.timestamp.isoformat(),
         )
 
@@ -116,44 +121,6 @@ class EventPublisher:
 
         await self._publish_to_notification_service(event)
 
-        # Other events use HTTP webhooks
-        subscribers = self.subscribers.get(event.event_type, [])
-        if not subscribers:
-            logger.debug(f"No subscribers for event type: {event.event_type}")
-            return
-
-        payload = {
-            "event_type": event.event_type.value,
-            "aggregate_id": event.aggregate_id,
-            "aggregate_type": event.aggregate_type,
-            "organization_id": event.organization_id,
-            "data": event.data,
-            "timestamp": event.timestamp.isoformat(),
-        }
-
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            for subscriber_url in subscribers:
-                try:
-                    logger.info(f"Publishing {event.event_type} to {subscriber_url}")
-                    response = await client.post(
-                        subscriber_url,
-                        json=payload,
-                        headers={"Content-Type": "application/json"},
-                    )
-
-                    if response.status_code >= 400:
-                        logger.warning(
-                            f"Event delivery failed to {subscriber_url}: "
-                            f"status={response.status_code}"
-                        )
-                    else:
-                        logger.info(f"Event delivered successfully to {subscriber_url}")
-
-                except httpx.TimeoutException:
-                    logger.warning(f"Timeout publishing event to {subscriber_url}")
-                except Exception as e:
-                    logger.error(f"Error publishing event to {subscriber_url}: {e}")
-
     async def _publish_to_notification_service(self, event: DomainEvent) -> None:
         """Deliver events to the notification service for dynamic subscription fan-out."""
         ingest_url = self._get_notification_ingest_url()
@@ -161,6 +128,7 @@ class EventPublisher:
             return
 
         payload = {
+            "event_id": event.event_id,
             "event_type": event.event_type.value,
             "aggregate_id": event.aggregate_id,
             "aggregate_type": event.aggregate_type,
@@ -172,7 +140,7 @@ class EventPublisher:
             auth_headers = notification_event_ingest_headers()
         except NotificationEventAuthConfigurationError:
             logger.error(
-                "Notification ingest skipped: service authentication is unavailable"
+                "Notification ingest skipped: producer authentication is unavailable"
             )
             return
         try:

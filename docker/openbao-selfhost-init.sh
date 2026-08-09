@@ -18,8 +18,9 @@ BAO_INIT_FILE="${BAO_INIT_FILE:-/bao/data/selfhost-init.json}"
 BAO_ROOT_TOKEN_FILE="${BAO_ROOT_TOKEN_FILE:-/bao/data/root.token}"
 BAO_UNSEAL_KEY_FILE="${BAO_UNSEAL_KEY_FILE:-/bao/data/unseal.key}"
 BAO_SERVICE_TOKEN_FILE="${BAO_SERVICE_TOKEN_FILE:-/bao/runtime/credential-service.token}"
+BAO_NOTIFICATION_TOKEN_FILE="${BAO_NOTIFICATION_TOKEN_FILE:-/bao/runtime/notification-webhook-service.token}"
 
-mkdir -p "$(dirname "${BAO_INIT_FILE}")" "$(dirname "${BAO_ROOT_TOKEN_FILE}")" "$(dirname "${BAO_UNSEAL_KEY_FILE}")" "$(dirname "${BAO_SERVICE_TOKEN_FILE}")"
+mkdir -p "$(dirname "${BAO_INIT_FILE}")" "$(dirname "${BAO_ROOT_TOKEN_FILE}")" "$(dirname "${BAO_UNSEAL_KEY_FILE}")" "$(dirname "${BAO_SERVICE_TOKEN_FILE}")" "$(dirname "${BAO_NOTIFICATION_TOKEN_FILE}")"
 
 status_json() {
     bao status -address="${BAO_ADDR}" -format=json 2>/dev/null || true
@@ -134,6 +135,37 @@ if [ "${service_token_missing}" = "1" ]; then
     write_secret_file "${BAO_SERVICE_TOKEN_FILE}" "${service_token}" 0444
 else
     echo "Reusing credential-service token at ${BAO_SERVICE_TOKEN_FILE}"
+fi
+
+notification_token_missing=0
+if [ ! -s "${BAO_NOTIFICATION_TOKEN_FILE}" ]; then
+    notification_token_missing=1
+elif is_placeholder_secret_value "$(tr -d '\r' < "${BAO_NOTIFICATION_TOKEN_FILE}")"; then
+    notification_token_missing=1
+fi
+
+if [ "${notification_token_missing}" != "1" ]; then
+    existing_notification_token="$(tr -d '\r' < "${BAO_NOTIFICATION_TOKEN_FILE}")"
+    if ! BAO_TOKEN="${existing_notification_token}" bao token lookup -address="${BAO_ADDR}" >/dev/null 2>&1; then
+        echo "Existing Notification OpenBao token is not accepted; minting a replacement..."
+        notification_token_missing=1
+    elif ! BAO_TOKEN="${existing_notification_token}" bao token capabilities -address="${BAO_ADDR}" transit/decrypt/notification-webhook-envelope-marty-aes256 2>/dev/null | grep -q "update"; then
+        echo "Existing Notification OpenBao token lacks webhook decrypt permission; minting a replacement..."
+        notification_token_missing=1
+    fi
+fi
+
+if [ "${notification_token_missing}" = "1" ]; then
+    echo "Minting Notification webhook OpenBao token..."
+    notification_token_json="$(bao token create -address="${BAO_ADDR}" -policy=notification-webhook-service -orphan -format=json)"
+    notification_token="$(json_field "${notification_token_json}" client_token)"
+    if [ -z "${notification_token}" ]; then
+        echo "Failed to mint Notification webhook OpenBao token."
+        exit 1
+    fi
+    write_secret_file "${BAO_NOTIFICATION_TOKEN_FILE}" "${notification_token}" 0444
+else
+    echo "Reusing Notification webhook OpenBao token at ${BAO_NOTIFICATION_TOKEN_FILE}"
 fi
 
 echo "OpenBao self-host bootstrap complete."
