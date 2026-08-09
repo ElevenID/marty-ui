@@ -3,10 +3,38 @@
 from __future__ import annotations
 
 import sys
+from enum import Enum
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import grpc
+from common.application_event_auth import ApplicationEventAuthError
+
+
+class _FlowInstanceStatus(str, Enum):
+    IN_PROGRESS = "in_progress"
+    AWAITING_WALLET = "awaiting_wallet"
+
+
+class _StepType(str, Enum):
+    APPROVAL = "approval"
+
+
+class _TransitionCondition(str, Enum):
+    SUCCESS = "success"
+
+
+async def _check_preconditions(preconditions, _context):
+    return False, list(preconditions)
+
+
+class _ApplicationApprovedWebhook:
+    def __init__(self, **values):
+        if values.get("event_type") != "application.approved":
+            raise ValueError("event_type must be application.approved")
+        if values.get("aggregate_type") != "application":
+            raise ValueError("aggregate_type must be application")
+        self.__dict__.update(values)
 
 # Pre-inject a lightweight stub for flow.main so the deferred import inside
 # the gRPC adapter doesn't pull in the entire flow service (and its heavy
@@ -17,11 +45,15 @@ _flow_main_stub = SimpleNamespace(
         (),
         {"__init__": lambda self, **kw: self.__dict__.update(kw)},
     ),
-    ApplicationApprovedWebhook=type(
-        "ApplicationApprovedWebhook",
-        (),
-        {"__init__": lambda self, **kw: self.__dict__.update(kw)},
+    ApplicationApprovedWebhook=_ApplicationApprovedWebhook,
+    _private_flow_context_path=lambda value: next(
+        (str(key) for key in value if str(key).lower().startswith("_marty_")),
+        None,
     ),
+    FlowInstanceStatus=_FlowInstanceStatus,
+    StepType=_StepType,
+    TransitionCondition=_TransitionCondition,
+    check_preconditions=_check_preconditions,
 )
 sys.modules.setdefault("flow.main", _flow_main_stub)
 
@@ -33,6 +65,9 @@ def _build_servicer(**overrides) -> FlowServiceGrpc:
     defaults = dict(
         start_verification_fn=AsyncMock(),
         application_approved_fn=AsyncMock(),
+        authenticate_application_approved_fn=AsyncMock(
+            return_value=SimpleNamespace(as_dict=lambda: {})
+        ),
         get_repo_fn=MagicMock(return_value=MagicMock()),
     )
     defaults.update(overrides)
@@ -173,20 +208,93 @@ class TestStartVerification:
 # ── ApplicationApproved ──────────────────────────────────────────────
 
 
+class TestPrivateFlowContext:
+    async def test_start_rejects_reserved_context_before_repository_access(self, ctx):
+        repo = MagicMock()
+        servicer = _build_servicer(get_repo_fn=MagicMock(return_value=repo))
+        response = await servicer.StartFlowInstance(
+            flow_service_pb2.StartFlowRequest(
+                flow_definition_id="flow-1",
+                initial_context={"_marty_precondition_evidence_v1": "forged"},
+            ),
+            ctx,
+        )
+        assert response.id == ""
+        assert ctx.code == grpc.StatusCode.INVALID_ARGUMENT
+        repo.get_definition.assert_not_called()
+
+    async def test_advance_rejects_reserved_context_before_repository_access(self, ctx):
+        repo = MagicMock()
+        servicer = _build_servicer(get_repo_fn=MagicMock(return_value=repo))
+        response = await servicer.AdvanceFlowInstance(
+            flow_service_pb2.AdvanceFlowRequest(
+                instance_id="instance-1",
+                data={"_marty_precondition_evidence_v1": "forged"},
+            ),
+            ctx,
+        )
+        assert response.id == ""
+        assert ctx.code == grpc.StatusCode.INVALID_ARGUMENT
+        repo.get_instance.assert_not_called()
+
+    async def test_advance_enforces_preconditions_before_context_update(self, ctx):
+        instance = SimpleNamespace(
+            id="instance-1",
+            flow_definition_id="flow-1",
+            current_step_id="approval-step",
+            status=_FlowInstanceStatus.IN_PROGRESS,
+            context={"application_status": "approved"},
+        )
+        flow_def = SimpleNamespace(
+            preconditions=["application_approved"],
+            steps=[
+                SimpleNamespace(
+                    id="approval-step",
+                    step_type=_StepType.APPROVAL,
+                    config={},
+                )
+            ],
+        )
+        repo = MagicMock()
+        repo.get_instance = AsyncMock(return_value=instance)
+        repo.get_definition = AsyncMock(return_value=flow_def)
+        repo.save_instance = AsyncMock()
+        servicer = _build_servicer(get_repo_fn=MagicMock(return_value=repo))
+
+        await servicer.AdvanceFlowInstance(
+            flow_service_pb2.AdvanceFlowRequest(
+                instance_id="instance-1",
+                step_result="success",
+                data={"application_status": "approved"},
+            ),
+            ctx,
+        )
+
+        assert ctx.code == grpc.StatusCode.FAILED_PRECONDITION
+        assert "application_approved" in ctx.details
+        assert instance.context == {"application_status": "approved"}
+        repo.save_instance.assert_not_awaited()
+
+
 class TestApplicationApproved:
     async def test_success(self, ctx):
+        evidence = SimpleNamespace(as_dict=lambda: {"authenticated": "yes"})
+        authenticate = AsyncMock(return_value=evidence)
+        handler = AsyncMock(return_value={"success": True, "flows_triggered": 2})
         servicer = _build_servicer(
-            application_approved_fn=AsyncMock(
-                return_value={"success": True, "flows_triggered": 2}
-            )
+            application_approved_fn=handler,
+            authenticate_application_approved_fn=authenticate,
         )
 
         req = flow_service_pb2.ApplicationApprovedEvent(
             event_type="application.approved",
             aggregate_id="app-1",
-            aggregate_type="Application",
+            aggregate_type="application",
             organization_id="org-1",
-            data={"applicant_id": "a-1", "credential_type": "MemberCredential"},
+            data={
+                "applicant_id": '"a-1"',
+                "claims": '{"given_name":"Ada","roles":["member"]}',
+            },
             timestamp="2026-03-14T00:00:00Z",
         )
         resp = await servicer.ApplicationApproved(req, ctx)
@@ -194,6 +302,82 @@ class TestApplicationApproved:
         assert resp.success is True
         assert resp.flows_triggered == 2
         assert ctx.code is None
+        authenticated_event = authenticate.call_args.kwargs["event"]
+        assert authenticated_event["data"] == {
+            "applicant_id": "a-1",
+            "claims": {"given_name": "Ada", "roles": ["member"]},
+        }
+        handler.assert_awaited_once()
+        assert handler.call_args.kwargs["auth_evidence"] is evidence
+
+    async def test_missing_authentication_never_reaches_handler(self, ctx):
+        handler = AsyncMock()
+        servicer = _build_servicer(
+            application_approved_fn=handler,
+            authenticate_application_approved_fn=AsyncMock(
+                side_effect=ApplicationEventAuthError(
+                    "missing_authentication", "authentication required"
+                )
+            ),
+        )
+
+        await servicer.ApplicationApproved(
+            flow_service_pb2.ApplicationApprovedEvent(
+                event_type="application.approved",
+                aggregate_id="app-unauthenticated",
+                aggregate_type="application",
+                organization_id="org-1",
+                data={"applicant_id": '"a-1"'},
+                timestamp="2026-03-14T00:00:00Z",
+            ),
+            ctx,
+        )
+
+        assert ctx.code == grpc.StatusCode.UNAUTHENTICATED
+        handler.assert_not_awaited()
+
+    async def test_wrong_event_type_is_rejected_before_authentication(self, ctx):
+        authenticate = AsyncMock()
+        handler = AsyncMock()
+        servicer = _build_servicer(
+            application_approved_fn=handler,
+            authenticate_application_approved_fn=authenticate,
+        )
+
+        await servicer.ApplicationApproved(
+            flow_service_pb2.ApplicationApprovedEvent(
+                event_type="application.rejected",
+                aggregate_id="app-wrong-event",
+                aggregate_type="application",
+                organization_id="org-1",
+                timestamp="2026-03-14T00:00:00Z",
+            ),
+            ctx,
+        )
+
+        assert ctx.code == grpc.StatusCode.INVALID_ARGUMENT
+        authenticate.assert_awaited_once()
+        handler.assert_not_awaited()
+
+    async def test_replay_maps_to_already_exists(self, ctx):
+        servicer = _build_servicer(
+            authenticate_application_approved_fn=AsyncMock(
+                side_effect=ApplicationEventAuthError(
+                    "replayed_event", "already consumed"
+                )
+            )
+        )
+        await servicer.ApplicationApproved(
+            flow_service_pb2.ApplicationApprovedEvent(
+                event_type="application.approved",
+                aggregate_id="app-replayed",
+                aggregate_type="application",
+                organization_id="org-1",
+                timestamp="2026-03-14T00:00:00Z",
+            ),
+            ctx,
+        )
+        assert ctx.code == grpc.StatusCode.ALREADY_EXISTS
 
     async def test_handler_error(self, ctx):
         servicer = _build_servicer(
@@ -203,7 +387,7 @@ class TestApplicationApproved:
         req = flow_service_pb2.ApplicationApprovedEvent(
             event_type="application.approved",
             aggregate_id="app-2",
-            aggregate_type="Application",
+            aggregate_type="application",
             organization_id="org-1",
             data={},
             timestamp="2026-03-14T00:00:00Z",

@@ -7,12 +7,15 @@ Uses HTTP callbacks for event delivery.
 
 import logging
 import os
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
 import httpx
+
+from common.application_event_auth import sign_application_event
 
 logger = logging.getLogger(__name__)
 
@@ -180,15 +183,37 @@ class EventPublisher:
             from marty_proto.v1 import flow_service_pb2, flow_service_pb2_grpc
             channel = self._get_flow_grpc_channel()
             stub = flow_service_pb2_grpc.FlowServiceStub(channel)
+            # The protobuf map is string-valued. JSON-encoding each value
+            # preserves nested claims and scalar types across this transport.
+            wire_data = {
+                key: json.dumps(
+                    value,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                )
+                for key, value in event.data.items()
+            }
+            wire_event = {
+                "event_type": event.event_type.value,
+                "aggregate_id": event.aggregate_id,
+                "aggregate_type": event.aggregate_type,
+                "organization_id": event.organization_id,
+                "data": event.data,
+                "timestamp": event.timestamp.isoformat(),
+            }
+            metadata = tuple(sign_application_event(wire_event).items())
             resp = await stub.ApplicationApproved(
                 flow_service_pb2.ApplicationApprovedEvent(
                     event_type=event.event_type.value,
                     aggregate_id=event.aggregate_id,
                     aggregate_type=event.aggregate_type,
                     organization_id=event.organization_id,
-                    data={k: str(v) for k, v in event.data.items()},
+                    data=wire_data,
                     timestamp=event.timestamp.isoformat(),
-                )
+                ),
+                metadata=metadata,
             )
             logger.info(
                 f"APPLICATION_APPROVED delivered via gRPC: "
