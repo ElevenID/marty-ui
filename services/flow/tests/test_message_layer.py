@@ -169,11 +169,8 @@ async def test_oid4vci_offer_creation_cannot_outrun_server_preconditions(
         forbidden_issuance,
     )
     repo = InMemoryFlowRepository()
-    flow_def = FlowDefinition(
-        organization_id="org-1",
+    flow_def = _application_approved_custom_flow(
         name="Approval-gated issuance",
-        flow_type=FlowType.OID4VCI_PRE_AUTHORIZED,
-        preconditions=["application_approved"],
         credential_template_id="template-1",
     )
     instance = FlowInstance(
@@ -192,6 +189,18 @@ async def test_oid4vci_offer_creation_cannot_outrun_server_preconditions(
     }
     assert called is False
     assert await repo.list_artifacts(instance.id) == []
+
+
+def test_application_approval_trigger_implies_server_owned_precondition() -> None:
+    flow_def = _application_approved_custom_flow(
+        name="Application approval trigger",
+        credential_template_id="template-1",
+    )
+
+    assert flow_def.preconditions == []
+    assert flow_main._required_issuance_preconditions(flow_def) == [
+        "application_approved"
+    ]
 
 
 @pytest.mark.asyncio

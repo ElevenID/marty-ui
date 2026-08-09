@@ -2050,9 +2050,33 @@ async def check_preconditions(
     return all_met, unmet
 
 
+def _is_application_approved_issuance_trigger(flow_def: FlowDefinition) -> bool:
+    """Identify flows whose trigger grants application-approval authority."""
+    if (
+        flow_def.flow_type != FlowType.CUSTOM
+        or not flow_def.extension
+        or _effective_flow_type(flow_def) != FlowType.OID4VCI_PRE_AUTHORIZED
+    ):
+        return False
+    trigger = flow_def.trigger if isinstance(flow_def.trigger, dict) else {}
+    trigger_config = (
+        trigger.get("config") if isinstance(trigger.get("config"), dict) else {}
+    )
+    return (
+        str(trigger.get("trigger_type") or "").upper() == "WEBHOOK"
+        and str(trigger_config.get("event_type") or "").upper()
+        == "APPLICATION_APPROVED"
+    )
+
+
 def _required_issuance_preconditions(flow_def: FlowDefinition) -> list[str]:
     """Collect every required control that must precede offer creation."""
     required = list(flow_def.preconditions or [])
+    # The trigger is part of the server-owned flow contract. An administrator
+    # must not be able to accidentally author an APPLICATION_APPROVED issuance
+    # flow whose direct-start path bypasses authenticated approval evidence.
+    if _is_application_approved_issuance_trigger(flow_def):
+        required.append("application_approved")
     for step in flow_def.steps:
         if step.step_type != StepType.APPROVAL or not isinstance(step.config, dict):
             continue
@@ -6624,23 +6648,9 @@ async def handle_application_approved(
     all_flows = await repo.list_definitions(event.organization_id)
 
     def handles_application_approved(flow: FlowDefinition) -> bool:
-        if (
-            flow.status != FlowStatus.ACTIVE
-            or flow.flow_type != FlowType.CUSTOM
-            or not flow.extension
-        ):
-            return False
-        if (
-            flow.extension.get("extends_flow_type")
-            != FlowType.OID4VCI_PRE_AUTHORIZED.value
-        ):
-            return False
-        trigger = flow.trigger if isinstance(flow.trigger, dict) else {}
-        trigger_config = (
-            trigger.get("config") if isinstance(trigger.get("config"), dict) else {}
+        return flow.status == FlowStatus.ACTIVE and _is_application_approved_issuance_trigger(
+            flow
         )
-        configured_event = str(trigger_config.get("event_type") or "").upper()
-        return configured_event == "APPLICATION_APPROVED"
 
     matching_flows = [
         flow
