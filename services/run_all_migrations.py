@@ -83,6 +83,10 @@ SERVICES = [
         "name": "flow",
         "module": "flow.infrastructure.models",
     },
+    {
+        "name": "device_registration",
+        "module": "device_registration.infrastructure.models",
+    },
 ]
 
 MANAGED_OPENBAO_SERVICE_ID = "managed-openbao-transit"
@@ -948,6 +952,7 @@ def ensure_schemas(database_url: str) -> None:
         "presentation_policy_service",
         "deployment_profile_service",
         "flow_service",
+        "device_registration_service",
         "revocation_profile_service",
     ]
 

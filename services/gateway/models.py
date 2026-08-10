@@ -1195,6 +1195,24 @@ class DevicePreferencesModel(BaseModel):
     quiet_hours_end: str | None = None
 
 
+class DeviceChallengeRequest(BaseModel):
+    device_id: str = Field(min_length=1, max_length=255)
+    public_key_der: str = Field(min_length=1, max_length=8192)
+    public_key_kid: str = Field(min_length=43, max_length=43)
+    registration_id: str | None = Field(None, max_length=36)
+    expected_key_version: int | None = Field(
+        None, ge=1, le=9_007_199_254_740_991
+    )
+
+
+class DeviceChallengeResponse(BaseModel):
+    challenge_id: str
+    challenge: str
+    algorithm: Literal["PS256"]
+    audience: Literal["marty-device-registration"]
+    expires_in: int
+
+
 class DeviceRegistrationCreate(BaseModel):
     user_id: str | None = Field(None, max_length=255)
     organization_id: str | None = Field(None, max_length=255)
@@ -1206,7 +1224,7 @@ class DeviceRegistrationCreate(BaseModel):
     device_model: str | None = Field(None, max_length=255)
     preferences: DevicePreferencesModel = Field(default_factory=DevicePreferencesModel)
     public_key_der: str | None = Field(None, max_length=8192)
-    public_key_kid: str | None = Field(None, max_length=255)
+    public_key_kid: str | None = Field(None, min_length=43, max_length=43)
     key_valid_from: str | None = Field(None, max_length=50)
     key_valid_until: str | None = Field(None, max_length=50)
     is_active: bool = True
@@ -1219,9 +1237,12 @@ class DeviceRegistrationUpdate(BaseModel):
     device_model: str | None = Field(None, max_length=255)
     preferences: DevicePreferencesModel | None = None
     public_key_der: str | None = Field(None, max_length=8192)
-    public_key_kid: str | None = Field(None, max_length=255)
+    public_key_kid: str | None = Field(None, min_length=43, max_length=43)
     key_valid_from: str | None = Field(None, max_length=50)
     key_valid_until: str | None = Field(None, max_length=50)
+    expected_key_version: int | None = Field(
+        None, ge=1, le=9_007_199_254_740_991
+    )
     is_active: bool | None = None
     last_seen_at: str | None = Field(None, max_length=50)
 
@@ -1241,6 +1262,9 @@ class DeviceRegistrationResponse(BaseModel):
     public_key_kid: str | None = None
     key_valid_from: str | None = None
     key_valid_until: str | None = None
+    key_version: int | None = Field(
+        None, ge=1, le=9_007_199_254_740_991
+    )
     is_active: bool
     created_at: str
     updated_at: str
