@@ -67,6 +67,7 @@ from trust_profile.registry_sync import (
     validate_current_registry_entries,
     validate_registry_url_structure,
 )
+from common.internal_service_auth import require_internal_service_auth
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -2205,6 +2206,7 @@ async def get_trust_profile(
     response_model=InternalTrustProfileResponse,
     response_model_exclude_none=True,
     include_in_schema=False,
+    dependencies=[Depends(require_internal_service_auth)],
 )
 async def internal_get_trust_profile(
     profile_id: str,

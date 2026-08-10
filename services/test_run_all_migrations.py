@@ -84,6 +84,12 @@ def test_notification_webhook_envelope_preparation_fails_without_kms(
     assert migrations.prepare_notification_webhook_envelope_key() is False
 
 
+def test_device_registration_schema_is_owned_by_the_deployment_migration_runner() -> None:
+    services = {service["name"]: service["module"] for service in migrations.SERVICES}
+
+    assert services["device_registration"] == "device_registration.infrastructure.models"
+
+
 def test_seed_signing_registry_binds_lti_key_inside_multi_key_service() -> None:
     redis = FakeRedis()
     organization_id = "00000000-0000-0000-0000-000000000001"

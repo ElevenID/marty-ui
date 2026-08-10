@@ -1484,6 +1484,28 @@ def test_trust_profile_lookup_url_uses_internal_service_endpoint(monkeypatch) ->
     )
 
 
+def test_trust_profile_lookup_sends_internal_service_token(monkeypatch) -> None:
+    token = "a" * 48
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("GRPC_SERVICE_TOKEN", token)
+    monkeypatch.delenv("GRPC_SERVICE_TOKEN_FILE", raising=False)
+
+    def get(url: str, **kwargs: object) -> SimpleNamespace:
+        captured.update(url=url, **kwargs)
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"organization_id": "org-1", "status": "active"},
+        )
+
+    monkeypatch.setattr("httpx.get", get)
+
+    result = pp._load_policy_trust_profile("profile-1", "org-1")
+
+    assert result["organization_id"] == "org-1"
+    assert captured["headers"] == {"x-service-token": token}
+
+
 def test_credential_status_lookup_url_honors_mip_template(monkeypatch) -> None:
     monkeypatch.setenv(
         "MIP_CREDENTIAL_STATUS_URL_TEMPLATE",

@@ -87,6 +87,10 @@ SERVICES = [
         "name": "notification",
         "module": "notification.infrastructure.models",
     },
+    {
+        "name": "device_registration",
+        "module": "device_registration.infrastructure.models",
+    },
 ]
 
 MANAGED_OPENBAO_SERVICE_ID = "managed-openbao-transit"
@@ -998,6 +1002,7 @@ def ensure_schemas(database_url: str) -> None:
         "deployment_profile_service",
         "flow_service",
         "notification_service",
+        "device_registration_service",
         "revocation_profile_service",
     ]
 

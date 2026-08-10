@@ -22,12 +22,22 @@ Required files:
 - `grpc_service_token`
 - `notification_webhook_secret`
 - `notification_applicant_event_token`
+- `workload_identity_ca_cert`
+- `pp_workload_server_cert`
+- `pp_workload_server_key`
+- `flow_workload_client_cert`
+- `flow_workload_client_key`
+- `verification_workload_client_cert`
+- `verification_workload_client_key`
 - `flow_application_event_hmac_key`
 - `integration_secret_master_key`
+- `flow_webhook_secret`
 - `token_hmac_key`
 - `openbao_service_token`
 - `notification_openbao_token`
 - `cloudflare_tunnel_token`
+
+`flow_webhook_secret` authenticates verification-completion callbacks between the flow and auth services. Generate a random value of at least 32 bytes and use the same secret for both services.
 
 `openbao_service_token` should contain the scoped `credential-service` token for your operator-managed external Vault/OpenBao instance. The helper script `scripts/bootstrap-selfhost-vault.sh` can create it from a bootstrap token without keeping the bootstrap credential in the stack.
 

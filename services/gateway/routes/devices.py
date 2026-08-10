@@ -4,6 +4,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request, Response
 
 from gateway.models import (
+    DeviceChallengeRequest,
+    DeviceChallengeResponse,
     DeviceRegistrationCreate,
     DeviceRegistrationResponse,
     DeviceRegistrationUpdate,
@@ -11,6 +13,21 @@ from gateway.models import (
 from gateway.proxy import get_registry, proxy_request
 
 device_router = APIRouter(prefix="/v1/devices", tags=["Devices"])
+
+
+@device_router.post(
+    "/challenge",
+    response_model=DeviceChallengeResponse,
+    summary="Create Device Key Challenge",
+)
+async def create_device_challenge(
+    body: DeviceChallengeRequest,
+    request: Request,
+) -> Response:
+    """Create a user-, device-, and key-bound proof-of-possession challenge."""
+    registry = get_registry()
+    service_url = registry.get_service_url("device-registration")
+    return await proxy_request(request, service_url, "/v1/devices/challenge")
 
 
 @device_router.post("", response_model=DeviceRegistrationResponse, summary="Register Device")
