@@ -67,6 +67,27 @@ def test_ci_verifies_the_pinned_mdoc_binding_evidence_contract() -> None:
     assert "result.not_revoked is None" in workflow
 
 
+def test_ci_and_stack_lock_pin_the_same_marty_common_release() -> None:
+    workflow_text = _text(".github/workflows/ci.yml")
+    workflow = yaml.safe_load(workflow_text)
+    lock = json.loads(_text("release/stack-lock.json"))
+    common = next(
+        component
+        for component in lock["components"]
+        if component["name"] == "marty-common"
+    )
+    artifact = next(
+        item for item in common["artifacts"] if item["type"] == "python"
+    )
+
+    assert common["version"] == "0.2.7"
+    assert common["commit"] == "e60967cc365cd62f3ae9d4491dae13869d0f2832"
+    assert workflow["env"]["MARTY_COMMON_URI"] == artifact["uri"]
+    assert workflow["env"]["MARTY_COMMON_DIGEST"] == artifact["digest"]
+    assert 'marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"' in workflow_text
+    assert "marty_common-0.2.4" not in workflow_text
+
+
 def test_cli_and_api_core_use_the_same_monorepo_release() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}

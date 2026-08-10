@@ -66,6 +66,18 @@ def test_templates_are_protocol_shaped() -> None:
         assert request.cedar_policies
 
 
+def test_non_revoked_credential_template_requires_checked_status() -> None:
+    template = next(
+        item
+        for item in POLICY_SET_TEMPLATES
+        if item["template_id"] == "verification_valid_credential"
+    )
+    cedar_text = template["cedar_policies"][0]["cedar_text"]
+
+    assert "context.revocation_checked" in cedar_text
+    assert "!context.is_revoked" in cedar_text
+
+
 def test_policy_validation_rejects_effect_mismatch() -> None:
     use_case = PolicySetUseCase(repo=None, cedar_engine=None)
 

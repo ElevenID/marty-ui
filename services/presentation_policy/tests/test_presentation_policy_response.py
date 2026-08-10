@@ -1821,6 +1821,19 @@ def _allowing_cedar_engine() -> SimpleNamespace:
     )
 
 
+def test_revocation_state_ignores_issuer_controlled_nested_claims() -> None:
+    assert pp._derive_revocation_state(
+        {
+            "revocation_checked": False,
+            "claims": {
+                "revocation_checked": True,
+                "not_revoked": True,
+                "is_revoked": False,
+            },
+        }
+    ) == (False, None)
+
+
 def test_normalized_trusted_issuer_satisfies_policy_constraints() -> None:
     passed, error = pp._evaluate_issuer_trust(
         trust_profile_data={
@@ -2893,6 +2906,8 @@ def _install_successful_policy_verification(
     issued_at: object | None = None,
     holder_binding_verified: bool = False,
     credential_count: int = 1,
+    revocation_checked: bool = True,
+    not_revoked: bool | None = True,
 ) -> None:
     monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "sd-jwt")
     monkeypatch.setattr(
@@ -2904,8 +2919,8 @@ def _install_successful_policy_verification(
             "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
             "format": "sd-jwt",
             "error": None,
-            "revocation_checked": True,
-            "not_revoked": True,
+            "revocation_checked": revocation_checked,
+            "not_revoked": not_revoked,
             "verification_evidence": {
                 "algorithm": "EdDSA",
                 "issued_at": issued_at,
@@ -3106,6 +3121,8 @@ def test_cedar_receives_only_verified_policy_evidence(
 ) -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     policy = asyncio.run(_save_open_badge_login_policy(repo))
+    policy.freshness = pp.FreshnessPolicy(require_not_revoked=True)
+    asyncio.run(repo.save(policy))
     _install_marty_trust_profile(
         monkeypatch,
         issuer_relationships=[_normalized_issuer_relationship(trust_level=87)],
@@ -3145,10 +3162,90 @@ def test_cedar_receives_only_verified_policy_evidence(
     assert isinstance(context, dict)
     assert context["issuer_trust_level"] == 87
     assert 30 <= context["credential_age_seconds"] <= 35
+    assert context["revocation_checked"] is True
+    assert context["revocation_required"] is True
     assert context["is_revoked"] is False
     assert context["is_expired"] is False
     assert context["holder_binding_present"] is False
     assert context["algorithm"] == "EdDSA"
+
+
+def test_optional_unchecked_revocation_uses_explicit_cedar_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(
+        monkeypatch,
+        issuer_relationships=[_normalized_issuer_relationship(trust_level=87)],
+    )
+    issued_at = int((datetime.now(timezone.utc) - timedelta(seconds=30)).timestamp())
+    _install_successful_policy_verification(
+        monkeypatch,
+        issued_at=issued_at,
+        holder_binding_verified=True,
+        revocation_checked=False,
+        not_revoked=None,
+    )
+    released_engine = pp.CedarEngine.with_credential_verification()
+    captured: dict[str, object] = {}
+
+    def is_authorized(**kwargs: object) -> object:
+        captured.update(kwargs)
+        return released_engine.is_authorized(**kwargs)
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(
+                vp_token="credential",
+                nonce="nonce",
+                audience="verifier",
+            ),
+            repo=repo,
+            cedar_engine=SimpleNamespace(is_authorized=is_authorized),
+        )
+    )
+
+    assert response.result == "passed"
+    assert response.decision == "allow"
+    context = captured["context"]
+    assert isinstance(context, dict)
+    assert context["revocation_checked"] is False
+    assert context["revocation_required"] is False
+    assert context["is_revoked"] is False
+
+
+def test_known_revoked_credential_denies_even_when_policy_does_not_require_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = asyncio.run(_save_open_badge_login_policy(repo))
+    _install_marty_trust_profile(
+        monkeypatch,
+        issuer_relationships=[_normalized_issuer_relationship(trust_level=87)],
+    )
+    issued_at = int((datetime.now(timezone.utc) - timedelta(seconds=30)).timestamp())
+    _install_successful_policy_verification(
+        monkeypatch,
+        issued_at=issued_at,
+        revocation_checked=False,
+        not_revoked=False,
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(vp_token="credential"),
+            repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
+        )
+    )
+
+    assert response.result == "failed"
+    assert response.decision == "deny"
+    assert response.verified_claims == {}
+    assert "Credential is revoked" in response.decision_reason
 
 
 def test_mdoc_direct_pin_lifecycle_supplies_separate_status_evidence(
@@ -3236,6 +3333,8 @@ def test_mdoc_direct_pin_lifecycle_supplies_separate_status_evidence(
     assert isinstance(context, dict)
     assert context["issuer_id"] == issuer_id
     assert context["issuer_trust_level"] == 87
+    assert context["revocation_checked"] is True
+    assert context["revocation_required"] is False
     assert context["is_revoked"] is False
     assert context["algorithm"] == "ES256"
 

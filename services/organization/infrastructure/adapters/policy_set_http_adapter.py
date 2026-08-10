@@ -114,6 +114,7 @@ permit (
     resource
 )
 when {
+    context.revocation_checked &&
     !context.is_revoked &&
     !context.is_expired &&
     context.issuer_trust_level >= 50
