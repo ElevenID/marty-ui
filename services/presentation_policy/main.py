@@ -2155,18 +2155,19 @@ _REVOKED_KEYS = {
 }
 
 
-def _collect_bool_values(payload: Any, target_keys: set[str]) -> list[bool]:
-    values: list[bool] = []
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            key_lc = str(key).strip().lower()
-            if key_lc in target_keys and isinstance(value, bool):
-                values.append(value)
-            values.extend(_collect_bool_values(value, target_keys))
-    elif isinstance(payload, list):
-        for item in payload:
-            values.extend(_collect_bool_values(item, target_keys))
-    return values
+def _top_level_bool_values(
+    payload: dict[str, Any], target_keys: set[str]
+) -> list[bool]:
+    """Read only status fields asserted by the owned verifier adapter.
+
+    Credential claims and raw verifier payloads are nested below the adapter
+    result. They are issuer-controlled data, not authoritative status evidence.
+    """
+    return [
+        value
+        for key, value in payload.items()
+        if str(key).strip().lower() in target_keys and isinstance(value, bool)
+    ]
 
 
 def _derive_revocation_state(
@@ -2178,13 +2179,18 @@ def _derive_revocation_state(
       - revocation_checked: whether status/revocation was actually checked
       - not_revoked: whether credential is confirmed not revoked
     """
-    checked_values = _collect_bool_values(verification_result, _REVOCATION_CHECK_KEYS)
-    not_revoked_values = _collect_bool_values(verification_result, _NOT_REVOKED_KEYS)
-    revoked_values = _collect_bool_values(verification_result, _REVOKED_KEYS)
+    checked_values = _top_level_bool_values(
+        verification_result, _REVOCATION_CHECK_KEYS
+    )
+    not_revoked_values = _top_level_bool_values(
+        verification_result, _NOT_REVOKED_KEYS
+    )
+    revoked_values = _top_level_bool_values(verification_result, _REVOKED_KEYS)
 
     revocation_checked: bool | None = None
     if checked_values:
-        revocation_checked = any(checked_values)
+        # Conflicting adapter fields cannot establish that a check occurred.
+        revocation_checked = all(checked_values)
 
     not_revoked: bool | None = None
     if any(revoked_values):
@@ -2192,10 +2198,9 @@ def _derive_revocation_state(
     elif not_revoked_values:
         # Any explicit false should fail closed.
         not_revoked = all(not_revoked_values)
-
-    # If revocation outcome is present, treat that as evidence a check occurred.
-    if revocation_checked is None and (revoked_values or not_revoked_values):
-        revocation_checked = True
+    elif revoked_values and revocation_checked is True:
+        # `is_revoked: false` is meaningful only with an explicit checked marker.
+        not_revoked = True
 
     return revocation_checked, not_revoked
 
@@ -3968,6 +3973,9 @@ async def evaluate_presentation(
     issuer_did: str = verification_result.get("issuer_did", "unknown")
     verification_ok: bool = verification_result.get("verified", False)
     revocation_checked, not_revoked = _derive_revocation_state(verification_result)
+    revocation_required = bool(
+        policy.freshness and policy.freshness.require_not_revoked
+    )
 
     if not verification_ok:
         verification_error = (
@@ -4152,79 +4160,41 @@ async def evaluate_presentation(
                 verification_result
             )
 
+    # Known revoked/suspended/expired status is never optional. Unknown status is
+    # rejected only when the selected product policy explicitly requires it.
+    if not_revoked is False:
+        normalized_lifecycle_status = str(
+            verification_result.get("revocation_status") or ""
+        ).strip().lower()
+        verification_error = {
+            "suspended": "Credential is suspended",
+            "expired": "Credential is expired",
+        }.get(normalized_lifecycle_status, "Credential is revoked")
+        return _failed_policy_response(
+            policy,
+            request,
+            f"Credential verification failed: {verification_error}",
+            freshness_check_passed=False,
+        )
+
     # Apply freshness/revocation requirements from MIP policy abstractions.
     # This must remain format-agnostic and not tied to a specific login flow.
-    if policy.freshness and policy.freshness.require_not_revoked:
-        if revocation_checked is not True:
-            verification_error = "Revocation status was not checked by the verifier"
-            credential_results = [
-                CredentialEvaluationResult(
-                    credential_template_id=req.credential_template_id,
-                    satisfied=False,
-                    issuer_did=issuer_did,
-                    claim_results=[],
-                    freshness_check_passed=False,
-                    signature_valid=True,
-                    errors=[verification_error],
-                )
-                for req in policy.credential_requirements
-            ]
-            required_total = sum(
-                1 for req in policy.credential_requirements if req.required
-            )
-            return PolicyEvaluationResponse(
-                result=EvaluationResult.FAILED.value,
-                policy_id=policy.id,
-                policy_name=policy.name,
-                credential_results=credential_results,
-                total_requirements=len(policy.credential_requirements),
-                satisfied_requirements=0,
-                required_satisfied=0,
-                required_total=required_total,
-                decision="deny",
-                decision_reason=f"Credential verification failed: {verification_error}",
-                verified_claims={},
-                evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
-                nonce=request.nonce,
-            )
-        if not_revoked is not True:
-            normalized_lifecycle_status = (
-                str(verification_result.get("revocation_status") or "").strip().lower()
-            )
-            verification_error = {
-                "suspended": "Credential is suspended",
-                "expired": "Credential is expired",
-            }.get(normalized_lifecycle_status, "Credential is revoked")
-            credential_results = [
-                CredentialEvaluationResult(
-                    credential_template_id=req.credential_template_id,
-                    satisfied=False,
-                    issuer_did=issuer_did,
-                    claim_results=[],
-                    freshness_check_passed=False,
-                    signature_valid=True,
-                    errors=[verification_error],
-                )
-                for req in policy.credential_requirements
-            ]
-            required_total = sum(
-                1 for req in policy.credential_requirements if req.required
-            )
-            return PolicyEvaluationResponse(
-                result=EvaluationResult.FAILED.value,
-                policy_id=policy.id,
-                policy_name=policy.name,
-                credential_results=credential_results,
-                total_requirements=len(policy.credential_requirements),
-                satisfied_requirements=0,
-                required_satisfied=0,
-                required_total=required_total,
-                decision="deny",
-                decision_reason=f"Credential verification failed: {verification_error}",
-                verified_claims={},
-                evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
-                nonce=request.nonce,
-            )
+    if revocation_required and revocation_checked is not True:
+        verification_error = "Revocation status was not checked by the verifier"
+        return _failed_policy_response(
+            policy,
+            request,
+            f"Credential verification failed: {verification_error}",
+            freshness_check_passed=False,
+        )
+    if revocation_required and not_revoked is not True:
+        verification_error = "Revocation check did not establish an active credential"
+        return _failed_policy_response(
+            policy,
+            request,
+            f"Credential verification failed: {verification_error}",
+            freshness_check_passed=False,
+        )
 
     credential_results = []
     verified_claims: dict[str, Any] = {}
@@ -4357,7 +4327,9 @@ async def evaluate_presentation(
         missing_evidence: list[str] = []
         if issuer_policy_evidence is None:
             missing_evidence.append("numeric issuer trust")
-        if revocation_checked is not True or not_revoked is not True:
+        if revocation_required and (
+            revocation_checked is not True or not_revoked is not True
+        ):
             missing_evidence.append("non-revocation")
         if validity_checked is not True or not isinstance(is_expired, bool):
             missing_evidence.append("credential validity")
@@ -4372,8 +4344,10 @@ async def evaluate_presentation(
                 "Cedar policy evidence is incomplete: " + ", ".join(missing_evidence),
                 trust_check_passed=issuer_policy_evidence is not None,
                 freshness_check_passed=(
-                    revocation_checked is True
-                    and not_revoked is True
+                    (
+                        not revocation_required
+                        or (revocation_checked is True and not_revoked is True)
+                    )
                     and validity_checked is True
                     and isinstance(is_expired, bool)
                     and credential_age_seconds is not None
@@ -4389,7 +4363,9 @@ async def evaluate_presentation(
             "issuer_id": credential_results[0].issuer_did if credential_results else "",
             "issuer_trust_level": issuer_policy_evidence["issuer_trust_level"],
             "credential_age_seconds": credential_age_seconds,
-            "is_revoked": False,
+            "revocation_checked": revocation_checked is True,
+            "revocation_required": revocation_required,
+            "is_revoked": not_revoked is False,
             "is_expired": is_expired,
             "holder_binding_present": (
                 verification_evidence.get("holder_binding_verified") is True
