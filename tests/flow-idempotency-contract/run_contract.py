@@ -340,7 +340,7 @@ def main() -> None:
     assert stored_plan_value[0]["instance_id"] == flow_instance_id
     assert artifact_count == 1
     assert artifact_owner == flow_instance_id
-    assert version == "20260809_0001"
+    assert version == "20260810_0100"
 
     instance_created_count = sum(instance_created_results)
     RESULT_PATH.parent.mkdir(parents=True, exist_ok=True)
