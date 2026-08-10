@@ -71,6 +71,7 @@ from marty_common import (
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
+from common.grpc_factory import create_grpc_channel
 from common.webhook_signatures import is_valid_event_secret, payload_digest
 from flow.callback_outbox import (
     CallbackOutboxEvent,
@@ -2717,9 +2718,10 @@ async def _initiate_credential_layer_issuance(
 
         channel = getattr(app.state, "issuance_grpc_channel", None)
         if channel is None:
-            import grpc.aio as grpc_aio
-
-            channel = grpc_aio.insecure_channel(ISSUANCE_GRPC_TARGET)
+            channel = create_grpc_channel(
+                ISSUANCE_GRPC_TARGET,
+                service_name="flow",
+            )
             close_channel = True
         else:
             close_channel = False
@@ -2822,10 +2824,11 @@ async def _build_wallet_offers_from_template(
         # Fetch credential template via gRPC
         from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
         from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
-        import grpc.aio as grpc_aio
-
         ct_grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
-        async with grpc_aio.insecure_channel(ct_grpc_target) as channel:
+        async with create_grpc_channel(
+            ct_grpc_target,
+            service_name="flow",
+        ) as channel:
             ct_stub = ct_grpc.CredentialTemplateServiceStub(channel)
             tmpl_resp = await ct_stub.GetTemplate(
                 ct_pb2.GetTemplateRequest(template_id=template_id)
@@ -7571,13 +7574,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # gRPC channels to downstream services
     from common.grpc_factory import (
-        create_grpc_channel,
         create_grpc_server,
         start_grpc_server_port,
     )
 
     pp_grpc_target = os.environ.get("PP_GRPC_TARGET", "presentation-policy:9009")
-    pp_grpc_channel = create_grpc_channel(pp_grpc_target, service_name="flow")
+    pp_grpc_channel = create_grpc_channel(
+        pp_grpc_target,
+        service_name="flow",
+        require_workload_identity=True,
+    )
     app.state.pp_grpc_channel = pp_grpc_channel
 
     ct_grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
