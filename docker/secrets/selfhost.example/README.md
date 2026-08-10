@@ -20,7 +20,8 @@ Required files:
 - `marty_api_client_secret`
 - `issuance_api_key`
 - `grpc_service_token`
-- `integration_secret_master_key`
+- `notification_webhook_secret`
+- `notification_applicant_event_token`
 - `workload_identity_ca_cert`
 - `pp_workload_server_cert`
 - `pp_workload_server_key`
@@ -33,11 +34,14 @@ Required files:
 - `flow_webhook_secret`
 - `token_hmac_key`
 - `openbao_service_token`
+- `notification_openbao_token`
 - `cloudflare_tunnel_token`
 
 `flow_webhook_secret` authenticates verification-completion callbacks between the flow and auth services. Generate a random value of at least 32 bytes and use the same secret for both services.
 
 `openbao_service_token` should contain the scoped `credential-service` token for your operator-managed external Vault/OpenBao instance. The helper script `scripts/bootstrap-selfhost-vault.sh` can create it from a bootstrap token without keeping the bootstrap credential in the stack.
+
+`notification_openbao_token` is the narrower `notification-webhook-service` token. Only the Notification workload receives it; other services and the migration job must not mount it.
 
 `integration_secret_master_key` is a base64-encoded 32-byte AES key used by issuance to encrypt organization-managed integration secrets, such as Canvas Credentials API tokens. Generate it with:
 

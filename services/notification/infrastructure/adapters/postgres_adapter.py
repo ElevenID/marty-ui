@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import delete, or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from notification.infrastructure.models import (
@@ -13,6 +14,7 @@ from notification.infrastructure.models import (
     subscriptions,
     webhook_deliveries,
     webhook_endpoints,
+    webhook_outbox,
 )
 
 if TYPE_CHECKING:
@@ -78,7 +80,6 @@ class PostgresNotificationRepository:
             ChannelType,
             DeliveryResult,
             Notification,
-            NotificationPriority,
             NotificationStatus,
             NotificationTarget,
             NotificationType,
@@ -186,7 +187,11 @@ class PostgresNotificationRepository:
             organization_id=row["organization_id"],
             name=row["name"],
             url=row["url"],
-            secret=row["secret"],
+            # Production reads never materialize the signing secret.  The
+            # worker unwraps it only for the lifetime of one delivery attempt.
+            secret="",
+            secret_envelope=row["secret_envelope"],
+            secret_hint=row["secret_hint"],
             description=row["description"],
             event_types=row["event_types"] or [],
             enabled=row["enabled"],
@@ -211,11 +216,38 @@ class PostgresNotificationRepository:
             event_type=row["event_type"],
             success=row["success"],
             response_status_code=row["response_status_code"],
-            response_body=row["response_body"],
+            response_body=None,
             error_message=row["error_message"],
             retry_count=row["retry_count"],
             response_time_ms=row["response_time_ms"],
             created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _to_webhook_outbox_event(row: dict[str, Any]):
+        from notification.webhook_outbox import WebhookOutboxEvent
+
+        return WebhookOutboxEvent(
+            id=row["id"],
+            organization_id=row["organization_id"],
+            webhook_id=row["webhook_id"],
+            subscription_id=row["subscription_id"],
+            event_id=row["event_id"],
+            event_type=row["event_type"],
+            payload=row["payload"] or {},
+            max_attempts=row["max_attempts"],
+            initial_backoff_seconds=row["initial_backoff_seconds"],
+            max_backoff_seconds=row["max_backoff_seconds"],
+            created_at=row["created_at"],
+            next_attempt_at=row["next_attempt_at"],
+            expires_at=row["expires_at"],
+            status=row["status"],
+            attempt_count=row["attempt_count"],
+            lease_token=row["lease_token"],
+            lease_expires_at=row["lease_expires_at"],
+            delivered_at=row["delivered_at"],
+            last_error_code=row["last_error_code"],
+            response_status_code=row["response_status_code"],
         )
 
     async def _upsert(self, table, identity_column: str, payload: dict[str, Any]) -> None:
@@ -357,6 +389,12 @@ class PostgresNotificationRepository:
         return await self._delete_by_identity(subscriptions, "id", subscription_id)
 
     async def save_webhook(self, webhook: "WebhookEndpoint") -> None:
+        if (
+            not webhook.secret_envelope
+            or not webhook.secret_envelope.startswith("vault:")
+            or not webhook.secret_hint
+        ):
+            raise ValueError("PostgreSQL webhooks require an encrypted signing secret")
         await self._upsert(
             webhook_endpoints,
             "id",
@@ -365,7 +403,8 @@ class PostgresNotificationRepository:
                 "organization_id": webhook.organization_id,
                 "name": webhook.name,
                 "url": webhook.url,
-                "secret": webhook.secret,
+                "secret_envelope": webhook.secret_envelope,
+                "secret_hint": webhook.secret_hint,
                 "description": webhook.description,
                 "event_types": webhook.event_types,
                 "enabled": webhook.enabled,
@@ -397,25 +436,32 @@ class PostgresNotificationRepository:
         return await self._delete_by_identity(webhook_endpoints, "id", webhook_id)
 
     async def save_webhook_delivery(self, delivery: "WebhookDelivery") -> None:
-        await self._upsert(
-            webhook_deliveries,
-            "id",
-            {
-                "id": delivery.id,
-                "organization_id": delivery.organization_id,
-                "webhook_id": delivery.webhook_id,
-                "subscription_id": delivery.subscription_id,
-                "event_id": delivery.event_id,
-                "event_type": delivery.event_type,
-                "success": delivery.success,
-                "response_status_code": delivery.response_status_code,
-                "response_body": delivery.response_body,
-                "error_message": delivery.error_message,
-                "retry_count": delivery.retry_count,
-                "response_time_ms": delivery.response_time_ms,
-                "created_at": delivery.created_at,
+        payload = {
+            "id": delivery.id,
+            "organization_id": delivery.organization_id,
+            "webhook_id": delivery.webhook_id,
+            "subscription_id": delivery.subscription_id,
+            "event_id": delivery.event_id,
+            "event_type": delivery.event_type,
+            "success": delivery.success,
+            "response_status_code": delivery.response_status_code,
+            "error_message": delivery.error_message,
+            "retry_count": delivery.retry_count,
+            "response_time_ms": delivery.response_time_ms,
+            "created_at": delivery.created_at,
+        }
+        statement = pg_insert(webhook_deliveries).values(**payload)
+        statement = statement.on_conflict_do_update(
+            index_elements=[webhook_deliveries.c.id],
+            set_={
+                key: getattr(statement.excluded, key)
+                for key in payload
+                if key != "id"
             },
         )
+        async with self._session_factory() as session:
+            await session.execute(statement)
+            await session.commit()
 
     async def list_webhook_deliveries(self, webhook_id: str) -> list["WebhookDelivery"]:
         async with self._session_factory() as session:
@@ -425,3 +471,180 @@ class PostgresNotificationRepository:
                 .order_by(webhook_deliveries.c.created_at.desc())
             )
             return [self._to_webhook_delivery(row) for row in result.mappings().all()]
+
+    async def enqueue_webhook_event(self, event) -> bool:
+        """Insert one logical event/subscription/destination delivery once."""
+        statement = (
+            pg_insert(webhook_outbox)
+            .values(
+                id=event.id,
+                organization_id=event.organization_id,
+                webhook_id=event.webhook_id,
+                subscription_id=event.subscription_id,
+                event_id=event.event_id,
+                event_type=event.event_type,
+                payload=event.payload,
+                max_attempts=event.max_attempts,
+                initial_backoff_seconds=event.initial_backoff_seconds,
+                max_backoff_seconds=event.max_backoff_seconds,
+                status=event.status,
+                attempt_count=event.attempt_count,
+                next_attempt_at=event.next_attempt_at,
+                lease_token=event.lease_token,
+                lease_expires_at=event.lease_expires_at,
+                delivered_at=event.delivered_at,
+                last_error_code=event.last_error_code,
+                response_status_code=event.response_status_code,
+                created_at=event.created_at,
+                expires_at=event.expires_at,
+            )
+            .on_conflict_do_nothing(index_elements=[webhook_outbox.c.id])
+        )
+        async with self._session_factory() as session:
+            result = await session.execute(statement)
+            await session.commit()
+            return result.rowcount == 1
+
+    async def claim_due_webhook_events(
+        self,
+        *,
+        now,
+        lease_expires_at,
+        limit: int,
+    ):
+        """Lease due deliveries across replicas using row locks."""
+        from notification.webhook_outbox import new_lease_token
+
+        claimed = []
+        async with self._session_factory() as session:
+            async with session.begin():
+                await session.execute(
+                    webhook_outbox.update()
+                    .where(
+                        webhook_outbox.c.expires_at <= now,
+                        webhook_outbox.c.status.in_(
+                            ("pending", "retry", "delivering")
+                        ),
+                    )
+                    .values(
+                        status="expired",
+                        payload={},
+                        lease_token=None,
+                        lease_expires_at=None,
+                        last_error_code="retention_expired",
+                    )
+                )
+                result = await session.execute(
+                    select(webhook_outbox)
+                    .where(
+                        webhook_outbox.c.expires_at > now,
+                        or_(
+                            (
+                                webhook_outbox.c.status.in_(("pending", "retry"))
+                                & (webhook_outbox.c.next_attempt_at <= now)
+                            ),
+                            (
+                                (webhook_outbox.c.status == "delivering")
+                                & (webhook_outbox.c.lease_expires_at <= now)
+                            ),
+                        ),
+                    )
+                    .order_by(webhook_outbox.c.created_at)
+                    .limit(max(1, min(limit, 100)))
+                    .with_for_update(skip_locked=True)
+                )
+                for row in result.mappings().all():
+                    lease_token = new_lease_token()
+                    attempt_count = int(row["attempt_count"]) + 1
+                    await session.execute(
+                        webhook_outbox.update()
+                        .where(webhook_outbox.c.id == row["id"])
+                        .values(
+                            status="delivering",
+                            attempt_count=attempt_count,
+                            lease_token=lease_token,
+                            lease_expires_at=lease_expires_at,
+                        )
+                    )
+                    claimed.append(
+                        self._to_webhook_outbox_event(
+                            {
+                                **row,
+                                "status": "delivering",
+                                "attempt_count": attempt_count,
+                                "lease_token": lease_token,
+                                "lease_expires_at": lease_expires_at,
+                            }
+                        )
+                    )
+        return claimed
+
+    async def mark_webhook_event_delivered(
+        self,
+        event_id: str,
+        *,
+        lease_token: str,
+        delivered_at,
+        response_status_code: int,
+    ) -> bool:
+        async with self._session_factory() as session:
+            result = await session.execute(
+                webhook_outbox.update()
+                .where(
+                    webhook_outbox.c.id == event_id,
+                    webhook_outbox.c.status == "delivering",
+                    webhook_outbox.c.lease_token == lease_token,
+                )
+                .values(
+                    status="delivered",
+                    payload={},
+                    delivered_at=delivered_at,
+                    response_status_code=response_status_code,
+                    lease_token=None,
+                    lease_expires_at=None,
+                    last_error_code=None,
+                )
+            )
+            await session.commit()
+            return result.rowcount == 1
+
+    async def mark_webhook_event_failed(
+        self,
+        event_id: str,
+        *,
+        lease_token: str,
+        next_attempt_at,
+        terminal: bool,
+        error_code: str,
+        response_status_code: int | None,
+    ) -> bool:
+        values = {
+            "status": "dead_letter" if terminal else "retry",
+            "next_attempt_at": next_attempt_at,
+            "lease_token": None,
+            "lease_expires_at": None,
+            "last_error_code": error_code[:128],
+            "response_status_code": response_status_code,
+        }
+        if terminal:
+            values["payload"] = {}
+        async with self._session_factory() as session:
+            result = await session.execute(
+                webhook_outbox.update()
+                .where(
+                    webhook_outbox.c.id == event_id,
+                    webhook_outbox.c.status == "delivering",
+                    webhook_outbox.c.lease_token == lease_token,
+                )
+                .values(**values)
+            )
+            await session.commit()
+            return result.rowcount == 1
+
+    async def get_webhook_outbox_event(self, event_id: str):
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(webhook_outbox).where(webhook_outbox.c.id == event_id)
+            )
+            row = result.mappings().first()
+            return self._to_webhook_outbox_event(row) if row else None
