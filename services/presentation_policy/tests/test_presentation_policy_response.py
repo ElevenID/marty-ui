@@ -315,6 +315,49 @@ def test_create_presentation_policy_accepts_protocol_required_claims() -> None:
     assert body["accepted_credential_types"] == ["DriversLicense"]
 
 
+def test_create_presentation_policy_rejects_unknown_claim_constraint_type() -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    client = _build_client(repo)
+
+    response = client.post(
+        "/v1/presentation-policies",
+        json={
+            "organization_id": "org-1",
+            "name": "Unsupported Constraint",
+            "credential_requirements": [
+                {
+                    "credential_template_id": "DriversLicense",
+                    "requested_claims": [
+                        {
+                            "claim_name": "age_over_21",
+                            "constraints": [
+                                {
+                                    "claim_name": "age_over_21",
+                                    "constraint_type": "future_operator",
+                                    "value": True,
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+        headers={"x-user-id": "user-1"},
+    )
+
+    assert response.status_code == 422
+    assert asyncio.run(repo.list("org-1")) == []
+
+
+def test_constraint_evaluation_denies_unknown_type() -> None:
+    constraint = pp.ClaimConstraint(
+        claim_name="age_over_21",
+        value=True,
+    )
+
+    assert pp._evaluate_constraint("future_operator", True, constraint) is False
+
+
 def test_public_response_normalizes_legacy_enum_casing() -> None:
     policy = pp.PresentationPolicy(
         organization_id="org-1",

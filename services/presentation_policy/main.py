@@ -396,7 +396,7 @@ class ClaimConstraintModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     claim_name: str
-    constraint_type: str = "presence"
+    constraint_type: ConstraintType = ConstraintType.PRESENCE
     value: Any = None
     description: str | None = None
 
@@ -623,9 +623,8 @@ def _evaluate_constraint(
             )
             return False
 
-    # Unknown constraint type — pass through
-    logger.warning(f"Unknown constraint type '{constraint_type}'; treating as passing")
-    return True
+    logger.warning("Unsupported constraint type %r; evaluation denied", constraint_type)
+    return False
 
 
 # =============================================================================
