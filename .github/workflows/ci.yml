@@ -5,8 +5,8 @@ env:
   MARTY_API_CORE_DIGEST: sha256:d3fed82fbd58d9106ea198511d1facec2c5e4d9aa703868ee57d1a9a4a4d9fdd
   MARTY_BLOG_URI: https://github.com/ElevenID/marty-blog/releases/download/v0.1.5/elevenid-marty-blog-0.1.5.tgz
   MARTY_BLOG_DIGEST: sha256:37ef3b45e289198022c2ccc83dcb618959a68644ee72366a00d6a4a6f331aaca
-  MARTY_COMMON_URI: https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.4/marty_common-0.2.4-py3-none-any.whl
-  MARTY_COMMON_DIGEST: sha256:1163a215f53dad95b73a5f67be4c5cca2573e049396edd71156b517d7d43595b
+  MARTY_COMMON_URI: https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.7/marty_common-0.2.7-py3-none-any.whl
+  MARTY_COMMON_DIGEST: sha256:c9ec52cf481879f9c426bd48335be9c31e0b85698dbc8a3683846f2db953df41
   MARTY_PROTOCOL_REF: 98b5a5fe981d17c1e59bdb6b6b20a937ef502767
 
 on:
@@ -97,11 +97,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl"
-          echo "${MARTY_COMMON_DIGEST#sha256:}  $RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl" | sha256sum --check --strict
+          marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"
+          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$marty_common_wheel"
+          echo "${MARTY_COMMON_DIGEST#sha256:}  $marty_common_wheel" | sha256sum --check --strict
           pip install -r requirements-services.txt
           pip install psycopg2-binary==2.9.10
-          pip install "$RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl"
+          pip install "$marty_common_wheel"
       - name: Run tests
         working-directory: services
         run: python -m pytest -v --tb=short -x
@@ -217,9 +218,10 @@ jobs:
           marty_rs_wheel="$RUNNER_TEMP/${marty_rs_uri##*/}"
           curl --fail --location --silent --show-error "$marty_rs_uri" --output "$marty_rs_wheel"
           echo "${marty_rs_digest#sha256:}  $marty_rs_wheel" | sha256sum --check --strict
-          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl"
-          echo "${MARTY_COMMON_DIGEST#sha256:}  $RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl" | sha256sum --check --strict
-          pip install pytest pyyaml jsonschema cryptography playwright "$marty_rs_wheel" "$RUNNER_TEMP/marty_common-0.2.4-py3-none-any.whl"
+          marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"
+          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$marty_common_wheel"
+          echo "${MARTY_COMMON_DIGEST#sha256:}  $marty_common_wheel" | sha256sum --check --strict
+          pip install pytest pyyaml jsonschema cryptography playwright "$marty_rs_wheel" "$marty_common_wheel"
       - name: Verify released mdoc binding evidence contract
         shell: bash
         run: |
