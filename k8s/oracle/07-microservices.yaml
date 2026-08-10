@@ -948,6 +948,12 @@ spec:
                   key: GRPC_SERVICE_TOKEN
             - name: VERIFICATION_SERVICE_PORT
               value: "8012"
+            - name: GRPC_WORKLOAD_TLS_CLIENT_CERT
+              value: /var/run/secrets/marty/workload/tls.crt
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KEY
+              value: /var/run/secrets/marty/workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_CA_CERT
+              value: /var/run/secrets/marty/workload/ca.crt
             - name: PP_GRPC_TARGET
               value: "presentation-policy:9009"
             - name: VERIF_GRPC_PORT
@@ -968,6 +974,10 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_INTERNAL_API_KEY
+          volumeMounts:
+            - name: verification-workload-tls
+              mountPath: /var/run/secrets/marty/workload
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -987,6 +997,10 @@ spec:
               port: 8012
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: verification-workload-tls
+          secret:
+            secretName: verification-workload-tls
 ---
 apiVersion: v1
 kind: Service
@@ -1352,6 +1366,12 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: GRPC_WORKLOAD_TLS_SERVER_CERT
+              value: /var/run/secrets/marty/workload/tls.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KEY
+              value: /var/run/secrets/marty/workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_CA_CERT
+              value: /var/run/secrets/marty/workload/ca.crt
             - name: PRESENTATION_POLICY_SERVICE_PORT
               value: "8009"
             - name: DID_RESOLUTION_BASE_URL
@@ -1368,6 +1388,10 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: RABBITMQ_URL
+          volumeMounts:
+            - name: presentation-policy-workload-tls
+              mountPath: /var/run/secrets/marty/workload
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -1387,6 +1411,10 @@ spec:
               port: 8009
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: presentation-policy-workload-tls
+          secret:
+            secretName: presentation-policy-workload-tls
 ---
 apiVersion: v1
 kind: Service
@@ -1528,6 +1556,12 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: GRPC_WORKLOAD_TLS_CLIENT_CERT
+              value: /var/run/secrets/marty/workload/tls.crt
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KEY
+              value: /var/run/secrets/marty/workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_CA_CERT
+              value: /var/run/secrets/marty/workload/ca.crt
             - name: FLOW_WEBHOOK_SECRET
               valueFrom:
                 secretKeyRef:
@@ -1560,6 +1594,10 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: PRESENTATION_POLICY_SERVICE_URL
+          volumeMounts:
+            - name: flow-workload-tls
+              mountPath: /var/run/secrets/marty/workload
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -1579,6 +1617,10 @@ spec:
               port: 8011
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: flow-workload-tls
+          secret:
+            secretName: flow-workload-tls
 ---
 apiVersion: v1
 kind: Service

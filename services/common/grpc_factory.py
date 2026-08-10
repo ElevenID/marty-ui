@@ -45,8 +45,8 @@ def _is_dev_environment() -> bool:
     return os.environ.get("ENVIRONMENT", "development").lower() in _DEV_ENVIRONMENTS
 
 
-def _read_service_token() -> str:
-    """Resolve the gRPC token and require a strong secret in production."""
+def read_service_token() -> str:
+    """Resolve the shared internal-service token with production safeguards."""
     token = os.environ.get("GRPC_SERVICE_TOKEN", "").strip()
     token_file = os.environ.get("GRPC_SERVICE_TOKEN_FILE", "").strip()
     if token and token_file:
@@ -365,6 +365,17 @@ class CorrelationIdInterceptor(grpc_aio.ServerInterceptor):
 
 _SERVICE_TOKEN_HEADER = "x-service-token"
 
+_WORKLOAD_TLS_SERVER_ENV = (
+    "GRPC_WORKLOAD_TLS_SERVER_CERT",
+    "GRPC_WORKLOAD_TLS_SERVER_KEY",
+    "GRPC_WORKLOAD_TLS_CA_CERT",
+)
+_WORKLOAD_TLS_CLIENT_ENV = (
+    "GRPC_WORKLOAD_TLS_CLIENT_CERT",
+    "GRPC_WORKLOAD_TLS_CLIENT_KEY",
+    "GRPC_WORKLOAD_TLS_CA_CERT",
+)
+
 
 class ServiceAuthInterceptor(grpc_aio.ServerInterceptor):
     """Validates a shared service token on inbound gRPC calls.
@@ -425,6 +436,128 @@ class ServiceAuthInterceptor(grpc_aio.ServerInterceptor):
         if handler.stream_unary:
             return grpc.stream_unary_rpc_method_handler(abort_unary, **handler_kwargs)
         return grpc.stream_stream_rpc_method_handler(abort_stream, **handler_kwargs)
+
+
+def _configured_paths(
+    names: tuple[str, ...], *, purpose: str
+) -> tuple[str, ...] | None:
+    """Return complete path configuration or reject a partial configuration."""
+    values = tuple(os.environ.get(name, "").strip() for name in names)
+    if any(values) and not all(values):
+        missing = ", ".join(
+            name for name, value in zip(names, values) if not value
+        )
+        raise RuntimeError(f"Incomplete {purpose} configuration; missing {missing}.")
+    return values if all(values) else None
+
+
+def _require_workload_tls_paths(
+    names: tuple[str, ...],
+    *,
+    purpose: str,
+) -> tuple[str, ...] | None:
+    paths = _configured_paths(names, purpose=purpose)
+    if paths is None and not _is_dev_environment():
+        required = ", ".join(names)
+        raise RuntimeError(
+            f"{purpose} requires certificate-derived workload identity outside "
+            f"development environments; configure {required}."
+        )
+    return paths
+
+
+def _auth_context_values(context: Any, key: str) -> tuple[bytes, ...]:
+    """Read a gRPC authentication-context property across key representations."""
+    auth_context = context.auth_context() if hasattr(context, "auth_context") else {}
+    values = auth_context.get(key, auth_context.get(key.encode("ascii"), ()))
+    return tuple(
+        value if isinstance(value, bytes) else str(value).encode()
+        for value in values
+    )
+
+
+class WorkloadIdentityInterceptor(grpc_aio.ServerInterceptor):
+    """Authorize RPCs using identities proven by mutually authenticated TLS.
+
+    The allowlist is deny-by-default. A bearer header is deliberately never
+    accepted as workload identity.
+    """
+
+    _EXEMPT_PREFIXES = ServiceAuthInterceptor._EXEMPT_PREFIXES
+
+    def __init__(self, allowed_identities_by_method: dict[str, set[str]]) -> None:
+        if not allowed_identities_by_method:
+            raise ValueError("Workload identity authorization must not be empty")
+        self._allowed_identities_by_method = {
+            method: frozenset(identities)
+            for method, identities in allowed_identities_by_method.items()
+        }
+        if any(
+            not method.startswith("/") or not identities
+            for method, identities in self._allowed_identities_by_method.items()
+        ):
+            raise ValueError(
+                "Every workload-authorized RPC needs an exact method and identity"
+            )
+
+    @staticmethod
+    def _peer_identities(context: Any) -> frozenset[str]:
+        transport = _auth_context_values(context, "transport_security_type")
+        if not any(value.lower() in {b"ssl", b"tls"} for value in transport):
+            return frozenset()
+        identities: set[str] = set()
+        for value in _auth_context_values(
+            context, "x509_subject_alternative_name"
+        ):
+            try:
+                identities.add(value.decode("utf-8", errors="strict"))
+            except UnicodeDecodeError:
+                continue
+        return frozenset(identities)
+
+    async def intercept_service(self, continuation, handler_call_details):
+        method = handler_call_details.method or ""
+        if any(method.startswith(prefix) for prefix in self._EXEMPT_PREFIXES):
+            return await continuation(handler_call_details)
+
+        handler = await continuation(handler_call_details)
+        if handler is None:
+            return None
+        allowed = self._allowed_identities_by_method.get(method, frozenset())
+
+        async def authorized_unary(request, context):
+            peer_identities = self._peer_identities(context)
+            if not peer_identities:
+                logger.warning(
+                    "Rejected gRPC call without mTLS workload identity to %s",
+                    method,
+                )
+                await context.abort(
+                    grpc.StatusCode.UNAUTHENTICATED,
+                    "A mutually authenticated workload identity is required",
+                )
+                return None
+            if peer_identities.isdisjoint(allowed):
+                logger.warning(
+                    "Rejected unauthorized workload gRPC call to %s", method
+                )
+                await context.abort(
+                    grpc.StatusCode.PERMISSION_DENIED,
+                    "The authenticated workload is not authorized for this RPC",
+                )
+                return None
+            result = handler.unary_unary(request, context)
+            return await result if inspect.isawaitable(result) else result
+
+        if not handler.unary_unary:
+            raise RuntimeError(
+                f"Workload identity authorization requires unary RPCs: {method}"
+            )
+        return grpc.unary_unary_rpc_method_handler(
+            authorized_unary,
+            request_deserializer=handler.request_deserializer,
+            response_serializer=handler.response_serializer,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +623,36 @@ def _build_channel_credentials() -> grpc.ChannelCredentials | None:
     )
 
 
+def _build_workload_server_credentials() -> grpc.ServerCredentials | None:
+    paths = _require_workload_tls_paths(
+        _WORKLOAD_TLS_SERVER_ENV,
+        purpose="gRPC workload-identity server TLS",
+    )
+    if paths is None:
+        return None
+    cert_path, key_path, ca_path = paths
+    return grpc.ssl_server_credentials(
+        [(_read_file_bytes(key_path), _read_file_bytes(cert_path))],
+        root_certificates=_read_file_bytes(ca_path),
+        require_client_auth=True,
+    )
+
+
+def _build_workload_channel_credentials() -> grpc.ChannelCredentials | None:
+    paths = _require_workload_tls_paths(
+        _WORKLOAD_TLS_CLIENT_ENV,
+        purpose="gRPC workload-identity client TLS",
+    )
+    if paths is None:
+        return None
+    cert_path, key_path, ca_path = paths
+    return grpc.ssl_channel_credentials(
+        root_certificates=_read_file_bytes(ca_path),
+        private_key=_read_file_bytes(key_path),
+        certificate_chain=_read_file_bytes(cert_path),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public API — server factory
 # ---------------------------------------------------------------------------
@@ -499,6 +662,7 @@ def create_grpc_server(
     service_name: str,
     *,
     interceptors: list[grpc_aio.ServerInterceptor] | None = None,
+    workload_identity_authorization: dict[str, set[str]] | None = None,
 ) -> tuple[grpc_aio.Server, HealthServicer]:
     """Create a gRPC async server with observability wired in.
 
@@ -517,6 +681,9 @@ def create_grpc_server(
         Logical name shown in logs / metrics labels.
     interceptors:
         Additional interceptors prepended to the chain.
+    workload_identity_authorization:
+        Exact RPC-to-certificate-URI-SAN allowlist. Outside development this
+        also requires the dedicated workload server certificate settings.
     """
     all_interceptors: list[grpc_aio.ServerInterceptor] = [
         CorrelationIdInterceptor(),
@@ -525,9 +692,28 @@ def create_grpc_server(
 
     # Production service-to-service calls must authenticate. Development may
     # omit the token for isolated local work.
-    service_token = _read_service_token()
+    service_token = read_service_token()
     if service_token:
         all_interceptors.insert(0, ServiceAuthInterceptor(service_token))
+
+    if workload_identity_authorization is not None:
+        workload_paths = _require_workload_tls_paths(
+            _WORKLOAD_TLS_SERVER_ENV,
+            purpose="gRPC workload-identity server TLS",
+        )
+        if workload_paths is not None:
+            # Retain the token as defense-in-depth. Caller identity comes only
+            # from the mutually authenticated certificate.
+            security_index = 1 if service_token else 0
+            all_interceptors.insert(
+                security_index,
+                WorkloadIdentityInterceptor(workload_identity_authorization),
+            )
+        else:
+            logger.warning(
+                "Workload identity authorization for %s is bypassed in development",
+                service_name,
+            )
 
     if interceptors:
         all_interceptors = list(interceptors) + all_interceptors
@@ -547,6 +733,7 @@ def start_grpc_server_port(
     *,
     service_names: list[str] | None = None,
     health_servicer: HealthServicer | None = None,
+    require_workload_identity: bool = False,
 ) -> None:
     """Bind *server* to *port* (TLS-aware) and enable reflection.
 
@@ -557,8 +744,15 @@ def start_grpc_server_port(
 
     ``service_names`` are registered with gRPC server reflection so
     that tools like ``grpcurl`` can introspect the API.
+
+    ``require_workload_identity`` selects the dedicated mTLS certificate and
+    CA settings and always requires authenticated client certificates.
     """
-    credentials = _build_server_credentials()
+    credentials = (
+        _build_workload_server_credentials()
+        if require_workload_identity
+        else _build_server_credentials()
+    )
     addr = f"[::]:{port}"
 
     if credentials:
@@ -603,6 +797,7 @@ def create_grpc_channel(
     *,
     service_name: str | None = None,
     interceptors: list[grpc_aio.ClientInterceptor] | None = None,
+    require_workload_identity: bool = False,
 ) -> grpc_aio.Channel:
     """Create a gRPC async channel with keepalive and optional TLS.
 
@@ -627,6 +822,10 @@ def create_grpc_channel(
         built-in client interceptors are skipped.
     interceptors:
         Additional client-side interceptors appended after the defaults.
+    require_workload_identity:
+        Use the dedicated client certificate and CA settings. These settings
+        are mandatory outside development and remain isolated from other
+        outbound gRPC channels in the same process.
     """
     all_interceptors: list[grpc_aio.ClientInterceptor] = []
     if service_name:
@@ -634,7 +833,7 @@ def create_grpc_channel(
         all_interceptors.append(MetricsClientInterceptor(service_name))
 
     # Attach the same mandatory production token used by the server interceptor.
-    service_token = _read_service_token()
+    service_token = read_service_token()
     if service_token:
         all_interceptors.append(ServiceTokenClientInterceptor(service_token))
 
@@ -648,7 +847,11 @@ def create_grpc_channel(
         ("grpc.http2.max_pings_without_data", 2),
     ]
 
-    credentials = _build_channel_credentials()
+    credentials = (
+        _build_workload_channel_credentials()
+        if require_workload_identity
+        else _build_channel_credentials()
+    )
     if credentials:
         channel = grpc_aio.secure_channel(
             target, credentials, options=options,

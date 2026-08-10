@@ -685,6 +685,9 @@ services:
     environment:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/pp_workload_server_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       PRESENTATION_POLICY_SERVICE_PORT: "8009"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -702,6 +705,9 @@ services:
     secrets:
       - marty_db_password
       - grpc_service_token
+      - pp_workload_server_cert
+      - pp_workload_server_key
+      - workload_identity_ca_cert
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -747,6 +753,9 @@ services:
     environment:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/flow_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/flow_workload_client_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       FLOW_SERVICE_PORT: "8011"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -765,6 +774,9 @@ services:
     secrets:
       - marty_db_password
       - grpc_service_token
+      - flow_workload_client_cert
+      - flow_workload_client_key
+      - workload_identity_ca_cert
       - flow_webhook_secret
       - flow_application_event_hmac_key
     depends_on:
@@ -794,6 +806,9 @@ services:
     environment:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/verification_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/verification_workload_client_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       VERIFICATION_SERVICE_PORT: "8012"
       PP_GRPC_TARGET: presentation-policy:9009
       VERIF_GRPC_PORT: "9017"
@@ -805,6 +820,9 @@ services:
     secrets:
       - issuance_api_key
       - grpc_service_token
+      - verification_workload_client_cert
+      - verification_workload_client_key
+      - workload_identity_ca_cert
     depends_on:
       presentation-policy:
         condition: service_healthy
@@ -1011,6 +1029,20 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/issuance_api_key
   grpc_service_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/grpc_service_token
+  workload_identity_ca_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/workload_identity_ca_cert
+  pp_workload_server_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/pp_workload_server_cert
+  pp_workload_server_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/pp_workload_server_key
+  flow_workload_client_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_workload_client_cert
+  flow_workload_client_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_workload_client_key
+  verification_workload_client_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/verification_workload_client_cert
+  verification_workload_client_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/verification_workload_client_key
   flow_webhook_secret:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_webhook_secret
   flow_application_event_hmac_key:

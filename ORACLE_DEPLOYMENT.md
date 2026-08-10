@@ -146,6 +146,12 @@ auth.elevenidllc.com CNAME  <tunnel-id>.cfargotunnel.com  (Proxied ✓)
 
 ### Step 3 — Configure Secrets
 
+Production verification requires the dedicated mTLS certificates described in
+[`docs/VERIFICATION_WORKLOAD_IDENTITY.md`](docs/VERIFICATION_WORKLOAD_IDENTITY.md).
+Set their `_FILE` inputs before running `setup-secrets`. The deployment helper
+creates separate Secrets for presentation-policy, Flow, and Verification so
+private keys are not mounted cross-workload.
+
 ```bash
 # Copy the example env file
 cp .env.production.example .env.production

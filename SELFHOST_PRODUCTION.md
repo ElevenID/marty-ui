@@ -133,11 +133,23 @@ Create these files under `SELFHOST_SECRET_DIR`:
 - `keycloak_admin_password`
 - `marty_api_client_secret`
 - `issuance_api_key`
+- `grpc_service_token`
+- `workload_identity_ca_cert`
+- `pp_workload_server_cert`
+- `pp_workload_server_key`
+- `flow_workload_client_cert`
+- `flow_workload_client_key`
+- `verification_workload_client_cert`
+- `verification_workload_client_key`
 - `openbao_service_token`
 - `cloudflare_tunnel_token`
 - `cloudflare_beta_tunnel_token` when you enable the optional `beta-tunnel` compose profile
 
 The stack will refuse to start if any required secret file still contains a placeholder value such as `change-me-postgres`.
+
+The workload certificates secure the verification-to-policy boundary. Their
+required SANs, key usages, and rotation constraints are documented in
+[`docs/VERIFICATION_WORKLOAD_IDENTITY.md`](docs/VERIFICATION_WORKLOAD_IDENTITY.md).
 
 The credential-login policy is controlled with `CREDENTIAL_LOGIN_POLICY_ID=50000000-0000-0000-0000-000000000004` in `.env.selfhost.production.local`.
 
