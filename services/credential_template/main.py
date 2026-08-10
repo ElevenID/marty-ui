@@ -35,6 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Annotated
 from marty_common import OrganizationContext, require_org_membership
 from marty_common.service_setup import create_service_app
+from common.grpc_factory import create_grpc_channel
 
 from credential_template.infrastructure.adapters import (
     PostgresCredentialTemplateRepository,
@@ -1679,7 +1680,10 @@ async def _require_active_revocation_profile(
 
     target = os.environ.get("RP_GRPC_TARGET", "revocation-profile:9013")
     try:
-        async with grpc.aio.insecure_channel(target) as channel:
+        async with create_grpc_channel(
+            target,
+            service_name="credential-template",
+        ) as channel:
             response = await rp_grpc.RevocationProfileServiceStub(channel).GetRevocationProfile(
                 rp_pb2.GetRevocationProfileRequest(profile_id=revocation_profile_id),
                 timeout=3.0,
