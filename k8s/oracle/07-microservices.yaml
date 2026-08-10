@@ -211,6 +211,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: FLOW_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: FLOW_WEBHOOK_SECRET
             - name: AUTH_SERVICE_PORT
               value: "8001"
             - name: UI_BASE_URL
@@ -1557,6 +1562,11 @@ spec:
               value: /var/run/secrets/marty/workload/tls.key
             - name: GRPC_WORKLOAD_TLS_CA_CERT
               value: /var/run/secrets/marty/workload/ca.crt
+            - name: FLOW_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: FLOW_WEBHOOK_SECRET
             - name: FLOW_APPLICATION_EVENT_HMAC_KEY
               valueFrom:
                 secretKeyRef:
