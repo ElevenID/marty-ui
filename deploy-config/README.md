@@ -25,6 +25,7 @@ This directory separates deployment concerns by target environment to reduce acc
 - Do not reuse one env file across both targets.
 - Do not put a separate beta/staging hostname in selfhost production `UI_ADDITIONAL_BASE_URLS`; that makes the secondary hostname use the production Keycloak issuer.
 - Keep secrets in external secret directories, not in this repo.
+- Do not layer the development-oriented `docker-compose.base.yml` into a production deployment. The former `docker-compose.profile.prod.yml` overlay was retired because it inherited development infrastructure, credentials, and host-published internal ports. Use a canonical production target below.
 
 ## Canonical Runtime Files
 
