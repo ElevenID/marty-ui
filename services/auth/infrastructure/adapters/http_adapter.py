@@ -2616,7 +2616,10 @@ async def credential_login_finalize(
     if _redis_client is None:
         raise HTTPException(status_code=503, detail="Session store not available")
 
-    raw = await _redis_client.get(f"{_COMPLETE_KEY}{nonce}")
+    # The completion value contains an authenticated session bearer. Claim it
+    # with one Redis operation so concurrent requests or replicas cannot both
+    # receive the same session cookie.
+    raw = await _redis_client.getdel(f"{_COMPLETE_KEY}{nonce}")
     if not raw:
         return RedirectResponse(
             url=f"{_ui_base_url}/?auth_error=Login+session+expired", status_code=302
@@ -2634,9 +2637,6 @@ async def credential_login_finalize(
         return RedirectResponse(
             url=f"{_ui_base_url}/?auth_error=Session+creation+failed", status_code=302
         )
-
-    # Consume the completion key so it can't be replayed
-    await _redis_client.delete(f"{_COMPLETE_KEY}{nonce}")
 
     redirect = RedirectResponse(
         url=_build_ui_redirect_url("/", _ui_base_url),
