@@ -760,6 +760,7 @@ services:
       REDIS_DB_FLOW: "3"
       FLOW_GRPC_PORT: "9011"
       FLOW_WEBHOOK_SECRET_FILE: /run/secrets/flow_webhook_secret
+      FLOW_CALLBACK_DESTINATIONS: ${FLOW_CALLBACK_DESTINATIONS:?set FLOW_CALLBACK_DESTINATIONS to organization-bound callback templates}
       FLOW_APPLICATION_EVENT_HMAC_KEY_FILE: /run/secrets/flow_application_event_hmac_key
     secrets:
       - marty_db_password

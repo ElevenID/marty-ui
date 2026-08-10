@@ -8,6 +8,7 @@ import json
 from typing import Any
 
 MINIMUM_EVENT_SECRET_BYTES = 32
+AUTH_CALLBACK_AUDIENCE = "marty-auth-service"
 
 
 def is_valid_event_secret(secret: str) -> bool:
@@ -17,6 +18,7 @@ def is_valid_event_secret(secret: str) -> bool:
 
 def canonical_event_bytes(
     *,
+    audience: str,
     event: str,
     event_id: str,
     timestamp: str,
@@ -25,6 +27,7 @@ def canonical_event_bytes(
     """Serialize every security-relevant event field deterministically."""
     return json.dumps(
         {
+            "audience": audience,
             "event": event,
             "event_id": event_id,
             "payload": payload,
@@ -38,6 +41,7 @@ def canonical_event_bytes(
 def sign_event(
     secret: str,
     *,
+    audience: str,
     event: str,
     event_id: str,
     timestamp: str,
@@ -51,6 +55,7 @@ def sign_event(
     digest = hmac.new(
         secret.encode("utf-8"),
         canonical_event_bytes(
+            audience=audience,
             event=event,
             event_id=event_id,
             timestamp=timestamp,
@@ -65,6 +70,7 @@ def verify_event_signature(
     signature: str,
     secret: str,
     *,
+    audience: str,
     event: str,
     event_id: str,
     timestamp: str,
@@ -75,9 +81,20 @@ def verify_event_signature(
         return False
     expected = sign_event(
         secret,
+        audience=audience,
         event=event,
         event_id=event_id,
         timestamp=timestamp,
         payload=payload,
     )
     return hmac.compare_digest(signature, expected)
+
+
+def payload_digest(payload: dict[str, Any]) -> str:
+    """Return a stable digest for a decision or evidence payload."""
+    encoded = json.dumps(
+        payload,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()

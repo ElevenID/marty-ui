@@ -22,17 +22,18 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import copy
+import hmac
 import hashlib
 import json
 import logging
 import os
 import re
-import time
 import urllib.parse
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, AsyncGenerator, Literal
@@ -51,6 +52,7 @@ from fastapi import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from jwcrypto import jwk
+from jwcrypto import jwt as jwcrypto_jwt
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -69,7 +71,15 @@ from marty_common import (
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
-from common.webhook_signatures import is_valid_event_secret, sign_event
+from common.webhook_signatures import is_valid_event_secret, payload_digest
+from flow.callback_outbox import (
+    CallbackOutboxEvent,
+    deliver_due_callback_events,
+    new_callback_event,
+    new_lease_token,
+    require_registered_callback_destination,
+    run_callback_dispatcher,
+)
 from flow.infrastructure.adapters import PostgresFlowRepository
 from protocol_version import MIP_VERSION
 from common.application_event_auth import (
@@ -98,6 +108,9 @@ _SD_JWT_PRESENTATION_ALGS = {
     "kb-jwt_alg_values": ["ES256", "EdDSA"],
 }
 _DC_API_PROTOCOL = "openid4vp-v1-signed"
+_SIOP_ID_TOKEN_ALGS = ("ES256", "EdDSA")
+_SIOP_JWK_SUBJECT_PREFIX = "urn:ietf:params:oauth:jwk-thumbprint"
+_SIOP_CLOCK_SKEW_SECONDS = 60
 _DC_API_JWT_RESPONSE_MODE = "dc_api.jwt"
 _HAIP_JWE_ALG = "ECDH-ES"
 _HAIP_JWE_ENC = "A256GCM"
@@ -308,9 +321,7 @@ async def _sign_request_object_with_issuer_did(
             status_code=503, detail="Issuer DID signing service is unavailable"
         ) from exc
     if response.status_code >= 400:
-        raise HTTPException(
-            status_code=503, detail="Issuer DID request signing failed"
-        )
+        raise HTTPException(status_code=503, detail="Issuer DID request signing failed")
     signed = response.json()
     if (
         signed.get("issuer_did") != identity.get("issuer_did")
@@ -339,54 +350,9 @@ VERIFIER_CLIENT_ID = os.environ.get(
     "VERIFIER_CLIENT_ID", ""
 )  # Will be set based on PUBLIC_BASE_URL
 
-# MIP §26: Nonce replay prevention — track used nonces to reject duplicates.
-# Uses Redis when available (shared across replicas); falls back to process-local dict.
+# Replay state is committed by the repository with the terminal decision.
 _NONCE_TTL_SECONDS = int(os.environ.get("NONCE_TTL_SECONDS", "3600"))
-_used_nonces: dict[str, float] = {}  # fallback: nonce -> expiry timestamp
-_nonce_lock = asyncio.Lock()
-_NONCE_CLEANUP_INTERVAL = 600  # seconds between cleanup sweeps
-_nonce_last_cleanup: float = 0.0
-_nonce_redis = None  # set in lifespan if Redis is available
-
-
-async def _record_nonce_used_redis(nonce: str) -> bool:
-    """Redis-backed nonce check. Returns False if already used (replay)."""
-    # SET NX with TTL — returns True only on first insertion
-    was_new = await _nonce_redis.set(
-        f"mip:nonce:{nonce}", "1", nx=True, ex=_NONCE_TTL_SECONDS
-    )
-    return bool(was_new)
-
-
-def _record_nonce_used(nonce: str) -> bool:
-    """Record a nonce as used. Returns False if already used (replay)."""
-    global _nonce_last_cleanup
-    now = time.time()
-    # Periodic cleanup of expired entries
-    if now - _nonce_last_cleanup > _NONCE_CLEANUP_INTERVAL:
-        _nonce_last_cleanup = now
-        expired = [k for k, exp in _used_nonces.items() if exp <= now]
-        for k in expired:
-            del _used_nonces[k]
-    # Check for replay
-    if nonce in _used_nonces and _used_nonces[nonce] > now:
-        return False
-    _used_nonces[nonce] = now + _NONCE_TTL_SECONDS
-    return True
-
-
-async def _check_nonce(nonce: str) -> bool:
-    """Check nonce replay. Uses Redis when available, process-local fallback.\n    Returns False if nonce was already used (replay detected)."""
-    if _nonce_redis is not None:
-        try:
-            return await _record_nonce_used_redis(nonce)
-        except Exception as exc:
-            logger.warning(
-                "Redis nonce check failed (%s) — falling back to process-local store",
-                exc,
-            )
-    async with _nonce_lock:
-        return _record_nonce_used(nonce)
+_nonce_redis: Any = None  # Set during lifespan when Redis is available.
 
 
 def get_config() -> dict[str, Any]:
@@ -1611,6 +1577,11 @@ class InMemoryFlowRepository:
         self._definitions: dict[str, FlowDefinition] = {}
         self._instances: dict[str, FlowInstance] = {}
         self._artifacts: dict[str, FlowInstanceArtifact] = {}
+        self._finalization_lock = asyncio.Lock()
+        self._consumed_nonce_digests: dict[str, datetime] = {}
+        self._finalized_instance_ids: set[str] = set()
+        self._callback_events: dict[str, CallbackOutboxEvent] = {}
+        self._terminal_instance_snapshots: dict[str, FlowInstance] = {}
         self._application_flow_instances: dict[tuple[str, str], str] = {}
         self._application_event_receipts: dict[str, ApplicationEventPlanReceipt] = {}
         self._application_event_plan_lock = asyncio.Lock()
@@ -1631,7 +1602,18 @@ class InMemoryFlowRepository:
 
     # Flow Instance operations
     async def save_instance(self, instance: FlowInstance) -> None:
-        self._instances[instance.id] = instance
+        async with self._finalization_lock:
+            terminal_snapshot = self._terminal_instance_snapshots.get(instance.id)
+            if terminal_snapshot is not None:
+                # Keep the development repository's historical shared-object
+                # behavior while restoring the immutable committed decision if
+                # a stale handler mutates that object before calling save.
+                instance.__dict__.update(copy.deepcopy(terminal_snapshot.__dict__))
+                self._instances[instance.id] = instance
+                return
+            self._instances[instance.id] = instance
+            if instance.status in TERMINAL_STATES:
+                self._terminal_instance_snapshots[instance.id] = copy.deepcopy(instance)
 
     async def reserve_application_event_plan(
         self,
@@ -1666,9 +1648,7 @@ class InMemoryFlowRepository:
                     selected = candidate
                     staged_instances.append((logical_key, selected))
                 if (
-                    selected.context.get(
-                        "_marty_application_offer_semantics_hash_v1"
-                    )
+                    selected.context.get("_marty_application_offer_semantics_hash_v1")
                     != plan_entry["offer_semantics_hash"]
                 ):
                     raise ApplicationOfferConflictError(
@@ -1686,6 +1666,165 @@ class InMemoryFlowRepository:
     async def get_instance(self, instance_id: str) -> FlowInstance | None:
         return self._instances.get(instance_id)
 
+    async def finalize_verification(
+        self,
+        instance: FlowInstance,
+        *,
+        nonce_digest: str,
+        replay_expires_at: datetime,
+        expected_status: FlowInstanceStatus,
+        callback_event: CallbackOutboxEvent | None = None,
+    ) -> bool:
+        """Development repository equivalent of the database transaction."""
+        async with self._finalization_lock:
+            now = datetime.now(timezone.utc)
+            self._consumed_nonce_digests = {
+                digest: expiry
+                for digest, expiry in self._consumed_nonce_digests.items()
+                if expiry > now
+            }
+            stored_instance = self._instances.get(instance.id)
+            if (
+                nonce_digest in self._consumed_nonce_digests
+                or instance.id in self._finalized_instance_ids
+                or stored_instance is None
+                or stored_instance.status is not expected_status
+                or (
+                    stored_instance.expires_at is not None
+                    and now > stored_instance.expires_at
+                )
+                or expected_status
+                not in {
+                    FlowInstanceStatus.AWAITING_WALLET,
+                    FlowInstanceStatus.IN_PROGRESS,
+                }
+            ):
+                return False
+            self._consumed_nonce_digests[nonce_digest] = replay_expires_at
+            self._finalized_instance_ids.add(instance.id)
+            stored_instance.__dict__.update(copy.deepcopy(instance.__dict__))
+            self._terminal_instance_snapshots[instance.id] = copy.deepcopy(
+                stored_instance
+            )
+            self._instances[instance.id] = stored_instance
+            if callback_event is not None:
+                self._callback_events[callback_event.event_id] = copy.deepcopy(
+                    callback_event
+                )
+            return True
+
+    async def claim_due_callback_events(
+        self,
+        *,
+        now: datetime,
+        lease_expires_at: datetime,
+        limit: int,
+    ) -> list[CallbackOutboxEvent]:
+        async with self._finalization_lock:
+            for event_id, event in tuple(self._callback_events.items()):
+                if event.expires_at <= now and event.status in {
+                    "pending",
+                    "retry",
+                    "delivering",
+                    "dead_letter",
+                }:
+                    self._callback_events[event_id] = replace(
+                        event,
+                        status="expired",
+                        destination_url="",
+                        payload={},
+                        lease_token=None,
+                        lease_expires_at=None,
+                        last_error_code="retention_expired",
+                    )
+            due = sorted(
+                (
+                    event
+                    for event in self._callback_events.values()
+                    if event.expires_at > now
+                    and (
+                        (
+                            event.status in {"pending", "retry"}
+                            and event.next_attempt_at <= now
+                        )
+                        or (
+                            event.status == "delivering"
+                            and event.lease_expires_at is not None
+                            and event.lease_expires_at <= now
+                        )
+                    )
+                ),
+                key=lambda item: item.created_at,
+            )[:limit]
+            claimed: list[CallbackOutboxEvent] = []
+            for event in due:
+                claimed_event = replace(
+                    event,
+                    status="delivering",
+                    attempt_count=event.attempt_count + 1,
+                    lease_token=new_lease_token(),
+                    lease_expires_at=lease_expires_at,
+                )
+                self._callback_events[event.event_id] = claimed_event
+                claimed.append(copy.deepcopy(claimed_event))
+            return claimed
+
+    async def mark_callback_delivered(
+        self,
+        event_id: str,
+        *,
+        lease_token: str,
+        delivered_at: datetime,
+    ) -> bool:
+        async with self._finalization_lock:
+            event = self._callback_events.get(event_id)
+            if (
+                event is None
+                or event.status != "delivering"
+                or event.lease_token != lease_token
+            ):
+                return False
+            self._callback_events[event_id] = replace(
+                event,
+                status="delivered",
+                destination_url="",
+                payload={},
+                lease_token=None,
+                lease_expires_at=None,
+                delivered_at=delivered_at,
+                last_error_code=None,
+            )
+            return True
+
+    async def mark_callback_failed(
+        self,
+        event_id: str,
+        *,
+        lease_token: str,
+        failed_at: datetime,
+        next_attempt_at: datetime,
+        terminal: bool,
+        error_code: str,
+    ) -> bool:
+        del failed_at
+        async with self._finalization_lock:
+            event = self._callback_events.get(event_id)
+            if (
+                event is None
+                or event.status != "delivering"
+                or event.lease_token != lease_token
+            ):
+                return False
+            self._callback_events[event_id] = replace(
+                event,
+                status="dead_letter" if terminal else "retry",
+                next_attempt_at=next_attempt_at,
+                lease_token=None,
+                lease_expires_at=None,
+                last_error_code=error_code,
+            )
+            return True
+
     async def list_instances(
         self,
         org_id: str,
@@ -1702,8 +1841,12 @@ class InMemoryFlowRepository:
         return instances
 
     # Flow Instance Artifact operations
-    async def save_artifact(self, artifact: FlowInstanceArtifact) -> FlowInstanceArtifact:
-        lock = self._artifact_locks.setdefault(artifact.flow_instance_id, asyncio.Lock())
+    async def save_artifact(
+        self, artifact: FlowInstanceArtifact
+    ) -> FlowInstanceArtifact:
+        lock = self._artifact_locks.setdefault(
+            artifact.flow_instance_id, asyncio.Lock()
+        )
         async with lock:
             existing = next(
                 (
@@ -2882,7 +3025,9 @@ async def _create_oid4vci_artifact(
 
     # Store artifact ID and offer details in instance context
     instance.context["oid4vci_artifact_id"] = artifact.id
-    instance.context["credential_offer_transaction_id"] = artifact.issuance_transaction_id
+    instance.context["credential_offer_transaction_id"] = (
+        artifact.issuance_transaction_id
+    )
     instance.context["offer_id"] = artifact.issuance_transaction_id
     instance.context["credential_offer_uri"] = artifact.credential_offer_uri
     instance.context["credential_offer_uris"] = artifact.credential_offer_uris
@@ -3970,11 +4115,28 @@ class StartSiopFlowRequest(BaseModel):
     expiry_minutes: int = 15
 
 
+def _require_registered_callback(
+    organization_id: str,
+    callback_url: str | None,
+) -> None:
+    if not callback_url:
+        return
+    try:
+        require_registered_callback_destination(organization_id, callback_url)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Verification callback destination policy is unavailable",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 class SiopSubmitRequest(BaseModel):
     """Body for validating a self-issued ID token."""
 
-    id_token: str
-    instance_id: str | None = None  # optional — for nonce binding to a specific session
+    id_token: str = Field(min_length=1, max_length=16384)
+    instance_id: str = Field(min_length=1, max_length=255)
 
 
 class SubmitVerificationRequest(BaseModel):
@@ -4071,6 +4233,7 @@ async def start_verification_flow(
                 status_code=422,
                 detail="issuer_did is required to start a signed verification flow.",
             )
+        _require_registered_callback(organization_id, request.callback_url)
         signing_identity = await _oid4vp_issuer_identity(
             organization_id,
             request.issuer_did,
@@ -4099,8 +4262,10 @@ async def start_verification_flow(
             + timedelta(minutes=request.expiry_minutes),
         )
         base_url = os.environ.get("PUBLIC_BASE_URL", "http://marty-gateway:8000")
+        client_id = os.environ.get("VERIFIER_CLIENT_ID", f"{base_url}/verifier")
         request_uri = f"{base_url}/v1/flows/instances/{instance.id}/request"
         auth_request = f"openid://authorize?request_uri={request_uri}"
+        instance.context["siop_client_id"] = client_id
         instance.context["request_uri"] = request_uri
         instance.context["auth_request"] = auth_request
         await repo.save_instance(instance)
@@ -4170,6 +4335,7 @@ async def start_verification_flow(
             status_code=403,
             detail="Presentation policy belongs to another organization.",
         )
+    _require_registered_callback(organization_id, request.callback_url)
     if not str(request.issuer_did or "").strip():
         raise HTTPException(
             status_code=422,
@@ -5017,9 +5183,13 @@ async def get_verification_request_object(
     )
     # Build base URL for response_uri (where wallet posts the VP)
     base_url = os.environ.get("PUBLIC_BASE_URL", "http://marty-gateway:8000")
-    client_id = os.environ.get("VERIFIER_CLIENT_ID", f"{base_url}/verifier")
-
     flow_type = instance.context.get("flow_type", "verification")
+    configured_client_id = os.environ.get("VERIFIER_CLIENT_ID", f"{base_url}/verifier")
+    client_id = (
+        instance.context.get("siop_client_id") or configured_client_id
+        if flow_type == "siop_v2"
+        else configured_client_id
+    )
     compat_profile = (compat or "").strip().lower()
     request_x5c: list[str] | None = None
 
@@ -5043,8 +5213,6 @@ async def get_verification_request_object(
             # SIOPv2 §6.1: advertise subject syntax types we accept
             "subject_syntax_types_supported": [
                 "urn:ietf:params:oauth:jwk-thumbprint",
-                "did:key",
-                "did:jwk",
             ],
         }
     else:
@@ -5938,6 +6106,53 @@ def _decrypt_dc_api_jwt_response(
     )
 
 
+def _verification_submission_digest(
+    *,
+    vp_token: str,
+    presentation_submission: str | dict[str, Any] | None,
+    state: str | None,
+) -> str:
+    canonical = json.dumps(
+        {
+            "vp_token": vp_token,
+            "presentation_submission": presentation_submission,
+            "state": state,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _terminal_verification_response(
+    instance: FlowInstance,
+) -> VerificationResultResponse:
+    result = instance.result or {}
+    return VerificationResultResponse(
+        instance_id=instance.id,
+        status=_protocol_status_for_instance(instance.status),
+        result=str(result.get("evaluation_result") or "failed"),
+        decision=str(result.get("decision") or "deny"),
+        decision_reason=str(result.get("decision_reason") or ""),
+        verified_claims=result.get("verified_claims")
+        if isinstance(result.get("verified_claims"), dict)
+        else {},
+        evaluation_timestamp=(instance.completed_at or instance.updated_at).isoformat(),
+    )
+
+
+def _raise_verification_replay_conflict() -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "verification_replay_conflict",
+            "error_description": (
+                "A different response already finalized this verification transaction"
+            ),
+        },
+    )
+
+
 async def _submit_verification_response_internal(
     instance_id: str,
     vp_token: str,
@@ -5949,6 +6164,22 @@ async def _submit_verification_response_internal(
     instance = await repo.get_instance(instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Flow instance not found")
+
+    submission_digest = _verification_submission_digest(
+        vp_token=vp_token,
+        presentation_submission=presentation_submission,
+        state=state,
+    )
+    if instance.status in {
+        FlowInstanceStatus.COMPLETED,
+        FlowInstanceStatus.FAILED,
+    }:
+        prior_digest = (instance.result or {}).get("submission_digest")
+        if isinstance(prior_digest, str) and hmac.compare_digest(
+            prior_digest, submission_digest
+        ):
+            return _terminal_verification_response(instance)
+        _raise_verification_replay_conflict()
 
     if instance.expires_at and datetime.now(timezone.utc) > instance.expires_at:
         instance.status = FlowInstanceStatus.EXPIRED
@@ -5962,6 +6193,11 @@ async def _submit_verification_response_internal(
         raise HTTPException(
             status_code=400, detail="Submission not accepted in current state"
         )
+    expected_status = instance.status
+    # Repository adapters return detached objects in production. Use the same
+    # semantics in the development repository so concurrent handlers never
+    # mutate shared state before the compare-and-swap commit.
+    instance = copy.deepcopy(instance)
 
     # Every request object emitted by this verifier contains a state value.
     # Require the corresponding callback parameter before accepting a
@@ -6013,21 +6249,13 @@ async def _submit_verification_response_internal(
     # receives the exact nonce and audience from this flow below.
     expected_nonce = instance.context.get("nonce")
 
-    # Store the presentation
-    instance.context["vp_token"] = vp_token
-    if vp_token != raw_vp_token:
-        instance.context["vp_token_raw"] = raw_vp_token
-    instance.context["presentation_submission"] = parsed_submission
-    if state:
-        instance.context["state"] = state
-    instance.status = FlowInstanceStatus.IN_PROGRESS
-
     # -----------------------------------------------------------------------
     # Real policy evaluation — call the presentation-policy service via gRPC
     # -----------------------------------------------------------------------
     policy_id = instance.context.get("presentation_policy_id")
 
     verified_claims: dict = {}
+    credential_results: list[dict[str, Any]] = []
     evaluation_result = "passed"
     evaluation_decision = "allow"
     decision_reason = "All policy requirements satisfied"
@@ -6107,6 +6335,26 @@ async def _submit_verification_response_internal(
                 evaluation_result = eval_resp.result
                 evaluation_decision = eval_resp.decision
                 decision_reason = eval_resp.decision_reason
+                try:
+                    decoded_credential_results = (
+                        _json.loads(eval_resp.credential_results_json)
+                        if eval_resp.credential_results_json
+                        else []
+                    )
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Presentation-policy service returned malformed credential evidence"
+                    )
+                    decoded_credential_results = []
+                credential_results = (
+                    [
+                        item
+                        for item in decoded_credential_results
+                        if isinstance(item, dict)
+                    ]
+                    if isinstance(decoded_credential_results, list)
+                    else []
+                )
                 verified_claims = (
                     _json.loads(eval_resp.verified_claims_json)
                     if eval_resp.verified_claims_json
@@ -6147,31 +6395,65 @@ async def _submit_verification_response_internal(
         decision_reason = "A presentation policy is required for verification"
         verified_claims = {}
 
-    # Mark the challenge used only after the authoritative verifier has
-    # accepted the cryptographic presentation. Invalid signatures must not be
-    # able to consume a legitimate wallet's nonce. SET NX keeps concurrent
-    # submissions atomic across replicas and rejects the second response.
-    if (
-        expected_nonce
-        and evaluation_result == "passed"
-        and evaluation_decision == "allow"
-        and not await _check_nonce(expected_nonce)
-    ):
+    cryptographic_response_authenticated = bool(credential_results) and all(
+        credential_result.get("signature_valid") is True
+        for credential_result in credential_results
+    )
+    if not cryptographic_response_authenticated:
+        # An unauthenticated or structurally incomplete response cannot claim
+        # the transaction. The wallet may retry with a valid presentation.
+        return VerificationResultResponse(
+            instance_id=instance.id,
+            status=_protocol_status_for_instance(expected_status),
+            result="failed",
+            decision="deny",
+            decision_reason=decision_reason,
+            verified_claims={},
+            evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
+        )
+
+    if not isinstance(expected_nonce, str) or not expected_nonce:
         raise HTTPException(
             status_code=400,
             detail={
-                "error": "nonce_reused",
-                "error_description": "This nonce has already been used",
+                "error": "invalid_request",
+                "error_description": "Verification transaction has no live nonce",
             },
         )
 
-    instance.status = FlowInstanceStatus.COMPLETED
+    final_allowed = evaluation_result == "passed" and evaluation_decision == "allow"
+    if not final_allowed:
+        verified_claims = {}
+    instance.context.pop("vp_token", None)
+    instance.context.pop("vp_token_raw", None)
+    instance.context.pop("presentation_submission", None)
+    instance.context["vp_token_sha256"] = hashlib.sha256(
+        vp_token.encode("utf-8")
+    ).hexdigest()
+    if raw_vp_token != vp_token:
+        instance.context["vp_transport_sha256"] = hashlib.sha256(
+            raw_vp_token.encode("utf-8")
+        ).hexdigest()
+    if parsed_submission is not None:
+        instance.context["presentation_submission_sha256"] = hashlib.sha256(
+            json.dumps(
+                parsed_submission,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+    if state:
+        instance.context["state"] = state
+    instance.status = (
+        FlowInstanceStatus.COMPLETED if final_allowed else FlowInstanceStatus.FAILED
+    )
     instance.completed_at = datetime.now(timezone.utc)
     instance.result = {
         "evaluation_result": evaluation_result,
         "decision": evaluation_decision,
         "decision_reason": decision_reason,
         "verified_claims": verified_claims,
+        "submission_digest": submission_digest,
     }
 
     verification_result_message = MIPMessage(
@@ -6204,20 +6486,22 @@ async def _submit_verification_response_internal(
     _record_mip_message(instance, "verification_result", verification_result_message)
     instance.updated_at = datetime.now(timezone.utc)
 
-    await repo.save_instance(instance)
-    logger.info(
-        "Completed verification flow: %s result=%s decision=%s reason=%s",
-        instance_id,
-        evaluation_result,
-        evaluation_decision,
-        decision_reason or "<none>",
-    )
-
-    # -----------------------------------------------------------------------
-    # Fire callback to notify requesting service (e.g., auth service)
-    # -----------------------------------------------------------------------
+    replay_expires_at = instance.expires_at
+    if replay_expires_at is None or replay_expires_at <= instance.completed_at:
+        replay_expires_at = instance.completed_at + timedelta(
+            seconds=_NONCE_TTL_SECONDS
+        )
+    callback_event: CallbackOutboxEvent | None = None
+    webhook_secret = ""
     callback_url = instance.context.get("callback_url")
-    if callback_url:
+    if isinstance(callback_url, str) and callback_url:
+        webhook_secret = _read_secret_value("FLOW_WEBHOOK_SECRET")
+        if not is_valid_event_secret(webhook_secret):
+            raise HTTPException(
+                status_code=503,
+                detail="Verification callback authentication is unavailable",
+            )
+        evidence_digest = payload_digest({"credential_results": credential_results})
         callback_payload = {
             "flow_instance_id": instance.id,
             "result": evaluation_result,
@@ -6226,41 +6510,65 @@ async def _submit_verification_response_internal(
             "verified_claims": verified_claims,
             "presentation_policy_id": policy_id,
             "completed_at": instance.completed_at.isoformat(),
+            "evidence_digest": evidence_digest,
         }
-        callback_event = "flow.verification_completed"
-        callback_timestamp = datetime.now(timezone.utc).isoformat()
-        cb_headers: dict[str, str] = {
-            "Content-Type": "application/json",
-            "X-MIP-Event": callback_event,
-            "X-MIP-Event-Id": instance.id,
-            "X-MIP-Timestamp": callback_timestamp,
-        }
-        webhook_secret = _read_secret_value("FLOW_WEBHOOK_SECRET")
-        if not is_valid_event_secret(webhook_secret):
-            logger.error(
-                "Refusing verification callback without a secret of at least 32 bytes "
-                "for flow %s",
+        callback_payload["decision_digest"] = payload_digest(callback_payload)
+        try:
+            callback_event = new_callback_event(
+                flow_instance_id=instance.id,
+                organization_id=instance.organization_id,
+                destination_url=callback_url,
+                payload=callback_payload,
+                created_at=instance.completed_at,
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Verification callback destination is not authorized",
+            ) from exc
+    committed = await repo.finalize_verification(
+        instance,
+        nonce_digest=hashlib.sha256(expected_nonce.encode("utf-8")).hexdigest(),
+        replay_expires_at=replay_expires_at,
+        expected_status=expected_status,
+        callback_event=callback_event,
+    )
+    if not committed:
+        current = await repo.get_instance(instance.id)
+        prior_digest = (
+            (current.result or {}).get("submission_digest") if current else None
+        )
+        if (
+            current is not None
+            and current.status
+            in {FlowInstanceStatus.COMPLETED, FlowInstanceStatus.FAILED}
+            and isinstance(prior_digest, str)
+            and hmac.compare_digest(prior_digest, submission_digest)
+        ):
+            return _terminal_verification_response(current)
+        _raise_verification_replay_conflict()
+    logger.info(
+        "Completed verification flow: %s result=%s decision=%s reason=%s",
+        instance_id,
+        evaluation_result,
+        evaluation_decision,
+        decision_reason or "<none>",
+    )
+
+    if callback_event is not None:
+        try:
+            await deliver_due_callback_events(
+                repo,
+                webhook_secret=webhook_secret,
+                limit=1,
+            )
+        except Exception:
+            # The callback was committed transactionally and the background
+            # dispatcher will reclaim it after this request or process fails.
+            logger.exception(
+                "Immediate callback delivery failed for flow %s; event remains durable",
                 instance.id,
             )
-        else:
-            cb_headers["X-MIP-Signature"] = sign_event(
-                webhook_secret,
-                event=callback_event,
-                event_id=instance.id,
-                timestamp=callback_timestamp,
-                payload=callback_payload,
-            )
-            try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
-                    cb_resp = await client.post(
-                        callback_url, json=callback_payload, headers=cb_headers
-                    )
-                    logger.info(
-                        f"Callback to {callback_url} returned HTTP {cb_resp.status_code}"
-                    )
-            except httpx.RequestError as exc:
-                # Do not change the already-committed verification result.
-                logger.warning(f"Callback POST to {callback_url} failed: {exc}")
 
     return VerificationResultResponse(
         instance_id=instance.id,
@@ -6560,6 +6868,7 @@ async def start_siop_flow(
     )
     instance.context["request_uri"] = request_uri
     instance.context["siop_uri"] = siop_uri
+    instance.context["siop_client_id"] = client_id
     await repo.save_instance(instance)
     logger.info(f"Started SIOPv2 cross-device flow: {instance.id}")
     return {
@@ -6571,172 +6880,257 @@ async def start_siop_flow(
     }
 
 
+def _siop_error(description: str, *, error: str = "invalid_id_token") -> HTTPException:
+    return HTTPException(
+        status_code=400,
+        detail={"error": error, "error_description": description},
+    )
+
+
+def _decode_siop_jwt_object(segment: str, label: str) -> dict[str, Any]:
+    if not segment or not re.fullmatch(r"[A-Za-z0-9_-]+", segment):
+        raise ValueError(f"Invalid {label} encoding")
+    padded = segment + "=" * (-len(segment) % 4)
+    decoded = base64.b64decode(padded, altchars=b"-_", validate=True)
+    value = json.loads(decoded)
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return value
+
+
+def _verify_siop_jwk_id_token(id_token: str) -> tuple[dict[str, Any], str]:
+    """Verify a draft-13 JWK-thumbprint SIOPv2 ID token.
+
+    DID subject syntax is deliberately not accepted until the verifier has a
+    governed DID resolver that can select the header ``kid`` from the resolved
+    authentication methods.
+    """
+    parts = id_token.split(".")
+    if len(parts) != 3 or not parts[2]:
+        raise _siop_error("ID token must be a signed compact JWS")
+
+    try:
+        header = _decode_siop_jwt_object(parts[0], "JOSE header")
+        unverified_claims = _decode_siop_jwt_object(parts[1], "JWT claims")
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise _siop_error(f"Malformed ID token: {exc}") from exc
+
+    alg = header.get("alg")
+    if alg not in _SIOP_ID_TOKEN_ALGS:
+        raise _siop_error("ID token signing algorithm is not supported")
+
+    subject = unverified_claims.get("sub")
+    if not isinstance(subject, str) or not subject.startswith(
+        f"{_SIOP_JWK_SUBJECT_PREFIX}:"
+    ):
+        raise _siop_error(
+            "Only JWK-thumbprint SIOPv2 subjects are currently supported",
+            error="subject_syntax_types_not_supported",
+        )
+
+    sub_jwk = unverified_claims.get("sub_jwk")
+    if not isinstance(sub_jwk, dict):
+        raise _siop_error("JWK-thumbprint subject requires a sub_jwk public key")
+    private_members = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
+    if private_members.intersection(sub_jwk):
+        raise _siop_error("sub_jwk must contain public key material only")
+
+    expected_key_shape = {
+        "ES256": ("EC", "P-256"),
+        "EdDSA": ("OKP", "Ed25519"),
+    }[alg]
+    if (sub_jwk.get("kty"), sub_jwk.get("crv")) != expected_key_shape:
+        raise _siop_error("sub_jwk key type does not match the signing algorithm")
+    if sub_jwk.get("alg") not in (None, alg):
+        raise _siop_error("sub_jwk algorithm does not match the JOSE header")
+    if sub_jwk.get("use") not in (None, "sig"):
+        raise _siop_error("sub_jwk is not authorized for signatures")
+    key_ops = sub_jwk.get("key_ops")
+    if key_ops is not None and (
+        not isinstance(key_ops, list) or "verify" not in key_ops
+    ):
+        raise _siop_error("sub_jwk is not authorized for verification")
+
+    try:
+        verification_key = jwk.JWK.from_json(json.dumps(sub_jwk))
+        verified_token = jwcrypto_jwt.JWT(
+            jwt=id_token,
+            key=verification_key,
+            algs=[alg],
+            check_claims={},
+        )
+        claims = json.loads(verified_token.claims)
+    except Exception as exc:
+        logger.info(
+            "SIOPv2 ID token signature validation failed: %s", type(exc).__name__
+        )
+        raise _siop_error("ID token signature validation failed") from exc
+
+    if not isinstance(claims, dict):
+        raise _siop_error("ID token claims must be a JSON object")
+
+    thumbprint = verification_key.thumbprint()
+    expected_subject = f"{_SIOP_JWK_SUBJECT_PREFIX}:sha-256:{thumbprint}"
+    if not hmac.compare_digest(subject, expected_subject):
+        raise _siop_error("sub is not bound to the sub_jwk thumbprint")
+
+    return claims, alg
+
+
+def _terminal_siop_response(instance: FlowInstance) -> dict[str, Any]:
+    result = instance.result or {}
+    return {
+        "status": "verified",
+        "sub": result.get("subject"),
+        "nonce": instance.context.get("nonce"),
+        "subject_syntax_type": result.get("subject_syntax_type")
+        or _SIOP_JWK_SUBJECT_PREFIX,
+    }
+
+
 @router.post("/siop/submit")
 async def submit_siop_id_token(
     body: SiopSubmitRequest,
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> dict:
-    """SIOPv2 Draft 13 §11: Validate a self-issued ID token from the wallet.
+    """Validate a cross-device SIOPv2 draft-13 self-issued ID token."""
+    instance = await repo.get_instance(body.instance_id)
+    if not instance:
+        raise _siop_error("Flow instance not found", error="invalid_request")
+    submission_digest = hashlib.sha256(
+        json.dumps(
+            {"id_token": body.id_token},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    if instance.status in {
+        FlowInstanceStatus.COMPLETED,
+        FlowInstanceStatus.FAILED,
+    }:
+        prior_digest = (instance.result or {}).get("submission_digest")
+        if isinstance(prior_digest, str) and hmac.compare_digest(
+            prior_digest, submission_digest
+        ):
+            return _terminal_siop_response(instance)
+        _raise_verification_replay_conflict()
+    if instance.context.get("flow_type") != "siop_v2":
+        raise _siop_error(
+            "Flow instance is not a SIOPv2 transaction", error="invalid_request"
+        )
+    if instance.expires_at and datetime.now(timezone.utc) > instance.expires_at:
+        instance.status = FlowInstanceStatus.EXPIRED
+        await repo.save_instance(instance)
+        raise HTTPException(status_code=410, detail="SIOPv2 transaction has expired")
+    if instance.status not in {
+        FlowInstanceStatus.AWAITING_WALLET,
+        FlowInstanceStatus.IN_PROGRESS,
+    }:
+        raise _siop_error(
+            "SIOPv2 response is not accepted in the current state",
+            error="invalid_request",
+        )
+    expected_status = instance.status
+    instance = copy.deepcopy(instance)
 
-    Enforces:
-    - iss MUST be 'https://self-issued.me/v2' (§11)
-    - sub MUST equal iss (§11)
-    - nonce MUST match the session nonce if instance_id is provided (§9)
-    - sub_jwk MUST be present for jwk-thumbprint subject syntax (§11)
-    """
-    import base64 as _b64
-    import hashlib
-
-    SELF_ISSUED_V2 = "https://self-issued.me/v2"
-
-    # Decode JWT payload without verification (signature verification would
-    # require the sub_jwk public key, which the spec requires to be in the token)
-    def _decode_payload(token: str) -> dict:
-        parts = token.split(".")
-        if len(parts) < 2:
-            raise ValueError("Not a valid JWT")
-        segment = parts[1]
-        segment += "=" * (4 - len(segment) % 4)
-        return json.loads(_b64.urlsafe_b64decode(segment))
-
-    try:
-        payload = _decode_payload(body.id_token)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_id_token",
-                "error_description": f"Malformed JWT: {exc}",
-            },
+    expected_nonce = instance.context.get("nonce")
+    expected_audience = instance.context.get("siop_client_id")
+    if not isinstance(expected_nonce, str) or not expected_nonce:
+        raise _siop_error(
+            "SIOPv2 transaction has no verifier nonce", error="invalid_request"
+        )
+    if not isinstance(expected_audience, str) or not expected_audience:
+        raise _siop_error(
+            "SIOPv2 transaction has no verifier audience", error="invalid_request"
         )
 
-    iss = payload.get("iss")
-    sub = payload.get("sub")
-    nonce = payload.get("nonce")
+    claims, alg = _verify_siop_jwk_id_token(body.id_token)
+    subject = claims.get("sub")
+    issuer = claims.get("iss")
+    nonce = claims.get("nonce")
 
-    # SIOPv2 §11: iss MUST be the self-issued value
-    if iss != SELF_ISSUED_V2:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_id_token",
-                "error_description": f"iss MUST be '{SELF_ISSUED_V2}', got {iss!r}",
-            },
+    if not isinstance(issuer, str) or not isinstance(subject, str) or issuer != subject:
+        raise _siop_error("Self-issued ID token requires iss to equal sub")
+
+    audience = claims.get("aud")
+    audience_matches = audience == expected_audience or (
+        isinstance(audience, list) and expected_audience in audience
+    )
+    if not audience_matches:
+        raise _siop_error("ID token audience does not match the SIOPv2 request")
+    if not isinstance(nonce, str) or not hmac.compare_digest(nonce, expected_nonce):
+        raise _siop_error("ID token nonce does not match the SIOPv2 request")
+
+    now = int(datetime.now(timezone.utc).timestamp())
+    issued_at = claims.get("iat")
+    expires_at = claims.get("exp")
+    if (
+        isinstance(issued_at, bool)
+        or not isinstance(issued_at, (int, float))
+        or isinstance(expires_at, bool)
+        or not isinstance(expires_at, (int, float))
+    ):
+        raise _siop_error("ID token requires numeric iat and exp claims")
+    if issued_at > now + _SIOP_CLOCK_SKEW_SECONDS:
+        raise _siop_error("ID token iat is in the future")
+    if expires_at <= now - _SIOP_CLOCK_SKEW_SECONDS:
+        raise _siop_error("ID token has expired")
+    if issued_at >= expires_at:
+        raise _siop_error("ID token validity window is invalid")
+    if instance.started_at:
+        earliest_iat = int(instance.started_at.timestamp()) - _SIOP_CLOCK_SKEW_SECONDS
+        if issued_at < earliest_iat:
+            raise _siop_error("ID token predates the SIOPv2 transaction")
+
+    instance.status = FlowInstanceStatus.COMPLETED
+    instance.subject_id = subject
+    instance.completed_at = datetime.now(timezone.utc)
+    instance.updated_at = instance.completed_at
+    instance.result = {
+        "evaluation_result": "passed",
+        "decision": "allow",
+        "subject": subject,
+        "subject_syntax_type": _SIOP_JWK_SUBJECT_PREFIX,
+        "signing_algorithm": alg,
+        "claims_trust": "self_attested",
+        "submission_digest": submission_digest,
+    }
+    replay_expires_at = instance.expires_at
+    if replay_expires_at is None or replay_expires_at <= instance.completed_at:
+        replay_expires_at = instance.completed_at + timedelta(
+            seconds=_NONCE_TTL_SECONDS
         )
+    committed = await repo.finalize_verification(
+        instance,
+        nonce_digest=hashlib.sha256(expected_nonce.encode("utf-8")).hexdigest(),
+        replay_expires_at=replay_expires_at,
+        expected_status=expected_status,
+    )
+    if not committed:
+        current = await repo.get_instance(instance.id)
+        prior_digest = (
+            (current.result or {}).get("submission_digest") if current else None
+        )
+        if (
+            current is not None
+            and current.status is FlowInstanceStatus.COMPLETED
+            and isinstance(prior_digest, str)
+            and hmac.compare_digest(prior_digest, submission_digest)
+        ):
+            return _terminal_siop_response(current)
+        _raise_verification_replay_conflict()
 
-    # SIOPv2 §11: sub MUST equal iss for self-issued tokens using self-issued URI subject syntax.
-    # For JWK-thumbprint subject syntax, sub is the thumbprint of the sub_jwk public key.
-    sub_jwk = payload.get("sub_jwk")
-    if sub_jwk:
-        # jwk-thumbprint subject syntax: sub MUST be the JWK thumbprint of sub_jwk
-        import hashlib
-
-        try:
-            key = sub_jwk
-            kty = key.get("kty", "")
-            if kty == "OKP":
-                canonical = json.dumps(
-                    {"crv": key["crv"], "kty": kty, "x": key["x"]}, sort_keys=True
-                ).encode()
-            elif kty == "EC":
-                canonical = json.dumps(
-                    {"crv": key["crv"], "kty": kty, "x": key["x"], "y": key["y"]},
-                    sort_keys=True,
-                ).encode()
-            else:
-                canonical = json.dumps(
-                    {
-                        k: v
-                        for k, v in sorted(key.items())
-                        if k not in ("d", "use", "key_ops", "alg", "kid")
-                    },
-                ).encode()
-            expected_thumbprint = (
-                base64.urlsafe_b64encode(hashlib.sha256(canonical).digest())
-                .rstrip(b"=")
-                .decode()
-            )
-            if sub != expected_thumbprint:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": "invalid_id_token",
-                        "error_description": "sub MUST be JWK thumbprint of sub_jwk when using jwk-thumbprint syntax",
-                    },
-                )
-        except HTTPException:
-            raise
-        except Exception:
-            logger.warning(
-                "JWK thumbprint computation failed for sub=%r — rejecting token",
-                sub,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_id_token",
-                    "error_description": "Failed to compute JWK thumbprint for sub_jwk validation",
-                },
-            )
-    else:
-        # self-issued URI subject syntax: sub MUST equal iss
-        if sub != iss:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_id_token",
-                    "error_description": f"sub MUST equal iss in a self-issued ID token (sub={sub!r}, iss={iss!r})",
-                },
-            )
-
-    # Nonce binding: verify against the flow instance when instance_id is provided
-    if body.instance_id:
-        instance = await repo.get_instance(body.instance_id)
-        if not instance:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_request",
-                    "error_description": "Flow instance not found",
-                },
-            )
-        expected_nonce = instance.context.get("nonce")
-        if expected_nonce and nonce != expected_nonce:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_id_token",
-                    "error_description": "nonce in ID token does not match the session nonce",
-                },
-            )
-        # MIP §26: reject replayed nonces
-        if expected_nonce and not await _check_nonce(expected_nonce):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "nonce_reused",
-                    "error_description": "This nonce has already been used",
-                },
-            )
-    else:
-        # No instance_id — accept any well-formed token but still reject wrong nonce
-        # if the nonce is clearly wrong (wrong-nonce-* sentinel values used in tests)
-        if nonce and nonce.startswith("wrong-"):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_id_token",
-                    "error_description": "nonce mismatch",
-                },
-            )
-
-    logger.info(f"SIOPv2 ID token validated for sub={sub!r} nonce={nonce!r}")
+    subject_digest = hashlib.sha256(subject.encode("utf-8")).hexdigest()
+    logger.info(
+        "SIOPv2 ID token validated for subject_sha256=%s instance=%s",
+        subject_digest,
+        instance.id,
+    )
     return {
         "status": "verified",
-        "sub": sub,
+        "sub": subject,
         "nonce": nonce,
-        "subject_syntax_type": "urn:ietf:params:oauth:jwk-thumbprint",
+        "subject_syntax_type": _SIOP_JWK_SUBJECT_PREFIX,
     }
 
 
@@ -6830,8 +7224,9 @@ async def handle_application_approved(
     all_flows = await repo.list_definitions(event.organization_id)
 
     def handles_application_approved(flow: FlowDefinition) -> bool:
-        return flow.status == FlowStatus.ACTIVE and _is_application_approved_issuance_trigger(
-            flow
+        return (
+            flow.status == FlowStatus.ACTIVE
+            and _is_application_approved_issuance_trigger(flow)
         )
 
     matching_flows = sorted(
@@ -7032,13 +7427,18 @@ async def handle_application_approved(
     failed_flow_ids: list[str] = []
     for plan_entry in receipt.flow_plan:
         flow_def = flow_by_id.get(plan_entry["flow_definition_id"])
-        if flow_def is None or semantics_hash(flow_def) != plan_entry["offer_semantics_hash"]:
+        if (
+            flow_def is None
+            or semantics_hash(flow_def) != plan_entry["offer_semantics_hash"]
+        ):
             raise ApplicationOfferConflictError(
                 "the durably selected application flow is unavailable or has changed"
             )
         instance = await repo.get_instance(plan_entry["instance_id"])
         if instance is None:
-            raise RuntimeError("durable application event plan references a missing instance")
+            raise RuntimeError(
+                "durable application event plan references a missing instance"
+            )
         try:
             artifact = None
             if _effective_flow_type(flow_def) == FlowType.OID4VCI_PRE_AUTHORIZED:
@@ -7110,6 +7510,14 @@ async def handle_application_approved(
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo, _nonce_redis
     logger.info(f"Starting {SERVICE_NAME}...")
+    callback_secret = _read_secret_value("FLOW_WEBHOOK_SECRET")
+    if (
+        not is_valid_event_secret(callback_secret)
+        and os.environ.get("ENVIRONMENT", "production").lower() == "production"
+    ):
+        raise RuntimeError(
+            "FLOW_WEBHOOK_SECRET must contain at least 32 bytes in production"
+        )
     validate_application_event_configuration()
 
     # Initialize Redis for nonce replay prevention (shared across replicas)
@@ -7139,6 +7547,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     _repo = PostgresFlowRepository(session_factory)
     logger.info("PostgreSQL adapter initialized for flow service")
+
+    callback_stop = asyncio.Event()
+    callback_task: asyncio.Task[None] | None = None
+    if is_valid_event_secret(callback_secret):
+        callback_task = asyncio.create_task(
+            run_callback_dispatcher(
+                _repo,
+                secret_provider=lambda: _read_secret_value("FLOW_WEBHOOK_SECRET"),
+                stop_event=callback_stop,
+            ),
+            name="verification-callback-dispatcher",
+        )
+    else:
+        logger.warning(
+            "Verification callback dispatcher is disabled without a 32-byte secret"
+        )
 
     # Initialize gRPC channel to organization service
     from common.di import setup_org_client, teardown_org_client
@@ -7192,13 +7616,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     logger.info(f"Shutting down {SERVICE_NAME}...")
+    if callback_task is not None:
+        callback_stop.set()
+        await callback_task
     await grpc_server.stop(grace=5)
     await pp_grpc_channel.close()
     await ct_grpc_channel.close()
     await issuance_grpc_channel.close()
     await teardown_org_client(app)
-    if _nonce_redis is not None:
-        await _nonce_redis.aclose()
     await engine.dispose()
 
 

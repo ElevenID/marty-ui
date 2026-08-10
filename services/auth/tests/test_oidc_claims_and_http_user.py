@@ -1,12 +1,20 @@
+import asyncio
 import base64
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, quote, urlparse
+from uuid import uuid4
 
 import pytest
+import redis.asyncio as redis
 from starlette.requests import Request
 from starlette.responses import Response
-from common.webhook_signatures import sign_event
+from common.webhook_signatures import (
+    AUTH_CALLBACK_AUDIENCE,
+    payload_digest,
+    sign_event,
+)
 
 from services.auth.infrastructure.adapters import http_adapter
 from services.auth.domain.entities import AuthenticatedUser
@@ -216,22 +224,44 @@ class _FakeRedis:
         self.deleted_keys: list[str] = []
         self.completed_payloads: list[dict] = []
         self.claimed_keys: set[str] = set()
+        self.values: dict[str, str] = {}
 
     async def get(self, key: str) -> str | None:
+        if key in self.values:
+            return self.values[key]
+        if key in self.deleted_keys or key.startswith(http_adapter._CALLBACK_CLAIM_KEY):
+            return None
         return self._payload
+
+    async def getdel(self, key: str) -> str | None:
+        payload = self._payload
+        self._payload = None
+        self.deleted_keys.append(key)
+        return payload
 
     async def setex(self, key: str, ttl: int, value: str) -> None:
         self.completed_payloads.append(json.loads(value))
+        self.values[key] = value
 
     async def delete(self, key: str) -> None:
         self.deleted_keys.append(key)
 
-    async def set(self, key: str, _value: str, *, ex: int, nx: bool) -> bool:
-        assert ex == http_adapter._PENDING_TTL
-        assert nx is True
-        if key in self.claimed_keys:
+    async def set(
+        self,
+        key: str,
+        value: str,
+        *,
+        ex: int,
+        nx: bool = False,
+    ) -> bool:
+        assert ex in {
+            http_adapter._CALLBACK_CLAIM_LEASE_SECONDS,
+            http_adapter._PENDING_TTL,
+        }
+        if nx and key in self.claimed_keys:
             return False
         self.claimed_keys.add(key)
+        self.values[key] = value
         return True
 
 
@@ -246,6 +276,24 @@ class _FakeSessionRepository:
 _CALLBACK_SECRET = "test-flow-webhook-secret-at-least-32-bytes"
 
 
+def _credential_verified_payload(
+    **overrides,
+) -> http_adapter.CredentialVerifiedPayload:
+    basis = {
+        "flow_instance_id": "flow-1",
+        "result": "passed",
+        "decision": "allow",
+        "decision_reason": "",
+        "verified_claims": {"email": "alice@example.com"},
+        "presentation_policy_id": "policy-1",
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "evidence_digest": "a" * 64,
+    }
+    basis.update(overrides)
+    basis["decision_digest"] = payload_digest(basis)
+    return http_adapter.CredentialVerifiedPayload(**basis)
+
+
 def _signed_credential_callback_request(
     payload: http_adapter.CredentialVerifiedPayload,
     *,
@@ -255,6 +303,7 @@ def _signed_credential_callback_request(
     event_timestamp = (timestamp or datetime.now(timezone.utc)).isoformat()
     signature = sign_event(
         _CALLBACK_SECRET,
+        audience=AUTH_CALLBACK_AUDIENCE,
         event=event,
         event_id=payload.flow_instance_id,
         timestamp=event_timestamp,
@@ -265,6 +314,7 @@ def _signed_credential_callback_request(
         method="POST",
         extra_headers={
             "x-mip-event": event,
+            "x-mip-audience": AUTH_CALLBACK_AUDIENCE,
             "x-mip-event-id": payload.flow_instance_id,
             "x-mip-timestamp": event_timestamp,
             "x-mip-signature": signature,
@@ -280,6 +330,27 @@ def test_flow_webhook_secret_rejects_weak_configuration(
 
     with pytest.raises(RuntimeError, match="at least 32 bytes"):
         http_adapter._read_flow_webhook_secret()
+
+
+def test_credential_callback_session_id_is_stable_and_event_bound() -> None:
+    first = http_adapter._credential_callback_session_id(
+        _CALLBACK_SECRET,
+        flow_instance_id="flow-1",
+        nonce="nonce-1",
+    )
+    retry = http_adapter._credential_callback_session_id(
+        _CALLBACK_SECRET,
+        flow_instance_id="flow-1",
+        nonce="nonce-1",
+    )
+    other_event = http_adapter._credential_callback_session_id(
+        _CALLBACK_SECRET,
+        flow_instance_id="flow-2",
+        nonce="nonce-1",
+    )
+
+    assert first == retry
+    assert first != other_event
 
 
 def _canvas_lti_session_payload() -> dict:
@@ -382,6 +453,95 @@ async def test_credential_login_finalize_redirects_to_console_and_sets_cookie(mo
 
 
 @pytest.mark.asyncio
+async def test_credential_login_finalize_atomically_issues_one_session_cookie(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    fake_redis = _FakeRedis(json.dumps({
+        "status": "completed",
+        "session_id": "session-123",
+    }))
+
+    monkeypatch.setattr(http_adapter, "_redis_client", fake_redis)
+    monkeypatch.setattr(http_adapter, "_ui_base_url", "https://elevenidllc.com")
+    monkeypatch.setattr(http_adapter, "_cookie_config", {
+        "key": "sessionId",
+        "httponly": True,
+        "secure": True,
+        "samesite": "lax",
+        "max_age": 86400,
+        "path": "/",
+    })
+
+    responses = await asyncio.gather(
+        credential_login_finalize("nonce-123", Response()),
+        credential_login_finalize("nonce-123", Response()),
+    )
+
+    authenticated = [
+        response
+        for response in responses
+        if "sessionId=session-123" in response.headers.get("set-cookie", "")
+    ]
+    expired = [
+        response
+        for response in responses
+        if "auth_error=Login+session+expired" in response.headers["location"]
+    ]
+    assert len(authenticated) == 1
+    assert len(expired) == 1
+
+
+@pytest.mark.asyncio
+async def test_credential_login_finalize_has_one_real_redis_winner(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    redis_client = redis.from_url(
+        os.environ.get("REDIS_URL", "redis://localhost:6379/0"),
+        decode_responses=True,
+    )
+    completion_key: str | None = None
+    try:
+        try:
+            await redis_client.ping()
+        except Exception as exc:
+            pytest.skip(f"Redis is unavailable: {exc}")
+
+        nonce = f"atomic-finalize-{uuid4()}"
+        completion_key = f"{http_adapter._COMPLETE_KEY}{nonce}"
+        await redis_client.set(
+            completion_key,
+            json.dumps({"status": "completed", "session_id": "session-123"}),
+            ex=30,
+        )
+        monkeypatch.setattr(http_adapter, "_redis_client", redis_client)
+        monkeypatch.setattr(http_adapter, "_ui_base_url", "https://elevenidllc.com")
+        monkeypatch.setattr(http_adapter, "_cookie_config", {
+            "key": "sessionId",
+            "httponly": True,
+            "secure": True,
+            "samesite": "lax",
+            "max_age": 86400,
+            "path": "/",
+        })
+
+        responses = await asyncio.gather(
+            *(credential_login_finalize(nonce, Response()) for _ in range(12))
+        )
+
+        authenticated = [
+            response
+            for response in responses
+            if "sessionId=session-123" in response.headers.get("set-cookie", "")
+        ]
+        assert len(authenticated) == 1
+        assert await redis_client.get(completion_key) is None
+    finally:
+        if completion_key is not None:
+            await redis_client.delete(completion_key)
+        await redis_client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_credential_verified_allows_claim_only_login_without_keycloak_admin(monkeypatch: pytest.MonkeyPatch):
     fake_redis = _FakeRedis(json.dumps({
         "state": "pending",
@@ -401,17 +561,13 @@ async def test_credential_verified_allows_claim_only_login_without_keycloak_admi
     monkeypatch.setattr(http_adapter, "_credential_login_policy_id", "policy-1")
     monkeypatch.setattr(http_adapter, "_credential_login_organization_id", "org-1")
     monkeypatch.setenv("FLOW_WEBHOOK_SECRET", _CALLBACK_SECRET)
-    payload = http_adapter.CredentialVerifiedPayload(
-        flow_instance_id="flow-1",
-        result="passed",
-        decision="allow",
+    payload = _credential_verified_payload(
         verified_claims={
             "email": "alice@example.com",
             "given_name": "Alice",
             "role": "administrator",
             "organization_id": "attacker-org",
         },
-        presentation_policy_id="policy-1",
     )
 
     result = await http_adapter.credential_verified(
@@ -448,13 +604,7 @@ async def test_credential_verified_denies_without_keycloak_admin_when_existing_u
     monkeypatch.setattr(http_adapter, "_credential_login_policy_id", "policy-1")
     monkeypatch.setattr(http_adapter, "_credential_login_organization_id", "org-1")
     monkeypatch.setenv("FLOW_WEBHOOK_SECRET", _CALLBACK_SECRET)
-    payload = http_adapter.CredentialVerifiedPayload(
-        flow_instance_id="flow-1",
-        result="passed",
-        decision="allow",
-        verified_claims={"email": "alice@example.com"},
-        presentation_policy_id="policy-1",
-    )
+    payload = _credential_verified_payload()
 
     result = await http_adapter.credential_verified(
         payload=payload,
@@ -485,10 +635,8 @@ async def test_credential_verified_rejects_unauthenticated_or_unbound_callbacks(
     monkeypatch.setattr(http_adapter, "_credential_login_organization_id", "org-1")
     monkeypatch.setenv("FLOW_WEBHOOK_SECRET", _CALLBACK_SECRET)
 
-    payload = http_adapter.CredentialVerifiedPayload(
+    payload = _credential_verified_payload(
         flow_instance_id="flow-2" if failure == "wrong_flow" else "flow-1",
-        result="passed",
-        decision="allow",
         verified_claims={"email": "attacker@example.com"},
         presentation_policy_id="policy-2" if failure == "wrong_policy" else "policy-1",
     )
@@ -518,7 +666,7 @@ async def test_credential_verified_rejects_unauthenticated_or_unbound_callbacks(
 
 
 @pytest.mark.asyncio
-async def test_credential_verified_claims_callback_only_once(monkeypatch: pytest.MonkeyPatch):
+async def test_credential_verified_retries_are_idempotent(monkeypatch: pytest.MonkeyPatch):
     fake_redis = _FakeRedis(json.dumps({
         "flow_instance_id": "flow-1",
         "presentation_policy_id": "policy-1",
@@ -535,21 +683,14 @@ async def test_credential_verified_claims_callback_only_once(monkeypatch: pytest
     monkeypatch.setattr(http_adapter, "_credential_login_policy_id", "policy-1")
     monkeypatch.setattr(http_adapter, "_credential_login_organization_id", "org-1")
     monkeypatch.setenv("FLOW_WEBHOOK_SECRET", _CALLBACK_SECRET)
-    payload = http_adapter.CredentialVerifiedPayload(
-        flow_instance_id="flow-1",
-        result="passed",
-        decision="allow",
-        verified_claims={"email": "alice@example.com"},
-        presentation_policy_id="policy-1",
-    )
+    payload = _credential_verified_payload()
     request = _signed_credential_callback_request(payload)
 
     first = await http_adapter.credential_verified(payload, "nonce-once", request)
-    with pytest.raises(http_adapter.HTTPException) as exc_info:
-        await http_adapter.credential_verified(payload, "nonce-once", request)
+    retry = await http_adapter.credential_verified(payload, "nonce-once", request)
 
     assert first["status"] == "completed"
-    assert exc_info.value.status_code == 409
+    assert retry == {"ok": True, "status": "already_processed"}
     assert len(fake_repo.saved) == 1
 
 
