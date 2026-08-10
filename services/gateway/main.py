@@ -1459,8 +1459,6 @@ Verification is handled through two complementary approaches:
             "subject_types_supported": ["public", "pairwise"],
             "subject_syntax_types_supported": [
                 "urn:ietf:params:oauth:jwk-thumbprint",
-                "did:key",
-                "did:jwk",
             ],
             "id_token_signing_alg_values_supported": ["EdDSA", "ES256"],
             "grant_types_supported": [
