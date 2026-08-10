@@ -13,10 +13,11 @@ echo "Starting service: $SERVICE_NAME (module: $MODULE_NAME)"
 echo "Working directory: $(pwd)"
 echo "Python version: $(python --version)"
 
-# Change to services directory and run service module with -m flag
-# This ensures the service is treated as a package with proper relative imports
+# Change to services directory and import the service through its canonical package name.
+# Running `${MODULE_NAME}.main` directly with `python -m` would execute it as
+# `__main__`; later adapter imports could then load a second copy of the module.
 cd /app/services
 if [ "$MODULE_NAME" = "applicant" ]; then
 	python -m applicant.migrate_store_v03
 fi
-exec python -m ${MODULE_NAME}.main
+exec python -m service_runner

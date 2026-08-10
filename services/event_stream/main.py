@@ -19,6 +19,7 @@ from marty_common.service_setup import create_service_app
 logger = logging.getLogger(__name__)
 
 SERVICE_NAME = "event-stream"
+SERVICE_PORT = int(os.environ.get("EVENT_STREAM_SERVICE_PORT", "8015"))
 
 
 @asynccontextmanager
@@ -68,7 +69,6 @@ app = create_app()
 if __name__ == "__main__":
     import uvicorn
 
-    SERVICE_PORT = int(os.environ.get("EVENT_STREAM_SERVICE_PORT", "8015"))
     uvicorn.run(
         app,
         host="0.0.0.0",
