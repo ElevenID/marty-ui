@@ -37,12 +37,12 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Annotated, Any, AsyncGenerator, Awaitable
 
-import grpc.aio as grpc_aio
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from marty_common.service_setup import create_service_app
+from common.grpc_factory import create_grpc_channel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -824,16 +824,21 @@ async def _evaluate_via_grpc(
             presentation_policy_service_pb2_grpc,
         )
 
-        channel = grpc_aio.insecure_channel(PP_GRPC_TARGET)
-        stub = presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub(channel)
-        req = presentation_policy_service_pb2.EvaluatePresentationRequest(
-            policy_id=policy_id,
-            vp_token=vp_token,
-            nonce=nonce or "",
-            context_json=context_json,
-        )
-        resp = await stub.EvaluatePresentation(req)
-        await channel.close()
+        async with create_grpc_channel(
+            PP_GRPC_TARGET,
+            service_name="verification",
+            require_workload_identity=True,
+        ) as channel:
+            stub = presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub(
+                channel
+            )
+            req = presentation_policy_service_pb2.EvaluatePresentationRequest(
+                policy_id=policy_id,
+                vp_token=vp_token,
+                nonce=nonce or "",
+                context_json=context_json,
+            )
+            resp = await stub.EvaluatePresentation(req)
         return {
             "result": resp.result,
             "decision": resp.decision,
@@ -857,10 +862,12 @@ async def _inspect_via_grpc(item: str) -> str:
     try:
         from marty_proto.v1 import inspection_system_pb2, inspection_system_pb2_grpc  # type: ignore
 
-        channel = grpc_aio.insecure_channel(INSPECTION_SYSTEM_TARGET)
-        stub = inspection_system_pb2_grpc.InspectionSystemStub(channel)
-        resp = await stub.Inspect(inspection_system_pb2.InspectRequest(item=item))
-        await channel.close()
+        async with create_grpc_channel(
+            INSPECTION_SYSTEM_TARGET,
+            service_name="verification",
+        ) as channel:
+            stub = inspection_system_pb2_grpc.InspectionSystemStub(channel)
+            resp = await stub.Inspect(inspection_system_pb2.InspectRequest(item=item))
         return resp.result
     except Exception as exc:
         logger.warning("InspectionSystem gRPC call failed: %s", exc)
@@ -1308,12 +1315,17 @@ async def _build_presentation_definition(session: VerificationSession) -> dict[s
             credential_template_service_pb2_grpc,
         )
 
-        pp_channel = grpc_aio.insecure_channel(PP_GRPC_TARGET)
-        pp_stub = presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub(pp_channel)
-        pp_resp = await pp_stub.GetPolicy(
-            presentation_policy_service_pb2.GetPolicyRequest(policy_id=policy_id)
-        )
-        await pp_channel.close()
+        async with create_grpc_channel(
+            PP_GRPC_TARGET,
+            service_name="verification",
+            require_workload_identity=True,
+        ) as pp_channel:
+            pp_stub = presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub(
+                pp_channel
+            )
+            pp_resp = await pp_stub.GetPolicy(
+                presentation_policy_service_pb2.GetPolicyRequest(policy_id=policy_id)
+            )
 
         if not pp_resp.id:
             return {"id": policy_id}
@@ -1328,7 +1340,7 @@ async def _build_presentation_definition(session: VerificationSession) -> dict[s
     if not credential_requirements:
         return {"id": policy_id}
 
-    ct_channel = grpc_aio.insecure_channel(CT_GRPC_TARGET)
+    ct_channel = create_grpc_channel(CT_GRPC_TARGET, service_name="verification")
     ct_stub = credential_template_service_pb2_grpc.CredentialTemplateServiceStub(ct_channel)
 
     input_descriptors: list[dict[str, Any]] = []
