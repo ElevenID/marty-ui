@@ -1,5 +1,8 @@
+"""Marty-owned notification target and delivery-truth tests."""
+
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -75,11 +78,66 @@ def test_send_notification_supports_structured_target_and_delivery_results():
     assert len(result) == 1
     assert result[0]["notification_id"] == body["id"]
     assert result[0]["channel"] == "EMAIL"
-    assert result[0]["success"] is True
+    assert result[0]["success"] is False
     assert result[0]["should_retry"] is False
+    assert result[0]["error_code"] == "EMAIL_ADAPTER_UNAVAILABLE"
     # None fields excluded by exclude_none
-    assert "error_code" not in result[0]
+    assert "delivered_at" not in result[0]
     assert "retry_after" not in result[0]
+
+
+@pytest.mark.parametrize(
+    ("channel", "target_fields", "expected_error"),
+    [
+        (
+            "FCM",
+            {"device_tokens": ["opaque-device-token"]},
+            "FCM_ADAPTER_UNAVAILABLE",
+        ),
+        ("SSE", {"user_id": "user-1"}, "SSE_ADAPTER_UNAVAILABLE"),
+        ("SMS", {"user_id": "user-1"}, "SMS_ADAPTER_UNAVAILABLE"),
+        (
+            "EMAIL",
+            {"email_addresses": ["holder@example.com"]},
+            "EMAIL_ADAPTER_UNAVAILABLE",
+        ),
+    ],
+)
+def test_unconfigured_channels_never_report_synthetic_delivery(
+    channel: str,
+    target_fields: dict[str, object],
+    expected_error: str,
+) -> None:
+    repo = notification.InMemoryNotificationRepository()
+    client = _build_client(repo)
+
+    response = client.post(
+        "/v1/notifications/send",
+        json={
+            "organization_id": "org-1",
+            "title": "Delivery truth",
+            "body": "No adapter is configured.",
+            "target": {"channels": [channel], **target_fields},
+        },
+    )
+
+    assert response.status_code == 200
+    notification_id = response.json()["id"]
+    delivery_response = client.get(
+        f"/v1/notifications/{notification_id}/delivery-results",
+        params={"organization_id": "org-1"},
+    )
+    assert delivery_response.status_code == 200
+    assert delivery_response.json() == [
+        {
+            "notification_id": notification_id,
+            "channel": channel,
+            "success": False,
+            "attempted_at": delivery_response.json()[0]["attempted_at"],
+            "error_code": expected_error,
+            "should_retry": False,
+        }
+    ]
 
 
 def test_send_notification_rejects_non_https_webhook_targets():

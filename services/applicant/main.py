@@ -2357,19 +2357,7 @@ async def review_application(
             "application_id": application.id,
             "credential_template_id": application.credential_template_id,
             "status": application.status.value,
-            "reviewer_notes": request.notes,
         }
-        if applicant:
-            event_data.update(
-                {
-                    "email": applicant.email,
-                    "given_name": applicant.given_name,
-                    "family_name": applicant.family_name,
-                    "vetting_level": applicant.vetting_level.value,
-                }
-            )
-        if request.reason:
-            event_data["rejection_reason"] = request.reason
         try:
             await get_event_publisher().publish(
                 DomainEvent(
