@@ -1,5 +1,6 @@
 """Service containers must import each application module exactly once."""
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -23,7 +24,7 @@ def test_runner_imports_the_canonical_service_module(
 
     monkeypatch.setenv("SERVICE_NAME", "flow")
     monkeypatch.setattr(service_runner.importlib, "import_module", import_module)
-    monkeypatch.setattr(service_runner.uvicorn, "run", run)
+    monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(run=run))
 
     service_runner.main()
 

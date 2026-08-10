@@ -7,8 +7,6 @@ import os
 import re
 from types import ModuleType
 
-import uvicorn
-
 _SERVICE_MODULE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -22,6 +20,8 @@ def load_service_module(service_name: str) -> ModuleType:
 
 def main() -> None:
     """Import and serve the configured service application."""
+    import uvicorn
+
     service_name = os.environ.get("SERVICE_NAME", "")
     if not service_name.strip():
         raise RuntimeError("SERVICE_NAME is required")
