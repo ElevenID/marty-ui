@@ -272,6 +272,27 @@ def test_internal_get_trust_profile_skips_user_membership() -> None:
     assert get_membership.await_count == 0
 
 
+def test_internal_get_trust_profile_requires_production_service_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "a" * 48
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("GRPC_SERVICE_TOKEN", token)
+    monkeypatch.delenv("GRPC_SERVICE_TOKEN_FILE", raising=False)
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = asyncio.run(_save_profile(repo))
+    client, get_membership = _build_client(repo)
+
+    assert client.get(f"/internal/v1/trust-profiles/{profile.id}").status_code == 401
+    response = client.get(
+        f"/internal/v1/trust-profiles/{profile.id}",
+        headers={"x-service-token": token},
+    )
+
+    assert response.status_code == 200
+    assert get_membership.await_count == 0
+
+
 def test_registry_sync_uses_stored_organization_and_materializes_imported_anchors(
     monkeypatch,
 ) -> None:

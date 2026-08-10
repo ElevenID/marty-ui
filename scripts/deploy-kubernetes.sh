@@ -224,7 +224,11 @@ cmd_setup_secrets() {
   local postgres_password keycloak_db_password marty_db_password keycloak_admin_password
   local marty_api_client_secret rabbitmq_password rabbitmq_erlang_cookie
   local google_client_id google_client_secret smtp_username smtp_password
-  local issuance_api_key grpc_service_token flow_application_event_hmac_key integration_secret_master_key canvas_credentials_shared_secret openbao_service_token
+  local issuance_api_key grpc_service_token flow_webhook_secret flow_application_event_hmac_key
+  local integration_secret_master_key canvas_credentials_shared_secret openbao_service_token
+  local workload_identity_ca_cert pp_workload_server_cert pp_workload_server_key
+  local flow_workload_client_cert flow_workload_client_key
+  local verification_workload_client_cert verification_workload_client_key
   local session_secret_key
   local cloudflare_tunnel_token
 
@@ -242,12 +246,26 @@ cmd_setup_secrets() {
   smtp_password="$(resolve_secret_input SMTP_PASSWORD)"
   issuance_api_key="$(resolve_secret_input ISSUANCE_API_KEY)"
   grpc_service_token="$(resolve_secret_input GRPC_SERVICE_TOKEN)"
+  workload_identity_ca_cert="$(resolve_secret_input MARTY_WORKLOAD_IDENTITY_CA_CERT)"
+  pp_workload_server_cert="$(resolve_secret_input PP_WORKLOAD_SERVER_CERT)"
+  pp_workload_server_key="$(resolve_secret_input PP_WORKLOAD_SERVER_KEY)"
+  flow_workload_client_cert="$(resolve_secret_input FLOW_WORKLOAD_CLIENT_CERT)"
+  flow_workload_client_key="$(resolve_secret_input FLOW_WORKLOAD_CLIENT_KEY)"
+  verification_workload_client_cert="$(resolve_secret_input VERIFICATION_WORKLOAD_CLIENT_CERT)"
+  verification_workload_client_key="$(resolve_secret_input VERIFICATION_WORKLOAD_CLIENT_KEY)"
+  flow_webhook_secret="$(resolve_secret_input FLOW_WEBHOOK_SECRET)"
   flow_application_event_hmac_key="$(resolve_secret_input FLOW_APPLICATION_EVENT_HMAC_KEY)"
   integration_secret_master_key="$(resolve_secret_input INTEGRATION_SECRET_MASTER_KEY)"
   canvas_credentials_shared_secret="$(resolve_secret_input CANVAS_CREDENTIALS_SHARED_SECRET)"
   openbao_service_token="$(resolve_secret_input OPENBAO_SERVICE_TOKEN)"
   cloudflare_tunnel_token="$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"
 
+  if is_placeholder_secret "$flow_webhook_secret"; then
+    error "FLOW_WEBHOOK_SECRET must be set to a non-placeholder value before deployment."
+  fi
+  if (( ${#flow_webhook_secret} < 32 )); then
+    error "FLOW_WEBHOOK_SECRET must be at least 32 characters."
+  fi
   require_catalog_required_secrets "$K8S_STACK_NAME"
 
   kubectl create secret generic marty-secrets \
@@ -272,12 +290,33 @@ cmd_setup_secrets() {
     --from-literal=ISSUANCE_API_KEY="$issuance_api_key" \
     --from-literal=SIGNING_KEYS_INTERNAL_API_KEY="$issuance_api_key" \
     --from-literal=GRPC_SERVICE_TOKEN="$grpc_service_token" \
+    --from-literal=FLOW_WEBHOOK_SECRET="$flow_webhook_secret" \
     --from-literal=FLOW_APPLICATION_EVENT_HMAC_KEY="$flow_application_event_hmac_key" \
     --from-literal=INTEGRATION_SECRET_MASTER_KEY="$integration_secret_master_key" \
     --from-literal=CANVAS_CREDENTIALS_SHARED_SECRET="$canvas_credentials_shared_secret" \
     --from-literal=OPENBAO_SERVICE_TOKEN="$openbao_service_token" \
     --dry-run=client -o yaml | kubectl apply -f -
   success "Application secrets created/updated"
+
+  kubectl create secret generic presentation-policy-workload-tls \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$workload_identity_ca_cert" \
+    --from-literal=tls.crt="$pp_workload_server_cert" \
+    --from-literal=tls.key="$pp_workload_server_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic flow-workload-tls \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$workload_identity_ca_cert" \
+    --from-literal=tls.crt="$flow_workload_client_cert" \
+    --from-literal=tls.key="$flow_workload_client_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic verification-workload-tls \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$workload_identity_ca_cert" \
+    --from-literal=tls.crt="$verification_workload_client_cert" \
+    --from-literal=tls.key="$verification_workload_client_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  success "Verification workload identity secrets created/updated"
 
   if ! is_placeholder_secret "$cloudflare_tunnel_token"; then
     kubectl create secret generic cloudflared-secret \

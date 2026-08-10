@@ -12,6 +12,10 @@ Session lifecycle:
   3. POST /v1/verify/{id}/submit  — wallet POSTs VP token
   4. GET  /v1/verify/{id}         — relying-party polls for result
 
+Standalone sessions are polling-only. Authoritative callback delivery belongs
+to the Flow service's transactional outbox. Redis is mandatory outside local
+development and tests so submission leases and terminal results are shared.
+
 Stateless shortcut:
   POST /v1/verify/evaluate — evaluate any VP token against a policy in one call
 
@@ -20,24 +24,25 @@ Port: 8012  |  gRPC: 9017
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
 import os
 import secrets
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Annotated, Any, AsyncGenerator, Awaitable
 
-import grpc
-import grpc.aio as grpc_aio
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from marty_common.service_setup import create_service_app
+from common.grpc_factory import create_grpc_channel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -103,12 +108,17 @@ class VerificationSession:
         self.holder_binding_evidence: dict[str, Any] | None = None
         self.inspection_performed: bool = False
         self.inspection_result: str = ""
-        self.vp_token: str | None = None
+        self.inspection_result_sha256: str | None = None
+        self.vp_token_sha256: str | None = None
+        self.processing_token: str | None = None
+        self.processing_expires_at: datetime | None = None
+        self.total_requirements: int = 0
+        self.satisfied_requirements: int = 0
         self.completed_at: datetime | None = None
         self.error: str | None = None
 
-    def is_expired(self) -> bool:
-        return datetime.now(timezone.utc) > self.expires_at
+    def is_expired(self, now: datetime | None = None) -> bool:
+        return (now or datetime.now(timezone.utc)) > self.expires_at
 
     def request_uri(self) -> str:
         return f"{PUBLIC_BASE_URL}/v1/verify/{self.session_id}/request"
@@ -124,6 +134,169 @@ class VerificationSession:
 REDIS_URL = os.environ.get("REDIS_URL", "")
 SESSION_PREFIX = "verification:session:"
 SESSION_TTL_SECONDS = 60 * 60  # 1 hour (covers 15-min expiry + buffer)
+SUBMISSION_LEASE_SECONDS = 30
+SUBMISSION_CAS_RETRIES = 8
+
+
+class SubmissionOutcome(str, Enum):
+    CLAIMED = "claimed"
+    COMMITTED = "committed"
+    DUPLICATE = "duplicate"
+    BUSY = "busy"
+    CONFLICT = "conflict"
+    EXPIRED = "expired"
+    MISSING = "missing"
+
+
+def _datetime_from_redis_time(value: tuple[int, int] | list[int]) -> datetime:
+    """Convert Redis TIME output to an aware UTC datetime."""
+    seconds, microseconds = (int(part) for part in value)
+    return datetime.fromtimestamp(seconds, tz=timezone.utc) + timedelta(
+        microseconds=microseconds
+    )
+
+
+@dataclass(frozen=True)
+class SubmissionTransition:
+    outcome: SubmissionOutcome
+    session: VerificationSession | None = None
+    token: str | None = None
+
+_SAFE_INSPECTION_RESULTS = {
+    "error",
+    "failed",
+    "invalid",
+    "ok",
+    "passed",
+    "recorded",
+    "unavailable",
+    "unsupported",
+    "unverified",
+    "valid",
+    "verified",
+}
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _minimize_verified_claims(claims: Any) -> dict[str, bool]:
+    """Retain claim names and pass status, never disclosed values."""
+    if not isinstance(claims, dict):
+        return {}
+    return {name: True for name in sorted(str(name) for name in claims) if name}
+
+
+def _minimize_claim_result(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, Any] = {}
+    for key in ("claim_name", "satisfied"):
+        item = value.get(key)
+        if isinstance(item, (str, bool)) or item is None:
+            if item is not None:
+                result[key] = item
+    constraint_results = value.get("constraint_results")
+    if isinstance(constraint_results, list):
+        minimized_constraints = []
+        for constraint in constraint_results:
+            if not isinstance(constraint, dict):
+                continue
+            minimized = {
+                key: item
+                for key in ("constraint_type", "passed", "satisfied")
+                if isinstance((item := constraint.get(key)), (str, bool))
+            }
+            if minimized:
+                minimized_constraints.append(minimized)
+        if minimized_constraints:
+            result["constraint_results"] = minimized_constraints
+    return result or None
+
+
+def _minimize_credential_results(results: Any) -> list[dict[str, Any]]:
+    """Project credential evaluations to non-value decision evidence."""
+    if not isinstance(results, list):
+        return []
+    minimized_results: list[dict[str, Any]] = []
+    scalar_keys = (
+        "credential_template_id",
+        "credential_type",
+        "credential_format",
+        "satisfied",
+        "issuer_did",
+        "signature_valid",
+        "trust_validated",
+        "revocation_checked",
+        "revocation_validated",
+        "revocation_status_checked",
+        "holder_binding_validated",
+    )
+    list_keys = ("claims_missing", "claims_satisfied")
+    for result in results:
+        if not isinstance(result, dict):
+            continue
+        minimized: dict[str, Any] = {
+            key: item
+            for key in scalar_keys
+            if isinstance((item := result.get(key)), (str, bool, int, float))
+        }
+        for key in list_keys:
+            values = result.get(key)
+            if isinstance(values, list):
+                minimized[key] = [str(item) for item in values if str(item)]
+        claim_results = result.get("claim_results")
+        if isinstance(claim_results, list):
+            minimized_claims = [
+                item
+                for claim_result in claim_results
+                if (item := _minimize_claim_result(claim_result)) is not None
+            ]
+            if minimized_claims:
+                minimized["claim_results"] = minimized_claims
+        minimized_results.append(minimized)
+    return minimized_results
+
+
+def _minimize_inspection_result(raw_result: str) -> tuple[str, str | None]:
+    if not raw_result:
+        return "", None
+    digest = _sha256_text(raw_result)
+    normalized = raw_result.strip().lower()
+    try:
+        parsed = json.loads(raw_result)
+    except (TypeError, ValueError):
+        parsed = None
+    if isinstance(parsed, dict):
+        for key in ("result", "status", "decision"):
+            candidate = str(parsed.get(key, "")).strip().lower()
+            if candidate in _SAFE_INSPECTION_RESULTS:
+                normalized = candidate
+                break
+    safe_result = normalized if normalized in _SAFE_INSPECTION_RESULTS else "recorded"
+    return safe_result, digest
+
+
+def _minimize_terminal_session(session: VerificationSession) -> None:
+    """Remove prohibited post-verification data before persistence."""
+    if session.status == SessionStatus.PENDING:
+        return
+    session.callback_url = None
+    session.processing_token = None
+    session.processing_expires_at = None
+    session.verified_claims = _minimize_verified_claims(session.verified_claims)
+    session.credential_results = _minimize_credential_results(
+        session.credential_results
+    )
+    if session.inspection_result and not (
+        session.inspection_result_sha256
+        and session.inspection_result in _SAFE_INSPECTION_RESULTS
+    ):
+        (
+            session.inspection_result,
+            session.inspection_result_sha256,
+        ) = _minimize_inspection_result(session.inspection_result)
 
 
 class _CompletedAwaitable:
@@ -135,6 +308,7 @@ class _CompletedAwaitable:
 
 def _session_to_redis_dict(session: VerificationSession) -> dict[str, Any]:
     """Serialize a VerificationSession to a JSON-safe dict for Redis storage."""
+    _minimize_terminal_session(session)
     return {
         "session_id": session.session_id,
         "flow_id": session.flow_id,
@@ -161,7 +335,16 @@ def _session_to_redis_dict(session: VerificationSession) -> dict[str, Any]:
         "holder_binding_evidence": session.holder_binding_evidence,
         "inspection_performed": session.inspection_performed,
         "inspection_result": session.inspection_result,
-        "vp_token": session.vp_token,
+        "inspection_result_sha256": session.inspection_result_sha256,
+        "vp_token_sha256": session.vp_token_sha256,
+        "processing_token": session.processing_token,
+        "processing_expires_at": (
+            session.processing_expires_at.isoformat()
+            if session.processing_expires_at
+            else None
+        ),
+        "total_requirements": session.total_requirements,
+        "satisfied_requirements": session.satisfied_requirements,
         "completed_at": session.completed_at.isoformat() if session.completed_at else None,
         "error": session.error,
     }
@@ -179,7 +362,9 @@ def _session_from_dict(data: dict[str, Any]) -> VerificationSession:
     session.trust_profile_id = data.get("trust_profile_id")
     session.deployment_profile_id = data.get("deployment_profile_id")
     session.external_reference = data.get("external_reference")
-    session.callback_url = data.get("callback_url")
+    # Standalone callbacks were retired in favor of the Flow service's governed
+    # transactional outbox. Ignore and scrub legacy destinations on rewrite.
+    session.callback_url = None
     session.purpose = data.get("purpose", "")
     session.nonce = data["nonce"]
     session.holder_id = data.get("holder_id")
@@ -195,24 +380,47 @@ def _session_from_dict(data: dict[str, Any]) -> VerificationSession:
     session.holder_binding_evidence = data.get("holder_binding_evidence")
     session.inspection_performed = data.get("inspection_performed", False)
     session.inspection_result = data.get("inspection_result", "")
-    session.vp_token = data.get("vp_token")
+    session.inspection_result_sha256 = data.get("inspection_result_sha256")
+    legacy_vp_token = data.get("vp_token")
+    session.vp_token_sha256 = data.get("vp_token_sha256") or (
+        _sha256_text(legacy_vp_token) if isinstance(legacy_vp_token, str) else None
+    )
+    session.processing_token = data.get("processing_token")
+    session.processing_expires_at = (
+        datetime.fromisoformat(data["processing_expires_at"])
+        if data.get("processing_expires_at")
+        else None
+    )
+    session.total_requirements = int(data.get("total_requirements") or 0)
+    session.satisfied_requirements = int(data.get("satisfied_requirements") or 0)
     session.completed_at = (
         datetime.fromisoformat(data["completed_at"]) if data.get("completed_at") else None
     )
     session.error = data.get("error")
+    _minimize_terminal_session(session)
     return session
 
 
+def _clone_session(session: VerificationSession) -> VerificationSession:
+    """Return a detached session so callers cannot mutate persisted state by alias."""
+    return _session_from_dict(_session_to_redis_dict(session))
+
+
 class SessionStore:
-    """Redis-backed session store. Falls back to in-memory if Redis unavailable."""
+    """Session persistence with atomic submission ownership and finalization."""
 
     def __init__(self, redis_client: Any | None = None) -> None:
         self._redis = redis_client
         self._fallback: dict[str, VerificationSession] = {}
+        self._lock = asyncio.Lock()
 
     @property
     def _use_redis(self) -> bool:
         return self._redis is not None
+
+    async def close(self) -> None:
+        if self._redis is not None:
+            await self._redis.aclose()
 
     def save(
         self,
@@ -222,6 +430,7 @@ class SessionStore:
     ) -> Awaitable[None]:
         if touch_updated_at:
             session.updated_at = datetime.now(timezone.utc)
+        _minimize_terminal_session(session)
         if self._use_redis:
             async def _save_to_redis() -> None:
                 key = f"{SESSION_PREFIX}{session.session_id}"
@@ -231,7 +440,7 @@ class SessionStore:
 
             return _save_to_redis()
 
-        self._fallback[session.session_id] = session
+        self._fallback[session.session_id] = _clone_session(session)
         return _CompletedAwaitable()
 
     async def get(self, session_id: str) -> VerificationSession | None:
@@ -239,16 +448,35 @@ class SessionStore:
             raw = await self._redis.get(f"{SESSION_PREFIX}{session_id}")
             if raw is None:
                 return None
-            session = _session_from_dict(json.loads(raw))
+            stored_data = json.loads(raw)
+            session = _session_from_dict(stored_data)
+            if (
+                session.status != SessionStatus.PENDING
+                and _session_to_redis_dict(session) != stored_data
+            ):
+                await self.save(session, touch_updated_at=False)
         else:
             session = self._fallback.get(session_id)
         if session is None:
             return None
-        if session.is_expired() and session.status == SessionStatus.PENDING:
+        session = _clone_session(session)
+        if (
+            session.status == SessionStatus.PENDING
+            and session.vp_token_sha256 is None
+        ):
+            now = (
+                _datetime_from_redis_time(await self._redis.time())
+                if self._use_redis
+                else datetime.now(timezone.utc)
+            )
+        else:
+            now = None
+        if now is not None and session.is_expired(now):
             session.status = SessionStatus.EXPIRED
             session.error = "Session expired before presentation was submitted"
-            session.updated_at = datetime.now(timezone.utc)
-            await self.save(session) if self._use_redis else None
+            session.updated_at = now
+            session.processing_token = None
+            session.processing_expires_at = None
         return session
 
     async def list_by_org(self, org_id: str, status: str | None = None) -> list[VerificationSession]:
@@ -261,30 +489,314 @@ class SessionStore:
                 if session:
                     sessions.append(session)
         else:
-            sessions = [s for s in self._fallback.values() if s.organization_id == org_id]
+            sessions = [
+                _clone_session(s)
+                for s in self._fallback.values()
+                if s.organization_id == org_id
+            ]
         if status:
             sessions = [s for s in sessions if s.status.value == status]
         return sorted(sessions, key=lambda s: s.created_at, reverse=True)
+
+    @staticmethod
+    def _submission_state(
+        session: VerificationSession,
+        digest: str,
+        now: datetime,
+    ) -> SubmissionOutcome | None:
+        if session.status == SessionStatus.EXPIRED:
+            return SubmissionOutcome.EXPIRED
+        if session.status != SessionStatus.PENDING:
+            if session.vp_token_sha256 == digest:
+                return SubmissionOutcome.DUPLICATE
+            return SubmissionOutcome.CONFLICT
+        if session.vp_token_sha256 and session.vp_token_sha256 != digest:
+            return SubmissionOutcome.CONFLICT
+        if (
+            session.processing_token
+            and session.processing_expires_at
+            and session.processing_expires_at > now
+        ):
+            return SubmissionOutcome.BUSY
+        # Once a presentation was accepted before session expiry, the digest
+        # remains recoverable after a worker crash. No different presentation
+        # can take over the session, and the lease token still fences workers.
+        if session.vp_token_sha256 == digest:
+            return None
+        if session.is_expired(now):
+            return SubmissionOutcome.EXPIRED
+        return None
+
+    @staticmethod
+    def _expire_session(session: VerificationSession, now: datetime) -> None:
+        session.status = SessionStatus.EXPIRED
+        session.error = "Session expired before presentation was submitted"
+        session.updated_at = now
+        session.processing_token = None
+        session.processing_expires_at = None
+
+    async def claim_submission(
+        self,
+        session_id: str,
+        digest: str,
+    ) -> SubmissionTransition:
+        """Atomically reserve one presentation digest for evaluation."""
+        if self._use_redis:
+            return await self._claim_submission_redis(session_id, digest)
+
+        async with self._lock:
+            stored = self._fallback.get(session_id)
+            if stored is None:
+                return SubmissionTransition(SubmissionOutcome.MISSING)
+            session = _clone_session(stored)
+            now = datetime.now(timezone.utc)
+            outcome = self._submission_state(session, digest, now)
+            if outcome == SubmissionOutcome.EXPIRED:
+                self._expire_session(session, now)
+                self._fallback[session_id] = _clone_session(session)
+                return SubmissionTransition(outcome, _clone_session(session))
+            if outcome is not None:
+                return SubmissionTransition(outcome, _clone_session(session))
+
+            token = secrets.token_urlsafe(32)
+            session.vp_token_sha256 = digest
+            session.processing_token = token
+            session.processing_expires_at = now + timedelta(
+                seconds=SUBMISSION_LEASE_SECONDS
+            )
+            session.updated_at = now
+            self._fallback[session_id] = _clone_session(session)
+            return SubmissionTransition(
+                SubmissionOutcome.CLAIMED,
+                _clone_session(session),
+                token,
+            )
+
+    async def _claim_submission_redis(
+        self,
+        session_id: str,
+        digest: str,
+    ) -> SubmissionTransition:
+        from redis.exceptions import WatchError
+
+        key = f"{SESSION_PREFIX}{session_id}"
+        for _attempt in range(SUBMISSION_CAS_RETRIES):
+            async with self._redis.pipeline(transaction=True) as pipe:
+                try:
+                    await pipe.watch(key)
+                    raw = await pipe.get(key)
+                    if raw is None:
+                        return SubmissionTransition(SubmissionOutcome.MISSING)
+                    pending_ttl_ms = await pipe.pttl(key)
+                    pending_ttl_options = (
+                        {"keepttl": True}
+                        if pending_ttl_ms >= 0
+                        else {"ex": SESSION_TTL_SECONDS}
+                    )
+                    session = _session_from_dict(json.loads(raw))
+                    # Redis time is shared by every application replica, so a
+                    # skewed worker cannot expire a session or steal a lease
+                    # early (or indefinitely delay recovery).
+                    now = _datetime_from_redis_time(await pipe.time())
+                    outcome = self._submission_state(session, digest, now)
+                    if outcome == SubmissionOutcome.EXPIRED:
+                        self._expire_session(session, now)
+                        pipe.multi()
+                        pipe.set(
+                            key,
+                            json.dumps(_session_to_redis_dict(session)),
+                            # Expiry/claim transitions must not renew the
+                            # unfinished transaction's absolute lifetime.
+                            **pending_ttl_options,
+                        )
+                        await pipe.execute()
+                        return SubmissionTransition(outcome, session)
+                    if outcome is not None:
+                        return SubmissionTransition(outcome, session)
+
+                    token = secrets.token_urlsafe(32)
+                    session.vp_token_sha256 = digest
+                    session.processing_token = token
+                    session.processing_expires_at = now + timedelta(
+                        seconds=SUBMISSION_LEASE_SECONDS
+                    )
+                    session.updated_at = now
+                    pipe.multi()
+                    pipe.set(
+                        key,
+                        json.dumps(_session_to_redis_dict(session)),
+                        # Same-digest crash recovery is bounded by the TTL set
+                        # when the session was created; repeated claims cannot
+                        # keep an expired transaction alive indefinitely.
+                        **pending_ttl_options,
+                    )
+                    await pipe.execute()
+                    return SubmissionTransition(
+                        SubmissionOutcome.CLAIMED,
+                        session,
+                        token,
+                    )
+                except WatchError:
+                    continue
+        raise RuntimeError("Could not claim verification submission after retries")
+
+    @staticmethod
+    def _validate_terminal_candidate(
+        current: VerificationSession,
+        candidate: VerificationSession,
+    ) -> None:
+        immutable_fields = (
+            "session_id",
+            "flow_id",
+            "flow_instance_id",
+            "organization_id",
+            "presentation_policy_id",
+            "response_type",
+            "nonce",
+            "created_at",
+            "expires_at",
+        )
+        if any(
+            getattr(current, field) != getattr(candidate, field)
+            for field in immutable_fields
+        ):
+            raise ValueError("Terminal session changed immutable verification state")
+        if candidate.status == SessionStatus.PENDING or candidate.completed_at is None:
+            raise ValueError("Terminal session must contain a completed outcome")
+
+    async def finalize_submission(
+        self,
+        session_id: str,
+        digest: str,
+        token: str,
+        candidate: VerificationSession,
+    ) -> SubmissionTransition:
+        """Commit a terminal result only for the current submission lease owner."""
+        if self._use_redis:
+            return await self._finalize_submission_redis(
+                session_id,
+                digest,
+                token,
+                candidate,
+            )
+
+        async with self._lock:
+            stored = self._fallback.get(session_id)
+            if stored is None:
+                return SubmissionTransition(SubmissionOutcome.MISSING)
+            current = _clone_session(stored)
+            if current.status != SessionStatus.PENDING:
+                outcome = (
+                    SubmissionOutcome.DUPLICATE
+                    if current.vp_token_sha256 == digest
+                    else SubmissionOutcome.CONFLICT
+                )
+                return SubmissionTransition(outcome, current)
+            if current.vp_token_sha256 != digest:
+                return SubmissionTransition(SubmissionOutcome.CONFLICT, current)
+            if current.processing_token != token:
+                return SubmissionTransition(SubmissionOutcome.BUSY, current)
+            self._validate_terminal_candidate(current, candidate)
+            terminal = _clone_session(candidate)
+            terminal.vp_token_sha256 = digest
+            terminal.processing_token = None
+            terminal.processing_expires_at = None
+            _minimize_terminal_session(terminal)
+            self._fallback[session_id] = _clone_session(terminal)
+            return SubmissionTransition(SubmissionOutcome.COMMITTED, terminal)
+
+    async def _finalize_submission_redis(
+        self,
+        session_id: str,
+        digest: str,
+        token: str,
+        candidate: VerificationSession,
+    ) -> SubmissionTransition:
+        from redis.exceptions import WatchError
+
+        key = f"{SESSION_PREFIX}{session_id}"
+        for _attempt in range(SUBMISSION_CAS_RETRIES):
+            async with self._redis.pipeline(transaction=True) as pipe:
+                try:
+                    await pipe.watch(key)
+                    raw = await pipe.get(key)
+                    if raw is None:
+                        return SubmissionTransition(SubmissionOutcome.MISSING)
+                    current = _session_from_dict(json.loads(raw))
+                    if current.status != SessionStatus.PENDING:
+                        outcome = (
+                            SubmissionOutcome.DUPLICATE
+                            if current.vp_token_sha256 == digest
+                            else SubmissionOutcome.CONFLICT
+                        )
+                        return SubmissionTransition(outcome, current)
+                    if current.vp_token_sha256 != digest:
+                        return SubmissionTransition(
+                            SubmissionOutcome.CONFLICT,
+                            current,
+                        )
+                    if current.processing_token != token:
+                        return SubmissionTransition(SubmissionOutcome.BUSY, current)
+
+                    self._validate_terminal_candidate(current, candidate)
+                    terminal = _clone_session(candidate)
+                    terminal.vp_token_sha256 = digest
+                    terminal.processing_token = None
+                    terminal.processing_expires_at = None
+                    _minimize_terminal_session(terminal)
+                    pipe.multi()
+                    pipe.set(
+                        key,
+                        json.dumps(_session_to_redis_dict(terminal)),
+                        ex=SESSION_TTL_SECONDS,
+                    )
+                    await pipe.execute()
+                    return SubmissionTransition(
+                        SubmissionOutcome.COMMITTED,
+                        terminal,
+                    )
+                except WatchError:
+                    continue
+        raise RuntimeError("Could not finalize verification submission after retries")
 
 
 _store: SessionStore | None = None
 
 
 async def init_store() -> SessionStore:
-    """Initialize the session store with Redis if configured, else in-memory."""
+    """Initialize Redis persistence, failing closed outside local/test use."""
     global _store
+    _store = None
+    environment = os.environ.get("ENVIRONMENT", "development").strip().lower()
+    allow_in_memory = environment in {"development", "dev", "local", "test"}
     if REDIS_URL:
+        client = None
         try:
             import redis.asyncio as aioredis
             client = aioredis.from_url(REDIS_URL, decode_responses=False)
             await client.ping()
             _store = SessionStore(redis_client=client)
-            logger.info("Verification session store: Redis (%s)", REDIS_URL)
+            logger.info("Verification session store: Redis")
         except Exception as exc:
-            logger.warning("Redis unavailable (%s), falling back to in-memory sessions: %s", REDIS_URL, exc)
+            if client is not None:
+                await client.aclose()
+            if not allow_in_memory:
+                raise RuntimeError(
+                    "Redis is required for Verification session persistence in "
+                    f"{environment or 'production'}"
+                ) from exc
+            logger.warning(
+                "Redis unavailable; using development-only in-memory sessions: %s",
+                exc,
+            )
             _store = SessionStore()
     else:
-        logger.warning("REDIS_URL not set — using in-memory session store (not suitable for production)")
+        if not allow_in_memory:
+            raise RuntimeError(
+                "REDIS_URL is required for Verification session persistence in "
+                f"{environment or 'production'}"
+            )
+        logger.warning("REDIS_URL not set; using development-only in-memory sessions")
         _store = SessionStore()
     return _store
 
@@ -312,16 +824,21 @@ async def _evaluate_via_grpc(
             presentation_policy_service_pb2_grpc,
         )
 
-        channel = grpc_aio.insecure_channel(PP_GRPC_TARGET)
-        stub = presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub(channel)
-        req = presentation_policy_service_pb2.EvaluatePresentationRequest(
-            policy_id=policy_id,
-            vp_token=vp_token,
-            nonce=nonce or "",
-            context_json=context_json,
-        )
-        resp = await stub.EvaluatePresentation(req)
-        await channel.close()
+        async with create_grpc_channel(
+            PP_GRPC_TARGET,
+            service_name="verification",
+            require_workload_identity=True,
+        ) as channel:
+            stub = presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub(
+                channel
+            )
+            req = presentation_policy_service_pb2.EvaluatePresentationRequest(
+                policy_id=policy_id,
+                vp_token=vp_token,
+                nonce=nonce or "",
+                context_json=context_json,
+            )
+            resp = await stub.EvaluatePresentation(req)
         return {
             "result": resp.result,
             "decision": resp.decision,
@@ -345,10 +862,12 @@ async def _inspect_via_grpc(item: str) -> str:
     try:
         from marty_proto.v1 import inspection_system_pb2, inspection_system_pb2_grpc  # type: ignore
 
-        channel = grpc_aio.insecure_channel(INSPECTION_SYSTEM_TARGET)
-        stub = inspection_system_pb2_grpc.InspectionSystemStub(channel)
-        resp = await stub.Inspect(inspection_system_pb2.InspectRequest(item=item))
-        await channel.close()
+        async with create_grpc_channel(
+            INSPECTION_SYSTEM_TARGET,
+            service_name="verification",
+        ) as channel:
+            stub = inspection_system_pb2_grpc.InspectionSystemStub(channel)
+            resp = await stub.Inspect(inspection_system_pb2.InspectRequest(item=item))
         return resp.result
     except Exception as exc:
         logger.warning("InspectionSystem gRPC call failed: %s", exc)
@@ -500,43 +1019,6 @@ def _session_to_protocol_dict(s: VerificationSession) -> dict:
     return {k: v for k, v in d.items() if v is not None}
 
 
-def _session_to_dict(s: VerificationSession) -> dict:
-    """Full dict with legacy fields — used for callbacks and internal gRPC."""
-    protocol_status = _protocol_status_for_session(s)
-    return {
-        "id": s.session_id,
-        "flow_id": s.flow_id,
-        "flow_instance_id": s.flow_instance_id,
-        "presentation_policy_id": s.presentation_policy_id,
-        "deployment_profile_id": s.deployment_profile_id,
-        "verifier_nonce": s.nonce,
-        "holder_id": s.holder_id,
-        "status": protocol_status,
-        "result": _protocol_result_for_session(s),
-        "expires_at": s.expires_at.isoformat(),
-        "created_at": s.created_at.isoformat(),
-        "completed_at": s.completed_at.isoformat() if s.completed_at else None,
-        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
-        "error": s.error,
-        "session_id": s.session_id,
-        "organization_id": s.organization_id,
-        "response_type": s.response_type,
-        "request_uri": s.request_uri(),
-        "qr_code_data": s.qr_code_data(),
-        "nonce": s.nonce,
-        "external_reference": s.external_reference,
-        "purpose": s.purpose,
-        "result_code": s.result,
-        "decision": s.decision,
-        "decision_reason": s.decision_reason,
-        "verified_claims": s.verified_claims,
-        "credential_results": s.credential_results,
-        "inspection_performed": s.inspection_performed,
-        "inspection_result": s.inspection_result,
-        "runtime_status": s.status.value,
-    }
-
-
 # ---------------------------------------------------------------------------
 # REST router
 # ---------------------------------------------------------------------------
@@ -564,6 +1046,14 @@ async def start_verification(
             status_code=400,
             detail="presentation_policy_id is required for vp_token response_type",
         )
+    if body.callback_url:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Standalone Verification callbacks are not supported; use the "
+                "Flow service transactional callback outbox"
+            ),
+        )
 
     session = VerificationSession(
         organization_id=body.organization_id,
@@ -572,7 +1062,7 @@ async def start_verification(
         trust_profile_id=body.trust_profile_id,
         deployment_profile_id=body.deployment_profile_id,
         external_reference=body.external_reference,
-        callback_url=body.callback_url,
+        callback_url=None,
         expiry_minutes=body.expiry_minutes,
         purpose=body.purpose,
     )
@@ -825,12 +1315,17 @@ async def _build_presentation_definition(session: VerificationSession) -> dict[s
             credential_template_service_pb2_grpc,
         )
 
-        pp_channel = grpc_aio.insecure_channel(PP_GRPC_TARGET)
-        pp_stub = presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub(pp_channel)
-        pp_resp = await pp_stub.GetPolicy(
-            presentation_policy_service_pb2.GetPolicyRequest(policy_id=policy_id)
-        )
-        await pp_channel.close()
+        async with create_grpc_channel(
+            PP_GRPC_TARGET,
+            service_name="verification",
+            require_workload_identity=True,
+        ) as pp_channel:
+            pp_stub = presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub(
+                pp_channel
+            )
+            pp_resp = await pp_stub.GetPolicy(
+                presentation_policy_service_pb2.GetPolicyRequest(policy_id=policy_id)
+            )
 
         if not pp_resp.id:
             return {"id": policy_id}
@@ -845,7 +1340,7 @@ async def _build_presentation_definition(session: VerificationSession) -> dict[s
     if not credential_requirements:
         return {"id": policy_id}
 
-    ct_channel = grpc_aio.insecure_channel(CT_GRPC_TARGET)
+    ct_channel = create_grpc_channel(CT_GRPC_TARGET, service_name="verification")
     ct_stub = credential_template_service_pb2_grpc.CredentialTemplateServiceStub(ct_channel)
 
     input_descriptors: list[dict[str, Any]] = []
@@ -1011,35 +1506,57 @@ async def get_session(
     return _session_to_protocol_dict(session)
 
 
-@router.post("/{session_id}/submit", summary="Submit VP Token")
-async def submit_presentation(
+def _submission_error(transition: SubmissionTransition) -> HTTPException:
+    if transition.outcome == SubmissionOutcome.MISSING:
+        return HTTPException(status_code=404, detail="Session not found")
+    if transition.outcome == SubmissionOutcome.EXPIRED:
+        return HTTPException(status_code=410, detail="Session expired")
+    if transition.outcome == SubmissionOutcome.CONFLICT:
+        return HTTPException(
+            status_code=409,
+            detail="Session is already bound to a different presentation",
+        )
+    if transition.outcome == SubmissionOutcome.BUSY:
+        return HTTPException(
+            status_code=409,
+            detail="Presentation evaluation is already in progress",
+        )
+    return HTTPException(
+        status_code=503,
+        detail="Verification session coordination unavailable",
+    )
+
+
+async def process_session_submission(
+    store: SessionStore,
     session_id: str,
-    body: SubmitVerificationRequest,
-    store: SessionStore = Depends(get_store),
-    user_id: str = Depends(get_current_user_id),
-) -> dict:
-    """
-    Receive a VP token from a wallet and evaluate it against the session policy.
-    Optionally calls the Marty InspectionSystem for credential inspection.
-    """
-    session = await store.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    if session.status != SessionStatus.PENDING:
-        raise HTTPException(status_code=409, detail=f"Session is {session.status.value}")
-    if session.is_expired():
-        session.status = SessionStatus.EXPIRED
-        session.error = "Session expired before presentation was submitted"
-        session.updated_at = datetime.now(timezone.utc)
-        raise HTTPException(status_code=410, detail="Session expired")
+    vp_token: str,
+) -> VerificationSession:
+    """Own, evaluate, and atomically finalize a standalone presentation."""
+    digest = _sha256_text(vp_token)
+    try:
+        transition = await store.claim_submission(session_id, digest)
+    except Exception as exc:
+        logger.error("Could not claim verification session %s: %s", session_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Verification session coordination unavailable",
+        ) from exc
 
-    session.vp_token = body.vp_token
-    session.updated_at = datetime.now(timezone.utc)
+    if transition.outcome == SubmissionOutcome.DUPLICATE and transition.session:
+        return transition.session
+    if (
+        transition.outcome != SubmissionOutcome.CLAIMED
+        or transition.session is None
+        or transition.token is None
+    ):
+        raise _submission_error(transition)
 
+    session = transition.session
     try:
         eval_result = await _evaluate_via_grpc(
             policy_id=session.presentation_policy_id or "",
-            vp_token=body.vp_token,
+            vp_token=vp_token,
             nonce=session.nonce,
             context_json=json.dumps({"session_id": session_id}),
         )
@@ -1048,41 +1565,75 @@ async def submit_presentation(
         session.decision_reason = eval_result.get("decision_reason", "")
         session.verified_claims = eval_result.get("verified_claims", {})
         session.credential_results = eval_result.get("credential_results", [])
-        session.holder_binding_evidence = _normalize_holder_binding_evidence(eval_result)
+        session.holder_binding_evidence = _normalize_holder_binding_evidence(
+            eval_result
+        )
+        session.total_requirements = int(eval_result.get("total_requirements") or 0)
+        session.satisfied_requirements = int(
+            eval_result.get("satisfied_requirements") or 0
+        )
         session.error = None
     except Exception as exc:
         logger.error("Evaluation failed for session %s: %s", session_id, exc)
         session.result = "failed"
         session.decision = "deny"
-        session.decision_reason = str(exc)
+        session.decision_reason = "Credential evaluation failed"
         session.holder_binding_evidence = None
-        session.error = None
+        session.total_requirements = 0
+        session.satisfied_requirements = 0
+        session.error = "Credential evaluation failed"
 
-    # Optionally call InspectionSystem for deep document verification
     if INSPECTION_SYSTEM_TARGET and session.result != "failed":
-        inspection_result = await _inspect_via_grpc(body.vp_token)
+        inspection_result = await _inspect_via_grpc(vp_token)
         if inspection_result:
             session.inspection_performed = True
             session.inspection_result = inspection_result
 
-    session.status = SessionStatus.COMPLETED if session.result == "passed" else SessionStatus.FAILED
+    session.status = (
+        SessionStatus.COMPLETED
+        if session.result == "passed"
+        else SessionStatus.FAILED
+    )
     session.completed_at = datetime.now(timezone.utc)
     session.updated_at = session.completed_at
-    await store.save(session, touch_updated_at=False)
 
-    # Fire callback if configured
-    if session.callback_url:
-        import httpx
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.post(session.callback_url, json=_session_to_dict(session))
-        except Exception as cb_exc:
-            logger.warning("Callback POST to %s failed: %s", session.callback_url, cb_exc)
+    try:
+        finalized = await store.finalize_submission(
+            session_id,
+            digest,
+            transition.token,
+            session,
+        )
+    except Exception as exc:
+        logger.error("Could not finalize verification session %s: %s", session_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Verification session coordination unavailable",
+        ) from exc
 
-    logger.info(
-        "Verification session %s completed: result=%s decision=%s",
-        session_id, session.result, session.decision,
-    )
+    if finalized.outcome in {
+        SubmissionOutcome.COMMITTED,
+        SubmissionOutcome.DUPLICATE,
+    } and finalized.session:
+        logger.info(
+            "Verification session %s finalized: result=%s decision=%s",
+            session_id,
+            finalized.session.result,
+            finalized.session.decision,
+        )
+        return finalized.session
+    raise _submission_error(finalized)
+
+
+@router.post("/{session_id}/submit", summary="Submit VP Token")
+async def submit_presentation(
+    session_id: str,
+    body: SubmitVerificationRequest,
+    store: SessionStore = Depends(get_store),
+    user_id: str = Depends(get_current_user_id),
+) -> dict:
+    """Evaluate one immutable submission and return its canonical outcome."""
+    session = await process_session_submission(store, session_id, body.vp_token)
     return _session_to_protocol_dict(session)
 
 
@@ -1121,6 +1672,7 @@ async def get_inspection_result(
         "session_id": session_id,
         "performed": session.inspection_performed,
         "result": session.inspection_result,
+        "result_sha256": session.inspection_result_sha256,
         "timestamp": session.completed_at.isoformat() if session.completed_at else "",
     }
 
@@ -1173,12 +1725,12 @@ grpc_server = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global grpc_server
+    global grpc_server, _store
 
     logger.info(f"Starting {SERVICE_NAME} service on port {SERVICE_PORT}...")
 
-    # Initialize session store (Redis or in-memory fallback)
-    store = await init_store()
+    # Production requires Redis; only local/test environments may use memory.
+    await init_store()
 
     if GRPC_ENABLED:
         try:
@@ -1211,6 +1763,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info(f"Shutting down {SERVICE_NAME}...")
     if grpc_server:
         await grpc_server.stop(grace=5)
+    if _store is not None:
+        await _store.close()
+        _store = None
 
 
 # ---------------------------------------------------------------------------

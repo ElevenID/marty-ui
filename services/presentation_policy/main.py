@@ -46,6 +46,7 @@ from marty_common import (
 )
 from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
+from common.internal_service_auth import internal_service_headers
 from marty_common.domain_enums import parse_credential_format
 
 from common.did_resolution import resolve_did_document
@@ -2856,7 +2857,11 @@ def _load_policy_trust_profile(
     import httpx as _httpx
 
     try:
-        response = _httpx.get(_trust_profile_lookup_url(profile_id), timeout=5.0)
+        response = _httpx.get(
+            _trust_profile_lookup_url(profile_id),
+            headers=internal_service_headers(),
+            timeout=5.0,
+        )
     except Exception as exc:
         logger.warning(
             "Could not load Trust Profile %s for tenant validation",
@@ -4700,7 +4705,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     grpc_port = int(os.environ.get("PP_GRPC_PORT", "9009"))
-    grpc_server, health_servicer = create_grpc_server("presentation-policy")
+    policy_service = "marty.ui.presentation_policy.v1.PresentationPolicyService"
+    authorized_verifiers = {
+        "spiffe://marty.internal/service/flow",
+        "spiffe://marty.internal/service/verification",
+    }
+    grpc_server, health_servicer = create_grpc_server(
+        "presentation-policy",
+        workload_identity_authorization={
+            f"/{policy_service}/GetPolicy": authorized_verifiers,
+            f"/{policy_service}/EvaluatePresentation": authorized_verifiers,
+        },
+    )
     servicer = PresentationPolicyServiceGrpc(
         repo=_repo,
         evaluate_fn=evaluate_presentation,
@@ -4711,8 +4727,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     start_grpc_server_port(
         grpc_server,
         grpc_port,
-        service_names=["marty.ui.presentation_policy.v1.PresentationPolicyService"],
+        service_names=[policy_service],
         health_servicer=health_servicer,
+        require_workload_identity=True,
     )
     await grpc_server.start()
     logger.info(f"Presentation-policy gRPC server listening on :{grpc_port}")
