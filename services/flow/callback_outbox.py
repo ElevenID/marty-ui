@@ -6,8 +6,6 @@ import asyncio
 import logging
 import os
 import re
-import uuid
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Protocol
 from urllib.parse import urlparse
@@ -18,6 +16,10 @@ from common.webhook_signatures import (
     AUTH_CALLBACK_AUDIENCE,
     is_valid_event_secret,
     sign_event,
+)
+from flow.infrastructure.callback_outbox_types import (
+    CallbackOutboxEvent,
+    new_lease_token,
 )
 
 logger = logging.getLogger(__name__)
@@ -122,26 +124,6 @@ def callback_retry_delay(attempt_count: int) -> timedelta:
     )
     exponent = max(0, min(attempt_count - 1, 16))
     return timedelta(seconds=min(cap_seconds, base_seconds * (2**exponent)))
-
-
-@dataclass(frozen=True)
-class CallbackOutboxEvent:
-    event_id: str
-    flow_instance_id: str
-    organization_id: str
-    destination_url: str
-    audience: str
-    event_type: str
-    payload: dict[str, Any]
-    created_at: datetime
-    next_attempt_at: datetime
-    expires_at: datetime
-    status: str = "pending"
-    attempt_count: int = 0
-    lease_token: str | None = None
-    lease_expires_at: datetime | None = None
-    delivered_at: datetime | None = None
-    last_error_code: str | None = None
 
 
 class CallbackOutboxRepository(Protocol):
@@ -400,7 +382,3 @@ async def run_callback_dispatcher(
             )
         except TimeoutError:
             continue
-
-
-def new_lease_token() -> str:
-    return str(uuid.uuid4())

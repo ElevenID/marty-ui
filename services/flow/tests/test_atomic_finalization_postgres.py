@@ -117,7 +117,7 @@ async def test_postgres_migration_and_concurrent_finalization_are_atomic() -> No
             revision = await connection.scalar(
                 text("SELECT version_num FROM flow_service.alembic_version")
             )
-            assert revision == "20260808_0002"
+            assert revision == "20260810_0100"
 
             instance_id = "90000000-0000-0000-0000-000000000001"
             now = datetime.now(timezone.utc)
