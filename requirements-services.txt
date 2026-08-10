@@ -3,10 +3,10 @@
 # Shared dependencies across all services
 
 # Web Framework
-fastapi>=0.109.0,<1.0
+fastapi>=0.141.1,<1.0
 uvicorn[standard]>=0.27.0
 pydantic>=2.13.4,<3.0
-pydantic-settings>=2.11.0
+pydantic-settings>=2.14.2
 
 # Database
 sqlalchemy[asyncio]>=2.0.25
@@ -36,13 +36,13 @@ passlib[bcrypt]~=1.7.4
 python-multipart>=0.0.6
 email-validator>=2.1.0
 python-dotenv>=1.0.0
-qrcode[pil]>=7.4.2  # QR code generation for OID4VCI
+qrcode[pil]>=8.2  # QR code generation for OID4VCI
 tenacity>=8.2.0  # Retry logic for service proxying
 
 # gRPC (inter-service communication)
-grpcio>=1.76.0
+grpcio>=1.83.0
 grpcio-tools>=1.76.0
-grpcio-health-checking>=1.76.0
+grpcio-health-checking>=1.83.0
 grpcio-reflection>=1.82.1
 googleapis-common-protos>=1.62.0
 
