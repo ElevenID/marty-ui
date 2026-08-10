@@ -143,7 +143,7 @@ jobs:
         working-directory: marty-ui
         run: |
           test "$(jq -r '.status' tests/artifacts/flow-idempotency/contract-result.json)" = passed
-          test "$(jq -r '.migration_revision' tests/artifacts/flow-idempotency/contract-result.json)" = 20260809_0001
+          test "$(jq -r '.migration_revision' tests/artifacts/flow-idempotency/contract-result.json)" = 20260810_0100
           test "$(jq -r '.production_repository_exercised' tests/artifacts/flow-idempotency/contract-result.json)" = true
           test "$(jq -r '.instance_created_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
           test "$(jq -r '.instance_recovered_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1

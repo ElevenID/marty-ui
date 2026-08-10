@@ -27,7 +27,10 @@ from flow.infrastructure.models import (
     flow_instances,
     flow_nonce_consumptions,
 )
-from flow.callback_outbox import CallbackOutboxEvent, new_lease_token
+from flow.infrastructure.callback_outbox_types import (
+    CallbackOutboxEvent,
+    new_lease_token,
+)
 
 logger = logging.getLogger(__name__)
 
