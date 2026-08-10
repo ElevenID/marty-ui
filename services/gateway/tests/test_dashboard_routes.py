@@ -121,8 +121,7 @@ async def test_runtime_status_derives_readiness_from_active_artifacts(
                 {
                     "id": "template-1",
                     "status": "ACTIVE",
-                    "issuer_profile_id": "issuer-1",
-                    "key_access_mode": "REMOTE_SIGNING",
+                    "issuer_did": "did:web:issuer.example:orgs:org-123",
                 }
             ], None
         if service_name == "presentation-policies":
@@ -140,7 +139,7 @@ async def test_runtime_status_derives_readiness_from_active_artifacts(
     assert error is None
     assert payload["can_issue"] is True
     assert payload["can_verify"] is True
-    assert payload["artifact_counts"]["kms_backed_credential_templates"] == 1
+    assert payload["artifact_counts"]["did_backed_credential_templates"] == 1
 
 
 @pytest.mark.asyncio

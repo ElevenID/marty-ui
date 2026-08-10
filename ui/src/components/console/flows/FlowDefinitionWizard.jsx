@@ -146,7 +146,7 @@ const FlowDefinitionWizard = () => {
     <Container maxWidth="md" sx={{ py: 4 }}>
       <Box sx={{ mb: 3 }}>
         <Typography variant="h4">Create flow</Typography>
-        <Typography color="text.secondary">MIP 0.3 standard flow</Typography>
+        <Typography color="text.secondary">MIP 0.4 standard flow</Typography>
       </Box>
 
       {capabilityError && (

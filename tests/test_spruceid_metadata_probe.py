@@ -18,7 +18,7 @@ SPEC.loader.exec_module(PROBE)
 
 BASE = "https://beta.elevenidllc.com"
 ORG_ID = "00000000-0000-0000-0000-000000000001"
-ISSUER = f"{BASE}/org/{ORG_ID}/spruce"
+ISSUER = f"{BASE}/org/{ORG_ID}"
 
 
 def _metadata() -> dict:
@@ -26,13 +26,13 @@ def _metadata() -> dict:
         "credential_issuer": ISSUER,
         "display": [{"name": "ElevenID LLC", "locale": "en"}],
         "credential_configurations_supported": {
-            "MemberCredential#spruce-sd-jwt": {
-                "format": "spruce-vc+sd-jwt",
+            "MemberCredential#sd-jwt": {
+                "format": "dc+sd-jwt",
                 "vct": f"{BASE}/credentials/marty-verified-member-badge",
                 "display": [{"name": "Marty Verified Member Badge"}],
             },
-            "EmployeeBadge#spruce-sd-jwt": {
-                "format": "spruce-vc+sd-jwt",
+            "EmployeeBadge#sd-jwt": {
+                "format": "dc+sd-jwt",
                 "vct": f"{BASE}/credentials/EmployeeBadge",
                 "display": [{"name": "Employee Badge"}],
             },
@@ -58,24 +58,24 @@ def test_validate_spruce_metadata_accepts_public_displayable_configurations() ->
 
 
 @pytest.mark.parametrize("mutation, message", [
-    (lambda value: value["credential_configurations_supported"].pop("MemberCredential#spruce-sd-jwt"), "MemberCredential"),
+    (lambda value: value["credential_configurations_supported"].pop("MemberCredential#sd-jwt"), "MemberCredential"),
     (
-        lambda value: value["credential_configurations_supported"]["EmployeeBadge#spruce-sd-jwt"].__setitem__(
+        lambda value: value["credential_configurations_supported"]["EmployeeBadge#sd-jwt"].__setitem__(
             "vct", "https://marty.example/credentials/EmployeeBadge"
         ),
         "legacy VCTs",
     ),
     (
-        lambda value: value["credential_configurations_supported"]["EmployeeBadge#spruce-sd-jwt"].__setitem__(
+        lambda value: value["credential_configurations_supported"]["EmployeeBadge#sd-jwt"].__setitem__(
             "display", []
         ),
-        "Malformed Spruce credential configurations",
+        "Malformed credential configurations",
     ),
     (
         lambda value: value["credential_configurations_supported"]["org.iso.18013.5.1.mDL#mdoc"].__setitem__(
             "doctype", "org.example.wrong"
         ),
-        "Malformed Spruce credential configurations",
+        "Malformed credential configurations",
     ),
 ])
 def test_validate_spruce_metadata_fails_closed(mutation, message: str) -> None:
@@ -123,11 +123,11 @@ def test_probe_checks_both_standard_metadata_locations(monkeypatch) -> None:
     summary = PROBE.probe(BASE, ORG_ID)
 
     assert requested == [
-        f"{BASE}/.well-known/openid-credential-issuer/org/{ORG_ID}/spruce",
-        f"{BASE}/org/{ORG_ID}/spruce/.well-known/openid-credential-issuer",
+        f"{BASE}/.well-known/openid-credential-issuer/org/{ORG_ID}",
+        f"{BASE}/org/{ORG_ID}/.well-known/openid-credential-issuer",
         f"{BASE}/credentials/marty-verified-member-badge",
     ]
-    assert summary["member_configuration"] == "MemberCredential#spruce-sd-jwt"
+    assert summary["member_configuration"] == "MemberCredential#sd-jwt"
     assert summary["member_badge_name"] == "Marty Verified Member Badge"
 
 

@@ -23,23 +23,27 @@ def _build_client(
 	credential_template._repo = repo
 	credential_template._wallet_repo = wallet_repo or credential_template.InMemoryWalletRegistryRepository()
 
+	membership = OrganizationMembership(
+		user_id="user-1",
+		organization_id="org-1",
+		status="active",
+		roles=[OrganizationRoleSummary(id="role-admin", name="admin", display_name="Admin")],
+		has_org_console_access=True,
+	)
 	get_membership = AsyncMock(
-		return_value=OrganizationMembership(
-			user_id="user-1",
-			organization_id="org-1",
-			status="active",
-			roles=[OrganizationRoleSummary(id="role-admin", name="admin", display_name="Admin")],
-			has_org_console_access=True,
+		side_effect=lambda user_id, organization_id: (
+			membership
+			if user_id == membership.user_id and organization_id == membership.organization_id
+			else None
 		)
 	)
 	app.state.org_client = SimpleNamespace(get_membership=get_membership)
 
-	async def fake_require_active_issuer_profile(
+	async def fake_require_active_issuer_did(
 		request,
 		*,
 		organization_id: str,
 		issuer_did: str | None,
-		issuer_profile_id: str | None,
 		credential_format: str | None = None,
 		algorithm: str | None = None,
 	) -> dict:
@@ -53,25 +57,15 @@ def _build_client(
 			"organization_id": organization_id,
 			"issuer_did": issuer_did,
 			"verification_method_id": "did:web:beta.elevenidllc.com:orgs:test#cred-issuer-test-es256",
-			"issuer_profile": {
-				"id": issuer_profile_id or "issuer-profile-1",
-				"issuer_did": issuer_did,
-				"signing_service_id": "managed-openbao-transit",
-				"signing_key_reference": "cred-issuer-test-es256",
-				"key_purpose": "vc_jwt_issuer",
-				"algorithm": "ES256",
-			},
-			"signing_service": {
-				"id": "managed-openbao-transit",
-				"algorithm": "ES256",
-				"key_reference": "cred-issuer-test-es256",
-			},
+			"public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+			"key_purpose": "mdoc_dsc" if credential_format == "mso_mdoc" else "vc_jwt_issuer",
+			"algorithm": algorithm or "ES256",
 		}
 
-	credential_template._require_active_issuer_profile = AsyncMock(
-		side_effect=fake_require_active_issuer_profile
+	credential_template._require_active_issuer_did = AsyncMock(
+		side_effect=fake_require_active_issuer_did
 	)
-	return TestClient(app), get_membership
+	return TestClient(app, headers={"x-user-id": "user-1"}), get_membership
 
 
 def _save_template(
@@ -122,6 +116,19 @@ def _save_override(
 	)
 	asyncio.run(repo.save(entry))
 	return entry
+
+
+def _wallet_api_key_headers(
+	organization_id: str,
+	permission: str,
+) -> dict[str, str]:
+	return {
+		"X-User-Id": "api_key:wallet-key",
+		"X-Organization-ID": organization_id,
+		"X-Api-Key-Id": "wallet-key",
+		"X-Api-Key-Scopes": "wallet:read,wallet:write",
+		"X-Required-Permission": permission,
+	}
 
 
 def test_get_wallet_compatibility_derives_profile_from_template_fields():
@@ -292,6 +299,184 @@ def test_create_wallet_accepts_routing_metadata_and_capability_flags():
 	assert body["ios_same_device_single_wallet_only"] is False
 	assert body["capabilities"]["digital_credentials"] is True
 	assert body["capabilities"]["haip"] is True
+
+
+def test_wallet_registry_without_scope_never_lists_tenant_overrides():
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
+	override = _save_override(wallet_repo)
+	client, get_membership = _build_client(repo, wallet_repo)
+
+	response = client.get("/v1/wallet-registry")
+
+	assert response.status_code == 200
+	assert override.id not in {wallet["id"] for wallet in response.json()}
+	assert all("organization_id" not in wallet for wallet in response.json())
+	get_membership.assert_not_awaited()
+
+
+def test_wallet_registry_scoped_list_requires_membership_and_returns_only_own_overrides():
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
+	owned = _save_override(wallet_repo, organization_id="org-1")
+	foreign = _save_override(wallet_repo, organization_id="org-2")
+	client, get_membership = _build_client(repo, wallet_repo)
+
+	response = client.get(
+		"/v1/wallet-registry",
+		params={"organization_id": "org-1"},
+	)
+
+	assert response.status_code == 200
+	wallet_ids = {wallet["id"] for wallet in response.json()}
+	assert owned.id in wallet_ids
+	assert foreign.id not in wallet_ids
+	get_membership.assert_awaited_once_with("user-1", "org-1")
+
+	foreign_list = client.get(
+		"/v1/wallet-registry",
+		params={"organization_id": "org-2"},
+	)
+	assert foreign_list.status_code == 403
+	assert foreign.id not in foreign_list.text
+
+
+def test_wallet_api_key_reads_only_its_bound_organization_without_membership():
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
+	owned = _save_override(wallet_repo, organization_id="org-1")
+	foreign = _save_override(wallet_repo, organization_id="org-2")
+	client, get_membership = _build_client(repo, wallet_repo)
+
+	response = client.get(
+		"/v1/wallet-registry",
+		params={"organization_id": "org-1"},
+		headers=_wallet_api_key_headers("org-1", "wallet:view"),
+	)
+	direct = client.get(
+		f"/v1/wallet-registry/{owned.id}",
+		headers=_wallet_api_key_headers("org-1", "wallet:view"),
+	)
+	foreign_direct = client.get(
+		f"/v1/wallet-registry/{foreign.id}",
+		headers=_wallet_api_key_headers("org-1", "wallet:view"),
+	)
+
+	assert response.status_code == 200
+	assert owned.id in {wallet["id"] for wallet in response.json()}
+	assert foreign.id not in {wallet["id"] for wallet in response.json()}
+	assert direct.status_code == 200
+	assert foreign_direct.status_code == 403
+	assert foreign.id not in foreign_direct.text
+	get_membership.assert_not_awaited()
+
+
+def test_wallet_api_key_write_permission_manages_only_its_bound_organization():
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
+	client, get_membership = _build_client(repo, wallet_repo)
+	headers = _wallet_api_key_headers("org-1", "wallet:write")
+
+	created = client.post(
+		"/v1/wallet-registry",
+		headers=headers,
+		json={
+			"organization_id": "org-1",
+			"name": "Machine-managed wallet",
+			"wallet_apps": ["Machine-managed wallet"],
+		},
+	)
+	foreign_create = client.post(
+		"/v1/wallet-registry",
+		headers=headers,
+		json={
+			"organization_id": "org-2",
+			"name": "Foreign wallet",
+			"wallet_apps": ["Foreign wallet"],
+		},
+	)
+
+	assert created.status_code == 201
+	assert created.json()["organization_id"] == "org-1"
+	assert foreign_create.status_code == 403
+	assert "does not have access" in foreign_create.json()["detail"]
+	get_membership.assert_not_awaited()
+
+
+def test_foreign_wallet_ids_cannot_be_read_or_used_to_build_open_links():
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
+	foreign = _save_override(wallet_repo, organization_id="org-2")
+	client, _ = _build_client(repo, wallet_repo)
+	inner_uri = "openid-credential-offer://?credential_offer_uri=https%3A%2F%2Fissuer.example%2Foffers%2F123"
+
+	get_response = client.get(f"/v1/wallet-registry/{foreign.id}")
+	open_response = client.get(
+		f"/v1/wallet-registry/{foreign.id}/open-link",
+		params={"inner_uri": inner_uri},
+	)
+
+	assert get_response.status_code == 403
+	assert open_response.status_code == 403
+	assert foreign.id not in get_response.text
+	assert foreign.id not in open_response.text
+
+
+def test_wallet_ownership_cannot_be_transferred_between_tenants():
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
+	owned = _save_override(wallet_repo, organization_id="org-1")
+	client, _ = _build_client(repo, wallet_repo)
+
+	response = client.patch(
+		f"/v1/wallet-registry/{owned.id}",
+		json={"organization_id": "org-2"},
+	)
+
+	assert response.status_code == 409
+	assert asyncio.run(wallet_repo.get(owned.id)).organization_id == "org-1"
+
+
+def test_system_wallets_are_read_only_through_tenant_api():
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
+	client, _ = _build_client(repo, wallet_repo)
+
+	update_response = client.patch(
+		"/v1/wallet-registry/wr-spruce-001",
+		json={"name": "Tenant rewrite"},
+	)
+	delete_response = client.delete("/v1/wallet-registry/wr-spruce-001")
+
+	assert update_response.status_code == 403
+	assert delete_response.status_code == 403
+	assert asyncio.run(wallet_repo.get("wr-spruce-001")) is not None
+
+
+def test_wallet_mutation_requires_console_or_wallet_write_permission():
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
+	client, get_membership = _build_client(repo, wallet_repo)
+	get_membership.side_effect = None
+	get_membership.return_value = OrganizationMembership(
+		user_id="user-1",
+		organization_id="org-1",
+		status="active",
+		roles=[],
+		has_org_console_access=False,
+	)
+
+	response = client.post(
+		"/v1/wallet-registry",
+		json={
+			"organization_id": "org-1",
+			"name": "Unauthorized override",
+			"wallet_apps": ["Unauthorized override"],
+		},
+	)
+
+	assert response.status_code == 403
+	assert "console access" in response.json()["detail"]
 
 
 def test_wallet_response_derives_universal_link_ios_mode_without_warning():
@@ -537,7 +722,7 @@ def test_wallet_open_link_preserves_inline_credential_offer_param_for_stale_temp
 	)
 	asyncio.run(wallet_repo.save(entry))
 	client, _ = _build_client(repo, wallet_repo)
-	offer_json = '{"credential_issuer":"https://issuer.example/org/org-1/spruce","credential_configuration_ids":["open_badge#spruce-sd-jwt"],"grants":{}}'
+	offer_json = '{"credential_issuer":"https://issuer.example/org/org-1","credential_configuration_ids":["open_badge#sd-jwt"],"grants":{}}'
 	inner_uri = "openid-credential-offer://?credential_offer=" + quote(offer_json, safe="")
 
 	response = client.get(
@@ -556,7 +741,7 @@ def test_wallet_open_link_preserves_inline_credential_offer_param_for_stale_temp
 	)
 
 
-def test_wallet_registry_response_exposes_oid4vci_profile_from_supported_formats():
+def test_wallet_registry_response_uses_standard_oid4vci_profile():
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	wallet_repo = credential_template.InMemoryWalletRegistryRepository()
 	client, _ = _build_client(repo, wallet_repo)
@@ -565,11 +750,8 @@ def test_wallet_registry_response_exposes_oid4vci_profile_from_supported_formats
 
 	assert response.status_code == 200
 	body = response.json()
-	assert body["oid4vci_profile"] == {
-		"format_variant": "spruce-vc+sd-jwt",
-		"issuer_path": "spruce",
-		"credential_configuration_suffix": "spruce-sd-jwt",
-	}
+	assert body["supported_formats"] == ["dc+sd-jwt", "mso_mdoc"]
+	assert "oid4vci_profile" not in body
 
 
 def test_wallet_open_link_rejects_unsafe_inner_uri_scheme():

@@ -66,6 +66,8 @@ class EventStreamServiceGrpc(
             organization_id=ev.organization_id,
             data=dict(ev.data),
             correlation_id=ev.correlation_id,
+            event_id=ev.event_id,
+            timestamp=ev.timestamp,
         )
         return es_pb2.PublishEventResponse(
             success=True,

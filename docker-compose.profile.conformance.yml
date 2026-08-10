@@ -67,9 +67,6 @@ services:
   credential-template:
     container_name: !reset null
     ports: !reset []
-  trust-profile:
-    container_name: !reset null
-    ports: !reset []
   applicant:
     container_name: !reset null
     ports: !reset []
@@ -82,6 +79,21 @@ services:
   presentation-policy:
     container_name: !reset null
     ports: !reset []
+  trust-profile:
+    container_name: !reset null
+    ports: !reset []
+    environment:
+      # The owned registry lane supplies one project-scoped HTTPS adapter.
+      # Public requests cannot set this allowlist, and production Compose
+      # files retain the default public-network-only destination policy.
+      TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST: trust-registry-fixture
+      TRUST_REGISTRY_TLS_CA_FILE: /run/secrets/trust-registry-conformance-root-ca.pem
+      # The owned lane invokes refresh explicitly so authorization and atomic
+      # failure are deterministic; the scheduler still starts but cannot race
+      # the test during this disposable run.
+      TRUST_REGISTRY_SYNC_POLL_SECONDS: "86400"
+    volumes:
+      - ${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to generated conformance material}/root-ca.pem:/run/secrets/trust-registry-conformance-root-ca.pem:ro
   deployment-profile:
     container_name: !reset null
     ports: !reset []
@@ -91,6 +103,21 @@ services:
   issuance:
     container_name: !reset null
     ports: !reset []
+    environment:
+      # Trust the disposable conformance CA only for outbound DIDComm TLS.
+      # The issuance code adds this CA to normal Web PKI validation; it never
+      # disables certificate or hostname verification.
+      DIDCOMM_TLS_CA_FILE: /run/secrets/didcomm-conformance-root-ca.pem
+      DIDCOMM_ALLOW_PRIVATE_IPS: "true"
+    volumes:
+      - ${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to generated conformance material}/root-ca.pem:/run/secrets/didcomm-conformance-root-ca.pem:ro
+    # The owned DIDComm interoperability lane starts a disposable holder
+    # receiver on the Docker host. Linux does not provide this hostname by
+    # default, so expose only the Docker host gateway to the issuance service
+    # in this isolated conformance overlay. Production Compose files do not
+    # inherit this mapping.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
   canvas-sync-worker:
     container_name: !reset null
   revocation-profile:

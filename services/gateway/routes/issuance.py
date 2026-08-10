@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-import json
+
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
-
 from gateway.models import (
     ApplicationTemplateCreate,
     ApplicationTemplatePatch,
     ApplicationTemplateResponse,
+    CredentialRenewalOfferResponse,
     DidcommDeliverRequest,
     DidcommDeliveryResponse,
-    CredentialRenewalOfferResponse,
     IssuanceCreate,
     IssuanceResponse,
     IssuanceTransactionResponse,
@@ -30,6 +29,7 @@ from gateway.proxy import (
     get_registry,
     proxy_request,
 )
+from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +60,6 @@ _ISSUANCE_HEADERS: dict[str, str] | None = (
 _FORMAT_KEY_PURPOSE: dict[str, str] = {
     "jwt_vc_json": "vc_jwt_issuer",
     "vc+sd-jwt": "vc_jwt_issuer",
-    "spruce-vc+sd-jwt": "vc_jwt_issuer",
     "dc+sd-jwt": "vc_jwt_issuer",
     "w3c_vcdm_v2_sd_jwt": "vc_jwt_issuer",
     "w3c_vcdm_v2_di": "vc_jwt_issuer",
@@ -143,8 +142,8 @@ async def _resolve_issuer_identity(
     credential_format: str | None = None,
     key_purpose: str | None = None,
     algorithm: str | None = None,
-) -> dict[str, str] | None:
-    """Resolve a public DID to exactly one org-owned active issuer profile."""
+) -> dict[str, object] | None:
+    """Resolve a public DID to exactly one organization-owned signing identity."""
     if not issuer_did:
         return None
     if not organization_id:
@@ -160,7 +159,7 @@ async def _resolve_issuer_identity(
     except ImportError:
         raise HTTPException(
             status_code=503,
-            detail="Signing-keys issuer profile resolver is unavailable.",
+            detail="Signing-keys issuer DID resolver is unavailable.",
         )
 
     try:
@@ -185,27 +184,28 @@ async def _resolve_issuer_identity(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=503,
-            detail="Signing-keys issuer profile resolver returned an invalid response.",
+            detail="Signing-keys issuer DID resolver returned an invalid response.",
         ) from exc
 
-    profile = (
-        payload.get("issuer_profile")
-        if isinstance(payload.get("issuer_profile"), dict)
-        else {}
-    )
-    service = (
-        payload.get("signing_service")
-        if isinstance(payload.get("signing_service"), dict)
-        else {}
-    )
-    resolved_profile_id = _clean_optional_id(profile.get("id"))
     resolved_issuer_did = _clean_optional_id(payload.get("issuer_did"))
     resolved_organization_id = _clean_optional_id(payload.get("organization_id"))
+    resolved_verification_method_id = _clean_optional_id(
+        payload.get("verification_method_id")
+    )
+    resolved_key_purpose = _clean_optional_id(payload.get("key_purpose"))
+    resolved_algorithm = _clean_optional_id(payload.get("algorithm"))
+    public_jwk = payload.get("public_jwk")
+    expected_key_purpose = (
+        key_purpose or _key_purpose_for_format(credential_format) or "vc_jwt_issuer"
+    )
     if (
-        not payload.get("ok")
-        or not resolved_profile_id
+        payload.get("ok") is not True
         or not resolved_issuer_did
-        or not service.get("id")
+        or not resolved_verification_method_id
+        or not resolved_key_purpose
+        or not resolved_algorithm
+        or not isinstance(public_jwk, dict)
+        or any(secret in public_jwk for secret in ("d", "p", "q", "k"))
     ):
         return None
     if resolved_organization_id != organization_id or resolved_issuer_did != issuer_did:
@@ -213,20 +213,18 @@ async def _resolve_issuer_identity(
             status_code=409,
             detail="Issuer DID resolver returned an identity outside the requested organization scope.",
         )
-    algorithm_value = profile.get("algorithm") or ""
+    if (
+        resolved_key_purpose != expected_key_purpose
+        or (algorithm and resolved_algorithm != algorithm)
+        or not resolved_verification_method_id.startswith(f"{resolved_issuer_did}#")
+    ):
+        return None
     return {
-        "issuer_profile_id": resolved_profile_id,
         "issuer_did": resolved_issuer_did,
-        "signing_service_id": str(service["id"]),
-        "signing_key_reference": str(profile.get("signing_key_reference") or ""),
-        "verification_method_id": str(payload.get("verification_method_id") or ""),
-        "key_purpose": str(
-            profile.get("key_purpose")
-            or key_purpose
-            or _key_purpose_for_format(credential_format)
-            or "vc_jwt_issuer"
-        ),
-        "algorithm": str(algorithm_value),
+        "verification_method_id": resolved_verification_method_id,
+        "public_jwk": public_jwk,
+        "key_purpose": resolved_key_purpose,
+        "algorithm": resolved_algorithm,
     }
 
 
@@ -614,8 +612,8 @@ async def _create_issuance_service_response(
         raise HTTPException(
             status_code=422,
             detail=(
-                "issuer_did must resolve to exactly one active KMS-backed issuer "
-                "profile for this organization."
+                "issuer_did must resolve to exactly one active organization-owned "
+                "signing identity."
             ),
         )
     inject_headers: dict[str, str] = dict(_ISSUANCE_HEADERS or {})
@@ -772,18 +770,6 @@ async def didcomm_deliver(body: DidcommDeliverRequest, request: Request) -> Resp
         "/v1/issuance/didcomm/deliver",
         inject_headers=_ISSUANCE_HEADERS,
     )
-
-
-@issuance_router.post("/didcomm/receive", summary="DIDComm V2 Receive")
-async def didcomm_receive(request: Request) -> Response:
-    """Receive inbound DIDComm v2 messages (acks, problem-reports, etc.).
-
-    This is the public-facing DIDComm endpoint that other agents POST to.
-    No authentication required — DIDComm agents use DID-based trust.
-    """
-    registry = get_registry()
-    service_url = registry.get_service_url("issuance")
-    return await proxy_request(request, service_url, "/v1/issuance/didcomm/receive")
 
 
 # ── Issued Credentials ──────────────────────────────────────────────

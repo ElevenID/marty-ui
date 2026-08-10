@@ -225,8 +225,8 @@ async def create_credential_template(
         raise HTTPException(
             status_code=422,
             detail=(
-                "issuer_did must resolve to exactly one active KMS-backed issuer "
-                "profile for this template."
+                "issuer_did must resolve to exactly one active organization-owned "
+                "signing identity for this template."
             ),
         )
     internal_body = body.model_dump(exclude_none=True)
@@ -427,7 +427,7 @@ async def get_credential_template_application_template(
 
 @wallet_registry_router.get("", summary="List Wallet Registry")
 async def list_wallet_registry(request: Request) -> Response:
-    """List all wallets in the global registry."""
+    """List global wallets and authorized organization overrides."""
     registry = get_registry()
     service_url = registry.get_service_url("credential-templates")
     return await proxy_request(request, service_url, "/v1/wallet-registry")

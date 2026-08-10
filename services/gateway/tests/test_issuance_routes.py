@@ -9,15 +9,11 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from fastapi import HTTPException
+from gateway.models import PUBLIC_ISSUANCE_RESERVED_CLAIMS, DidcommDeliverRequest
+from gateway.registry import get_route_config
+from gateway.routes import applicants, canvas_integrations, issuance, signing_keys
 from pydantic import ValidationError
 from starlette.responses import JSONResponse
-
-from gateway.models import PUBLIC_ISSUANCE_RESERVED_CLAIMS
-from gateway.routes import applicants
-from gateway.routes import canvas_integrations
-from gateway.routes import issuance
-from gateway.routes import signing_keys
-from gateway.registry import get_route_config
 
 
 def _build_request(
@@ -978,6 +974,77 @@ def test_authorize_route_precedes_issuance_id_catch_all() -> None:
     )
 
 
+def test_didcomm_delivery_contract_requires_tenant_and_rejects_resolver_selector() -> None:
+    request = DidcommDeliverRequest(
+        organization_id="org_123",
+        transaction_id="tx-123",
+        holder_did="did:peer:2.EzExample",
+    )
+    assert request.model_dump() == {
+        "organization_id": "org_123",
+        "transaction_id": "tx-123",
+        "holder_did": "did:peer:2.EzExample",
+    }
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        DidcommDeliverRequest(
+            organization_id="org_123",
+            transaction_id="tx-123",
+            holder_did="did:peer:2.EzExample",
+            universal_resolver_url="https://attacker.example/resolve",
+        )
+
+
+@pytest.mark.asyncio
+async def test_didcomm_delivery_uses_authenticated_public_gateway_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    async def _proxy(request, service_url, path, inject_headers=None):
+        captured.update(
+            service_url=service_url,
+            path=path,
+            inject_headers=inject_headers,
+        )
+        return JSONResponse({"status": "delivered"})
+
+    monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(issuance, "proxy_request", _proxy)
+    monkeypatch.setattr(issuance, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
+
+    await issuance.didcomm_deliver(
+        DidcommDeliverRequest(
+            organization_id="org_123",
+            transaction_id="tx-123",
+            holder_did="did:peer:2.EzExample",
+        ),
+        _build_request(session_org_id="org_123"),
+    )
+
+    assert captured == {
+        "service_url": "http://issuance-service",
+        "path": "/v1/issuance/didcomm/deliver",
+        "inject_headers": {"X-API-Key": "secret"},
+    }
+
+
+def test_didcomm_boundary_exposes_only_authenticated_outbound_delivery() -> None:
+    paths = {route.path for route in issuance.issuance_router.routes}
+    assert "/v1/issuance/didcomm/deliver" in paths
+    assert "/v1/issuance/didcomm/receive" not in paths
+
+    assert get_route_config("/v1/issuance/didcomm/deliver") == {
+        "service": "issuance",
+        "requires_auth": True,
+    }
+    # Prefix fallback remains authenticated, but there is no callable route.
+    assert get_route_config("/v1/issuance/didcomm/receive") == {
+        "service": "issuance",
+        "requires_auth": True,
+    }
+
+
 @pytest.mark.asyncio
 async def test_canvas_mirror_automation_cycle_route_proxies_with_management_header(
     monkeypatch: pytest.MonkeyPatch,
@@ -1210,12 +1277,10 @@ async def test_resolve_issuer_identity_uses_org_scoped_did(
                 "ok": True,
                 "organization_id": "org_acme",
                 "issuer_did": issuer_did,
-                "verification_method_id": "",
-                "issuer_profile": {
-                    "id": "ip-2",
-                    "key_purpose": "vc_jwt_issuer",
-                },
-                "signing_service": {"id": "svc-2"},
+                "verification_method_id": f"{issuer_did}#key-2",
+                "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256",
             }
         )
 
@@ -1229,13 +1294,11 @@ async def test_resolve_issuer_identity_uses_org_scoped_did(
 
     identity = await issuance._resolve_issuer_identity(request, "org_acme", issuer_did)
     assert identity == {
-        "issuer_profile_id": "ip-2",
         "issuer_did": issuer_did,
-        "signing_service_id": "svc-2",
-        "signing_key_reference": "",
-        "verification_method_id": "",
+        "verification_method_id": f"{issuer_did}#key-2",
+        "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
         "key_purpose": "vc_jwt_issuer",
-        "algorithm": "",
+        "algorithm": "ES256",
     }
 
 
@@ -1256,13 +1319,9 @@ async def test_resolve_issuer_identity_prefers_format_scoped_profile(
                 "organization_id": "org_acme",
                 "issuer_did": issuer_did,
                 "verification_method_id": "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary",
-                "issuer_profile": {
-                    "id": "ip-mdoc",
-                    "signing_key_reference": "cred-dsc-acme-primary",
-                    "key_purpose": "mdoc_dsc",
-                    "algorithm": "ES256",
-                },
-                "signing_service": {"id": "svc-mdoc"},
+                "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+                "key_purpose": "mdoc_dsc",
+                "algorithm": "ES256",
             }
         )
 
@@ -1279,8 +1338,6 @@ async def test_resolve_issuer_identity_prefers_format_scoped_profile(
         credential_format="mso_mdoc",
     )
 
-    assert identity["signing_service_id"] == "svc-mdoc"
-    assert identity["signing_key_reference"] == "cred-dsc-acme-primary"
     assert (
         identity["verification_method_id"]
         == "did:web:beta.elevenidllc.com:orgs:acme#cred-dsc-acme-primary"
@@ -1318,10 +1375,10 @@ def test_public_signing_format_normalizes_template_and_wire_names(
 
 
 @pytest.mark.asyncio
-async def test_resolve_issuer_identity_returns_internal_profile_only(
+async def test_resolve_issuer_identity_returns_public_identity_only(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """The resolver returns a profile only as trusted internal routing state."""
+    """The gateway caller never receives private custody routing state."""
     issuer_did = "did:web:beta.elevenidllc.com:orgs:acme"
 
     async def fake_resolve_issuer_did(**kwargs):
@@ -1331,8 +1388,9 @@ async def test_resolve_issuer_identity_returns_internal_profile_only(
                 "organization_id": "org_x",
                 "issuer_did": issuer_did,
                 "verification_method_id": f"{issuer_did}#key-1",
-                "issuer_profile": {"id": "resolved-profile"},
-                "signing_service": {"id": "svc-1"},
+                "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+                "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256",
             }
         )
 
@@ -1345,8 +1403,10 @@ async def test_resolve_issuer_identity_returns_internal_profile_only(
     identity = await issuance._resolve_issuer_identity(request, "org_x", issuer_did)
 
     assert identity is not None
-    assert identity["issuer_profile_id"] == "resolved-profile"
     assert identity["issuer_did"] == issuer_did
+    assert "issuer_profile_id" not in identity
+    assert "signing_service_id" not in identity
+    assert "signing_key_reference" not in identity
 
 
 @pytest.mark.asyncio

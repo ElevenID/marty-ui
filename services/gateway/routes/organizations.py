@@ -1149,14 +1149,13 @@ async def _load_runtime_status_payload(
     active_policies = [item for item in policies if _is_active_artifact(item)]
     active_deployments = [item for item in deployments if _is_active_artifact(item)]
     active_flows = [item for item in flows if _is_active_artifact(item)]
-    kms_backed_templates = [
+    did_backed_templates = [
         item
         for item in active_templates
-        if item.get("issuer_profile_id")
-        and str(item.get("key_access_mode") or "").upper() == "REMOTE_SIGNING"
+        if str(item.get("issuer_did") or "").startswith("did:")
     ]
 
-    issuer_active = bool(kms_backed_templates)
+    issuer_active = bool(did_backed_templates)
     issuer_keys_valid = issuer_active
     deployment_active = bool(active_deployments)
     policy_reachable = bool(active_policies)
@@ -1182,7 +1181,7 @@ async def _load_runtime_status_payload(
         "last_verification_timestamp": None,
         "artifact_counts": {
             "active_credential_templates": len(active_templates),
-            "kms_backed_credential_templates": len(kms_backed_templates),
+            "did_backed_credential_templates": len(did_backed_templates),
             "active_presentation_policies": len(active_policies),
             "active_deployment_profiles": len(active_deployments),
             "active_flows": len(active_flows),

@@ -138,12 +138,13 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
     });
   }, [open, preferredWallets, walletOptions]);
 
-  // Load wallet registry once for label resolution
+  // Load the global catalogue plus overrides for the active organization.
   useEffect(() => {
-    listWallets(true)
+    const orgId = organizationId || offerData?.organization_id || null;
+    listWallets(true, orgId)
       .then((w) => setRegistryWallets(Array.isArray(w) ? w : []))
       .catch(() => {});
-  }, []);
+  }, [organizationId, offerData?.organization_id]);
 
   useEffect(() => {
     if (!open) return;

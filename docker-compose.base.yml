@@ -416,6 +416,7 @@ services:
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
+      ES_GRPC_TARGET: event-stream:9015
       AUTH_GRPC_PORT: "9001"
     ports:
       - "8001:8001"
@@ -453,6 +454,7 @@ services:
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
       MARTY_ORG_REVIEWER_EMAIL: ${MARTY_ORG_REVIEWER_EMAIL:-reviewer@marty.demo}
+      ES_GRPC_TARGET: event-stream:9015
     ports:
       - "8002:8002"
       - "9002:9002"
@@ -518,6 +520,7 @@ services:
       # OpenBao KMS for certificate operations
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
     ports:
       - "8004:8004"
     depends_on:
@@ -542,6 +545,7 @@ services:
     container_name: marty-applicant
     environment:
       APPLICANT_SERVICE_PORT: "8006"
+      FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-dev-flow-application-event-hmac-key-change-before-production}
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
       APPLICANT_DATA_FILE: /app/data/applicant_store.json
       ISSUANCE_SERVICE_URL: http://issuance:8005
@@ -549,6 +553,7 @@ services:
       APPLICATION_TEMPLATE_MIGRATION_MAP: ${APPLICATION_TEMPLATE_MIGRATION_MAP:-}
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
+      ES_GRPC_TARGET: event-stream:9015
     ports:
       - "8006:8006"
     volumes:
@@ -637,6 +642,8 @@ services:
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_PORT: "9009"
       DID_RESOLUTION_BASE_URL: http://gateway:8000
+      DID_PUBLIC_FALLBACK_ENABLED: ${DID_PUBLIC_FALLBACK_ENABLED:-false}
+      DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       ISSUANCE_SERVICE_URL: http://issuance:8005
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
@@ -716,6 +723,7 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_DB_FLOW: "3"
       FLOW_GRPC_PORT: "9011"
+      FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-dev-flow-application-event-hmac-key-change-before-production}
     ports:
       - "8011:8011"
       - "9011:9011"
@@ -750,7 +758,6 @@ services:
       CANVAS_LTI_EXPERIENCE_BASE_URL: ${CANVAS_LTI_EXPERIENCE_BASE_URL:-}
       CANVAS_OAUTH_COMPLETION_REDIRECT_URL: ${CANVAS_OAUTH_COMPLETION_REDIRECT_URL:-${CANVAS_LTI_EXPERIENCE_BASE_URL:-http://localhost:3000}/console/org/deploy/canvas}
       CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
-      CANVAS_LTI_TOOL_ISSUER_PROFILE_ID: ${CANVAS_LTI_TOOL_ISSUER_PROFILE_ID:-}
       CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
       CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS: ${CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS:-}
       CANVAS_LTI_TOOL_ACTIVE_KID: ${CANVAS_LTI_TOOL_ACTIVE_KID:-}
@@ -810,8 +817,9 @@ services:
       CANVAS_LTI_JWKS_TTL_MINUTES: ${CANVAS_LTI_JWKS_TTL_MINUTES:-1440}
       CANVAS_ALLOW_PRIVATE_BASE_URLS: ${CANVAS_ALLOW_PRIVATE_BASE_URLS:-false}
       CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-false}
-      # DIDComm v2 push delivery — optional Universal Resolver for unknown DID methods
+      # DIDComm resolver infrastructure is deployment-managed and never caller-selected.
       UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
+      DIDCOMM_ALLOW_PRIVATE_ENDPOINTS: ${DIDCOMM_ALLOW_PRIVATE_ENDPOINTS:-false}
     ports:
       - "8005:8005"
       - "9005:9005"
@@ -850,7 +858,6 @@ services:
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
-      CANVAS_LTI_TOOL_ISSUER_PROFILE_ID: ${CANVAS_LTI_TOOL_ISSUER_PROFILE_ID:-}
       CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
       CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS: ${CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS:-}
       CANVAS_LTI_TOOL_ACTIVE_KID: ${CANVAS_LTI_TOOL_ACTIVE_KID:-}

@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { server } from '@test/mocks/server'
 
-import { getMyApplications, getMyCredentials } from '../applicantApi'
+import {
+  deleteApplicationEvidence,
+  getMyApplications,
+  getMyCredentials,
+  listApplicationEvidence,
+  listOrganizationApplicationEvidence,
+  revokeOrganizationApplicationEvidence,
+  submitApplicationEvidence,
+} from '../applicantApi'
 
 describe('applicantApi', () => {
   it('loads current applicant applications from the canonical self-service route', async () => {
@@ -54,5 +62,73 @@ describe('applicantApi', () => {
       limit: 10,
       offset: 20,
     })
+  })
+
+  it('uses only the current self-service evidence routes', async () => {
+    const requests: Array<{ method: string; path: string; body?: unknown }> = []
+    server.use(
+      http.post('http://localhost:8000/v1/me/applications/:applicationId/evidence', async ({ request }) => {
+        requests.push({
+          method: request.method,
+          path: new URL(request.url).pathname,
+          body: await request.json(),
+        })
+        return HttpResponse.json({ id: 'evidence-1', status: 'ACTIVE' })
+      }),
+      http.get('http://localhost:8000/v1/me/applications/:applicationId/evidence', ({ request }) => {
+        requests.push({ method: request.method, path: new URL(request.url).pathname })
+        return HttpResponse.json([{ id: 'evidence-1', status: 'ACTIVE' }])
+      }),
+      http.delete('http://localhost:8000/v1/me/applications/:applicationId/evidence/:evidenceId', ({ request }) => {
+        requests.push({ method: request.method, path: new URL(request.url).pathname })
+        return HttpResponse.json({ deleted: true })
+      }),
+    )
+
+    await submitApplicationEvidence('application/1', {
+      evidence_requirement_id: 'identity-scan',
+      media_type: 'image/png',
+      filename: 'identity.png',
+      content_base64: 'aWRlbnRpdHk=',
+    })
+    await listApplicationEvidence('application/1')
+    await deleteApplicationEvidence('application/1', 'evidence/1')
+
+    expect(requests).toEqual([
+      {
+        method: 'POST',
+        path: '/v1/me/applications/application%2F1/evidence',
+        body: expect.objectContaining({ evidence_requirement_id: 'identity-scan' }),
+      },
+      { method: 'GET', path: '/v1/me/applications/application%2F1/evidence' },
+      { method: 'DELETE', path: '/v1/me/applications/application%2F1/evidence/evidence%2F1' },
+    ])
+    expect(requests.every(({ path }) => !path.startsWith('/v1/applications/'))).toBe(true)
+  })
+
+  it('binds reviewer evidence access to the organization-scoped route', async () => {
+    const requests: Array<{ method: string; path: string; body?: unknown }> = []
+    server.use(
+      http.get('http://localhost:8000/v1/organizations/:organizationId/applicants/:applicationId/evidence', ({ request }) => {
+        requests.push({ method: request.method, path: new URL(request.url).pathname })
+        return HttpResponse.json([{ id: 'evidence-1', status: 'ACTIVE' }])
+      }),
+      http.post('http://localhost:8000/v1/organizations/:organizationId/applicants/:applicationId/evidence/:evidenceId/revoke', async ({ request }) => {
+        requests.push({ method: request.method, path: new URL(request.url).pathname, body: await request.json() })
+        return HttpResponse.json({ id: 'evidence-1', status: 'REVOKED' })
+      }),
+    )
+
+    await listOrganizationApplicationEvidence('org/1', 'application/1')
+    await revokeOrganizationApplicationEvidence('org/1', 'application/1', 'evidence/1', 'invalid image')
+
+    expect(requests).toEqual([
+      { method: 'GET', path: '/v1/organizations/org%2F1/applicants/application%2F1/evidence' },
+      {
+        method: 'POST',
+        path: '/v1/organizations/org%2F1/applicants/application%2F1/evidence/evidence%2F1/revoke',
+        body: { reason: 'invalid image' },
+      },
+    ])
   })
 })

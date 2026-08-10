@@ -64,10 +64,9 @@ binding, which is never accepted from an issuance or LTI request:
 
 | Setting | Requirement |
 |---|---|
-| `CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID` | Organization that owns the issuer profile |
-| `CANVAS_LTI_TOOL_ISSUER_PROFILE_ID` | Active issuer profile selected for LTI tool assertions |
-| `CANVAS_LTI_TOOL_ISSUER_DID` | DID controlled by that issuer profile |
-| `CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS` | Required comma-separated inventory of credential issuer profiles; the dedicated LTI profile must not overlap |
+| `CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID` | Organization that owns the LTI issuer DID |
+| `CANVAS_LTI_TOOL_ISSUER_DID` | DID that resolves to the active LTI signing profile |
+| `CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS` | Required comma-separated inventory of credential issuer profiles |
 | `CANVAS_LTI_TOOL_ACTIVE_KID` | DID verification method (`<issuer DID>#<fragment>`) used in every RS256 client assertion |
 | `CANVAS_LTI_TOOL_PUBLIC_JWKS` | Compact public RSA/RS256 JWKS; retiring keys include `retired_at` and remain published for seven days |
 | `SIGNING_KEYS_INTERNAL_URL` and API-key secret | Internal signing gateway used by the API and worker; production Compose mounts the key from a secret file and Kubernetes uses a Secret key |

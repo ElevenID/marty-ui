@@ -147,6 +147,26 @@ _VC_API_ROUTE_RULES = (
     ),
 )
 
+_WALLET_REGISTRY_ROUTE_PERMISSIONS = {
+    "GET": "wallet:view",
+    "HEAD": "wallet:view",
+    "OPTIONS": "wallet:view",
+    "POST": "wallet:write",
+    "PUT": "wallet:write",
+    "PATCH": "wallet:write",
+    "DELETE": "wallet:write",
+}
+_WALLET_REGISTRY_ROUTE_RULE = (
+    re.compile(r"^/v1/wallet-registry(?:/|$)"),
+    dict(_WALLET_REGISTRY_ROUTE_PERMISSIONS),
+    "wallet",
+)
+_WALLET_REGISTRY_RESOURCE_LOOKUP = (
+    "credential-templates",
+    "/v1/wallet-registry/{resource_id}",
+    {"resolve"},
+)
+
 _CANVAS_PROVENANCE_ROUTE = (
     "GET",
     "/v1/issuance/delivery-records/canvas-credentials/provenance",
@@ -255,6 +275,12 @@ class GatewayCedarAuthMiddleware(MartyCedarAuthMiddleware):
             return "webhooks:write" in scope_set
         if required_permission == "notification:send":
             return "notifications:send" in scope_set
+        if resource == "wallet":
+            if action == "view":
+                return bool(scope_set & {"wallet:read", "wallet:write"})
+            if action == "write":
+                return "wallet:write" in scope_set
+            return False
         if resource != "signing-key":
             return MartyCedarAuthMiddleware._api_key_allowed(
                 required_permission,
@@ -278,6 +304,91 @@ class GatewayCedarAuthMiddleware(MartyCedarAuthMiddleware):
         }:
             return "keys:write" in scope_set
         return False
+
+
+def _register_wallet_registry_cedar_routes() -> None:
+    """Complete the published wallet RBAC and API-key scope boundary."""
+
+    resolver = getattr(_cedar_actions, "resolve_action_and_resource", None)
+    lookup_resolver = getattr(_cedar_actions, "resolve_resource_lookup", None)
+    rules = getattr(_cedar_actions, "SPECIAL_ROUTE_RULES", None)
+    lookups = getattr(_cedar_actions, "RESOURCE_LOOKUP_MAP", None)
+    if (
+        not callable(resolver)
+        or not callable(lookup_resolver)
+        or not isinstance(rules, list)
+        or not isinstance(lookups, dict)
+    ):
+        raise RuntimeError(
+            "Unsupported marty-common Cedar registry; refusing to start "
+            "without wallet-registry tenant authorization."
+        )
+
+    probes = {
+        method: resolver(method, "/v1/wallet-registry/example")
+        for method in _WALLET_REGISTRY_ROUTE_PERMISSIONS
+    }
+    expected = {
+        method: (permission, "wallet")
+        for method, permission in _WALLET_REGISTRY_ROUTE_PERMISSIONS.items()
+    }
+    if any(
+        value is not None and value != expected[method]
+        for method, value in probes.items()
+    ):
+        raise RuntimeError(
+            "Conflicting marty-common wallet-registry Cedar mapping; "
+            "refusing to override it."
+        )
+    if any(value is None for value in probes.values()) and any(
+        value is not None for value in probes.values()
+    ):
+        raise RuntimeError(
+            "Partial marty-common wallet-registry Cedar mapping; "
+            "refusing to extend an ambiguous boundary."
+        )
+
+    inserted_rule = False
+    if probes != expected:
+        rules.insert(0, _WALLET_REGISTRY_ROUTE_RULE)
+        inserted_rule = True
+
+    existing_lookup = lookups.get("wallet-registry")
+    inserted_lookup = False
+    if existing_lookup is None:
+        lookups["wallet-registry"] = _WALLET_REGISTRY_RESOURCE_LOOKUP
+        inserted_lookup = True
+    elif existing_lookup != _WALLET_REGISTRY_RESOURCE_LOOKUP:
+        if inserted_rule:
+            rules.remove(_WALLET_REGISTRY_ROUTE_RULE)
+        raise RuntimeError(
+            "Conflicting marty-common wallet-registry tenant lookup; "
+            "refusing to override it."
+        )
+
+    try:
+        verified_routes = all(
+            resolver(method, "/v1/wallet-registry/example") == expected_value
+            for method, expected_value in expected.items()
+        )
+        verified_lookup = lookup_resolver("/v1/wallet-registry/example") == (
+            "credential-templates",
+            "/v1/wallet-registry/example",
+        )
+        verified_reserved = (
+            lookup_resolver("/v1/wallet-registry/resolve/profile") is None
+        )
+    except Exception:
+        verified_routes = verified_lookup = verified_reserved = False
+    if not (verified_routes and verified_lookup and verified_reserved):
+        if inserted_rule:
+            rules.remove(_WALLET_REGISTRY_ROUTE_RULE)
+        if inserted_lookup:
+            del lookups["wallet-registry"]
+        raise RuntimeError(
+            "Wallet-registry Cedar compatibility mapping did not activate; "
+            "refusing to start."
+        )
 
 
 def _register_signing_key_cedar_routes() -> None:
@@ -852,6 +963,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     _register_signing_key_cedar_routes()
+    _register_wallet_registry_cedar_routes()
     _register_vc_api_cedar_routes()
     _register_canvas_provenance_cedar_route()
     _register_notification_cedar_routes()
@@ -1238,32 +1350,6 @@ Verification is handled through two complementary approaches:
     async def get_org_waltid_as_metadata_appended(org_id: str) -> Response:
         return await _proxy_to_issuance_well_known(
             f"/.well-known/oauth-authorization-server/org/{org_id}"
-        )
-
-    # SpruceID / SpruceKit wallet variants
-
-    @app.get("/.well-known/openid-credential-issuer/org/{org_id}/spruce")
-    async def get_org_spruce_issuer_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(
-            f"/.well-known/openid-credential-issuer/org/{org_id}/spruce"
-        )
-
-    @app.get("/org/{org_id}/spruce/.well-known/openid-credential-issuer")
-    async def get_org_spruce_issuer_metadata_appended(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(
-            f"/.well-known/openid-credential-issuer/org/{org_id}/spruce"
-        )
-
-    @app.get("/.well-known/oauth-authorization-server/org/{org_id}/spruce")
-    async def get_org_spruce_as_metadata(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(
-            f"/.well-known/oauth-authorization-server/org/{org_id}/spruce"
-        )
-
-    @app.get("/org/{org_id}/spruce/.well-known/oauth-authorization-server")
-    async def get_org_spruce_as_metadata_appended(org_id: str) -> Response:
-        return await _proxy_to_issuance_well_known(
-            f"/.well-known/oauth-authorization-server/org/{org_id}/spruce"
         )
 
     # Google Wallet CredentialManager API variants

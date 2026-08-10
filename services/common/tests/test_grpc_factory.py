@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import grpc
@@ -12,6 +13,8 @@ import pytest
 from common.grpc_factory import (
     CorrelationIdInterceptor,
     LoggingMetricsInterceptor,
+    ServiceAuthInterceptor,
+    ServiceTokenClientInterceptor,
     create_grpc_channel,
     create_grpc_server,
     start_grpc_server_port,
@@ -32,6 +35,13 @@ def grpc_event_loop():
         asyncio.set_event_loop(loop)
 
     yield loop
+
+
+@pytest.fixture(autouse=True)
+def isolated_grpc_environment(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    monkeypatch.delenv("GRPC_SERVICE_TOKEN", raising=False)
+    monkeypatch.delenv("GRPC_SERVICE_TOKEN_FILE", raising=False)
 
 
 # ── create_grpc_server ──────────────────────────────────────────────
@@ -107,6 +117,98 @@ class TestCreateGrpcChannel:
             "grpc.keepalive_permit_without_calls": False,
             "grpc.http2.max_pings_without_data": 2,
         }
+
+
+class TestServiceAuthentication:
+    def test_production_server_requires_service_token(self, monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "production")
+
+        with pytest.raises(RuntimeError, match="GRPC_SERVICE_TOKEN.*required"):
+            create_grpc_server("test-svc")
+
+    def test_production_channel_requires_service_token(self, monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "production")
+
+        with pytest.raises(RuntimeError, match="GRPC_SERVICE_TOKEN.*required"):
+            create_grpc_channel("localhost:50051", service_name="test-svc")
+
+    @pytest.mark.parametrize("token", ["change_me_grpc_token", "too-short"])
+    def test_production_rejects_weak_service_tokens(self, monkeypatch, token):
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("GRPC_SERVICE_TOKEN", token)
+
+        with pytest.raises(RuntimeError):
+            create_grpc_server("test-svc")
+
+    def test_production_reads_token_from_secret_file(self, monkeypatch, tmp_path):
+        token_file = tmp_path / "grpc_service_token"
+        token_file.write_text("a" * 48 + "\n", encoding="utf-8")
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("GRPC_SERVICE_TOKEN_FILE", str(token_file))
+
+        with patch("common.grpc_factory.grpc_aio.server") as server_factory:
+            server_factory.return_value = MagicMock()
+            create_grpc_server("test-svc")
+
+        interceptors = server_factory.call_args.kwargs["interceptors"]
+        assert isinstance(interceptors[0], ServiceAuthInterceptor)
+
+    def test_production_channel_sends_secret_file_token(self, monkeypatch, tmp_path):
+        token_file = tmp_path / "grpc_service_token"
+        token = "b" * 48
+        token_file.write_text(token, encoding="utf-8")
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("GRPC_SERVICE_TOKEN_FILE", str(token_file))
+        monkeypatch.setenv("GRPC_INSECURE_ALLOWED", "true")
+
+        with patch("common.grpc_factory.grpc_aio.insecure_channel") as channel_factory:
+            channel_factory.return_value = MagicMock()
+            create_grpc_channel("localhost:50051", service_name="test-svc")
+
+        interceptors = channel_factory.call_args.kwargs["interceptors"]
+        token_interceptor = next(
+            item for item in interceptors if isinstance(item, ServiceTokenClientInterceptor)
+        )
+        assert token_interceptor._token == token
+
+    def test_environment_and_file_are_mutually_exclusive(self, monkeypatch, tmp_path):
+        token_file = tmp_path / "grpc_service_token"
+        token_file.write_text("c" * 48, encoding="utf-8")
+        monkeypatch.setenv("GRPC_SERVICE_TOKEN", "d" * 48)
+        monkeypatch.setenv("GRPC_SERVICE_TOKEN_FILE", str(token_file))
+
+        with pytest.raises(RuntimeError, match="Both GRPC_SERVICE_TOKEN"):
+            create_grpc_server("test-svc")
+
+    def test_client_interceptor_covers_every_rpc_cardinality(self):
+        interceptor = ServiceTokenClientInterceptor("a" * 48)
+
+        assert isinstance(interceptor, grpc.aio.UnaryUnaryClientInterceptor)
+        assert isinstance(interceptor, grpc.aio.UnaryStreamClientInterceptor)
+        assert isinstance(interceptor, grpc.aio.StreamUnaryClientInterceptor)
+        assert isinstance(interceptor, grpc.aio.StreamStreamClientInterceptor)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("factory", "cardinality"),
+        [
+            (grpc.unary_unary_rpc_method_handler, "unary_unary"),
+            (grpc.unary_stream_rpc_method_handler, "unary_stream"),
+            (grpc.stream_unary_rpc_method_handler, "stream_unary"),
+            (grpc.stream_stream_rpc_method_handler, "stream_stream"),
+        ],
+    )
+    async def test_rejection_preserves_rpc_cardinality(self, factory, cardinality):
+        original = factory(lambda request, context: None)
+        continuation = AsyncMock(return_value=original)
+        details = SimpleNamespace(method="/test.Service/Call", invocation_metadata=())
+
+        rejected = await ServiceAuthInterceptor("a" * 48).intercept_service(
+            continuation,
+            details,
+        )
+
+        assert getattr(rejected, cardinality) is not None
 
 
 # ── LoggingMetricsInterceptor ────────────────────────────────────────

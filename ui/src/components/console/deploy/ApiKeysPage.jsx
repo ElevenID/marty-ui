@@ -49,7 +49,6 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import { ResourcePage } from '../../common';
 import ConfirmDeleteDialog from '../../common/ConfirmDeleteDialog';
 import { useAsyncData } from '../../../hooks/useAsyncData';
-import { useAuth } from '../../../hooks/useAuth';
 import { useConsole } from '../../../contexts/ConsoleContext';
 import { createApiKey, listApiKeys, revokeApiKey } from '../../../services/apiKeysApi';
 import { createWebhook, listWebhooks } from '../../../services/webhooksApi';
@@ -74,6 +73,16 @@ const API_KEY_SCOPES = [
     id: 'trust:read',
     label: 'Read trust registry',
     description: 'Query trust registries, issuers, and trust anchors.',
+  },
+  {
+    id: 'wallet:read',
+    label: 'Read wallet registry',
+    description: 'Read global wallet compatibility data and organization-owned overrides.',
+  },
+  {
+    id: 'wallet:write',
+    label: 'Manage wallet registry',
+    description: 'Create and maintain organization-owned wallet registry overrides.',
   },
   {
     id: 'credentials:revoke',
@@ -219,7 +228,6 @@ async function copyToClipboard(text) {
 
 function ApiKeysPage() {
   const { t } = useTranslation('console');
-  const { organizationId: authOrganizationId } = useAuth();
   const { activeOrgId } = useConsole();
   const organizationId = activeOrgId;
   const [dialogOpen, setDialogOpen] = useState(false);

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import grpc
+import pytest
 
 
 # Pre-inject a lightweight stub for credential_template.main so the deferred
@@ -55,12 +56,8 @@ def _make_template_response(**overrides):
         version=1,
         created_at="2026-01-01T00:00:00Z",
         updated_at="2026-01-02T00:00:00Z",
-        issuer_profile_id="issuer-profile-1",
         issuer_did="did:web:issuer.example:orgs:org-1",
-        key_access_mode="REMOTE_SIGNING",
-        issuer_key_id="issuer-key-1",
         issuer_algorithm="ES256",
-        remote_signing_config={"signing_service_id": "managed-openbao-transit"},
     )
     defaults.update(overrides)
     return SimpleNamespace(**defaults)
@@ -102,11 +99,32 @@ class TestGetTemplate:
         assert resp.display_style.background_color == "#003366"
         assert resp.validity_rules.default_validity_days == 365
         assert resp.issuer_did == "did:web:issuer.example:orgs:org-1"
+        assert resp.issuer_algorithm == "ES256"
         assert "issuer_profile_id" not in resp.DESCRIPTOR.fields_by_name
         assert "key_access_mode" not in resp.DESCRIPTOR.fields_by_name
         assert "issuer_key_id" not in resp.DESCRIPTOR.fields_by_name
         assert "remote_signing_config_json" not in resp.DESCRIPTOR.fields_by_name
         assert ctx.code is None
+
+    async def test_internal_get_preserves_algorithm_omitted_from_public_response(self, ctx):
+        """Issuance receives the stored DID resolution, not the sanitized REST shape."""
+        template = _make_template_response(issuer_algorithm="EdDSA")
+        public_response = _make_template_response()
+        del public_response.issuer_algorithm
+        repo = MagicMock()
+        repo.get = AsyncMock(return_value=template)
+        servicer = _build_servicer(
+            repo=repo,
+            to_response_fn=lambda _template: public_response,
+        )
+
+        response = await servicer.GetTemplate(
+            ct_pb2.GetTemplateRequest(template_id="tpl-1"),
+            ctx,
+        )
+
+        assert response.issuer_algorithm == "EdDSA"
+        assert response.issuer_did == "did:web:issuer.example:orgs:org-1"
 
     async def test_not_found(self, ctx):
         repo = MagicMock()
@@ -220,14 +238,12 @@ class TestGetCredentialConfigurations:
         t1 = SimpleNamespace(
             credential_type="EmployeeCredential",
             name="Employee Badge",
-            issuer_profile_id="issuer-profile-1",
-            key_access_mode="REMOTE_SIGNING",
+            issuer_did="did:web:issuer.example:orgs:org-1",
         )
         t2 = SimpleNamespace(
             credential_type="MemberCredential",
             name="Member Badge",
-            issuer_profile_id="issuer-profile-2",
-            key_access_mode="REMOTE_SIGNING",
+            issuer_did="did:web:issuer.example:orgs:org-1",
         )
         repo = MagicMock()
         repo.list_all = AsyncMock(return_value=[t1, t2])
@@ -245,14 +261,12 @@ class TestGetCredentialConfigurations:
         valid = SimpleNamespace(
             credential_type="EmployeeCredential",
             name="Employee Badge",
-            issuer_profile_id="issuer-profile-1",
-            key_access_mode="REMOTE_SIGNING",
+            issuer_did="did:web:issuer.example:orgs:org-1",
         )
         legacy = SimpleNamespace(
             credential_type="LegacyCredential",
             name="Legacy Badge",
-            issuer_profile_id="",
-            key_access_mode="LOCAL",
+            issuer_did="",
         )
         repo = MagicMock()
         repo.list_all = AsyncMock(return_value=[valid, legacy])
@@ -269,8 +283,7 @@ class TestGetCredentialConfigurations:
         t = SimpleNamespace(
             credential_type="",
             name="No Type",
-            issuer_profile_id="issuer-profile-1",
-            key_access_mode="REMOTE_SIGNING",
+            issuer_did="did:web:issuer.example:orgs:org-1",
         )
         repo = MagicMock()
         repo.list_all = AsyncMock(return_value=[t])
@@ -292,6 +305,23 @@ class TestGetCredentialConfigurations:
 
         configs = json.loads(resp.configurations_json)
         assert configs == {}
+
+
+class TestMutationBoundary:
+    @pytest.mark.parametrize(
+        "method_name",
+        [
+            "CreateTemplate",
+            "UpdateTemplate",
+            "ActivateTemplate",
+            "DeprecateTemplate",
+            "NewVersion",
+            "DeleteTemplate",
+        ],
+    )
+    def test_grpc_adapter_does_not_implement_template_mutations(self, method_name):
+        """Template writes must traverse gateway REST authorization and RBAC."""
+        assert method_name not in CredentialTemplateServiceGrpc.__dict__
 
 
 # ── HealthCheck ──────────────────────────────────────────────────────

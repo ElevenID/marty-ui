@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
+from yaml.nodes import MappingNode, ScalarNode
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,7 +22,37 @@ stack = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(stack)
 
 
-def test_issuer_profile_identity_returns_only_public_did_material(
+def _assert_unique_yaml_keys(node: yaml.Node, path: Path, location: str = "root") -> None:
+    if isinstance(node, MappingNode):
+        seen: dict[str, int] = {}
+        for key_node, value_node in node.value:
+            if isinstance(key_node, ScalarNode):
+                key = key_node.value
+                line = key_node.start_mark.line + 1
+                if key in seen:
+                    pytest.fail(
+                        f"{path.name}:{line}: duplicate mapping key {key!r}; "
+                        f"first declared at line {seen[key]} ({location})"
+                    )
+                seen[key] = line
+                child_location = f"{location}.{key}"
+            else:
+                child_location = location
+            _assert_unique_yaml_keys(value_node, path, child_location)
+    else:
+        for child in getattr(node, "value", ()):
+            if isinstance(child, yaml.Node):
+                _assert_unique_yaml_keys(child, path, location)
+
+
+def test_compose_files_have_no_duplicate_mapping_keys() -> None:
+    for path in sorted(ROOT.glob("docker-compose*.yml")):
+        document = yaml.compose(path.read_text(encoding="utf-8"))
+        assert document is not None, f"{path.name} is empty"
+        _assert_unique_yaml_keys(document, path)
+
+
+def test_issuer_did_identity_returns_only_public_did_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = {
@@ -41,7 +73,7 @@ def test_issuer_profile_identity_returns_only_public_did_material(
         )()
 
     monkeypatch.setattr(stack.subprocess, "run", fake_run)
-    assert stack.issuer_profile_identity(["docker", "compose"]) == payload
+    assert stack.issuer_did_identity(["docker", "compose"]) == payload
     rendered = " ".join(captured)
     assert "exec -T gateway python -c" in rendered
     assert "SIGNING_KEYS_INTERNAL_API_KEY" in rendered
@@ -50,7 +82,7 @@ def test_issuer_profile_identity_returns_only_public_did_material(
     assert "/resolve-issuer-did" in rendered
 
 
-def test_issuer_profile_identity_rejects_private_jwk_material(
+def test_issuer_did_identity_rejects_private_jwk_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = {
@@ -70,7 +102,7 @@ def test_issuer_profile_identity_rejects_private_jwk_material(
         )(),
     )
     with pytest.raises(ValueError, match="public ES256 identity"):
-        stack.issuer_profile_identity(["docker", "compose"])
+        stack.issuer_did_identity(["docker", "compose"])
 
 
 def test_project_name_is_narrowly_scoped() -> None:
@@ -219,6 +251,87 @@ def test_haip_overlay_is_explicit_and_isolation_is_last() -> None:
     assert any(path.endswith("docker-compose.profile.oidf-haip.yml") for path in files)
     assert any(
         path.endswith("docker-compose.profile.conformance-images.yml") for path in files
+    )
+
+
+def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
+    isolation = (ROOT / stack.ISOLATION_FILE).read_text(encoding="utf-8")
+    issuance = isolation.split("  issuance:\n", 1)[1].split(
+        "  canvas-sync-worker:\n", 1
+    )[0]
+
+    assert '"host.docker.internal:host-gateway"' in issuance
+    assert "DIDCOMM_TLS_CA_FILE:" in issuance
+    assert 'DIDCOMM_ALLOW_PRIVATE_IPS: "true"' in issuance
+    assert "didcomm-conformance-root-ca.pem:ro" in issuance
+    for production_file in (
+        "docker-compose.base.yml",
+        "docker-compose.selfhost.prod.yml",
+        "docker-compose.ui-prod.yml",
+        "docker-compose.ui-release.yml",
+    ):
+        assert "host.docker.internal:host-gateway" not in (
+            ROOT / production_file
+        ).read_text(encoding="utf-8")
+        assert "DIDCOMM_TLS_CA_FILE" not in (
+            ROOT / production_file
+        ).read_text(encoding="utf-8")
+        assert "DIDCOMM_ALLOW_PRIVATE_IPS" not in (
+            ROOT / production_file
+        ).read_text(encoding="utf-8")
+
+
+def test_trust_registry_private_adapter_is_conformance_only() -> None:
+    isolation = (ROOT / stack.ISOLATION_FILE).read_text(encoding="utf-8")
+    trust_profile = isolation.split("  trust-profile:\n", 1)[1].split(
+        "  deployment-profile:\n", 1
+    )[0]
+
+    assert "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST: trust-registry-fixture" in trust_profile
+    assert "TRUST_REGISTRY_TLS_CA_FILE:" in trust_profile
+    assert 'TRUST_REGISTRY_SYNC_POLL_SECONDS: "86400"' in trust_profile
+    assert "trust-registry-conformance-root-ca.pem:ro" in trust_profile
+    for production_file in (
+        "docker-compose.base.yml",
+        "docker-compose.selfhost.prod.yml",
+        "docker-compose.ui-prod.yml",
+        "docker-compose.ui-release.yml",
+    ):
+        production = (ROOT / production_file).read_text(encoding="utf-8")
+        assert "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST" not in production
+        assert "TRUST_REGISTRY_TLS_CA_FILE" not in production
+
+
+def test_local_build_defines_ui_without_release_image_overlays() -> None:
+    command = stack.compose_command(
+        "marty-conformance-test1",
+        use_ghcr=False,
+    )
+    files = [
+        command[index + 1] for index, value in enumerate(command) if value == "--file"
+    ]
+
+    assert files[-1].endswith("docker-compose.profile.conformance.yml")
+    assert any(path.endswith("docker-compose.profile.local-build.yml") for path in files)
+    assert not any(path.endswith("docker-compose.profile.ghcr.yml") for path in files)
+    assert not any(
+        path.endswith("docker-compose.profile.conformance-images.yml") for path in files
+    )
+
+    source_profile = (ROOT / stack.LOCAL_BUILD_FILE).read_text(encoding="utf-8")
+    ui_section = source_profile.split("  ui:\n", 1)[1]
+    assert "context: ./ui" in ui_section
+    assert "dockerfile: Dockerfile.prod" in ui_section
+    assert "gateway:" in ui_section
+
+
+def test_local_ui_image_is_reproducible_and_installs_postinstall_script() -> None:
+    dockerfile = (ROOT / "ui" / "Dockerfile.prod").read_text(encoding="utf-8")
+
+    assert "oven/bun:1.3.14-alpine@sha256:" in dockerfile
+    assert "nginx:1.29.1-alpine@sha256:" in dockerfile
+    assert dockerfile.index("COPY scripts/patch-prerenderer-ts-deepmerge.cjs") < dockerfile.index(
+        "RUN bun install --frozen-lockfile"
     )
 
 

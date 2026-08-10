@@ -12,6 +12,7 @@ const {
   mockGetApplicantByUser,
   mockCreateApplicant,
   mockCreateApplication,
+  mockSubmitApplicationEvidence,
   mockGenerateIssuanceOffer,
   mockSubmitApplication,
   mockUpdateApplicantProfile,
@@ -29,6 +30,7 @@ const {
   mockGetApplicantByUser: vi.fn(),
   mockCreateApplicant: vi.fn(),
   mockCreateApplication: vi.fn(),
+  mockSubmitApplicationEvidence: vi.fn(),
   mockGenerateIssuanceOffer: vi.fn(),
   mockSubmitApplication: vi.fn(),
   mockUpdateApplicantProfile: vi.fn(),
@@ -107,6 +109,7 @@ vi.mock('../../services/applicantApi', () => ({
   getMyApplicantProfile: mockGetApplicant,
   upsertMyApplicantProfile: mockCreateApplicant,
   createApplication: mockCreateApplication,
+  submitApplicationEvidence: mockSubmitApplicationEvidence,
   listApplications: mockListApplications,
   submitApplication: mockSubmitApplication,
   withdrawApplication: mockSupersedeApplication,
@@ -208,6 +211,7 @@ describe('ApplicationForm', () => {
     mockGetApplicantByUser.mockResolvedValue(null);
     mockCreateApplicant.mockResolvedValue({ id: 'app-created' });
     mockCreateApplication.mockResolvedValue({ id: 'application-1' });
+    mockSubmitApplicationEvidence.mockResolvedValue({ id: 'evidence-1', status: 'ACTIVE' });
     mockListApplications.mockResolvedValue({ items: [], total: 0, limit: 100, offset: 0 });
     mockListApplicantApplicationsForProfile.mockResolvedValue([]);
     mockSupersedeApplication.mockResolvedValue({ id: 'application-existing', status: 'WITHDRAWN' });
@@ -492,5 +496,59 @@ describe('ApplicationForm', () => {
       expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
       expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-1:');
     });
+  });
+
+  it('uploads required evidence through the same public API before browser submission', async () => {
+    mockLocationState.location = {
+      search: '',
+      state: {
+        credential: {
+          id: 'cfg-evidence',
+          application_template_id: 'app-template-evidence',
+          credential_type: 'EmployeeCredential',
+          display_name: 'Employee Credential',
+          required_fields: [],
+          optional_fields: [],
+          custom_fields: [],
+          field_validation_rules: {},
+        },
+        applicationTemplate: {
+          id: 'app-template-evidence',
+          credential_template_id: 'cfg-evidence',
+          form_fields: [],
+          evidence_requirements: [{
+            evidence_id: 'identity_scan',
+            evidence_type: 'DOCUMENT_SCAN',
+            description: 'Identity scan',
+            required: true,
+            accepted_formats: ['image/png'],
+          }],
+        },
+      },
+    };
+
+    const { user } = render(<ApplicationForm />);
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(fileInput).toBeInTheDocument();
+    await user.upload(fileInput, new File(['identity'], 'identity.png', { type: 'image/png' }));
+    await user.click(screen.getByTestId('next-step-btn'));
+    await user.click(screen.getByTestId('accept-terms-checkbox'));
+    await user.click(screen.getByTestId('submit-application-btn'));
+
+    await waitFor(() => {
+      expect(mockSubmitApplicationEvidence).toHaveBeenCalledWith(
+        'application-1',
+        expect.objectContaining({
+          evidence_requirement_id: 'identity_scan',
+          media_type: 'image/png',
+          filename: 'identity.png',
+          content_base64: 'aWRlbnRpdHk=',
+        }),
+      );
+      expect(mockSubmitApplication).toHaveBeenCalledWith('application-1');
+    });
+    expect(mockSubmitApplicationEvidence.mock.invocationCallOrder[0]).toBeLessThan(
+      mockSubmitApplication.mock.invocationCallOrder[0],
+    );
   });
 });

@@ -142,3 +142,54 @@ async def test_proxy_request_replaces_caller_internal_headers_with_trusted_conte
     assert forwarded["x-org-roles"] == "integration_admin"
     assert forwarded["x-required-permission"] == "integration-connector:edit"
     assert forwarded["x-forwarded-host"] == "test"
+
+
+@pytest.mark.asyncio
+async def test_proxy_request_forwards_api_key_effective_permission_separately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = {}
+
+    class Client:
+        async def request(self, *, method, url, headers, content, timeout):
+            captured.update(headers=headers)
+            return httpx.Response(200, json={"ok": True})
+
+    monkeypatch.setattr(proxy, "_http_client", Client())
+
+    app = FastAPI()
+
+    @app.get("/proxy")
+    async def proxy_route(request: Request):
+        request.state.auth_source = "api_key"
+        request.state.organization_id = "organization-b"
+        request.state.api_key_id = "key-b"
+        request.state.api_key_scopes = ["admin:full"]
+        # The Cedar middleware stores API-key scopes here for compatibility,
+        # but it also records the exact route permission it authorized.
+        request.state.org_permissions = {"admin:full"}
+        request.state.required_permission = "application:review"
+        return await proxy.proxy_request(
+            request,
+            "http://applicant:8010",
+            "/v1/organizations/organization-b/applicants",
+        )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as test_client:
+        response = await test_client.get(
+            "/proxy",
+            headers={
+                "X-Org-Permissions": "organization:delete",
+                "X-Required-Permission": "organization:delete",
+            },
+        )
+
+    assert response.status_code == 200
+    forwarded = httpx.Headers(captured["headers"])
+    assert forwarded["x-api-key-scopes"] == "admin:full"
+    assert forwarded["x-org-permissions"] == "application:review"
+    assert forwarded["x-required-permission"] == "application:review"
