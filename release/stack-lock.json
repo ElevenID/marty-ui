@@ -1,6 +1,6 @@
 {
   "schema": "marty.stack-lock/v1",
-  "release": "marty-ui@1.1.134",
+  "release": "marty-ui@1.1.135",
   "components": [
     {
       "name": "marty-api-core",
@@ -31,13 +31,13 @@
     {
       "name": "marty-core-python",
       "repository": "ElevenID/marty-core",
-      "version": "0.1.38",
-      "commit": "ef8421e7c545f5d54796a636e6ba4079cf2becc9",
+      "version": "0.1.43",
+      "commit": "73b5a304471a595dadb47d48fbb357878e500aa1",
       "artifacts": [{
         "type": "python",
-        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.38/marty_rs-0.1.38-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-        "digest": "sha256:955400cffed222b5ef18f340f5c5a5c003b3b7cd25c14304bf432f235409e091",
-        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.1.38/marty-core.spdx.json",
+        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.43/marty_rs-0.1.43-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "digest": "sha256:59bddbffa1cd85822ec5176624c2bbe86fd3baee2ce50eed9a29674b95304ab1",
+        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.1.43/marty-core.spdx.json",
         "provenance": "https://github.com/ElevenID/marty-core/attestations"
       }]
     },
