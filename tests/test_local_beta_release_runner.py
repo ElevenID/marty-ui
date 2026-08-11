@@ -197,3 +197,14 @@ def test_beta_runner_resolves_all_required_immutable_compose_inputs() -> None:
     assert '$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"' in script
     assert 'com.docker.compose.service=docs' in script
     assert 'Existing beta docs image is not immutable' in script
+
+
+def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path() -> None:
+    script = text("scripts/deploy-local-beta-release.ps1")
+
+    assert 'Get-DotEnvValue -Path $GeneratedEnvFile -Name "REDIS_PASSWORD"' in script
+    assert 'docker exec --env "REDISCLI_AUTH=$RedisPassword" $redis redis-cli SAVE' in script
+    assert 'throw "Authenticated beta Redis snapshot failed"' in script
+    assert script.count('-RedisPassword $redisPassword') == 2
+    assert script.count('"/app/services/run_all_migrations.py"') == 3
+    assert '"/app/run_all_migrations.py"' not in script
