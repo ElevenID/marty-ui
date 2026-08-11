@@ -134,6 +134,23 @@ jobs:
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Validate beta-only Rust event-stream overlay
+        env:
+          MARTY_RS_URI: https://example.invalid/marty-rs.whl
+          MARTY_RS_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+          MARTY_COMMON_URI: https://example.invalid/marty-common.whl
+          MARTY_COMMON_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
+          MARTY_ISSUANCE_IMAGE: example.invalid/issuance@sha256:2222222222222222222222222222222222222222222222222222222222222222
+          MARTY_DOCS_IMAGE: example.invalid/docs@sha256:3333333333333333333333333333333333333333333333333333333333333333
+        run: |
+          set -euo pipefail
+          rendered="$(docker compose \
+            --file docker-compose.base.yml \
+            --file docker-compose.profile.tunnel.yml \
+            --file deploy-config/compose/tunnel-beta/event-stream-rust.yml \
+            config event-stream)"
+          grep -F 'dockerfile: rust/services/event-stream/Dockerfile' <<<"$rendered"
+          grep -F 'RUST_LOG: info' <<<"$rendered"
       - name: Build event-stream image
         run: >-
           docker build
