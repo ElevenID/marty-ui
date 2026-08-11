@@ -113,6 +113,28 @@ def test_stack_release_publishes_signed_evidence() -> None:
     assert "pytest tests/oss_stack" in workflow
 
 
+def test_stack_release_ui_smoke_checks_real_homepage_content() -> None:
+    workflow = _text(".github/workflows/cd.yml")
+
+    assert "Smoke-test UI image" in workflow
+    assert "UI image contains the default Nginx homepage" in workflow
+    assert "UI image homepage is missing ElevenID content" in workflow
+    assert "grep --quiet 'Welcome to nginx'" in workflow
+    assert "grep --quiet 'ElevenID'" in workflow
+
+
+def test_public_ui_build_requires_a_prerendered_root_page() -> None:
+    dockerfile = _text("docker/ui.Dockerfile")
+    vite_config = _text("ui/vite.config.ts")
+
+    assert "test -s dist-final/index.html" in dockerfile
+    assert "grep -q 'ElevenID' dist-final/index.html" in dockerfile
+    assert "! grep -q 'Welcome to nginx' dist-final/index.html" in dockerfile
+    assert "route.outputPath = PRERENDERED_ROOT_STAGING_PATH" in vite_config
+    assert "promotePrerenderedRootPlugin()" in vite_config
+    assert "unlinkSync(stagedPath)" in vite_config
+
+
 def test_stack_release_allows_only_successful_one_shot_exits() -> None:
     workflow = _text(".github/workflows/cd.yml")
 

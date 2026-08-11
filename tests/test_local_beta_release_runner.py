@@ -59,10 +59,15 @@ def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() 
     assert "Start-ContainersBestEffort" in script
     assert "if ($LASTEXITCODE -ne 0)" in script
     assert script.count('"--verify-manifest", $sourceManifestPath') == 2
+    assert 'Write-Step "Verify public UI image homepage content"' in script
+    assert 'docker run --rm --entrypoint cat $uiImage /usr/share/nginx/html/index.html' in script
+    assert '$uiRootText -notmatch "ElevenID"' in script
+    assert '$uiRootText -match "Welcome to nginx"' in script
     post_build_verify = script.index('Write-Step "Reverify coordinated source after image builds"')
     final_build = script.index('Write-Step "Build marker-bearing public UI image"')
+    ui_content_verify = script.index('Write-Step "Verify public UI image homepage content"')
     maintenance = script.index('Write-Step "Enter maintenance window and apply live migration"')
-    assert final_build < post_build_verify < maintenance
+    assert final_build < ui_content_verify < post_build_verify < maintenance
 
 
 def test_release_ui_compose_uses_image_without_source_mounts() -> None:
