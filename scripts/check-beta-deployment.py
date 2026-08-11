@@ -125,6 +125,68 @@ def homepage_ready(url: str) -> tuple[bool, str]:
     return False, last_error
 
 
+def oidc_discovery_ready(url: str, expected_issuer: str) -> tuple[bool, str]:
+    request = urllib.request.Request(
+        url,
+        headers={"Cache-Control": "no-cache", "User-Agent": "elevenid-beta-health/1"},
+    )
+    last_error = "unknown error"
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                status = response.status
+                body = response.read(1_048_577)
+            if not 200 <= status < 300:
+                return False, f"HTTP {status}"
+            if len(body) > 1_048_576:
+                return False, "discovery document exceeds 1 MiB"
+            payload = json.loads(body)
+            issuer = str(payload.get("issuer") or "").rstrip("/") if isinstance(payload, dict) else ""
+            expected = expected_issuer.rstrip("/")
+            if issuer != expected:
+                return False, f"issuer mismatch: expected {expected}, got {issuer or '<missing>'}"
+            jwks_uri = str(payload.get("jwks_uri") or "")
+            if not jwks_uri.startswith(f"{expected}/"):
+                return False, "jwks_uri is outside the canonical issuer"
+            return True, f"HTTP {status}, canonical issuer"
+        except (json.JSONDecodeError, TypeError, ValueError, urllib.error.URLError, TimeoutError) as exc:
+            last_error = str(exc)
+            if attempt < 2:
+                time.sleep(2)
+    return False, last_error
+
+
+def internal_oidc_discovery_ready(
+    auth_container_id: str,
+    expected_issuer: str,
+) -> tuple[bool, str]:
+    probe = (
+        "import json,os,urllib.request;"
+        "base=os.environ['OIDC_ISSUER_URL'].rstrip('/');"
+        "doc=json.load(urllib.request.urlopen(base+'/.well-known/openid-configuration',timeout=10));"
+        "print(json.dumps({'issuer':doc.get('issuer'),'jwks_uri':doc.get('jwks_uri')}))"
+    )
+    try:
+        result = subprocess.run(
+            ["docker", "exec", auth_container_id, "python", "-c", probe],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        return False, f"internal discovery probe failed: {type(exc).__name__}"
+    issuer = str(payload.get("issuer") or "").rstrip("/") if isinstance(payload, dict) else ""
+    expected = expected_issuer.rstrip("/")
+    if issuer != expected:
+        return False, f"internal issuer mismatch: expected {expected}, got {issuer or '<missing>'}"
+    jwks_uri = str(payload.get("jwks_uri") or "")
+    if not jwks_uri.startswith(f"{expected}/"):
+        return False, "internal jwks_uri is outside the canonical issuer"
+    return True, "canonical issuer"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--env-file", type=Path, required=True)
@@ -134,6 +196,7 @@ def main() -> int:
         return 1
 
     failures: list[str] = []
+    auth_record: dict[str, object] | None = None
     for service in REQUIRED_SERVICES:
         record = service_container(BETA_PROJECT, service)
         if record is None:
@@ -143,6 +206,8 @@ def main() -> int:
         print(f"[{'OK' if ready else 'FAIL'}] beta-container: {service}={detail}")
         if not ready:
             failures.append(f"container {service} is {detail}")
+        if service == "auth":
+            auth_record = record
 
     ui_record = service_container(BETA_UI_PROJECT, "ui-prod")
     if ui_record is None:
@@ -153,19 +218,37 @@ def main() -> int:
         if not ready:
             failures.append(f"UI container is {detail}")
 
-    domain = read_env(args.env_file).get("PUBLIC_DOMAIN", "beta.elevenidllc.com")
+    environment = read_env(args.env_file)
+    domain = environment.get("PUBLIC_DOMAIN", "beta.elevenidllc.com")
+    realm = environment.get("KEYCLOAK_REALM", "11id")
     homepage_url = f"https://{domain}/"
     ready, detail = homepage_ready(homepage_url)
     print(f"[{'OK' if ready else 'FAIL'}] beta-homepage: {homepage_url} {detail}")
     if not ready:
         failures.append(f"public homepage {homepage_url} failed: {detail}")
 
-    for route in ("/ready", "/realms/11id/.well-known/openid-configuration"):
+    for route in ("/ready",):
         url = f"https://{domain}{route}"
         ready, detail = http_ready(url)
         print(f"[{'OK' if ready else 'FAIL'}] beta-public: {url} {detail}")
         if not ready:
             failures.append(f"public route {url} failed: {detail}")
+
+    issuer = f"https://{domain}/realms/{realm}"
+    discovery_url = f"{issuer}/.well-known/openid-configuration"
+    ready, detail = oidc_discovery_ready(discovery_url, issuer)
+    print(f"[{'OK' if ready else 'FAIL'}] beta-oidc: {discovery_url} {detail}")
+    if not ready:
+        failures.append(f"public OIDC discovery {discovery_url} failed: {detail}")
+
+    auth_container_id = str(auth_record.get("Id") or "") if auth_record else ""
+    if not auth_container_id:
+        ready, detail = False, "auth container is unavailable"
+    else:
+        ready, detail = internal_oidc_discovery_ready(auth_container_id, issuer)
+    print(f"[{'OK' if ready else 'FAIL'}] beta-oidc-internal: {detail}")
+    if not ready:
+        failures.append(f"internal OIDC discovery failed: {detail}")
 
     if failures:
         print("Beta deployment check failed:", file=sys.stderr)

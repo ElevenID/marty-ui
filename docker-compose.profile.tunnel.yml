@@ -28,9 +28,9 @@ services:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}
       UI_BASE_URL: ${UI_BASE_URL:-https://beta.elevenidllc.com}
       # Keycloak 25.x uses hostname v2 by default.
-      # KC_HOSTNAME sets the external hostname; KC_PROXY_HEADERS trusts
-      # X-Forwarded-Proto/X-Forwarded-Host from nginx so protocol becomes https.
-      KC_HOSTNAME: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}
+      # Use the complete public URL so discovery remains canonical even for
+      # server-to-server requests that do not carry edge proxy headers.
+      KC_HOSTNAME: https://${PUBLIC_DOMAIN:-beta.elevenidllc.com}
       # Override base KC_HOSTNAME_PORT (8180) — v2 ignores it but clear to avoid confusion
       KC_HOSTNAME_PORT: ""
       KC_HOSTNAME_STRICT: "false"

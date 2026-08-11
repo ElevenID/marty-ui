@@ -50,6 +50,13 @@ def test_beta_tunnel_edge_healthcheck_uses_readiness() -> None:
     assert "http://127.0.0.1/health" not in contents
 
 
+def test_beta_keycloak_publishes_the_canonical_https_issuer_without_proxy_headers() -> None:
+    contents = _text("docker-compose.profile.tunnel.yml")
+
+    assert "KC_HOSTNAME: https://${PUBLIC_DOMAIN:-beta.elevenidllc.com}" in contents
+    assert "KC_HOSTNAME: ${PUBLIC_DOMAIN:-beta.elevenidllc.com}" not in contents
+
+
 def test_selfhost_edge_healthchecks_use_readiness() -> None:
     contents = _text("docker-compose.selfhost.prod.yml")
 
