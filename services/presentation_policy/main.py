@@ -47,12 +47,12 @@ from marty_common import (
 from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
 from common.internal_service_auth import internal_service_headers
-from marty_common.domain_enums import parse_credential_format
-
 from common.did_resolution import resolve_did_document
+from common.native_backend import load_marty_rs
 from presentation_policy.infrastructure.adapters import (
     PostgresPresentationPolicyRepository,
 )
+from presentation_policy.native_policy import NativePresentationPolicyEvaluator
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -537,209 +537,17 @@ class PresentationPolicyResponse(BaseModel):
 
 
 # =============================================================================
-# Constraint Evaluation
-# =============================================================================
-
-
-def _evaluate_constraint(
-    constraint_type: str, value: Any, constraint: "ClaimConstraint"
-) -> bool:
-    """Evaluate a single claim constraint against a presented value."""
-    import re as _re
-
-    expected = constraint.value
-
-    if constraint_type == ConstraintType.PRESENCE.value:
-        return value is not None
-
-    if value is None:
-        # Remaining constraint types require an actual value
-        return False
-
-    if constraint_type == ConstraintType.EQUALS.value:
-        return str(value) == str(expected)
-
-    if constraint_type == ConstraintType.NOT_EQUALS.value:
-        return str(value) != str(expected)
-
-    if constraint_type == ConstraintType.IN_SET.value:
-        allowed = expected if isinstance(expected, list) else [expected]
-        return str(value) in [str(a) for a in allowed]
-
-    if constraint_type == ConstraintType.NOT_IN_SET.value:
-        allowed = expected if isinstance(expected, list) else [expected]
-        return str(value) not in [str(a) for a in allowed]
-
-    if constraint_type == ConstraintType.GREATER_THAN.value:
-        try:
-            return float(value) > float(expected)
-        except (TypeError, ValueError):
-            return False
-
-    if constraint_type == ConstraintType.LESS_THAN.value:
-        try:
-            return float(value) < float(expected)
-        except (TypeError, ValueError):
-            return False
-
-    if constraint_type == ConstraintType.GREATER_OR_EQUAL.value:
-        try:
-            return float(value) >= float(expected)
-        except (TypeError, ValueError):
-            return False
-
-    if constraint_type == ConstraintType.LESS_OR_EQUAL.value:
-        try:
-            return float(value) <= float(expected)
-        except (TypeError, ValueError):
-            return False
-
-    if constraint_type == ConstraintType.REGEX.value:
-        try:
-            return bool(_re.fullmatch(str(expected), str(value)))
-        except _re.error:
-            return False
-
-    if constraint_type == ConstraintType.AGE_OVER.value:
-        # value is expected to be an ISO-8601 date of birth string
-        from datetime import date as _date, datetime as _dt
-
-        try:
-            min_age = int(expected)
-            dob = _dt.fromisoformat(str(value)).date()
-            today = _date.today()
-            age = (
-                today.year
-                - dob.year
-                - ((today.month, today.day) < (dob.month, dob.day))
-            )
-            return age >= min_age
-        except Exception:
-            logger.warning(
-                "AGE_OVER constraint evaluation failed for value=%r, expected=%r",
-                value,
-                expected,
-                exc_info=True,
-            )
-            return False
-
-    logger.warning("Unsupported constraint type %r; evaluation denied", constraint_type)
-    return False
-
-
-# =============================================================================
 # Format Detection & Verification Utilities
 # =============================================================================
-
-_SD_JWT_FORMAT_ALIASES = {
-    "sd-jwt",
-    "sd_jwt",
-    "sd-jwt-vc",
-    "sd_jwt_vc",
-    "dc+sd-jwt",
-    "vc+sd-jwt",
-    "ietf_sd_jwt",
-    "w3c_vcdm_v2_sd_jwt",
-}
-
 
 def _b64decode_unpadded(segment: str) -> bytes:
     padded = segment + "=" * (-len(segment) % 4)
     return base64.urlsafe_b64decode(padded.encode())
 
 
-def _load_marty_rs_binding() -> Any | None:
-    """Load the released marty-rs package, retaining legacy import compatibility."""
-    try:
-        from marty_rs import _marty_rs as binding
-
-        return binding
-    except Exception:
-        pass
-
-    try:
-        from _marty_rs import _marty_rs as binding
-
-        return binding
-    except Exception:
-        pass
-
-    try:
-        import _marty_rs as binding
-
-        inner = getattr(binding, "_marty_rs", None)
-        return inner or binding
-    except Exception:
-        return None
-
-
-def _detected_format_to_canonical(credential_format: str) -> str:
-    normalized = str(credential_format or "").strip().lower().replace("_", "-")
-    sd_jwt_aliases = {value.replace("_", "-") for value in _SD_JWT_FORMAT_ALIASES}
-    if normalized in {"w3c-vcdm-di", "w3c-vcdm-v2-di", "data-integrity"}:
-        return "W3C_VCDM_V2_DI"
-    if normalized in sd_jwt_aliases:
-        return "SD_JWT_VC"
-    if normalized in {"w3c-vc", "jwt-vc", "vc-jwt", "jwt-vc-json"}:
-        return "VC_JWT"
-    if normalized in {"mdoc", "mso-mdoc"}:
-        return "MDOC"
-    if normalized in {"openbadge-v3", "open-badge-v3", "openbadge3"}:
-        return "OPENBADGE_V3"
-    if normalized in {"openbadge-v2", "open-badge-v2", "openbadge2"}:
-        return "OPENBADGE_V2"
-    return normalized.upper() or "UNKNOWN"
-
-
-def _required_format_to_canonical(required_format: str | None) -> str | None:
-    if not required_format:
-        return None
-    normalized = str(required_format).strip().lower()
-    if not normalized:
-        return None
-    sd_jwt_aliases = {value.replace("_", "-") for value in _SD_JWT_FORMAT_ALIASES}
-    if normalized.replace("_", "-") in {
-        "w3c-vcdm-di",
-        "w3c-vcdm-v2-di",
-        "data-integrity",
-        "json-ld",
-        "ldp-vc",
-    }:
-        return "W3C_VCDM_V2_DI"
-    if (
-        normalized in _SD_JWT_FORMAT_ALIASES
-        or normalized.replace("_", "-") in sd_jwt_aliases
-    ):
-        return "SD_JWT_VC"
-    if normalized in {"openbadge-v3", "open-badge-v3", "openbadge3"}:
-        return "OPENBADGE_V3"
-    if normalized in {"openbadge-v2", "open-badge-v2", "openbadge2"}:
-        return "OPENBADGE_V2"
-    if normalized in {
-        "w3c_vcdm_v2_jwt_vc",
-        "w3c-vcdm-v2-jwt-vc",
-        "jwt_vc",
-        "jwt-vc",
-        "vc_jwt",
-        "vc-jwt",
-        "jwt_vc_json",
-        "jwt-vc-json",
-    }:
-        return "VC_JWT"
-    try:
-        return parse_credential_format(required_format).value
-    except ValueError:
-        return normalized.upper()
-
-
-def _credential_format_satisfies_requirement(
-    detected_format: str, required_format: str | None
-) -> bool:
-    expected = _required_format_to_canonical(required_format)
-    if expected is None:
-        return True
-    actual = _detected_format_to_canonical(detected_format)
-    return actual == expected
+def _load_marty_rs_binding() -> Any:
+    """Load the only supported Rust binding surface or raise a typed error."""
+    return load_marty_rs(required_capability="document_verification")
 
 
 def _jwt_header_and_payload(jwt_part: str) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1778,6 +1586,10 @@ async def _verify_sd_jwt(
             }
 
         kb_jwt_present = any(segment and "." in segment for segment in segments[1:])
+        kb_jwt = next(
+            (segment for segment in segments[1:] if segment and "." in segment),
+            None,
+        )
         verification_evidence = _jwt_verification_evidence(
             header,
             payload,
@@ -1785,6 +1597,24 @@ async def _verify_sd_jwt(
                 kb_jwt_present and (nonce is not None or audience is not None)
             ),
         )
+        if verification_evidence["holder_binding_verified"]:
+            verification_evidence.update(
+                {
+                    "holder_binding_method": "CREDENTIAL_KEY",
+                    "proof_profile": "SD_JWT_KEY_BINDING",
+                    "challenge_verified": nonce is not None,
+                    "audience_verified": audience is not None,
+                }
+            )
+            if kb_jwt is not None:
+                try:
+                    _kb_header, kb_payload = _jwt_header_and_payload(kb_jwt)
+                    if _native_epoch_seconds(kb_payload.get("iat")) is not None:
+                        verification_evidence["proof_issued_at"] = kb_payload["iat"]
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    # The Rust verifier already accepted the key-binding JWT;
+                    # an absent optional iat simply supplies no proof-age fact.
+                    pass
         if did_resolution_provenance is not None:
             verification_evidence["did_resolution"] = did_resolution_provenance
         return {
@@ -2006,6 +1836,10 @@ def _verify_mdoc(
                 "holder_binding_verified": bool(
                     is_valid and result.device_authentication_valid
                 ),
+                "holder_binding_method": "DEVICE_KEY",
+                "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+                "challenge_verified": bool(is_valid and nonce is not None),
+                "audience_verified": bool(is_valid and audience is not None),
                 "credential_count": len(result.document_types),
             },
         }
@@ -2531,6 +2365,12 @@ def _normalized_issuer_policy_evidence(
     ):
         return None
     compliance_status = relationship.get("compliance_status")
+    accreditations = relationship.get("accreditations")
+    if not isinstance(accreditations, list) or any(
+        not isinstance(accreditation, str) or not accreditation.strip()
+        for accreditation in accreditations
+    ):
+        return None
     return {
         "issuer_trust_level": trust_level,
         "compliance_status": (
@@ -2538,6 +2378,9 @@ def _normalized_issuer_policy_evidence(
             if isinstance(compliance_status, str) and compliance_status
             else None
         ),
+        "accreditations": [
+            accreditation.strip().casefold() for accreditation in accreditations
+        ],
     }
 
 
@@ -2663,6 +2506,7 @@ def _evaluate_issuer_trust(
     trust_profile_data: dict[str, Any],
     issuer_did: str,
     constraints: IssuerConstraints | None,
+    now: datetime | None = None,
 ) -> tuple[bool, str | None]:
     """Evaluate normalized issuer relationships with legacy-source fallback."""
     if str(trust_profile_data.get("status") or "").lower() != "active":
@@ -2684,6 +2528,7 @@ def _evaluate_issuer_trust(
             issuer_did=issuer_did,
             relationships=relationships,
             constraints=constraints,
+            now=now,
         )
     if _issuer_constraints_require_relationship(constraints):
         return False, f"Issuer {issuer_did} has no trust-level relationship"
@@ -2812,6 +2657,7 @@ def _verify_open_badge_v3(vp_token: str) -> dict:
 router = APIRouter(prefix="/v1/presentation-policies", tags=["presentation-policies"])
 
 _repo: InMemoryPresentationPolicyRepository | None = None
+_native_policy_evaluator: NativePresentationPolicyEvaluator | None = None
 
 
 def get_repo() -> InMemoryPresentationPolicyRepository:
@@ -3631,6 +3477,7 @@ class CredentialEvaluationResult(BaseModel):
     trust_check_passed: bool = True
     freshness_check_passed: bool = True
     signature_valid: bool = True
+    error_codes: list[str] = []
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -3654,6 +3501,8 @@ class PolicyEvaluationResponse(BaseModel):
     # Decision support
     decision: str  # "allow", "deny", "manual_review"
     decision_reason: str
+    error_codes: list[str] = []
+    warnings: list[str] = []
 
     # Verified claims (aggregated from all credentials)
     verified_claims: dict[str, Any]
@@ -3701,6 +3550,272 @@ class EvaluateInlineRequest(BaseModel):
     nonce: str | None = Field(None, max_length=512)
     audience: str | None = Field(None, max_length=512)
     context: dict[str, Any] = Field(default_factory=dict)
+
+
+def _native_claim_constraint(constraint: ClaimConstraint) -> dict[str, Any]:
+    return {
+        "claim_name": constraint.claim_name,
+        "constraint_type": constraint.constraint_type.value,
+        "value": constraint.value,
+    }
+
+
+def _native_requested_claim(claim: RequestedClaim) -> dict[str, Any]:
+    return {
+        "claim_name": claim.claim_name,
+        "required": claim.required,
+        "selective_disclosure": claim.selective_disclosure,
+        "accept_derived": claim.accept_derived,
+        "predicate_spec": claim.predicate_spec,
+        "constraints": [
+            _native_claim_constraint(constraint) for constraint in claim.constraints
+        ],
+    }
+
+
+def _native_credential_requirement(
+    requirement: CredentialRequirement,
+) -> dict[str, Any]:
+    return {
+        "id": requirement.id,
+        "credential_template_id": requirement.credential_template_id,
+        "required": requirement.required,
+        "credential_payload_format": requirement.credential_payload_format or None,
+        "requested_claims": [
+            _native_requested_claim(claim) for claim in requirement.requested_claims
+        ],
+        "trust_profile_id": requirement.trust_profile_id,
+        "max_age_seconds": requirement.max_age_seconds,
+        "require_fresh_issuance": requirement.require_fresh_issuance,
+    }
+
+
+def _native_policy(policy: PresentationPolicy) -> dict[str, Any]:
+    proof_freshness = policy.holder_binding.proof_freshness
+    max_proof_age = proof_freshness.get(
+        "max_proof_age_seconds",
+        proof_freshness.get("max_age_seconds"),
+    )
+    return {
+        "id": policy.id,
+        "name": policy.name,
+        "organization_id": policy.organization_id,
+        "credential_requirements": [
+            _native_credential_requirement(requirement)
+            for requirement in policy.credential_requirements
+        ],
+        "alternative_requirements": [
+            {
+                "id": alternative.id,
+                "name": alternative.name,
+                "credential_requirements": [
+                    _native_credential_requirement(requirement)
+                    for requirement in alternative.credential_requirements
+                ],
+                "min_satisfied": alternative.min_satisfied,
+            }
+            for alternative in policy.alternative_requirements
+        ],
+        "trust_profile_id": policy.trust_profile_id,
+        "holder_binding": {
+            "required": policy.holder_binding.required,
+            "binding_methods": list(policy.holder_binding.binding_methods),
+            "proof_profiles": list(policy.holder_binding.proof_profiles),
+            "challenge_required": bool(
+                proof_freshness.get("challenge_required", True)
+                if policy.holder_binding.required
+                else proof_freshness.get("challenge_required", False)
+            ),
+            "audience_binding_required": bool(
+                proof_freshness.get("audience_binding_required", True)
+                if policy.holder_binding.required
+                else proof_freshness.get("audience_binding_required", False)
+            ),
+            "replay_detection_required": bool(
+                proof_freshness.get("replay_detection_required", False)
+            ),
+            "max_proof_age_seconds": max_proof_age,
+        },
+        "freshness": (
+            {
+                "max_age_seconds": policy.freshness.max_age_seconds,
+                "require_not_revoked": policy.freshness.require_not_revoked,
+                "revocation_grace_seconds": policy.freshness.revocation_grace_seconds,
+            }
+            if policy.freshness
+            else None
+        ),
+        "issuer_constraints": (
+            {
+                "min_trust_level": policy.issuer_constraints.min_trust_level,
+                "required_compliance_statuses": [
+                    status.upper()
+                    for status in policy.issuer_constraints.required_compliance_statuses
+                ],
+                "required_accreditations": [
+                    accreditation.casefold()
+                    for accreditation in policy.issuer_constraints.required_accreditations
+                ],
+            }
+            if policy.issuer_constraints
+            else None
+        ),
+    }
+
+
+def _native_epoch_seconds(value: object) -> int | None:
+    parsed = _verification_datetime(value)
+    if parsed is None:
+        return None
+    epoch_seconds = int(parsed.timestamp())
+    return epoch_seconds if epoch_seconds >= 0 else None
+
+
+def _native_revocation_checked_at(
+    verification_result: dict[str, Any],
+    verification_evidence: dict[str, Any],
+    *,
+    revocation_checked: bool | None,
+    evaluation_time_epoch_seconds: int,
+) -> int | None:
+    if revocation_checked is not True:
+        return None
+    candidates = (
+        verification_result.get("revocation_checked_at"),
+        verification_evidence.get("revocation_checked_at"),
+        (verification_result.get("status_evidence") or {}).get("checked_at")
+        if isinstance(verification_result.get("status_evidence"), dict)
+        else None,
+        (verification_evidence.get("status_evidence") or {}).get("checked_at")
+        if isinstance(verification_evidence.get("status_evidence"), dict)
+        else None,
+    )
+    for candidate in candidates:
+        parsed = _native_epoch_seconds(candidate)
+        if parsed is not None:
+            return parsed
+    # The verifier or managed-status lookup ran synchronously in this request.
+    # If it reports a completed check without its own timestamp, bind the fact
+    # to this explicit evaluation instant rather than consulting another clock.
+    return evaluation_time_epoch_seconds
+
+
+def _native_credential_status(verification_result: dict[str, Any]) -> str | None:
+    status = str(verification_result.get("revocation_status") or "").strip().lower()
+    if not status:
+        return None
+    if status in {"active", "good", "valid"}:
+        return "active"
+    if status in {"revoked", "suspended", "expired"}:
+        return status
+    return "unknown"
+
+
+def _native_policy_response(
+    policy: PresentationPolicy,
+    request: EvaluatePresentationRequest,
+    native_result: dict[str, Any],
+) -> PolicyEvaluationResponse:
+    trust_error_codes = {
+        "trust_profile_not_verified",
+        "issuer_trust_level_insufficient",
+        "issuer_compliance_status_missing",
+        "issuer_accreditation_missing",
+    }
+    freshness_error_codes = {
+        "credential_timestamp_missing",
+        "credential_timestamp_future",
+        "credential_stale",
+        "revocation_check_required",
+        "revocation_evidence_stale",
+        "revocation_status_unknown",
+        "credential_revoked",
+        "proof_timestamp_missing",
+        "proof_timestamp_future",
+        "proof_stale",
+    }
+    credential_results: list[CredentialEvaluationResult] = []
+    for result in native_result["credential_results"]:
+        errors = result.get("errors") if isinstance(result, dict) else []
+        errors = errors if isinstance(errors, list) else []
+        error_codes = {
+            error.get("code")
+            for error in errors
+            if isinstance(error, dict) and isinstance(error.get("code"), str)
+        }
+        claim_results = result.get("claim_results") if isinstance(result, dict) else []
+        claim_results = claim_results if isinstance(claim_results, list) else []
+        credential_results.append(
+            CredentialEvaluationResult(
+                credential_template_id=str(result.get("credential_template_id") or ""),
+                satisfied=result.get("satisfied") is True,
+                issuer_did=result.get("issuer_id"),
+                claim_results=[
+                    ClaimEvaluationResult(
+                        claim_name=str(claim.get("claim_name") or ""),
+                        satisfied=claim.get("satisfied") is True,
+                        presented_value=(
+                            str(claim.get("presented_value"))
+                            if claim.get("presented_value") is not None
+                            else None
+                        ),
+                        constraint_results=[
+                            {
+                                "constraint": constraint.get("constraint_type"),
+                                "passed": constraint.get("passed") is True,
+                            }
+                            for constraint in claim.get("constraint_results", [])
+                            if isinstance(constraint, dict)
+                        ],
+                    )
+                    for claim in claim_results
+                    if isinstance(claim, dict)
+                ],
+                trust_check_passed=not bool(error_codes & trust_error_codes),
+                freshness_check_passed=not bool(
+                    error_codes & freshness_error_codes
+                ),
+                signature_valid="signature_invalid" not in error_codes,
+                error_codes=sorted(error_codes),
+                errors=[
+                    str(error.get("message") or error.get("code") or "Policy failed")
+                    for error in errors
+                    if isinstance(error, dict)
+                ],
+                warnings=[
+                    str(warning) for warning in result.get("warnings", [])
+                ],
+            )
+        )
+
+    evaluation_time = datetime.fromtimestamp(
+        native_result["evaluation_time_epoch_seconds"], timezone.utc
+    ).isoformat()
+    native_errors = native_result.get("errors")
+    native_errors = native_errors if isinstance(native_errors, list) else []
+    return PolicyEvaluationResponse(
+        result=native_result["result"],
+        policy_id=policy.id,
+        policy_name=policy.name,
+        credential_results=credential_results,
+        total_requirements=native_result["total_requirements"],
+        satisfied_requirements=native_result["satisfied_requirements"],
+        required_satisfied=native_result["required_satisfied"],
+        required_total=native_result["required_total"],
+        decision=native_result["decision"],
+        decision_reason=native_result["decision_reason"],
+        error_codes=sorted(
+            {
+                str(error.get("code"))
+                for error in native_errors
+                if isinstance(error, dict) and error.get("code")
+            }
+        ),
+        warnings=[str(warning) for warning in native_result.get("warnings", [])],
+        verified_claims=native_result["verified_claims"],
+        evaluation_timestamp=evaluation_time,
+        nonce=request.nonce,
+    )
 
 
 def _failed_policy_response(
@@ -3788,6 +3903,325 @@ def _authorize_gateway_api_key_evaluation(
     return True
 
 
+def _evaluate_native_facts(
+    *,
+    policy: PresentationPolicy,
+    request: EvaluatePresentationRequest,
+    http_request: Request | None,
+    cedar_engine: Any,
+    native_policy_evaluator: NativePresentationPolicyEvaluator | None,
+    credential_format: str,
+    verification_result: dict[str, Any],
+    verification_evidence: dict[str, Any],
+    extracted_claims: dict[str, Any],
+    issuer_did: str,
+    trust_profile_data: dict[str, Any] | None,
+    signature_verified: bool,
+    trust_check_passed: bool,
+    trust_failure_reason: str | None,
+    revocation_checked: bool | None,
+    not_revoked: bool | None,
+    credential_age_seconds: int | None,
+    evaluation_time: datetime,
+    verify_nonce: str | None,
+    verify_audience: str | None,
+) -> PolicyEvaluationResponse:
+    """Run external orchestration and delegate the complete decision to Rust."""
+    evaluator = native_policy_evaluator
+    if evaluator is None and http_request is not None:
+        evaluator = getattr(
+            http_request.app.state,
+            "native_policy_evaluator",
+            None,
+        )
+    if evaluator is None:
+        evaluator = _native_policy_evaluator
+    if evaluator is None:
+        evaluator = NativePresentationPolicyEvaluator()
+
+    if (
+        cedar_engine is None
+        and http_request is not None
+        and hasattr(http_request.app.state, "cedar_engine")
+    ):
+        cedar_engine = http_request.app.state.cedar_engine
+
+    issuer_policy_evidence = _normalized_issuer_policy_evidence(
+        trust_profile_data,
+        issuer_did,
+    )
+    algorithm = verification_evidence.get("algorithm")
+    validity_checked = verification_evidence.get("validity_checked")
+    is_expired = verification_evidence.get("is_expired")
+    revocation_required = bool(
+        policy.freshness and policy.freshness.require_not_revoked
+    )
+    missing_evidence: list[str] = []
+    if issuer_policy_evidence is None:
+        missing_evidence.append("numeric issuer trust")
+    if revocation_required and (
+        revocation_checked is not True or not_revoked is not True
+    ):
+        missing_evidence.append("non-revocation")
+    if validity_checked is not True or not isinstance(is_expired, bool):
+        missing_evidence.append("credential validity")
+    if credential_age_seconds is None:
+        missing_evidence.append("credential issuance time")
+    if not isinstance(algorithm, str) or not algorithm:
+        missing_evidence.append("signature algorithm")
+
+    external_authorization: dict[str, Any]
+    if cedar_engine is None:
+        external_authorization = {
+            "evaluated": False,
+            "allowed": False,
+            "reasons": [],
+            "errors": [
+                "Cedar credential-verification policy engine is unavailable"
+            ],
+        }
+    elif missing_evidence:
+        external_authorization = {
+            "evaluated": False,
+            "allowed": False,
+            "reasons": [],
+            "errors": [
+                "Cedar policy evidence is incomplete: "
+                + ", ".join(missing_evidence)
+            ],
+        }
+    else:
+        compliance_code = extracted_claims.get("_compliance_code")
+        if not isinstance(compliance_code, str) or not compliance_code:
+            compliance_code = "UNSPECIFIED"
+        cedar_context = {
+            "credential_format": evaluator.normalize_credential_format(
+                credential_format
+            ),
+            "compliance_code": compliance_code,
+            "issuer_id": issuer_did,
+            "issuer_trust_level": issuer_policy_evidence["issuer_trust_level"],
+            "credential_age_seconds": credential_age_seconds,
+            "revocation_checked": revocation_checked is True,
+            "revocation_required": revocation_required,
+            "is_revoked": not_revoked is False,
+            "is_expired": is_expired,
+            "holder_binding_present": (
+                verification_evidence.get("holder_binding_verified") is True
+            ),
+            "algorithm": algorithm,
+        }
+        cedar_entities = [
+            {
+                "uid": {"type": "MIP::User", "id": "verifier"},
+                "attrs": {"email": "", "status": "ACTIVE"},
+                "parents": [
+                    {"type": "MIP::Organization", "id": policy.organization_id}
+                ],
+            },
+            {
+                "uid": {
+                    "type": "MIP::Organization",
+                    "id": policy.organization_id,
+                },
+                "attrs": {},
+                "parents": [],
+            },
+            {
+                "uid": {
+                    "type": "MIP::Credential",
+                    "id": "presented-credential",
+                },
+                "attrs": {
+                    "format": cedar_context["credential_format"],
+                    "status": "ACTIVE",
+                    "compliance_code": cedar_context["compliance_code"],
+                    "issuer_id": cedar_context["issuer_id"],
+                    "trust_level": cedar_context["issuer_trust_level"],
+                },
+                "parents": [
+                    {"type": "MIP::Organization", "id": policy.organization_id}
+                ],
+            },
+        ]
+        try:
+            cedar_decision = cedar_engine.is_authorized(
+                principal='MIP::User::"verifier"',
+                action='MIP::Action::"credentials:verify"',
+                resource='MIP::Credential::"presented-credential"',
+                context=cedar_context,
+                entities=cedar_entities,
+            )
+            external_authorization = {
+                "evaluated": True,
+                "allowed": cedar_decision.allowed is True,
+                "reasons": [str(reason) for reason in cedar_decision.reasons or []],
+                "errors": [str(error) for error in cedar_decision.errors or []],
+            }
+        except Exception as error:
+            logger.exception("Cedar credential-verification evaluation failed")
+            external_authorization = {
+                "evaluated": True,
+                "allowed": False,
+                "reasons": [],
+                "errors": [f"Cedar policy evaluation failed: {type(error).__name__}"],
+            }
+
+    trusted_oid4vp_context = bool(
+        http_request is None
+        and request.context.get("oid4vp_verifier_context") is True
+    )
+    holder_binding_verified = (
+        verification_evidence.get("holder_binding_verified") is True
+    )
+    holder_binding_method = verification_evidence.get("holder_binding_method")
+    if not isinstance(holder_binding_method, str) or not holder_binding_method:
+        holder_binding_method = (
+            "DEVICE_KEY"
+            if trusted_oid4vp_context and holder_binding_verified
+            else None
+        )
+    elif (
+        trusted_oid4vp_context
+        and policy.holder_binding.binding_methods
+        and holder_binding_method not in policy.holder_binding.binding_methods
+        and "DEVICE_KEY" in policy.holder_binding.binding_methods
+    ):
+        # An issuer/credential holder key is the device key at the enclosing
+        # OID4VP proof boundary. This alias is selected only for a trusted flow.
+        holder_binding_method = "DEVICE_KEY"
+    proof_profile = verification_evidence.get("proof_profile")
+    if not isinstance(proof_profile, str) or not proof_profile:
+        proof_profile = (
+            "OID4VP_VERIFIABLE_PRESENTATION"
+            if trusted_oid4vp_context and holder_binding_verified
+            else None
+        )
+    elif (
+        trusted_oid4vp_context
+        and policy.holder_binding.proof_profiles
+        and proof_profile not in policy.holder_binding.proof_profiles
+        and "OID4VP_VERIFIABLE_PRESENTATION"
+        in policy.holder_binding.proof_profiles
+    ):
+        proof_profile = "OID4VP_VERIFIABLE_PRESENTATION"
+    challenge_verified = verification_evidence.get("challenge_verified")
+    if not isinstance(challenge_verified, bool):
+        challenge_verified = holder_binding_verified and verify_nonce is not None
+    audience_verified = verification_evidence.get("audience_verified")
+    if not isinstance(audience_verified, bool):
+        audience_verified = holder_binding_verified and verify_audience is not None
+    replay_check_verified = verification_evidence.get("replay_check_verified")
+    if not isinstance(replay_check_verified, bool):
+        replay_check_verified = bool(
+            trusted_oid4vp_context
+            and request.context.get("replay_check_verified") is True
+        )
+
+    proof_epoch_seconds = _native_epoch_seconds(
+        verification_evidence.get("proof_issued_at")
+    )
+    if proof_epoch_seconds is None:
+        proof_age_seconds = verification_evidence.get("proof_age_seconds")
+        if (
+            isinstance(proof_age_seconds, int)
+            and not isinstance(proof_age_seconds, bool)
+            and proof_age_seconds >= 0
+            and proof_age_seconds <= int(evaluation_time.timestamp())
+        ):
+            proof_epoch_seconds = int(evaluation_time.timestamp()) - proof_age_seconds
+
+    issuer_trust_level = (
+        issuer_policy_evidence.get("issuer_trust_level")
+        if issuer_policy_evidence
+        else None
+    )
+    compliance_status = (
+        issuer_policy_evidence.get("compliance_status")
+        if issuer_policy_evidence
+        else None
+    )
+    accreditations = (
+        issuer_policy_evidence.get("accreditations", [])
+        if issuer_policy_evidence
+        else []
+    )
+    evaluation_time_epoch_seconds = int(evaluation_time.timestamp())
+    credential_id = verification_evidence.get("credential_id")
+    if not isinstance(credential_id, str) or not credential_id:
+        credential_id = extracted_claims.get("id")
+    if not isinstance(credential_id, str) or not credential_id:
+        credential_id = "presented-credential"
+    credential_template_ids = [
+        requirement.credential_template_id
+        for requirement in policy.credential_requirements
+        if requirement.credential_template_id
+    ]
+    warnings = verification_result.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+
+    native_request = {
+        "policy": _native_policy(policy),
+        "credentials": [
+            {
+                "credential_id": credential_id,
+                "credential_template_ids": credential_template_ids,
+                "credential_format": credential_format,
+                "claims": extracted_claims,
+                "issuer_id": issuer_did,
+                "signature_verified": signature_verified,
+                "signature_failure_reason": (
+                    None
+                    if signature_verified
+                    else str(
+                        verification_result.get("error")
+                        or "Credential verification failed"
+                    )
+                ),
+                "trust_profile_verified": trust_check_passed,
+                "trust_failure_reason": trust_failure_reason,
+                "trust_level": issuer_trust_level,
+                "compliance_statuses": (
+                    [str(compliance_status).upper()] if compliance_status else []
+                ),
+                "accreditations": [
+                    str(accreditation).casefold()
+                    for accreditation in accreditations
+                ],
+                "issued_at_epoch_seconds": _native_epoch_seconds(
+                    verification_evidence.get("issued_at")
+                ),
+                "revocation_checked_at_epoch_seconds": (
+                    _native_revocation_checked_at(
+                        verification_result,
+                        verification_evidence,
+                        revocation_checked=revocation_checked,
+                        evaluation_time_epoch_seconds=evaluation_time_epoch_seconds,
+                    )
+                ),
+                "not_revoked": not_revoked,
+                "credential_status": _native_credential_status(
+                    verification_result
+                ),
+                "warnings": [str(warning) for warning in warnings],
+            }
+        ],
+        "evaluation_time_epoch_seconds": evaluation_time_epoch_seconds,
+        "holder_binding_verified": holder_binding_verified,
+        "holder_binding_method": holder_binding_method,
+        "proof_profile": proof_profile,
+        "challenge_verified": challenge_verified,
+        "audience_verified": audience_verified,
+        "replay_check_verified": replay_check_verified,
+        "proof_epoch_seconds": proof_epoch_seconds,
+        "external_authorization": external_authorization,
+    }
+
+    native_result = evaluator.evaluate(native_request)
+    return _native_policy_response(policy, request, native_result)
+
+
 @router.post(
     "/{policy_id}/evaluate",
     response_model=PolicyEvaluationResponse,
@@ -3827,6 +4261,7 @@ async def evaluate_presentation(
     http_request: Request = None,
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
     cedar_engine: Any = None,
+    native_policy_evaluator: NativePresentationPolicyEvaluator | None = None,
 ) -> PolicyEvaluationResponse:
     """
     Evaluate a Verifiable Presentation against a Presentation Policy.
@@ -3968,51 +4403,23 @@ async def evaluate_presentation(
     # 6. Check freshness/expiry
 
     # Extract real claims from the verification result
-    extracted_claims: dict[str, Any] = verification_result.get("claims", {})
-    issuer_did: str = verification_result.get("issuer_did", "unknown")
     verification_ok: bool = verification_result.get("verified", False)
-    revocation_checked, not_revoked = _derive_revocation_state(verification_result)
-    revocation_required = bool(
-        policy.freshness and policy.freshness.require_not_revoked
+    raw_claims = verification_result.get("claims", {})
+    extracted_claims: dict[str, Any] = (
+        raw_claims if verification_ok and isinstance(raw_claims, dict) else {}
     )
-
-    if not verification_ok:
-        verification_error = (
-            verification_result.get("error") or "Credential verification failed"
-        )
-        credential_results = [
-            CredentialEvaluationResult(
-                credential_template_id=req.credential_template_id,
-                satisfied=False,
-                issuer_did=issuer_did,
-                claim_results=[],
-                signature_valid=False,
-                errors=[str(verification_error)],
-            )
-            for req in policy.credential_requirements
-        ]
-        required_total = sum(
-            1 for req in policy.credential_requirements if req.required
-        )
-        return PolicyEvaluationResponse(
-            result=EvaluationResult.FAILED.value,
-            policy_id=policy.id,
-            policy_name=policy.name,
-            credential_results=credential_results,
-            total_requirements=len(policy.credential_requirements),
-            satisfied_requirements=0,
-            required_satisfied=0,
-            required_total=required_total,
-            decision="deny",
-            decision_reason=f"Credential verification failed: {verification_error}",
-            verified_claims={},
-            evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
-            nonce=request.nonce,
-        )
+    raw_issuer_did = verification_result.get("issuer_did", "unknown")
+    issuer_did: str = (
+        raw_issuer_did
+        if verification_ok and isinstance(raw_issuer_did, str) and raw_issuer_did
+        else "unknown"
+    )
+    revocation_checked, not_revoked = _derive_revocation_state(verification_result)
 
     verification_evidence = verification_result.get("verification_evidence")
     if not isinstance(verification_evidence, dict):
         verification_evidence = {}
+    evaluation_time = datetime.now(timezone.utc)
     credential_count = verification_evidence.get("credential_count", 1)
     if (
         isinstance(credential_count, bool)
@@ -4024,58 +4431,28 @@ async def evaluate_presentation(
             request,
             "Presentation must contain exactly one independently verified credential",
         )
-    if (
-        requires_bound_presentation
-        and verification_evidence.get("holder_binding_verified") is not True
-    ):
-        return _failed_policy_response(
-            policy,
-            request,
-            "Required holder binding was not verified",
-            signature_valid=False,
-        )
-
-    requirement = policy.credential_requirements[0]
-    freshness_limits = [
-        value
-        for value in (
-            policy.freshness.max_age_seconds if policy.freshness else None,
-            requirement.max_age_seconds,
-        )
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0
-    ]
-    requires_issuance_time = bool(
-        freshness_limits or requirement.require_fresh_issuance
+    # Freshness is evaluated only by the Rust kernel. This calculation supplies
+    # an external Cedar fact; missing or stale evidence remains a native denial.
+    credential_age_seconds = _credential_age_seconds(
+        verification_evidence,
+        now=evaluation_time,
     )
-    credential_age_seconds = _credential_age_seconds(verification_evidence)
-    if requires_issuance_time and credential_age_seconds is None:
-        return _failed_policy_response(
-            policy,
-            request,
-            "Credential issuance-time evidence is unavailable or invalid",
-            freshness_check_passed=False,
-        )
-    if freshness_limits and credential_age_seconds is not None:
-        max_age_seconds = min(freshness_limits)
-        if credential_age_seconds > max_age_seconds:
-            return _failed_policy_response(
-                policy,
-                request,
-                f"Credential exceeds maximum age of {max_age_seconds} seconds",
-                freshness_check_passed=False,
-            )
 
     # Validate issuer DID against the policy's Trust Profile (MIP §8.3).
     # Resolve trust_profile_id: per-requirement override takes precedence over policy-level.
     trust_check_passed = True
     trust_check_error: str | None = None
-    if trust_profile_id and issuer_did and issuer_did != "unknown":
+    if verification_ok and trust_profile_id and issuer_did != "unknown":
         try:
             if trust_profile_data is not None:
                 trust_check_passed, trust_check_error = _evaluate_issuer_trust(
                     trust_profile_data=trust_profile_data,
                     issuer_did=issuer_did,
-                    constraints=policy.issuer_constraints,
+                    # Trust-profile relationship resolution remains service
+                    # orchestration. Policy-level issuer constraints are owned
+                    # exclusively by the Rust decision kernel below.
+                    constraints=None,
+                    now=evaluation_time,
                 )
             elif trust_check_passed:
                 trust_check_passed = False
@@ -4089,39 +4466,15 @@ async def evaluate_presentation(
             )
             logger.warning(trust_check_error)
 
-    if not trust_check_passed:
-        credential_results = [
-            CredentialEvaluationResult(
-                credential_template_id=req.credential_template_id,
-                satisfied=False,
-                issuer_did=issuer_did,
-                claim_results=[],
-                trust_check_passed=False,
-                signature_valid=True,
-                errors=[str(trust_check_error)],
-            )
-            for req in policy.credential_requirements
-        ]
-        required_total = sum(
-            1 for req in policy.credential_requirements if req.required
-        )
-        return PolicyEvaluationResponse(
-            result=EvaluationResult.FAILED.value,
-            policy_id=policy.id,
-            policy_name=policy.name,
-            credential_results=credential_results,
-            total_requirements=len(policy.credential_requirements),
-            satisfied_requirements=0,
-            required_satisfied=0,
-            required_total=required_total,
-            decision="deny",
-            decision_reason=f"Credential verification failed: {trust_check_error}",
-            verified_claims={},
-            evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
-            nonce=request.nonce,
+    elif trust_profile_id:
+        trust_check_passed = False
+        trust_check_error = (
+            "Issuer identity was unavailable from the verified credential"
+            if verification_ok
+            else "Issuer trust was not evaluated for an unverified credential"
         )
 
-    if revocation_checked is not True and credential_format == "mdoc":
+    if verification_ok and revocation_checked is not True and credential_format == "mdoc":
         mdoc_status_evidence = _mdoc_direct_pin_lifecycle_evidence(
             trust_profile_data,
             verification_evidence,
@@ -4139,7 +4492,7 @@ async def evaluate_presentation(
                 verification_result
             )
 
-    if revocation_checked is not True:
+    if verification_ok and revocation_checked is not True:
         (
             status_revocation_checked,
             status_not_revoked,
@@ -4159,283 +4512,40 @@ async def evaluate_presentation(
                 verification_result
             )
 
-    # Known revoked/suspended/expired status is never optional. Unknown status is
-    # rejected only when the selected product policy explicitly requires it.
-    if not_revoked is False:
-        normalized_lifecycle_status = str(
-            verification_result.get("revocation_status") or ""
-        ).strip().lower()
-        verification_error = {
-            "suspended": "Credential is suspended",
-            "expired": "Credential is expired",
-        }.get(normalized_lifecycle_status, "Credential is revoked")
-        return _failed_policy_response(
-            policy,
-            request,
-            f"Credential verification failed: {verification_error}",
-            freshness_check_passed=False,
+    warnings = verification_result.get("warnings")
+    warnings = [str(warning) for warning in warnings] if isinstance(warnings, list) else []
+    if not verification_ok:
+        verification_error = str(
+            verification_result.get("error") or "Credential verification failed"
         )
+        warnings.append(f"Verifier denied credential: {verification_error}")
+    if trust_check_error:
+        warnings.append(f"Trust orchestration: {trust_check_error}")
+    verification_result["warnings"] = warnings
 
-    # Apply freshness/revocation requirements from MIP policy abstractions.
-    # This must remain format-agnostic and not tied to a specific login flow.
-    if revocation_required and revocation_checked is not True:
-        verification_error = "Revocation status was not checked by the verifier"
-        return _failed_policy_response(
-            policy,
-            request,
-            f"Credential verification failed: {verification_error}",
-            freshness_check_passed=False,
-        )
-    if revocation_required and not_revoked is not True:
-        verification_error = "Revocation check did not establish an active credential"
-        return _failed_policy_response(
-            policy,
-            request,
-            f"Credential verification failed: {verification_error}",
-            freshness_check_passed=False,
-        )
-
-    credential_results = []
-    verified_claims: dict[str, Any] = {}
-    all_satisfied = True
-    required_satisfied = 0
-    required_total = 0
-
-    for req in policy.credential_requirements:
-        if req.required:
-            required_total += 1
-
-        claim_results = []
-        req_satisfied = True
-        req_errors: list[str] = []
-
-        if not _credential_format_satisfies_requirement(
-            credential_format, req.credential_payload_format
-        ):
-            req_satisfied = False
-            req_errors.append(
-                "Credential format mismatch: "
-                f"policy requires {req.credential_payload_format}, presentation is {credential_format}"
-            )
-
-        for claim in req.requested_claims:
-            # Use real extracted value; fall back to None if not present
-            presented_value = extracted_claims.get(claim.claim_name)
-            claim_satisfied = presented_value is not None or not claim.required
-
-            # Evaluate constraints against the presented value
-            constraint_results = []
-            for c in claim.constraints:
-                try:
-                    ct = c.constraint_type.value
-                    passed = _evaluate_constraint(ct, presented_value, c)
-                    constraint_results.append({"constraint": ct, "passed": passed})
-                    if not passed:
-                        claim_satisfied = False
-                except Exception:
-                    logger.warning(
-                        "Constraint evaluation error for %s/%s",
-                        claim.claim_name,
-                        c.constraint_type.value,
-                        exc_info=True,
-                    )
-                    constraint_results.append(
-                        {
-                            "constraint": c.constraint_type.value,
-                            "passed": False,
-                            "error": True,
-                        }
-                    )
-                    claim_satisfied = False
-
-            claim_results.append(
-                ClaimEvaluationResult(
-                    claim_name=claim.claim_name,
-                    satisfied=claim_satisfied,
-                    presented_value=str(presented_value)
-                    if presented_value is not None
-                    else None,
-                    constraint_results=constraint_results,
-                )
-            )
-            if claim.required and not claim_satisfied:
-                req_satisfied = False
-
-            if presented_value is not None:
-                verified_claims[claim.claim_name] = presented_value
-
-        credential_results.append(
-            CredentialEvaluationResult(
-                credential_template_id=req.credential_template_id,
-                satisfied=req_satisfied,
-                issuer_did=issuer_did,
-                issuer_name=None,
-                claim_results=claim_results,
-                errors=req_errors,
-            )
-        )
-
-        if req.required:
-            if req_satisfied:
-                required_satisfied += 1
-            else:
-                all_satisfied = False
-
-    # Determine overall result
-    if all_satisfied and required_satisfied == required_total:
-        result = EvaluationResult.PASSED
-        decision = "allow"
-        decision_reason = "All required credentials and claims satisfied"
-    elif required_satisfied > 0:
-        result = EvaluationResult.PARTIAL
-        decision = "manual_review"
-        decision_reason = (
-            f"Partially satisfied: {required_satisfied}/{required_total} required"
-        )
-        all_satisfied = False
-    else:
-        result = EvaluationResult.FAILED
-        decision = "deny"
-        decision_reason = "Required credentials not satisfied"
-        all_satisfied = False
-
-    # Cedar policy evaluation for credential verification trust rules. Keep
-    # specific verifier/trust/freshness denials above, but never let omission
-    # of the final authorization reducer turn a tentative allow into success.
-    if (
-        cedar_engine is None
-        and http_request
-        and hasattr(http_request.app.state, "cedar_engine")
-    ):
-        cedar_engine = http_request.app.state.cedar_engine
-    if decision == "allow" and cedar_engine is None:
-        return _failed_policy_response(
-            policy,
-            request,
-            "Cedar credential-verification policy engine is unavailable",
-        )
-
-    if decision == "allow":
-        issuer_policy_evidence = _normalized_issuer_policy_evidence(
-            trust_profile_data,
-            issuer_did,
-        )
-        algorithm = verification_evidence.get("algorithm")
-        validity_checked = verification_evidence.get("validity_checked")
-        is_expired = verification_evidence.get("is_expired")
-        missing_evidence: list[str] = []
-        if issuer_policy_evidence is None:
-            missing_evidence.append("numeric issuer trust")
-        if revocation_required and (
-            revocation_checked is not True or not_revoked is not True
-        ):
-            missing_evidence.append("non-revocation")
-        if validity_checked is not True or not isinstance(is_expired, bool):
-            missing_evidence.append("credential validity")
-        if credential_age_seconds is None:
-            missing_evidence.append("credential issuance time")
-        if not isinstance(algorithm, str) or not algorithm:
-            missing_evidence.append("signature algorithm")
-        if missing_evidence:
-            return _failed_policy_response(
-                policy,
-                request,
-                "Cedar policy evidence is incomplete: " + ", ".join(missing_evidence),
-                trust_check_passed=issuer_policy_evidence is not None,
-                freshness_check_passed=(
-                    (
-                        not revocation_required
-                        or (revocation_checked is True and not_revoked is True)
-                    )
-                    and validity_checked is True
-                    and isinstance(is_expired, bool)
-                    and credential_age_seconds is not None
-                ),
-            )
-
-        compliance_code = verified_claims.get("_compliance_code")
-        if not isinstance(compliance_code, str) or not compliance_code:
-            compliance_code = "UNSPECIFIED"
-        cedar_context = {
-            "credential_format": _detected_format_to_canonical(credential_format),
-            "compliance_code": compliance_code,
-            "issuer_id": credential_results[0].issuer_did if credential_results else "",
-            "issuer_trust_level": issuer_policy_evidence["issuer_trust_level"],
-            "credential_age_seconds": credential_age_seconds,
-            "revocation_checked": revocation_checked is True,
-            "revocation_required": revocation_required,
-            "is_revoked": not_revoked is False,
-            "is_expired": is_expired,
-            "holder_binding_present": (
-                verification_evidence.get("holder_binding_verified") is True
-            ),
-            "algorithm": algorithm,
-        }
-        cedar_entities = [
-            {
-                "uid": {"type": "MIP::User", "id": "verifier"},
-                "attrs": {"email": "", "status": "ACTIVE"},
-                "parents": [
-                    {"type": "MIP::Organization", "id": policy.organization_id}
-                ],
-            },
-            {
-                "uid": {"type": "MIP::Organization", "id": policy.organization_id},
-                "attrs": {},
-                "parents": [],
-            },
-            {
-                "uid": {"type": "MIP::Credential", "id": "presented-credential"},
-                "attrs": {
-                    "format": cedar_context["credential_format"],
-                    "status": "ACTIVE",
-                    "compliance_code": cedar_context["compliance_code"],
-                    "issuer_id": cedar_context["issuer_id"],
-                    "trust_level": cedar_context["issuer_trust_level"],
-                },
-                "parents": [
-                    {"type": "MIP::Organization", "id": policy.organization_id}
-                ],
-            },
-        ]
-        try:
-            cedar_decision = cedar_engine.is_authorized(
-                principal='MIP::User::"verifier"',
-                action='MIP::Action::"credentials:verify"',
-                resource='MIP::Credential::"presented-credential"',
-                context=cedar_context,
-                entities=cedar_entities,
-            )
-        except Exception:
-            logger.exception("Cedar credential-verification evaluation failed")
-            return _failed_policy_response(
-                policy,
-                request,
-                "Cedar policy evaluation failed",
-            )
-        if not cedar_decision.allowed:
-            decision = "deny"
-            decision_reason = f"Cedar policy denied: {cedar_decision.reasons or cedar_decision.errors}"
-            result = EvaluationResult.FAILED
-            logger.warning(
-                f"Cedar denied credential verification: {cedar_decision.errors}"
-            )
-
-    return PolicyEvaluationResponse(
-        result=result.value,
-        policy_id=policy.id,
-        policy_name=policy.name,
-        credential_results=credential_results,
-        total_requirements=len(policy.credential_requirements),
-        satisfied_requirements=sum(1 for cr in credential_results if cr.satisfied),
-        required_satisfied=required_satisfied,
-        required_total=required_total,
-        decision=decision,
-        decision_reason=decision_reason,
-        verified_claims=verified_claims,
-        evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
-        nonce=request.nonce,
+    return _evaluate_native_facts(
+        policy=policy,
+        request=request,
+        http_request=http_request,
+        cedar_engine=cedar_engine,
+        native_policy_evaluator=native_policy_evaluator,
+        credential_format=credential_format,
+        verification_result=verification_result,
+        verification_evidence=verification_evidence,
+        extracted_claims=extracted_claims,
+        issuer_did=issuer_did,
+        trust_profile_data=trust_profile_data,
+        signature_verified=verification_ok,
+        trust_check_passed=trust_check_passed,
+        trust_failure_reason=trust_check_error,
+        revocation_checked=revocation_checked,
+        not_revoked=not_revoked,
+        credential_age_seconds=credential_age_seconds,
+        evaluation_time=evaluation_time,
+        verify_nonce=verify_nonce,
+        verify_audience=verify_audience,
     )
+
 
 
 @router.post(
@@ -4642,8 +4752,21 @@ def _policy_to_response(policy: PresentationPolicy) -> PresentationPolicyRespons
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    global _repo
+    global _native_policy_evaluator, _repo
     logger.info(f"Starting {SERVICE_NAME}...")
+
+    # Production startup is intentionally fail-closed: the service is not
+    # ready unless the one canonical Rust decision kernel is installed.
+    _native_policy_evaluator = NativePresentationPolicyEvaluator()
+    native_diagnostics = _native_policy_evaluator.native_backend_diagnostics
+    app.state.native_policy_evaluator = _native_policy_evaluator
+    app.state.native_backend_diagnostics = native_diagnostics
+    logger.info(
+        "Native backend ready: backend=%s version=%s capabilities=%s",
+        native_diagnostics["backend"],
+        native_diagnostics["version"],
+        ",".join(native_diagnostics["capabilities"]),
+    )
 
     # Initialize PostgreSQL adapter
     from marty_common.database import DatabaseManager, DatabaseConfig
@@ -4737,6 +4860,13 @@ CRUD operations for Presentation Policies that define required credentials and c
         lifespan=lifespan,
         routers=[router],
     )
+
+    @app.get("/health/native-backend")
+    async def native_backend_health() -> dict[str, Any]:
+        diagnostics = getattr(app.state, "native_backend_diagnostics", None)
+        if not isinstance(diagnostics, dict) or diagnostics.get("available") is not True:
+            raise HTTPException(status_code=503, detail="Native backend is unavailable")
+        return {"status": "ready", **diagnostics}
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(

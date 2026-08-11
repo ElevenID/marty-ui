@@ -6273,6 +6273,11 @@ async def _submit_verification_response_internal(
             evaluation_context: dict[str, Any] = {}
             if instance.context.get("oid4vp_verifier_context") is True:
                 evaluation_context["oid4vp_verifier_context"] = True
+                # The flow repository atomically consumes the verifier nonce
+                # when this transaction is finalized and rejects a distinct
+                # concurrent or subsequent response. The policy service may
+                # therefore pass this trusted gRPC fact to the Rust replay gate.
+                evaluation_context["replay_check_verified"] = True
             mdoc_client_id = instance.context.get("oid4vp_client_id")
             mdoc_nonce = instance.context.get("nonce")
             mdoc_response_uri = instance.context.get("oid4vp_response_uri")

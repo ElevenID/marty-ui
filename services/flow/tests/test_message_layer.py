@@ -3088,6 +3088,7 @@ async def test_submit_verification_response_forwards_flow_trust_profile_to_polic
     context = captured["context"]
     assert isinstance(context, dict)
     assert context["oid4vp_verifier_context"] is True
+    assert context["replay_check_verified"] is True
     assert context["oid4vp_client_id"] == "did:web:verifier.example"
     assert context["oid4vp_response_uri"] == "https://verifier.example/callback"
     assert isinstance(context["mdoc_session_transcript_b64url"], str)

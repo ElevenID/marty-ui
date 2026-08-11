@@ -349,13 +349,8 @@ def test_create_presentation_policy_rejects_unknown_claim_constraint_type() -> N
     assert asyncio.run(repo.list("org-1")) == []
 
 
-def test_constraint_evaluation_denies_unknown_type() -> None:
-    constraint = pp.ClaimConstraint(
-        claim_name="age_over_21",
-        value=True,
-    )
-
-    assert pp._evaluate_constraint("future_operator", True, constraint) is False
+def test_python_constraint_evaluator_has_been_removed() -> None:
+    assert not hasattr(pp, "_evaluate_constraint")
 
 
 def test_public_response_normalizes_legacy_enum_casing() -> None:
@@ -590,6 +585,10 @@ def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
         "revocation_checked": False,
         "not_revoked": None,
         "holder_binding_verified": True,
+        "holder_binding_method": "DEVICE_KEY",
+        "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+        "challenge_verified": True,
+        "audience_verified": True,
         "credential_count": 1,
     }
     assert calls == [
@@ -694,6 +693,10 @@ def test_mdoc_verification_rejects_legacy_or_incomplete_binding_evidence(
     assert result["error"] == "Authenticated mdoc evidence is incomplete"
     assert result["verification_evidence"] == {
         "holder_binding_verified": False,
+        "holder_binding_method": "DEVICE_KEY",
+        "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+        "challenge_verified": False,
+        "audience_verified": False,
         "credential_count": 1,
     }
     assert extracted == []
@@ -900,7 +903,7 @@ def test_mdoc_evaluation_always_binds_nonce_and_audience(monkeypatch) -> None:
     )
 
     assert response.result == "failed"
-    assert "Cedar policy evidence is incomplete" in response.decision_reason
+    assert "Issuer identity was unavailable" in response.decision_reason
     assert captured == {
         "nonce": "nonce-1",
         "audience": "did:web:verifier.example",
@@ -1490,16 +1493,10 @@ async def test_w3c_vc_logs_only_fixed_verifier_error_categories(
     assert "secret-key-name" not in caplog.text
 
 
-def test_open_badge_login_policy_format_accepts_sd_jwt_aliases() -> None:
-    assert pp._credential_format_satisfies_requirement("sd-jwt", "sd_jwt_vc")
-    assert pp._credential_format_satisfies_requirement("sd-jwt", "dc+sd-jwt")
-    assert pp._credential_format_satisfies_requirement("sd-jwt", "ietf_sd_jwt")
-    assert not pp._credential_format_satisfies_requirement("sd-jwt", "openbadge-v3")
-    assert pp._credential_format_satisfies_requirement("w3c-vcdm-di", "w3c_vcdm_v2_di")
-    assert pp._credential_format_satisfies_requirement("w3c-vcdm-di", "JSON_LD")
-    assert pp._credential_format_satisfies_requirement("w3c-vcdm-di", "ldp_vc")
-    assert pp._credential_format_satisfies_requirement("w3c-vc", "w3c_vcdm_v2_jwt_vc")
-    assert pp._credential_format_satisfies_requirement("w3c-vc", "jwt_vc_json")
+def test_python_policy_format_normalizers_have_been_removed() -> None:
+    assert not hasattr(pp, "_detected_format_to_canonical")
+    assert not hasattr(pp, "_required_format_to_canonical")
+    assert not hasattr(pp, "_credential_format_satisfies_requirement")
 
 
 def test_trust_profile_service_url_defaults_to_compose_service_name(
@@ -2543,6 +2540,8 @@ def test_open_badge_login_policy_denies_unverified_open_badge(monkeypatch) -> No
     assert response.verified_claims == {}
     assert response.credential_results[0].signature_valid is False
     assert "DID resolution failed" in response.decision_reason
+    assert "signature_invalid" in response.error_codes
+    assert "signature_invalid" in response.credential_results[0].error_codes
 
 
 def test_policy_freshness_denies_when_revocation_not_checked(monkeypatch) -> None:
@@ -2749,6 +2748,7 @@ def test_policy_freshness_reports_suspended_credential_status(monkeypatch) -> No
     assert response.result == "failed"
     assert response.decision == "deny"
     assert "Credential is suspended" in response.decision_reason
+    assert "credential_revoked" in response.error_codes
 
 
 def test_status_lookup_accepts_record_bound_to_unconfigured_issuer(monkeypatch) -> None:

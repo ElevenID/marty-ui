@@ -1,7 +1,7 @@
 {
   "schema": "marty.rust-ownership/v1",
   "roadmap": "docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md",
-  "updated": "2026-08-10",
+  "updated": "2026-08-11",
   "policy": {
     "canonical_rule": "Each deterministic protocol, policy, validation, cryptographic, or state-machine capability has one Rust implementation.",
     "fallback_rule": "Required native capabilities fail closed; runtime fallback to Python or Dart is prohibited.",
@@ -106,7 +106,7 @@
     {
       "id": "presentation-policy",
       "phase": 1,
-      "status": "planned",
+      "status": "cutover-in-progress",
       "canonical": {
         "repository": "ElevenID/marty-core",
         "paths": ["marty-verification/src"],
@@ -320,6 +320,18 @@
         "id": "no-disabled-signature-verification",
         "glob": "services/**/*.py",
         "pattern": "verify_signature[\\\"']?\\s*[:=]\\s*False",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-python-presentation-policy-evaluator",
+        "glob": "services/presentation_policy/*.py",
+        "pattern": "(?:_evaluate_constraint|_detected_format_to_canonical|_required_format_to_canonical|_credential_format_satisfies_requirement)",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-direct-presentation-policy-native-imports",
+        "glob": "services/presentation_policy/*.py",
+        "pattern": "(?:from|import)\\s+(?:marty_rs|_marty_rs)",
         "expected_matches": {}
       }
     ]
