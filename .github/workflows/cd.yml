@@ -39,6 +39,12 @@ jobs:
       marty_rs_version: ${{ steps.components.outputs.marty_rs }}
       marty_rs_uri: ${{ steps.components.outputs.marty_rs_uri }}
       marty_rs_digest: ${{ steps.components.outputs.marty_rs_digest }}
+      marty_verification_version: ${{ steps.components.outputs.marty_verification }}
+      marty_verification_uri: ${{ steps.components.outputs.marty_verification_uri }}
+      marty_verification_digest: ${{ steps.components.outputs.marty_verification_digest }}
+      marty_iso18013_version: ${{ steps.components.outputs.marty_iso18013 }}
+      marty_iso18013_uri: ${{ steps.components.outputs.marty_iso18013_uri }}
+      marty_iso18013_digest: ${{ steps.components.outputs.marty_iso18013_digest }}
       marty_common_version: ${{ steps.components.outputs.marty_common }}
       marty_common_uri: ${{ steps.components.outputs.marty_common_uri }}
       marty_common_digest: ${{ steps.components.outputs.marty_common_digest }}
@@ -80,6 +86,12 @@ jobs:
             echo "marty_rs=$(jq -er '.components[] | select(.name == "marty-core-python") | .version' "$LOCK_FILE")"
             echo "marty_rs_uri=$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .uri' "$LOCK_FILE")"
             echo "marty_rs_digest=$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .digest' "$LOCK_FILE")"
+            echo "marty_verification=$(jq -er '.components[] | select(.name == "marty-verification-python") | .version' "$LOCK_FILE")"
+            echo "marty_verification_uri=$(jq -er '.components[] | select(.name == "marty-verification-python") | .artifacts[] | select(.type == "python") | .uri' "$LOCK_FILE")"
+            echo "marty_verification_digest=$(jq -er '.components[] | select(.name == "marty-verification-python") | .artifacts[] | select(.type == "python") | .digest' "$LOCK_FILE")"
+            echo "marty_iso18013=$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .version' "$LOCK_FILE")"
+            echo "marty_iso18013_uri=$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .uri' "$LOCK_FILE")"
+            echo "marty_iso18013_digest=$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .digest' "$LOCK_FILE")"
             echo "marty_common=$(jq -er '.components[] | select(.name == "marty-common") | .version' "$LOCK_FILE")"
             echo "marty_common_uri=$(jq -er '.components[] | select(.name == "marty-common") | .artifacts[] | select(.type == "python") | .uri' "$LOCK_FILE")"
             echo "marty_common_digest=$(jq -er '.components[] | select(.name == "marty-common") | .artifacts[] | select(.type == "python") | .digest' "$LOCK_FILE")"
@@ -198,6 +210,12 @@ jobs:
             MARTY_RS_VERSION=${{ needs.validate-stack.outputs.marty_rs_version }}
             MARTY_RS_URI=${{ needs.validate-stack.outputs.marty_rs_uri }}
             MARTY_RS_DIGEST=${{ needs.validate-stack.outputs.marty_rs_digest }}
+            MARTY_VERIFICATION_VERSION=${{ needs.validate-stack.outputs.marty_verification_version }}
+            MARTY_VERIFICATION_URI=${{ needs.validate-stack.outputs.marty_verification_uri }}
+            MARTY_VERIFICATION_DIGEST=${{ needs.validate-stack.outputs.marty_verification_digest }}
+            MARTY_ISO18013_VERSION=${{ needs.validate-stack.outputs.marty_iso18013_version }}
+            MARTY_ISO18013_URI=${{ needs.validate-stack.outputs.marty_iso18013_uri }}
+            MARTY_ISO18013_DIGEST=${{ needs.validate-stack.outputs.marty_iso18013_digest }}
             MARTY_COMMON_VERSION=${{ needs.validate-stack.outputs.marty_common_version }}
             MARTY_COMMON_URI=${{ needs.validate-stack.outputs.marty_common_uri }}
             MARTY_COMMON_DIGEST=${{ needs.validate-stack.outputs.marty_common_digest }}
@@ -216,6 +234,15 @@ jobs:
             MARTY_COMMON_VERSION=${{ needs.validate-stack.outputs.marty_common_version }}
             MARTY_COMMON_URI=${{ needs.validate-stack.outputs.marty_common_uri }}
             MARTY_COMMON_DIGEST=${{ needs.validate-stack.outputs.marty_common_digest }}
+            MARTY_RS_VERSION=${{ needs.validate-stack.outputs.marty_rs_version }}
+            MARTY_RS_URI=${{ needs.validate-stack.outputs.marty_rs_uri }}
+            MARTY_RS_DIGEST=${{ needs.validate-stack.outputs.marty_rs_digest }}
+            MARTY_VERIFICATION_VERSION=${{ needs.validate-stack.outputs.marty_verification_version }}
+            MARTY_VERIFICATION_URI=${{ needs.validate-stack.outputs.marty_verification_uri }}
+            MARTY_VERIFICATION_DIGEST=${{ needs.validate-stack.outputs.marty_verification_digest }}
+            MARTY_ISO18013_VERSION=${{ needs.validate-stack.outputs.marty_iso18013_version }}
+            MARTY_ISO18013_URI=${{ needs.validate-stack.outputs.marty_iso18013_uri }}
+            MARTY_ISO18013_DIGEST=${{ needs.validate-stack.outputs.marty_iso18013_digest }}
           provenance: mode=max
           sbom: true
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8

@@ -18,7 +18,7 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     assert "applicant_store.json" in script
     assert "redis-dump.rdb" in script
     assert "openbao-data.tar.gz" in script
-    assert "marty-beta-copy-" in script
+    assert "elevenid-beta-copy-" in script
     assert "migration-rehearsal.log" in script
     assert "--verify-only" in script
     assert 'MARTY_KMS_BOOTSTRAP_ENABLED=$kmsBootstrapEnabled' in script
@@ -27,12 +27,12 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     assert '"BAO_TOKEN"' in script
     assert "export_canvas_lti_public_jwks.py" in script
     assert "CANVAS_LTI_TOOL_PUBLIC_JWKS" in script
-    assert "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS" in script
+    assert "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES" in script
     assert "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST" in script
     assert '$env:CANVAS_OAUTH_COMPLETION_REDIRECT_URL = "$BetaOrigin/console/org/deploy/canvas"' in script
     assert 'MARTY_KMS_BOOTSTRAP_ENABLED=$rehearsalKmsEnabled' in script
-    assert '"marty-beta-copy-openbao-' in script
-    assert '"marty-beta-copy-redis-' in script
+    assert '"elevenid-beta-copy-openbao-' in script
+    assert '"elevenid-beta-copy-redis-' in script
     assert '-Phase "maintenance_quiesced"' in script
     assert '-WritersStopped $true' in script
     assert "restore-local-beta-release.ps1" in script
@@ -51,13 +51,12 @@ def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() 
     assert 'promotion_eligible = $false' in script
     assert 'release_ready = $false' in script
     assert '"canvas-sync-worker"' in script
-    assert '"marty-canvas-sync-worker"' in script
     assert '$service -eq "canvas-sync-worker"' in script
     assert '{ "issuance" } else { $service }' in script
     assert "$script:ApplicationBuildServices" in script
     assert '$env:CANVAS_ALLOW_PRIVATE_BASE_URLS = "false"' in script
     assert '$env:CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS = "false"' in script
-    assert '$script:InfrastructureWriterContainers = @("marty-keycloak")' in script
+    assert '$script:InfrastructureWriterServices = @("keycloak")' in script
     assert "Start-ContainersBestEffort" in script
     assert "if ($LASTEXITCODE -ne 0)" in script
     assert script.count('"--verify-manifest", $sourceManifestPath') == 2
@@ -72,7 +71,9 @@ def test_release_ui_compose_uses_image_without_source_mounts() -> None:
 
     assert "MARTY_UI_RELEASE_IMAGE" in compose
     assert "./ui/dist" not in compose
-    assert "marty-infra-network" in compose
+    assert "elevenid-beta-ui" in compose
+    assert "${MARTY_NETWORK_NAME:-elevenid-beta-network}" in compose
+    assert "container_name:" not in compose
 
 
 def test_plan_only_exits_before_artifact_writes() -> None:
@@ -125,8 +126,9 @@ def test_canvas_beta_wrapper_enables_only_the_disposable_portable_target() -> No
 def test_beta_inventory_tolerates_services_added_by_the_release() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
-    assert "$existingContainers = @(& docker ps -a --format '{{.Names}}')" in script
-    assert "if ($container -notin $existingContainers)" in script
+    assert "function Get-ComposeContainerId" in script
+    assert '"label=com.docker.compose.project=$script:BetaUiProject"' in script
+    assert '"ps", "--all", "--quiet", $Service' in script
     assert 'ConvertFrom-Json -InputObject ($json -join "`n")' in script
     assert 'throw "Could not inspect Docker container: $container"' in script
 
@@ -145,13 +147,53 @@ def test_beta_restore_is_explicit_and_project_scoped() -> None:
     script = text("scripts/restore-local-beta-release.ps1")
 
     assert "-ConfirmBetaRestore is required" in script
-    assert "if ($Container -notin $existingContainers) { return $false }" in script
-    assert 'ConvertFrom-Json -InputObject ($json -join "`n")' in script
-    assert '$workerExists -contains "marty-canvas-sync-worker"' in script
-    assert "$gatewayRecord.runtime_marker_environment.PSObject.Properties[$name]" in script
-    assert "foreach ($record in $preDeployDocument)" in script
+    assert '$project = "elevenid-beta"' in script
+    assert 'com.docker.compose.project' in script
+    assert 'throw "Refusing container outside $project"' in script
     assert 'phase -ne "maintenance_quiesced"' in script
-    assert "marty-ui_redis_data" in script
-    assert 'ExpectedProject' in script
-    assert '"marty-ui-prod"' in script
-    assert "marty-selfhost-prod was not addressed" in script
+    assert "elevenid-beta_redis_data" in script
+    assert '"elevenid-beta-ui"' in script
+    assert "self-host production was not addressed" in script
+    assert "Wait-ForServiceHealth" in script
+    assert '$gatewayRecord[0].runtime_marker_environment.PSObject.Properties[$name]' in script
+    assert '"canvas-sync-worker" -notin @($preDeploy.service)' in script
+    assert 'Invoke-Checked docker @("rm", "--force", $worker)' in script
+
+
+def test_beta_runner_targets_only_the_beta_projects_and_rust_event_stream() -> None:
+    deploy = text("scripts/deploy-local-beta-release.ps1")
+    restore = text("scripts/restore-local-beta-release.ps1")
+    beta = text("docker-compose.beta.yml")
+    base = text("docker-compose.base.yml")
+
+    assert '$script:BetaProject = "elevenid-beta"' in deploy
+    assert '$script:BetaUiProject = "elevenid-beta-ui"' in deploy
+    assert '$script:BetaNetwork = "elevenid-beta-network"' in deploy
+    assert "docker-compose.beta.yml" in deploy
+    assert "deploy-config\\compose\\tunnel-beta\\event-stream-rust.yml" in deploy
+    assert "deploy-config/compose/tunnel-beta/event-stream-rust.yml" in restore
+    assert "-TunnelEnvFile" in deploy and "-GeneratedEnvFile" in deploy
+    assert 'mip_version -ne "0.4.1"' in deploy
+    assert 'mip_version = "0.4.1"' in deploy
+    assert "name: elevenid-beta" in beta
+    assert "name: elevenid-beta-network" in beta
+    assert "container_name:" not in base
+    assert "${MARTY_NETWORK_NAME:-marty-infra-network}" in base
+    assert '$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.uri)@$($martyIssuance.digest)"' in restore
+    assert 'com.docker.compose.service=docs' in restore
+
+
+def test_beta_runner_resolves_all_required_immutable_compose_inputs() -> None:
+    script = text("scripts/deploy-local-beta-release.ps1")
+
+    assert '$env:MARTY_COMMON_URI = $martyCommon.Uri' in script
+    assert '$env:MARTY_COMMON_DIGEST = $martyCommon.Digest' in script
+    assert '$env:MARTY_RS_URI = $martyRs.Uri' in script
+    assert '$env:MARTY_RS_DIGEST = $martyRs.Digest' in script
+    assert '$env:MARTY_VERIFICATION_URI = $martyVerification.Uri' in script
+    assert '$env:MARTY_VERIFICATION_DIGEST = $martyVerification.Digest' in script
+    assert '$env:MARTY_ISO18013_URI = $martyIso18013.Uri' in script
+    assert '$env:MARTY_ISO18013_DIGEST = $martyIso18013.Digest' in script
+    assert '$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"' in script
+    assert 'com.docker.compose.service=docs' in script
+    assert 'Existing beta docs image is not immutable' in script

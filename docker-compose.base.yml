@@ -6,6 +6,10 @@
 x-marty-service-build-artifacts: &marty_service_build_artifacts
   MARTY_RS_URI: ${MARTY_RS_URI:?set MARTY_RS_URI to the immutable marty-rs wheel}
   MARTY_RS_DIGEST: ${MARTY_RS_DIGEST:?set MARTY_RS_DIGEST to that wheel's sha256 digest}
+  MARTY_VERIFICATION_URI: ${MARTY_VERIFICATION_URI:?set MARTY_VERIFICATION_URI to the immutable marty-verification wheel}
+  MARTY_VERIFICATION_DIGEST: ${MARTY_VERIFICATION_DIGEST:?set MARTY_VERIFICATION_DIGEST to that wheel's sha256 digest}
+  MARTY_ISO18013_URI: ${MARTY_ISO18013_URI:?set MARTY_ISO18013_URI to the immutable marty-iso18013 wheel}
+  MARTY_ISO18013_DIGEST: ${MARTY_ISO18013_DIGEST:?set MARTY_ISO18013_DIGEST to that wheel's sha256 digest}
   MARTY_COMMON_URI: ${MARTY_COMMON_URI:?set MARTY_COMMON_URI to the immutable marty-common wheel}
   MARTY_COMMON_DIGEST: ${MARTY_COMMON_DIGEST:?set MARTY_COMMON_DIGEST to that wheel's sha256 digest}
 
@@ -15,7 +19,6 @@ services:
   # ==========================================================================
   postgres:
     image: postgres:15-alpine
-    container_name: marty-postgres
     ports:
       - "5433:5432"
     environment:
@@ -47,7 +50,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: marty-redis
     ports:
       - "6379:6379"
     command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
@@ -72,7 +74,6 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:25.0
-    container_name: marty-keycloak
     command:
       - start-dev
       - --features=organization
@@ -126,7 +127,6 @@ services:
   # every 'docker compose up'.
   keycloak-configurator:
     image: quay.io/keycloak/keycloak:25.0
-    container_name: marty-keycloak-configurator
     entrypoint: ["/bin/bash", "/scripts/setup-keycloak.sh"]
     environment:
       KC_URL: http://keycloak:8080
@@ -166,7 +166,6 @@ services:
 
   mailpit:
     image: axllent/mailpit:v1.21
-    container_name: marty-mailpit
     ports:
       - "9025:8025"
       - "2025:1025"
@@ -180,7 +179,6 @@ services:
 
   openbao:
     image: quay.io/openbao/openbao:2
-    container_name: marty-openbao
     cap_add:
       - IPC_LOCK
     ports:
@@ -212,7 +210,6 @@ services:
 
   openbao-init:
     image: quay.io/openbao/openbao:2
-    container_name: marty-openbao-init
     entrypoint: ["/bin/sh", "/scripts/openbao-init.sh"]
     environment:
       BAO_ADDR: "http://openbao:8200"
@@ -233,7 +230,6 @@ services:
     build:
       context: .
       dockerfile: services/Dockerfile.migrations
-    container_name: marty-db-migrate
     environment:
       MARTY_DB_PASSWORD: ${MARTY_DB_PASSWORD:-marty_dev_password}
       DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
@@ -271,7 +267,6 @@ services:
   # process so the deployed schema cannot drift from the service artifact.
   issuance-migrations:
     image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
-    container_name: marty-issuance-migrations
     command: ["python", "manage_migrations.py", "upgrade"]
     environment:
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
@@ -294,7 +289,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: gateway
-    container_name: marty-gateway
     environment:
       GATEWAY_PORT: "8000"
       AUTH_SERVICE_URL: http://auth:8001
@@ -383,7 +377,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: auth
-    container_name: marty-auth
     environment:
       AUTH_SERVICE_PORT: "8001"
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
@@ -449,7 +442,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: organization
-    container_name: marty-organization
     environment:
       ORGANIZATION_SERVICE_PORT: "8002"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
@@ -484,7 +476,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: credential-template
-    container_name: marty-credential-template
     environment:
       CREDENTIAL_TEMPLATE_SERVICE_PORT: "8003"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
@@ -517,7 +508,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: trust-profile
-    container_name: marty-trust-profile
     environment:
       TRUST_PROFILE_SERVICE_PORT: "8004"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
@@ -547,7 +537,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: applicant
-    container_name: marty-applicant
     environment:
       APPLICANT_SERVICE_PORT: "8006"
       FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-dev-flow-application-event-hmac-key-change-before-production}
@@ -586,7 +575,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: notification
-    container_name: marty-notification
     environment:
       NOTIFICATION_SERVICE_PORT: "8007"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
@@ -625,7 +613,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: compliance-profile
-    container_name: marty-compliance-profile
     environment:
       COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
@@ -651,7 +638,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: presentation-policy
-    container_name: marty-presentation-policy
     environment:
       PRESENTATION_POLICY_SERVICE_PORT: "8009"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
@@ -688,7 +674,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: deployment-profile
-    container_name: marty-deployment-profile
     environment:
       DEPLOYMENT_PROFILE_SERVICE_PORT: "8010"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
@@ -714,7 +699,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: flow
-    container_name: marty-flow
     environment:
       FLOW_SERVICE_PORT: "8011"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
@@ -767,7 +751,6 @@ services:
 
   issuance:
     image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
-    container_name: marty-issuance
     environment:
       ISSUANCE_SERVICE_PORT: "8005"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
@@ -862,7 +845,6 @@ services:
   # PostgreSQL jobs and records a database heartbeat consumed by readiness.
   canvas-sync-worker:
     image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
-    container_name: marty-canvas-sync-worker
     command: ["python", "-m", "issuance.canvas_worker"]
     environment:
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
@@ -918,7 +900,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: revocation-profile
-    container_name: marty-revocation-profile
     environment:
       REVOCATION_PROFILE_SERVICE_PORT: "8013"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
@@ -950,7 +931,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: device_registration
-    container_name: marty-device-registration
     environment:
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
       DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
@@ -980,7 +960,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: event_stream
-    container_name: marty-event-stream
     environment:
       - EVENT_STREAM_GRPC_ENABLED=true
       - EVENT_STREAM_GRPC_PORT=9015
@@ -1006,7 +985,6 @@ services:
       args:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: verification
-    container_name: marty-verification
     environment:
       VERIFICATION_SERVICE_PORT: "8012"
       PP_GRPC_TARGET: presentation-policy:9009
@@ -1040,7 +1018,6 @@ services:
       context: ./config/envoy
       dockerfile: Dockerfile
     image: marty-envoy:latest
-    container_name: marty-envoy
     volumes:
       - ./config/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
       - ./config/envoy/proto_descriptor.pb:/etc/envoy/proto_descriptor.pb:ro
@@ -1089,4 +1066,4 @@ volumes:
 
 networks:
   marty-network:
-    name: marty-infra-network
+    name: ${MARTY_NETWORK_NAME:-marty-infra-network}

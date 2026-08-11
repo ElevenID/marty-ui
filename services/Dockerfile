@@ -7,6 +7,12 @@ ARG MARTY_UI_SHA=unknown
 ARG MARTY_RS_VERSION=0.1.0
 ARG MARTY_RS_URI
 ARG MARTY_RS_DIGEST
+ARG MARTY_VERIFICATION_VERSION=0.1.0
+ARG MARTY_VERIFICATION_URI
+ARG MARTY_VERIFICATION_DIGEST
+ARG MARTY_ISO18013_VERSION=0.1.0
+ARG MARTY_ISO18013_URI
+ARG MARTY_ISO18013_DIGEST
 ARG MARTY_COMMON_VERSION=0.2.3
 ARG MARTY_COMMON_URI
 ARG MARTY_COMMON_DIGEST
@@ -31,15 +37,25 @@ WORKDIR /app
 COPY requirements-services.txt /tmp/requirements-services.txt
 RUN test -n "$MARTY_RS_URI" \
     && test -n "$MARTY_RS_DIGEST" \
+    && test -n "$MARTY_VERIFICATION_URI" \
+    && test -n "$MARTY_VERIFICATION_DIGEST" \
+    && test -n "$MARTY_ISO18013_URI" \
+    && test -n "$MARTY_ISO18013_DIGEST" \
     && test -n "$MARTY_COMMON_URI" \
     && test -n "$MARTY_COMMON_DIGEST" \
     && MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}" \
+    && MARTY_VERIFICATION_WHEEL="/tmp/${MARTY_VERIFICATION_URI##*/}" \
+    && MARTY_ISO18013_WHEEL="/tmp/${MARTY_ISO18013_URI##*/}" \
     && MARTY_COMMON_WHEEL="/tmp/${MARTY_COMMON_URI##*/}" \
     && curl --fail --location --silent --show-error "$MARTY_RS_URI" --output "$MARTY_RS_WHEEL" \
+    && curl --fail --location --silent --show-error "$MARTY_VERIFICATION_URI" --output "$MARTY_VERIFICATION_WHEEL" \
+    && curl --fail --location --silent --show-error "$MARTY_ISO18013_URI" --output "$MARTY_ISO18013_WHEEL" \
     && curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$MARTY_COMMON_WHEEL" \
     && echo "${MARTY_RS_DIGEST#sha256:}  $MARTY_RS_WHEEL" | sha256sum --check --strict \
+    && echo "${MARTY_VERIFICATION_DIGEST#sha256:}  $MARTY_VERIFICATION_WHEEL" | sha256sum --check --strict \
+    && echo "${MARTY_ISO18013_DIGEST#sha256:}  $MARTY_ISO18013_WHEEL" | sha256sum --check --strict \
     && echo "${MARTY_COMMON_DIGEST#sha256:}  $MARTY_COMMON_WHEEL" | sha256sum --check --strict \
-    && pip install --no-cache-dir -r /tmp/requirements-services.txt "$MARTY_RS_WHEEL" "$MARTY_COMMON_WHEEL"
+    && pip install --no-cache-dir -r /tmp/requirements-services.txt "$MARTY_RS_WHEEL" "$MARTY_VERIFICATION_WHEEL" "$MARTY_ISO18013_WHEEL" "$MARTY_COMMON_WHEEL"
 
 COPY packages/marty_proto /app/packages/marty_proto
 COPY services /app/services

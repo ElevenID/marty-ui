@@ -103,13 +103,23 @@ jobs:
           marty_rs_uri="$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
           marty_rs_digest="$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
           marty_rs_wheel="$RUNNER_TEMP/${marty_rs_uri##*/}"
+          verification_uri="$(jq -er '.components[] | select(.name == "marty-verification-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
+          verification_digest="$(jq -er '.components[] | select(.name == "marty-verification-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
+          verification_wheel="$RUNNER_TEMP/${verification_uri##*/}"
+          iso18013_uri="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
+          iso18013_digest="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
+          iso18013_wheel="$RUNNER_TEMP/${iso18013_uri##*/}"
           curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$marty_common_wheel"
           curl --fail --location --silent --show-error "$marty_rs_uri" --output "$marty_rs_wheel"
+          curl --fail --location --silent --show-error "$verification_uri" --output "$verification_wheel"
+          curl --fail --location --silent --show-error "$iso18013_uri" --output "$iso18013_wheel"
           echo "${MARTY_COMMON_DIGEST#sha256:}  $marty_common_wheel" | sha256sum --check --strict
           echo "${marty_rs_digest#sha256:}  $marty_rs_wheel" | sha256sum --check --strict
+          echo "${verification_digest#sha256:}  $verification_wheel" | sha256sum --check --strict
+          echo "${iso18013_digest#sha256:}  $iso18013_wheel" | sha256sum --check --strict
           pip install -r requirements-services.txt
           pip install psycopg2-binary==2.9.10
-          pip install "$marty_common_wheel" "$marty_rs_wheel"
+          pip install "$marty_common_wheel" "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
       - name: Run tests
         working-directory: services
         run: python -m pytest -v --tb=short -x
@@ -138,6 +148,10 @@ jobs:
         env:
           MARTY_RS_URI: https://example.invalid/marty-rs.whl
           MARTY_RS_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+          MARTY_VERIFICATION_URI: https://example.invalid/marty-verification.whl
+          MARTY_VERIFICATION_DIGEST: sha256:4444444444444444444444444444444444444444444444444444444444444444
+          MARTY_ISO18013_URI: https://example.invalid/marty-iso18013.whl
+          MARTY_ISO18013_DIGEST: sha256:5555555555555555555555555555555555555555555555555555555555555555
           MARTY_COMMON_URI: https://example.invalid/marty-common.whl
           MARTY_COMMON_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
           MARTY_ISSUANCE_IMAGE: example.invalid/issuance@sha256:2222222222222222222222222222222222222222222222222222222222222222
@@ -269,18 +283,33 @@ jobs:
           marty_rs_uri="$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
           marty_rs_digest="$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
           marty_rs_wheel="$RUNNER_TEMP/${marty_rs_uri##*/}"
+          verification_uri="$(jq -er '.components[] | select(.name == "marty-verification-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
+          verification_digest="$(jq -er '.components[] | select(.name == "marty-verification-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
+          verification_wheel="$RUNNER_TEMP/${verification_uri##*/}"
+          iso18013_uri="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
+          iso18013_digest="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
+          iso18013_wheel="$RUNNER_TEMP/${iso18013_uri##*/}"
           curl --fail --location --silent --show-error "$marty_rs_uri" --output "$marty_rs_wheel"
+          curl --fail --location --silent --show-error "$verification_uri" --output "$verification_wheel"
+          curl --fail --location --silent --show-error "$iso18013_uri" --output "$iso18013_wheel"
           echo "${marty_rs_digest#sha256:}  $marty_rs_wheel" | sha256sum --check --strict
+          echo "${verification_digest#sha256:}  $verification_wheel" | sha256sum --check --strict
+          echo "${iso18013_digest#sha256:}  $iso18013_wheel" | sha256sum --check --strict
           marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"
           curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$marty_common_wheel"
           echo "${MARTY_COMMON_DIGEST#sha256:}  $marty_common_wheel" | sha256sum --check --strict
-          pip install pytest pyyaml jsonschema cryptography playwright "$marty_rs_wheel" "$marty_common_wheel"
+          pip install pytest pyyaml jsonschema cryptography playwright "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel" "$marty_common_wheel"
       - name: Verify released mdoc binding evidence contract
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
+          import marty_iso18013
+          import marty_verification
           from marty_rs import _marty_rs
+
+          assert hasattr(marty_iso18013, "Session")
+          assert hasattr(marty_verification, "ChainValidator")
 
           evidence_type = _marty_rs.MdocDocumentVerificationEvidence
           for attribute in (
