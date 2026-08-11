@@ -80,8 +80,8 @@ def test_ci_and_stack_lock_pin_the_same_marty_common_release() -> None:
         item for item in common["artifacts"] if item["type"] == "python"
     )
 
-    assert common["version"] == "0.2.7"
-    assert common["commit"] == "e60967cc365cd62f3ae9d4491dae13869d0f2832"
+    assert common["version"] == "0.2.8"
+    assert common["commit"] == "cac6dd5222e9b8d65c79df0f8964751cf1b88300"
     assert workflow["env"]["MARTY_COMMON_URI"] == artifact["uri"]
     assert workflow["env"]["MARTY_COMMON_DIGEST"] == artifact["digest"]
     assert 'marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"' in workflow_text
