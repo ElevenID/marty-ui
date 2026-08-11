@@ -51,8 +51,7 @@ def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() 
     assert 'promotion_eligible = $false' in script
     assert 'release_ready = $false' in script
     assert '"canvas-sync-worker"' in script
-    assert '$service -eq "canvas-sync-worker"' in script
-    assert '{ "issuance" } else { $service }' in script
+    assert '$_ -notin @("issuance", "canvas-sync-worker")' in script
     assert "$script:ApplicationBuildServices" in script
     assert '$env:CANVAS_ALLOW_PRIVATE_BASE_URLS = "false"' in script
     assert '$env:CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS = "false"' in script
@@ -222,3 +221,13 @@ def test_beta_runner_always_isolates_required_openbao_migration_state() -> None:
     assert '"BAO_ADDR=http://openbao:8200"' in script
     assert script.count('"--env", "BAO_TOKEN"') == 1
     assert '"dev-only-token"' not in script
+
+
+def test_beta_runner_preserves_the_pinned_external_issuance_image_role() -> None:
+    script = text("scripts/deploy-local-beta-release.ps1")
+
+    assert '$service -in @("issuance", "canvas-sync-worker")' in script
+    assert "image: ${MARTY_ISSUANCE_IMAGE}" in script
+    assert 'Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)' in script
+    assert '$imageRef = if ($service -in @("issuance", "canvas-sync-worker"))' in script
+    assert '"elevenid-local/issuance:${releaseVersion}"' not in script

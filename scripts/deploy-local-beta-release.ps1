@@ -68,7 +68,7 @@ $script:ApplicationServices = @(
     "gateway"
 )
 $script:ApplicationBuildServices = @(
-    $script:ApplicationServices | Where-Object { $_ -ne "canvas-sync-worker" }
+    $script:ApplicationServices | Where-Object { $_ -notin @("issuance", "canvas-sync-worker") }
 )
 $script:InfrastructureWriterServices = @("keycloak")
 
@@ -350,9 +350,13 @@ New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
 $releaseComposeFile = Join-Path $script:ArtifactDir "local-release-images.yml"
 $releaseCompose = @("services:")
 foreach ($service in $script:ApplicationServices) {
-    $imageService = if ($service -eq "canvas-sync-worker") { "issuance" } else { $service }
     $releaseCompose += "  ${service}:"
-    $releaseCompose += "    image: elevenid-local/${imageService}:${releaseVersion}"
+    if ($service -in @("issuance", "canvas-sync-worker")) {
+        $releaseCompose += '    image: ${MARTY_ISSUANCE_IMAGE}'
+    }
+    else {
+        $releaseCompose += "    image: elevenid-local/${service}:${releaseVersion}"
+    }
 }
 $releaseCompose -join "`n" | Set-Content -LiteralPath $releaseComposeFile -Encoding utf8
 $script:ComposeFiles += $releaseComposeFile
@@ -392,6 +396,7 @@ $env:MARTY_VERIFICATION_DIGEST = $martyVerification.Digest
 $env:MARTY_ISO18013_URI = $martyIso18013.Uri
 $env:MARTY_ISO18013_DIGEST = $martyIso18013.Digest
 $env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"
+Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)
 $docsIds = @(& docker ps -a --filter "label=com.docker.compose.project=$script:BetaProject" --filter "label=com.docker.compose.service=docs" --format '{{.ID}}')
 if ($LASTEXITCODE -ne 0 -or $docsIds.Count -ne 1) { throw "Expected one existing beta docs container" }
 $env:MARTY_DOCS_IMAGE = & docker inspect $docsIds[0] --format '{{.Config.Image}}'
@@ -559,8 +564,12 @@ if ($stackVersion -notmatch '^\d{4}\.\d{2}\.\d+$') {
 }
 $runtimeImageDigests = [ordered]@{}
 foreach ($service in $script:ApplicationServices) {
-    $imageService = if ($service -eq "canvas-sync-worker") { "issuance" } else { $service }
-    $imageRef = "elevenid-local/${imageService}:${releaseVersion}"
+    $imageRef = if ($service -in @("issuance", "canvas-sync-worker")) {
+        $env:MARTY_ISSUANCE_IMAGE
+    }
+    else {
+        "elevenid-local/${service}:${releaseVersion}"
+    }
     $imageId = docker image inspect $imageRef --format '{{.Id}}'
     if ($LASTEXITCODE -ne 0 -or $imageId -notmatch '^sha256:[0-9a-f]{64}$') {
         throw "Could not resolve immutable image ID for $imageRef"
