@@ -114,6 +114,35 @@ jobs:
         working-directory: services
         run: python -m pytest -v --tb=short -x
 
+  test-rust-services:
+    name: Rust Service Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.87.0
+          components: clippy,rustfmt
+      - name: Check formatting
+        working-directory: rust
+        run: cargo fmt --all -- --check
+      - name: Test Rust service contracts
+        working-directory: rust
+        run: cargo test --locked --workspace
+      - name: Lint Rust services
+        working-directory: rust
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Build event-stream image
+        run: >-
+          docker build
+          --file rust/services/event-stream/Dockerfile
+          --tag marty-event-stream:ci
+          --build-arg MARTY_RELEASE_VERSION=ci
+          --build-arg MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          .
+
   flow-idempotency-contract:
     name: Flow Idempotency PostgreSQL Contract
     runs-on: ubuntu-latest
