@@ -124,7 +124,7 @@
     {
       "id": "event-stream-service",
       "phase": 2,
-      "status": "planned",
+      "status": "cutover-in-progress",
       "canonical": {
         "repository": "ElevenID/marty-ui",
         "paths": ["rust/services/event-stream"],

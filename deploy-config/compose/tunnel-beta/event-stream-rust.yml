@@ -1,0 +1,20 @@
+# Beta-only Rust event-stream cutover.
+#
+# This overlay is consumed by scripts/deploy-local-beta-release.ps1 after the
+# base and tunnel profiles. Production and persistent self-host compose files
+# intentionally continue to select the preceding Python image until a separate
+# promotion decision is approved.
+
+services:
+  event-stream:
+    build: !override
+      context: .
+      dockerfile: rust/services/event-stream/Dockerfile
+      args:
+        MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+        MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
+    environment:
+      EVENT_STREAM_SERVICE_PORT: "8015"
+      EVENT_STREAM_GRPC_ENABLED: "true"
+      EVENT_STREAM_GRPC_PORT: "9015"
+      RUST_LOG: ${EVENT_STREAM_RUST_LOG:-info}
