@@ -222,7 +222,8 @@ function New-BetaStateBackup {
         [Parameter(Mandatory = $true)][string]$ManifestPath,
         [Parameter(Mandatory = $true)][string]$SafeRelease,
         [Parameter(Mandatory = $true)][string]$Phase,
-        [Parameter(Mandatory = $true)][bool]$WritersStopped
+        [Parameter(Mandatory = $true)][bool]$WritersStopped,
+        [Parameter(Mandatory = $true)][string]$RedisPassword
     )
 
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
@@ -235,7 +236,11 @@ function New-BetaStateBackup {
     Invoke-Checked -FilePath docker -Arguments @("cp", "${postgres}:/tmp/$SafeRelease-keycloak.dump", (Join-Path $Destination "postgres-keycloak.dump"))
     Invoke-Checked -FilePath docker -Arguments @("cp", "${postgres}:/tmp/$SafeRelease-globals.sql", (Join-Path $Destination "postgres-globals.sql"))
     Invoke-Checked -FilePath docker -Arguments @("cp", "${applicant}:/app/data/applicant_store.json", (Join-Path $Destination "applicant_store.json"))
-    Invoke-Checked -FilePath docker -Arguments @("exec", $redis, "redis-cli", "SAVE")
+    $redisSave = & docker exec --env "REDISCLI_AUTH=$RedisPassword" $redis redis-cli SAVE
+    $redisSaveLine = [string]($redisSave | Select-Object -Last 1)
+    if ($LASTEXITCODE -ne 0 -or $redisSaveLine.Trim() -ne "OK") {
+        throw "Authenticated beta Redis snapshot failed"
+    }
     Invoke-Checked -FilePath docker -Arguments @("cp", "${redis}:/data/dump.rdb", (Join-Path $Destination "redis-dump.rdb"))
     Invoke-Checked -FilePath docker -Arguments @("run", "--rm", "--mount", "type=volume,src=elevenid-beta_openbao_data,dst=/source,readonly", "--mount", "type=bind,src=$Destination,dst=/backup", "postgres:15-alpine", "sh", "-lc", "cd /source && tar -czf /backup/openbao-data.tar.gz .")
 
@@ -281,6 +286,7 @@ if ($EnablePortableCanvas -and $PilotOrganizationId -notmatch '^[0-9a-fA-F]{8}-[
 
 $sourceManifestPath = Join-Path $script:ArtifactDir "source-manifest.json"
 $martyDbPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "MARTY_DB_PASSWORD"
+$redisPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "REDIS_PASSWORD"
 if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf)) {
     throw "Missing source manifest: $sourceManifestPath"
 }
@@ -410,7 +416,8 @@ New-BetaStateBackup `
     -ManifestPath (Join-Path $script:ArtifactDir "preflight-backup-manifest.json") `
     -SafeRelease $safeRelease `
     -Phase "preflight_rehearsal" `
-    -WritersStopped $false
+    -WritersStopped $false `
+    -RedisPassword $redisPassword
 
 Write-Step "Build immutable migration image"
 $migrationImage = "elevenid-local/db-migrate:$releaseVersion"
@@ -494,9 +501,9 @@ try {
             "--env", "MARTY_ORG_ID=$PilotOrganizationId"
         )
     }
-    $rehearsalArguments += @($migrationImage, "python", "/app/run_all_migrations.py")
+    $rehearsalArguments += @($migrationImage, "python", "/app/services/run_all_migrations.py")
     Invoke-DockerLogged -Arguments $rehearsalArguments -LogPath (Join-Path $logsDir "migration-rehearsal.log") -FailureMessage "Migration rehearsal failed"
-    $verifyArguments = @("run", "--rm", "--network", $script:BetaNetwork, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", $migrationImage, "python", "/app/run_all_migrations.py", "--verify-only")
+    $verifyArguments = @("run", "--rm", "--network", $script:BetaNetwork, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", $migrationImage, "python", "/app/services/run_all_migrations.py", "--verify-only")
     Invoke-DockerLogged -Arguments $verifyArguments -LogPath (Join-Path $logsDir "migration-rehearsal-verify.log") -FailureMessage "Migration rehearsal verification failed"
 }
 finally {
@@ -592,7 +599,8 @@ try {
         -ManifestPath (Join-Path $script:ArtifactDir "backup-manifest.json") `
         -SafeRelease $safeRelease `
         -Phase "maintenance_quiesced" `
-        -WritersStopped $true
+        -WritersStopped $true `
+        -RedisPassword $redisPassword
     $restoreScript = Join-Path $script:RepoRoot "scripts\restore-local-beta-release.ps1"
     "& `"$restoreScript`" -ArtifactDir `"$script:ArtifactDir`" -TunnelEnvFile `"$TunnelEnvFile`" -GeneratedEnvFile `"$GeneratedEnvFile`" -ConfirmBetaRestore" | Set-Content -LiteralPath (Join-Path $script:ArtifactDir "supervised-recovery.txt") -Encoding utf8
 
@@ -619,7 +627,7 @@ try {
                 "--env", "MARTY_ORG_ID=$PilotOrganizationId"
             )
         }
-        $migrationArguments += @($migrationImage, "python", "/app/run_all_migrations.py")
+        $migrationArguments += @($migrationImage, "python", "/app/services/run_all_migrations.py")
         $liveMutationStarted = $true
         Invoke-DockerLogged -Arguments $migrationArguments -LogPath (Join-Path $logsDir "migration-live.log") -FailureMessage "Live migration failed"
     }
