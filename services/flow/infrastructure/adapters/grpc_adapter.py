@@ -424,8 +424,10 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             FlowInstanceStatus,
             StepType,
             TransitionCondition,
+            _native_flow_graph,
             check_preconditions,
         )
+        from flow.native import NativeFlowOperationError, select_next_step
 
         repo = self._get_repo()
         instance = await repo.get_instance(request.instance_id)
@@ -460,11 +462,25 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
                 return flow_service_pb2.FlowInstanceResponse()
 
         condition = TransitionCondition(request.step_result) if request.step_result else TransitionCondition.SUCCESS
-        next_step_id = None
-        for t in flow_def.transitions:
-            if t.from_step_id == instance.current_step_id and t.condition == condition:
-                next_step_id = t.to_step_id
-                break
+        if instance.status == FlowInstanceStatus.AWAITING_WALLET:
+            instance.transition_to(
+                FlowInstanceStatus.IN_PROGRESS,
+                event="grpc_wallet_step_response_received",
+            )
+        if instance.current_step_id is None:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details("Flow has no current step")
+            return flow_service_pb2.FlowInstanceResponse()
+        try:
+            next_step_id = select_next_step(
+                _native_flow_graph(flow_def),
+                instance.current_step_id,
+                condition.value,
+            )
+        except NativeFlowOperationError as error:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(str(error))
+            return flow_service_pb2.FlowInstanceResponse()
 
         instance.context.update(dict(request.data))
 
@@ -482,16 +498,14 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             })
             next_step = next((s for s in flow_def.steps if s.id == next_step_id), None)
             if next_step and next_step.step_type == StepType.END:
-                instance.status = FlowInstanceStatus.COMPLETED
-                instance.completed_at = now
+                instance.transition_to(FlowInstanceStatus.COMPLETED)
                 instance.result = instance.context
         else:
             if request.step_result == "failure":
-                instance.status = FlowInstanceStatus.FAILED
+                instance.transition_to(FlowInstanceStatus.FAILED)
                 instance.error = "Step failed with no recovery transition"
             else:
-                instance.status = FlowInstanceStatus.COMPLETED
-            instance.completed_at = now
+                instance.transition_to(FlowInstanceStatus.COMPLETED)
 
         instance.updated_at = now
         await repo.save_instance(instance)
@@ -502,6 +516,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
 
     async def CancelFlowInstance(self, request, context):
         from flow.main import FlowInstanceStatus
+        from flow.native import NativeFlowOperationError, is_terminal_status
 
         repo = self._get_repo()
         instance = await repo.get_instance(request.instance_id)
@@ -510,15 +525,20 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             context.set_details("Flow instance not found")
             return flow_service_pb2.FlowInstanceResponse()
 
-        if instance.status in (FlowInstanceStatus.COMPLETED, FlowInstanceStatus.CANCELLED):
+        if is_terminal_status(instance.status.value):
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
             context.set_details("Flow already ended")
             return flow_service_pb2.FlowInstanceResponse()
 
-        now = datetime.now(timezone.utc)
-        instance.status = FlowInstanceStatus.CANCELLED
-        instance.completed_at = now
-        instance.updated_at = now
+        try:
+            instance.transition_to(
+                FlowInstanceStatus.CANCELLED,
+                event="grpc_flow_cancelled",
+            )
+        except NativeFlowOperationError as error:
+            context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
+            context.set_details(str(error))
+            return flow_service_pb2.FlowInstanceResponse()
         await repo.save_instance(instance)
         logger.info("gRPC CancelFlowInstance: %s", instance.id)
         await self._emit_flow_event("cancelled", instance)
