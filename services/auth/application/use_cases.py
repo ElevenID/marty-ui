@@ -84,6 +84,7 @@ class AuthenticateUseCase:
         
         # Generate state for CSRF protection
         state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
         
         # Store PKCE state
         pkce_state = PKCEState(
@@ -91,6 +92,7 @@ class AuthenticateUseCase:
             code_verifier=code_verifier,
             redirect_uri=command.redirect_uri or "/",
             oidc_redirect_uri=command.oidc_redirect_uri,
+            nonce=nonce,
         )
         await self.pkce_repository.save(pkce_state)
         
@@ -98,6 +100,7 @@ class AuthenticateUseCase:
         auth_url = self.oidc_provider.get_authorization_url(
             state=state,
             code_challenge=code_challenge,
+            nonce=nonce,
             redirect_uri=command.oidc_redirect_uri,  # Use request host when supplied
         )
         
@@ -119,6 +122,7 @@ class AuthenticateUseCase:
         
         # Generate state for CSRF protection
         state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
         
         # Store PKCE state
         pkce_state = PKCEState(
@@ -126,6 +130,7 @@ class AuthenticateUseCase:
             code_verifier=code_verifier,
             redirect_uri=command.redirect_uri or "/",
             oidc_redirect_uri=command.oidc_redirect_uri,
+            nonce=nonce,
         )
         await self.pkce_repository.save(pkce_state)
         
@@ -133,6 +138,7 @@ class AuthenticateUseCase:
         reg_url = self.oidc_provider.get_registration_url(
             state=state,
             code_challenge=code_challenge,
+            nonce=nonce,
             redirect_uri=command.oidc_redirect_uri,  # Use request host when supplied
         )
         
@@ -176,8 +182,15 @@ class AuthenticateUseCase:
         if not id_token:
             raise ValueError("No ID token in response")
         
-        # Parse user claims from ID token (already validated via PKCE)
-        oidc_user = self.oidc_provider.parse_id_token(id_token, access_token)
+        if not pkce_state.nonce:
+            raise ValueError("OIDC nonce is missing from login state")
+
+        validated_identity = await self.oidc_provider.validate_tokens(
+            id_token,
+            access_token,
+            pkce_state.nonce,
+        )
+        oidc_user = validated_identity.user_info
         
         # JIT provision user
         user = await self.user_provisioning.provision_user(oidc_user)
@@ -190,6 +203,7 @@ class AuthenticateUseCase:
             user_agent=command.user_agent,
             id_token=id_token,
             refresh_token=refresh_token,
+            oidc_claims=validated_identity.id_token_claims,
         )
         
         await self.session_repository.save(session)
