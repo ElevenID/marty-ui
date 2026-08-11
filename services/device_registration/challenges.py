@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import secrets
 from dataclasses import asdict, dataclass
@@ -37,38 +36,19 @@ class ChallengeRecord:
     message_version: int = 2
 
     def message(self) -> bytes:
-        if self.message_version == 1:
-            return (
-                "marty-device-registration-v1\n"
-                f"{CHALLENGE_AUDIENCE}\n{self.challenge_id}\n{self.user_id}\n"
-                f"{self.device_id}\n{self.public_key_kid}\n{self.nonce}"
-            ).encode()
-        return (
-            "marty-device-registration-v2\n"
-            + json.dumps(
-                {
-                    "audience": self.audience,
-                    "challenge_id": self.challenge_id,
-                    "device_id": self.device_id,
-                    "expires_at": self.expires_at,
-                    "key_version": self.key_version,
-                    "nonce": self.nonce,
-                    "public_key_kid": self.public_key_kid,
-                    "purpose": self.purpose,
-                    "registration_id": self.registration_id,
-                    "user_id": self.user_id,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            )
-        ).encode()
+        from device_registration.native import challenge_message
+
+        return challenge_message(self)
 
     def encoded_message(self) -> str:
-        return base64.urlsafe_b64encode(self.message()).decode().rstrip("=")
+        from device_registration.native import encoded_challenge_message
+
+        return encoded_challenge_message(self)
 
     def is_expired(self, now: datetime | None = None) -> bool:
-        checked_at = now or datetime.now(timezone.utc)
-        return checked_at >= datetime.fromisoformat(self.expires_at)
+        from device_registration.native import challenge_is_expired
+
+        return challenge_is_expired(self, now)
 
 
 class ChallengeStore:

@@ -18,8 +18,8 @@ from device_registration.keys import (
     DeviceKeyConflictError,
     DeviceKeyState,
     InactiveDeviceRegistrationError,
-    challenge_key_is_eligible,
 )
+from device_registration.native import challenge_key_is_eligible
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 

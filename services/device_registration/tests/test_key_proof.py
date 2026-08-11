@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from services.device_registration import main as device
 from services.device_registration.challenges import ChallengeStore
-from services.device_registration.proof import public_key_thumbprint
+from services.device_registration.native import inspect_public_key
 
 
 def _b64url(value: bytes) -> str:
@@ -27,7 +27,13 @@ def _key_material(key_size: int = 2048):
         serialization.Encoding.DER,
         serialization.PublicFormat.PKCS1,
     )
-    return private_key, _b64url(der), public_key_thumbprint(public_key)
+    encoded = _b64url(der)
+    kid = (
+        inspect_public_key(encoded)["public_key_kid"]
+        if key_size >= 2048
+        else "w" * 43
+    )
+    return private_key, encoded, kid
 
 
 def _sign(private_key, encoded_challenge: str) -> str:
