@@ -12,11 +12,12 @@ import hashlib
 import json
 import logging
 import os
-import zlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional, Protocol
+
+from .native_status_list import NativeStatusListAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,7 @@ class StatusListManager:
         repository: IStatusListRepository,
         base_url: str = "https://status.example.com",
         default_size: int = 131072,  # 16KB worth of bits
+        native_adapter: NativeStatusListAdapter | None = None,
     ):
         """Initialize the status list manager.
 
@@ -133,6 +135,8 @@ class StatusListManager:
         self._base_url = base_url
         self._default_size = default_size
         self._locks: dict[str, asyncio.Lock] = {}
+        self._native = native_adapter or NativeStatusListAdapter()
+        self.native_backend_diagnostics = self._native.native_backend_diagnostics
 
     def _get_lock(self, key: str) -> asyncio.Lock:
         """Get or create a lock for a key."""
@@ -181,16 +185,13 @@ class StatusListManager:
         import uuid
 
         if format == StatusListFormat.TOKEN_STATUS_LIST:
-            # Token status list: 1 byte per entry
             size = self._default_size
             bits_per_status = 8
-            data = bytes(size)  # All zeros = all valid
+            data = self._native.empty_token_bytes(size, bits_per_status)
         else:
-            # Bitstring: 1 bit per entry
             size = self._default_size
             bits_per_status = 1
-            byte_size = (size + 7) // 8
-            data = bytes(byte_size)  # All zeros = all valid
+            data = self._native.empty_bitstring_bytes(size)
 
         return StatusList(
             id=str(uuid.uuid4()),
@@ -261,24 +262,24 @@ class StatusListManager:
                 raise ValueError(f"Index {index} out of range [0, {status_list.size})")
 
             if format == StatusListFormat.TOKEN_STATUS_LIST:
-                if status < 0 or status > 255:
-                    raise ValueError(f"Status {status} out of range [0, 255] for token status list")
-                # Direct byte update
-                data = bytearray(status_list.data)
-                data[index] = status
-                status_list.data = bytes(data)
+                status_list.data = self._native.set_token_status(
+                    status_list.data,
+                    status_list.size,
+                    status_list.bits_per_status,
+                    index,
+                    status,
+                )
             else:
                 if status not in (0, 1):
-                    raise ValueError(f"Status {status} must be 0 or 1 for bitstring status list")
-                # Bit update
-                data = bytearray(status_list.data)
-                byte_index = index // 8
-                bit_index = index % 8
-                if status:
-                    data[byte_index] |= (1 << (7 - bit_index))
-                else:
-                    data[byte_index] &= ~(1 << (7 - bit_index))
-                status_list.data = bytes(data)
+                    raise ValueError(
+                        f"Status {status} must be 0 or 1 for bitstring status list"
+                    )
+                status_list.data = self._native.set_bitstring_status(
+                    status_list.data,
+                    status_list.size,
+                    index,
+                    bool(status),
+                )
 
             status_list.version += 1
             status_list.updated_at = datetime.now(timezone.utc)
@@ -314,11 +315,17 @@ class StatusListManager:
             raise ValueError(f"Index {index} out of range [0, {status_list.size})")
 
         if format == StatusListFormat.TOKEN_STATUS_LIST:
-            return status_list.data[index]
-        else:
-            byte_index = index // 8
-            bit_index = index % 8
-            return (status_list.data[byte_index] >> (7 - bit_index)) & 1
+            return self._native.get_token_status(
+                status_list.data,
+                status_list.size,
+                status_list.bits_per_status,
+                index,
+            )
+        return self._native.get_bitstring_status(
+            status_list.data,
+            status_list.size,
+            index,
+        )
 
     async def publish(
         self,
@@ -358,28 +365,34 @@ class StatusListManager:
 
         return url
 
-    def _compress_token_status_list(self, data: bytes) -> bytes:
+    def _compress_token_status_list(self, status_list: StatusList) -> bytes:
         """Compress data for Token Status List (DEFLATE).
 
         Args:
-            data: Raw status data
+            status_list: Persisted status-list state
 
         Returns:
             Compressed data
         """
-        return zlib.compress(data, level=9)
+        return self._native.compress_token(
+            status_list.data,
+            status_list.size,
+            status_list.bits_per_status,
+        )
 
-    def _compress_bitstring_status_list(self, data: bytes) -> str:
+    def _compress_bitstring_status_list(self, status_list: StatusList) -> str:
         """Compress and encode data for Bitstring Status List.
 
         Args:
-            data: Raw bitstring data
+            status_list: Persisted bitstring state
 
         Returns:
             Base64url encoded GZIP compressed data
         """
-        compressed = zlib.compress(data, level=9)
-        return base64.urlsafe_b64encode(compressed).decode("ascii").rstrip("=")
+        return self._native.encode_bitstring(
+            status_list.data,
+            status_list.size,
+        )
 
     def encode_status_list_token(
         self,
@@ -399,16 +412,15 @@ class StatusListManager:
         Returns:
             Dictionary suitable for JWT/CWT encoding
         """
-        compressed = self._compress_token_status_list(status_list.data)
-
         return {
             "iss": issuer,
             "sub": subject,
             "iat": int(datetime.now(timezone.utc).timestamp()),
-            "status_list": {
-                "bits": status_list.bits_per_status,
-                "lst": base64.urlsafe_b64encode(compressed).decode("ascii").rstrip("="),
-            },
+            "status_list": self._native.token_claim(
+                status_list.data,
+                status_list.size,
+                status_list.bits_per_status,
+            ),
         }
 
     def encode_bitstring_status_list(
@@ -429,22 +441,23 @@ class StatusListManager:
         Returns:
             Dictionary for BitstringStatusListCredential
         """
-        encoded_list = self._compress_bitstring_status_list(status_list.data)
+        credential_id = status_list.url or f"urn:uuid:{status_list.id}"
+        credential_subject = self._native.bitstring_subject(
+            status_list.data,
+            status_list.size,
+            f"{credential_id}#list",
+            status_purpose,
+        )
 
         return {
             "@context": [
                 "https://www.w3.org/ns/credentials/v2",
             ],
-            "id": status_list.url or f"urn:uuid:{status_list.id}",
+            "id": credential_id,
             "type": ["VerifiableCredential", "BitstringStatusListCredential"],
             "issuer": issuer,
             "validFrom": status_list.created_at.isoformat(),
-            "credentialSubject": {
-                "id": f"{status_list.url}#list",
-                "type": "BitstringStatusList",
-                "statusPurpose": status_purpose,
-                "encodedList": encoded_list,
-            },
+            "credentialSubject": credential_subject,
         }
 
 

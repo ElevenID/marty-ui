@@ -31,13 +31,13 @@
     {
       "name": "marty-core-python",
       "repository": "ElevenID/marty-core",
-      "version": "0.1.45",
-      "commit": "c8ea296bb301befff4a5b6d09d7369ea802c12ad",
+      "version": "0.1.46",
+      "commit": "c8a028e803e7278f7842f5085855ac12a80b14ba",
       "artifacts": [{
         "type": "python",
-        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.45/marty_rs-0.1.45-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-        "digest": "sha256:adb4f74c8b052b0d3359176e65a2c2c09a3c4937a1774dda95f0c1f02f3c4fff",
-        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.1.45/marty-core.spdx.json",
+        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.46/marty_rs-0.1.46-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "digest": "sha256:d878bd702dc72ab247575978f15b0ce449a076394b323aae9d6b98d38e487c5b",
+        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.1.46/marty-core.spdx.json",
         "provenance": "https://github.com/ElevenID/marty-core/attestations"
       }]
     },
