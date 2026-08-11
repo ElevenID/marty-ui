@@ -287,6 +287,7 @@ if ($EnablePortableCanvas -and $PilotOrganizationId -notmatch '^[0-9a-fA-F]{8}-[
 $sourceManifestPath = Join-Path $script:ArtifactDir "source-manifest.json"
 $martyDbPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "MARTY_DB_PASSWORD"
 $redisPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "REDIS_PASSWORD"
+$encodedRedisPassword = [Uri]::EscapeDataString($redisPassword)
 $baoDevRootToken = Get-DotEnvValue -Path $GeneratedEnvFile -Name "BAO_DEV_ROOT_TOKEN"
 if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf)) {
     throw "Missing source manifest: $sourceManifestPath"
@@ -448,6 +449,8 @@ $copyContainer = "elevenid-beta-copy-$copySuffix"
 $copyRedisContainer = "elevenid-beta-copy-redis-$copySuffix"
 $copyOpenBaoContainer = "elevenid-beta-copy-openbao-$copySuffix"
 $copyPassword = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
+$copyRedisPassword = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
+$encodedCopyRedisPassword = [Uri]::EscapeDataString($copyRedisPassword)
 $copyBaoToken = -join ((1..40) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
 $rehearsalContainers = @($copyContainer, $copyOpenBaoContainer)
 if ($EnablePortableCanvas) {
@@ -463,7 +466,10 @@ try {
     Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyContainer, "--network", $script:BetaNetwork, "--env", "POSTGRES_PASSWORD=$copyPassword", "postgres:15-alpine")
     Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyOpenBaoContainer, "--network", $script:BetaNetwork, "--env", "BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken", "--env", "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200", "quay.io/openbao/openbao:2", "server", "-dev")
     if ($EnablePortableCanvas) {
-        Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyRedisContainer, "--network", $script:BetaNetwork, "redis:7-alpine")
+        Invoke-Checked -FilePath docker -Arguments @(
+            "run", "--detach", "--name", $copyRedisContainer, "--network", $script:BetaNetwork,
+            "redis:7-alpine", "redis-server", "--requirepass", $copyRedisPassword
+        )
     }
     $ready = $false
     foreach ($attempt in 1..60) {
@@ -476,8 +482,8 @@ try {
     $openBaoReady = $false
     foreach ($attempt in 1..60) {
         if ($EnablePortableCanvas) {
-            docker exec $copyRedisContainer redis-cli ping 2>$null | Out-Null
-            if ($LASTEXITCODE -eq 0) { $redisReady = $true }
+            $redisPing = docker exec $copyRedisContainer redis-cli --no-auth-warning -a $copyRedisPassword ping 2>$null
+            if ($LASTEXITCODE -eq 0 -and $redisPing -eq "PONG") { $redisReady = $true }
         }
         docker exec $copyOpenBaoContainer bao status -address=http://127.0.0.1:8200 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) { $openBaoReady = $true }
@@ -503,7 +509,7 @@ try {
     )
     if ($EnablePortableCanvas) {
         $rehearsalArguments += @(
-            "--env", "REDIS_URL=redis://${copyRedisContainer}:6379",
+            "--env", "REDIS_URL=redis://:${encodedCopyRedisPassword}@${copyRedisContainer}:6379",
             "--env", "MARTY_ORG_ID=$PilotOrganizationId"
         )
     }
@@ -641,7 +647,7 @@ try {
         )
         if ($EnablePortableCanvas) {
             $migrationArguments += @(
-                "--env", "REDIS_URL=redis://redis:6379",
+                "--env", "REDIS_URL=redis://:${encodedRedisPassword}@redis:6379",
                 "--env", "MARTY_ORG_ID=$PilotOrganizationId"
             )
         }
