@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -115,3 +116,29 @@ def test_python_adapter_uses_canonical_rust_format_vectors(
     adapter = NativePresentationPolicyEvaluator()
 
     assert adapter.normalize_credential_format(value) == expected
+
+
+def test_python_adapter_matches_shared_rust_golden_vector() -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "tests"
+        / "vectors"
+        / "presentation_policy_service.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    adapter = NativePresentationPolicyEvaluator()
+
+    for vector in fixture["format_vectors"]:
+        assert (
+            adapter.normalize_credential_format(vector["input"])
+            == vector["expected"]
+        )
+
+    result = adapter.evaluate(fixture["request"])
+    expected = fixture["expected"]
+    assert result["result"] == expected["result"]
+    assert result["decision"] == expected["decision"]
+    assert result["required_total"] == expected["required_total"]
+    assert result["required_satisfied"] == expected["required_satisfied"]
+    assert result["verified_claims"] == expected["verified_claims"]
+    assert [error["code"] for error in result["errors"]] == expected["error_codes"]
