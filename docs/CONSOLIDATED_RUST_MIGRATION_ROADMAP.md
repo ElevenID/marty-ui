@@ -29,6 +29,13 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 The canonical implementation must live at the lowest reusable Rust layer. A binding, service, or application may adapt inputs and outputs, but it must not fork the algorithm.
 
+The machine-readable ownership inventory is
+[`rust-migration-ownership.json`](rust-migration-ownership.json). CI validates
+its schema, exact production Python crypto-import baseline, and source rules
+that prevent unsigned token decoding or direct native binding surfaces from
+being added. Every migration PR that removes an approved non-Rust import must
+shrink the manifest in the same change; stale allowances fail CI.
+
 | Capability | Canonical owner | Consumers | Consolidation rule |
 |---|---|---|---|
 | Cryptography, document verification, presentation policy, status lists, OIDC validation, device proof, DID/JWK utilities | `marty-core` | Python services, credential packages, wallet, Rust services | Public reusable kernels live in one `marty-core` crate or module and are re-exported rather than copied. |
