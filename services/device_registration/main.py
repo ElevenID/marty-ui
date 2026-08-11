@@ -10,7 +10,6 @@ Port: 8014
 from __future__ import annotations
 
 import asyncio
-import hmac
 import logging
 import os
 import uuid
@@ -33,12 +32,12 @@ from device_registration.keys import (
     DeviceKeyConflictError,
     DeviceKeyState,
     InactiveDeviceRegistrationError,
-    challenge_key_is_eligible,
 )
-from device_registration.proof import (
-    parse_device_public_key,
-    public_key_digest,
-    public_key_thumbprint,
+from device_registration.native import (
+    challenge_binding_matches,
+    challenge_key_is_eligible,
+    initialize_device_auth_backend,
+    validate_public_key,
     verify_challenge_signature,
 )
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
@@ -433,16 +432,9 @@ def _validate_public_key(public_key_der: str, public_key_kid: str | None):
             detail="public_key_kid is required when public_key_der is present",
         )
     try:
-        key, raw_der = parse_device_public_key(public_key_der)
+        return validate_public_key(public_key_der, public_key_kid)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    expected_kid = public_key_thumbprint(key)
-    if not hmac.compare_digest(public_key_kid, expected_kid):
-        raise HTTPException(
-            status_code=400,
-            detail="public_key_kid must be the RFC 7638 thumbprint of public_key_der",
-        )
-    return key, raw_der
 
 
 async def _consume_key_proof(
@@ -458,7 +450,7 @@ async def _consume_key_proof(
     expected_key_version: int | None,
     purpose: str,
 ) -> str:
-    key, raw_der = _validate_public_key(public_key_der, public_key_kid)
+    inspection = _validate_public_key(public_key_der, public_key_kid)
     if not challenge_id or not signature:
         raise HTTPException(
             status_code=400,
@@ -467,20 +459,21 @@ async def _consume_key_proof(
     record = await store.get(challenge_id)
     if record is None:
         raise HTTPException(status_code=400, detail="Device challenge is invalid or expired")
-    bindings = (
-        record.user_id == user_id
-        and record.device_id == device_id
-        and hmac.compare_digest(record.public_key_kid, public_key_kid or "")
-        and hmac.compare_digest(record.public_key_sha256, public_key_digest(raw_der))
-        and record.registration_id == registration_id
-        and record.key_version == expected_key_version
-        and record.purpose == purpose
-        and record.audience == "marty-device-registration"
+    bindings = challenge_binding_matches(
+        record,
+        user_id=user_id,
+        device_id=device_id,
+        public_key_kid=public_key_kid or "",
+        public_key_sha256=inspection["public_key_sha256"],
+        registration_id=registration_id,
+        key_version=expected_key_version,
+        purpose=purpose,
+        audience="marty-device-registration",
     )
     if not bindings:
         raise HTTPException(status_code=400, detail="Device challenge binding mismatch")
     try:
-        verify_challenge_signature(key, record.message(), signature)
+        verify_challenge_signature(public_key_der, record, signature)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not await store.consume(record):
@@ -536,7 +529,7 @@ async def request_challenge(
     repo: InMemoryDeviceRepository | PostgresDeviceRegistrationRepository = Depends(get_repo),
 ) -> ChallengeResponseModel:
     """Issue a challenge nonce that the device must sign to prove key possession."""
-    _key, raw_der = _validate_public_key(
+    inspection = _validate_public_key(
         body.public_key_der,
         body.public_key_kid,
     )
@@ -587,7 +580,7 @@ async def request_challenge(
         user_id,
         body.device_id,
         body.public_key_kid,
-        public_key_digest(raw_der),
+        inspection["public_key_sha256"],
         registration_id=registration.id if registration else None,
         key_version=expected_version,
         purpose=purpose,
@@ -884,6 +877,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo, _challenge_store
     logger.info("Starting %s...", SERVICE_NAME)
     _rotation_grace_seconds()
+    native_diagnostics = initialize_device_auth_backend()
+    app.state.native_backend_diagnostics = native_diagnostics
+    logger.info(
+        "Native device-auth backend ready: backend=%s version=%s revision=%s",
+        native_diagnostics["backend"],
+        native_diagnostics["version"],
+        native_diagnostics.get("build_revision", "unknown"),
+    )
     from marty_common.database import DatabaseConfig, DatabaseManager
     db = DatabaseManager(DatabaseConfig.from_env("device-registration"))
     async with db.engine.connect() as conn:
@@ -906,13 +907,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app() -> FastAPI:
-    return create_service_app(
+    created = create_service_app(
         title="Device Registration Service",
         description="Manages user device registrations for push and challenge-response authentication",
         service_name=SERVICE_NAME,
         lifespan=lifespan,
         routers=[router],
     )
+
+    @created.get("/health/native-backend")
+    async def native_backend_health() -> dict:
+        diagnostics = getattr(created.state, "native_backend_diagnostics", None)
+        if not isinstance(diagnostics, dict) or diagnostics.get("available") is not True:
+            raise HTTPException(status_code=503, detail="Native backend is unavailable")
+        return {"status": "ready", **diagnostics}
+
+    return created
 
 
 app = create_app()

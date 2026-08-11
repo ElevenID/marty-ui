@@ -23,7 +23,7 @@ from services.device_registration.challenges import (
     ChallengeRecord,
     ChallengeStore,
 )
-from services.device_registration.proof import public_key_digest, public_key_thumbprint
+from services.device_registration.native import inspect_public_key
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "infrastructure" / "migrations"
 
@@ -39,7 +39,8 @@ def _key_material():
         serialization.Encoding.DER,
         serialization.PublicFormat.PKCS1,
     )
-    return private_key, _b64url(der), public_key_thumbprint(public_key)
+    encoded = _b64url(der)
+    return private_key, encoded, inspect_public_key(encoded)["public_key_kid"]
 
 
 def _sign(private_key, encoded_challenge: str) -> str:
@@ -220,9 +221,7 @@ async def test_retiring_key_only_resolves_exact_pre_rotation_non_mutating_challe
         user_id="user-1",
         device_id="device-1",
         public_key_kid=old_kid,
-        public_key_sha256=public_key_digest(
-            base64.urlsafe_b64decode(old_der + "=" * (-len(old_der) % 4))
-        ),
+        public_key_sha256=inspect_public_key(old_der)["public_key_sha256"],
         nonce="nonce",
         created_at=issued_at.isoformat(),
         expires_at=(issued_at + timedelta(minutes=5)).isoformat(),
