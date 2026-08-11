@@ -70,6 +70,19 @@ def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() 
     assert final_build < ui_content_verify < post_build_verify < maintenance
 
 
+def test_beta_runner_reconciles_infrastructure_writer_configuration() -> None:
+    script = text("scripts/deploy-local-beta-release.ps1")
+
+    step = 'Write-Step "Recreate infrastructure writers from release configuration"'
+    recreate = '@("up", "--detach", "--no-build", "--no-deps", "--force-recreate")'
+    assert step in script
+    assert recreate in script
+    assert "+ $script:InfrastructureWriterServices" in script
+    assert "Wait-ForServiceHealth $script:InfrastructureWriterServices" in script
+    assert '@("start", $keycloakContainer)' not in script
+    assert script.index(step) < script.index('Write-Step "Recreate application containers')
+
+
 def test_release_ui_compose_uses_image_without_source_mounts() -> None:
     compose = text("docker-compose.ui-release.yml")
 

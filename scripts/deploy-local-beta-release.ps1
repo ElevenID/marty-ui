@@ -714,11 +714,9 @@ try {
         $env:CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS = "false"
     }
 
-    $keycloakContainer = Get-ComposeContainerId -Service "keycloak"
-    if ($keycloakContainer -and $keycloakContainer -in $maintenanceContainers) {
-        Invoke-Checked -FilePath docker -Arguments @("start", $keycloakContainer)
-        Wait-ForServiceHealth @("keycloak")
-    }
+    Write-Step "Recreate infrastructure writers from release configuration"
+    Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $script:InfrastructureWriterServices)
+    Wait-ForServiceHealth $script:InfrastructureWriterServices
 
     Write-Step "Recreate application containers from coordinated images"
     Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $script:ApplicationServices)
