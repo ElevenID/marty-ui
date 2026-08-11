@@ -287,6 +287,7 @@ if ($EnablePortableCanvas -and $PilotOrganizationId -notmatch '^[0-9a-fA-F]{8}-[
 $sourceManifestPath = Join-Path $script:ArtifactDir "source-manifest.json"
 $martyDbPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "MARTY_DB_PASSWORD"
 $redisPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "REDIS_PASSWORD"
+$baoDevRootToken = Get-DotEnvValue -Path $GeneratedEnvFile -Name "BAO_DEV_ROOT_TOKEN"
 if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf)) {
     throw "Missing source manifest: $sourceManifestPath"
 }
@@ -443,9 +444,9 @@ $copyRedisContainer = "elevenid-beta-copy-redis-$copySuffix"
 $copyOpenBaoContainer = "elevenid-beta-copy-openbao-$copySuffix"
 $copyPassword = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
 $copyBaoToken = -join ((1..40) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
-$rehearsalContainers = @($copyContainer)
+$rehearsalContainers = @($copyContainer, $copyOpenBaoContainer)
 if ($EnablePortableCanvas) {
-    $rehearsalContainers += @($copyRedisContainer, $copyOpenBaoContainer)
+    $rehearsalContainers += $copyRedisContainer
 }
 try {
     foreach ($candidate in $rehearsalContainers) {
@@ -455,9 +456,9 @@ try {
         }
     }
     Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyContainer, "--network", $script:BetaNetwork, "--env", "POSTGRES_PASSWORD=$copyPassword", "postgres:15-alpine")
+    Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyOpenBaoContainer, "--network", $script:BetaNetwork, "--env", "BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken", "--env", "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200", "quay.io/openbao/openbao:2", "server", "-dev")
     if ($EnablePortableCanvas) {
         Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyRedisContainer, "--network", $script:BetaNetwork, "redis:7-alpine")
-        Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyOpenBaoContainer, "--network", $script:BetaNetwork, "--env", "BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken", "--env", "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200", "quay.io/openbao/openbao:2", "server", "-dev")
     }
     $ready = $false
     foreach ($attempt in 1..60) {
@@ -466,20 +467,20 @@ try {
         Start-Sleep -Seconds 2
     }
     if (-not $ready) { throw "Rehearsal PostgreSQL did not become ready" }
-    if ($EnablePortableCanvas) {
-        $redisReady = $false
-        $openBaoReady = $false
-        foreach ($attempt in 1..60) {
+    $redisReady = -not $EnablePortableCanvas
+    $openBaoReady = $false
+    foreach ($attempt in 1..60) {
+        if ($EnablePortableCanvas) {
             docker exec $copyRedisContainer redis-cli ping 2>$null | Out-Null
             if ($LASTEXITCODE -eq 0) { $redisReady = $true }
-            docker exec $copyOpenBaoContainer bao status -address=http://127.0.0.1:8200 2>$null | Out-Null
-            if ($LASTEXITCODE -eq 0) { $openBaoReady = $true }
-            if ($redisReady -and $openBaoReady) { break }
-            Start-Sleep -Seconds 2
         }
-        if (-not $redisReady) { throw "Rehearsal Redis did not become ready" }
-        if (-not $openBaoReady) { throw "Rehearsal OpenBao did not become ready" }
+        docker exec $copyOpenBaoContainer bao status -address=http://127.0.0.1:8200 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) { $openBaoReady = $true }
+        if ($redisReady -and $openBaoReady) { break }
+        Start-Sleep -Seconds 2
     }
+    if (-not $redisReady) { throw "Rehearsal Redis did not become ready" }
+    if (-not $openBaoReady) { throw "Rehearsal OpenBao did not become ready" }
     Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE ROLE marty LOGIN PASSWORD '$copyPassword';")
     Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "createdb", "-U", "postgres", "-O", "marty", "marty")
     Invoke-Checked -FilePath docker -Arguments @("cp", (Join-Path $preflightBackupDir "postgres-marty.dump"), "${copyContainer}:/tmp/marty.dump")
@@ -491,13 +492,13 @@ try {
         "--env", "DATABASE_URL=$copyUrl",
         "--env", "PUBLIC_API_URL=$BetaOrigin",
         "--env", "MARTY_MIGRATION_PROFILE=beta",
-        "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=$rehearsalKmsEnabled"
+        "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=$rehearsalKmsEnabled",
+        "--env", "BAO_ADDR=http://${copyOpenBaoContainer}:8200",
+        "--env", "BAO_TOKEN=$copyBaoToken"
     )
     if ($EnablePortableCanvas) {
         $rehearsalArguments += @(
             "--env", "REDIS_URL=redis://${copyRedisContainer}:6379",
-            "--env", "BAO_ADDR=http://${copyOpenBaoContainer}:8200",
-            "--env", "BAO_TOKEN=$copyBaoToken",
             "--env", "MARTY_ORG_ID=$PilotOrganizationId"
         )
     }
@@ -608,22 +609,20 @@ try {
     $env:PUBLIC_API_URL = $BetaOrigin
     $previousBaoToken = $env:BAO_TOKEN
     try {
-        if ($EnablePortableCanvas) {
-            $env:BAO_TOKEN = if ($env:BAO_DEV_ROOT_TOKEN) { $env:BAO_DEV_ROOT_TOKEN } else { "dev-only-token" }
-        }
+        $env:BAO_TOKEN = $baoDevRootToken
         $kmsBootstrapEnabled = if ($EnablePortableCanvas) { "true" } else { "false" }
         $migrationArguments = @(
             "run", "--rm", "--network", $script:BetaNetwork,
             "--env", "DATABASE_URL=postgresql://marty:${martyDbPassword}@postgres:5432/marty",
             "--env", "PUBLIC_API_URL=$BetaOrigin",
             "--env", "MARTY_MIGRATION_PROFILE=beta",
-            "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=$kmsBootstrapEnabled"
+            "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=$kmsBootstrapEnabled",
+            "--env", "BAO_ADDR=http://openbao:8200",
+            "--env", "BAO_TOKEN"
         )
         if ($EnablePortableCanvas) {
             $migrationArguments += @(
                 "--env", "REDIS_URL=redis://redis:6379",
-                "--env", "BAO_ADDR=http://openbao:8200",
-                "--env", "BAO_TOKEN",
                 "--env", "MARTY_ORG_ID=$PilotOrganizationId"
             )
         }

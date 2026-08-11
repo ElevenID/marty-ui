@@ -208,3 +208,17 @@ def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path(
     assert script.count('-RedisPassword $redisPassword') == 2
     assert script.count('"/app/services/run_all_migrations.py"') == 3
     assert '"/app/run_all_migrations.py"' not in script
+
+
+def test_beta_runner_always_isolates_required_openbao_migration_state() -> None:
+    script = text("scripts/deploy-local-beta-release.ps1")
+
+    assert 'Get-DotEnvValue -Path $GeneratedEnvFile -Name "BAO_DEV_ROOT_TOKEN"' in script
+    assert '$rehearsalContainers = @($copyContainer, $copyOpenBaoContainer)' in script
+    assert '"BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken"' in script
+    assert '"BAO_ADDR=http://${copyOpenBaoContainer}:8200"' in script
+    assert '"BAO_TOKEN=$copyBaoToken"' in script
+    assert '$env:BAO_TOKEN = $baoDevRootToken' in script
+    assert '"BAO_ADDR=http://openbao:8200"' in script
+    assert script.count('"--env", "BAO_TOKEN"') == 1
+    assert '"dev-only-token"' not in script
