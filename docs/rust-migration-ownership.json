@@ -184,11 +184,11 @@
     {
       "id": "flow-and-did-jwk",
       "phase": 5,
-      "status": "planned",
+      "status": "cutover-in-progress",
       "canonical": {
         "repository": "ElevenID/marty-core",
-        "paths": ["marty-flow/src", "marty-didcomm/src"],
-        "binding_paths": ["marty-bindings/src/lib.rs"]
+        "paths": ["marty-verification/src/flow.rs", "marty-didcomm/src"],
+        "binding_paths": ["marty-bindings/src/flow.rs"]
       },
       "legacy": [
         {
@@ -310,6 +310,24 @@
       {
         "id": "no-direct-auth-native-imports",
         "glob": "services/auth/**/*.py",
+        "pattern": "(?:from|import)\\s+(?:marty_rs|_marty_rs)",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-python-flow-transition-table",
+        "glob": "services/flow/**/*.py",
+        "pattern": "\\b(?:VALID_TRANSITIONS|TERMINAL_STATES)\\b",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-direct-flow-status-assignment",
+        "glob": "services/flow/**/*.py",
+        "pattern": "instance\\.status\\s*=(?!=)",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-direct-flow-native-imports",
+        "glob": "services/flow/**/*.py",
         "pattern": "(?:from|import)\\s+(?:marty_rs|_marty_rs)",
         "expected_matches": {}
       },

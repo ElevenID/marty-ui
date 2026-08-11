@@ -82,6 +82,14 @@ from flow.callback_outbox import (
     run_callback_dispatcher,
 )
 from flow.infrastructure.adapters import PostgresFlowRepository
+from flow.native import (
+    NativeFlowOperationError,
+    evaluate_transition as evaluate_native_flow_transition,
+    initialize_native_flow_backend,
+    is_terminal_status as is_native_terminal_status,
+    select_next_step as select_native_next_step,
+    validate_graph as validate_native_flow_graph,
+)
 from protocol_version import MIP_VERSION
 from common.application_event_auth import (
     AUDIENCE as APPLICATION_EVENT_AUDIENCE,
@@ -1226,6 +1234,26 @@ def _effective_flow_type(flow: FlowDefinition) -> FlowType:
     return flow.flow_type
 
 
+def _native_flow_graph(flow: FlowDefinition) -> dict[str, Any]:
+    """Map persisted flow DTOs to the canonical Rust graph contract."""
+    if not flow.start_step_id:
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_GRAPH: flow definition has no start step"
+        )
+    return {
+        "entry_step_id": flow.start_step_id,
+        "steps": [{"step_id": step.id} for step in flow.steps],
+        "transitions": [
+            {
+                "from_step_id": transition.from_step_id,
+                "to_step_id": transition.to_step_id,
+                "outcome": transition.condition.value,
+            }
+            for transition in flow.transitions
+        ],
+    }
+
+
 # =============================================================================
 # Default Flow Step Templates
 # =============================================================================
@@ -1373,56 +1401,6 @@ class FlowInstanceStatus(str, Enum):
     EXPIRED = "expired"
 
 
-# MIP §9: Valid state transitions — terminal states are immutable.
-VALID_TRANSITIONS: dict[FlowInstanceStatus, set[FlowInstanceStatus]] = {
-    FlowInstanceStatus.CREATED: {
-        FlowInstanceStatus.PENDING,
-        FlowInstanceStatus.IN_PROGRESS,
-        FlowInstanceStatus.CANCELLED,
-    },
-    FlowInstanceStatus.PENDING: {
-        FlowInstanceStatus.IN_PROGRESS,
-        FlowInstanceStatus.CANCELLED,
-    },
-    FlowInstanceStatus.IN_PROGRESS: {
-        FlowInstanceStatus.AWAITING_WALLET,
-        FlowInstanceStatus.AWAITING_APPROVAL,
-        FlowInstanceStatus.AWAITING_EVIDENCE,
-        FlowInstanceStatus.COMPLETED,
-        FlowInstanceStatus.FAILED,
-        FlowInstanceStatus.CANCELLED,
-        FlowInstanceStatus.EXPIRED,
-    },
-    FlowInstanceStatus.AWAITING_WALLET: {
-        FlowInstanceStatus.IN_PROGRESS,
-        FlowInstanceStatus.CANCELLED,
-        FlowInstanceStatus.EXPIRED,
-    },
-    FlowInstanceStatus.AWAITING_APPROVAL: {
-        FlowInstanceStatus.IN_PROGRESS,
-        FlowInstanceStatus.FAILED,
-        FlowInstanceStatus.CANCELLED,
-    },
-    FlowInstanceStatus.AWAITING_EVIDENCE: {
-        FlowInstanceStatus.IN_PROGRESS,
-        FlowInstanceStatus.CANCELLED,
-        FlowInstanceStatus.EXPIRED,
-    },
-    # Terminal states — no transitions allowed
-    FlowInstanceStatus.COMPLETED: set(),
-    FlowInstanceStatus.FAILED: set(),
-    FlowInstanceStatus.CANCELLED: set(),
-    FlowInstanceStatus.EXPIRED: set(),
-}
-
-TERMINAL_STATES = {
-    FlowInstanceStatus.COMPLETED,
-    FlowInstanceStatus.FAILED,
-    FlowInstanceStatus.CANCELLED,
-    FlowInstanceStatus.EXPIRED,
-}
-
-
 def _parse_flow_instance_status(value: FlowInstanceStatus | str) -> FlowInstanceStatus:
     if isinstance(value, FlowInstanceStatus):
         return value
@@ -1482,27 +1460,30 @@ class FlowInstance:
 
         Raises ValueError if the transition is not valid per MIP §9.
         """
-        if new_status == self.status:
+        decision = evaluate_native_flow_transition(
+            self.status.value,
+            new_status.value,
+            actor=actor,
+            event=event,
+        )
+        if decision["no_op"]:
             return
-        allowed = VALID_TRANSITIONS.get(self.status, set())
-        if new_status not in allowed:
-            raise ValueError(
-                f"Invalid state transition: {self.status.value} -> {new_status.value}"
-            )
-        prior = self.status
+        prior = FlowInstanceStatus(decision["prior_state"])
+        decided_status = FlowInstanceStatus(decision["new_state"])
+        now = datetime.now(timezone.utc)
         self.state_history.append(
             {
                 "prior_state": prior.value,
-                "new_state": new_status.value,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "actor": actor,
-                "event": event or f"{prior.value}_to_{new_status.value}",
+                "new_state": decided_status.value,
+                "timestamp": now.isoformat(),
+                "actor": decision["actor"],
+                "event": decision["event"],
             }
         )
-        self.status = new_status
-        self.updated_at = datetime.now(timezone.utc)
-        if new_status in TERMINAL_STATES:
-            self.completed_at = datetime.now(timezone.utc)
+        self.status = decided_status
+        self.updated_at = now
+        if decision["terminal"]:
+            self.completed_at = now
 
 
 class ArtifactStatus(str, Enum):
@@ -1613,7 +1594,7 @@ class InMemoryFlowRepository:
                 self._instances[instance.id] = instance
                 return
             self._instances[instance.id] = instance
-            if instance.status in TERMINAL_STATES:
+            if is_native_terminal_status(instance.status.value):
                 self._terminal_instance_snapshots[instance.id] = copy.deepcopy(instance)
 
     async def reserve_application_event_plan(
@@ -1938,40 +1919,30 @@ class FlowExtensionModel(BaseModel):
         if ":" not in self.extension_uri:
             raise ValueError("extension_uri must be an absolute URI")
 
-        step_ids = [step.step_id for step in self.steps]
-        if len(step_ids) != len(set(step_ids)):
-            raise ValueError("extension step_id values must be unique")
-        if self.entry_step_id not in step_ids:
-            raise ValueError("entry_step_id must reference an extension step")
-
-        adjacency: dict[str, list[str]] = {step_id: [] for step_id in step_ids}
-        for transition in self.transitions:
-            if (
-                transition.from_step_id not in adjacency
-                or transition.to_step_id not in adjacency
-            ):
-                raise ValueError("extension transitions must reference declared steps")
-            adjacency[transition.from_step_id].append(transition.to_step_id)
-
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def visit(step_id: str) -> None:
-            if step_id in visiting:
-                raise ValueError("extension graph must be acyclic")
-            if step_id in visited:
-                return
-            visiting.add(step_id)
-            for destination in adjacency[step_id]:
-                visit(destination)
-            visiting.remove(step_id)
-            visited.add(step_id)
-
-        visit(self.entry_step_id)
-        if visited != set(step_ids):
-            raise ValueError(
-                "every extension step must be reachable from entry_step_id"
-            )
+        outcome_map = {
+            "SUCCESS": "success",
+            "FAILURE": "failure",
+            "APPROVED": "approval_granted",
+            "REJECTED": "approval_denied",
+            "TIMEOUT": "timeout",
+            "CUSTOM": "condition_met",
+        }
+        graph = {
+            "entry_step_id": self.entry_step_id,
+            "steps": [{"step_id": step.step_id} for step in self.steps],
+            "transitions": [
+                {
+                    "from_step_id": transition.from_step_id,
+                    "to_step_id": transition.to_step_id,
+                    "outcome": outcome_map[transition.outcome],
+                }
+                for transition in self.transitions
+            ],
+        }
+        try:
+            validate_native_flow_graph(graph)
+        except NativeFlowOperationError as error:
+            raise ValueError(str(error)) from error
         return self
 
 
@@ -3782,18 +3753,24 @@ async def advance_flow(
     ):
         await _execute_physical_document_step(instance, current_step_name, request.data)
 
-    # Find next step based on transition
+    if instance.status == FlowInstanceStatus.AWAITING_WALLET:
+        instance.transition_to(
+            FlowInstanceStatus.IN_PROGRESS,
+            actor=user_id,
+            event="wallet_step_response_received",
+        )
+
+    # Let the canonical Rust graph select the sole next step.
     current_step_id = instance.current_step_id
     condition = TransitionCondition(request.step_result)
-
-    next_step_id = None
-    for transition in flow_def.transitions:
-        if (
-            transition.from_step_id == current_step_id
-            and transition.condition == condition
-        ):
-            next_step_id = transition.to_step_id
-            break
+    if current_step_id is None:
+        raise HTTPException(status_code=400, detail="Flow has no current step")
+    try:
+        next_step_id = select_native_next_step(
+            _native_flow_graph(flow_def), current_step_id, condition.value
+        )
+    except NativeFlowOperationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
     # Update context with request data
     instance.context.update(request.data)
@@ -3824,17 +3801,15 @@ async def advance_flow(
         # Check if this is an end step
         next_step = next((s for s in flow_def.steps if s.id == next_step_id), None)
         if next_step and next_step.step_type == StepType.END:
-            instance.status = FlowInstanceStatus.COMPLETED
-            instance.completed_at = datetime.now(timezone.utc)
+            instance.transition_to(FlowInstanceStatus.COMPLETED, actor=user_id)
             instance.result = instance.context
     else:
         # No valid transition, flow ends
         if request.step_result == "failure":
-            instance.status = FlowInstanceStatus.FAILED
+            instance.transition_to(FlowInstanceStatus.FAILED, actor=user_id)
             instance.error = "Step failed with no recovery transition"
         else:
-            instance.status = FlowInstanceStatus.COMPLETED
-        instance.completed_at = datetime.now(timezone.utc)
+            instance.transition_to(FlowInstanceStatus.COMPLETED, actor=user_id)
 
     instance.updated_at = datetime.now(timezone.utc)
     await repo.save_instance(instance)
@@ -3861,7 +3836,7 @@ async def cancel_flow(
     )
     ensure_membership_permission(membership, "flow-instance", "cancel")
 
-    if instance.status in TERMINAL_STATES:
+    if is_native_terminal_status(instance.status.value):
         raise HTTPException(status_code=400, detail="Flow already ended")
 
     try:
@@ -5159,11 +5134,6 @@ async def get_verification_request_object(
     if not instance:
         raise HTTPException(status_code=404, detail="Flow instance not found")
 
-    if instance.expires_at and datetime.now(timezone.utc) > instance.expires_at:
-        instance.status = FlowInstanceStatus.EXPIRED
-        await repo.save_instance(instance)
-        raise HTTPException(status_code=410, detail="Verification request has expired")
-
     if instance.status not in [
         FlowInstanceStatus.AWAITING_WALLET,
         FlowInstanceStatus.IN_PROGRESS,
@@ -5171,6 +5141,11 @@ async def get_verification_request_object(
         raise HTTPException(
             status_code=400, detail="Request already processed or invalid state"
         )
+
+    if instance.expires_at and datetime.now(timezone.utc) > instance.expires_at:
+        instance.transition_to(FlowInstanceStatus.EXPIRED, event="request_expired")
+        await repo.save_instance(instance)
+        raise HTTPException(status_code=410, detail="Verification request has expired")
 
     if instance.context.get("request_transport") == "url_query":
         raise HTTPException(
@@ -6185,7 +6160,7 @@ async def _submit_verification_response_internal(
         _raise_verification_replay_conflict()
 
     if instance.expires_at and datetime.now(timezone.utc) > instance.expires_at:
-        instance.status = FlowInstanceStatus.EXPIRED
+        instance.transition_to(FlowInstanceStatus.EXPIRED, event="submission_expired")
         await repo.save_instance(instance)
         raise HTTPException(status_code=410, detail="Verification request has expired")
 
@@ -6452,10 +6427,15 @@ async def _submit_verification_response_internal(
         ).hexdigest()
     if state:
         instance.context["state"] = state
-    instance.status = (
-        FlowInstanceStatus.COMPLETED if final_allowed else FlowInstanceStatus.FAILED
+    if instance.status == FlowInstanceStatus.AWAITING_WALLET:
+        instance.transition_to(
+            FlowInstanceStatus.IN_PROGRESS,
+            event="wallet_submission_received",
+        )
+    instance.transition_to(
+        FlowInstanceStatus.COMPLETED if final_allowed else FlowInstanceStatus.FAILED,
+        event="verification_completed" if final_allowed else "verification_failed",
     )
-    instance.completed_at = datetime.now(timezone.utc)
     instance.result = {
         "evaluation_result": evaluation_result,
         "decision": evaluation_decision,
@@ -7027,7 +7007,7 @@ async def submit_siop_id_token(
             "Flow instance is not a SIOPv2 transaction", error="invalid_request"
         )
     if instance.expires_at and datetime.now(timezone.utc) > instance.expires_at:
-        instance.status = FlowInstanceStatus.EXPIRED
+        instance.transition_to(FlowInstanceStatus.EXPIRED, event="siop_submission_expired")
         await repo.save_instance(instance)
         raise HTTPException(status_code=410, detail="SIOPv2 transaction has expired")
     if instance.status not in {
@@ -7090,7 +7070,15 @@ async def submit_siop_id_token(
         if issued_at < earliest_iat:
             raise _siop_error("ID token predates the SIOPv2 transaction")
 
-    instance.status = FlowInstanceStatus.COMPLETED
+    if instance.status == FlowInstanceStatus.AWAITING_WALLET:
+        instance.transition_to(
+            FlowInstanceStatus.IN_PROGRESS,
+            event="siop_submission_received",
+        )
+    instance.transition_to(
+        FlowInstanceStatus.COMPLETED,
+        event="siop_verification_completed",
+    )
     instance.subject_id = subject
     instance.completed_at = datetime.now(timezone.utc)
     instance.updated_at = instance.completed_at
@@ -7518,6 +7506,14 @@ async def handle_application_approved(
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo, _nonce_redis
     logger.info(f"Starting {SERVICE_NAME}...")
+    native_diagnostics = initialize_native_flow_backend()
+    app.state.native_backend_diagnostics = native_diagnostics
+    logger.info(
+        "Native backend ready: backend=%s version=%s capabilities=%s",
+        native_diagnostics["backend"],
+        native_diagnostics["version"],
+        ",".join(native_diagnostics["capabilities"]),
+    )
     callback_secret = _read_secret_value("FLOW_WEBHOOK_SECRET")
     if (
         not is_valid_event_secret(callback_secret)
@@ -7659,6 +7655,13 @@ For orchestrating multi-step credential journeys (issuance, renewal, revocation)
         lifespan=lifespan,
         routers=[router, did_router],
     )
+
+    @app.get("/health/native-backend")
+    async def native_backend_health() -> dict[str, Any]:
+        diagnostics = getattr(app.state, "native_backend_diagnostics", None)
+        if not isinstance(diagnostics, dict) or diagnostics.get("available") is not True:
+            raise HTTPException(status_code=503, detail="Native backend is unavailable")
+        return {"status": "ready", **diagnostics}
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(
