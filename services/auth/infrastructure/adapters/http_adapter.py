@@ -40,10 +40,15 @@ from ...application.ports import (
     UserProvisioningPort,
 )
 from ...application.use_cases import AuthenticateUseCase, SessionUseCase
-from ...domain.entities import AuthenticatedUser, ImpersonationContext, Session, UserType
+from ...domain.entities import (
+    AuthenticatedUser,
+    ImpersonationContext,
+    OIDCUserInfo,
+    Session,
+    UserType,
+)
 from .applicant_profile_adapter import apply_credential_login_defaults
 from .credential_login_enricher import build_credential_login_user
-from .oidc_adapter import build_oidc_user_info
 
 try:
     from .keycloak_admin_adapter import KeycloakAdminAdapter, merge_oidc_user_info
@@ -1176,29 +1181,6 @@ def _oidc_callback_url(ui_base_url: str) -> str:
     return f"{ui_base_url.rstrip('/')}/v1/auth/callback"
 
 
-def _decode_jwt_claims(token: str | None) -> dict[str, Any]:
-    """Decode JWT claims without signature verification."""
-    if not token:
-        return {}
-
-    try:
-        parts = token.split(".")
-        if len(parts) != 3:
-            return {}
-
-        payload = parts[1]
-        padding = (-len(payload)) % 4
-        if padding:
-            payload += "=" * padding
-
-        decoded = base64.urlsafe_b64decode(payload.encode("utf-8")).decode("utf-8")
-        claims = json.loads(decoded)
-        return claims if isinstance(claims, dict) else {}
-    except Exception:
-        logger.debug("Failed to decode JWT claims for impersonation detection", exc_info=True)
-        return {}
-
-
 def _decode_impersonation_handoff(raw_cookie: str | None) -> dict[str, Any] | None:
     """Decode the short-lived impersonation handoff cookie set before Keycloak redirect."""
     if not raw_cookie:
@@ -1238,7 +1220,7 @@ def _build_session_impersonation(
     falls back to the short-lived handoff cookie we set before redirecting to
     Keycloak's native impersonation endpoint.
     """
-    claims = _decode_jwt_claims(session.id_token)
+    claims = session.oidc_claims or {}
     native_admin_user_id, native_admin_username = _get_native_impersonator_claims(claims)
     handoff = _decode_impersonation_handoff(request.cookies.get(_impersonation_handoff_cookie_name))
 
@@ -2918,9 +2900,9 @@ async def credential_verified(
                 kc_tokens = await _kc_admin_adapter.exchange_token_for_user(kc_user_id)
                 if kc_tokens and (kc_tokens.get("id_token") or kc_tokens.get("access_token")):
                     try:
-                        keycloak_user = build_oidc_user_info(
-                            id_token=kc_tokens.get("id_token"),
-                            access_token=kc_tokens.get("access_token"),
+                        keycloak_user = OIDCUserInfo.from_claims(
+                            kc_tokens.get("id_token_claims") or {},
+                            kc_tokens.get("access_token_claims") or {},
                         )
                     except ValueError as kc_claim_exc:
                         logger.warning(
@@ -2989,6 +2971,11 @@ async def credential_verified(
     if kc_tokens:
         session.id_token = kc_tokens.get("id_token")
         session.refresh_token = kc_tokens.get("refresh_token")
+        session.oidc_claims = (
+            kc_tokens.get("id_token_claims")
+            or kc_tokens.get("access_token_claims")
+            or None
+        )
         logger.debug("KC tokens obtained for %s", email)
 
     await _session_repository.save(session)

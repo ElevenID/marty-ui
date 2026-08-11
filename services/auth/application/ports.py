@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from ..domain.entities import (
     AuthenticatedUser,
+    OIDCValidatedIdentity,
     OIDCUserInfo,
     PKCEState,
     Session,
@@ -164,6 +165,7 @@ class OIDCProviderPort(ABC):
         self,
         state: str,
         code_challenge: str,
+        nonce: str,
         redirect_uri: str | None = None,
     ) -> str:
         """Build authorization URL with PKCE."""
@@ -174,6 +176,7 @@ class OIDCProviderPort(ABC):
         self,
         state: str,
         code_challenge: str,
+        nonce: str,
         redirect_uri: str | None = None,
     ) -> str:
         """Build registration URL with PKCE."""
@@ -190,8 +193,13 @@ class OIDCProviderPort(ABC):
         ...
     
     @abstractmethod
-    def parse_id_token(self, id_token: str, access_token: str | None = None) -> OIDCUserInfo:
-        """Parse user claims from ID token (already validated via PKCE)."""
+    async def validate_tokens(
+        self,
+        id_token: str,
+        access_token: str | None,
+        expected_nonce: str,
+    ) -> OIDCValidatedIdentity:
+        """Validate provider tokens and return authenticated identity claims."""
         ...
     
     @abstractmethod

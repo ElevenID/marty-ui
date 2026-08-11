@@ -184,6 +184,7 @@ class KeycloakAdminAdapter:
         client_secret: str,
         timeout: float = 8.0,
         token_exchange_enabled: bool | None = None,
+        token_validator: Any | None = None,
     ) -> None:
         self._admin_url = admin_url.rstrip("/")
         self._realm = realm
@@ -195,6 +196,7 @@ class KeycloakAdminAdapter:
             if token_exchange_enabled is not None
             else os.environ.get("KEYCLOAK_TOKEN_EXCHANGE_ENABLED", "false").lower() in {"1", "true", "yes"}
         )
+        self._token_validator = token_validator
         self._token_url = f"{self._admin_url}/realms/{realm}/protocol/openid-connect/token"
         self._admin_base = f"{self._admin_url}/admin/realms/{realm}"
 
@@ -387,7 +389,7 @@ class KeycloakAdminAdapter:
         self,
         kc_user_id: str,
         audience: str = "marty-ui",
-    ) -> dict[str, str] | None:
+    ) -> dict[str, Any] | None:
         """
         Perform an RFC 8693 token exchange to obtain KC-issued tokens for
         a Keycloak user identified by *kc_user_id*.
@@ -426,10 +428,24 @@ class KeycloakAdminAdapter:
                 resp.raise_for_status()
 
                 tokens = resp.json()
+                if not isinstance(tokens, dict):
+                    raise ValueError("KC token exchange returned an invalid response")
+                if self._token_validator is None:
+                    raise ValueError("Native OIDC token validator is unavailable")
+                validated = await self._token_validator.validate_exchanged_tokens(
+                    tokens,
+                    expected_audience=audience,
+                )
+                if validated is None:
+                    raise ValueError(
+                        "KC token exchange returned no verifiable identity token"
+                    )
                 return {
                     "id_token": tokens.get("id_token", ""),
                     "refresh_token": tokens.get("refresh_token", ""),
                     "access_token": tokens.get("access_token", ""),
+                    "id_token_claims": validated.id_token_claims,
+                    "access_token_claims": validated.access_token_claims,
                 }
 
         except Exception as exc:
@@ -534,7 +550,7 @@ class KeycloakAdminAdapter:
 # Factory helper
 # ---------------------------------------------------------------------------
 
-def build_keycloak_admin_adapter() -> KeycloakAdminAdapter | None:
+def build_keycloak_admin_adapter(*, token_validator: Any) -> KeycloakAdminAdapter | None:
     """
     Build a :class:`KeycloakAdminAdapter` from environment variables.
 
@@ -588,4 +604,5 @@ def build_keycloak_admin_adapter() -> KeycloakAdminAdapter | None:
         realm=realm,
         client_id=client_id,
         client_secret=client_secret,
+        token_validator=token_validator,
     )

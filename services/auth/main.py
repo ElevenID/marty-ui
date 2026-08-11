@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 import redis.asyncio as redis
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from marty_common.service_setup import create_service_app
@@ -73,6 +73,15 @@ def get_config() -> dict:
             ),
             "client_id": os.environ.get("OIDC_CLIENT_ID", "marty-ui"),
             "client_secret": os.environ.get("OIDC_CLIENT_SECRET"),
+            "access_token_audience": os.environ.get(
+                "OIDC_ACCESS_TOKEN_AUDIENCE",
+                os.environ.get("OIDC_CLIENT_ID", "marty-ui"),
+            ),
+            "allowed_algorithms": tuple(
+                value.strip()
+                for value in os.environ.get("OIDC_ALLOWED_ALGORITHMS", "RS256").split(",")
+                if value.strip()
+            ),
             "redirect_uri": os.environ.get(
                 "OIDC_REDIRECT_URI",
                 redirect_default,
@@ -122,8 +131,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         client_secret=config["oidc"]["client_secret"],
         redirect_uri=config["oidc"]["redirect_uri"],
         external_issuer_url=config["oidc"]["external_issuer_url"],
+        access_token_audience=config["oidc"]["access_token_audience"],
+        allowed_algorithms=config["oidc"]["allowed_algorithms"],
     )
     oidc_provider = KeycloakOIDCAdapter(oidc_config)
+    native_diagnostics = oidc_provider.validator.native_backend_diagnostics
+    app.state.native_backend_diagnostics = native_diagnostics
+    logger.info(
+        "Native backend ready: backend=%s version=%s capabilities=%s",
+        native_diagnostics["backend"],
+        native_diagnostics["version"],
+        ",".join(native_diagnostics["capabilities"]),
+    )
     
     # gRPC channels
     from common.grpc_factory import create_grpc_channel
@@ -160,7 +179,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     
     # Keycloak admin adapter (optional — for token exchange in credential login)
-    kc_admin_adapter = build_keycloak_admin_adapter()
+    kc_admin_adapter = build_keycloak_admin_adapter(
+        token_validator=oidc_provider.validator,
+    )
 
     # Configure router with use cases
     configure_auth_router(
@@ -239,6 +260,13 @@ def create_app() -> FastAPI:
         redoc_url=_redoc,
         openapi_url=_openapi,
     )
+
+    @app.get("/health/native-backend")
+    async def native_backend_health() -> dict:
+        diagnostics = getattr(app.state, "native_backend_diagnostics", None)
+        if not isinstance(diagnostics, dict) or diagnostics.get("available") is not True:
+            raise HTTPException(status_code=503, detail="Native backend is unavailable")
+        return {"status": "ready", **diagnostics}
 
     # In-memory sliding-window rate limiter for auth endpoints (brute-force mitigation).
     # Covers /login, /register, /callback, /credential-login/* — all unauthenticated flows.

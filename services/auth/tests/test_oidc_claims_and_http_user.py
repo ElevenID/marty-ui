@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -34,18 +33,6 @@ from services.auth.infrastructure.adapters.http_adapter import (
     get_current_user,
 )
 from services.auth.infrastructure.adapters.oidc_adapter import build_oidc_user_info
-
-
-def _encode_base64url(payload: dict) -> str:
-    return base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
-
-
-def _build_jwt(claims: dict) -> str:
-    return ".".join([
-        _encode_base64url({"alg": "none", "typ": "JWT"}),
-        _encode_base64url(claims),
-        "signature",
-    ])
 
 
 def _build_request(*, referer: str = "") -> Request:
@@ -103,7 +90,7 @@ def _build_forwarded_request(
 
 
 def test_build_oidc_user_info_merges_keycloak_roles_and_org_claims():
-    id_token = _build_jwt({
+    id_claims = {
         "sub": "kc-user-1",
         "email": "alice@example.com",
         "given_name": "Alice",
@@ -113,17 +100,17 @@ def test_build_oidc_user_info_merges_keycloak_roles_and_org_claims():
             "org-1": {"name": "Acme"},
             "org-2": {"name": "Beta"},
         },
-    })
-    access_token = _build_jwt({
+    }
+    access_claims = {
         "realm_access": {"roles": ["vendor"]},
         "resource_access": {
             "marty-ui": {"roles": ["organization-admin"]},
             "marty-api": {"roles": ["api-user"]},
         },
         "roles": ["administrator"],
-    })
+    }
 
-    oidc_user = build_oidc_user_info(id_token=id_token, access_token=access_token)
+    oidc_user = build_oidc_user_info(id_claims, access_claims)
 
     assert oidc_user.sub == "kc-user-1"
     assert oidc_user.organization == {

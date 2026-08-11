@@ -10,14 +10,6 @@ def _encode_base64url(payload: dict) -> str:
     return base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).decode("utf-8").rstrip("=")
 
 
-def _build_jwt(claims: dict) -> str:
-    return ".".join([
-        _encode_base64url({"alg": "none", "typ": "JWT"}),
-        _encode_base64url(claims),
-        "signature",
-    ])
-
-
 def test_build_session_impersonation_uses_handoff_cookie_for_matching_target():
     user = AuthenticatedUser(
         user_id="vendor-1",
@@ -62,12 +54,13 @@ def test_build_session_impersonation_uses_native_keycloak_claims_when_present():
     )
     session = Session.create(
         user=user,
-        id_token=_build_jwt({
+        id_token="verified-id-token",
+        oidc_claims={
             "sub": "vendor-1",
             "email": "vendor@example.com",
             "IMPERSONATOR_ID": "admin-2",
             "IMPERSONATOR_USERNAME": "support.admin",
-        }),
+        },
     )
     request = SimpleNamespace(cookies={})
 
