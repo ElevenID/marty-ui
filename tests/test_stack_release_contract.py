@@ -24,6 +24,8 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
         "marty-cli",
         "marty-common",
         "marty-core-python",
+        "marty-verification-python",
+        "marty-iso18013-python",
         "marty-integration-tests",
     }
     for component in required_components:
@@ -53,12 +55,11 @@ def test_ci_verifies_the_pinned_mdoc_binding_evidence_contract() -> None:
     assert 'select(.type == "python") | .uri' in workflow
     assert 'select(.type == "python") | .digest' in workflow
     assert "sha256sum --check --strict" in workflow
-    assert (
-        'pip install pytest pyyaml jsonschema cryptography playwright "$marty_rs_wheel"'
-        in workflow
-    )
+    assert '"$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"' in workflow
     assert "Verify released mdoc binding evidence contract" in workflow
     assert "from marty_rs import _marty_rs" in workflow
+    assert "import marty_verification" in workflow
+    assert "import marty_iso18013" in workflow
     assert "_marty_rs.MdocDocumentVerificationEvidence" in workflow
     assert '"issuer_certificate_sha256"' in workflow
     assert '"valid_at_verification_time"' in workflow
@@ -178,9 +179,31 @@ def test_public_builds_do_not_checkout_sibling_sources() -> None:
     assert "COPY ../" not in dockerfiles
     assert "MARTY_COMMON_URI" in dockerfiles
     assert "MARTY_COMMON_DIGEST" in dockerfiles
+    assert "MARTY_VERIFICATION_URI" in dockerfiles
+    assert "MARTY_VERIFICATION_DIGEST" in dockerfiles
+    assert "MARTY_ISO18013_URI" in dockerfiles
+    assert "MARTY_ISO18013_DIGEST" in dockerfiles
     assert 'MARTY_COMMON_WHEEL="/tmp/${MARTY_COMMON_URI##*/}"' in dockerfiles
     assert "/tmp/marty-common.whl" not in dockerfiles
     assert "sha256sum --check --strict" in dockerfiles
+
+
+def test_service_images_install_every_required_native_backend() -> None:
+    service = _text("services/Dockerfile")
+    migrations = _text("services/Dockerfile.migrations")
+
+    for dockerfile in (service, migrations):
+        assert 'MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}"' in dockerfile
+        assert 'MARTY_VERIFICATION_WHEEL="/tmp/${MARTY_VERIFICATION_URI##*/}"' in dockerfile
+        assert 'MARTY_ISO18013_WHEEL="/tmp/${MARTY_ISO18013_URI##*/}"' in dockerfile
+        assert '"$MARTY_VERIFICATION_WHEEL"' in dockerfile
+        assert '"$MARTY_ISO18013_WHEEL"' in dockerfile
+
+    lock = json.loads(_text("release/stack-lock.json"))
+    components = {component["name"]: component for component in lock["components"]}
+    for name in ("marty-core-python", "marty-verification-python", "marty-iso18013-python"):
+        assert components[name]["version"] == "0.1.46"
+        assert components[name]["commit"] == "c8a028e803e7278f7842f5085855ac12a80b14ba"
 
 
 def test_release_images_reject_commerce_markers() -> None:

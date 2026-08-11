@@ -1,64 +1,128 @@
 <#
 .SYNOPSIS
-Restores only the disposable local beta stack from a quiesced release backup.
+Restores a quiesced elevenid-beta release snapshot after a failed migration.
 
 .DESCRIPTION
-This is a supervised recovery command for a failed beta migration. It refuses
-non-beta artifacts and non-Compose-owned target containers. It restores the
-Marty and Keycloak databases, applicant JSON store, Redis snapshot, and the
-pre-deploy application/UI images. OpenBao remains running because the beta dev
-server holds its transit keys in process memory; the Canvas bootstrap is
-additive and does not rotate or delete existing keys.
+This command is intentionally limited to the elevenid-beta Compose project.
+It resolves containers by Compose service labels and never addresses self-host
+production or demo-release-candidate resources.
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$ArtifactDir,
+    [string]$TunnelEnvFile = (Join-Path (Split-Path -Parent $PSScriptRoot) ".env.tunnel.beta.local"),
+    [string]$GeneratedEnvFile = (Join-Path (Split-Path -Parent $PSScriptRoot) ".env.beta.generated.local"),
     [Parameter(Mandatory = $true)][switch]$ConfirmBetaRestore
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+if (-not $ConfirmBetaRestore) { throw "-ConfirmBetaRestore is required" }
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$artifactRoot = (Resolve-Path (Join-Path $repoRoot "tests\artifacts")).Path
+$resolvedArtifacts = (Resolve-Path $ArtifactDir).Path
+$allowedPrefix = $artifactRoot.TrimEnd('\') + '\'
+if (-not $resolvedArtifacts.StartsWith($allowedPrefix, [StringComparison]::OrdinalIgnoreCase) -or $resolvedArtifacts -match "selfhost|production|demo-release-candidate") {
+    throw "Restore ArtifactDir must be a local beta artifact under tests/artifacts"
+}
+
+$project = "elevenid-beta"
+$uiProject = "elevenid-beta-ui"
+$env:MARTY_NETWORK_NAME = "elevenid-beta-network"
+$composeFiles = @(
+    "docker-compose.base.yml", "docker-compose.beta.yml", "docker-compose.profile.dev.yml",
+    "docker-compose.profile.tunnel.yml", "deploy-config/compose/tunnel-beta/event-stream-rust.yml",
+    "docker-compose.profile.waltid.yml",
+    "docker-compose.profile.canvas-real.yml", "docker-compose.profile.canvas-sandbox.yml"
+) | ForEach-Object { Join-Path $repoRoot $_ }
+$uiCompose = Join-Path $repoRoot "docker-compose.ui-release.yml"
+$envFiles = @(
+    $TunnelEnvFile,
+    $GeneratedEnvFile
+)
+foreach ($envFile in $envFiles) {
+    if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) { throw "Required beta environment file is missing: $envFile" }
+}
+$stackLock = Get-Content -LiteralPath (Join-Path $repoRoot "release\stack-lock.json") -Raw | ConvertFrom-Json
+function Get-StackArtifact([string]$Name, [string]$Type) {
+    $component = @($stackLock.components | Where-Object name -eq $Name)
+    if ($component.Count -ne 1) { throw "Stack lock must contain exactly one $Name component" }
+    $artifact = @($component[0].artifacts | Where-Object type -eq $Type)
+    if ($artifact.Count -ne 1 -or $artifact[0].digest -notmatch '^sha256:[0-9a-f]{64}$' -or -not $artifact[0].uri) {
+        throw "Stack lock artifact is incomplete: $Name/$Type"
+    }
+    return $artifact[0]
+}
+$martyCommon = Get-StackArtifact "marty-common" "python"
+$martyRs = Get-StackArtifact "marty-core-python" "python"
+$martyVerification = Get-StackArtifact "marty-verification-python" "python"
+$martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python"
+$martyIssuance = Get-StackArtifact "marty-credentials-issuance" "oci"
+$env:MARTY_COMMON_URI = $martyCommon.uri
+$env:MARTY_COMMON_DIGEST = $martyCommon.digest
+$env:MARTY_RS_URI = $martyRs.uri
+$env:MARTY_RS_DIGEST = $martyRs.digest
+$env:MARTY_VERIFICATION_URI = $martyVerification.uri
+$env:MARTY_VERIFICATION_DIGEST = $martyVerification.digest
+$env:MARTY_ISO18013_URI = $martyIso18013.uri
+$env:MARTY_ISO18013_DIGEST = $martyIso18013.digest
+$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.uri)@$($martyIssuance.digest)"
+$docsIds = @(& docker ps -a --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=docs" --format '{{.ID}}')
+if ($LASTEXITCODE -ne 0 -or $docsIds.Count -ne 1) { throw "Expected one existing beta docs container" }
+$env:MARTY_DOCS_IMAGE = & docker inspect $docsIds[0] --format '{{.Config.Image}}'
+if ($LASTEXITCODE -ne 0 -or $env:MARTY_DOCS_IMAGE -notmatch '^sha256:[0-9a-f]{64}$') {
+    throw "Existing beta docs image is not immutable"
+}
 
 function Invoke-Checked([string]$FilePath, [string[]]$Arguments) {
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) { throw "$FilePath failed with exit code $LASTEXITCODE" }
 }
 
-function Wait-ForContainerHealth([string[]]$Containers, [int]$TimeoutSeconds = 420) {
+function Get-ComposeArgs([string[]]$Tail) {
+    $args = @("compose", "--project-name", $project)
+    foreach ($envFile in $envFiles) { $args += @("--env-file", $envFile) }
+    foreach ($file in $composeFiles) { $args += @("-f", $file) }
+    return $args + $Tail
+}
+
+function Find-ServiceContainer([string]$Service) {
+    $arguments = Get-ComposeArgs @("ps", "--all", "--quiet", $Service)
+    $id = & docker @arguments
+    if ($LASTEXITCODE -ne 0) { throw "Could not resolve beta service $Service" }
+    $ids = @($id | Where-Object { $_ })
+    if ($ids.Count -gt 1) { throw "Expected at most one beta container for $Service" }
+    if ($ids.Count -eq 0) { return $null }
+    $inspect = & docker inspect $ids[0] | ConvertFrom-Json
+    if ($inspect[0].Config.Labels.'com.docker.compose.project' -ne $project) {
+        throw "Refusing container outside $project"
+    }
+    return [string]$ids[0]
+}
+
+function Get-ServiceContainer([string]$Service) {
+    $container = Find-ServiceContainer $Service
+    if (-not $container) { throw "Expected one beta container for $Service" }
+    return $container
+}
+
+function Wait-ForServiceHealth([string[]]$Services, [int]$TimeoutSeconds = 420) {
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
         $pending = @()
-        foreach ($container in $Containers) {
-            $state = docker inspect $container --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>$null
-            if ($LASTEXITCODE -ne 0 -or $state -notin @("healthy", "running")) { $pending += $container }
+        foreach ($service in $Services) {
+            $container = Find-ServiceContainer $service
+            if (-not $container) { $pending += "$service=missing"; continue }
+            $state = & docker inspect $container --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>$null
+            if ($LASTEXITCODE -ne 0 -or $state -notin @("healthy", "running")) {
+                $pending += "$service=$state"
+            }
         }
         if ($pending.Count -eq 0) { return }
         Start-Sleep -Seconds 5
     } while ((Get-Date) -lt $deadline)
-    throw "Restored beta containers did not become healthy: $($pending -join ', ')"
-}
-
-function Assert-ContainerOwnership([string]$Container, [string]$ExpectedProject) {
-    $existingContainers = @(& docker ps -a --format '{{.Names}}')
-    if ($LASTEXITCODE -ne 0) { throw "Could not enumerate Docker containers" }
-    if ($Container -notin $existingContainers) { return $false }
-    $json = & docker inspect $Container
-    if ($LASTEXITCODE -ne 0) { throw "Could not inspect beta container: $Container" }
-    $inspect = (ConvertFrom-Json -InputObject ($json -join "`n"))[0]
-    $project = $inspect.Config.Labels.'com.docker.compose.project'
-    if ($project -ne $ExpectedProject) {
-        throw "Refusing beta restore: $Container belongs to Compose project $project, not $ExpectedProject"
-    }
-    return $true
-}
-
-if (-not $ConfirmBetaRestore) { throw "-ConfirmBetaRestore is required" }
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$artifactRoot = (Resolve-Path (Join-Path $repoRoot "tests\artifacts")).Path
-$resolvedArtifacts = (Resolve-Path $ArtifactDir).Path
-$artifactPrefix = $artifactRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
-if (-not $resolvedArtifacts.StartsWith($artifactPrefix, [StringComparison]::OrdinalIgnoreCase) -or $resolvedArtifacts -match "selfhost|production") {
-    throw "Restore ArtifactDir must be a beta artifact under marty-ui/tests/artifacts"
+    throw "Restored beta services did not become healthy: $($pending -join ', ')"
 }
 
 $backupDir = Join-Path $resolvedArtifacts "backup"
@@ -67,116 +131,94 @@ $preDeployPath = Join-Path $resolvedArtifacts "pre-deploy-containers.json"
 foreach ($required in @($backupManifestPath, $preDeployPath, (Join-Path $resolvedArtifacts "source-manifest.json"))) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing beta recovery input: $required" }
 }
-$backupManifest = Get-Content -LiteralPath $backupManifestPath -Raw | ConvertFrom-Json
-if ($backupManifest.schema_version -ne 1 -or $backupManifest.phase -ne "maintenance_quiesced" -or $backupManifest.application_writers_stopped -ne $true) {
+$manifest = Get-Content -LiteralPath $backupManifestPath -Raw | ConvertFrom-Json
+if ($manifest.schema_version -ne 1 -or $manifest.phase -ne "maintenance_quiesced" -or $manifest.application_writers_stopped -ne $true) {
     throw "Backup is not a quiesced beta maintenance snapshot"
 }
 $requiredFiles = @("applicant_store.json", "openbao-data.tar.gz", "postgres-globals.sql", "postgres-keycloak.dump", "postgres-marty.dump", "redis-dump.rdb")
-foreach ($record in @($backupManifest.files)) {
-    if ($record.name -notin $requiredFiles) { throw "Unexpected file in beta backup manifest" }
-    $path = Join-Path $backupDir $record.name
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing beta backup file: $($record.name)" }
-    $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actual -ne $record.sha256) { throw "Beta backup checksum mismatch: $($record.name)" }
-}
 foreach ($name in $requiredFiles) {
-    if ($name -notin @($backupManifest.files.name)) { throw "Beta backup manifest is incomplete: $name" }
+    $record = @($manifest.files | Where-Object name -eq $name)
+    $path = Join-Path $backupDir $name
+    if ($record.Count -ne 1 -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Incomplete beta backup: $name" }
+    $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($hash -ne $record[0].sha256) { throw "Beta backup checksum mismatch: $name" }
 }
 
-$applicationMap = [ordered]@{
-    "marty-auth" = "auth"; "marty-organization" = "organization"; "marty-credential-template" = "credential-template"
-    "marty-trust-profile" = "trust-profile"; "marty-applicant" = "applicant"; "marty-notification" = "notification"
-    "marty-compliance-profile" = "compliance-profile"; "marty-presentation-policy" = "presentation-policy"
-    "marty-deployment-profile" = "deployment-profile"; "marty-flow" = "flow"; "marty-verification" = "verification"
-    "marty-revocation-profile" = "revocation-profile"; "marty-device-registration" = "device-registration"
-    "marty-event-stream" = "event-stream"; "marty-issuance" = "issuance"
-    "marty-canvas-sync-worker" = "canvas-sync-worker"; "marty-gateway" = "gateway"
-}
-$preDeployDocument = ConvertFrom-Json -InputObject (Get-Content -LiteralPath $preDeployPath -Raw)
-$preDeploy = @()
-foreach ($record in $preDeployDocument) {
-    $preDeploy += $record
-}
-$targetNames = @($applicationMap.Keys) + @("marty-keycloak", "marty-ui-prod")
-foreach ($name in $targetNames) {
-    $project = if ($name -eq "marty-ui-prod") { "marty-ui-prod" } else { "marty-ui" }
-    if (Assert-ContainerOwnership $name $project) { docker stop $name 2>$null | Out-Null }
-}
-foreach ($infra in @("marty-postgres", "marty-redis", "marty-openbao")) {
-    if (-not (Assert-ContainerOwnership $infra "marty-ui")) { throw "Required beta infrastructure is absent: $infra" }
-}
+$preDeploy = @(Get-Content -LiteralPath $preDeployPath -Raw | ConvertFrom-Json)
+$applicationServices = @(
+    "auth", "organization", "credential-template", "trust-profile", "applicant", "notification",
+    "compliance-profile", "presentation-policy", "deployment-profile", "flow", "verification",
+    "revocation-profile", "device-registration", "event-stream", "issuance", "canvas-sync-worker", "gateway"
+)
+Invoke-Checked docker (Get-ComposeArgs (@("stop") + $applicationServices + @("keycloak")))
 
-Invoke-Checked docker @("cp", (Join-Path $backupDir "postgres-marty.dump"), "marty-postgres:/tmp/beta-restore-marty.dump")
-Invoke-Checked docker @("cp", (Join-Path $backupDir "postgres-keycloak.dump"), "marty-postgres:/tmp/beta-restore-keycloak.dump")
+$postgres = Get-ServiceContainer "postgres"
+Invoke-Checked docker @("cp", (Join-Path $backupDir "postgres-marty.dump"), "${postgres}:/tmp/beta-restore-marty.dump")
+Invoke-Checked docker @("cp", (Join-Path $backupDir "postgres-keycloak.dump"), "${postgres}:/tmp/beta-restore-keycloak.dump")
 foreach ($database in @("marty", "keycloak")) {
-    Invoke-Checked docker @("exec", "marty-postgres", "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$database' AND pid <> pg_backend_pid();")
-    Invoke-Checked docker @("exec", "marty-postgres", "dropdb", "-U", "postgres", "--if-exists", $database)
-    Invoke-Checked docker @("exec", "marty-postgres", "createdb", "-U", "postgres", "-O", $database, $database)
-    Invoke-Checked docker @("exec", "marty-postgres", "pg_restore", "-U", "postgres", "-d", $database, "--no-owner", "--role=$database", "/tmp/beta-restore-$database.dump")
+    Invoke-Checked docker @("exec", $postgres, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='$database' AND pid <> pg_backend_pid();")
+    Invoke-Checked docker @("exec", $postgres, "dropdb", "-U", "postgres", "--if-exists", $database)
+    Invoke-Checked docker @("exec", $postgres, "createdb", "-U", "postgres", "-O", $database, $database)
+    Invoke-Checked docker @("exec", $postgres, "pg_restore", "-U", "postgres", "-d", $database, "--no-owner", "--role=$database", "/tmp/beta-restore-$database.dump")
 }
-Invoke-Checked docker @("cp", (Join-Path $backupDir "applicant_store.json"), "marty-applicant:/app/data/applicant_store.json")
 
-$redisVolume = (docker volume inspect marty-ui_redis_data | ConvertFrom-Json)[0]
-if ($LASTEXITCODE -ne 0 -or $redisVolume.Labels.'com.docker.compose.project' -ne "marty-ui") {
-    throw "Refusing to restore a Redis volume not owned by the marty-ui Compose project"
-}
-Invoke-Checked docker @("stop", "marty-redis")
-Invoke-Checked docker @("run", "--rm", "--mount", "type=volume,src=marty-ui_redis_data,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", "postgres:15-alpine", "sh", "-lc", "rm -rf /data/appendonlydir && rm -f /data/dump.rdb && cp /backup/redis-dump.rdb /data/dump.rdb")
-Invoke-Checked docker @("start", "marty-redis")
-Wait-ForContainerHealth @("marty-redis")
+$redisVolumeName = "elevenid-beta_redis_data"
+$redisVolumeRaw = & docker volume inspect $redisVolumeName
+if ($LASTEXITCODE -ne 0) { throw "Required beta Redis volume is absent" }
+$redisVolume = ($redisVolumeRaw -join "`n") | ConvertFrom-Json
+if ($redisVolume[0].Labels.'com.docker.compose.project' -ne $project) { throw "Refusing non-beta Redis volume" }
+Invoke-Checked docker (Get-ComposeArgs @("stop", "redis"))
+Invoke-Checked docker @("run", "--rm", "--mount", "type=volume,src=$redisVolumeName,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", "postgres:15-alpine", "sh", "-lc", "rm -rf /data/appendonlydir && rm -f /data/dump.rdb && cp /backup/redis-dump.rdb /data/dump.rdb")
+Invoke-Checked docker (Get-ComposeArgs @("start", "redis"))
+Wait-ForServiceHealth @("redis")
 
-$gatewayRecord = @($preDeploy | Where-Object { $_.container -eq "marty-gateway" })[0]
-foreach ($name in @("MARTY_RELEASE_VERSION", "MARTY_UI_SHA", "ELEVENID_STACK_VERSION", "ELEVENID_IMAGE_DIGESTS_JSON")) {
-    $property = $gatewayRecord.runtime_marker_environment.PSObject.Properties[$name]
-    if ($null -ne $property -and $null -ne $property.Value) {
-        Set-Item -Path "Env:$name" -Value ([string]$property.Value)
+$gatewayRecord = @($preDeploy | Where-Object { $_.service -eq "gateway" } | Select-Object -First 1)
+if ($gatewayRecord.Count -eq 1) {
+    foreach ($name in @("MARTY_RELEASE_VERSION", "MARTY_UI_SHA", "ELEVENID_STACK_VERSION", "ELEVENID_IMAGE_DIGESTS_JSON")) {
+        $property = $gatewayRecord[0].runtime_marker_environment.PSObject.Properties[$name]
+        if ($null -ne $property -and $null -ne $property.Value) {
+            Set-Item -Path "Env:$name" -Value ([string]$property.Value)
+        }
     }
 }
-$restoreComposePath = Join-Path $resolvedArtifacts "restore-images.yml"
-$restoreYaml = @("services:")
+$restoreImages = Join-Path $resolvedArtifacts "restore-images.yml"
+$yaml = @("services:")
 $restoreServices = @()
 foreach ($record in $preDeploy) {
-    if ($record.running -and $applicationMap.Contains($record.container)) {
-        if ($record.image_id -notmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid pre-deploy image ID for $($record.container)" }
-        $service = $applicationMap[$record.container]
-        $restoreServices += $service
-        $restoreYaml += "  ${service}:"
-        $restoreYaml += "    image: $($record.image_id)"
+    if ($record.running -and $record.service -in $applicationServices) {
+        if ($record.image_id -notmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid image ID for $($record.service)" }
+        $restoreServices += [string]$record.service
+        $yaml += "  $($record.service):"
+        $yaml += "    image: $($record.image_id)"
     }
 }
-$restoreYaml -join "`n" | Set-Content -LiteralPath $restoreComposePath -Encoding utf8
-$composeArgs = @("compose", "--project-name", "marty-ui")
-foreach ($file in @("docker-compose.base.yml", "docker-compose.profile.dev.yml", "docker-compose.profile.tunnel.yml", "docker-compose.profile.waltid.yml", "docker-compose.profile.canvas-real.yml", "docker-compose.profile.canvas-sandbox.yml")) {
-    $composeArgs += @("-f", (Join-Path $repoRoot $file))
-}
-$composeArgs += @("-f", $restoreComposePath)
+$yaml -join "`n" | Set-Content -LiteralPath $restoreImages -Encoding utf8
+$composeFiles += $restoreImages
+Invoke-Checked docker (Get-ComposeArgs (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + @("keycloak") + $restoreServices))
+Wait-ForServiceHealth (@("keycloak") + $restoreServices)
 
-Invoke-Checked docker @("start", "marty-keycloak")
-Wait-ForContainerHealth @("marty-keycloak")
-if ($restoreServices.Count -gt 0) {
-    Invoke-Checked docker ($composeArgs + @("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $restoreServices)
-    Wait-ForContainerHealth @($applicationMap.Keys | Where-Object { $applicationMap[$_] -in $restoreServices })
+if ("canvas-sync-worker" -notin @($preDeploy.service)) {
+    $worker = Find-ServiceContainer "canvas-sync-worker"
+    if ($worker) { Invoke-Checked docker @("rm", "--force", $worker) }
 }
-if ("marty-canvas-sync-worker" -notin @($preDeploy.container)) {
-    $workerExists = @(& docker ps -a --filter "name=^/marty-canvas-sync-worker$" --format '{{.Names}}')
-    if ($LASTEXITCODE -ne 0) { throw "Could not query the beta Canvas worker" }
-    if ($workerExists -contains "marty-canvas-sync-worker") {
-        Invoke-Checked docker @("rm", "--force", "marty-canvas-sync-worker")
-    }
-}
-$uiRecord = @($preDeploy | Where-Object { $_.container -eq "marty-ui-prod" -and $_.running })
-if ($uiRecord.Count -gt 0) {
+
+$applicant = Get-ServiceContainer "applicant"
+Invoke-Checked docker @("cp", (Join-Path $backupDir "applicant_store.json"), "${applicant}:/app/data/applicant_store.json")
+
+$uiRecord = @($preDeploy | Where-Object { $_.service -eq "ui-prod" -and $_.running } | Select-Object -First 1)
+if ($uiRecord.Count -eq 1) {
+    if ($uiRecord[0].image_id -notmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid beta UI image ID" }
     $env:MARTY_UI_RELEASE_IMAGE = $uiRecord[0].image_id
-    Invoke-Checked docker @("compose", "-f", (Join-Path $repoRoot "docker-compose.ui-release.yml"), "up", "--detach", "--no-build", "--force-recreate", "ui-prod")
-    Wait-ForContainerHealth @("marty-ui-prod")
+    Invoke-Checked docker @("compose", "--project-name", $uiProject, "--env-file", $envFiles[0], "--env-file", $envFiles[1], "-f", $uiCompose, "up", "--detach", "--no-build", "--force-recreate", "--wait", "ui-prod")
 }
 
 [ordered]@{
-    schema_version = 1
+    schema_version = 2
     operation = "restore_quiesced_local_beta_release"
+    compose_project = $project
+    ui_compose_project = $uiProject
     beta_only = $true
-    artifact_dir = $resolvedArtifacts
     restored_at = (Get-Date).ToUniversalTime().ToString("o")
     openbao_process_preserved = $true
 } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $resolvedArtifacts "beta-restore-audit.json") -Encoding utf8
-Write-Host "Supervised local beta restore complete. OpenBao remained running and marty-selfhost-prod was not addressed."
+Write-Host "Supervised elevenid-beta restore complete; self-host production was not addressed."
