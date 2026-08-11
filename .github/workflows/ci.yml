@@ -27,6 +27,8 @@ jobs:
       - run: pip install ruff
       - name: Check Python correctness
         run: ruff check services/ packages/ --select E9,F63,F7,F82
+      - name: Enforce canonical Rust ownership
+        run: python scripts/check_rust_ownership.py
 
   test-ui:
     name: UI Tests
