@@ -11,6 +11,10 @@ param(
 
     [string]$PilotOrganizationId = "00000000-0000-0000-0000-000000000001",
 
+    [string]$TunnelEnvFile = (Join-Path (Split-Path -Parent $PSScriptRoot) ".env.tunnel.beta.local"),
+
+    [string]$GeneratedEnvFile = (Join-Path (Split-Path -Parent $PSScriptRoot) ".env.beta.generated.local"),
+
     [switch]$PlanOnly
 )
 
@@ -26,8 +30,17 @@ $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $script:WorkspaceRoot = (Resolve-Path (Join-Path $script:RepoRoot "..")).Path
 $script:ArtifactRoot = (Resolve-Path (Join-Path $script:RepoRoot "tests\artifacts")).Path
 $script:ArtifactDir = (Resolve-Path $ArtifactDir).Path
+$script:BetaProject = "elevenid-beta"
+$script:BetaUiProject = "elevenid-beta-ui"
+$script:BetaNetwork = "elevenid-beta-network"
+$env:MARTY_NETWORK_NAME = $script:BetaNetwork
+$script:EnvFiles = @($TunnelEnvFile, $GeneratedEnvFile)
+foreach ($envFile in $script:EnvFiles) {
+    if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) { throw "Required beta environment file is missing: $envFile" }
+}
 $script:ComposeFiles = @(
     (Join-Path $script:RepoRoot "docker-compose.base.yml"),
+    (Join-Path $script:RepoRoot "docker-compose.beta.yml"),
     (Join-Path $script:RepoRoot "docker-compose.profile.dev.yml"),
     (Join-Path $script:RepoRoot "docker-compose.profile.tunnel.yml"),
     (Join-Path $script:RepoRoot "deploy-config\compose\tunnel-beta\event-stream-rust.yml"),
@@ -57,26 +70,7 @@ $script:ApplicationServices = @(
 $script:ApplicationBuildServices = @(
     $script:ApplicationServices | Where-Object { $_ -ne "canvas-sync-worker" }
 )
-$script:ApplicationContainers = @(
-    "marty-auth",
-    "marty-organization",
-    "marty-credential-template",
-    "marty-trust-profile",
-    "marty-applicant",
-    "marty-notification",
-    "marty-compliance-profile",
-    "marty-presentation-policy",
-    "marty-deployment-profile",
-    "marty-flow",
-    "marty-verification",
-    "marty-revocation-profile",
-    "marty-device-registration",
-    "marty-event-stream",
-    "marty-issuance",
-    "marty-canvas-sync-worker",
-    "marty-gateway"
-)
-$script:InfrastructureWriterContainers = @("marty-keycloak")
+$script:InfrastructureWriterServices = @("keycloak")
 
 function Write-Step([string]$Message) {
     Write-Host "`n==> $Message" -ForegroundColor Cyan
@@ -117,7 +111,8 @@ function Invoke-DockerLogged {
 
 function Invoke-Compose {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
-    $composeArgs = @("compose", "--project-name", "marty-ui")
+    $composeArgs = @("compose", "--project-name", $script:BetaProject)
+    foreach ($envFile in $script:EnvFiles) { $composeArgs += @("--env-file", $envFile) }
     foreach ($file in $script:ComposeFiles) {
         $composeArgs += @("-f", $file)
     }
@@ -125,19 +120,51 @@ function Invoke-Compose {
     Invoke-Checked -FilePath docker -Arguments $composeArgs
 }
 
+function Get-DotEnvValue([string]$Path, [string]$Name) {
+    $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^$([regex]::Escape($Name))=" } | Select-Object -Last 1
+    if (-not $line) { throw "Required beta setting is absent: $Name" }
+    $value = ($line -split "=", 2)[1]
+    if ([string]::IsNullOrWhiteSpace($value)) { throw "Required beta setting is empty: $Name" }
+    return $value
+}
+
+function Get-ComposeContainerId {
+    param(
+        [Parameter(Mandatory = $true)][string]$Service,
+        [switch]$Ui
+    )
+    if ($Ui) {
+        $id = & docker ps -a --filter "label=com.docker.compose.project=$script:BetaUiProject" --filter "label=com.docker.compose.service=$Service" --format '{{.ID}}'
+    }
+    else {
+        $args = @("compose", "--project-name", $script:BetaProject)
+        foreach ($envFile in $script:EnvFiles) { $args += @("--env-file", $envFile) }
+        foreach ($file in $script:ComposeFiles) { $args += @("-f", $file) }
+        $args += @("ps", "--all", "--quiet", $Service)
+        $id = & docker @args
+    }
+    if ($LASTEXITCODE -ne 0) { throw "Could not resolve Compose service: $Service" }
+    $ids = @($id | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($ids.Count -gt 1) { throw "Compose service resolved to multiple containers: $Service" }
+    if ($ids.Count -eq 1) { return [string]$ids[0] }
+    return $null
+}
+
 function Get-FileSha256([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
-function Wait-ForContainerHealth {
-    param([string[]]$Containers, [int]$TimeoutSeconds = 420)
+function Wait-ForServiceHealth {
+    param([string[]]$Services, [int]$TimeoutSeconds = 420, [switch]$Ui)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     do {
         $pending = @()
-        foreach ($container in $Containers) {
+        foreach ($service in $Services) {
+            $container = Get-ComposeContainerId -Service $service -Ui:$Ui
+            if (-not $container) { $pending += "$service=missing"; continue }
             $state = docker inspect $container --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>$null
             if ($LASTEXITCODE -ne 0 -or $state -notin @("healthy", "running")) {
-                $pending += "$container=$state"
+                $pending += "$service=$state"
             }
         }
         if ($pending.Count -eq 0) {
@@ -145,19 +172,16 @@ function Wait-ForContainerHealth {
         }
         Start-Sleep -Seconds 5
     } while ((Get-Date) -lt $deadline)
-    throw "Containers did not become healthy: $($pending -join ', ')"
+    throw "Services did not become healthy: $($pending -join ', ')"
 }
 
-function Get-ContainerRecords([string[]]$Containers) {
+function Get-ServiceRecords([string[]]$Services, [switch]$IncludeUi) {
     $records = @()
-    $existingContainers = @(& docker ps -a --format '{{.Names}}')
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not enumerate Docker containers"
-    }
-    foreach ($container in $Containers) {
-        if ($container -notin $existingContainers) {
-            continue
-        }
+    $targets = @($Services | ForEach-Object { [ordered]@{ service = $_; ui = $false } })
+    if ($IncludeUi) { $targets += [ordered]@{ service = "ui-prod"; ui = $true } }
+    foreach ($target in $targets) {
+        $container = Get-ComposeContainerId -Service $target.service -Ui:$target.ui
+        if (-not $container) { continue }
         $json = & docker inspect $container
         if ($LASTEXITCODE -ne 0) {
             throw "Could not inspect Docker container: $container"
@@ -175,7 +199,9 @@ function Get-ContainerRecords([string[]]$Containers) {
             }
         }
         $records += [ordered]@{
-            container = $container
+            container_id = $container
+            container = $inspect.Name.TrimStart('/')
+            service = $target.service
             configured_image = $inspect.Config.Image
             image_id = $inspect.Image
             status = $inspect.State.Status
@@ -200,14 +226,18 @@ function New-BetaStateBackup {
     )
 
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
-    Invoke-Checked -FilePath docker -Arguments @("exec", "marty-postgres", "sh", "-lc", "pg_dump -U postgres -Fc -d marty -f /tmp/$SafeRelease-marty.dump && pg_dump -U postgres -Fc -d keycloak -f /tmp/$SafeRelease-keycloak.dump && pg_dumpall -U postgres --globals-only -f /tmp/$SafeRelease-globals.sql")
-    Invoke-Checked -FilePath docker -Arguments @("cp", "marty-postgres:/tmp/$SafeRelease-marty.dump", (Join-Path $Destination "postgres-marty.dump"))
-    Invoke-Checked -FilePath docker -Arguments @("cp", "marty-postgres:/tmp/$SafeRelease-keycloak.dump", (Join-Path $Destination "postgres-keycloak.dump"))
-    Invoke-Checked -FilePath docker -Arguments @("cp", "marty-postgres:/tmp/$SafeRelease-globals.sql", (Join-Path $Destination "postgres-globals.sql"))
-    Invoke-Checked -FilePath docker -Arguments @("cp", "marty-applicant:/app/data/applicant_store.json", (Join-Path $Destination "applicant_store.json"))
-    Invoke-Checked -FilePath docker -Arguments @("exec", "marty-redis", "redis-cli", "SAVE")
-    Invoke-Checked -FilePath docker -Arguments @("cp", "marty-redis:/data/dump.rdb", (Join-Path $Destination "redis-dump.rdb"))
-    Invoke-Checked -FilePath docker -Arguments @("run", "--rm", "--mount", "type=volume,src=marty-ui_openbao_data,dst=/source,readonly", "--mount", "type=bind,src=$Destination,dst=/backup", "postgres:15-alpine", "sh", "-lc", "cd /source && tar -czf /backup/openbao-data.tar.gz .")
+    $postgres = Get-ComposeContainerId -Service "postgres"
+    $applicant = Get-ComposeContainerId -Service "applicant"
+    $redis = Get-ComposeContainerId -Service "redis"
+    foreach ($required in @($postgres, $applicant, $redis)) { if (-not $required) { throw "Beta backup requires the running state services" } }
+    Invoke-Checked -FilePath docker -Arguments @("exec", $postgres, "sh", "-lc", "pg_dump -U postgres -Fc -d marty -f /tmp/$SafeRelease-marty.dump && pg_dump -U postgres -Fc -d keycloak -f /tmp/$SafeRelease-keycloak.dump && pg_dumpall -U postgres --globals-only -f /tmp/$SafeRelease-globals.sql")
+    Invoke-Checked -FilePath docker -Arguments @("cp", "${postgres}:/tmp/$SafeRelease-marty.dump", (Join-Path $Destination "postgres-marty.dump"))
+    Invoke-Checked -FilePath docker -Arguments @("cp", "${postgres}:/tmp/$SafeRelease-keycloak.dump", (Join-Path $Destination "postgres-keycloak.dump"))
+    Invoke-Checked -FilePath docker -Arguments @("cp", "${postgres}:/tmp/$SafeRelease-globals.sql", (Join-Path $Destination "postgres-globals.sql"))
+    Invoke-Checked -FilePath docker -Arguments @("cp", "${applicant}:/app/data/applicant_store.json", (Join-Path $Destination "applicant_store.json"))
+    Invoke-Checked -FilePath docker -Arguments @("exec", $redis, "redis-cli", "SAVE")
+    Invoke-Checked -FilePath docker -Arguments @("cp", "${redis}:/data/dump.rdb", (Join-Path $Destination "redis-dump.rdb"))
+    Invoke-Checked -FilePath docker -Arguments @("run", "--rm", "--mount", "type=volume,src=elevenid-beta_openbao_data,dst=/source,readonly", "--mount", "type=bind,src=$Destination,dst=/backup", "postgres:15-alpine", "sh", "-lc", "cd /source && tar -czf /backup/openbao-data.tar.gz .")
 
     $files = @(Get-ChildItem -LiteralPath $Destination -File | Sort-Object Name | ForEach-Object {
         [ordered]@{ name = $_.Name; size = $_.Length; sha256 = Get-FileSha256 $_.FullName }
@@ -250,6 +280,7 @@ if ($EnablePortableCanvas -and $PilotOrganizationId -notmatch '^[0-9a-fA-F]{8}-[
 }
 
 $sourceManifestPath = Join-Path $script:ArtifactDir "source-manifest.json"
+$martyDbPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "MARTY_DB_PASSWORD"
 if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf)) {
     throw "Missing source manifest: $sourceManifestPath"
 }
@@ -278,6 +309,9 @@ Write-Host "Origin: $BetaOrigin"
 Write-Host "Artifact directory: $script:ArtifactDir"
 Write-Host "Promotion eligible: false"
 Write-Host "Portable Canvas enabled: $([bool]$EnablePortableCanvas)"
+Write-Host "Compose project: $script:BetaProject"
+Write-Host "UI Compose project: $script:BetaUiProject"
+Write-Host "Network: $script:BetaNetwork"
 
 if ($PlanOnly) {
     [ordered]@{
@@ -287,6 +321,9 @@ if ($PlanOnly) {
         portable_canvas_enabled = [bool]$EnablePortableCanvas
         canvas_origin = if ($EnablePortableCanvas) { $CanvasOrigin } else { $null }
         pilot_organization_id = if ($EnablePortableCanvas) { $PilotOrganizationId } else { $null }
+        compose_project = $script:BetaProject
+        ui_compose_project = $script:BetaUiProject
+        network = $script:BetaNetwork
         application_services = $script:ApplicationServices
         steps = @(
             "backup",
@@ -322,11 +359,48 @@ Invoke-Checked -FilePath python -Arguments @(
 
 Write-Step "Preflight running beta topology"
 Invoke-Checked -FilePath docker -Arguments @("info", "--format", "{{.ServerVersion}}")
-foreach ($container in @("marty-postgres", "marty-redis", "marty-openbao", "marty-keycloak", "marty-applicant", "marty-gateway", "marty-ui-prod")) {
+$stackLock = Get-Content -LiteralPath (Join-Path $script:RepoRoot "release\stack-lock.json") -Raw | ConvertFrom-Json
+function Get-StackArtifact([string]$Name, [string]$Type) {
+    $component = @($stackLock.components | Where-Object name -eq $Name)
+    if ($component.Count -ne 1) { throw "Stack lock must contain exactly one $Name component" }
+    $artifact = @($component[0].artifacts | Where-Object type -eq $Type)
+    if ($artifact.Count -ne 1 -or $artifact[0].digest -notmatch '^sha256:[0-9a-f]{64}$' -or -not $artifact[0].uri) {
+        throw "Stack lock artifact is incomplete: $Name/$Type"
+    }
+    return [pscustomobject]@{ Version = [string]$component[0].version; Uri = [string]$artifact[0].uri; Digest = [string]$artifact[0].digest }
+}
+$martyCommon = Get-StackArtifact "marty-common" "python"
+$martyRs = Get-StackArtifact "marty-core-python" "python"
+$martyVerification = Get-StackArtifact "marty-verification-python" "python"
+$martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python"
+$martyApiCore = Get-StackArtifact "marty-api-core" "npm"
+$martyBlog = Get-StackArtifact "marty-blog" "npm"
+$martyIssuance = Get-StackArtifact "marty-credentials-issuance" "oci"
+$env:MARTY_COMMON_URI = $martyCommon.Uri
+$env:MARTY_COMMON_DIGEST = $martyCommon.Digest
+$env:MARTY_RS_URI = $martyRs.Uri
+$env:MARTY_RS_DIGEST = $martyRs.Digest
+$env:MARTY_VERIFICATION_URI = $martyVerification.Uri
+$env:MARTY_VERIFICATION_DIGEST = $martyVerification.Digest
+$env:MARTY_ISO18013_URI = $martyIso18013.Uri
+$env:MARTY_ISO18013_DIGEST = $martyIso18013.Digest
+$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"
+$docsIds = @(& docker ps -a --filter "label=com.docker.compose.project=$script:BetaProject" --filter "label=com.docker.compose.service=docs" --format '{{.ID}}')
+if ($LASTEXITCODE -ne 0 -or $docsIds.Count -ne 1) { throw "Expected one existing beta docs container" }
+$env:MARTY_DOCS_IMAGE = & docker inspect $docsIds[0] --format '{{.Config.Image}}'
+if ($LASTEXITCODE -ne 0 -or $env:MARTY_DOCS_IMAGE -notmatch '^sha256:[0-9a-f]{64}$') {
+    throw "Existing beta docs image is not immutable"
+}
+foreach ($service in @("postgres", "redis", "openbao", "keycloak", "applicant", "gateway")) {
+    $container = Get-ComposeContainerId -Service $service
+    if (-not $container) { throw "Required beta service is absent: $service" }
     Invoke-Checked -FilePath docker -Arguments @("inspect", $container, "--format", "{{.State.Status}}")
 }
+$uiContainer = Get-ComposeContainerId -Service "ui-prod" -Ui
+if (-not $uiContainer) { throw "Required beta UI service is absent" }
+Invoke-Checked -FilePath docker -Arguments @("inspect", $uiContainer, "--format", "{{.State.Status}}")
 
-$preDeployContainers = Get-ContainerRecords ($script:ApplicationContainers + $script:InfrastructureWriterContainers + @("marty-ui-prod"))
+$preDeployContainers = Get-ServiceRecords ($script:ApplicationServices + $script:InfrastructureWriterServices) -IncludeUi
 $preDeployContainers | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $script:ArtifactDir "pre-deploy-containers.json") -Encoding utf8
 
 Write-Step "Capture preflight backup for isolated migration rehearsal"
@@ -340,13 +414,26 @@ New-BetaStateBackup `
 
 Write-Step "Build immutable migration image"
 $migrationImage = "elevenid-local/db-migrate:$releaseVersion"
-Invoke-Checked -FilePath docker -Arguments @("build", "--file", (Join-Path $script:RepoRoot "services\Dockerfile.migrations"), "--tag", $migrationImage, "--label", "org.opencontainers.image.version=$releaseVersion", "--label", "org.opencontainers.image.revision=$sourceId", $script:WorkspaceRoot)
+Invoke-Checked -FilePath docker -Arguments @(
+    "build", "--file", (Join-Path $script:RepoRoot "services\Dockerfile.migrations"),
+    "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId",
+    "--build-arg", "MARTY_COMMON_VERSION=$($martyCommon.Version)", "--build-arg", "MARTY_COMMON_URI=$($martyCommon.Uri)",
+    "--build-arg", "MARTY_COMMON_DIGEST=$($martyCommon.Digest)",
+    "--build-arg", "MARTY_RS_VERSION=$($martyRs.Version)", "--build-arg", "MARTY_RS_URI=$($martyRs.Uri)",
+    "--build-arg", "MARTY_RS_DIGEST=$($martyRs.Digest)",
+    "--build-arg", "MARTY_VERIFICATION_VERSION=$($martyVerification.Version)", "--build-arg", "MARTY_VERIFICATION_URI=$($martyVerification.Uri)",
+    "--build-arg", "MARTY_VERIFICATION_DIGEST=$($martyVerification.Digest)",
+    "--build-arg", "MARTY_ISO18013_VERSION=$($martyIso18013.Version)", "--build-arg", "MARTY_ISO18013_URI=$($martyIso18013.Uri)",
+    "--build-arg", "MARTY_ISO18013_DIGEST=$($martyIso18013.Digest)",
+    "--tag", $migrationImage, "--label", "org.opencontainers.image.version=$releaseVersion",
+    "--label", "org.opencontainers.image.revision=$sourceId", $script:RepoRoot
+)
 
 Write-Step "Rehearse one-way migration on isolated beta copy"
 $copySuffix = $sourceId.Substring(0, 12)
-$copyContainer = "marty-beta-copy-$copySuffix"
-$copyRedisContainer = "marty-beta-copy-redis-$copySuffix"
-$copyOpenBaoContainer = "marty-beta-copy-openbao-$copySuffix"
+$copyContainer = "elevenid-beta-copy-$copySuffix"
+$copyRedisContainer = "elevenid-beta-copy-redis-$copySuffix"
+$copyOpenBaoContainer = "elevenid-beta-copy-openbao-$copySuffix"
 $copyPassword = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
 $copyBaoToken = -join ((1..40) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
 $rehearsalContainers = @($copyContainer)
@@ -356,14 +443,14 @@ if ($EnablePortableCanvas) {
 try {
     foreach ($candidate in $rehearsalContainers) {
         $existing = docker ps -a --filter "name=^/$candidate$" --format '{{.Names}}'
-        if ($existing -and $candidate.StartsWith("marty-beta-copy-")) {
+        if ($existing -and $candidate.StartsWith("elevenid-beta-copy-")) {
             Invoke-Checked -FilePath docker -Arguments @("rm", "--force", $candidate)
         }
     }
-    Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyContainer, "--network", "marty-infra-network", "--env", "POSTGRES_PASSWORD=$copyPassword", "postgres:15-alpine")
+    Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyContainer, "--network", $script:BetaNetwork, "--env", "POSTGRES_PASSWORD=$copyPassword", "postgres:15-alpine")
     if ($EnablePortableCanvas) {
-        Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyRedisContainer, "--network", "marty-infra-network", "redis:7-alpine")
-        Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyOpenBaoContainer, "--network", "marty-infra-network", "--env", "BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken", "--env", "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200", "quay.io/openbao/openbao:2", "server", "-dev")
+        Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyRedisContainer, "--network", $script:BetaNetwork, "redis:7-alpine")
+        Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyOpenBaoContainer, "--network", $script:BetaNetwork, "--env", "BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken", "--env", "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200", "quay.io/openbao/openbao:2", "server", "-dev")
     }
     $ready = $false
     foreach ($attempt in 1..60) {
@@ -393,7 +480,7 @@ try {
     $copyUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
     $rehearsalKmsEnabled = if ($EnablePortableCanvas) { "true" } else { "false" }
     $rehearsalArguments = @(
-        "run", "--rm", "--network", "marty-infra-network",
+        "run", "--rm", "--network", $script:BetaNetwork,
         "--env", "DATABASE_URL=$copyUrl",
         "--env", "PUBLIC_API_URL=$BetaOrigin",
         "--env", "MARTY_MIGRATION_PROFILE=beta",
@@ -409,13 +496,13 @@ try {
     }
     $rehearsalArguments += @($migrationImage, "python", "/app/run_all_migrations.py")
     Invoke-DockerLogged -Arguments $rehearsalArguments -LogPath (Join-Path $logsDir "migration-rehearsal.log") -FailureMessage "Migration rehearsal failed"
-    $verifyArguments = @("run", "--rm", "--network", "marty-infra-network", "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", $migrationImage, "python", "/app/run_all_migrations.py", "--verify-only")
+    $verifyArguments = @("run", "--rm", "--network", $script:BetaNetwork, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", $migrationImage, "python", "/app/run_all_migrations.py", "--verify-only")
     Invoke-DockerLogged -Arguments $verifyArguments -LogPath (Join-Path $logsDir "migration-rehearsal-verify.log") -FailureMessage "Migration rehearsal verification failed"
 }
 finally {
     foreach ($expectedContainer in $rehearsalContainers) {
         $candidate = docker ps -a --filter "name=^/$expectedContainer$" --format '{{.Names}}'
-        if ($candidate -eq $expectedContainer -and $expectedContainer.StartsWith("marty-beta-copy-")) {
+        if ($candidate -eq $expectedContainer -and $expectedContainer.StartsWith("elevenid-beta-copy-")) {
             docker rm --force $expectedContainer | Out-Null
         }
     }
@@ -424,11 +511,28 @@ finally {
 Write-Step "Build marker-bearing application images"
 $env:MARTY_RELEASE_VERSION = $releaseVersion
 $env:MARTY_UI_SHA = $sourceId
-Invoke-Compose -Arguments (@("build", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId") + $script:ApplicationBuildServices)
+Invoke-Compose -Arguments (@(
+    "build", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId",
+    "--build-arg", "MARTY_COMMON_VERSION=$($martyCommon.Version)", "--build-arg", "MARTY_COMMON_URI=$($martyCommon.Uri)",
+    "--build-arg", "MARTY_COMMON_DIGEST=$($martyCommon.Digest)", "--build-arg", "MARTY_RS_VERSION=$($martyRs.Version)",
+    "--build-arg", "MARTY_RS_URI=$($martyRs.Uri)", "--build-arg", "MARTY_RS_DIGEST=$($martyRs.Digest)",
+    "--build-arg", "MARTY_VERIFICATION_VERSION=$($martyVerification.Version)", "--build-arg", "MARTY_VERIFICATION_URI=$($martyVerification.Uri)",
+    "--build-arg", "MARTY_VERIFICATION_DIGEST=$($martyVerification.Digest)",
+    "--build-arg", "MARTY_ISO18013_VERSION=$($martyIso18013.Version)", "--build-arg", "MARTY_ISO18013_URI=$($martyIso18013.Uri)",
+    "--build-arg", "MARTY_ISO18013_DIGEST=$($martyIso18013.Digest)"
+) + $script:ApplicationBuildServices)
 
 Write-Step "Build marker-bearing public UI image"
 $uiImage = "elevenid-local/ui:$releaseVersion"
-Invoke-Checked -FilePath docker -Arguments @("buildx", "build", "--load", "--file", (Join-Path $script:RepoRoot "docker\ui.Dockerfile"), "--build-context", "marty-cli=$(Join-Path $script:WorkspaceRoot 'marty-cli')", "--build-context", "marty-blog=$(Join-Path $script:WorkspaceRoot 'marty-blog')", "--build-arg", "UI_VARIANT=public", "--build-arg", "NGINX_CONFIG=nginx.spa.conf", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId", "--tag", $uiImage, $script:RepoRoot)
+Invoke-Checked -FilePath docker -Arguments @(
+    "buildx", "build", "--load", "--file", (Join-Path $script:RepoRoot "docker\ui.Dockerfile"),
+    "--build-arg", "UI_VARIANT=public", "--build-arg", "NGINX_CONFIG=nginx.spa.conf",
+    "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId",
+    "--build-arg", "MARTY_API_CORE_VERSION=$($martyApiCore.Version)", "--build-arg", "MARTY_API_CORE_URI=$($martyApiCore.Uri)",
+    "--build-arg", "MARTY_API_CORE_DIGEST=$($martyApiCore.Digest)", "--build-arg", "MARTY_BLOG_VERSION=$($martyBlog.Version)",
+    "--build-arg", "MARTY_BLOG_URI=$($martyBlog.Uri)", "--build-arg", "MARTY_BLOG_DIGEST=$($martyBlog.Digest)",
+    "--tag", $uiImage, $script:RepoRoot
+)
 
 # Builds consume coordinated live worktrees. Revalidate every snapshotted input
 # after the final build and before stopping beta writers, so a concurrent edit
@@ -468,8 +572,8 @@ $canvasLtiJwksPath = Join-Path $script:ArtifactDir "canvas-lti-public-jwks.json"
 $canvasLtiActiveKidPath = Join-Path $script:ArtifactDir "canvas-lti-active-kid.txt"
 $canvasLtiActiveKid = $null
 $canvasLtiJwksSha256 = $null
-$maintenanceCandidates = $script:ApplicationContainers + $script:InfrastructureWriterContainers + @("marty-ui-prod")
-$maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.container -in $maintenanceCandidates } | ForEach-Object { $_.container })
+$maintenanceServices = $script:ApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
+$maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.service -in $maintenanceServices } | ForEach-Object { $_.container_id })
 if ($maintenanceContainers.Count -gt 0) {
     Invoke-Checked -FilePath docker -Arguments (@("stop") + $maintenanceContainers)
 }
@@ -490,7 +594,7 @@ try {
         -Phase "maintenance_quiesced" `
         -WritersStopped $true
     $restoreScript = Join-Path $script:RepoRoot "scripts\restore-local-beta-release.ps1"
-    "& `"$restoreScript`" -ArtifactDir `"$script:ArtifactDir`" -ConfirmBetaRestore" | Set-Content -LiteralPath (Join-Path $script:ArtifactDir "supervised-recovery.txt") -Encoding utf8
+    "& `"$restoreScript`" -ArtifactDir `"$script:ArtifactDir`" -TunnelEnvFile `"$TunnelEnvFile`" -GeneratedEnvFile `"$GeneratedEnvFile`" -ConfirmBetaRestore" | Set-Content -LiteralPath (Join-Path $script:ArtifactDir "supervised-recovery.txt") -Encoding utf8
 
     $env:MARTY_MIGRATION_PROFILE = "beta"
     $env:PUBLIC_API_URL = $BetaOrigin
@@ -501,8 +605,8 @@ try {
         }
         $kmsBootstrapEnabled = if ($EnablePortableCanvas) { "true" } else { "false" }
         $migrationArguments = @(
-            "run", "--rm", "--network", "marty-infra-network",
-            "--env", "DATABASE_URL=postgresql://marty:marty_dev_password@postgres:5432/marty",
+            "run", "--rm", "--network", $script:BetaNetwork,
+            "--env", "DATABASE_URL=postgresql://marty:${martyDbPassword}@postgres:5432/marty",
             "--env", "PUBLIC_API_URL=$BetaOrigin",
             "--env", "MARTY_MIGRATION_PROFILE=beta",
             "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=$kmsBootstrapEnabled"
@@ -530,11 +634,11 @@ try {
 
     if ($EnablePortableCanvas) {
         Write-Step "Publish the dedicated OpenBao LTI tool public key"
-        $canvasLtiIssuerDid = "did:web:$(([uri]$BetaOrigin).Host):orgs:marty"
-        $canvasLtiVerificationMethodId = "$canvasLtiIssuerDid#lti-tool-marty-rs256"
         $openBaoResponsePath = [IO.Path]::GetTempFileName()
         try {
-            $openBaoResponse = & docker exec marty-openbao sh -lc 'BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$BAO_DEV_ROOT_TOKEN_ID" bao read -format=json transit/keys/lti-tool-marty-rs256' 2>$null
+            $openBaoContainer = Get-ComposeContainerId -Service "openbao"
+            if (-not $openBaoContainer) { throw "OpenBao service is absent" }
+            $openBaoResponse = & docker exec $openBaoContainer sh -lc 'BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$BAO_DEV_ROOT_TOKEN_ID" bao read -format=json transit/keys/lti-tool-marty-rs256' 2>$null
             if ($LASTEXITCODE -ne 0 -or -not $openBaoResponse) {
                 throw "Could not read the dedicated Canvas LTI public key from OpenBao"
             }
@@ -544,8 +648,7 @@ try {
                 "--input", $openBaoResponsePath,
                 "--output", $canvasLtiJwksPath,
                 "--active-kid-output", $canvasLtiActiveKidPath,
-                "--key-name", "lti-tool-marty-rs256",
-                "--verification-method-id", $canvasLtiVerificationMethodId
+                "--key-name", "lti-tool-marty-rs256"
             )
         }
         finally {
@@ -554,7 +657,7 @@ try {
 
         $canvasLtiActiveKid = (Get-Content -LiteralPath $canvasLtiActiveKidPath -Raw).Trim()
         $canvasLtiPublicJwks = (Get-Content -LiteralPath $canvasLtiJwksPath -Raw).Trim()
-        if ($canvasLtiActiveKid -ne $canvasLtiVerificationMethodId) {
+        if ($canvasLtiActiveKid -notmatch '^lti-tool-marty-rs256-v[1-9][0-9]*$') {
             throw "Exported Canvas LTI active kid is invalid"
         }
         $canvasLtiDocument = $canvasLtiPublicJwks | ConvertFrom-Json
@@ -566,8 +669,9 @@ try {
         $env:CANVAS_LTI_EXPERIENCE_BASE_URL = $BetaOrigin
         $env:CANVAS_OAUTH_COMPLETION_REDIRECT_URL = "$BetaOrigin/console/org/deploy/canvas"
         $env:CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID = $PilotOrganizationId
-        $env:CANVAS_LTI_TOOL_ISSUER_DID = $canvasLtiIssuerDid
-        $env:CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS = "ip-marty-vc-jwt-issuer,ip-marty-mdoc-dsc,ip-marty-vdsnc-issuer"
+        $env:CANVAS_LTI_TOOL_SIGNING_SERVICE_ID = "managed-openbao-transit"
+        $env:CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE = "lti-tool-marty-rs256"
+        $env:CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES = "cred-issuer-marty-es256,cred-issuer-marty-es384,cred-issuer-marty-rs256,cred-issuer-marty-eddsa,cred-dsc-marty-primary"
         $env:CANVAS_LTI_TOOL_ACTIVE_KID = $canvasLtiActiveKid
         $env:CANVAS_LTI_TOOL_PUBLIC_JWKS = $canvasLtiPublicJwks
         $env:CANVAS_PORTABLE_INTEGRATION_ENABLED = "true"
@@ -578,19 +682,23 @@ try {
         $env:CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS = "false"
     }
 
-    if ("marty-keycloak" -in $maintenanceContainers) {
-        Invoke-Checked -FilePath docker -Arguments @("start", "marty-keycloak")
-        Wait-ForContainerHealth @("marty-keycloak")
+    $keycloakContainer = Get-ComposeContainerId -Service "keycloak"
+    if ($keycloakContainer -and $keycloakContainer -in $maintenanceContainers) {
+        Invoke-Checked -FilePath docker -Arguments @("start", $keycloakContainer)
+        Wait-ForServiceHealth @("keycloak")
     }
 
     Write-Step "Recreate application containers from coordinated images"
     Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $script:ApplicationServices)
-    Wait-ForContainerHealth $script:ApplicationContainers
+    Wait-ForServiceHealth $script:ApplicationServices
 
     Write-Step "Recreate public UI from immutable image"
     $env:MARTY_UI_RELEASE_IMAGE = $uiImage
-    Invoke-Checked -FilePath docker -Arguments @("compose", "-f", (Join-Path $script:RepoRoot "docker-compose.ui-release.yml"), "up", "--detach", "--no-build", "--force-recreate", "ui-prod")
-    Wait-ForContainerHealth @("marty-ui-prod")
+    $uiComposeArguments = @("compose", "--project-name", $script:BetaUiProject)
+    foreach ($envFile in $script:EnvFiles) { $uiComposeArguments += @("--env-file", $envFile) }
+    $uiComposeArguments += @("-f", (Join-Path $script:RepoRoot "docker-compose.ui-release.yml"), "up", "--detach", "--no-build", "--force-recreate", "ui-prod")
+    Invoke-Checked -FilePath docker -Arguments $uiComposeArguments
+    Wait-ForServiceHealth @("ui-prod") -Ui
 }
 catch {
     if (-not $liveMutationStarted) {
@@ -624,7 +732,7 @@ foreach ($marker in @($servicesMarker, $betaServicesMarker)) {
     }
 }
 
-$postDeployContainers = Get-ContainerRecords ($script:ApplicationContainers + @("marty-ui-prod"))
+$postDeployContainers = Get-ServiceRecords $script:ApplicationServices -IncludeUi
 $deploymentManifest = [ordered]@{
     schema_version = 1
     release_version = $releaseVersion
@@ -633,6 +741,9 @@ $deploymentManifest = [ordered]@{
     source_kind = "local-worktree-snapshot"
     marty_ui_sha = $sourceId
     beta_origin = $BetaOrigin
+    compose_project = $script:BetaProject
+    ui_compose_project = $script:BetaUiProject
+    network = $script:BetaNetwork
     promotion_eligible = $false
     release_ready = $false
     backup_manifest = "backup-manifest.json"
@@ -644,8 +755,8 @@ $deploymentManifest = [ordered]@{
         enabled = [bool]$EnablePortableCanvas
         canvas_origin = if ($EnablePortableCanvas) { $CanvasOrigin } else { $null }
         pilot_organization_id = if ($EnablePortableCanvas) { $PilotOrganizationId } else { $null }
-        lti_issuer_profile_id = if ($EnablePortableCanvas) { "ip-marty-canvas-lti-tool" } else { $null }
-        lti_issuer_did = if ($EnablePortableCanvas) { $canvasLtiIssuerDid } else { $null }
+        lti_signing_service_id = if ($EnablePortableCanvas) { "managed-openbao-transit" } else { $null }
+        lti_signing_key_reference = if ($EnablePortableCanvas) { "lti-tool-marty-rs256" } else { $null }
         lti_active_kid = $canvasLtiActiveKid
         public_jwks_sha256 = $canvasLtiJwksSha256
         legacy_event_ingest_enabled = $false

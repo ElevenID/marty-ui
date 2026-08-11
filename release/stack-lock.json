@@ -1,6 +1,6 @@
 {
   "schema": "marty.stack-lock/v1",
-  "release": "marty-ui@1.1.136",
+  "release": "marty-ui@1.1.137",
   "components": [
     {
       "name": "marty-api-core",
@@ -37,6 +37,32 @@
         "type": "python",
         "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.46/marty_rs-0.1.46-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
         "digest": "sha256:d878bd702dc72ab247575978f15b0ce449a076394b323aae9d6b98d38e487c5b",
+        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.1.46/marty-core.spdx.json",
+        "provenance": "https://github.com/ElevenID/marty-core/attestations"
+      }]
+    },
+    {
+      "name": "marty-verification-python",
+      "repository": "ElevenID/marty-core",
+      "version": "0.1.46",
+      "commit": "c8a028e803e7278f7842f5085855ac12a80b14ba",
+      "artifacts": [{
+        "type": "python",
+        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.46/marty_verification_py-0.1.46-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "digest": "sha256:be0a949e05dcd91214abe8edba735f24632055e971d62438c17cd2f6b8776b75",
+        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.1.46/marty-core.spdx.json",
+        "provenance": "https://github.com/ElevenID/marty-core/attestations"
+      }]
+    },
+    {
+      "name": "marty-iso18013-python",
+      "repository": "ElevenID/marty-core",
+      "version": "0.1.46",
+      "commit": "c8a028e803e7278f7842f5085855ac12a80b14ba",
+      "artifacts": [{
+        "type": "python",
+        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.46/marty_iso18013-0.1.46-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "digest": "sha256:97f11cff30e538ef661c8a87689d1358962aad7d5e2edc9e1e7bd19327c188dc",
         "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.1.46/marty-core.spdx.json",
         "provenance": "https://github.com/ElevenID/marty-core/attestations"
       }]
