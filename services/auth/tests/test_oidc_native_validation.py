@@ -40,6 +40,7 @@ class FakeNativeBackend:
                     "aud": request["expected_audience"],
                     "email": "alice@example.com",
                     "nonce": request["expected_nonce"],
+                    "roles": ["vendor"],
                 }
             )
         if request["compact_jwt"] == "access-token":
@@ -91,7 +92,7 @@ def _install_provider_transport(monkeypatch: pytest.MonkeyPatch, *, issuer: str 
 
 
 @pytest.mark.asyncio
-async def test_validates_id_and_access_tokens_with_one_native_backend(monkeypatch: pytest.MonkeyPatch):
+async def test_validates_id_token_and_binds_opaque_access_token(monkeypatch: pytest.MonkeyPatch):
     requested_urls = _install_provider_transport(monkeypatch)
     native = FakeNativeBackend()
     validator = OIDCNativeValidator(_config(), native_backend=native)
@@ -101,14 +102,46 @@ async def test_validates_id_and_access_tokens_with_one_native_backend(monkeypatc
     assert identity.user_info.sub == "user-1"
     assert identity.user_info.roles == ["vendor"]
     assert identity.id_token_claims["nonce"] == "nonce-1"
-    assert len(native.requests) == 2
+    assert identity.access_token_claims == {}
+    assert len(native.requests) == 1
     assert native.requests[0]["expected_nonce"] == "nonce-1"
     assert native.requests[0]["access_token"] == "access-token"
-    assert native.requests[1]["expected_nonce"] is None
     assert requested_urls == [
         "http://keycloak:8080/realms/11id/.well-known/openid-configuration",
         "http://keycloak:8080/realms/11id/protocol/openid-connect/certs",
     ]
+
+
+@pytest.mark.asyncio
+async def test_exchanged_tokens_validate_id_token_and_keep_access_token_opaque(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _install_provider_transport(monkeypatch)
+    native = FakeNativeBackend()
+    validator = OIDCNativeValidator(_config(), native_backend=native)
+
+    identity = await validator.validate_exchanged_tokens(
+        {"id_token": "id-token", "access_token": "access-token"},
+        expected_audience="marty-ui",
+    )
+
+    assert identity is not None
+    assert identity.user_info.sub == "user-1"
+    assert identity.user_info.roles == ["vendor"]
+    assert identity.access_token_claims == {}
+    assert len(native.requests) == 1
+    assert native.requests[0]["access_token"] == "access-token"
+
+
+@pytest.mark.asyncio
+async def test_exchanged_access_token_without_id_token_fails_closed():
+    validator = OIDCNativeValidator(_config(), native_backend=FakeNativeBackend())
+
+    with pytest.raises(ValueError, match="requires a verifiable ID token"):
+        await validator.validate_exchanged_tokens(
+            {"access_token": "access-token"},
+            expected_audience="marty-ui",
+        )
 
 
 @pytest.mark.asyncio
