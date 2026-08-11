@@ -160,16 +160,13 @@ class OIDCNativeValidator:
             expected_nonce=expected_nonce,
             access_token=access_token,
         )
+        # OAuth access tokens are opaque to the relying party unless the
+        # resource server publishes a separate validation contract. Keycloak
+        # lightweight access tokens deliberately omit ID-token claims such as
+        # ``sub`` and ``aud``. The canonical Rust ID-token validator receives
+        # the opaque value and enforces ``at_hash`` when the provider emits it;
+        # the adapter must never reinterpret the bearer token as an ID token.
         access_claims: dict[str, Any] = {}
-        if access_token:
-            access_claims = await self._validate_token(
-                access_token,
-                expected_audience=self.config.access_token_audience or self.config.client_id,
-                expected_nonce=None,
-                access_token=None,
-            )
-            if access_claims.get("sub") != id_claims.get("sub"):
-                raise ValueError("OIDC ID and access token subjects do not match")
         return OIDCValidatedIdentity(
             user_info=build_oidc_user_info(id_claims, access_claims),
             id_token_claims=id_claims,
@@ -187,27 +184,17 @@ class OIDCNativeValidator:
         access_token = str(tokens.get("access_token") or "")
         if not id_token and not access_token:
             return None
-        id_claims: dict[str, Any] = {}
-        if id_token:
-            id_claims = await self._validate_token(
-                id_token,
-                expected_audience=expected_audience,
-                expected_nonce=None,
-                access_token=access_token or None,
-            )
+        if not id_token:
+            raise ValueError("OIDC token exchange requires a verifiable ID token")
+        id_claims = await self._validate_token(
+            id_token,
+            expected_audience=expected_audience,
+            expected_nonce=None,
+            access_token=access_token or None,
+        )
         access_claims: dict[str, Any] = {}
-        if access_token:
-            access_claims = await self._validate_token(
-                access_token,
-                expected_audience=expected_audience,
-                expected_nonce=None,
-                access_token=None,
-            )
-            if id_claims and access_claims.get("sub") != id_claims.get("sub"):
-                raise ValueError("OIDC exchanged-token subjects do not match")
-        primary_claims = id_claims or access_claims
         return OIDCValidatedIdentity(
-            user_info=build_oidc_user_info(primary_claims, access_claims),
+            user_info=build_oidc_user_info(id_claims, access_claims),
             id_token_claims=id_claims,
             access_token_claims=access_claims,
         )
