@@ -120,6 +120,21 @@ function Invoke-Compose {
     Invoke-Checked -FilePath docker -Arguments $composeArgs
 }
 
+function Invoke-ComposeLogged {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$LogPath,
+        [Parameter(Mandatory = $true)][string]$FailureMessage
+    )
+    $composeArgs = @("compose", "--project-name", $script:BetaProject)
+    foreach ($envFile in $script:EnvFiles) { $composeArgs += @("--env-file", $envFile) }
+    foreach ($file in $script:ComposeFiles) {
+        $composeArgs += @("-f", $file)
+    }
+    $composeArgs += $Arguments
+    Invoke-DockerLogged -Arguments $composeArgs -LogPath $LogPath -FailureMessage $FailureMessage
+}
+
 function Get-DotEnvValue([string]$Path, [string]$Name) {
     $line = Get-Content -LiteralPath $Path | Where-Object { $_ -match "^$([regex]::Escape($Name))=" } | Select-Object -Last 1
     if (-not $line) { throw "Required beta setting is absent: $Name" }
@@ -517,6 +532,15 @@ try {
     Invoke-DockerLogged -Arguments $rehearsalArguments -LogPath (Join-Path $logsDir "migration-rehearsal.log") -FailureMessage "Migration rehearsal failed"
     $verifyArguments = @("run", "--rm", "--network", $script:BetaNetwork, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", $migrationImage, "python", "/app/services/run_all_migrations.py", "--verify-only")
     Invoke-DockerLogged -Arguments $verifyArguments -LogPath (Join-Path $logsDir "migration-rehearsal-verify.log") -FailureMessage "Migration rehearsal verification failed"
+    $copyIssuanceUrl = "postgresql+asyncpg://marty:$copyPassword@${copyContainer}:5432/marty"
+    Invoke-ComposeLogged `
+        -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations") `
+        -LogPath (Join-Path $logsDir "issuance-migration-rehearsal.log") `
+        -FailureMessage "Issuance migration rehearsal failed"
+    Invoke-ComposeLogged `
+        -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations", "python", "manage_migrations.py", "current") `
+        -LogPath (Join-Path $logsDir "issuance-migration-rehearsal-verify.log") `
+        -FailureMessage "Issuance migration rehearsal verification failed"
 }
 finally {
     foreach ($expectedContainer in $rehearsalContainers) {
@@ -654,6 +678,15 @@ try {
         $migrationArguments += @($migrationImage, "python", "/app/services/run_all_migrations.py")
         $liveMutationStarted = $true
         Invoke-DockerLogged -Arguments $migrationArguments -LogPath (Join-Path $logsDir "migration-live.log") -FailureMessage "Live migration failed"
+        $liveIssuanceUrl = "postgresql+asyncpg://marty:${martyDbPassword}@postgres:5432/marty"
+        Invoke-ComposeLogged `
+            -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveIssuanceUrl", "issuance-migrations") `
+            -LogPath (Join-Path $logsDir "issuance-migration-live.log") `
+            -FailureMessage "Live issuance migration failed"
+        Invoke-ComposeLogged `
+            -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveIssuanceUrl", "issuance-migrations", "python", "manage_migrations.py", "current") `
+            -LogPath (Join-Path $logsDir "issuance-migration-live-verify.log") `
+            -FailureMessage "Live issuance migration verification failed"
     }
     finally {
         if ($null -eq $previousBaoToken) {

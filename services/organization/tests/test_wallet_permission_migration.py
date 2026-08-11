@@ -54,6 +54,8 @@ def test_permission_catalog_and_new_system_roles_include_wallet_boundary() -> No
     for role_name in ("reviewer", "operator", "viewer"):
         assert "wallet:view" in templates[role_name]
         assert "wallet:write" not in templates[role_name]
+    assert "wallet:view" in templates["applicant"]
+    assert "wallet:write" not in templates["applicant"]
 
 
 def test_forward_migration_inserts_and_backfills_wallet_permissions(monkeypatch) -> None:

@@ -99,6 +99,7 @@ def test_plan_only_exits_before_artifact_writes() -> None:
     assert "$PSNativeCommandUseErrorActionPreference = $false" in script
     assert script.count("$LASTEXITCODE -ne 0") >= 9
     assert "function Invoke-DockerLogged" in script
+    assert "function Invoke-ComposeLogged" in script
     assert '$ErrorActionPreference = "Continue"' in script
     assert 'throw "$FailureMessage (exit code $nativeExitCode)"' in script
     plan_exit = script.index("if ($PlanOnly)")
@@ -244,6 +245,17 @@ def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path(
     assert script.count('-RedisPassword $redisPassword') == 2
     assert script.count('"/app/services/run_all_migrations.py"') == 3
     assert '"/app/run_all_migrations.py"' not in script
+    assert script.count('"issuance-migrations"') == 4
+    assert "issuance-migration-rehearsal.log" in script
+    assert "issuance-migration-rehearsal-verify.log" in script
+    assert "issuance-migration-live.log" in script
+    assert "issuance-migration-live-verify.log" in script
+    assert script.index("issuance-migration-rehearsal.log") < script.index(
+        'Write-Step "Build marker-bearing application images"'
+    )
+    assert script.index("migration-live.log") < script.index(
+        "issuance-migration-live.log"
+    )
 
 
 def test_beta_runner_always_isolates_required_openbao_migration_state() -> None:
@@ -268,3 +280,18 @@ def test_beta_runner_preserves_the_pinned_external_issuance_image_role() -> None
     assert 'Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)' in script
     assert '$imageRef = if ($service -in @("issuance", "canvas-sync-worker"))' in script
     assert '"elevenid-local/issuance:${releaseVersion}"' not in script
+
+
+def test_beta_compose_requires_credential_login_issuer_identity() -> None:
+    base_compose = text("docker-compose.base.yml")
+    beta_compose = text("docker-compose.beta.yml")
+
+    assert "CREDENTIAL_LOGIN_ORGANIZATION_ID:" in base_compose
+    assert "CREDENTIAL_LOGIN_ISSUER_DID:" in base_compose
+    assert (
+        "CREDENTIAL_LOGIN_ORGANIZATION_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}"
+        in beta_compose
+    )
+    assert beta_compose.count(
+        "${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}"
+    ) == 2
