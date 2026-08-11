@@ -157,6 +157,17 @@ def test_beta_restore_is_explicit_and_project_scoped() -> None:
     assert '$gatewayRecord[0].runtime_marker_environment.PSObject.Properties[$name]' in script
     assert '"canvas-sync-worker" -notin @($preDeploy.service)' in script
     assert 'Invoke-Checked docker @("rm", "--force", $worker)' in script
+    assert "$preDeployDocument | ForEach-Object { $_ }" in script
+    assert "$preDeploy = @(Get-Content" not in script
+
+
+def test_beta_compose_uses_the_generated_database_password_without_source_overlays() -> None:
+    base = text("docker-compose.base.yml")
+    tunnel = text("docker-compose.profile.tunnel.yml")
+
+    assert "postgresql+asyncpg://marty:marty_dev_password" not in base
+    assert base.count("postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}") == 14
+    assert "./services/gateway/routes/signing_keys.py" not in tunnel
 
 
 def test_beta_runner_targets_only_the_beta_projects_and_rust_event_stream() -> None:
