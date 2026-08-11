@@ -6,8 +6,10 @@ import PuppeteerRenderer from '@prerenderer/renderer-puppeteer'
 import { visualizer } from 'rollup-plugin-visualizer'
 import Sitemap from 'vite-plugin-sitemap'
 import { fileURLToPath, URL } from 'node:url'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+
+const PRERENDERED_ROOT_STAGING_PATH = '__prerendered-root.html'
 
 function createManualChunk(id: string) {
   const normalizedId = id.replace(/\\/g, '/')
@@ -105,6 +107,33 @@ function prerenderLocaleAssetsPlugin() {
         }
 
         emitDirectory(localeRoot)
+    },
+  }
+}
+
+function promotePrerenderedRootPlugin() {
+  return {
+    name: 'promote-prerendered-root',
+    apply: 'build' as const,
+    enforce: 'post' as const,
+    writeBundle(outputOptions: { dir?: string }) {
+      if (!outputOptions.dir) {
+        throw new Error('Public prerender output directory is unavailable')
+      }
+
+      const stagedPath = resolve(outputOptions.dir, PRERENDERED_ROOT_STAGING_PATH)
+      const rootPath = resolve(outputOptions.dir, 'index.html')
+      if (!existsSync(stagedPath)) {
+        throw new Error(`Prerendered root artifact is missing: ${stagedPath}`)
+      }
+
+      const html = readFileSync(stagedPath, 'utf8')
+      if (!html.includes('ElevenID') || html.includes('Welcome to nginx')) {
+        throw new Error('Prerendered root artifact failed the public homepage content contract')
+      }
+
+      writeFileSync(rootPath, html)
+      unlinkSync(stagedPath)
     },
   }
 }
@@ -284,6 +313,12 @@ export default defineConfig(async ({ mode }) => {
               '</head>',
               '<meta name="prerender-status-code" content="200" /></head>'
             );
+            // The prerender plugin removes Vite's root entry before emitting the
+            // replacement. Stage the root under a unique name so a later plugin
+            // can promote it after all bundle writes have completed.
+            if (route.route === '/') {
+              route.outputPath = PRERENDERED_ROOT_STAGING_PATH
+            }
           },
         }),
         
@@ -385,6 +420,7 @@ export default defineConfig(async ({ mode }) => {
             { userAgent: 'Cohere-AI', allow: '/' },
           ],
         }),
+        promotePrerenderedRootPlugin(),
       ] : []),
 
       ...(!isDev && enableBundleAnalysis ? [
