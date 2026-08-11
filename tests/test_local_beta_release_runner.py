@@ -22,7 +22,7 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     assert "migration-rehearsal.log" in script
     assert "--verify-only" in script
     assert 'MARTY_KMS_BOOTSTRAP_ENABLED=$kmsBootstrapEnabled' in script
-    assert '"REDIS_URL=redis://redis:6379"' in script
+    assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
     assert '"BAO_ADDR=http://openbao:8200"' in script
     assert '"BAO_TOKEN"' in script
     assert "export_canvas_lti_public_jwks.py" in script
@@ -218,8 +218,16 @@ def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path(
     script = text("scripts/deploy-local-beta-release.ps1")
 
     assert 'Get-DotEnvValue -Path $GeneratedEnvFile -Name "REDIS_PASSWORD"' in script
+    assert '$encodedRedisPassword = [Uri]::EscapeDataString($redisPassword)' in script
     assert 'docker exec --env "REDISCLI_AUTH=$RedisPassword" $redis redis-cli SAVE' in script
     assert 'throw "Authenticated beta Redis snapshot failed"' in script
+    assert '"redis-server", "--requirepass", $copyRedisPassword' in script
+    assert '$redisPing = docker exec $copyRedisContainer redis-cli --no-auth-warning -a $copyRedisPassword ping' in script
+    assert '$LASTEXITCODE -eq 0 -and $redisPing -eq "PONG"' in script
+    assert '$encodedCopyRedisPassword = [Uri]::EscapeDataString($copyRedisPassword)' in script
+    assert '"REDIS_URL=redis://:${encodedCopyRedisPassword}@${copyRedisContainer}:6379"' in script
+    assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
+    assert '"REDIS_URL=redis://redis:6379"' not in script
     assert script.count('-RedisPassword $redisPassword') == 2
     assert script.count('"/app/services/run_all_migrations.py"') == 3
     assert '"/app/run_all_migrations.py"' not in script
