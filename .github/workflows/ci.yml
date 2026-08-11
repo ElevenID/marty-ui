@@ -114,6 +114,52 @@ jobs:
         working-directory: services
         run: python -m pytest -v --tb=short -x
 
+  test-rust-services:
+    name: Rust Service Tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.87.0
+          components: clippy,rustfmt
+      - name: Check formatting
+        working-directory: rust
+        run: cargo fmt --all -- --check
+      - name: Test Rust service contracts
+        working-directory: rust
+        run: cargo test --locked --workspace
+      - name: Lint Rust services
+        working-directory: rust
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Validate beta-only Rust event-stream overlay
+        env:
+          MARTY_RS_URI: https://example.invalid/marty-rs.whl
+          MARTY_RS_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+          MARTY_COMMON_URI: https://example.invalid/marty-common.whl
+          MARTY_COMMON_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
+          MARTY_ISSUANCE_IMAGE: example.invalid/issuance@sha256:2222222222222222222222222222222222222222222222222222222222222222
+          MARTY_DOCS_IMAGE: example.invalid/docs@sha256:3333333333333333333333333333333333333333333333333333333333333333
+        run: |
+          set -euo pipefail
+          rendered="$(docker compose \
+            --file docker-compose.base.yml \
+            --file docker-compose.profile.tunnel.yml \
+            --file deploy-config/compose/tunnel-beta/event-stream-rust.yml \
+            config event-stream)"
+          grep -F 'dockerfile: rust/services/event-stream/Dockerfile' <<<"$rendered"
+          grep -F 'RUST_LOG: info' <<<"$rendered"
+      - name: Build event-stream image
+        run: >-
+          docker build
+          --file rust/services/event-stream/Dockerfile
+          --tag marty-event-stream:ci
+          --build-arg MARTY_RELEASE_VERSION=ci
+          --build-arg MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          .
+
   flow-idempotency-contract:
     name: Flow Idempotency PostgreSQL Contract
     runs-on: ubuntu-latest
