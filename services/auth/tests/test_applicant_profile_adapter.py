@@ -5,7 +5,12 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from auth.domain.entities import AuthenticatedUser, UserType
+from auth.domain.entities import (
+    AuthenticatedUser,
+    OIDCUserInfo,
+    OIDCValidatedIdentity,
+    UserType,
+)
 from auth.infrastructure.adapters.applicant_profile_adapter import ApplicantProfileProvisioningAdapter
 from auth.infrastructure.adapters.keycloak_admin_adapter import KeycloakAdminAdapter
 
@@ -66,3 +71,94 @@ async def test_keycloak_token_exchange_is_not_probed_when_disabled(monkeypatch):
 
     assert tokens is None
     client.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_keycloak_token_exchange_returns_only_native_validated_claims():
+    validator = AsyncMock()
+    validator.validate_exchanged_tokens.return_value = OIDCValidatedIdentity(
+        user_info=OIDCUserInfo(sub="kc-user-1", email="holder@example.com"),
+        id_token_claims={"sub": "kc-user-1", "email": "holder@example.com"},
+        access_token_claims={"sub": "kc-user-1", "realm_access": {"roles": ["applicant"]}},
+    )
+    adapter = KeycloakAdminAdapter(
+        admin_url="http://keycloak",
+        realm="marty",
+        client_id="marty-api",
+        client_secret="secret",
+        token_exchange_enabled=True,
+        token_validator=validator,
+    )
+    adapter._get_service_account_token = AsyncMock(return_value="service-token")
+    response = httpx.Response(
+        200,
+        json={
+            "id_token": "signed-id-token",
+            "access_token": "signed-access-token",
+            "refresh_token": "refresh-token",
+        },
+        request=httpx.Request("POST", "http://keycloak/realms/marty/protocol/openid-connect/token"),
+    )
+    client = AsyncMock()
+    client.post.return_value = response
+    client.__aenter__.return_value = client
+    client.__aexit__.return_value = None
+
+    with patch(
+        "auth.infrastructure.adapters.keycloak_admin_adapter.httpx.AsyncClient",
+        return_value=client,
+    ):
+        tokens = await adapter.exchange_token_for_user("kc-user-1")
+
+    validator.validate_exchanged_tokens.assert_awaited_once_with(
+        {
+            "id_token": "signed-id-token",
+            "access_token": "signed-access-token",
+            "refresh_token": "refresh-token",
+        },
+        expected_audience="marty-ui",
+    )
+    assert tokens == {
+        "id_token": "signed-id-token",
+        "access_token": "signed-access-token",
+        "refresh_token": "refresh-token",
+        "id_token_claims": {"sub": "kc-user-1", "email": "holder@example.com"},
+        "access_token_claims": {
+            "sub": "kc-user-1",
+            "realm_access": {"roles": ["applicant"]},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_keycloak_token_exchange_rejects_refresh_token_without_validated_identity():
+    validator = AsyncMock()
+    validator.validate_exchanged_tokens.return_value = None
+    adapter = KeycloakAdminAdapter(
+        admin_url="http://keycloak",
+        realm="marty",
+        client_id="marty-api",
+        client_secret="secret",
+        token_exchange_enabled=True,
+        token_validator=validator,
+    )
+    adapter._get_service_account_token = AsyncMock(return_value="service-token")
+    response = httpx.Response(
+        200,
+        json={"refresh_token": "unbound-refresh-token"},
+        request=httpx.Request(
+            "POST", "http://keycloak/realms/marty/protocol/openid-connect/token"
+        ),
+    )
+    client = AsyncMock()
+    client.post.return_value = response
+    client.__aenter__.return_value = client
+    client.__aexit__.return_value = None
+
+    with patch(
+        "auth.infrastructure.adapters.keycloak_admin_adapter.httpx.AsyncClient",
+        return_value=client,
+    ):
+        tokens = await adapter.exchange_token_for_user("kc-user-1")
+
+    assert tokens is None

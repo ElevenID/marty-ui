@@ -294,30 +294,20 @@
         "id": "unsigned-oidc-decoder-baseline",
         "glob": "services/auth/**/*.py",
         "pattern": "(?<![A-Za-z0-9_])(?:_?decode_jwt_claims|parse_id_token)(?![A-Za-z0-9_])",
-        "expected_matches": {
-          "services/auth/application/ports.py": 1,
-          "services/auth/application/use_cases.py": 1,
-          "services/auth/infrastructure/adapters/http_adapter.py": 2,
-          "services/auth/infrastructure/adapters/oidc_adapter.py": 4
-        }
+        "expected_matches": {}
       },
       {
         "id": "pkce-is-not-token-validation-baseline",
         "glob": "services/auth/**/*.py",
         "pattern": "already validated via PKCE",
-        "expected_matches": {
-          "services/auth/application/ports.py": 1,
-          "services/auth/application/use_cases.py": 1,
-          "services/auth/infrastructure/adapters/oidc_adapter.py": 1
-        }
+        "expected_matches": {}
       },
       {
         "id": "auth-base64url-decode-baseline",
         "glob": "services/auth/**/*.py",
         "pattern": "urlsafe_b64decode",
         "expected_matches": {
-          "services/auth/infrastructure/adapters/http_adapter.py": 2,
-          "services/auth/infrastructure/adapters/oidc_adapter.py": 1
+          "services/auth/infrastructure/adapters/http_adapter.py": 1
         }
       },
       {

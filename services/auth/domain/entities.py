@@ -311,6 +311,7 @@ class Session:
     user_agent: str | None = None
     id_token: str | None = None  # For SSO logout
     refresh_token: str | None = None
+    oidc_claims: dict[str, Any] | None = None
     
     @classmethod
     def create(
@@ -321,6 +322,7 @@ class Session:
         user_agent: str | None = None,
         id_token: str | None = None,
         refresh_token: str | None = None,
+        oidc_claims: dict[str, Any] | None = None,
     ) -> Session:
         """Create a new session for a user."""
         now = datetime.now(timezone.utc)
@@ -335,6 +337,7 @@ class Session:
             user_agent=user_agent,
             id_token=id_token,
             refresh_token=refresh_token,
+            oidc_claims=oidc_claims,
         )
     
     @property
@@ -373,6 +376,7 @@ class Session:
             "user_agent": self.user_agent,
             "id_token": self.id_token,
             "refresh_token": self.refresh_token,
+            "oidc_claims": self.oidc_claims,
         }
     
     @classmethod
@@ -389,6 +393,7 @@ class Session:
             user_agent=data.get("user_agent"),
             id_token=data.get("id_token"),
             refresh_token=data.get("refresh_token"),
+            oidc_claims=data.get("oidc_claims"),
         )
 
 
@@ -405,6 +410,7 @@ class PKCEState:
     code_verifier: str
     redirect_uri: str
     oidc_redirect_uri: str | None = None
+    nonce: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc) + timedelta(minutes=10))
     
@@ -420,6 +426,7 @@ class PKCEState:
             "code_verifier": self.code_verifier,
             "redirect_uri": self.redirect_uri,
             "oidc_redirect_uri": self.oidc_redirect_uri,
+            "nonce": self.nonce,
             "created_at": self.created_at.isoformat(),
             "expires_at": self.expires_at.isoformat(),
         }
@@ -432,6 +439,7 @@ class PKCEState:
             code_verifier=data["code_verifier"],
             redirect_uri=data["redirect_uri"],
             oidc_redirect_uri=data.get("oidc_redirect_uri"),
+            nonce=data.get("nonce"),
             created_at=datetime.fromisoformat(data["created_at"]),
             expires_at=datetime.fromisoformat(data["expires_at"]),
         )
@@ -503,3 +511,12 @@ class OIDCUserInfo:
             organization=organization_claim,
             roles=roles,
         )
+
+
+@dataclass(frozen=True)
+class OIDCValidatedIdentity:
+    """Identity and raw claims returned only after native OIDC validation."""
+
+    user_info: OIDCUserInfo
+    id_token_claims: dict[str, Any]
+    access_token_claims: dict[str, Any]
