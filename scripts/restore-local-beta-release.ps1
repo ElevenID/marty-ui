@@ -144,7 +144,8 @@ foreach ($name in $requiredFiles) {
     if ($hash -ne $record[0].sha256) { throw "Beta backup checksum mismatch: $name" }
 }
 
-$preDeploy = @(Get-Content -LiteralPath $preDeployPath -Raw | ConvertFrom-Json)
+$preDeployDocument = Get-Content -LiteralPath $preDeployPath -Raw | ConvertFrom-Json
+$preDeploy = @($preDeployDocument | ForEach-Object { $_ })
 $applicationServices = @(
     "auth", "organization", "credential-template", "trust-profile", "applicant", "notification",
     "compliance-profile", "presentation-policy", "deployment-profile", "flow", "verification",
