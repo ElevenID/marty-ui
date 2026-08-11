@@ -444,7 +444,7 @@ services:
         SERVICE_NAME: organization
     environment:
       ORGANIZATION_SERVICE_PORT: "8002"
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
       ORG_GRPC_PORT: "9002"
@@ -478,7 +478,7 @@ services:
         SERVICE_NAME: credential-template
     environment:
       CREDENTIAL_TEMPLATE_SERVICE_PORT: "8003"
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
       RP_GRPC_TARGET: revocation-profile:9013
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
@@ -510,7 +510,7 @@ services:
         SERVICE_NAME: trust-profile
     environment:
       TRUST_PROFILE_SERVICE_PORT: "8004"
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
       # OpenBao KMS for certificate operations
       BAO_ADDR: http://openbao:8200
@@ -540,7 +540,7 @@ services:
     environment:
       APPLICANT_SERVICE_PORT: "8006"
       FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-dev-flow-application-event-hmac-key-change-before-production}
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       APPLICANT_DATA_FILE: /app/data/applicant_store.json
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
@@ -577,7 +577,7 @@ services:
         SERVICE_NAME: notification
     environment:
       NOTIFICATION_SERVICE_PORT: "8007"
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
       NOTIF_GRPC_PORT: "9007"
@@ -615,7 +615,7 @@ services:
         SERVICE_NAME: compliance-profile
     environment:
       COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
     ports:
       - "8008:8008"
@@ -640,7 +640,7 @@ services:
         SERVICE_NAME: presentation-policy
     environment:
       PRESENTATION_POLICY_SERVICE_PORT: "8009"
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_PORT: "9009"
       DID_RESOLUTION_BASE_URL: http://gateway:8000
@@ -676,7 +676,7 @@ services:
         SERVICE_NAME: deployment-profile
     environment:
       DEPLOYMENT_PROFILE_SERVICE_PORT: "8010"
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
     ports:
       - "8010:8010"
@@ -701,7 +701,7 @@ services:
         SERVICE_NAME: flow
     environment:
       FLOW_SERVICE_PORT: "8011"
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_TARGET: presentation-policy:9009
@@ -753,7 +753,7 @@ services:
     image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
     environment:
       ISSUANCE_SERVICE_PORT: "8005"
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
       CANVAS_LTI_EXPERIENCE_BASE_URL: ${CANVAS_LTI_EXPERIENCE_BASE_URL:-}
@@ -847,7 +847,7 @@ services:
     image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
     command: ["python", "-m", "issuance.canvas_worker"]
     environment:
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # Repository initialization verifies opaque OAuth/session material.
       # Keep this identical to issuance so the worker can process jobs.
@@ -902,7 +902,7 @@ services:
         SERVICE_NAME: revocation-profile
     environment:
       REVOCATION_PROFILE_SERVICE_PORT: "8013"
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       REDIS_URL: redis://redis:6379/4
       ORG_GRPC_TARGET: organization:9002
       RP_GRPC_PORT: "9013"
@@ -933,7 +933,7 @@ services:
         SERVICE_NAME: device_registration
     environment:
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
-      DATABASE_URL: postgresql+asyncpg://marty:marty_dev_password@postgres:5432/marty
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       REDIS_URL: redis://redis:6379/5
       ORG_GRPC_TARGET: organization:9002
     ports:
