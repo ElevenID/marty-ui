@@ -547,6 +547,16 @@ Invoke-Checked -FilePath docker -Arguments @(
     "--tag", $uiImage, $script:RepoRoot
 )
 
+Write-Step "Verify public UI image homepage content"
+$uiRootHtml = @(docker run --rm --entrypoint cat $uiImage /usr/share/nginx/html/index.html)
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not read the public UI homepage from $uiImage"
+}
+$uiRootText = $uiRootHtml -join "`n"
+if ($uiRootText -notmatch "ElevenID" -or $uiRootText -match "Welcome to nginx") {
+    throw "Public UI image homepage failed the ElevenID content contract"
+}
+
 # Builds consume coordinated live worktrees. Revalidate every snapshotted input
 # after the final build and before stopping beta writers, so a concurrent edit
 # cannot be deployed under the source identity captured at the start of the run.

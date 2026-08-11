@@ -48,6 +48,11 @@ COPY ui/ .
 
 # Build the application
 RUN if [ "$UI_VARIANT" = "selfhost" ]; then bun run build:selfhost && mv dist-selfhost dist-final; else bun run build && mv dist dist-final; fi \
+    && if [ "$UI_VARIANT" = "public" ]; then \
+      test -s dist-final/index.html \
+      && grep -q 'ElevenID' dist-final/index.html \
+      && ! grep -q 'Welcome to nginx' dist-final/index.html; \
+    fi \
     && printf '{"component":"ui","release_version":"%s","marty_ui_sha":"%s"}\n' \
       "$MARTY_RELEASE_VERSION" "$MARTY_UI_SHA" > dist-final/marty-ui-release.json
 
