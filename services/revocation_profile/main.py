@@ -24,16 +24,12 @@ from enum import Enum
 from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from typing import Annotated
 
 from marty_common import (
-    OrganizationContext,
     ensure_membership_permission,
-    RequestIdMiddleware,
-    RequestLoggingMiddleware,
     create_service_app,
 )
 
@@ -1515,6 +1511,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         base_url=base_url,
         default_size=131072,  # 16KB bitstring = 131,072 bits
     )
+    native_diagnostics = _status_list_manager.native_backend_diagnostics
+    app.state.native_backend_diagnostics = native_diagnostics
+    logger.info(
+        "Native backend ready: backend=%s version=%s capabilities=%s",
+        native_diagnostics["backend"],
+        native_diagnostics["version"],
+        ",".join(native_diagnostics["capabilities"]),
+    )
     logger.info(f"Initialized StatusListManager with base URL: {base_url}")
     
     # Initialize gRPC channel to organization service
@@ -1561,13 +1565,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await teardown_org_client(app)
 
 def create_app() -> FastAPI:
-    return create_service_app(
+    app = create_service_app(
         title="RevocationProfile Service",
         description="Format-agnostic revocation configuration and automation",
         service_name=SERVICE_NAME,
         lifespan=lifespan,
         routers=[router, status_router, cascade_router, batch_router, internal_router],
     )
+
+    @app.get("/health/native-backend")
+    async def native_backend_health() -> dict[str, Any]:
+        diagnostics = getattr(app.state, "native_backend_diagnostics", None)
+        if not isinstance(diagnostics, dict) or diagnostics.get("available") is not True:
+            raise HTTPException(status_code=503, detail="Native backend is unavailable")
+        return {"status": "ready", **diagnostics}
+
+    return app
 
 
 app = create_app()
