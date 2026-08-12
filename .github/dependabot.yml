@@ -4,6 +4,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: sunday
+      time: "04:00"
+      timezone: "America/Denver"
     groups:
       github-actions:
         patterns: ["*"]
@@ -12,6 +15,9 @@ updates:
     directory: /ui
     schedule:
       interval: weekly
+      day: sunday
+      time: "05:00"
+      timezone: "America/Denver"
     open-pull-requests-limit: 5
     groups:
       ui-development:
@@ -22,6 +28,9 @@ updates:
     directory: /tests
     schedule:
       interval: weekly
+      day: sunday
+      time: "06:00"
+      timezone: "America/Denver"
     groups:
       browser-tests:
         patterns: ["*"]
@@ -30,6 +39,9 @@ updates:
     directory: /tests/canvas-oss-contract
     schedule:
       interval: weekly
+      day: sunday
+      time: "07:00"
+      timezone: "America/Denver"
     groups:
       canvas-contract:
         patterns: ["*"]
@@ -38,9 +50,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: sunday
+      time: "08:00"
+      timezone: "America/Denver"
     open-pull-requests-limit: 5
 
   - package-ecosystem: pip
     directory: /docker/canvas-sandbox
     schedule:
       interval: weekly
+      day: sunday
+      time: "09:00"
+      timezone: "America/Denver"
