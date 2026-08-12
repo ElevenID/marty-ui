@@ -3397,6 +3397,19 @@ async def post_my_application_claim(
 ) -> ApplicationResponse:
     user_id, _, _ = _identity_headers(x_user_id)
     application, _ = await _self_application(application_id, user_id, repo)
+    await _sync_application_issuance_state(application, repo)
+    offer_expires_at = _parse_iso_datetime(application.system_data.get("offer_expires_at"))
+    has_offer = bool(
+        application.system_data.get("credential_offer_uri")
+        or application.system_data.get("credential_offer_uris")
+    )
+    if (
+        application.claim_state == ClaimState.OFFER_READY
+        and has_offer
+        and offer_expires_at is not None
+        and offer_expires_at > datetime.now(timezone.utc)
+    ):
+        return _application_to_response(application)
     return await issue_application(application.id, request=body, repo=repo)
 
 
