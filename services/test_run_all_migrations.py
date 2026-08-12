@@ -216,6 +216,7 @@ def test_seed_issuer_profiles_creates_active_marty_kms_profiles():
 
     assert set(profiles) == {
         "ip-marty-vc-jwt-issuer",
+        "ip-marty-sd-jwt-issuer",
         "ip-marty-oid4vp-verifier",
         "ip-marty-canvas-lti-tool",
         "ip-marty-mdoc-dsc",
@@ -230,8 +231,15 @@ def test_seed_issuer_profiles_creates_active_marty_kms_profiles():
         == "cred-issuer-marty-es256"
     )
     assert profiles["ip-marty-vc-jwt-issuer"]["key_purpose"] == "vc_jwt_issuer"
-    assert profiles["ip-marty-vc-jwt-issuer"]["credential_format"] == "SD_JWT_VC"
+    assert profiles["ip-marty-vc-jwt-issuer"]["credential_format"] == "VC_JWT"
     assert profiles["ip-marty-vc-jwt-issuer"]["algorithm"] == "ES256"
+    assert (
+        profiles["ip-marty-sd-jwt-issuer"]["signing_key_reference"]
+        == "cred-issuer-marty-es256"
+    )
+    assert profiles["ip-marty-sd-jwt-issuer"]["key_purpose"] == "vc_jwt_issuer"
+    assert profiles["ip-marty-sd-jwt-issuer"]["credential_format"] == "SD_JWT_VC"
+    assert profiles["ip-marty-sd-jwt-issuer"]["algorithm"] == "ES256"
     assert (
         profiles["ip-marty-oid4vp-verifier"]["signing_key_reference"]
         == "oid4vp-verifier-marty-es256"

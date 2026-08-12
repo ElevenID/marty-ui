@@ -21,7 +21,7 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     assert "elevenid-beta-copy-" in script
     assert "migration-rehearsal.log" in script
     assert "--verify-only" in script
-    assert 'MARTY_KMS_BOOTSTRAP_ENABLED=$kmsBootstrapEnabled' in script
+    assert script.count('MARTY_KMS_BOOTSTRAP_ENABLED=true') == 2
     assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
     assert '"BAO_ADDR=http://openbao:8200"' in script
     assert '"BAO_TOKEN"' in script
@@ -30,9 +30,11 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     assert "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES" in script
     assert "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST" in script
     assert '$env:CANVAS_OAUTH_COMPLETION_REDIRECT_URL = "$BetaOrigin/console/org/deploy/canvas"' in script
-    assert 'MARTY_KMS_BOOTSTRAP_ENABLED=$rehearsalKmsEnabled' in script
+    assert "$rehearsalKmsEnabled" not in script
+    assert "$kmsBootstrapEnabled" not in script
     assert '"elevenid-beta-copy-openbao-' in script
     assert '"elevenid-beta-copy-redis-' in script
+    assert "$rehearsalContainers = @($copyContainer, $copyOpenBaoContainer, $copyRedisContainer)" in script
     assert '-Phase "maintenance_quiesced"' in script
     assert '-WritersStopped $true' in script
     assert "restore-local-beta-release.ps1" in script
@@ -262,7 +264,10 @@ def test_beta_runner_always_isolates_required_openbao_migration_state() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
     assert 'Get-DotEnvValue -Path $GeneratedEnvFile -Name "BAO_DEV_ROOT_TOKEN"' in script
-    assert '$rehearsalContainers = @($copyContainer, $copyOpenBaoContainer)' in script
+    assert (
+        "$rehearsalContainers = "
+        "@($copyContainer, $copyOpenBaoContainer, $copyRedisContainer)"
+    ) in script
     assert '"BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken"' in script
     assert '"BAO_ADDR=http://${copyOpenBaoContainer}:8200"' in script
     assert '"BAO_TOKEN=$copyBaoToken"' in script
