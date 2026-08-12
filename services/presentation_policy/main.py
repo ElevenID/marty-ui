@@ -48,7 +48,11 @@ from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
 from common.internal_service_auth import internal_service_headers
 from common.did_resolution import resolve_did_document
-from common.native_backend import load_marty_rs
+from common.native_backend import (
+    NativeBackendUnavailable,
+    NativeOperationError,
+    load_marty_rs,
+)
 from presentation_policy.infrastructure.adapters import (
     PostgresPresentationPolicyRepository,
 )
@@ -939,106 +943,38 @@ def _public_jwk_to_pem(public_jwk: dict[str, Any]) -> str:
 
 
 def _detect_credential_format(vp_token: str | dict[str, Any]) -> str:
-    """
-    Auto-detect credential format from VP token.
-
-    Returns: "w3c-vc", "sd-jwt", "mdoc", "openbadge-v2", "openbadge-v3", or "unknown"
-    """
+    """Route a credential through the canonical native detector."""
+    serialized = (
+        json.dumps(vp_token, separators=(",", ":"), sort_keys=True)
+        if isinstance(vp_token, dict)
+        else vp_token
+    )
+    binding = _load_marty_rs_binding()
+    detector = getattr(binding, "detect_credential_format", None)
+    if not callable(detector):
+        raise NativeBackendUnavailable(
+            "The Marty Rust backend does not expose detect_credential_format"
+        )
     try:
-        if isinstance(vp_token, dict):
-            proof = vp_token.get("proof")
-            proofs = proof if isinstance(proof, list) else [proof]
-            if any(
-                isinstance(item, dict) and item.get("type") == "DataIntegrityProof"
-                for item in proofs
-            ):
-                # This is routing, not acceptance. A structured document with
-                # a Data Integrity proof must reach the released VCDM engine,
-                # which validates its context, types, proof configuration,
-                # signature, and current validity. Requiring an exact context
-                # shape here can misclassify an otherwise verifiable document
-                # as "unknown" before cryptographic verification; relaxing
-                # candidate detection does not make an invalid document pass.
-                return "w3c-vcdm-di"
-            return "unknown"
-
-        stripped = vp_token.strip()
-        if stripped.startswith("{"):
-            credential, _document_store = _extract_open_badge_payload(
-                stripped, "credential"
-            )
-            if isinstance(credential, dict):
-                context = credential.get("@context", [])
-                contexts = context if isinstance(context, list) else [context]
-                type_value = credential.get("type", [])
-                types = type_value if isinstance(type_value, list) else [type_value]
-                if "https://w3id.org/openbadges/v2" in contexts:
-                    return "openbadge-v2"
-                if (
-                    "OpenBadgeCredential" in types
-                    or "AchievementCredential" in types
-                    or "https://purl.imsglobal.org/spec/ob/v3p0/context.json"
-                    in contexts
-                    or "https://w3id.org/openbadges/v3" in contexts
-                ):
-                    return "openbadge-v3"
-
-        # Try JWT-based formats first
-        if "." in vp_token and vp_token.count(".") >= 2:
-            # Could be JWT, SD-JWT, W3C VC, or Open Badge
-            parts = vp_token.split(".")
-
-            # SD-JWT has ~-separated disclosures after the JWT
-            if "~" in vp_token:
-                return "sd-jwt"
-
-            # Decode header to check type
-            try:
-                import base64
-
-                header_data = base64.urlsafe_b64decode(parts[0] + "==")
-                header = json.loads(header_data)
-
-                # Check JWT type claim
-                if header.get("typ") == "openBadgeCredential":
-                    return "openbadge-v3"
-                elif "badge" in str(header).lower():
-                    return "openbadge-v2"
-                elif header.get("typ") in ["JWT", "vc+jwt"]:
-                    return "w3c-vc"
-            except (ValueError, json.JSONDecodeError, Exception):
-                pass
-
-            # Default JWT to W3C VC
-            return "w3c-vc"
-
-        # mDoc is CBOR-encoded
-        if vp_token.startswith("\\x"):
-            return "mdoc"
-        mdoc_candidate = stripped
-        for prefix in ("mso_mdoc:", "mdoc:"):
-            if mdoc_candidate.startswith(prefix):
-                mdoc_candidate = mdoc_candidate[len(prefix) :]
-                break
-        if mdoc_candidate and "." not in mdoc_candidate and "~" not in mdoc_candidate:
-            try:
-                import base64 as _b64
-
-                mdoc_bytes = _b64.urlsafe_b64decode(
-                    mdoc_candidate + "=" * (-len(mdoc_candidate) % 4)
-                )
-                marty_rs = _load_marty_rs_binding()
-                if marty_rs is None:
-                    raise RuntimeError("marty-rs verification binding is unavailable")
-                marty_rs.parse_device_response(mdoc_bytes)
-                return "mdoc"
-            except Exception:
-                pass
-
-    except Exception as e:
-        logger.warning(f"Format detection error: {e}")
-
-    return "unknown"
+        detected = detector(serialized)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise NativeOperationError(
+            f"Native credential format detection failed: {exc}"
+        ) from exc
+    supported = {
+        "w3c-vc",
+        "w3c-vcdm-di",
+        "sd-jwt",
+        "mdoc",
+        "openbadge-v2",
+        "openbadge-v3",
+        "unknown",
+    }
+    if detected not in supported:
+        raise NativeOperationError(
+            f"Native credential format detection returned unsupported result: {detected!r}"
+        )
+    return detected
 
 
 async def _verify_credential_by_format(
