@@ -17,7 +17,7 @@ alembic>=1.13.0
 redis>=5.0.0
 
 # HTTP Client
-httpx>=0.26.0
+httpx>=0.28.1
 
 # Observability
 opentelemetry-api>=1.22.0
