@@ -565,3 +565,65 @@ def test_claim_offer_ready_uses_only_mapped_form_claims(client, repo, seeded, te
     assert "applicant_id" not in captured
     assert "integration_context" not in captured
     assert "approval_strategy" not in captured
+
+
+def test_claim_reuses_an_active_offer_without_retriggering_flow(client, repo, seeded, monkeypatch):
+    application_id = create_application(client).json()["id"]
+    application = run(repo.get_application(application_id))
+    application.status = ApplicationStatus.OFFERED
+    application.claim_state = service.ClaimState.OFFER_READY
+    application.system_data.update({
+        "credential_offer_uri": "openid-credential-offer://existing-offer",
+        "offer_expires_at": "2099-01-01T00:00:00Z",
+    })
+    run(repo.save_application(application))
+
+    async def must_not_issue(**_kwargs):
+        raise AssertionError("an active applicant offer must not be reissued")
+
+    monkeypatch.setattr(service, "_initiate_issuance_via_flow", must_not_issue)
+
+    response = client.post(
+        f"/v1/me/applications/{application_id}/claim",
+        headers=self_headers(),
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["claim_state"] == "OFFER_READY"
+    assert response.json()["credential_offer_uri"].endswith("existing-offer")
+
+
+def test_claim_reissues_an_expired_offer(client, repo, seeded, monkeypatch):
+    application_id = create_application(client).json()["id"]
+    application = run(repo.get_application(application_id))
+    application.status = ApplicationStatus.OFFERED
+    application.claim_state = service.ClaimState.OFFER_READY
+    application.system_data.update({
+        "credential_offer_uri": "openid-credential-offer://expired-offer",
+        "offer_expires_at": "2000-01-01T00:00:00Z",
+    })
+    run(repo.save_application(application))
+    calls = 0
+
+    async def issue(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "id": "replacement-transaction",
+            "status": "pending",
+            "credential_offer_uri": "openid-credential-offer://replacement-offer",
+            "expires_at": "2099-01-01T00:00:00Z",
+        }
+
+    monkeypatch.setattr(service, "_initiate_issuance_via_flow", issue)
+
+    response = client.post(
+        f"/v1/me/applications/{application_id}/claim",
+        headers=self_headers(),
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert calls == 1
+    assert response.json()["credential_offer_uri"].endswith("replacement-offer")
