@@ -1602,6 +1602,58 @@ def test_credential_status_lookup_url_honors_mip_template(monkeypatch) -> None:
     )
 
 
+def test_managed_credential_status_lookup_sends_tenant_management_auth(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.delenv("MIP_CREDENTIAL_STATUS_URL_TEMPLATE", raising=False)
+    monkeypatch.setenv("ISSUANCE_API_KEY", "issuance-secret")
+
+    def get(url: str, **kwargs: object) -> SimpleNamespace:
+        captured.update(url=url, **kwargs)
+        return SimpleNamespace(
+            status_code=200,
+            raise_for_status=lambda: None,
+            json=lambda: {"id": "credential-123", "status": "active"},
+        )
+
+    monkeypatch.setattr("httpx.get", get)
+
+    assert pp._get_issued_credential_status("credential-123", "org-1") == {
+        "id": "credential-123",
+        "status": "active",
+    }
+    assert captured["headers"] == {
+        "Accept": "application/json",
+        "X-API-Key": "issuance-secret",
+        "X-Organization-ID": "org-1",
+    }
+
+
+def test_custom_status_resolver_does_not_receive_issuance_management_key(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setenv(
+        "MIP_CREDENTIAL_STATUS_URL_TEMPLATE",
+        "https://status.example/credentials/{credential_id}",
+    )
+    monkeypatch.setenv("ISSUANCE_API_KEY", "must-not-leak")
+
+    def get(url: str, **kwargs: object) -> SimpleNamespace:
+        captured.update(url=url, **kwargs)
+        return SimpleNamespace(
+            status_code=404,
+            raise_for_status=lambda: None,
+            json=lambda: {},
+        )
+
+    monkeypatch.setattr("httpx.get", get)
+
+    assert pp._get_issued_credential_status("credential-123", "org-1") is None
+    assert captured["headers"] == {"Accept": "application/json"}
+
+
 def test_credential_status_identifier_candidates_use_explicit_ids_only() -> None:
     candidates = pp._credential_status_identifier_candidates(
         {
@@ -2695,7 +2747,10 @@ def test_policy_freshness_accepts_managed_issuer_active_credential_status(
     monkeypatch.setattr(
         pp,
         "_get_issued_credential_status",
-        lambda credential_id: {"id": credential_id, "status": "active"},
+        lambda credential_id, _organization_id: {
+            "id": credential_id,
+            "status": "active",
+        },
     )
 
     response = asyncio.run(
@@ -2738,7 +2793,10 @@ def test_policy_freshness_denies_managed_issuer_revoked_credential_status(
     monkeypatch.setattr(
         pp,
         "_get_issued_credential_status",
-        lambda credential_id: {"id": credential_id, "status": "revoked"},
+        lambda credential_id, _organization_id: {
+            "id": credential_id,
+            "status": "revoked",
+        },
     )
 
     response = asyncio.run(
@@ -2779,7 +2837,10 @@ def test_policy_freshness_reports_suspended_credential_status(monkeypatch) -> No
     monkeypatch.setattr(
         pp,
         "_get_issued_credential_status",
-        lambda credential_id: {"id": credential_id, "status": "suspended"},
+        lambda credential_id, _organization_id: {
+            "id": credential_id,
+            "status": "suspended",
+        },
     )
 
     response = asyncio.run(
@@ -2802,7 +2863,7 @@ def test_status_lookup_accepts_record_bound_to_unconfigured_issuer(monkeypatch) 
     monkeypatch.setattr(
         pp,
         "_get_issued_credential_status",
-        lambda credential_id: {
+        lambda credential_id, _organization_id: {
             "id": credential_id,
             "issuer_did": issuer_did,
             "status": "active",
@@ -2812,6 +2873,7 @@ def test_status_lookup_accepts_record_bound_to_unconfigured_issuer(monkeypatch) 
     assert pp._lookup_managed_issuer_credential_status_revocation_state(
         issuer_did=issuer_did,
         credential_ids=["credential-123"],
+        organization_id="org-1",
     ) == (True, True, "active")
 
 
@@ -2820,7 +2882,7 @@ def test_status_lookup_rejects_record_bound_to_different_issuer(monkeypatch) -> 
     monkeypatch.setattr(
         pp,
         "_get_issued_credential_status",
-        lambda credential_id: {
+        lambda credential_id, _organization_id: {
             "id": credential_id,
             "issuer_did": "did:jwk:other-issuer",
             "status": "active",
@@ -2830,6 +2892,7 @@ def test_status_lookup_rejects_record_bound_to_different_issuer(monkeypatch) -> 
     assert pp._lookup_managed_issuer_credential_status_revocation_state(
         issuer_did="did:jwk:presented-issuer",
         credential_ids=["credential-123"],
+        organization_id="org-1",
     ) == (None, None, None)
 
 

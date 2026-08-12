@@ -650,6 +650,7 @@ services:
       DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
