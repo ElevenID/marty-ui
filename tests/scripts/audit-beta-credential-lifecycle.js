@@ -11,6 +11,11 @@ const {
   maskProtocolField,
   showStep,
 } = require('./demo-recording');
+const {
+  DEFAULT_BETA_ORGANIZATION_ID,
+  DEFAULT_LIFECYCLE_POLICY_ID,
+  DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
+} = require('./beta-credential-contract');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
@@ -18,9 +23,9 @@ loadEnvFile(path.join(ROOT, '.env'));
 
 const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
 const TEST_WALLET_ORIGIN = process.env.MARTY_TEST_WALLET_ORIGIN || 'http://127.0.0.1:8787';
-const ORG_ID = process.env.BETA_AUDIT_ORG_ID || '02af5d70-04e6-40d8-80e2-3e8400d4b018';
-const POLICY_ID = process.env.BETA_AUDIT_POLICY_ID || '43336aa5-4532-4a9d-95de-241ac97d5a2a';
-const SOURCE_TEMPLATE_ID = process.env.BETA_AUDIT_TEMPLATE_ID || '1d9d2ea0-1a39-4fc3-99de-c786a5617f78';
+const ORG_ID = process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID;
+const POLICY_ID = process.env.BETA_AUDIT_POLICY_ID || DEFAULT_LIFECYCLE_POLICY_ID;
+const SOURCE_TEMPLATE_ID = process.env.BETA_AUDIT_TEMPLATE_ID || DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID;
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 

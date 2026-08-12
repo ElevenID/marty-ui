@@ -16,12 +16,18 @@ const {
   maskProtocolField: maskRecordingProtocolField,
   showStep: showRecordingStep,
 } = require('./demo-recording');
+const {
+  DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
+  credentialInventoryEvidence,
+} = require('./beta-credential-contract');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
 const TEST_WALLET_ORIGIN = process.env.MARTY_TEST_WALLET_ORIGIN || 'http://127.0.0.1:8787';
 const MEMBERSHIP_BADGE_VCT = process.env.MARTY_LOGIN_BADGE_VCT
   || `${BETA_ORIGIN}/credentials/marty-verified-member-badge`;
+const MEMBERSHIP_BADGE_CONFIGURATION_ID = process.env.EXPECTED_LOGIN_BADGE_CONFIGURATION_ID
+  || DEFAULT_LOGIN_BADGE_CONFIGURATION_ID;
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 async function showStep(page, title, detail) {
@@ -47,10 +53,14 @@ async function receiveBadge(walletPage, offerUri) {
   const response = await responsePromise;
   const body = await response.json().catch(() => null);
   const inventory = await walletPage.locator('#credentials').innerText();
+  const inventoryEvidence = credentialInventoryEvidence(inventory, {
+    vct: MEMBERSHIP_BADGE_VCT,
+    configurationId: MEMBERSHIP_BADGE_CONFIGURATION_ID,
+  });
   return {
     status: response.status(),
     accepted: response.ok(),
-    storedExpectedVct: inventory.includes(MEMBERSHIP_BADGE_VCT),
+    ...inventoryEvidence,
     error: response.ok() ? null : redact(body?.error || 'Credential receipt failed'),
   };
 }
@@ -220,7 +230,7 @@ async function main() {
       report.badge.offerSource === 'canonical-ui'
       && report.badge.loggedOut
       && report.badge.accepted
-      && report.badge.storedExpectedVct
+      && report.badge.storedExpectedCredential
       && report.presentation.accepted
       && report.completion.status === 'completed'
       && report.completion.authenticated
