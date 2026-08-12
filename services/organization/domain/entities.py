@@ -215,6 +215,7 @@ APPLICANT_PERMISSION_KEYS: frozenset[str] = frozenset(
     {
         "organization:view",
         "credential-template:view",
+        "wallet:view",
         "application-template:view",
         "application:view",
         "issuance:view",
