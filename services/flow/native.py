@@ -25,7 +25,7 @@ def initialize_native_flow_backend(
     if backend is None:
         backend = load_marty_rs(required_capability="flow_state_machine")
         diagnostics = get_marty_rs_diagnostics(
-            backend, required_capability="flow_state_machine"
+            backend, required_capability="credential_presentation_metadata"
         )
     else:
         diagnostics = {
@@ -33,7 +33,10 @@ def initialize_native_flow_backend(
             "backend": "injected-test-backend",
             "version": "test",
             "build_revision": "test",
-            "capabilities": ["flow_state_machine"],
+            "capabilities": [
+                "flow_state_machine",
+                "credential_presentation_metadata",
+            ],
         }
     _backend = backend
     _diagnostics = diagnostics
@@ -68,6 +71,61 @@ def _json_object(raw: Any, operation: str) -> dict[str, Any]:
     if not isinstance(result, dict):
         raise NativeFlowOperationError(
             f"FLOW.INVALID_NATIVE_RESULT: {operation} did not return an object"
+        )
+    return result
+
+
+def credential_profile_presentation_metadata(
+    profile: str,
+    credential_format: str,
+    type_identifier: str,
+) -> dict[str, Any]:
+    """Return canonical OID4VP metadata for a Rust-owned issuer profile."""
+    try:
+        result = _json_object(
+            _native().credential_profile_presentation_metadata(
+                profile,
+                credential_format,
+                type_identifier,
+            ),
+            "credential_profile_presentation_metadata",
+        )
+    except NativeFlowOperationError:
+        raise
+    except Exception as error:
+        raise NativeFlowOperationError(str(error)) from error
+
+    if set(result) != {"format", "meta"}:
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: credential presentation metadata shape is invalid"
+        )
+    if not isinstance(result["format"], str) or not result["format"].strip():
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: credential presentation format is invalid"
+        )
+    metadata = result["meta"]
+    if (
+        not isinstance(metadata, dict)
+        or len(metadata) != 1
+        or not set(metadata).issubset({"type_values", "vct_values"})
+    ):
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: credential presentation meta is invalid"
+        )
+    type_values = metadata.get("type_values")
+    valid_type_values = isinstance(type_values, list) and bool(type_values) and all(
+        isinstance(type_set, list)
+        and bool(type_set)
+        and all(isinstance(value, str) and bool(value) for value in type_set)
+        for type_set in type_values
+    )
+    vct_values = metadata.get("vct_values")
+    valid_vct_values = isinstance(vct_values, list) and bool(vct_values) and all(
+        isinstance(value, str) and bool(value) for value in vct_values
+    )
+    if not valid_type_values and not valid_vct_values:
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: credential presentation type identifiers are invalid"
         )
     return result
 

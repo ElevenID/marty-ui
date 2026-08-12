@@ -2979,6 +2979,16 @@ async def test_build_presentation_definition_accepts_current_and_legacy_open_bad
 
     presentation_definition = await _build_presentation_definition("policy-1")
     descriptor = presentation_definition["input_descriptors"][0]
+    assert descriptor["_marty_credential_profile"] == "open_badge"
+    assert descriptor["_marty_presentation_metadata"] == {
+        "format": "dc+sd-jwt",
+        "meta": {
+            "vct_values": [
+                "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+                "https://marty.example/credentials/open_badge",
+            ]
+        },
+    }
     [vct_field] = [
         field
         for field in descriptor["constraints"]["fields"]
@@ -2991,6 +3001,79 @@ async def test_build_presentation_definition_accepts_current_and_legacy_open_bad
             "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
             "https://marty.example/credentials/open_badge",
         ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_open_badge_dcql_uses_canonical_rust_issuer_metadata(
+    monkeypatch,
+) -> None:
+    async def _fake_presentation_definition(_policy_id: str) -> dict:
+        return {
+            "id": "pd-1",
+            "input_descriptors": [
+                {
+                    "id": "req-marty-open-badge-login",
+                    "_marty_credential_profile": "open_badge",
+                    "format": {"jwt_vc_json": {"alg": ["ES256"]}},
+                    "constraints": {
+                        "fields": [
+                            {
+                                "path": ["$.vc.type", "$.type"],
+                                "filter": {"const": "open_badge"},
+                            }
+                        ]
+                    },
+                }
+            ],
+        }
+
+    captured: list[str] = []
+
+    def _native_metadata(
+        profile: str,
+        credential_format: str,
+        type_identifier: str,
+    ) -> dict:
+        captured.append(profile)
+        assert credential_format == "jwt_vc_json"
+        assert type_identifier == ""
+        return {
+            "format": "jwt_vc_json",
+            "meta": {
+                "type_values": [["VerifiableCredential", "OpenBadgeCredential"]]
+            },
+        }
+
+    monkeypatch.setattr(
+        "flow.main._build_presentation_definition", _fake_presentation_definition
+    )
+    monkeypatch.setattr(
+        "flow.main.credential_profile_presentation_metadata", _native_metadata
+    )
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        context={"presentation_policy_id": "policy-1"},
+    )
+
+    query = await flow_main._oid4vp_credential_query(instance)
+
+    assert captured == ["open_badge"]
+    assert query == {
+        "dcql_query": {
+            "credentials": [
+                {
+                    "id": "req-marty-open-badge-login",
+                    "format": "jwt_vc_json",
+                    "meta": {
+                        "type_values": [
+                            ["VerifiableCredential", "OpenBadgeCredential"]
+                        ]
+                    },
+                }
+            ]
+        }
     }
 
 

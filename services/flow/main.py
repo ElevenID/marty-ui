@@ -84,6 +84,7 @@ from flow.callback_outbox import (
 from flow.infrastructure.adapters import PostgresFlowRepository
 from flow.native import (
     NativeFlowOperationError,
+    credential_profile_presentation_metadata,
     evaluate_transition as evaluate_native_flow_transition,
     initialize_native_flow_backend,
     is_terminal_status as is_native_terminal_status,
@@ -4530,6 +4531,20 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
                     f"{template_id}: {exc}"
                 )
 
+        credential_profile = "open_badge" if credential_type == "open_badge" else None
+        profile_presentation_metadata: dict[str, Any] | None = None
+        if credential_profile:
+            profile_formats = _oid4vp_presentation_formats(supported_formats)
+            profile_format = next(iter(profile_formats), "jwt_vc_json")
+            profile_presentation_metadata = credential_profile_presentation_metadata(
+                credential_profile,
+                profile_format,
+                credential_vct or "",
+            )
+            type_values = profile_presentation_metadata["meta"].get("type_values")
+            if type_values:
+                credential_type = type_values[0][-1]
+
         # Build type-filter constraint based on format.  Presentation Exchange
         # fields are conjunctive, so the SD-JWT vct selector must be the only
         # required type selector for an SD-JWT login badge.  Compatibility type
@@ -4547,7 +4562,11 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
                 )
             elif _is_sd_jwt_format(supported_formats):
                 # SD-JWT VC — primary filter by vct claim
-                vct_values = _sd_jwt_vct_values(credential_vct, credential_type)
+                vct_values = (
+                    profile_presentation_metadata["meta"]["vct_values"]
+                    if profile_presentation_metadata
+                    else _sd_jwt_vct_values(credential_vct, credential_type)
+                )
                 fields.append(
                     {
                         "path": ["$.vct"],
@@ -4646,6 +4665,13 @@ async def _build_presentation_definition(presentation_policy_id: str) -> dict:
             "name": display_name,
             "purpose": purpose,
         }
+        if credential_profile:
+            # This is an application profile alias, not a wire credential type.
+            # Rust owns its canonical issued/presentation representation.
+            descriptor["_marty_credential_profile"] = credential_profile
+            descriptor["_marty_presentation_metadata"] = (
+                profile_presentation_metadata
+            )
         if _is_mdoc_format(supported_formats):
             descriptor["_marty_mdoc"] = {
                 "doctype": credential_doctype or credential_type or "",
@@ -4819,27 +4845,9 @@ def _string_filter_for_values(values: list[str]) -> dict[str, Any]:
 def _sd_jwt_vct_values(
     credential_vct: str | None, credential_type: str | None
 ) -> list[str]:
-    """Return accepted SD-JWT VC type values for the request object.
-
-    Marty Open Badge credentials were issued with an early development vct
-    before the beta.elevenidllc.com production vct was introduced. Including
-    the legacy value lets wallets find already-issued badges while the verifier
-    still enforces issuer trust, signature, claims, and revocation.
-    """
-    values = (
-        [credential_vct or credential_type]
-        if (credential_vct or credential_type)
-        else []
-    )
-    if (
-        credential_type == "open_badge"
-        or credential_vct
-        == "https://beta.elevenidllc.com/credentials/marty-verified-member-badge"
-    ):
-        values.append("https://marty.example/credentials/open_badge")
-    return [
-        value for i, value in enumerate(values) if value and value not in values[:i]
-    ]
+    """Return the template's generic SD-JWT VC type identifier."""
+    value = credential_vct or credential_type
+    return [value] if value else []
 
 
 def _dcql_format_name(fmt: str) -> str:
@@ -4983,12 +4991,28 @@ async def _oid4vp_credential_query(
     for descriptor in presentation_definition.get("input_descriptors", []):
         format_map = descriptor.get("format", {})
         first_format = next(iter(format_map), "jwt_vc_json")
-        format_name = _dcql_format_name(first_format)
+        credential_profile = descriptor.get("_marty_credential_profile")
+        native_metadata = None
+        if isinstance(credential_profile, str) and credential_profile:
+            native_metadata = descriptor.get("_marty_presentation_metadata")
+            if not isinstance(native_metadata, dict):
+                native_metadata = credential_profile_presentation_metadata(
+                    credential_profile,
+                    first_format,
+                    "",
+                )
+            format_name = native_metadata["format"]
+        else:
+            format_name = _dcql_format_name(first_format)
         entry: dict[str, Any] = {
             "id": descriptor["id"],
             "format": format_name,
         }
-        metadata = _dcql_meta_for_descriptor(descriptor, format_name)
+        metadata = (
+            native_metadata["meta"]
+            if native_metadata is not None
+            else _dcql_meta_for_descriptor(descriptor, format_name)
+        )
         if metadata:
             entry["meta"] = metadata
         claims = _dcql_claims_for_descriptor(descriptor, format_name)
