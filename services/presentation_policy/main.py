@@ -2815,13 +2815,33 @@ def _status_indicates_not_revoked(status: str) -> bool:
     return status in {"active", "valid", "current", "good"}
 
 
-def _get_issued_credential_status(credential_id: str) -> dict[str, Any] | None:
+def _get_issued_credential_status(
+    credential_id: str,
+    organization_id: str,
+) -> dict[str, Any] | None:
     """Fetch current issuer-managed status for a credential id."""
     import httpx as _httpx
 
+    headers = {"Accept": "application/json"}
+    if not os.environ.get("MIP_CREDENTIAL_STATUS_URL_TEMPLATE", "").strip():
+        api_key = os.environ.get("ISSUANCE_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError(
+                "ISSUANCE_API_KEY is required for managed credential status lookup"
+            )
+        if not organization_id.strip():
+            raise RuntimeError(
+                "organization_id is required for managed credential status lookup"
+            )
+        headers.update(
+            {
+                "X-API-Key": api_key,
+                "X-Organization-ID": organization_id,
+            }
+        )
     response = _httpx.get(
         _credential_status_lookup_url(credential_id),
-        headers={"Accept": "application/json"},
+        headers=headers,
         timeout=5.0,
     )
     if response.status_code == 404:
@@ -2835,6 +2855,7 @@ def _lookup_managed_issuer_credential_status_revocation_state(
     *,
     issuer_did: str | None,
     credential_ids: list[str],
+    organization_id: str,
 ) -> tuple[bool | None, bool | None, str | None]:
     """Use issuer-managed status as revocation evidence when configured.
 
@@ -2853,7 +2874,10 @@ def _lookup_managed_issuer_credential_status_revocation_state(
 
     for credential_id in credential_ids:
         try:
-            status_payload = _get_issued_credential_status(credential_id)
+            status_payload = _get_issued_credential_status(
+                credential_id,
+                organization_id,
+            )
         except Exception as exc:
             logger.warning(
                 "Credential status lookup failed for managed issuer %s credential=%s: %s",
@@ -4435,6 +4459,7 @@ async def evaluate_presentation(
             revocation_status,
         ) = _lookup_managed_issuer_credential_status_revocation_state(
             issuer_did=issuer_did,
+            organization_id=policy.organization_id,
             credential_ids=_credential_status_identifier_candidates(
                 extracted_claims,
                 verification_result,
