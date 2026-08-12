@@ -118,6 +118,46 @@ def test_manual_issuance_trigger_signs_exact_payload(monkeypatch):
     assert captured["json"]["data"]["claims"]["roles"] == ["member"]
 
 
+def test_issuance_status_sync_authenticates_internal_request(monkeypatch):
+    captured = {}
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def json():
+            return {"id": "tx-1", "status": "credential_issued"}
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, url, **kwargs):
+            captured.update(url=url, **kwargs)
+            return Response()
+
+    monkeypatch.setenv("ISSUANCE_API_KEY", "issuance-internal-test-key")
+    monkeypatch.setattr(service.httpx, "AsyncClient", Client)
+
+    result = run(service._get_issuance_transaction_context("tx-1"))
+
+    assert result == {"id": "tx-1", "status": "credential_issued"}
+    assert captured["url"].endswith("/v1/issuance/transactions/tx-1")
+    assert captured["headers"] == {
+        "X-API-Key": "issuance-internal-test-key"
+    }
+
+
 @pytest.fixture()
 def repo(tmp_path):
     with patch.dict(os.environ, {"APPLICANT_DATA_FILE": str(tmp_path / "store.json")}):
