@@ -405,7 +405,9 @@ def test_activate_keeps_protocol_shape_stable() -> None:
     )
 
 
-def test_detect_credential_format_recognizes_json_open_badge_v3() -> None:
+def test_detect_credential_format_recognizes_json_open_badge_v3(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     credential = {
         "@context": [
             "https://www.w3.org/ns/credentials/v2",
@@ -419,13 +421,27 @@ def test_detect_credential_format_recognizes_json_open_badge_v3() -> None:
         },
     }
 
+    serialized: list[str] = []
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            detect_credential_format=lambda value: (
+                serialized.append(value) or "openbadge-v3"
+            )
+        ),
+    )
+
     assert (
         pp._detect_credential_format(json.dumps({"credential": credential}))
         == "openbadge-v3"
     )
+    assert json.loads(serialized[0]) == {"credential": credential}
 
 
-def test_detect_credential_format_recognizes_vcdm_data_integrity_object() -> None:
+def test_detect_credential_format_recognizes_vcdm_data_integrity_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     document = {
         "@context": ["https://www.w3.org/ns/credentials/v2"],
         "type": ["VerifiablePresentation"],
@@ -434,6 +450,11 @@ def test_detect_credential_format_recognizes_vcdm_data_integrity_object() -> Non
             "cryptosuite": "eddsa-rdfc-2022",
         },
     }
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(detect_credential_format=lambda _value: "w3c-vcdm-di"),
+    )
     assert pp._detect_credential_format(document) == "w3c-vcdm-di"
 
 
@@ -467,7 +488,10 @@ async def test_vcdm_candidate_detection_leaves_context_acceptance_to_released_ve
     monkeypatch.setattr(
         pp,
         "_load_marty_rs_binding",
-        lambda: SimpleNamespace(verify_vcdm_data_integrity=reject),
+        lambda: SimpleNamespace(
+            detect_credential_format=lambda _value: "w3c-vcdm-di",
+            verify_vcdm_data_integrity=reject,
+        ),
     )
 
     credential_format = pp._detect_credential_format(document)
@@ -487,18 +511,39 @@ async def test_vcdm_candidate_detection_leaves_context_acceptance_to_released_ve
 def test_detect_credential_format_recognizes_base64url_mdoc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    parsed: list[bytes] = []
     monkeypatch.setattr(
         pp,
         "_load_marty_rs_binding",
-        lambda: SimpleNamespace(
-            parse_device_response=lambda value: parsed.append(bytes(value))
-        ),
+        lambda: SimpleNamespace(detect_credential_format=lambda _value: "mdoc"),
     )
     token = base64.urlsafe_b64encode(b"\xa1aa\x01").rstrip(b"=").decode()
 
     assert pp._detect_credential_format(token) == "mdoc"
-    assert parsed == [b"\xa1aa\x01"]
+
+
+def test_detect_credential_format_requires_native_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pp, "_load_marty_rs_binding", lambda: SimpleNamespace())
+
+    with pytest.raises(
+        pp.NativeBackendUnavailable,
+        match="does not expose detect_credential_format",
+    ):
+        pp._detect_credential_format("header.payload.signature")
+
+
+def test_detect_credential_format_rejects_invalid_native_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(detect_credential_format=lambda _value: "jwt-ish"),
+    )
+
+    with pytest.raises(pp.NativeOperationError, match="unsupported result"):
+        pp._detect_credential_format("header.payload.signature")
 
 
 def test_mdoc_verification_requires_trust_and_verifier_session_transcript(
