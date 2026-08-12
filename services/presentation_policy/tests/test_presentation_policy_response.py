@@ -1332,6 +1332,183 @@ async def test_w3c_vc_uses_public_issuer_profile_did_material(
 
 
 @pytest.mark.asyncio
+async def test_open_badge_v3_compact_jwt_uses_composite_rust_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer = "did:web:issuer.example:profiles:membership"
+    public_jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "public-x",
+        "y": "public-y",
+    }
+    token = ".".join(
+        [
+            _jwt_segment({"alg": "ES256", "kid": f"{issuer}#key-1"}),
+            _jwt_segment(
+                {
+                    "iss": issuer,
+                    "jti": "urn:uuid:badge-123",
+                    "vc": {
+                        "id": "urn:uuid:badge-123",
+                        "credentialSubject": {
+                            "id": "did:example:alice",
+                            "email": "alice@example.test",
+                            "achievement": {
+                                "name": "Verified Member",
+                                "description": "Membership achievement",
+                            },
+                        },
+                    },
+                }
+            ),
+            "signature",
+        ]
+    )
+    captured: dict[str, object] = {}
+
+    def verify(request_json: str) -> str:
+        captured.update(json.loads(request_json))
+        return json.dumps(
+            {
+                "valid": True,
+                "credential_profile": "openbadge-v3",
+                "algorithm": "ES256",
+                "issuer": issuer,
+                "claims": {
+                    "iss": issuer,
+                    "jti": "urn:uuid:badge-123",
+                    "vc": {
+                        "id": "urn:uuid:badge-123",
+                        "credentialSubject": {
+                            "id": "did:example:alice",
+                            "email": "alice@example.test",
+                        },
+                    },
+                },
+                "errors": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_open_badge_v3_jwt=verify,
+            verify_vcdm_jwt=lambda _request: pytest.fail(
+                "generic VC-JWT verifier must not own the Open Badge profile"
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        pp,
+        "_verify_open_badge_v3",
+        lambda _token: pytest.fail("compact VC-JWT must not use decoded JSON"),
+    )
+
+    result = await pp._verify_credential_by_format(
+        token,
+        "openbadge-v3",
+        None,
+        None,
+        public_jwk,
+    )
+
+    assert result["verified"] is True
+    assert result["format"] == "openbadge-v3"
+    assert result["issuer_did"] == issuer
+    assert result["credential_id"] == "urn:uuid:badge-123"
+    assert result["claims"] == {
+        "id": "did:example:alice",
+        "email": "alice@example.test",
+    }
+    assert captured == {"token": token, "issuer_public_jwk": public_jwk}
+
+
+@pytest.mark.asyncio
+async def test_open_badge_v3_compact_jwt_fails_closed_without_profile_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer = "did:key:z6MkhIssuer"
+    token = ".".join(
+        [
+            _jwt_segment({"alg": "EdDSA", "kid": f"{issuer}#z6MkhIssuer"}),
+            _jwt_segment({"iss": issuer, "vc": {"credentialSubject": {}}}),
+            "signature",
+        ]
+    )
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_vcdm_jwt=lambda _request: pytest.fail(
+                "generic verifier is not a profile fallback"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        pp,
+        "_verify_open_badge_v3",
+        lambda _token: pytest.fail("decoded JSON fallback is forbidden"),
+    )
+
+    result = await pp._verify_credential_by_format(
+        token,
+        "openbadge-v3",
+        None,
+        None,
+    )
+
+    assert result["verified"] is False
+    assert result["format"] == "openbadge-v3"
+    assert result["claims"] == {}
+    assert "verify_open_badge_v3_jwt" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_open_badge_v3_compact_jwt_rejects_wrong_native_profile_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer = "did:key:z6MkhIssuer"
+    token = ".".join(
+        [
+            _jwt_segment({"alg": "EdDSA", "kid": f"{issuer}#z6MkhIssuer"}),
+            _jwt_segment({"iss": issuer, "vc": {"credentialSubject": {}}}),
+            "signature",
+        ]
+    )
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_open_badge_v3_jwt=lambda _request: json.dumps(
+                {
+                    "valid": True,
+                    "credential_profile": "w3c-vc",
+                    "issuer": issuer,
+                    "claims": {
+                        "jti": "caller-controlled",
+                        "vc": {"credentialSubject": {"role": "admin"}},
+                    },
+                    "errors": [],
+                }
+            )
+        ),
+    )
+
+    result = await pp._verify_credential_by_format(
+        token,
+        "openbadge-v3",
+        None,
+        None,
+    )
+
+    assert result["verified"] is False
+    assert result["claims"] == {}
+    assert "unexpected credential profile" in result["error"]
+
+
+@pytest.mark.asyncio
 async def test_w3c_vc_did_key_resolution_stays_inside_rust(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1028,6 +1028,15 @@ async def _verify_credential_by_format(
         elif credential_format == "openbadge-v2":
             return _verify_open_badge_v2(vp_token)
         elif credential_format == "openbadge-v3":
+            stripped_token = vp_token.strip()
+            if stripped_token.count(".") == 2 and not stripped_token.startswith("{"):
+                return await _verify_w3c_vc(
+                    vp_token,
+                    nonce,
+                    audience,
+                    issuer_public_jwk,
+                    credential_profile="openbadge-v3",
+                )
             return _verify_open_badge_v3(vp_token)
         else:
             return {
@@ -1194,6 +1203,8 @@ async def _verify_w3c_vc(
     _nonce: str | None,
     _audience: str | None,
     issuer_public_jwk: dict[str, Any] | None = None,
+    *,
+    credential_profile: str | None = None,
 ) -> dict:
     """Verify a standalone VCDM v2 VC-JWT against issuer-profile DID material.
 
@@ -1202,6 +1213,17 @@ async def _verify_w3c_vc(
     released Rust verifier. Signing remains behind the issuer profile and this
     path never accepts a KMS key coordinate or private JWK.
     """
+    verifier_name_by_profile = {
+        None: "verify_vcdm_jwt",
+        "openbadge-v3": "verify_open_badge_v3_jwt",
+    }
+    if credential_profile not in verifier_name_by_profile:
+        raise ValueError(
+            f"Unsupported VC-JWT credential profile: {credential_profile}"
+        )
+    verifier_name = verifier_name_by_profile[credential_profile]
+    result_format = credential_profile or "w3c-vc"
+
     _marty_rs = _load_marty_rs_binding()
     if _marty_rs is None:
         logger.warning("_marty_rs not available — W3C VC verification disabled")
@@ -1209,15 +1231,16 @@ async def _verify_w3c_vc(
             "verified": False,
             "claims": {},
             "issuer_did": "unknown",
-            "format": "w3c-vc",
+            "format": result_format,
             "error": "marty-rs bindings not installed",
         }
 
     did_resolution_provenance: dict[str, str] | None = None
     try:
-        if not hasattr(_marty_rs, "verify_vcdm_jwt"):
-            raise RuntimeError(
-                "marty-rs VCDM JWT verification function is not available"
+        verifier = getattr(_marty_rs, verifier_name, None)
+        if not callable(verifier):
+            raise NativeBackendUnavailable(
+                f"marty-rs {verifier_name} verification function is not available"
             )
 
         header, payload = _jwt_header_and_payload(vp_token)
@@ -1239,9 +1262,16 @@ async def _verify_w3c_vc(
         request: dict[str, Any] = {"token": vp_token}
         if public_jwk is not None:
             request["issuer_public_jwk"] = public_jwk
-        result = json.loads(_marty_rs.verify_vcdm_jwt(json.dumps(request)))
+        result = json.loads(verifier(json.dumps(request)))
         if not isinstance(result, dict):
             raise ValueError("VCDM JWT verifier returned a non-object result")
+        if (
+            credential_profile is not None
+            and result.get("credential_profile") != credential_profile
+        ):
+            raise NativeOperationError(
+                "Rust VC-JWT verifier returned an unexpected credential profile"
+            )
         is_valid = result.get("valid") is True
         verified_payload = result.get("claims") if is_valid else None
         verified_vc = (
@@ -1289,7 +1319,7 @@ async def _verify_w3c_vc(
             # It lets the policy engine query the authoritative issuer-managed
             # status record without trusting the caller or exposing KMS routing.
             "credential_id": credential_id,
-            "format": "w3c-vc",
+            "format": result_format,
             "verification_evidence": verification_evidence,
             "error": (
                 None
@@ -1298,12 +1328,12 @@ async def _verify_w3c_vc(
             ),
         }
     except Exception as e:
-        logger.error("W3C VC Rust verification failed: %s", e)
+        logger.error("%s Rust verification failed: %s", result_format, e)
         return {
             "verified": False,
             "claims": {},
             "issuer_did": "unknown",
-            "format": "w3c-vc",
+            "format": result_format,
             "error": str(e),
             "verification_evidence": (
                 {"did_resolution": did_resolution_provenance}
