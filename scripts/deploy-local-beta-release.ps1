@@ -467,10 +467,7 @@ $copyPassword = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximu
 $copyRedisPassword = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
 $encodedCopyRedisPassword = [Uri]::EscapeDataString($copyRedisPassword)
 $copyBaoToken = -join ((1..40) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
-$rehearsalContainers = @($copyContainer, $copyOpenBaoContainer)
-if ($EnablePortableCanvas) {
-    $rehearsalContainers += $copyRedisContainer
-}
+$rehearsalContainers = @($copyContainer, $copyOpenBaoContainer, $copyRedisContainer)
 try {
     foreach ($candidate in $rehearsalContainers) {
         $existing = docker ps -a --filter "name=^/$candidate$" --format '{{.Names}}'
@@ -480,12 +477,10 @@ try {
     }
     Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyContainer, "--network", $script:BetaNetwork, "--env", "POSTGRES_PASSWORD=$copyPassword", "postgres:15-alpine")
     Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyOpenBaoContainer, "--network", $script:BetaNetwork, "--env", "BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken", "--env", "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200", "quay.io/openbao/openbao:2", "server", "-dev")
-    if ($EnablePortableCanvas) {
-        Invoke-Checked -FilePath docker -Arguments @(
-            "run", "--detach", "--name", $copyRedisContainer, "--network", $script:BetaNetwork,
-            "redis:7-alpine", "redis-server", "--requirepass", $copyRedisPassword
-        )
-    }
+    Invoke-Checked -FilePath docker -Arguments @(
+        "run", "--detach", "--name", $copyRedisContainer, "--network", $script:BetaNetwork,
+        "redis:7-alpine", "redis-server", "--requirepass", $copyRedisPassword
+    )
     $ready = $false
     foreach ($attempt in 1..60) {
         docker exec $copyContainer pg_isready -U postgres | Out-Null
@@ -493,13 +488,11 @@ try {
         Start-Sleep -Seconds 2
     }
     if (-not $ready) { throw "Rehearsal PostgreSQL did not become ready" }
-    $redisReady = -not $EnablePortableCanvas
+    $redisReady = $false
     $openBaoReady = $false
     foreach ($attempt in 1..60) {
-        if ($EnablePortableCanvas) {
-            $redisPing = docker exec $copyRedisContainer redis-cli --no-auth-warning -a $copyRedisPassword ping 2>$null
-            if ($LASTEXITCODE -eq 0 -and $redisPing -eq "PONG") { $redisReady = $true }
-        }
+        $redisPing = docker exec $copyRedisContainer redis-cli --no-auth-warning -a $copyRedisPassword ping 2>$null
+        if ($LASTEXITCODE -eq 0 -and $redisPing -eq "PONG") { $redisReady = $true }
         docker exec $copyOpenBaoContainer bao status -address=http://127.0.0.1:8200 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) { $openBaoReady = $true }
         if ($redisReady -and $openBaoReady) { break }
@@ -512,22 +505,17 @@ try {
     Invoke-Checked -FilePath docker -Arguments @("cp", (Join-Path $preflightBackupDir "postgres-marty.dump"), "${copyContainer}:/tmp/marty.dump")
     Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "pg_restore", "-U", "postgres", "-d", "marty", "--no-owner", "--role=marty", "/tmp/marty.dump")
     $copyUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
-    $rehearsalKmsEnabled = if ($EnablePortableCanvas) { "true" } else { "false" }
     $rehearsalArguments = @(
         "run", "--rm", "--network", $script:BetaNetwork,
         "--env", "DATABASE_URL=$copyUrl",
         "--env", "PUBLIC_API_URL=$BetaOrigin",
         "--env", "MARTY_MIGRATION_PROFILE=beta",
-        "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=$rehearsalKmsEnabled",
+        "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=true",
         "--env", "BAO_ADDR=http://${copyOpenBaoContainer}:8200",
-        "--env", "BAO_TOKEN=$copyBaoToken"
+        "--env", "BAO_TOKEN=$copyBaoToken",
+        "--env", "REDIS_URL=redis://:${encodedCopyRedisPassword}@${copyRedisContainer}:6379",
+        "--env", "MARTY_ORG_ID=$PilotOrganizationId"
     )
-    if ($EnablePortableCanvas) {
-        $rehearsalArguments += @(
-            "--env", "REDIS_URL=redis://:${encodedCopyRedisPassword}@${copyRedisContainer}:6379",
-            "--env", "MARTY_ORG_ID=$PilotOrganizationId"
-        )
-    }
     $rehearsalArguments += @($migrationImage, "python", "/app/services/run_all_migrations.py")
     Invoke-DockerLogged -Arguments $rehearsalArguments -LogPath (Join-Path $logsDir "migration-rehearsal.log") -FailureMessage "Migration rehearsal failed"
     $verifyArguments = @("run", "--rm", "--network", $script:BetaNetwork, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", $migrationImage, "python", "/app/services/run_all_migrations.py", "--verify-only")
@@ -659,22 +647,17 @@ try {
     $previousBaoToken = $env:BAO_TOKEN
     try {
         $env:BAO_TOKEN = $baoDevRootToken
-        $kmsBootstrapEnabled = if ($EnablePortableCanvas) { "true" } else { "false" }
         $migrationArguments = @(
             "run", "--rm", "--network", $script:BetaNetwork,
             "--env", "DATABASE_URL=postgresql://marty:${martyDbPassword}@postgres:5432/marty",
             "--env", "PUBLIC_API_URL=$BetaOrigin",
             "--env", "MARTY_MIGRATION_PROFILE=beta",
-            "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=$kmsBootstrapEnabled",
+            "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=true",
             "--env", "BAO_ADDR=http://openbao:8200",
-            "--env", "BAO_TOKEN"
+            "--env", "BAO_TOKEN",
+            "--env", "REDIS_URL=redis://:${encodedRedisPassword}@redis:6379",
+            "--env", "MARTY_ORG_ID=$PilotOrganizationId"
         )
-        if ($EnablePortableCanvas) {
-            $migrationArguments += @(
-                "--env", "REDIS_URL=redis://:${encodedRedisPassword}@redis:6379",
-                "--env", "MARTY_ORG_ID=$PilotOrganizationId"
-            )
-        }
         $migrationArguments += @($migrationImage, "python", "/app/services/run_all_migrations.py")
         $liveMutationStarted = $true
         Invoke-DockerLogged -Arguments $migrationArguments -LogPath (Join-Path $logsDir "migration-live.log") -FailureMessage "Live migration failed"
