@@ -10,16 +10,23 @@ const {
   redact,
   waitFor,
 } = require('./verify-beta-waltid-acceptance');
+const {
+  DEFAULT_BETA_ORGANIZATION_ID,
+  DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
+  credentialInventoryEvidence,
+} = require('./beta-credential-contract');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
 const TEST_WALLET_ORIGIN = process.env.MARTY_TEST_WALLET_ORIGIN || 'http://127.0.0.1:8787';
-const ORG_ID = process.env.BETA_AUDIT_ORG_ID || '02af5d70-04e6-40d8-80e2-3e8400d4b018';
+const ORG_ID = process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID;
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 const RECORDING_PAUSE_MS = Number.parseInt(process.env.RECORDING_PAUSE_MS || '1400', 10);
 const MEMBERSHIP_BADGE_VCT = process.env.MARTY_LOGIN_BADGE_VCT
   || `${BETA_ORIGIN}/credentials/marty-verified-member-badge`;
+const MEMBERSHIP_BADGE_CONFIGURATION_ID = process.env.EXPECTED_LOGIN_BADGE_CONFIGURATION_ID
+  || DEFAULT_LOGIN_BADGE_CONFIGURATION_ID;
 
 async function showStep(page, title, detail = '') {
   if (!RECORD_VIDEO || page.isClosed()) return;
@@ -105,7 +112,7 @@ async function selectOrg(page) {
   return selection;
 }
 
-async function receiveInTestWallet(walletPage, offerUri, expectedVct) {
+async function receiveInTestWallet(walletPage, offerUri, expectedVct, expectedConfigurationId = null) {
   await walletPage.goto(TEST_WALLET_ORIGIN, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await showStep(walletPage, 'Receive credential in browser wallet', 'The credential offer is hidden in this recording.');
   await maskProtocolField(walletPage, 'Credential offer URI');
@@ -120,10 +127,14 @@ async function receiveInTestWallet(walletPage, offerUri, expectedVct) {
   await walletPage.getByRole('status').filter({ hasText: 'Credential received' }).waitFor({ timeout: 60_000 }).catch(() => {});
   await showStep(walletPage, 'Credential stored', 'The wallet inventory now contains the expected credential type.');
   const inventory = await walletPage.locator('#credentials').innerText();
+  const inventoryEvidence = credentialInventoryEvidence(inventory, {
+    vct: expectedVct,
+    configurationId: expectedConfigurationId,
+  });
   return {
     status: response.status(),
     ok: response.ok(),
-    storedExpectedVct: expectedVct ? inventory.includes(expectedVct) : true,
+    ...inventoryEvidence,
     error: response.ok() ? null : redact(body?.error || 'Credential receipt failed'),
   };
 }
@@ -463,6 +474,7 @@ async function main() {
         testWalletPage,
         betaOffer.offerUri,
         MEMBERSHIP_BADGE_VCT,
+        MEMBERSHIP_BADGE_CONFIGURATION_ID,
       );
       report.membershipBadge = {
         walletId: 'wr-default',
@@ -471,6 +483,8 @@ async function main() {
         loggedOut: betaOffer.loggedOut,
         accepted: acceptance.ok,
         storedExpectedVct: acceptance.storedExpectedVct,
+        storedExpectedConfigurationId: acceptance.storedExpectedConfigurationId,
+        storedExpectedCredential: acceptance.storedExpectedCredential,
         walletStatus: acceptance.status,
         walletError: acceptance.error,
       };
@@ -705,7 +719,7 @@ async function main() {
       && report.membershipBadge?.walletId === 'wr-default'
       && report.membershipBadge?.loggedOut
       && report.membershipBadge?.accepted
-      && report.membershipBadge?.storedExpectedVct
+      && report.membershipBadge?.storedExpectedCredential
       && report.credentialLogin?.ok
       && report.policyCredential?.ok
       && report.policyCredential?.accepted

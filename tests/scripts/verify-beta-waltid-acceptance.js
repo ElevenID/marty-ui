@@ -4,12 +4,20 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('@playwright/test');
+const {
+  DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
+  DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
+  credentialConfigurationIdForWaltid,
+  credentialInventoryEvidence,
+} = require('./beta-credential-contract');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
 const WALLET_ORIGIN = process.env.WALTID_WALLET_ORIGIN || 'http://127.0.0.1:7101';
-const TEMPLATE_ID = process.env.LOGIN_BADGE_TEMPLATE_ID || '50000000-0000-0000-0000-000000000010';
+const TEMPLATE_ID = process.env.LOGIN_BADGE_TEMPLATE_ID || DEFAULT_LOGIN_BADGE_TEMPLATE_ID;
 const EXPECTED_VCT = process.env.EXPECTED_LOGIN_BADGE_VCT || `${BETA_ORIGIN}/credentials/marty-verified-member-badge`;
+const EXPECTED_CONFIGURATION_ID = process.env.EXPECTED_LOGIN_BADGE_CONFIGURATION_ID
+  || DEFAULT_LOGIN_BADGE_CONFIGURATION_ID;
 const HEADLESS = process.env.HEADED !== '1';
 
 function loadEnvFile(file) {
@@ -58,17 +66,6 @@ function issuerUrlWithWaltidPath(issuerUrl) {
   const issuer = issuerUrl.trim().replace(/\/+$/, '');
   if (issuer.endsWith('/waltid')) return issuer;
   return `${issuer.replace(/\/(credential-manager|apple-wallet|spruce|waltid)$/, '')}/waltid`;
-}
-
-function credentialConfigurationIdForWaltid(configId) {
-  if (typeof configId !== 'string' || !configId.trim()) return configId;
-  const id = configId.trim();
-  if (id.endsWith('#sd-jwt') || id.endsWith('#mdoc') || id.endsWith('#vds-nc')) return id;
-  if (id.endsWith('#credential-manager') || id.endsWith('#apple-wallet')) {
-    return `${id.split('#')[0]}#sd-jwt`;
-  }
-  if (id.includes('#')) return id;
-  return `${id}#sd-jwt`;
 }
 
 function adaptOfferUriForWaltid(offerUri) {
@@ -367,7 +364,14 @@ async function acceptOfferInLocalWallet(walletPage, walletId, offerUri) {
   const credentialPreviews = (after.credentials || []).map((credential) => (
     credential.parsedDocument ? JSON.stringify(credential.parsedDocument) : credential.document || ''
   ));
+  const inventoryEvidence = credentialInventoryEvidence(credentialPreviews.join('\n'), {
+    vct: EXPECTED_VCT,
+    configurationId: EXPECTED_CONFIGURATION_ID,
+  });
   const vctResolutionEvents = events.filter((event) => event.url.includes('/exchange/resolveVctUrl'));
+  const vctResolutionOk = vctResolutionEvents.some((event) => (
+    event.status === 200 && (event.body || '').includes(EXPECTED_VCT)
+  ));
 
   return {
     routeParam: offerPart(adaptedOfferUri).key,
@@ -384,9 +388,13 @@ async function acceptOfferInLocalWallet(walletPage, walletId, offerUri) {
     })),
     checks: {
       expectedVct: EXPECTED_VCT,
-      storedExpectedVct: credentialPreviews.some((preview) => preview.includes(EXPECTED_VCT)),
+      expectedConfigurationId: EXPECTED_CONFIGURATION_ID,
+      ...inventoryEvidence,
       storedLegacyExampleVct: credentialPreviews.some((preview) => preview.includes('marty.example')),
-      vctResolutionOk: vctResolutionEvents.some((event) => event.status === 200 && (event.body || '').includes(EXPECTED_VCT)),
+      vctResolutionOk,
+      metadataResolutionOk: inventoryEvidence.storedExactVct
+        ? vctResolutionOk
+        : inventoryEvidence.storedExpectedConfigurationId,
       vctResolutionStatuses: vctResolutionEvents.map((event) => event.status),
       walletShowsCredentialTitle: /Marty Verified Membe|Member Login Credential/i.test(after.text || ''),
     },
@@ -415,9 +423,9 @@ async function main() {
       beta.offerSource === 'canonical-ui'
       &&
       accepted
-      && acceptance.checks.storedExpectedVct
+      && acceptance.checks.storedExpectedCredential
       && !acceptance.checks.storedLegacyExampleVct
-      && acceptance.checks.vctResolutionOk
+      && acceptance.checks.metadataResolutionOk
       && acceptance.checks.walletShowsCredentialTitle
     );
     const result = {

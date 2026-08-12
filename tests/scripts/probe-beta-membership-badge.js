@@ -4,10 +4,11 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('@playwright/test');
+const { DEFAULT_LOGIN_BADGE_TEMPLATE_ID } = require('./beta-credential-contract');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
-const TEMPLATE_ID = process.env.LOGIN_BADGE_TEMPLATE_ID || '50000000-0000-0000-0000-000000000010';
+const TEMPLATE_ID = process.env.LOGIN_BADGE_TEMPLATE_ID || DEFAULT_LOGIN_BADGE_TEMPLATE_ID;
 
 function loadEnvFile(file) {
   if (!fs.existsSync(file)) return;
