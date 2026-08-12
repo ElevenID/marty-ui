@@ -554,9 +554,16 @@ def _advance_applicant_to_credentialed(applicant: "Applicant") -> None:
 async def _get_issuance_transaction_context(transaction_id: str | None) -> dict[str, Any] | None:
     if not transaction_id or transaction_id.startswith("local-"):
         return None
+    headers: dict[str, str] = {}
+    api_key = _service_secret("ISSUANCE_API_KEY")
+    if api_key:
+        headers["X-API-Key"] = api_key
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
-            response = await client.get(f"{ISSUANCE_SERVICE_URL}/v1/issuance/transactions/{transaction_id}")
+            response = await client.get(
+                f"{ISSUANCE_SERVICE_URL}/v1/issuance/transactions/{transaction_id}",
+                headers=headers,
+            )
         if response.status_code == 404:
             return None
         response.raise_for_status()

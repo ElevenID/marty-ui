@@ -180,6 +180,9 @@ async function main() {
       walletOptions: loginRequest.walletOptions,
     };
     report.presentation = await presentBadge(walletPage, loginRequest.href);
+    if (!report.presentation.accepted) {
+      throw new Error(`Browser wallet presentation failed: ${report.presentation.error || 'unknown error'}`);
+    }
     await showStep(
       walletPage,
       'Membership badge presented',
@@ -249,6 +252,13 @@ async function main() {
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
     if (!report.releaseReady) process.exitCode = 1;
+  } catch (error) {
+    report.finishedAt = new Date().toISOString();
+    report.releaseReady = false;
+    report.error = redact(error.stack || error.message || String(error));
+    fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
+    console.log(JSON.stringify(report, null, 2));
+    process.exitCode = 1;
   } finally {
     await browser.close();
   }
