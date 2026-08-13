@@ -29,7 +29,9 @@ The Rust adapter intentionally exposes only the established protocol response fi
 
 ## Remaining cutover work
 
-- Run differential Python/Rust HTTP fixtures and full integration tests before selecting the image in the coordinated beta release.
+- Run full integration tests before selecting the image in the coordinated beta release.
+
+The administrative HTTP boundary is covered by the shared language-neutral vectors in `tests/fixtures/revocation_profile_http_vectors.json`. Both the Python compatibility service and Rust adapter execute the same valid, authorization-failure, malformed, timing-dependency, HTTPS, and legacy-spelling cases. The fixture compares stable response fields and normalizes only generated profile IDs and timestamps.
 
 ## Executable and operational contract
 
