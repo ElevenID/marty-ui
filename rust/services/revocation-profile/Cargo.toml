@@ -1,0 +1,29 @@
+[package]
+name = "marty-revocation-profile"
+version = "0.1.0"
+description = "Rust revocation-profile service core"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+marty-status = { git = "https://github.com/ElevenID/marty-core", rev = "edc80a0369b850ac0864b26208d57a23f475aca9" }
+prost.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[build-dependencies]
+protoc-bin-vendored = "3"
+tonic-build = "0.12"
+
+[dev-dependencies]
+tower.workspace = true
