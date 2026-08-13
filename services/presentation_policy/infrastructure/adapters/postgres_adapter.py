@@ -7,7 +7,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 if TYPE_CHECKING:
-    from presentation_policy.main import PresentationPolicy, PolicyStatus, DisplayMetadata, CredentialRequirement, AlternativeRequirement
+    from presentation_policy.main import PresentationPolicy
 
 from presentation_policy.infrastructure.models import presentation_policies
 
@@ -35,6 +35,7 @@ class PostgresPresentationPolicyRepository:
                     "purpose": policy.purpose,
                     "trust_profile_id": policy.trust_profile_id,
                     "accepted_credential_types": policy.accepted_credential_types,
+                    "presentation_proof_required": policy.presentation_proof_required,
                     "holder_binding": {
                         "required": policy.holder_binding.required,
                         "binding_methods": policy.holder_binding.binding_methods,
@@ -335,6 +336,9 @@ class PostgresPresentationPolicyRepository:
                 accepted_credential_types=protocol_data.get("accepted_credential_types") or [req.credential_template_id for req in credential_requirements if req.credential_template_id],
                 credential_requirements=credential_requirements,
                 alternative_requirements=alternative_requirements,
+                presentation_proof_required=bool(
+                    protocol_data.get("presentation_proof_required", False)
+                ),
                 trust_profile_id=protocol_data.get("trust_profile_id"),
                 holder_binding=normalize_holder_binding(protocol_data.get("holder_binding")),
                 freshness=FreshnessPolicy(**protocol_data["freshness"]) if protocol_data.get("freshness") else None,
@@ -499,6 +503,9 @@ class PostgresPresentationPolicyRepository:
                         accepted_credential_types=protocol_data.get("accepted_credential_types") or [req.credential_template_id for req in credential_requirements if req.credential_template_id],
                         credential_requirements=credential_requirements,
                         alternative_requirements=alternative_requirements,
+                        presentation_proof_required=bool(
+                            protocol_data.get("presentation_proof_required", False)
+                        ),
                         trust_profile_id=protocol_data.get("trust_profile_id"),
                         holder_binding=normalize_holder_binding(protocol_data.get("holder_binding")),
                         freshness=FreshnessPolicy(**protocol_data["freshness"]) if protocol_data.get("freshness") else None,

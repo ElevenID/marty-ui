@@ -315,6 +315,75 @@ def test_create_presentation_policy_accepts_protocol_required_claims() -> None:
     assert body["accepted_credential_types"] == ["DriversLicense"]
 
 
+def test_holder_bound_presentation_only_policy_maps_to_internal_proof_obligation() -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    client = _build_client(repo)
+
+    created = client.post(
+        "/v1/presentation-policies",
+        json={
+            "organization_id": "org-1",
+            "name": "Presentation proof",
+            "holder_binding": {
+                "required": True,
+                "binding_methods": ["DEVICE_KEY"],
+                "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+                "proof_freshness": {
+                    "challenge_required": True,
+                    "audience_binding_required": True,
+                    "replay_detection_required": False,
+                },
+            },
+            "credential_requirements": [],
+        },
+        headers={"x-user-id": "user-1"},
+    )
+
+    assert created.status_code == 200
+    assert created.json()["credential_requirements"] == []
+    policy_id = created.json()["id"]
+    stored = asyncio.run(repo.get(policy_id))
+    assert stored is not None
+    assert stored.presentation_proof_required is True
+
+    activated = client.post(
+        f"/v1/presentation-policies/{policy_id}/activate",
+        headers={"x-user-id": "user-1"},
+    )
+    assert activated.status_code == 200
+    assert activated.json()["status"] == "active"
+
+
+def test_adding_a_credential_requirement_clears_internal_proof_only_obligation() -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = pp.PresentationPolicy(
+        organization_id="org-1",
+        name="Presentation proof",
+        presentation_proof_required=True,
+        holder_binding=pp.HolderBinding(required=True),
+    )
+    asyncio.run(repo.save(policy))
+    client = _build_client(repo)
+
+    updated = client.patch(
+        f"/v1/presentation-policies/{policy.id}",
+        json={
+            "credential_requirements": [
+                {
+                    "credential_template_id": "IdentityCredential",
+                    "requested_claims": [{"claim_name": "subject_id"}],
+                }
+            ]
+        },
+        headers={"x-user-id": "user-1"},
+    )
+
+    assert updated.status_code == 200
+    stored = asyncio.run(repo.get(policy.id))
+    assert stored is not None
+    assert stored.presentation_proof_required is False
+
+
 def test_create_presentation_policy_rejects_unknown_claim_constraint_type() -> None:
     repo = pp.InMemoryPresentationPolicyRepository()
     client = _build_client(repo)
@@ -1002,6 +1071,7 @@ async def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_c
         "verified_proofs": 1,
         "verified_credentials": 1,
         "credential_count": 1,
+        "presentation_verified": True,
         "algorithm": None,
         "issued_at": None,
         "expires_at": None,
@@ -1080,6 +1150,13 @@ async def test_vcdm_data_integrity_does_not_invent_replay_or_binding_facts(
             "verified_credentials": 1,
             "errors": [],
         },
+        {
+            "valid": True,
+            "kind": "presentation",
+            "verified_proofs": 1,
+            "verified_credentials": 0,
+            "errors": [],
+        },
     ],
 )
 async def test_vcdm_presentation_binding_requires_explicit_verified_proof_evidence(
@@ -1111,6 +1188,7 @@ async def test_vcdm_presentation_binding_requires_explicit_verified_proof_eviden
     )
 
     evidence = result["verification_evidence"]
+    assert evidence["presentation_verified"] is False
     assert evidence["holder_binding_verified"] is False
     assert "holder_binding_method" not in evidence
     assert "proof_profile" not in evidence
@@ -3986,6 +4064,164 @@ def test_multi_credential_presentation_requires_per_credential_evidence(
     assert response.decision == "deny"
     assert response.verified_claims == {}
     assert "exactly one independently verified credential" in response.decision_reason
+
+
+def test_presentation_only_policy_submits_no_credential_facts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = pp.PresentationPolicy(
+        organization_id="org-1",
+        name="Presentation proof",
+        status=pp.PolicyStatus.ACTIVE,
+        presentation_proof_required=True,
+        holder_binding=pp.HolderBinding(
+            required=True,
+            binding_methods=["DEVICE_KEY"],
+            proof_profiles=["OID4VP_VERIFIABLE_PRESENTATION"],
+            proof_freshness={
+                "challenge_required": True,
+                "audience_binding_required": True,
+                "replay_detection_required": False,
+            },
+        ),
+    )
+    asyncio.run(repo.save(policy))
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "w3c-vcdm-di")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "claims": {},
+            "issuer_did": "unknown",
+            "format": "w3c-vcdm-di",
+            "verification_evidence": {
+                "presentation_verified": True,
+                "verified_proofs": 1,
+                "verified_credentials": 0,
+                "credential_count": 0,
+                "holder_binding_verified": True,
+                "holder_binding_method": "DEVICE_KEY",
+                "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+                "challenge_verified": True,
+                "audience_verified": True,
+            },
+        },
+    )
+    native_requests: list[dict[str, object]] = []
+
+    def evaluate_native(request: dict[str, object]) -> dict[str, object]:
+        native_requests.append(request)
+        return {
+            "result": "passed",
+            "decision": "allow",
+            "decision_reason": "Presentation proof satisfied",
+            "credential_results": [],
+            "total_requirements": 1,
+            "satisfied_requirements": 1,
+            "required_satisfied": 1,
+            "required_total": 1,
+            "verified_claims": {},
+            "errors": [],
+            "warnings": [],
+            "evaluation_time_epoch_seconds": request[
+                "evaluation_time_epoch_seconds"
+            ],
+        }
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(
+                vp_token={"type": ["VerifiablePresentation"]},
+                nonce="challenge",
+                audience="verifier",
+            ),
+            repo=repo,
+            native_policy_evaluator=SimpleNamespace(evaluate=evaluate_native),
+        )
+    )
+
+    assert response.decision == "allow"
+    assert response.verified_claims == {}
+    assert len(native_requests) == 1
+    native_request = native_requests[0]
+    assert native_request["credentials"] == []
+    assert native_request["presentation_verified"] is True
+    assert native_request["policy"]["presentation_proof_required"] is True
+    assert "external_authorization" not in native_request
+
+
+def test_presentation_only_policy_rejects_contradictory_verifier_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = pp.PresentationPolicy(
+        organization_id="org-1",
+        name="Presentation proof",
+        status=pp.PolicyStatus.ACTIVE,
+        presentation_proof_required=True,
+        holder_binding=pp.HolderBinding(required=True),
+    )
+    asyncio.run(repo.save(policy))
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "w3c-vcdm-di")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": False,
+            "verification_evidence": {
+                "presentation_verified": True,
+                "holder_binding_verified": True,
+                "challenge_verified": True,
+                "audience_verified": True,
+                "replay_check_verified": True,
+            },
+        },
+    )
+    native_requests: list[dict[str, object]] = []
+
+    def evaluate_native(request: dict[str, object]) -> dict[str, object]:
+        native_requests.append(request)
+        return {
+            "result": "failed",
+            "decision": "deny",
+            "decision_reason": "Presentation proof required",
+            "credential_results": [],
+            "total_requirements": 1,
+            "satisfied_requirements": 0,
+            "required_satisfied": 0,
+            "required_total": 1,
+            "verified_claims": {},
+            "errors": ["PresentationProofRequired"],
+            "warnings": [],
+            "evaluation_time_epoch_seconds": request[
+                "evaluation_time_epoch_seconds"
+            ],
+        }
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(
+                vp_token={"type": ["VerifiablePresentation"]},
+                nonce="challenge",
+                audience="verifier",
+            ),
+            repo=repo,
+            native_policy_evaluator=SimpleNamespace(evaluate=evaluate_native),
+        )
+    )
+
+    assert response.decision == "deny"
+    assert len(native_requests) == 1
+    native_request = native_requests[0]
+    assert native_request["presentation_verified"] is False
+    assert native_request["holder_binding_verified"] is False
+    assert native_request["challenge_verified"] is False
+    assert native_request["audience_verified"] is False
+    assert native_request["replay_check_verified"] is False
 
 
 def test_per_requirement_credential_age_is_enforced(
