@@ -29,17 +29,23 @@ def _metadata() -> dict:
             "MemberCredential#sd-jwt": {
                 "format": "dc+sd-jwt",
                 "vct": f"{BASE}/credentials/marty-verified-member-badge",
-                "display": [{"name": "Marty Verified Member Badge"}],
+                "credential_metadata": {
+                    "display": [{"name": "Marty Verified Member Badge"}],
+                },
             },
             "EmployeeBadge#sd-jwt": {
                 "format": "dc+sd-jwt",
                 "vct": f"{BASE}/credentials/EmployeeBadge",
-                "display": [{"name": "Employee Badge"}],
+                "credential_metadata": {
+                    "display": [{"name": "Employee Badge"}],
+                },
             },
             "org.iso.18013.5.1.mDL#mdoc": {
                 "format": "mso_mdoc",
                 "doctype": "org.iso.18013.5.1.mDL",
-                "display": [{"name": "Mobile Driving Licence (mDL)"}],
+                "credential_metadata": {
+                    "display": [{"name": "Mobile Driving Licence (mDL)"}],
+                },
             },
         },
     }
@@ -67,7 +73,7 @@ def test_validate_spruce_metadata_accepts_public_displayable_configurations() ->
     ),
     (
         lambda value: value["credential_configurations_supported"]["EmployeeBadge#sd-jwt"].__setitem__(
-            "display", []
+            "credential_metadata", {"display": []}
         ),
         "Malformed credential configurations",
     ),
