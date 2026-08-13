@@ -162,6 +162,52 @@ def test_missing_mdoc_handover_capability_fails_startup(
     ]
 
 
+def test_missing_haip_response_encryption_capability_fails_startup(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    backend = object()
+    requested: list[str | None] = []
+
+    monkeypatch.setattr(
+        native,
+        "load_marty_rs",
+        lambda *, required_capability=None: backend,
+    )
+
+    def diagnostics(_backend, *, required_capability: str | None = None):
+        assert _backend is backend
+        requested.append(required_capability)
+        if required_capability in {
+            "credential_presentation_metadata",
+            "openid4vp_mdoc_handover",
+        }:
+            return {
+                "available": True,
+                "capabilities": [
+                    "flow_state_machine",
+                    "credential_presentation_metadata",
+                    "openid4vp_mdoc_handover",
+                ],
+            }
+        raise NativeBackendUnavailable(
+            f"missing required native capability: {required_capability}"
+        )
+
+    monkeypatch.setattr(native, "_backend", None)
+    monkeypatch.setattr(native, "_diagnostics", None)
+    monkeypatch.setattr(native, "get_marty_rs_diagnostics", diagnostics)
+
+    with pytest.raises(
+        NativeBackendUnavailable, match="haip_response_encryption"
+    ):
+        native.initialize_native_flow_backend()
+    assert requested == [
+        "credential_presentation_metadata",
+        "openid4vp_mdoc_handover",
+        "haip_response_encryption",
+    ]
+
+
 def test_malformed_native_decision_fails_closed(monkeypatch: pytest.MonkeyPatch):
     class MalformedBackend:
         @staticmethod
@@ -172,6 +218,60 @@ def test_malformed_native_decision_fails_closed(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(native, "_diagnostics", {"available": True})
     with pytest.raises(native.NativeFlowOperationError, match="decision shape"):
         native.evaluate_transition("created", "pending")
+
+
+def test_haip_key_and_decryption_adapters_validate_native_results():
+    public = {
+        "alg": "ECDH-ES",
+        "crv": "P-256",
+        "kid": "oid4vp-haip-test",
+        "kty": "EC",
+        "use": "enc",
+        "x": "x-coordinate",
+        "y": "y-coordinate",
+    }
+    private = {**public, "d": "private-value"}
+
+    class HaipBackend:
+        @staticmethod
+        def haip_generate_response_encryption_key():
+            return json.dumps(public), json.dumps(private)
+
+        @staticmethod
+        def haip_validate_response_header(compact_jwe: str):
+            assert compact_jwe == "compact-jwe"
+            return json.dumps(
+                {
+                    "alg": "ECDH-ES",
+                    "enc": "A256GCM",
+                    "epk": {"kty": "EC", "crv": "P-256"},
+                }
+            )
+
+        @staticmethod
+        def haip_decrypt_response(compact_jwe: str, private_jwk_json: str):
+            assert compact_jwe == "compact-jwe"
+            assert json.loads(private_jwk_json) == private
+            return b'{"vp_token":"fixture"}'
+
+    native.initialize_native_flow_backend(HaipBackend())
+    assert native.generate_haip_response_encryption_key() == (public, private)
+    assert native.validate_haip_response_header("compact-jwe")["enc"] == "A256GCM"
+    assert native.decrypt_haip_response("compact-jwe", private) == (
+        b'{"vp_token":"fixture"}'
+    )
+
+
+@pytest.mark.parametrize("result", [None, (), ("{}",), ("{}", "{}")])
+def test_malformed_native_haip_key_pair_fails_closed(result):
+    class MalformedBackend:
+        @staticmethod
+        def haip_generate_response_encryption_key():
+            return result
+
+    native.initialize_native_flow_backend(MalformedBackend())
+    with pytest.raises(native.NativeFlowOperationError, match="INVALID_NATIVE_RESULT"):
+        native.generate_haip_response_encryption_key()
 
 
 def test_credential_profile_presentation_metadata_uses_native_contract():

@@ -30,6 +30,9 @@ def initialize_native_flow_backend(
         diagnostics = get_marty_rs_diagnostics(
             backend, required_capability="openid4vp_mdoc_handover"
         )
+        diagnostics = get_marty_rs_diagnostics(
+            backend, required_capability="haip_response_encryption"
+        )
     else:
         diagnostics = {
             "available": True,
@@ -40,6 +43,7 @@ def initialize_native_flow_backend(
                 "flow_state_machine",
                 "credential_presentation_metadata",
                 "openid4vp_mdoc_handover",
+                "haip_response_encryption",
             ],
         }
     _backend = backend
@@ -274,6 +278,83 @@ def credential_profile_presentation_metadata(
             "FLOW.INVALID_NATIVE_RESULT: credential presentation type identifiers are invalid"
         )
     return result
+
+
+def generate_haip_response_encryption_key() -> tuple[dict[str, Any], dict[str, Any]]:
+    """Generate one per-flow HAIP key through the canonical Rust backend."""
+    try:
+        raw = _native().haip_generate_response_encryption_key()
+    except Exception as error:
+        raise NativeFlowOperationError(str(error)) from error
+    if not isinstance(raw, (tuple, list)) or len(raw) != 2:
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: HAIP key generation did not return a key pair"
+        )
+    public = _json_object(raw[0], "haip_generate_response_encryption_key.public")
+    private = _json_object(raw[1], "haip_generate_response_encryption_key.private")
+    public_fields = {"alg", "crv", "kid", "kty", "use", "x", "y"}
+    if set(public) != public_fields or set(private) != public_fields | {"d"}:
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: HAIP key generation returned an invalid JWK shape"
+        )
+    if (
+        public.get("alg") != "ECDH-ES"
+        or public.get("crv") != "P-256"
+        or public.get("kty") != "EC"
+        or public.get("use") != "enc"
+        or any(
+            not isinstance(public.get(field), str) or not public[field]
+            for field in public_fields
+        )
+        or any(private.get(field) != public.get(field) for field in public_fields)
+        or not isinstance(private.get("d"), str)
+        or not private["d"]
+    ):
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: HAIP key generation returned invalid key material"
+        )
+    return public, private
+
+
+def validate_haip_response_header(compact_jwe: str) -> dict[str, Any]:
+    """Validate a HAIP envelope in Rust before requesting KMS unwrap."""
+    try:
+        header = _json_object(
+            _native().haip_validate_response_header(compact_jwe),
+            "haip_validate_response_header",
+        )
+    except NativeFlowOperationError:
+        raise
+    except Exception as error:
+        raise NativeFlowOperationError(str(error)) from error
+    if header.get("alg") != "ECDH-ES" or header.get("enc") not in {
+        "A128GCM",
+        "A256GCM",
+    }:
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: HAIP header validation returned invalid algorithms"
+        )
+    if not isinstance(header.get("epk"), dict):
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: HAIP header validation returned no epk"
+        )
+    return header
+
+
+def decrypt_haip_response(compact_jwe: str, private_jwk: dict[str, Any]) -> bytes:
+    """Decrypt a HAIP compact JWE through the canonical Rust backend."""
+    try:
+        plaintext = _native().haip_decrypt_response(
+            compact_jwe,
+            json.dumps(private_jwk, separators=(",", ":"), sort_keys=True),
+        )
+    except Exception as error:
+        raise NativeFlowOperationError(str(error)) from error
+    if not isinstance(plaintext, bytes):
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: HAIP decryption did not return bytes"
+        )
+    return plaintext
 
 
 def evaluate_transition(

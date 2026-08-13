@@ -236,6 +236,24 @@
       ]
     },
     {
+      "id": "haip-response-encryption",
+      "phase": 5,
+      "status": "cutover-in-progress",
+      "canonical": {
+        "repository": "ElevenID/marty-core",
+        "paths": ["marty-crypto/src/kdf.rs", "marty-verification/src/jwk/jwe.rs"],
+        "binding_paths": ["marty-bindings/src/haip.rs"]
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-ui",
+          "paths": ["services/flow/main.py", "services/flow/native.py"],
+          "language": "python",
+          "disposition": "kms-and-http-adapter-only"
+        }
+      ]
+    },
+    {
       "id": "wallet-oid4vc",
       "phase": 6,
       "status": "planned",
@@ -320,8 +338,6 @@
       {"path": "services/flow/main.py", "statement": "from cryptography.hazmat.primitives import hashes, serialization"},
       {"path": "services/flow/main.py", "statement": "from cryptography.hazmat.primitives.asymmetric import ec"},
       {"path": "services/flow/main.py", "statement": "from jwcrypto import jwk"},
-      {"path": "services/flow/main.py", "statement": "from jwcrypto import jwe as jwcrypto_jwe"},
-      {"path": "services/flow/main.py", "statement": "from jwcrypto import jwk as jwcrypto_jwk"},
       {"path": "services/flow/main.py", "statement": "from jwcrypto import jwt as jwcrypto_jwt"},
       {"path": "services/gateway/kms_adapters/__init__.py", "statement": "from cryptography.hazmat.primitives import serialization"},
       {"path": "services/gateway/kms_adapters/__init__.py", "statement": "from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa"},
@@ -404,6 +420,12 @@
         "id": "no-python-oid4vp-request-builder",
         "glob": "services/**/*.py",
         "pattern": "(?:_WALLET_FORMATS_FALLBACK|_oid4vp_wallet_registry_formats|_oid4vp_format_alg|_oid4vp_presentation_formats|_is_sd_jwt_format|_is_mdoc_format|_string_filter_for_values|_sd_jwt_vct_values|_dcql_format_name|_json_schema_const_values|_dcql_meta_for_descriptor|_dcql_claims_for_descriptor|default-credential|default_requirement)",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-python-haip-jwe-kernel",
+        "glob": "services/flow/main.py",
+        "pattern": "(?:jwcrypto\\s+import\\s+jwe|JWK\\.generate\\(kty=[\"']EC[\"'])",
         "expected_matches": {}
       },
       {
