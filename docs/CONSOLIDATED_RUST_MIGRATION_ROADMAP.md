@@ -6,7 +6,7 @@
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-08-10
+**Last updated:** 2026-08-13
 
 ## Objective
 
@@ -202,6 +202,18 @@ These legacy services are conditional targets. For each service, make and record
 - **Retire:** migrate required data/callers, remove the deployed service, and delete the Python implementation.
 
 Maintaining an unused Rust rewrite beside a legacy Python implementation is not an acceptable outcome.
+
+**Decision:** Retain both capabilities. DTC create/sign/verify and governed
+lifecycle validation are canonical in `marty-verification::dtc`. VDS-NC
+canonicalization, barcode policy, create/sign/inspect/verify, field consistency,
+and temporal validation are canonical in `marty-oid4vci` and
+`marty-verification`. Marty preserves its gRPC, storage, provider, DTO, and visa
+mapping adapters, but no longer owns a cryptographic or protocol kernel. The
+evidence and allowed adapter boundary are recorded in
+[`rust-migration-phase8-dtc-vds-decision.md`](rust-migration-phase8-dtc-vds-decision.md).
+
+**Exit gate:** Satisfied for implementation and caller cutover. Final completion
+still follows the roadmap-wide beta evidence and removal enforcement gates.
 
 ### Phase 9 — Removal and enforcement
 

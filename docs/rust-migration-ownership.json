@@ -236,20 +236,41 @@
       ]
     },
     {
-      "id": "legacy-dtc-vds",
+      "id": "dtc",
       "phase": 8,
-      "status": "decision-pending",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-core",
-        "paths": ["decision-required"],
-        "binding_paths": []
+        "paths": ["marty-verification/src/dtc"],
+        "binding_paths": ["marty-verification/src/lib.rs"]
       },
       "legacy": [
         {
           "repository": "ElevenID/Marty",
-          "paths": ["src/marty_plugin"],
+          "paths": ["src/marty_plugin/dtc_engine/src/dtc_engine_service.py"],
           "language": "python",
-          "disposition": "retire-or-rewrite"
+          "disposition": "transport-storage-provider-adapter-only"
+        }
+      ]
+    },
+    {
+      "id": "vds-nc",
+      "phase": 8,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-core",
+        "paths": [
+          "marty-oid4vci/src/formats/vds_nc_profile.rs",
+          "marty-verification/src/verification/vds_nc.rs"
+        ],
+        "binding_paths": ["marty-bindings/src/lib.rs"]
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/Marty",
+          "paths": ["src/marty_plugin/shared/vds_nc"],
+          "language": "python",
+          "disposition": "dto-visa-provider-adapter-only"
         }
       ]
     }
