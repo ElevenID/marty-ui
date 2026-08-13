@@ -472,3 +472,18 @@ jobs:
             bandit-report.json
             semgrep-report.json
           retention-days: 14
+
+  ci-gate:
+    name: CI Gate
+    if: always()
+    needs: [lint, test-ui, test-services, test-rust-services, flow-idempotency-contract, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security]
+    runs-on: ubuntu-latest
+    env:
+      RESULTS: ${{ join(needs.*.result, ' ') }}
+    steps:
+      - name: Require every CI lane
+        shell: bash
+        run: |
+          for result in $RESULTS; do
+            test "$result" = success
+          done
