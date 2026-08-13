@@ -187,6 +187,14 @@ jobs:
         run: >-
           cargo test --locked -p marty-revocation-profile
           --test storage_contract -- --ignored
+      - name: Test Rust revocation executable contract
+        working-directory: rust
+        env:
+          MARTY_TEST_POSTGRES_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
+          MARTY_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+        run: >-
+          cargo test --locked -p marty-revocation-profile
+          --test runtime_contract -- --ignored
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
