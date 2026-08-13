@@ -224,8 +224,8 @@ def test_service_images_install_every_required_native_backend() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
     for name in ("marty-core-python", "marty-verification-python", "marty-iso18013-python"):
-        assert components[name]["version"] == "0.1.52"
-        assert components[name]["commit"] == "c21b813b00d578c0f25a475cfa6543c29fb8ee42"
+        assert components[name]["version"] == "0.1.53"
+        assert components[name]["commit"] == "e4695adbad6518917b0779e4e988f0c2e32fb21c"
 
 
 def test_release_images_reject_commerce_markers() -> None:

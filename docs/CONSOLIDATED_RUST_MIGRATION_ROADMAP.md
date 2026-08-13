@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Approved implementation roadmap
+**Status:** Implementation active — source cutovers landed; beta evidence and final removals pending
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
@@ -15,6 +15,24 @@ Reduce the amount of Python and other non-Rust protocol code in the Marty stack 
 This is not a line-for-line translation project. Rust owns deterministic protocol, policy, validation, cryptographic, and state-machine behavior. Python remains only where it is useful for API composition, persistence adapters, scheduling, OCR, and third-party integrations until a whole service is deliberately replaced. Flutter/Dart remains responsible for application UI and platform integrations.
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
+
+## Implementation status (2026-08-13)
+
+The selected deterministic protocol, cryptographic, policy, validation,
+state-machine, wallet, licensing, DTC, and VDS-NC kernels now have one
+canonical Rust owner. The final Flow P-256 `did:jwk`/`did:key` caller cutover
+is included in the closing source-cleanup change. The machine-readable
+inventory records these workstreams as `native-active` and keeps only the two
+whole-service runtime cutovers below open.
+
+| Remaining gate | Current state | Completion evidence required |
+|---|---|---|
+| Event-stream whole-service removal | Rust binary and beta overlay are packaged; legacy Python service remains for non-beta stacks | One coordinated beta deployment, contract/operational evidence, required soak, then deletion of `services/event_stream` and Python image/package references |
+| Revocation-profile whole-service removal | Rust HTTP/gRPC/storage/runtime implementation and beta overlay are packaged; legacy Python orchestration remains | One coordinated beta deployment, status/revocation parity and operational evidence, required soak, then deletion of superseded Python service/kernel code and dependencies |
+| Phase 9 release and evidence | Source cutovers are merged or in the closing dependency-ordered release/caller change; beta remains pinned | Immutable Rust/UI releases, one beta-only update, seven-day service and fourteen-day security evidence windows, language/dependency measurements, and a production-promotion evidence package without promotion |
+
+Until those gates pass, this roadmap is not complete. Production and
+persistent self-host configurations remain unchanged.
 
 ## Non-negotiable outcomes
 
