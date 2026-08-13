@@ -272,6 +272,24 @@
       ]
     },
     {
+      "id": "oid4vp-x509-identity",
+      "phase": 5,
+      "status": "cutover-in-progress",
+      "canonical": {
+        "repository": "ElevenID/marty-core",
+        "paths": ["marty-verification/src/oid4vp.rs"],
+        "binding_paths": ["marty-bindings/src/oid4vp_identity.rs"]
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-ui",
+          "paths": ["services/flow/main.py", "services/flow/native.py"],
+          "language": "python",
+          "disposition": "configuration-and-native-adapter-only"
+        }
+      ]
+    },
+    {
       "id": "license-entitlements",
       "phase": 7,
       "status": "planned",
@@ -334,8 +352,7 @@
     "excluded_path_parts": ["tests", "migrations", "__pycache__"],
     "restricted_import_roots": ["Crypto", "OpenSSL", "cryptography", "jose", "jwcrypto", "jwt", "nacl"],
     "approved_imports": [
-      {"path": "services/flow/main.py", "statement": "from cryptography import x509"},
-      {"path": "services/flow/main.py", "statement": "from cryptography.hazmat.primitives import hashes, serialization"},
+      {"path": "services/flow/main.py", "statement": "from cryptography.hazmat.primitives import serialization"},
       {"path": "services/flow/main.py", "statement": "from cryptography.hazmat.primitives.asymmetric import ec"},
       {"path": "services/flow/main.py", "statement": "from jwcrypto import jwk"},
       {"path": "services/flow/main.py", "statement": "from jwcrypto import jwt as jwcrypto_jwt"},
@@ -426,6 +443,12 @@
         "id": "no-python-haip-jwe-kernel",
         "glob": "services/flow/main.py",
         "pattern": "(?:jwcrypto\\s+import\\s+jwe|JWK\\.generate\\(kty=[\"']EC[\"'])",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-python-oid4vp-x509-kernel",
+        "glob": "services/flow/main.py",
+        "pattern": "(?:x509\\.load_pem_x509_certificate|hashes\\.Hash\\(hashes\\.SHA256\\(\\)\\)|public_bytes\\(serialization\\.Encoding\\.DER\\))",
         "expected_matches": {}
       },
       {
