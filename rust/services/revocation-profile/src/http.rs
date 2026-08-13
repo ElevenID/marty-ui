@@ -1,12 +1,12 @@
 use crate::{
-    CredentialFormat, IssuerRevocationConfig, NewProfile, RevocationAutomationConfig,
-    RevocationMechanism, RevocationProfile, RevocationProfileService, RevocationTimingMode,
-    ServiceError, VerifierRevocationConfig,
+    CredentialFormat, CredentialStatus, IssuerRevocationConfig, NewProfile, ProcessRevocation,
+    RevocationAutomationConfig, RevocationMechanism, RevocationProfile, RevocationProfileService,
+    RevocationTimingMode, ServiceError, StatusListFormat, VerifierRevocationConfig,
 };
 use async_trait::async_trait;
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -15,9 +15,11 @@ use chrono::SecondsFormat;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::HashSet, sync::Arc};
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 const RESOURCE: &str = "revocation-profile";
+const SERVICE_TOKEN_HEADER: &str = "x-service-token";
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum AuthorizationError {
@@ -38,10 +40,50 @@ pub trait Authorization: Send + Sync {
     ) -> Result<(), AuthorizationError>;
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct InternalServiceAuth {
+    expected_token: Option<Arc<str>>,
+}
+
+impl InternalServiceAuth {
+    pub fn new(expected_token: Option<String>) -> Result<Self, AuthorizationError> {
+        let expected_token = match expected_token {
+            Some(value) if value.trim().is_empty() => {
+                return Err(AuthorizationError::Unavailable(
+                    "configured service token is empty".into(),
+                ));
+            }
+            Some(value) => Some(Arc::<str>::from(value.trim())),
+            None => None,
+        };
+        Ok(Self { expected_token })
+    }
+
+    fn authorize(&self, headers: &HeaderMap) -> Result<(), ApiError> {
+        let Some(expected) = &self.expected_token else {
+            return Ok(());
+        };
+        let supplied = headers
+            .get(SERVICE_TOKEN_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        let valid = supplied.len() == expected.len()
+            && bool::from(supplied.as_bytes().ct_eq(expected.as_bytes()));
+        if valid {
+            Ok(())
+        } else {
+            Err(ApiError::Unauthorized(
+                "Missing or invalid service token".into(),
+            ))
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RevocationProfileHttp {
     service: RevocationProfileService,
     authorization: Arc<dyn Authorization>,
+    internal_auth: InternalServiceAuth,
 }
 
 impl RevocationProfileHttp {
@@ -49,7 +91,16 @@ impl RevocationProfileHttp {
         Self {
             service,
             authorization,
+            internal_auth: InternalServiceAuth::default(),
         }
+    }
+
+    pub fn with_internal_service_token(
+        mut self,
+        expected_token: Option<String>,
+    ) -> Result<Self, AuthorizationError> {
+        self.internal_auth = InternalServiceAuth::new(expected_token)?;
+        Ok(self)
     }
 
     pub fn router(self) -> Router {
@@ -65,6 +116,18 @@ impl RevocationProfileHttp {
             .route(
                 "/v1/revocation-profiles/{profile_id}/activate",
                 post(activate_profile),
+            )
+            .route(
+                "/internal/revocation-profiles/{profile_id}/allocate-index",
+                post(allocate_index),
+            )
+            .route(
+                "/internal/revocation-profiles/{profile_id}/process-revocation",
+                post(process_revocation),
+            )
+            .route(
+                "/v1/organizations/{organization_id}/revocation-profiles/{profile_id}/status-lists/{mechanism}/{purpose}",
+                get(status_list_document),
             )
             .with_state(self)
     }
@@ -196,6 +259,45 @@ struct ListQuery {
     limit: usize,
     #[serde(default)]
     offset: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AllocateIndexRequest {
+    organization_id: String,
+    credential_format: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AllocateIndexResponse {
+    organization_id: String,
+    index: usize,
+    status_list_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProcessRevocationRequest {
+    organization_id: String,
+    credential_id: String,
+    index: usize,
+    status: String,
+    #[serde(default)]
+    reason: Option<String>,
+    credential_format: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ProcessRevocationResponse {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    organization_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status_list_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 fn default_limit() -> usize {
@@ -409,6 +511,171 @@ async fn delete_profile(
     Ok(Json(json!({"success": true})))
 }
 
+async fn allocate_index(
+    State(state): State<RevocationProfileHttp>,
+    Path(profile_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<AllocateIndexRequest>,
+) -> Result<Json<AllocateIndexResponse>, ApiError> {
+    state.internal_auth.authorize(&headers)?;
+    let result = state
+        .service
+        .allocate_index(
+            &profile_id,
+            &request.organization_id,
+            &request.credential_format,
+        )
+        .await?;
+    Ok(Json(AllocateIndexResponse {
+        organization_id: result.organization_id,
+        index: result.index,
+        status_list_url: result.status_list_url,
+    }))
+}
+
+async fn process_revocation(
+    State(state): State<RevocationProfileHttp>,
+    Path(profile_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<ProcessRevocationRequest>,
+) -> Result<Json<ProcessRevocationResponse>, ApiError> {
+    state.internal_auth.authorize(&headers)?;
+    let _reason = request.reason;
+    let status = match request.status.as_str() {
+        "revoked" => CredentialStatus::Revoked,
+        "suspended" => CredentialStatus::Suspended,
+        "reinstated" => CredentialStatus::Reinstated,
+        other => {
+            return Ok(Json(ProcessRevocationResponse {
+                success: false,
+                organization_id: None,
+                status_list_url: None,
+                index: None,
+                error: Some(format!("Unknown status: {other}")),
+            }));
+        }
+    };
+    let operation = ProcessRevocation {
+        profile_id: profile_id.clone(),
+        organization_id: request.organization_id,
+        credential_id: request.credential_id,
+        index: request.index,
+        status,
+        credential_format: request.credential_format,
+    };
+    match state.service.process_revocation(operation).await {
+        Ok(result) => Ok(Json(ProcessRevocationResponse {
+            success: true,
+            organization_id: Some(result.organization_id),
+            status_list_url: Some(result.status_list_url),
+            index: Some(result.index),
+            error: None,
+        })),
+        Err(ServiceError::PermissionDenied) => {
+            Err(ApiError::Service(ServiceError::PermissionDenied))
+        }
+        Err(ServiceError::NotFound(_)) => Ok(Json(ProcessRevocationResponse {
+            success: false,
+            organization_id: None,
+            status_list_url: None,
+            index: None,
+            error: Some(format!("RevocationProfile {profile_id} not found")),
+        })),
+        Err(ServiceError::FailedPrecondition(detail)) => {
+            let detail = detail
+                .strip_prefix("revocation profile is not active")
+                .map(|suffix| format!("RevocationProfile {profile_id} is not active{suffix}"))
+                .unwrap_or(detail);
+            Ok(Json(ProcessRevocationResponse {
+                success: false,
+                organization_id: None,
+                status_list_url: None,
+                index: None,
+                error: Some(detail),
+            }))
+        }
+        Err(_) => Ok(Json(ProcessRevocationResponse {
+            success: false,
+            organization_id: None,
+            status_list_url: None,
+            index: None,
+            error: Some("Revocation processing failed".into()),
+        })),
+    }
+}
+
+async fn status_list_document(
+    State(state): State<RevocationProfileHttp>,
+    Path((organization_id, profile_id, mechanism, purpose)): Path<(String, String, String, String)>,
+) -> Result<Response, ApiError> {
+    if !matches!(purpose.as_str(), "revocation" | "suspension") {
+        return Err(ApiError::BadRequest(
+            "purpose must be revocation or suspension".into(),
+        ));
+    }
+    let format = match mechanism.trim().to_ascii_lowercase().as_str() {
+        "bitstring" | "bitstring-status-list" | "bitstring_status_list" => {
+            StatusListFormat::Bitstring
+        }
+        "token" | "token-status-list" | "token_status_list" => StatusListFormat::TokenStatusList,
+        _ => {
+            return Err(ApiError::BadRequest(format!(
+                "Unsupported status list mechanism: {mechanism}"
+            )));
+        }
+    };
+    let profile = state.service.get(&profile_id).await?;
+    if profile.organization_id != organization_id {
+        return Err(ApiError::NotFound("RevocationProfile not found".into()));
+    }
+    let record = state
+        .service
+        .status_list(&profile_id, &organization_id, format)
+        .await?;
+    let canonical_url = state
+        .service
+        .status_list_url_for(&profile, format, &purpose);
+    let issuer = format!("did:example:org:{organization_id}");
+    let payload = match format {
+        StatusListFormat::Bitstring => {
+            let subject = record
+                .bitstring_credential_subject(format!("{canonical_url}#list"), &purpose)
+                .map_err(ServiceError::from)?;
+            json!({
+                "@context": ["https://www.w3.org/ns/credentials/v2"],
+                "id": canonical_url,
+                "type": ["VerifiableCredential", "BitstringStatusListCredential"],
+                "issuer": issuer,
+                "validFrom": record.created_at.to_rfc3339_opts(SecondsFormat::AutoSi, false),
+                "credentialSubject": subject,
+            })
+        }
+        StatusListFormat::TokenStatusList => {
+            let claim = record.token_claim().map_err(ServiceError::from)?;
+            json!({
+                "iss": issuer,
+                "sub": canonical_url,
+                "iat": chrono::Utc::now().timestamp(),
+                "status_list": claim,
+            })
+        }
+    };
+    let content_type = if format == StatusListFormat::Bitstring {
+        "application/vc+ld+json"
+    } else {
+        "application/json"
+    };
+    let mut response = Json(payload).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=300"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    Ok(response)
+}
+
 fn validate_create_request(request: &CreateProfileRequest) -> Result<(), ApiError> {
     if request.organization_id.is_empty() || request.organization_id.len() > 255 {
         return Err(ApiError::Unprocessable(
@@ -494,6 +761,10 @@ enum ApiError {
     #[error("{0}")]
     Unauthorized(String),
     #[error("{0}")]
+    BadRequest(String),
+    #[error("{0}")]
+    NotFound(String),
+    #[error("{0}")]
     Unprocessable(String),
     #[error(transparent)]
     Authorization(AuthorizationError),
@@ -505,6 +776,8 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, detail) = match self {
             Self::Unauthorized(detail) => (StatusCode::UNAUTHORIZED, detail),
+            Self::BadRequest(detail) => (StatusCode::BAD_REQUEST, detail),
+            Self::NotFound(detail) => (StatusCode::NOT_FOUND, detail),
             Self::Unprocessable(detail) => (StatusCode::UNPROCESSABLE_ENTITY, detail),
             Self::Authorization(AuthorizationError::Denied) => (
                 StatusCode::FORBIDDEN,
@@ -730,5 +1003,143 @@ mod tests {
             json_response(response).await,
             json!({"detail": "revocation_mechanism must contain at least one mechanism"})
         );
+    }
+
+    #[tokio::test]
+    async fn internal_lifecycle_requires_service_token_and_public_document_is_canonical() {
+        let authorization = Arc::new(RecordingAuthorization::default());
+        let service = RevocationProfileService::new(
+            Arc::new(InMemoryProfileRepository::default()),
+            Arc::new(InMemoryStatusRepository::default()),
+            "https://status.example.com",
+        )
+        .unwrap();
+        let token = "s".repeat(48);
+        let app = RevocationProfileHttp::new(service, authorization)
+            .with_internal_service_token(Some(token.clone()))
+            .unwrap()
+            .router();
+
+        let create = Request::builder()
+            .method("POST")
+            .uri("/v1/revocation-profiles")
+            .header("content-type", "application/json")
+            .header("x-user-id", "user-1")
+            .body(Body::from(
+                json!({"organization_id": "org-1", "name": "status profile"}).to_string(),
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(create).await.unwrap();
+        let body = json_response(response).await;
+        let profile_id = body["id"].as_str().unwrap().to_string();
+
+        let allocate_uri = format!("/internal/revocation-profiles/{profile_id}/allocate-index");
+        let allocation_body = json!({
+            "organization_id": "org-1",
+            "credential_format": "sd_jwt_vc"
+        })
+        .to_string();
+        let unauthorized = Request::builder()
+            .method("POST")
+            .uri(&allocate_uri)
+            .header("content-type", "application/json")
+            .body(Body::from(allocation_body.clone()))
+            .unwrap();
+        let response = app.clone().oneshot(unauthorized).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            json_response(response).await,
+            json!({"detail": "Missing or invalid service token"})
+        );
+
+        let allocate = Request::builder()
+            .method("POST")
+            .uri(&allocate_uri)
+            .header("content-type", "application/json")
+            .header(SERVICE_TOKEN_HEADER, &token)
+            .body(Body::from(allocation_body))
+            .unwrap();
+        let response = app.clone().oneshot(allocate).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let allocation = json_response(response).await;
+        assert_eq!(allocation["index"], 0);
+
+        let process_uri = format!("/internal/revocation-profiles/{profile_id}/process-revocation");
+        let process_body = json!({
+            "organization_id": "org-1",
+            "credential_id": "credential-1",
+            "index": 0,
+            "status": "revoked",
+            "credential_format": "sd_jwt_vc"
+        })
+        .to_string();
+        let inactive = Request::builder()
+            .method("POST")
+            .uri(&process_uri)
+            .header("content-type", "application/json")
+            .header(SERVICE_TOKEN_HEADER, &token)
+            .body(Body::from(process_body.clone()))
+            .unwrap();
+        let response = app.clone().oneshot(inactive).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            json_response(response).await["error"],
+            format!("RevocationProfile {profile_id} is not active (status: draft)")
+        );
+
+        let activate = Request::builder()
+            .method("POST")
+            .uri(format!("/v1/revocation-profiles/{profile_id}/activate"))
+            .header("x-user-id", "user-1")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(activate).await.unwrap().status(),
+            StatusCode::OK
+        );
+
+        let process = Request::builder()
+            .method("POST")
+            .uri(process_uri)
+            .header("content-type", "application/json")
+            .header(SERVICE_TOKEN_HEADER, &token)
+            .body(Body::from(process_body))
+            .unwrap();
+        let response = app.clone().oneshot(process).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_response(response).await["success"], true);
+
+        let document_uri = format!(
+            "/v1/organizations/org-1/revocation-profiles/{profile_id}/status-lists/bitstring-status-list/revocation"
+        );
+        let document = Request::builder()
+            .uri(document_uri)
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(document).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "application/vc+ld+json"
+        );
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "public, max-age=300"
+        );
+        let body = json_response(response).await;
+        assert_eq!(body["credentialSubject"]["statusPurpose"], "revocation");
+        assert!(body["credentialSubject"]["encodedList"]
+            .as_str()
+            .unwrap()
+            .starts_with('u'));
+
+        let cross_tenant = Request::builder()
+            .uri(format!(
+                "/v1/organizations/org-2/revocation-profiles/{profile_id}/status-lists/bitstring-status-list/revocation"
+            ))
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(cross_tenant).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

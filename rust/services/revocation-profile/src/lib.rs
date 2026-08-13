@@ -13,7 +13,7 @@ pub mod proto {
 
 pub use domain::*;
 pub use grpc::RevocationProfileGrpc;
-pub use http::{Authorization, AuthorizationError, RevocationProfileHttp};
+pub use http::{Authorization, AuthorizationError, InternalServiceAuth, RevocationProfileHttp};
 pub use postgres::PgProfileRepository;
 pub use redis_status::RedisStatusRepository;
 pub use repository::{InMemoryProfileRepository, ProfileRepository};

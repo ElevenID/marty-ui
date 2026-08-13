@@ -247,6 +247,15 @@ impl RevocationProfileService {
             .replace("__STATUS_PURPOSE__", "{purpose}")
     }
 
+    pub fn status_list_url_for(
+        &self,
+        profile: &RevocationProfile,
+        format: StatusListFormat,
+        purpose: &str,
+    ) -> String {
+        self.status_list_url(profile, format, purpose)
+    }
+
     async fn authorized_profile(
         &self,
         profile_id: &str,
