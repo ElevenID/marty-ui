@@ -371,6 +371,24 @@
         "expected_matches": {}
       },
       {
+        "id": "no-presentation-native-none-fallback",
+        "glob": "services/presentation_policy/*.py",
+        "pattern": "(?:_marty_rs|marty_rs)\\s+is\\s+None",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-python-sd-jwt-disclosure-reconstruction",
+        "glob": "services/presentation_policy/*.py",
+        "pattern": "(?:disclosure_parts|Skipping malformed disclosure)",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-presentation-policy-default-engine-fallback",
+        "glob": "services/presentation_policy/*.py",
+        "pattern": "CedarEngine\\.with_defaults",
+        "expected_matches": {}
+      },
+      {
         "id": "no-python-status-list-kernel",
         "glob": "services/revocation_profile/status_list_manager.py",
         "pattern": "(?:import\\s+zlib|bytearray\\(status_list\\.data\\)|1\\s*<<\\s*\\(7\\s*-\\s*bit_index\\)|urlsafe_b64encode\\(compressed\\))",

@@ -670,6 +670,7 @@ def test_mdoc_verification_logs_only_stable_error_category(
                 document_types=["org.iso.18013.5.1.mDL"],
                 error=raw_error,
             ),
+            verify_mdoc_cbor=lambda _value: {},
         ),
     )
     mdoc_bytes = b"\xa1aa\x01"
@@ -1562,17 +1563,15 @@ async def test_open_badge_v3_compact_jwt_fails_closed_without_profile_verifier(
         lambda _token: pytest.fail("decoded JSON fallback is forbidden"),
     )
 
-    result = await pp._verify_credential_by_format(
-        token,
-        "openbadge-v3",
-        None,
-        None,
-    )
-
-    assert result["verified"] is False
-    assert result["format"] == "openbadge-v3"
-    assert result["claims"] == {}
-    assert "verify_open_badge_v3_jwt" in result["error"]
+    with pytest.raises(
+        pp.NativeBackendUnavailable, match="verify_open_badge_v3_jwt"
+    ):
+        await pp._verify_credential_by_format(
+            token,
+            "openbadge-v3",
+            None,
+            None,
+        )
 
 
 @pytest.mark.asyncio
@@ -1989,7 +1988,7 @@ async def test_verify_sd_jwt_reports_did_resolution_failure(monkeypatch) -> None
 
     assert result["verified"] is False
     assert "DID resolution failed" in result["error"]
-    assert result["claims"]["email"] == "member@example.com"
+    assert result["claims"] == {}
 
 
 @pytest.mark.asyncio
@@ -2034,7 +2033,14 @@ async def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
             audience=audience,
             nonce=nonce,
         )
-        return json.dumps({"given_name": "Marty"})
+        return json.dumps(
+            {
+                "iss": did,
+                "sub": "did:example:holder",
+                "email": "member@example.com",
+                "given_name": "Marty",
+            }
+        )
 
     monkeypatch.setattr(
         pp,
@@ -2061,6 +2067,65 @@ async def test_verify_sd_jwt_resolves_did_jwk(monkeypatch) -> None:
         "audience": "https://verifier.example",
         "nonce": "nonce-123",
     }
+
+
+@pytest.mark.asyncio
+async def test_verify_sd_jwt_exposes_only_rust_verified_claims(monkeypatch) -> None:
+    public_jwk = {"kty": "EC", "crv": "P-256", "x": "x-value", "y": "y-value"}
+    encoded = (
+        base64.urlsafe_b64encode(json.dumps(public_jwk).encode()).decode().rstrip("=")
+    )
+    did = f"did:jwk:{encoded}"
+    token = ".".join(
+        [
+            _jwt_segment({"alg": "ES256", "typ": "dc+sd-jwt", "kid": did}),
+            _jwt_segment(
+                {
+                    "iss": did,
+                    "sub": "did:example:holder",
+                    "email": "unverified@example.com",
+                }
+            ),
+            "signature",
+        ]
+    )
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_sd_jwt=lambda *_args: json.dumps(
+                {"iss": did, "sub": "did:example:holder", "given_name": "Marty"}
+            )
+        ),
+    )
+
+    result = await pp._verify_sd_jwt(token, nonce=None, audience=None)
+
+    assert result["verified"] is True
+    assert result["claims"]["given_name"] == "Marty"
+    assert "email" not in result["claims"]
+
+
+@pytest.mark.asyncio
+async def test_verify_sd_jwt_requires_native_capability(monkeypatch) -> None:
+    token = ".".join(
+        [
+            _jwt_segment({"alg": "ES256", "typ": "dc+sd-jwt"}),
+            _jwt_segment({"iss": "https://issuer.example"}),
+            "signature",
+        ]
+    )
+    monkeypatch.setattr(pp, "_load_marty_rs_binding", lambda: SimpleNamespace())
+
+    with pytest.raises(
+        pp.NativeBackendUnavailable, match="does not expose verify_sd_jwt"
+    ):
+        await pp._verify_sd_jwt(
+            token,
+            nonce=None,
+            audience=None,
+            issuer_public_jwk={"kty": "EC"},
+        )
 
 
 def test_verify_open_badge_v3_uses_binding_and_flattens_claims(monkeypatch) -> None:
