@@ -1,5 +1,7 @@
 pub mod domain;
 pub mod grpc;
+pub mod postgres;
+pub mod redis_status;
 pub mod repository;
 pub mod service;
 pub mod status;
@@ -10,6 +12,8 @@ pub mod proto {
 
 pub use domain::*;
 pub use grpc::RevocationProfileGrpc;
+pub use postgres::PgProfileRepository;
+pub use redis_status::RedisStatusRepository;
 pub use repository::{InMemoryProfileRepository, ProfileRepository};
 pub use service::{RevocationProfileService, ServiceError};
 pub use status::{InMemoryStatusRepository, StatusListFormat, StatusRepository};
