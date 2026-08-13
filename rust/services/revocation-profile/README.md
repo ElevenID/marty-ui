@@ -12,6 +12,8 @@ and a Redis adapter compatible with the existing keys and JSON records. Redis
 index allocation is atomic and status mutations use bounded compare-and-swap;
 the mutation itself still runs only through `marty-status`.
 
-It is not selected by any compose profile. REST/auth parity, executable image
-wiring, and beta compose selection must land and pass their contract gates
+It is not selected by any compose profile. Shared Python/Rust HTTP vectors and
+the disposable executable contract cover the compatibility, authorization,
+storage, readiness, diagnostics, and HTTP/gRPC startup boundaries. Coordinated
+beta selection, application-consumer evidence, and soak gates must still pass
 before the Python service is removed.

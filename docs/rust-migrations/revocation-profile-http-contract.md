@@ -1,6 +1,6 @@
 # Revocation Profile Rust HTTP Contract
 
-This document records the compatibility boundary for the Rust revocation-profile HTTP adapter. The adapter is not selected by Compose until the remaining differential and full integration contracts are implemented and tested.
+This document records the compatibility boundary for the Rust revocation-profile HTTP adapter. The adapter is not selected by Compose until the coordinated beta release after all roadmap work lands.
 
 ## Profile routes in this slice
 
@@ -29,7 +29,8 @@ The Rust adapter intentionally exposes only the established protocol response fi
 
 ## Remaining cutover work
 
-- Run full integration tests before selecting the image in the coordinated beta release.
+- Complete the roadmap-wide consolidation and deletion gates before selecting the image in the coordinated beta release.
+- Run the unchanged application-consumer suites against the coordinated beta topology before removing the Python compatibility service.
 
 The administrative HTTP boundary is covered by the shared language-neutral vectors in `tests/fixtures/revocation_profile_http_vectors.json`. Both the Python compatibility service and Rust adapter execute the same valid, authorization-failure, malformed, timing-dependency, HTTPS, and legacy-spelling cases. The fixture compares stable response fields and normalizes only generated profile IDs and timestamps.
 
@@ -40,5 +41,7 @@ The Rust executable uses the released PostgreSQL schema and Python-compatible Re
 `DATABASE_URL`, `REDIS_URL`, and `ORG_GRPC_TARGET` are required. Outside development, `GRPC_SERVICE_TOKEN` or `GRPC_SERVICE_TOKEN_FILE` must provide a non-placeholder token of at least 32 characters. SQLAlchemy PostgreSQL driver spellings are normalized for SQLx; non-PostgreSQL URLs and non-HTTPS status-list base URLs fail startup.
 
 The executable co-hosts HTTP on port `8013` and gRPC on `9013`, coordinates graceful shutdown, emits structured JSON traces, and exposes `/health`, `/ready`, `/startup`, `/health/native-backend`, and `/metrics`. Readiness fails with `503` unless PostgreSQL, Redis, and organization authorization are all reachable. The native diagnostics identify the canonical Rust backend, package version, release, build revision, and capabilities. The digest-pinned image is buildable but remains unselected by Compose until the coordinated beta release.
+
+CI launches the compiled executable against disposable PostgreSQL and Redis plus an authenticated organization gRPC server. The executable contract requires all readiness components, exact native release/build diagnostics, durable HTTP create/list behavior, missing-identity denial, unauthenticated gRPC denial, and authenticated gRPC health. This complements the shared Python/Rust HTTP vectors without introducing a runtime test mode or mock fallback.
 
 This slice makes no deployment or Compose selection change.
