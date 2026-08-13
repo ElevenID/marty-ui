@@ -669,9 +669,12 @@ CD intentionally emits only `build-ready-manifest-<version>` with
 `release_ready: false`. The beta lifecycle workflow adds `release-context.json`
 to its evidence artifact so the stack-release run, release version, tested UI SHA,
 beta source snapshot, Marty Core SHA, explicitly pinned Marty Protocol SHA, beta
-origin, MIP version, and workflow run cannot be substituted later. The protocol
-SHA is supplied independently because schema corrections do not require a beta
-redeployment or a new application release.
+origin, MIP version, current evidence-tooling SHA, and workflow run cannot be
+substituted later. The protocol SHA is supplied independently because schema
+corrections do not require a beta redeployment or a new application release.
+The immutable application release is verified against its stack release while
+the lifecycle executes the current reviewed harness, preventing stale release
+scripts from weakening or breaking newer evidence checks.
 It also preserves the independently fetched services/UI runtime markers.
 The artifact also contains `spruce-metadata.json`; promotion rejects missing,
 empty, wrong-origin, or non-displayable issuer metadata and rechecks the live
