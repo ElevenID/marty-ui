@@ -239,6 +239,14 @@ impl RevocationProfileService {
             .await?)
     }
 
+    pub fn status_list_url_template(&self, profile: &RevocationProfile) -> String {
+        let concrete =
+            self.status_list_url(profile, StatusListFormat::Bitstring, "__STATUS_PURPOSE__");
+        concrete
+            .replace("bitstring-status-list", "{mechanism}")
+            .replace("__STATUS_PURPOSE__", "{purpose}")
+    }
+
     async fn authorized_profile(
         &self,
         profile_id: &str,
