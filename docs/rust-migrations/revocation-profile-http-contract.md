@@ -1,6 +1,6 @@
 # Revocation Profile Rust HTTP Contract
 
-This document records the compatibility boundary for the Rust revocation-profile HTTP adapter. The adapter is not selected by Compose until the remaining organization-client, executable-image, observability, and differential contracts are implemented and tested.
+This document records the compatibility boundary for the Rust revocation-profile HTTP adapter. The adapter is not selected by Compose until the remaining differential and full integration contracts are implemented and tested.
 
 ## Profile routes in this slice
 
@@ -29,8 +29,14 @@ The Rust adapter intentionally exposes only the established protocol response fi
 
 ## Remaining cutover work
 
-- Connect the authorization trait to the organization gRPC service and preserve permission/backend status mappings.
-- Add service configuration, health/readiness, metrics/tracing, graceful shutdown, gRPC co-hosting, and a digest-pinned image.
 - Run differential Python/Rust HTTP fixtures and full integration tests before selecting the image in the coordinated beta release.
+
+## Executable and operational contract
+
+The Rust executable uses the released PostgreSQL schema and Python-compatible Redis keys. It connects to the organization gRPC service for active-membership and exact-permission checks, propagates the shared internal service token, and maps missing membership to denial while mapping unavailable authorization infrastructure to `503`.
+
+`DATABASE_URL`, `REDIS_URL`, and `ORG_GRPC_TARGET` are required. Outside development, `GRPC_SERVICE_TOKEN` or `GRPC_SERVICE_TOKEN_FILE` must provide a non-placeholder token of at least 32 characters. SQLAlchemy PostgreSQL driver spellings are normalized for SQLx; non-PostgreSQL URLs and non-HTTPS status-list base URLs fail startup.
+
+The executable co-hosts HTTP on port `8013` and gRPC on `9013`, coordinates graceful shutdown, emits structured JSON traces, and exposes `/health`, `/ready`, `/startup`, `/health/native-backend`, and `/metrics`. Readiness fails with `503` unless PostgreSQL, Redis, and organization authorization are all reachable. The native diagnostics identify the canonical Rust backend, package version, release, build revision, and capabilities. The digest-pinned image is buildable but remains unselected by Compose until the coordinated beta release.
 
 This slice makes no deployment or Compose selection change.

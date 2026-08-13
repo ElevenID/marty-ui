@@ -6,11 +6,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_server(true)
         .build_client(true)
         .compile_protos(
-            &["../../../proto/v1/revocation_profile_service.proto"],
+            &[
+                "../../../proto/v1/revocation_profile_service.proto",
+                "../../../proto/v1/organization_service.proto",
+            ],
             &["../../../proto/v1"],
         )?;
 
     println!("cargo:rerun-if-changed=../../../proto/v1/revocation_profile_service.proto");
+    println!("cargo:rerun-if-changed=../../../proto/v1/organization_service.proto");
     println!("cargo:rerun-if-changed=../../../proto/v1/google/api/annotations.proto");
     println!("cargo:rerun-if-changed=../../../proto/v1/google/api/http.proto");
     Ok(())
