@@ -66,7 +66,11 @@ def validate_spruce_metadata(
             doctype = str(config.get("doctype") or "").strip()
             if not doctype or config_id != f"{doctype}#mdoc":
                 malformed.append(config_id)
-        config_displays = config.get("display") or []
+        credential_metadata = config.get("credential_metadata")
+        if not isinstance(credential_metadata, dict):
+            malformed.append(config_id)
+            continue
+        config_displays = credential_metadata.get("display") or []
         if not any(str(item.get("name") or "").strip() for item in config_displays if isinstance(item, dict)):
             malformed.append(config_id)
     _require(not legacy_vcts, f"OID4VCI metadata exposes legacy VCTs: {sorted(set(legacy_vcts))}")

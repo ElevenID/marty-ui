@@ -11,10 +11,16 @@ on:
         description: Organization with the seeded lifecycle fixtures
         required: true
       release_version:
-        description: Release version in the successful build-ready manifest
+        description: Release version published by the successful stack release
         required: true
       cd_run_id:
-        description: Successful CD run that built the deployed release
+        description: Successful Stack release run that built the deployed release
+        required: true
+      marty_ui_sha:
+        description: Exact 40-character Marty UI commit used by the stack release
+        required: true
+      beta_source_id:
+        description: Exact coordinated source-snapshot ID reported by beta
         required: true
   repository_dispatch:
     types: [beta-deployed]
@@ -25,6 +31,7 @@ concurrency:
 
 permissions:
   actions: read
+  attestations: read
   contents: read
 
 jobs:
@@ -41,36 +48,100 @@ jobs:
       TEST_VENDOR_EMAIL: ${{ secrets.TEST_VENDOR_EMAIL }}
       TEST_VENDOR_PASSWORD: ${{ secrets.TEST_VENDOR_PASSWORD }}
       MARTY_TEST_WALLET_ORIGIN: http://127.0.0.1:8787
-      MARTY_CORE_REF: ${{ vars.MARTY_CORE_REF }}
-      MARTY_PROTOCOL_REF: ${{ vars.MARTY_PROTOCOL_REF }}
       RELEASE_VERSION: ${{ inputs.release_version || github.event.client_payload.release_version }}
       CD_RUN_ID: ${{ inputs.cd_run_id || github.event.client_payload.cd_run_id }}
+      MARTY_UI_SHA: ${{ inputs.marty_ui_sha || github.event.client_payload.marty_ui_sha || github.sha }}
+      BETA_SOURCE_ID: ${{ inputs.beta_source_id || github.event.client_payload.beta_source_id }}
       GH_TOKEN: ${{ github.token }}
       CI: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ env.MARTY_UI_SHA }}
 
-      - name: Require pinned coordinated revisions
+      - name: Bind lifecycle to the successful stack release
+        id: release
         shell: bash
         run: |
-          for ref_name in MARTY_CORE_REF MARTY_PROTOCOL_REF; do
+          set -euo pipefail
+          if [[ ! "$MARTY_UI_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "MARTY_UI_SHA must be a full 40-character commit SHA." >&2
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$MARTY_UI_SHA"
+
+          run="$(gh run view "$CD_RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion,event,headBranch,headSha,status,workflowName)"
+          test "$(jq -r '.status' <<<"$run")" = "completed"
+          test "$(jq -r '.conclusion' <<<"$run")" = "success"
+          test "$(jq -r '.event' <<<"$run")" = "push"
+          test "$(jq -r '.headBranch' <<<"$run")" = "v$RELEASE_VERSION"
+          test "$(jq -r '.headSha' <<<"$run")" = "$MARTY_UI_SHA"
+          test "$(jq -r '.workflowName' <<<"$run")" = "Stack release"
+
+          mkdir -p tests/artifacts/build-evidence
+          gh release download "v$RELEASE_VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern stack-manifest.json \
+            --pattern SHA256SUMS \
+            --dir tests/artifacts/build-evidence
+          (
+            cd tests/artifacts/build-evidence
+            sha256sum --check --ignore-missing SHA256SUMS
+          )
+          gh attestation verify tests/artifacts/build-evidence/stack-manifest.json \
+            --repo "$GITHUB_REPOSITORY"
+
+          manifest=tests/artifacts/build-evidence/stack-manifest.json
+          jq -e \
+            --arg release "marty-ui@$RELEASE_VERSION" \
+            --arg version "$RELEASE_VERSION" \
+            --arg sha "$MARTY_UI_SHA" \
+            '.schema == "marty.stack/v1" and
+             .release == $release and
+             any(.components[];
+               .name == "marty-ui" and
+               .repository == "ElevenID/marty-ui" and
+               .version == $version and
+               .commit == $sha) and
+             ([.components[] |
+                select(.repository == "ElevenID/marty-core") |
+                .commit] | unique | length == 1)' \
+            "$manifest" >/dev/null
+
+          core_ref="$(jq -er '[.components[] | select(.repository == "ElevenID/marty-core") | .commit] | unique | .[0]' "$manifest")"
+          protocol_ref="$(python - <<'PY'
+          import re
+          from pathlib import Path
+
+          text = Path('.github/workflows/ci.yml').read_text(encoding='utf-8')
+          matches = re.findall(r'^\s*MARTY_PROTOCOL_REF:\s*([0-9a-f]{40})\s*$', text, re.MULTILINE)
+          if len(matches) != 1:
+              raise SystemExit('CI must pin exactly one full MARTY_PROTOCOL_REF')
+          print(matches[0])
+          PY
+          )"
+          for ref_name in core_ref protocol_ref; do
             if [[ ! "${!ref_name}" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "$ref_name must be a full 40-character commit SHA." >&2
+              echo "$ref_name must resolve to a full 40-character commit SHA." >&2
               exit 1
             fi
           done
+          echo "core=$core_ref" >> "$GITHUB_OUTPUT"
+          echo "protocol=$protocol_ref" >> "$GITHUB_OUTPUT"
+          echo "MARTY_CORE_REF=$core_ref" >> "$GITHUB_ENV"
+          echo "MARTY_PROTOCOL_REF=$protocol_ref" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ElevenID/marty-core
           token: ${{ github.token }}
-          ref: ${{ env.MARTY_CORE_REF }}
+          ref: ${{ steps.release.outputs.core }}
           path: marty-core
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: Marty-Protocol/Marty-Protocol
-          ref: ${{ env.MARTY_PROTOCOL_REF }}
+          ref: ${{ steps.release.outputs.protocol }}
           path: marty-protocol
 
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
@@ -91,7 +162,7 @@ jobs:
       - name: Require the full-stack fixture manifest
         shell: bash
         run: |
-          for name in BETA_ORIGIN BETA_AUDIT_ORG_ID TEST_APPLICANT_EMAIL TEST_APPLICANT_PASSWORD TEST_VENDOR_EMAIL TEST_VENDOR_PASSWORD RELEASE_VERSION CD_RUN_ID; do
+          for name in BETA_ORIGIN BETA_AUDIT_ORG_ID TEST_APPLICANT_EMAIL TEST_APPLICANT_PASSWORD TEST_VENDOR_EMAIL TEST_VENDOR_PASSWORD RELEASE_VERSION CD_RUN_ID MARTY_UI_SHA BETA_SOURCE_ID MARTY_CORE_REF MARTY_PROTOCOL_REF; do
             if [[ -z "${!name}" ]]; then
               echo "$name is required by the beta-lifecycle environment." >&2
               exit 1
@@ -101,33 +172,10 @@ jobs:
             echo "CD_RUN_ID must be numeric." >&2
             exit 1
           fi
-
-      - name: Bind lifecycle to the successful CD build
-        shell: bash
-        run: |
-          run="$(gh run view "$CD_RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion,headSha,status,workflowName)"
-          test "$(jq -r '.status' <<<"$run")" = "completed"
-          test "$(jq -r '.conclusion' <<<"$run")" = "success"
-          test "$(jq -r '.headSha' <<<"$run")" = "$GITHUB_SHA"
-          test "$(jq -r '.workflowName' <<<"$run")" = "CD"
-          mkdir -p tests/artifacts/build-evidence
-          gh run download "$CD_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "build-ready-manifest-$RELEASE_VERSION" \
-            --dir tests/artifacts/build-evidence
-          jq -e \
-            --arg release "$RELEASE_VERSION" \
-            --arg sha "$GITHUB_SHA" \
-            --arg core "$MARTY_CORE_REF" \
-            --arg protocol "$MARTY_PROTOCOL_REF" \
-            '.release_version == $release and
-             .mip_version == "0.4.1" and
-             .repositories.marty_ui == $sha and
-             .repositories.marty_core == $core and
-             .repositories.marty_protocol == $protocol and
-             .build_ready == true and
-             .release_ready == false' \
-            tests/artifacts/build-evidence/build-ready-manifest.json >/dev/null
+          if [[ ! "$BETA_SOURCE_ID" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "BETA_SOURCE_ID must be a full 40-character source-snapshot ID." >&2
+            exit 1
+          fi
 
       - name: Require the selected release to be running on beta
         shell: bash
@@ -142,9 +190,9 @@ jobs:
             component="$(basename "$report" -release.json)"
             jq -e \
               --arg release "$RELEASE_VERSION" \
-              --arg sha "$GITHUB_SHA" \
+              --arg source_id "$BETA_SOURCE_ID" \
               --arg component "$component" \
-              '.component == $component and .release_version == $release and .marty_ui_sha == $sha' \
+              '.component == $component and .release_version == $release and .marty_ui_sha == $source_id' \
               "$report" >/dev/null
           done
 
@@ -249,7 +297,8 @@ jobs:
             --arg run_id "$GITHUB_RUN_ID" \
             --arg cd_run_id "$CD_RUN_ID" \
             --arg release_version "$RELEASE_VERSION" \
-            --arg marty_ui_sha "$GITHUB_SHA" \
+            --arg marty_ui_sha "$MARTY_UI_SHA" \
+            --arg beta_source_id "$BETA_SOURCE_ID" \
             --arg marty_core_sha "$MARTY_CORE_REF" \
             --arg beta_origin "$BETA_ORIGIN" \
             --arg mip_version "0.4.1" \
@@ -258,6 +307,7 @@ jobs:
               cd_run_id: $cd_run_id,
               release_version: $release_version,
               marty_ui_sha: $marty_ui_sha,
+              beta_source_id: $beta_source_id,
               marty_core_sha: $marty_core_sha,
               beta_origin: $beta_origin,
               mip_version: $mip_version
