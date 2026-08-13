@@ -121,6 +121,7 @@ def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> No
 
     assert inputs["marty_ui_sha"]["required"] is True
     assert inputs["beta_source_id"]["required"] is True
+    assert inputs["marty_protocol_sha"]["required"] is True
     assert permissions["actions"] == "read"
     assert permissions["attestations"] == "read"
     assert permissions["contents"] == "read"
@@ -136,7 +137,9 @@ def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> No
     assert '.repository == "ElevenID/marty-core"' in workflow
     assert "--arg source_id \"$BETA_SOURCE_ID\"" in workflow
     assert "beta_source_id: $beta_source_id" in workflow
-    assert "CI must pin exactly one full MARTY_PROTOCOL_REF" in workflow
+    assert "marty_protocol_sha: $marty_protocol_sha" in workflow
+    assert "MARTY_PROTOCOL_SHA must be a full 40-character commit SHA" in workflow
+    assert "CI must pin exactly one full MARTY_PROTOCOL_REF" not in workflow
     assert "test -f marty-core/Cargo.lock" in workflow
     assert "test -f marty-core/marty-test-wallet/Cargo.toml" in workflow
     assert "cargo metadata --locked --no-deps" in workflow
