@@ -56,12 +56,11 @@ jobs:
       MARTY_UI_SHA: ${{ inputs.marty_ui_sha || github.event.client_payload.marty_ui_sha || github.sha }}
       BETA_SOURCE_ID: ${{ inputs.beta_source_id || github.event.client_payload.beta_source_id }}
       MARTY_PROTOCOL_SHA: ${{ inputs.marty_protocol_sha || github.event.client_payload.marty_protocol_sha }}
+      EVIDENCE_TOOLING_SHA: ${{ github.sha }}
       GH_TOKEN: ${{ github.token }}
       CI: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ env.MARTY_UI_SHA }}
 
       - name: Bind lifecycle to the successful stack release
         id: release
@@ -72,7 +71,13 @@ jobs:
             echo "MARTY_UI_SHA must be a full 40-character commit SHA." >&2
             exit 1
           fi
-          test "$(git rev-parse HEAD)" = "$MARTY_UI_SHA"
+          if [[ ! "$EVIDENCE_TOOLING_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "EVIDENCE_TOOLING_SHA must be a full 40-character commit SHA." >&2
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$EVIDENCE_TOOLING_SHA"
+          git fetch --no-tags --depth=1 origin "$MARTY_UI_SHA"
+          git cat-file -e "$MARTY_UI_SHA^{commit}"
 
           run="$(gh run view "$CD_RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion,event,headBranch,headSha,status,workflowName)"
           test "$(jq -r '.status' <<<"$run")" = "completed"
@@ -295,6 +300,7 @@ jobs:
             --arg beta_source_id "$BETA_SOURCE_ID" \
             --arg marty_core_sha "$MARTY_CORE_REF" \
             --arg marty_protocol_sha "$MARTY_PROTOCOL_REF" \
+            --arg evidence_tooling_sha "$EVIDENCE_TOOLING_SHA" \
             --arg beta_origin "$BETA_ORIGIN" \
             --arg mip_version "0.4.1" \
             '{
@@ -305,6 +311,7 @@ jobs:
               beta_source_id: $beta_source_id,
               marty_core_sha: $marty_core_sha,
               marty_protocol_sha: $marty_protocol_sha,
+              evidence_tooling_sha: $evidence_tooling_sha,
               beta_origin: $beta_origin,
               mip_version: $mip_version
             }' > tests/artifacts/release-context.json
