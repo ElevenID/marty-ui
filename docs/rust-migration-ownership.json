@@ -47,7 +47,7 @@
     {
       "id": "pkd-cryptography",
       "phase": 0,
-      "status": "cutover-in-progress",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-core",
         "paths": ["marty-crypto/src", "marty-verification/src"],
@@ -88,7 +88,7 @@
     {
       "id": "oidc-validation",
       "phase": 0,
-      "status": "cutover-in-progress",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-core",
         "paths": ["marty-oid4vci/src/oidc.rs"],
@@ -106,7 +106,7 @@
     {
       "id": "presentation-policy",
       "phase": 1,
-      "status": "cutover-in-progress",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-core",
         "paths": ["marty-verification/src"],
@@ -166,7 +166,7 @@
     {
       "id": "device-authentication",
       "phase": 4,
-      "status": "cutover-in-progress",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-core",
         "paths": ["marty-verification/src/device_auth.rs"],
@@ -184,7 +184,7 @@
     {
       "id": "flow-and-did-jwk",
       "phase": 5,
-      "status": "cutover-in-progress",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-core",
         "paths": ["marty-verification/src/flow.rs", "marty-didcomm/src"],
@@ -238,7 +238,7 @@
     {
       "id": "haip-response-encryption",
       "phase": 5,
-      "status": "cutover-in-progress",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-core",
         "paths": ["marty-crypto/src/kdf.rs", "marty-verification/src/jwk/jwe.rs"],
@@ -256,7 +256,7 @@
     {
       "id": "wallet-oid4vc",
       "phase": 6,
-      "status": "planned",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-core",
         "paths": ["marty-oid4vci/src", "marty-iso18013/src"],
@@ -274,7 +274,7 @@
     {
       "id": "oid4vp-x509-identity",
       "phase": 5,
-      "status": "cutover-in-progress",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-core",
         "paths": ["marty-verification/src/oid4vp.rs"],
@@ -292,7 +292,7 @@
     {
       "id": "siop-jwk-id-token-verification",
       "phase": 5,
-      "status": "cutover-in-progress",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-core",
         "paths": ["marty-oid4vci/src/siop.rs", "marty-oid4vci/src/jose.rs"],
@@ -310,7 +310,7 @@
     {
       "id": "license-entitlements",
       "phase": 7,
-      "status": "planned",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-subscriptions",
         "paths": ["packages/verifier_entitlements/marty-license"],
@@ -370,9 +370,6 @@
     "excluded_path_parts": ["tests", "migrations", "__pycache__"],
     "restricted_import_roots": ["Crypto", "OpenSSL", "cryptography", "jose", "jwcrypto", "jwt", "nacl"],
     "approved_imports": [
-      {"path": "services/flow/main.py", "statement": "from cryptography.hazmat.primitives import serialization"},
-      {"path": "services/flow/main.py", "statement": "from cryptography.hazmat.primitives.asymmetric import ec"},
-      {"path": "services/flow/main.py", "statement": "from jwcrypto import jwk"},
       {"path": "services/gateway/kms_adapters/__init__.py", "statement": "from cryptography.hazmat.primitives import serialization"},
       {"path": "services/gateway/kms_adapters/__init__.py", "statement": "from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa"},
       {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography import x509", "count": 4},
@@ -448,6 +445,12 @@
         "id": "no-direct-did-native-imports",
         "glob": "services/common/did_resolution.py",
         "pattern": "(?:from|import)\\s+(?:marty_rs|_marty_rs)",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-python-did-identifier-kernel",
+        "glob": "services/flow/**/*.py",
+        "pattern": "(?:def\\s+_(?:base58_encode|ec_public_key_from_jwk)\\s*\\(|EllipticCurvePublicNumbers|multicodec_bytes)",
         "expected_matches": {}
       },
       {

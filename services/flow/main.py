@@ -51,9 +51,6 @@ from fastapi import (
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
-from jwcrypto import jwk
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from typing import Annotated
@@ -92,6 +89,7 @@ from flow.native import (
     NativeFlowOperationError,
     build_openid4vp_mdoc_session_transcript as _build_openid4vp_mdoc_session_transcript,
     decrypt_haip_response as decrypt_native_haip_response,
+    derive_p256_did_identifier as derive_native_p256_did_identifier,
     evaluate_transition as evaluate_native_flow_transition,
     generate_haip_response_encryption_key as generate_native_haip_response_encryption_key,
     initialize_native_flow_backend,
@@ -4938,22 +4936,6 @@ async def get_oid4vp_did_web_document(request: Request) -> JSONResponse:
     )
 
 
-def _base58_encode(data: bytes) -> str:
-    """Base58btc encode (Bitcoin alphabet)."""
-    ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-    num = int.from_bytes(data, "big")
-    result = []
-    while num > 0:
-        num, remainder = divmod(num, 58)
-        result.append(ALPHABET[remainder])
-    for byte in data:
-        if byte == 0:
-            result.append(ALPHABET[0])
-        else:
-            break
-    return "".join(reversed(result))
-
-
 def _base64url_encode(data: bytes) -> str:
     """Base64url encode without padding."""
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
@@ -4976,19 +4958,6 @@ def _verifier_x509_certificate_bundle() -> str:
     raise RuntimeError(
         "VERIFIER_X509_CERT_PEM or VERIFIER_X509_CERT_FILE is required for x509_hash"
     )
-
-
-def _ec_public_key_from_jwk(public_jwk: dict[str, Any]) -> ec.EllipticCurvePublicKey:
-    if public_jwk.get("kty") != "EC" or public_jwk.get("crv") != "P-256":
-        raise RuntimeError("OID4VP issuer profile must publish a P-256 public JWK")
-    try:
-        x = int.from_bytes(_base64url_decode(str(public_jwk["x"])), "big")
-        y = int.from_bytes(_base64url_decode(str(public_jwk["y"])), "big")
-        return ec.EllipticCurvePublicNumbers(x, y, ec.SECP256R1()).public_key()
-    except (KeyError, TypeError, ValueError) as exc:
-        raise RuntimeError(
-            "OID4VP issuer profile contains an invalid P-256 public JWK"
-        ) from exc
 
 
 def _x509_hash_client_id_and_header(
@@ -5139,29 +5108,17 @@ def _derive_verifier_did(
 
 
 def _derive_verifier_did_jwk(signing_identity: dict[str, Any]) -> str:
-    """Derive a did:jwk from the verifier's P-256 public signing key."""
-    public_jwk = _verifier_public_jwk(signing_identity)
-    public_jwk.pop("kid", None)
-    jwk_json = json.dumps(public_jwk, separators=(",", ":"), sort_keys=True).encode(
-        "utf-8"
+    """Derive a did:jwk in the canonical Rust DID kernel."""
+    return derive_native_p256_did_identifier(
+        _verifier_public_jwk(signing_identity), "did:jwk"
     )
-    return f"did:jwk:{_base64url_encode(jwk_json)}"
 
 
 def _derive_verifier_did_key(signing_identity: dict[str, Any]) -> str:
-    """Derive a did:key from the verifier's P-256 (secp256r1) signing key.
-
-    Uses multicodec code 0x1200 (varint: b'\\x80\\x24') for secp256r1-pub,
-    encoded as base58btc multibase (prefix 'z').
-    """
-    public_key = _ec_public_key_from_jwk(_verifier_public_jwk(signing_identity))
-    compressed_pub = public_key.public_bytes(
-        serialization.Encoding.X962,
-        serialization.PublicFormat.CompressedPoint,
+    """Derive a P-256 did:key in the canonical Rust DID kernel."""
+    return derive_native_p256_did_identifier(
+        _verifier_public_jwk(signing_identity), "did:key"
     )
-    # varint(0x1200) = b'\x80\x24' (secp256r1-pub multicodec prefix)
-    multicodec_bytes = b"\x80\x24" + compressed_pub
-    return f"did:key:z{_base58_encode(multicodec_bytes)}"
 
 
 def _oid4vp_did_web_document(signing_identity: dict[str, Any]) -> dict[str, Any]:
