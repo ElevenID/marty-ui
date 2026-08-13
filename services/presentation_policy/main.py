@@ -1141,6 +1141,16 @@ async def _verify_vcdm_data_integrity(
         if isinstance(embedded, list)
         else []
     )
+    verified_proofs = result.get("verified_proofs")
+    holder_binding_verified = bool(
+        verified
+        and is_presentation
+        and result.get("kind") == "presentation"
+        and isinstance(verified_proofs, int)
+        and not isinstance(verified_proofs, bool)
+        and verified_proofs > 0
+        and (nonce is not None or audience is not None)
+    )
     evidence_document = (
         embedded_credentials[0]
         if len(embedded_credentials) == 1
@@ -1174,7 +1184,7 @@ async def _verify_vcdm_data_integrity(
         "error": safe_error,
         "verification_evidence": {
             "kind": result.get("kind"),
-            "verified_proofs": result.get("verified_proofs", 0),
+            "verified_proofs": verified_proofs or 0,
             "verified_credentials": result.get("verified_credentials", 0),
             "credential_count": len(embedded_credentials) if is_presentation else 1,
             "algorithm": result.get("algorithm") or proof_algorithm,
@@ -1188,10 +1198,21 @@ async def _verify_vcdm_data_integrity(
             ),
             "validity_checked": verified,
             "is_expired": False if verified else None,
-            "holder_binding_verified": bool(
-                verified
-                and is_presentation
-                and (nonce is not None or audience is not None)
+            "holder_binding_verified": holder_binding_verified,
+            **(
+                {
+                    # A verified Data Integrity VP proves control of the
+                    # holder's presentation key at the wallet/device boundary.
+                    # Project the same canonical facts supplied by the mdoc
+                    # verifier; do not claim a replay check that this stateless
+                    # VC-API operation did not perform.
+                    "holder_binding_method": "DEVICE_KEY",
+                    "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+                    "challenge_verified": nonce is not None,
+                    "audience_verified": audience is not None,
+                }
+                if holder_binding_verified
+                else {}
             ),
             "did_resolution": did_resolution_provenance,
         },
