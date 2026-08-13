@@ -1471,6 +1471,35 @@ async def _load_json_document(
     return parsed if isinstance(parsed, dict) else dict(default)
 
 
+async def _load_did_registry_document(
+    request: Request, storage_key: str
+) -> dict[str, Any] | None:
+    """Load an optional DID document without converting registry failure to absence."""
+    redis_client = getattr(request.app.state, "redis_client", None)
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail="DID document registry is unavailable.")
+    try:
+        payload = await redis_client.get(storage_key)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="DID document registry is unavailable."
+        ) from exc
+    if payload is None:
+        return None
+    try:
+        decoded = payload if isinstance(payload, str) else payload.decode()
+        parsed = json.loads(decoded)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503, detail="DID document registry contains invalid data."
+        ) from exc
+    if not isinstance(parsed, dict):
+        raise HTTPException(
+            status_code=503, detail="DID document registry contains invalid data."
+        )
+    return parsed
+
+
 async def _credential_issuer_key_references(
     request: Request,
     organization_id: str,
@@ -1552,25 +1581,20 @@ async def _load_did_document_for_identity(
     are DID-scoped; the legacy fallback remains readable so operators can
     upgrade before every issuer identity has been republished.
     """
-    missing_key = "__marty_scoped_did_document_missing__"
-    scoped = await _load_json_document(
-        request,
-        _did_doc_storage_key(organization_id, issuer_did),
-        {missing_key: True},
+    scoped = await _load_did_registry_document(
+        request, _did_doc_storage_key(organization_id, issuer_did)
     )
-    if scoped.get(missing_key) is not True:
+    if scoped is not None:
         if scoped.get("id") != issuer_did:
             raise HTTPException(
                 status_code=503,
                 detail="Scoped DID document identity does not match its registry key.",
             )
         return scoped
-    legacy = await _load_json_document(
-        request,
-        _did_doc_storage_key(organization_id),
-        default,
+    legacy = await _load_did_registry_document(
+        request, _did_doc_storage_key(organization_id)
     )
-    return _retarget_did_document(legacy, issuer_did)
+    return _retarget_did_document(legacy or dict(default), issuer_did)
 
 
 def _merge_discovered_capabilities(
@@ -4345,17 +4369,17 @@ async def publish_service_to_did(
         "provider": normalized.get("provider"),
         "has_x5c": bool(x5c),
     }
-    did_doc = await _load_json_document(
-        request,
-        _did_doc_storage_key(resolved_org_id, did_id),
-        {
+    did_doc = await _load_did_registry_document(
+        request, _did_doc_storage_key(resolved_org_id, did_id)
+    )
+    if did_doc is None:
+        did_doc = {
             "id": did_id,
             "controller": did_id,
             "verificationMethod": [],
             "assertionMethod": [],
             "updated_at": _utcnow_iso(),
-        },
-    )
+        }
     if did_doc.get("id") != did_id:
         raise HTTPException(
             status_code=503,

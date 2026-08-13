@@ -3938,6 +3938,24 @@ async def test_resolve_did_web_by_slug_rejects_changed_scoped_identity(
 
 
 @pytest.mark.asyncio
+async def test_identity_resolution_fails_closed_when_registry_is_unavailable():
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(side_effect=RuntimeError("registry offline"))
+    request = _build_public_request(redis_client=redis_mock)
+
+    with pytest.raises(signing_keys.HTTPException) as exc_info:
+        await signing_keys._load_did_document_for_identity(
+            request,
+            "org_acme",
+            "did:web:beta.elevenidllc.com:orgs:acme",
+            {"id": "did:web:beta.elevenidllc.com:orgs:acme"},
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "DID document registry is unavailable."
+
+
+@pytest.mark.asyncio
 async def test_resolve_did_web_by_slug_rejects_invalid_slug(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -4196,6 +4214,46 @@ async def test_publish_service_to_did_rejects_changed_scoped_identity(
     assert exc_info.value.status_code == 503
     assert "identity does not match" in str(exc_info.value.detail)
     redis_mock.set.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_publish_service_to_did_requires_document_registry(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Publication must not report success when its durable registry is absent."""
+    test_service = {
+        "id": "svc-bao",
+        "service_type": "openbao-transit",
+        "key_reference": "cred-issuer-es256",
+        "algorithms": ["ES256"],
+    }
+
+    async def fake_load_registry(request, org_id):
+        return {"services": [test_service], "default_service_id": None}
+
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+    monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
+    monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
+
+    class FakeAdapter:
+        async def get_public_key_jwk(self, config: dict):
+            return {"kty": "EC", "crv": "P-256", "x": "abc", "y": "def"}
+
+    monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
+    request = _build_request("org_123")
+
+    with pytest.raises(signing_keys.HTTPException) as exc_info:
+        await signing_keys.publish_service_to_did(
+            request=request,
+            service_id="svc-bao",
+            body={"did_id": "did:web:beta.elevenidllc.com:orgs:acme"},
+            organization_id=None,
+        )
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "DID document registry is unavailable."
 
 
 @pytest.mark.asyncio
