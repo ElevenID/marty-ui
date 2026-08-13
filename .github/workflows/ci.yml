@@ -7,7 +7,7 @@ env:
   MARTY_BLOG_DIGEST: sha256:37ef3b45e289198022c2ccc83dcb618959a68644ee72366a00d6a4a6f331aaca
   MARTY_COMMON_URI: https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.8/marty_common-0.2.8-py3-none-any.whl
   MARTY_COMMON_DIGEST: sha256:12d2f142b888b3ea95797c9ee1b6e06b38cc0070b169c38c11712a76b2e18ec0
-  MARTY_PROTOCOL_REF: 23d05756a948c12d4e2a875f14b99d46b1684eb9
+  MARTY_PROTOCOL_REF: be14b3ab3928e103c90fe2bdd6ad26a19a154ffa
 
 on:
   pull_request:
