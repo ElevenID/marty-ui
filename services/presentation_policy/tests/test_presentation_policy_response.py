@@ -2081,6 +2081,7 @@ async def test_resolve_did_jwk_without_network() -> None:
 
     assert document["id"] == did
     assert document["assertionMethod"] == [did]
+    assert document["verificationMethod"][0]["id"] == did
     assert document["verificationMethod"][0]["publicKeyJwk"] == public_jwk
 
 
