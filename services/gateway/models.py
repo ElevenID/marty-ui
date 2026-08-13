@@ -1500,10 +1500,12 @@ class PresentationPolicyCreate(BaseModel):
             self.required_claims
             or self.credential_requirements
             or self.alternative_requirements
+            or (self.holder_binding is not None and self.holder_binding.required)
         ):
             raise ValueError(
                 "at least one required claim, credential requirement, or "
-                "alternative requirement is required"
+                "alternative requirement, or holder-bound presentation proof "
+                "is required"
             )
         if (
             self.credential_ranking_strategy == "CUSTOM"
