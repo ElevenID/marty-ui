@@ -24,9 +24,10 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
     assert '"BAO_ADDR=http://openbao:8200"' in script
     assert '"BAO_TOKEN"' in script
-    assert "export_canvas_lti_public_jwks.py" in script
-    assert "CANVAS_LTI_TOOL_PUBLIC_JWKS" in script
-    assert "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES" in script
+    assert 'CANVAS_LTI_TOOL_ISSUER_DID = $canvasLtiIssuerDid' in script
+    assert '"did:web:${betaHost}:orgs:marty"' in script
+    assert "CANVAS_LTI_TOOL_PUBLIC_JWKS" not in script
+    assert "CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES" not in script
     assert "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST" in script
     assert '$env:CANVAS_OAUTH_COMPLETION_REDIRECT_URL = "$BetaOrigin/console/org/deploy/canvas"' in script
     assert "$rehearsalKmsEnabled" not in script

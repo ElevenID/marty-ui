@@ -618,10 +618,7 @@ $env:ELEVENID_STACK_VERSION = $stackVersion
 $env:ELEVENID_IMAGE_DIGESTS_JSON = $runtimeImageDigests | ConvertTo-Json -Compress
 
 Write-Step "Enter maintenance window and apply live migration"
-$canvasLtiJwksPath = Join-Path $script:ArtifactDir "canvas-lti-public-jwks.json"
-$canvasLtiActiveKidPath = Join-Path $script:ArtifactDir "canvas-lti-active-kid.txt"
-$canvasLtiActiveKid = $null
-$canvasLtiJwksSha256 = $null
+$canvasLtiIssuerDid = $null
 $maintenanceServices = $script:ApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
 $maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.service -in $maintenanceServices } | ForEach-Object { $_.container_id })
 if ($maintenanceContainers.Count -gt 0) {
@@ -686,47 +683,13 @@ try {
     }
 
     if ($EnablePortableCanvas) {
-        Write-Step "Publish the dedicated OpenBao LTI tool public key"
-        $openBaoResponsePath = [IO.Path]::GetTempFileName()
-        try {
-            $openBaoContainer = Get-ComposeContainerId -Service "openbao"
-            if (-not $openBaoContainer) { throw "OpenBao service is absent" }
-            $openBaoResponse = & docker exec $openBaoContainer sh -lc 'BAO_ADDR=http://127.0.0.1:8200 BAO_TOKEN="$BAO_DEV_ROOT_TOKEN_ID" bao read -format=json transit/keys/lti-tool-marty-rs256' 2>$null
-            if ($LASTEXITCODE -ne 0 -or -not $openBaoResponse) {
-                throw "Could not read the dedicated Canvas LTI public key from OpenBao"
-            }
-            $openBaoResponse -join "`n" | Set-Content -LiteralPath $openBaoResponsePath -Encoding utf8
-            Invoke-Checked -FilePath python -Arguments @(
-                (Join-Path $script:RepoRoot "scripts\export_canvas_lti_public_jwks.py"),
-                "--input", $openBaoResponsePath,
-                "--output", $canvasLtiJwksPath,
-                "--active-kid-output", $canvasLtiActiveKidPath,
-                "--key-name", "lti-tool-marty-rs256"
-            )
-        }
-        finally {
-            Remove-Item -LiteralPath $openBaoResponsePath -Force -ErrorAction SilentlyContinue
-        }
-
-        $canvasLtiActiveKid = (Get-Content -LiteralPath $canvasLtiActiveKidPath -Raw).Trim()
-        $canvasLtiPublicJwks = (Get-Content -LiteralPath $canvasLtiJwksPath -Raw).Trim()
-        if ($canvasLtiActiveKid -notmatch '^lti-tool-marty-rs256-v[1-9][0-9]*$') {
-            throw "Exported Canvas LTI active kid is invalid"
-        }
-        $canvasLtiDocument = $canvasLtiPublicJwks | ConvertFrom-Json
-        if (-not $canvasLtiDocument.keys -or $canvasLtiActiveKid -notin @($canvasLtiDocument.keys.kid)) {
-            throw "Exported Canvas LTI JWKS does not contain its active kid"
-        }
-        $canvasLtiJwksSha256 = Get-FileSha256 $canvasLtiJwksPath
-
+        Write-Step "Bind Canvas LTI signing to the seeded issuer DID"
+        $betaHost = ([Uri]$BetaOrigin).DnsSafeHost
+        $canvasLtiIssuerDid = "did:web:${betaHost}:orgs:marty"
         $env:CANVAS_LTI_EXPERIENCE_BASE_URL = $BetaOrigin
         $env:CANVAS_OAUTH_COMPLETION_REDIRECT_URL = "$BetaOrigin/console/org/deploy/canvas"
         $env:CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID = $PilotOrganizationId
-        $env:CANVAS_LTI_TOOL_SIGNING_SERVICE_ID = "managed-openbao-transit"
-        $env:CANVAS_LTI_TOOL_SIGNING_KEY_REFERENCE = "lti-tool-marty-rs256"
-        $env:CANVAS_CREDENTIAL_ISSUER_KEY_REFERENCES = "cred-issuer-marty-es256,cred-issuer-marty-es384,cred-issuer-marty-rs256,cred-issuer-marty-eddsa,cred-dsc-marty-primary"
-        $env:CANVAS_LTI_TOOL_ACTIVE_KID = $canvasLtiActiveKid
-        $env:CANVAS_LTI_TOOL_PUBLIC_JWKS = $canvasLtiPublicJwks
+        $env:CANVAS_LTI_TOOL_ISSUER_DID = $canvasLtiIssuerDid
         $env:CANVAS_PORTABLE_INTEGRATION_ENABLED = "true"
         $env:CANVAS_PILOT_ORGANIZATION_IDS = $PilotOrganizationId
         $env:CANVAS_LEGACY_EVENT_INGEST_ENABLED = "false"
@@ -806,10 +769,8 @@ $deploymentManifest = [ordered]@{
         enabled = [bool]$EnablePortableCanvas
         canvas_origin = if ($EnablePortableCanvas) { $CanvasOrigin } else { $null }
         pilot_organization_id = if ($EnablePortableCanvas) { $PilotOrganizationId } else { $null }
-        lti_signing_service_id = if ($EnablePortableCanvas) { "managed-openbao-transit" } else { $null }
-        lti_signing_key_reference = if ($EnablePortableCanvas) { "lti-tool-marty-rs256" } else { $null }
-        lti_active_kid = $canvasLtiActiveKid
-        public_jwks_sha256 = $canvasLtiJwksSha256
+        lti_issuer_did = $canvasLtiIssuerDid
+        signing_resolution = if ($EnablePortableCanvas) { "organization-scoped-issuer-did" } else { $null }
         legacy_event_ingest_enabled = $false
     }
     deployed_at = (Get-Date).ToUniversalTime().ToString("o")

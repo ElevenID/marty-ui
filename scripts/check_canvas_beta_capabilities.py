@@ -23,8 +23,9 @@ from typing import Any
 
 MARTY_ORIGIN = "https://beta.elevenidllc.com"
 CANVAS_ORIGIN = "https://canvas-test.elevenidllc.com"
-ISSUANCE_CONTAINER = "marty-issuance"
-WORKER_CONTAINER = "marty-canvas-sync-worker"
+BETA_COMPOSE_PROJECT = "elevenid-beta"
+ISSUANCE_SERVICE = "issuance"
+WORKER_SERVICE = "canvas-sync-worker"
 PRIVATE_RSA_PARAMETERS = {"d", "p", "q", "dp", "dq", "qi", "oth"}
 
 
@@ -53,7 +54,22 @@ def _docker_json(*args: str) -> Any:
         raise CapabilityError(f"Docker inspection failed for {subject}") from exc
 
 
-def _container(name: str) -> tuple[dict[str, str], str, str]:
+def _container_id(service: str) -> str:
+    payload = _docker_json(
+        "ps",
+        "--filter",
+        f"label=com.docker.compose.project={BETA_COMPOSE_PROJECT}",
+        "--filter",
+        f"label=com.docker.compose.service={service}",
+        "--format",
+        "{{json .ID}}",
+    )
+    _require(isinstance(payload, str) and bool(payload), f"Beta Compose service {service} is absent")
+    return payload
+
+
+def _container(service: str) -> tuple[dict[str, str], str, str]:
+    name = _container_id(service)
     payload = _docker_json("inspect", name)
     _require(isinstance(payload, list) and len(payload) == 1, f"{name} inspection was ambiguous")
     record = payload[0]
@@ -82,38 +98,12 @@ def _csv(value: str, setting: str) -> list[str]:
     return items
 
 
-def _validate_jwks(raw: str, active_kid: str) -> dict[str, dict[str, Any]]:
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise CapabilityError("Deployed Canvas tool JWKS is not valid JSON") from exc
-    keys = payload.get("keys") if isinstance(payload, dict) else None
-    _require(isinstance(keys, list) and keys, "Deployed Canvas tool JWKS has no keys")
-    by_kid: dict[str, dict[str, Any]] = {}
-    for key in keys:
-        _require(isinstance(key, dict), "Deployed Canvas tool JWKS contains a non-object key")
-        _require(not PRIVATE_RSA_PARAMETERS.intersection(key), "Deployed Canvas tool JWKS contains private RSA material")
-        _require(
-            key.get("kty") == "RSA"
-            and key.get("alg") == "RS256"
-            and key.get("use") == "sig"
-            and bool(key.get("n"))
-            and bool(key.get("e")),
-            "Every deployed Canvas tool key must be a public RSA/RS256 signing key",
-        )
-        kid = str(key.get("kid") or "").strip()
-        _require(bool(kid) and kid not in by_kid, "Deployed Canvas tool JWKS kids must be unique and non-empty")
-        by_kid[kid] = key
-    _require(active_kid in by_kid, "Deployed Canvas active kid is absent from its JWKS")
-    return by_kid
-
-
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
         return None
 
 
-def _public_jwks() -> dict[str, dict[str, Any]]:
+def _public_jwks(issuer_did: str) -> dict[str, dict[str, Any]]:
     url = f"{MARTY_ORIGIN}/v1/integrations/canvas/lti/jwks"
     request = urllib.request.Request(
         url,
@@ -140,15 +130,26 @@ def _public_jwks() -> dict[str, dict[str, Any]]:
         _require(isinstance(key, dict), "Public beta Canvas LTI JWKS contains a non-object key")
         _require(not PRIVATE_RSA_PARAMETERS.intersection(key), "Public beta Canvas LTI JWKS exposes private RSA material")
         kid = str(key.get("kid") or "").strip()
-        _require(bool(kid) and kid not in by_kid, "Public beta Canvas LTI JWKS kids are invalid")
+        _require(
+            key.get("kty") == "RSA"
+            and key.get("alg") == "RS256"
+            and key.get("use") == "sig"
+            and bool(key.get("n"))
+            and bool(key.get("e")),
+            "Every public Canvas LTI key must be a public RSA/RS256 signing key",
+        )
+        _require(
+            kid.startswith(f"{issuer_did}#") and kid not in by_kid,
+            "Public beta Canvas LTI JWKS kids must belong to the configured issuer DID",
+        )
         by_kid[kid] = key
     return by_kid
 
 
 def validate(expected_organization_id: str) -> dict[str, Any]:
     _require(bool(expected_organization_id.strip()), "Expected pilot organization ID is required")
-    issuance, issuance_image, issuance_reference = _container(ISSUANCE_CONTAINER)
-    worker, worker_image, worker_reference = _container(WORKER_CONTAINER)
+    issuance, issuance_image, issuance_reference = _container(ISSUANCE_SERVICE)
+    worker, worker_image, worker_reference = _container(WORKER_SERVICE)
     _require(issuance_image == worker_image, "Canvas worker is not running the deployed issuance image")
     _require(issuance_reference == worker_reference, "Canvas worker and issuance image references differ")
 
@@ -178,33 +179,13 @@ def validate(expected_organization_id: str) -> dict[str, Any]:
     signer_settings = (
         "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID",
         "CANVAS_LTI_TOOL_ISSUER_DID",
-        "CANVAS_LTI_TOOL_ACTIVE_KID",
-        "CANVAS_LTI_TOOL_PUBLIC_JWKS",
-        "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
     )
     for setting in signer_settings:
         _require(bool(issuance.get(setting, "").strip()), f"Deployed beta issuance is missing {setting}")
         _require(worker.get(setting) == issuance.get(setting), f"Canvas worker {setting} differs from deployed issuance")
     issuer_did = issuance["CANVAS_LTI_TOOL_ISSUER_DID"].strip()
     _require(issuer_did.startswith("did:"), "Canvas LTI issuer identity is not a DID")
-    _csv(
-        issuance["CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS"],
-        "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
-    )
-    active_kid = issuance["CANVAS_LTI_TOOL_ACTIVE_KID"].strip()
-    _require(
-        active_kid.startswith(f"{issuer_did}#"),
-        "Canvas LTI active kid is not a verification method of its issuer DID",
-    )
-    configured_jwks = _validate_jwks(
-        issuance["CANVAS_LTI_TOOL_PUBLIC_JWKS"],
-        active_kid,
-    )
-    public_jwks = _public_jwks()
-    _require(set(public_jwks) == set(configured_jwks), "Public beta JWKS key set differs from deployed signer configuration")
-    for kid, configured in configured_jwks.items():
-        for parameter in ("kty", "kid", "alg", "use", "n", "e"):
-            _require(public_jwks[kid].get(parameter) == configured.get(parameter), "Public beta JWKS differs from deployed signer configuration")
+    _public_jwks(issuer_did)
 
     for setting in (
         "CANVAS_PORTABLE_INTEGRATION_ENABLED",
