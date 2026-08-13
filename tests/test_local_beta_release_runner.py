@@ -209,6 +209,7 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
     )
     assert "ENVIRONMENT: beta" in revocation_overlay
     assert "GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set" in revocation_overlay
+    assert revocation_overlay.count("<<: *beta-grpc-service-auth") == 17
     assert "-TunnelEnvFile" in deploy and "-GeneratedEnvFile" in deploy
     assert 'mip_version -ne "0.4.1"' in deploy
     assert 'mip_version = "0.4.1"' in deploy
@@ -218,6 +219,16 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
     assert "${MARTY_NETWORK_NAME:-marty-infra-network}" in base
     assert '$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.uri)@$($martyIssuance.digest)"' in restore
     assert 'com.docker.compose.service=docs' in restore
+
+
+def test_beta_rust_cutover_requires_a_persistent_shared_service_token() -> None:
+    deploy = text("scripts/deploy-local-beta-release.ps1")
+    initializer = text("scripts/ensure-beta-grpc-service-token.ps1")
+
+    assert 'Get-DotEnvValue -Path $GeneratedEnvFile -Name "GRPC_SERVICE_TOKEN"' in deploy
+    assert "GRPC_SERVICE_TOKEN must be a non-placeholder value" in deploy
+    assert "RandomNumberGenerator" in initializer
+    assert "its value was not displayed" in initializer
 
 
 def test_beta_runner_resolves_all_required_immutable_compose_inputs() -> None:
