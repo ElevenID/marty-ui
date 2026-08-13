@@ -260,6 +260,57 @@ def test_missing_x509_identity_capability_fails_startup(
     ]
 
 
+def test_missing_siop_verification_capability_fails_startup(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    backend = object()
+    requested: list[str | None] = []
+    monkeypatch.setattr(
+        native,
+        "load_marty_rs",
+        lambda *, required_capability=None: backend,
+    )
+
+    def diagnostics(_backend, *, required_capability: str | None = None):
+        assert _backend is backend
+        requested.append(required_capability)
+        if required_capability in {
+            "credential_presentation_metadata",
+            "openid4vp_mdoc_handover",
+            "haip_response_encryption",
+            "oid4vp_x509_identity",
+        }:
+            return {
+                "available": True,
+                "capabilities": [
+                    "flow_state_machine",
+                    "credential_presentation_metadata",
+                    "openid4vp_mdoc_handover",
+                    "haip_response_encryption",
+                    "oid4vp_x509_identity",
+                ],
+            }
+        raise NativeBackendUnavailable(
+            f"missing required native capability: {required_capability}"
+        )
+
+    monkeypatch.setattr(native, "_backend", None)
+    monkeypatch.setattr(native, "_diagnostics", None)
+    monkeypatch.setattr(native, "get_marty_rs_diagnostics", diagnostics)
+
+    with pytest.raises(
+        NativeBackendUnavailable, match="siop_jwk_id_token_verification"
+    ):
+        native.initialize_native_flow_backend()
+    assert requested == [
+        "credential_presentation_metadata",
+        "openid4vp_mdoc_handover",
+        "haip_response_encryption",
+        "oid4vp_x509_identity",
+        "siop_jwk_id_token_verification",
+    ]
+
+
 def test_malformed_native_decision_fails_closed(monkeypatch: pytest.MonkeyPatch):
     class MalformedBackend:
         @staticmethod
@@ -421,6 +472,25 @@ def test_x509_identity_adapter_matches_certificate_vector():
     assert x5c == [base64.b64encode(der).decode()]
 
 
+def test_siop_verification_adapter_uses_native_contract():
+    class SiopBackend:
+        @staticmethod
+        def siop_verify_jwk_id_token(id_token: str) -> str:
+            assert id_token == "signed-token"
+            return json.dumps(
+                {
+                    "claims": {"sub": "thumbprint-subject", "nonce": "nonce-1"},
+                    "signing_algorithm": "ES256",
+                }
+            )
+
+    native.initialize_native_flow_backend(SiopBackend())
+    assert native.verify_siop_jwk_id_token("signed-token") == (
+        {"sub": "thumbprint-subject", "nonce": "nonce-1"},
+        "ES256",
+    )
+
+
 @pytest.mark.parametrize(
     "result",
     [
@@ -443,6 +513,25 @@ def test_malformed_native_x509_identity_fails_closed(result: str):
             "certificate bundle",
             {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
         )
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        "{}",
+        json.dumps({"claims": [], "signing_algorithm": "ES256"}),
+        json.dumps({"claims": {}, "signing_algorithm": "RS256"}),
+    ],
+)
+def test_malformed_native_siop_verification_fails_closed(result: str):
+    class MalformedBackend:
+        @staticmethod
+        def siop_verify_jwk_id_token(_id_token: str) -> str:
+            return result
+
+    native.initialize_native_flow_backend(MalformedBackend())
+    with pytest.raises(native.NativeFlowOperationError, match="INVALID_NATIVE_RESULT"):
+        native.verify_siop_jwk_id_token("signed-token")
 
 
 def test_legacy_sd_jwt_profile_metadata_uses_native_vct_contract():

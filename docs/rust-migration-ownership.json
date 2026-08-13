@@ -290,6 +290,24 @@
       ]
     },
     {
+      "id": "siop-jwk-id-token-verification",
+      "phase": 5,
+      "status": "cutover-in-progress",
+      "canonical": {
+        "repository": "ElevenID/marty-core",
+        "paths": ["marty-oid4vci/src/siop.rs", "marty-oid4vci/src/jose.rs"],
+        "binding_paths": ["marty-bindings/src/siop.rs"]
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-ui",
+          "paths": ["services/flow/main.py", "services/flow/native.py"],
+          "language": "python",
+          "disposition": "transaction-policy-and-native-adapter-only"
+        }
+      ]
+    },
+    {
       "id": "license-entitlements",
       "phase": 7,
       "status": "planned",
@@ -355,7 +373,6 @@
       {"path": "services/flow/main.py", "statement": "from cryptography.hazmat.primitives import serialization"},
       {"path": "services/flow/main.py", "statement": "from cryptography.hazmat.primitives.asymmetric import ec"},
       {"path": "services/flow/main.py", "statement": "from jwcrypto import jwk"},
-      {"path": "services/flow/main.py", "statement": "from jwcrypto import jwt as jwcrypto_jwt"},
       {"path": "services/gateway/kms_adapters/__init__.py", "statement": "from cryptography.hazmat.primitives import serialization"},
       {"path": "services/gateway/kms_adapters/__init__.py", "statement": "from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa"},
       {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography import x509", "count": 4},
@@ -449,6 +466,12 @@
         "id": "no-python-oid4vp-x509-kernel",
         "glob": "services/flow/main.py",
         "pattern": "(?:x509\\.load_pem_x509_certificate|hashes\\.Hash\\(hashes\\.SHA256\\(\\)\\)|public_bytes\\(serialization\\.Encoding\\.DER\\))",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-python-siop-jose-kernel",
+        "glob": "services/flow/main.py",
+        "pattern": "(?:_decode_siop_jwt_object|verification_key\\.thumbprint\\(\\)|jwcrypto_jwt\\.JWT\\()",
         "expected_matches": {}
       },
       {
