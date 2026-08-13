@@ -1,7 +1,10 @@
 use crate::{
-    CredentialFormat, CredentialStatus, IssuerRevocationConfig, NewProfile, ProcessRevocation,
-    RevocationAutomationConfig, RevocationMechanism, RevocationProfile, RevocationProfileService,
-    RevocationTimingMode, ServiceError, StatusListFormat, VerifierRevocationConfig,
+    CascadeOperationType, CascadeRevocationOperation, CascadeStatus, CredentialFormat,
+    CredentialStatus, InMemoryRevocationOperationRepository, IssuerRevocationConfig, NewProfile,
+    OperationError, ProcessRevocation, RevocationAutomationConfig, RevocationBatch,
+    RevocationBatchStatus, RevocationMechanism, RevocationOperationRepository, RevocationProfile,
+    RevocationProfileService, RevocationTimingMode, ServiceError, StatusListFormat,
+    TriggerEntityType, VerifierRevocationConfig,
 };
 use async_trait::async_trait;
 use axum::{
@@ -84,6 +87,7 @@ pub struct RevocationProfileHttp {
     service: RevocationProfileService,
     authorization: Arc<dyn Authorization>,
     internal_auth: InternalServiceAuth,
+    operations: Arc<dyn RevocationOperationRepository>,
 }
 
 impl RevocationProfileHttp {
@@ -92,6 +96,7 @@ impl RevocationProfileHttp {
             service,
             authorization,
             internal_auth: InternalServiceAuth::default(),
+            operations: Arc::new(InMemoryRevocationOperationRepository::default()),
         }
     }
 
@@ -101,6 +106,14 @@ impl RevocationProfileHttp {
     ) -> Result<Self, AuthorizationError> {
         self.internal_auth = InternalServiceAuth::new(expected_token)?;
         Ok(self)
+    }
+
+    pub fn with_operation_repository(
+        mut self,
+        operations: Arc<dyn RevocationOperationRepository>,
+    ) -> Self {
+        self.operations = operations;
+        self
     }
 
     pub fn router(self) -> Router {
@@ -128,6 +141,34 @@ impl RevocationProfileHttp {
             .route(
                 "/v1/organizations/{organization_id}/revocation-profiles/{profile_id}/status-lists/{mechanism}/{purpose}",
                 get(status_list_document),
+            )
+            .route(
+                "/v1/cascade-revocations",
+                post(create_cascade).get(list_cascades),
+            )
+            .route(
+                "/v1/cascade-revocations/{operation_id}",
+                get(get_cascade).delete(delete_cascade),
+            )
+            .route(
+                "/v1/cascade-revocations/{operation_id}/confirm",
+                post(confirm_cascade),
+            )
+            .route(
+                "/v1/cascade-revocations/{operation_id}/rollback",
+                post(rollback_cascade),
+            )
+            .route(
+                "/v1/revocation-batches",
+                post(create_batch).get(list_batches),
+            )
+            .route(
+                "/v1/revocation-batches/{batch_id}",
+                get(get_batch).delete(delete_batch),
+            )
+            .route(
+                "/v1/revocation-batches/{batch_id}/publish",
+                post(publish_batch),
             )
             .with_state(self)
     }
@@ -298,6 +339,182 @@ struct ProcessRevocationResponse {
     index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateCascadeRequest {
+    organization_id: String,
+    operation_type: CascadeOperationType,
+    trigger_entity_type: TriggerEntityType,
+    trigger_entity_id: String,
+    #[serde(default)]
+    affected_credential_count: Option<usize>,
+    #[serde(default)]
+    affected_credential_ids: Vec<String>,
+    #[serde(default)]
+    requires_confirmation: Option<bool>,
+    #[serde(default = "default_max_cascade_depth")]
+    max_cascade_depth: u8,
+    #[serde(default)]
+    current_depth: u8,
+    #[serde(default = "default_circuit_breaker_threshold")]
+    circuit_breaker_threshold: usize,
+    #[serde(default)]
+    can_rollback: bool,
+    #[serde(default)]
+    rollback_snapshot: Option<Value>,
+    #[serde(default)]
+    metadata: Option<Value>,
+}
+
+fn default_max_cascade_depth() -> u8 {
+    3
+}
+
+fn default_circuit_breaker_threshold() -> usize {
+    1_000
+}
+
+#[derive(Debug, Deserialize)]
+struct CascadeListQuery {
+    organization_id: String,
+    #[serde(default)]
+    status: Option<CascadeStatus>,
+}
+
+#[derive(Debug, Serialize)]
+struct CascadeResponse {
+    id: String,
+    organization_id: String,
+    operation_type: CascadeOperationType,
+    trigger_entity_type: TriggerEntityType,
+    trigger_entity_id: String,
+    status: CascadeStatus,
+    affected_credential_count: usize,
+    affected_credential_ids: Vec<String>,
+    requires_confirmation: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confirmed_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confirmed_by: Option<String>,
+    max_cascade_depth: u8,
+    current_depth: u8,
+    circuit_breaker_threshold: usize,
+    circuit_breaker_triggered: bool,
+    can_rollback: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rollback_snapshot: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rolled_back_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rolled_back_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<Value>,
+    created_at: String,
+    updated_at: String,
+}
+
+impl From<CascadeRevocationOperation> for CascadeResponse {
+    fn from(value: CascadeRevocationOperation) -> Self {
+        Self {
+            id: value.id,
+            organization_id: value.organization_id,
+            operation_type: value.operation_type,
+            trigger_entity_type: value.trigger_entity_type,
+            trigger_entity_id: value.trigger_entity_id,
+            status: value.status,
+            affected_credential_count: value.affected_credential_count,
+            affected_credential_ids: value.affected_credential_ids,
+            requires_confirmation: value.requires_confirmation,
+            confirmed_at: value
+                .confirmed_at
+                .map(|time| time.to_rfc3339_opts(SecondsFormat::AutoSi, false)),
+            confirmed_by: value.confirmed_by,
+            max_cascade_depth: value.max_cascade_depth,
+            current_depth: value.current_depth,
+            circuit_breaker_threshold: value.circuit_breaker_threshold,
+            circuit_breaker_triggered: value.circuit_breaker_triggered,
+            can_rollback: value.can_rollback,
+            rollback_snapshot: value.rollback_snapshot,
+            rolled_back_at: value
+                .rolled_back_at
+                .map(|time| time.to_rfc3339_opts(SecondsFormat::AutoSi, false)),
+            rolled_back_by: value.rolled_back_by,
+            error_message: value.error_message,
+            metadata: value.metadata,
+            created_at: value
+                .created_at
+                .to_rfc3339_opts(SecondsFormat::AutoSi, false),
+            updated_at: value
+                .updated_at
+                .to_rfc3339_opts(SecondsFormat::AutoSi, false),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateBatchRequest {
+    organization_id: String,
+    revocation_profile_id: String,
+    #[serde(default = "default_batch_interval")]
+    batch_interval: String,
+    #[serde(default = "default_credential_format")]
+    credential_format: String,
+    #[serde(default)]
+    credential_ids: Vec<String>,
+}
+
+fn default_batch_interval() -> String {
+    "1h".into()
+}
+
+fn default_credential_format() -> String {
+    "SD_JWT_VC".into()
+}
+
+#[derive(Debug, Deserialize)]
+struct BatchListQuery {
+    organization_id: String,
+    #[serde(default)]
+    status: Option<RevocationBatchStatus>,
+}
+
+#[derive(Debug, Serialize)]
+struct BatchResponse {
+    id: String,
+    organization_id: String,
+    revocation_profile_id: String,
+    batch_interval: String,
+    credential_format: String,
+    credential_count: usize,
+    status: RevocationBatchStatus,
+    created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    published_at: Option<String>,
+}
+
+impl From<RevocationBatch> for BatchResponse {
+    fn from(value: RevocationBatch) -> Self {
+        Self {
+            id: value.id,
+            organization_id: value.organization_id,
+            revocation_profile_id: value.revocation_profile_id,
+            batch_interval: value.batch_interval,
+            credential_format: value.credential_format,
+            credential_count: value.credential_ids.len(),
+            status: value.status,
+            created_at: value
+                .created_at
+                .to_rfc3339_opts(SecondsFormat::AutoSi, false),
+            published_at: value
+                .published_at
+                .map(|time| time.to_rfc3339_opts(SecondsFormat::AutoSi, false)),
+        }
+    }
 }
 
 fn default_limit() -> usize {
@@ -676,6 +893,295 @@ async fn status_list_document(
     Ok(response)
 }
 
+async fn create_cascade(
+    State(state): State<RevocationProfileHttp>,
+    headers: HeaderMap,
+    Json(request): Json<CreateCascadeRequest>,
+) -> Result<Json<CascadeResponse>, ApiError> {
+    state
+        .authorize(&headers, &request.organization_id, "activate")
+        .await?;
+    if !(1..=10).contains(&request.max_cascade_depth) {
+        return Err(ApiError::Unprocessable(
+            "max_cascade_depth must be between 1 and 10".into(),
+        ));
+    }
+    if request.current_depth > request.max_cascade_depth {
+        return Err(ApiError::Unprocessable(
+            "current_depth must be between 0 and max_cascade_depth".into(),
+        ));
+    }
+    if request.circuit_breaker_threshold == 0 {
+        return Err(ApiError::Unprocessable(
+            "circuit_breaker_threshold must be at least 1".into(),
+        ));
+    }
+    let affected_credential_count = request
+        .affected_credential_count
+        .unwrap_or(request.affected_credential_ids.len());
+    let circuit_breaker_triggered = affected_credential_count >= request.circuit_breaker_threshold;
+    let requires_confirmation =
+        request.requires_confirmation.unwrap_or(false) || circuit_breaker_triggered;
+    let rollback_snapshot = if request.can_rollback && request.rollback_snapshot.is_none() {
+        Some(json!({
+            "affected_credential_ids": request.affected_credential_ids,
+            "affected_credential_count": affected_credential_count,
+            "trigger_entity_id": request.trigger_entity_id,
+        }))
+    } else {
+        request.rollback_snapshot
+    };
+    let now = crate::domain::utc_now();
+    let mut operation = CascadeRevocationOperation {
+        id: uuid::Uuid::new_v4().to_string(),
+        organization_id: request.organization_id,
+        operation_type: request.operation_type,
+        trigger_entity_type: request.trigger_entity_type,
+        trigger_entity_id: request.trigger_entity_id,
+        status: if requires_confirmation {
+            CascadeStatus::PendingConfirmation
+        } else {
+            CascadeStatus::InProgress
+        },
+        affected_credential_count,
+        affected_credential_ids: request.affected_credential_ids,
+        requires_confirmation,
+        confirmed_at: None,
+        confirmed_by: None,
+        max_cascade_depth: request.max_cascade_depth,
+        current_depth: request.current_depth,
+        circuit_breaker_threshold: request.circuit_breaker_threshold,
+        circuit_breaker_triggered,
+        can_rollback: request.can_rollback,
+        rollback_snapshot,
+        rolled_back_at: None,
+        rolled_back_by: None,
+        error_message: None,
+        metadata: request.metadata,
+        created_at: now,
+        updated_at: now,
+        completed_at: None,
+    };
+    if !requires_confirmation {
+        operation.status = CascadeStatus::Completed;
+        operation.completed_at = Some(now);
+    }
+    state
+        .operations
+        .save_cascade(operation.clone())
+        .await
+        .map_err(ApiError::Operation)?;
+    Ok(Json(operation.into()))
+}
+
+async fn list_cascades(
+    State(state): State<RevocationProfileHttp>,
+    headers: HeaderMap,
+    Query(query): Query<CascadeListQuery>,
+) -> Result<Json<Vec<CascadeResponse>>, ApiError> {
+    state
+        .authorize(&headers, &query.organization_id, "view")
+        .await?;
+    let values = state
+        .operations
+        .list_cascades(&query.organization_id, query.status)
+        .await
+        .map_err(ApiError::Operation)?;
+    Ok(Json(values.into_iter().map(Into::into).collect()))
+}
+
+async fn get_cascade(
+    State(state): State<RevocationProfileHttp>,
+    Path(operation_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CascadeResponse>, ApiError> {
+    let operation = get_cascade_operation(&state, &operation_id).await?;
+    state
+        .authorize(&headers, &operation.organization_id, "view")
+        .await?;
+    Ok(Json(operation.into()))
+}
+
+async fn confirm_cascade(
+    State(state): State<RevocationProfileHttp>,
+    Path(operation_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CascadeResponse>, ApiError> {
+    let mut operation = get_cascade_operation(&state, &operation_id).await?;
+    let user_id = current_user_id(&headers)?.to_string();
+    state
+        .authorize(&headers, &operation.organization_id, "activate")
+        .await?;
+    operation.confirm(&user_id).map_err(ApiError::Operation)?;
+    state
+        .operations
+        .save_cascade(operation.clone())
+        .await
+        .map_err(ApiError::Operation)?;
+    Ok(Json(operation.into()))
+}
+
+async fn rollback_cascade(
+    State(state): State<RevocationProfileHttp>,
+    Path(operation_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<CascadeResponse>, ApiError> {
+    let mut operation = get_cascade_operation(&state, &operation_id).await?;
+    let user_id = current_user_id(&headers)?.to_string();
+    state
+        .authorize(&headers, &operation.organization_id, "activate")
+        .await?;
+    operation.rollback(&user_id).map_err(ApiError::Operation)?;
+    state
+        .operations
+        .save_cascade(operation.clone())
+        .await
+        .map_err(ApiError::Operation)?;
+    Ok(Json(operation.into()))
+}
+
+async fn delete_cascade(
+    State(state): State<RevocationProfileHttp>,
+    Path(operation_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let operation = get_cascade_operation(&state, &operation_id).await?;
+    state
+        .authorize(&headers, &operation.organization_id, "activate")
+        .await?;
+    if operation.status != CascadeStatus::PendingConfirmation {
+        return Err(ApiError::BadRequest(
+            "Only pending cascade operations can be cancelled".into(),
+        ));
+    }
+    state
+        .operations
+        .delete_cascade(&operation_id)
+        .await
+        .map_err(ApiError::Operation)?;
+    Ok(Json(json!({"success": true})))
+}
+
+async fn get_cascade_operation(
+    state: &RevocationProfileHttp,
+    operation_id: &str,
+) -> Result<CascadeRevocationOperation, ApiError> {
+    state
+        .operations
+        .get_cascade(operation_id)
+        .await
+        .map_err(ApiError::Operation)?
+        .ok_or_else(|| ApiError::NotFound("CascadeRevocationOperation not found".into()))
+}
+
+async fn create_batch(
+    State(state): State<RevocationProfileHttp>,
+    headers: HeaderMap,
+    Json(request): Json<CreateBatchRequest>,
+) -> Result<(StatusCode, Json<BatchResponse>), ApiError> {
+    let profile = state.service.get(&request.revocation_profile_id).await?;
+    if profile.organization_id != request.organization_id {
+        return Err(ApiError::Service(ServiceError::PermissionDenied));
+    }
+    state
+        .authorize(&headers, &request.organization_id, "activate")
+        .await?;
+    let batch = RevocationBatch::new(
+        request.organization_id,
+        request.revocation_profile_id,
+        request.batch_interval,
+        request.credential_format,
+        request.credential_ids,
+    )
+    .map_err(ApiError::Operation)?;
+    state
+        .operations
+        .save_batch(batch.clone())
+        .await
+        .map_err(ApiError::Operation)?;
+    Ok((StatusCode::CREATED, Json(batch.into())))
+}
+
+async fn list_batches(
+    State(state): State<RevocationProfileHttp>,
+    headers: HeaderMap,
+    Query(query): Query<BatchListQuery>,
+) -> Result<Json<Vec<BatchResponse>>, ApiError> {
+    state
+        .authorize(&headers, &query.organization_id, "view")
+        .await?;
+    let values = state
+        .operations
+        .list_batches(Some(&query.organization_id), query.status)
+        .await
+        .map_err(ApiError::Operation)?;
+    Ok(Json(values.into_iter().map(Into::into).collect()))
+}
+
+async fn get_batch(
+    State(state): State<RevocationProfileHttp>,
+    Path(batch_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<BatchResponse>, ApiError> {
+    let batch = get_batch_operation(&state, &batch_id).await?;
+    state
+        .authorize(&headers, &batch.organization_id, "view")
+        .await?;
+    Ok(Json(batch.into()))
+}
+
+async fn publish_batch(
+    State(state): State<RevocationProfileHttp>,
+    Path(batch_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<BatchResponse>, ApiError> {
+    let mut batch = get_batch_operation(&state, &batch_id).await?;
+    state
+        .authorize(&headers, &batch.organization_id, "activate")
+        .await?;
+    batch.publish().map_err(ApiError::Operation)?;
+    state
+        .operations
+        .save_batch(batch.clone())
+        .await
+        .map_err(ApiError::Operation)?;
+    Ok(Json(batch.into()))
+}
+
+async fn delete_batch(
+    State(state): State<RevocationProfileHttp>,
+    Path(batch_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let batch = get_batch_operation(&state, &batch_id).await?;
+    state
+        .authorize(&headers, &batch.organization_id, "activate")
+        .await?;
+    if batch.status != RevocationBatchStatus::Pending {
+        return Err(ApiError::BadRequest(
+            "Can only delete PENDING batches".into(),
+        ));
+    }
+    state
+        .operations
+        .delete_batch(&batch_id)
+        .await
+        .map_err(ApiError::Operation)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_batch_operation(
+    state: &RevocationProfileHttp,
+    batch_id: &str,
+) -> Result<RevocationBatch, ApiError> {
+    state
+        .operations
+        .get_batch(batch_id)
+        .await
+        .map_err(ApiError::Operation)?
+        .ok_or_else(|| ApiError::NotFound("Revocation batch not found".into()))
+}
+
 fn validate_create_request(request: &CreateProfileRequest) -> Result<(), ApiError> {
     if request.organization_id.is_empty() || request.organization_id.len() > 255 {
         return Err(ApiError::Unprocessable(
@@ -769,6 +1275,8 @@ enum ApiError {
     #[error(transparent)]
     Authorization(AuthorizationError),
     #[error(transparent)]
+    Operation(#[from] OperationError),
+    #[error(transparent)]
     Service(#[from] ServiceError),
 }
 
@@ -786,6 +1294,26 @@ impl IntoResponse for ApiError {
             Self::Authorization(AuthorizationError::Unavailable(_)) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "Authorization backend is unavailable".into(),
+            ),
+            Self::Operation(OperationError::InvalidArgument(detail))
+            | Self::Operation(OperationError::InvalidTransition(detail)) => {
+                (StatusCode::BAD_REQUEST, detail)
+            }
+            Self::Operation(OperationError::NotFound) => (
+                StatusCode::NOT_FOUND,
+                "Revocation operation not found".into(),
+            ),
+            Self::Operation(OperationError::PermissionDenied) => (
+                StatusCode::FORBIDDEN,
+                "Revocation operation belongs to another organization".into(),
+            ),
+            Self::Operation(OperationError::CircuitBreaker) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Batch contains 1000+ credentials. Use confirm endpoint after review.".into(),
+            ),
+            Self::Operation(OperationError::Storage(_)) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Revocation operation storage is unavailable".into(),
             ),
             Self::Service(ServiceError::InvalidArgument(detail)) => {
                 (StatusCode::UNPROCESSABLE_ENTITY, detail)
@@ -1141,5 +1669,89 @@ mod tests {
             .unwrap();
         let response = app.oneshot(cross_tenant).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn cascade_and_batch_routes_preserve_state_and_tenant_rules() {
+        let authorization = Arc::new(RecordingAuthorization::default());
+        let app = app(authorization.clone());
+        let cascade = Request::builder()
+            .method("POST")
+            .uri("/v1/cascade-revocations")
+            .header("content-type", "application/json")
+            .header("x-user-id", "user-1")
+            .body(Body::from(
+                json!({
+                    "organization_id": "org-1", "operation_type": "ISSUER_REVOCATION",
+                    "trigger_entity_type": "ISSUER", "trigger_entity_id": "issuer-1",
+                    "affected_credential_count": 1500, "affected_credential_ids": ["cred-1"],
+                    "circuit_breaker_threshold": 1000, "can_rollback": true
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(cascade).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_response(response).await;
+        let operation_id = body["id"].as_str().unwrap();
+        assert_eq!(body["status"], "PENDING_CONFIRMATION");
+        assert_eq!(body["circuit_breaker_triggered"], true);
+        assert_eq!(body["rollback_snapshot"]["affected_credential_count"], 1500);
+
+        let confirm = Request::builder()
+            .method("POST")
+            .uri(format!("/v1/cascade-revocations/{operation_id}/confirm"))
+            .header("x-user-id", "admin-1")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(confirm).await.unwrap();
+        assert_eq!(json_response(response).await["status"], "COMPLETED");
+
+        let create_profile = Request::builder()
+            .method("POST")
+            .uri("/v1/revocation-profiles")
+            .header("content-type", "application/json")
+            .header("x-user-id", "user-1")
+            .body(Body::from(
+                json!({"organization_id": "org-1", "name": "batch profile"}).to_string(),
+            ))
+            .unwrap();
+        let profile = json_response(app.clone().oneshot(create_profile).await.unwrap()).await;
+        let profile_id = profile["id"].as_str().unwrap();
+        let create_batch = Request::builder()
+            .method("POST")
+            .uri("/v1/revocation-batches")
+            .header("content-type", "application/json")
+            .header("x-user-id", "user-1")
+            .body(Body::from(
+                json!({
+                    "organization_id": "org-1", "revocation_profile_id": profile_id,
+                    "batch_interval": "1h", "credential_ids": ["cred-1"]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = app.clone().oneshot(create_batch).await.unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let batch = json_response(response).await;
+        let batch_id = batch["id"].as_str().unwrap();
+        assert_eq!(batch["credential_count"], 1);
+        assert_eq!(batch["status"], "PENDING");
+        let publish = Request::builder()
+            .method("POST")
+            .uri(format!("/v1/revocation-batches/{batch_id}/publish"))
+            .header("x-user-id", "user-1")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(publish).await.unwrap();
+        assert_eq!(json_response(response).await["status"], "PUBLISHED");
+        let delete = Request::builder()
+            .method("DELETE")
+            .uri(format!("/v1/revocation-batches/{batch_id}"))
+            .header("x-user-id", "user-1")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.oneshot(delete).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
