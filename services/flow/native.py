@@ -39,6 +39,9 @@ def initialize_native_flow_backend(
         diagnostics = get_marty_rs_diagnostics(
             backend, required_capability="siop_jwk_id_token_verification"
         )
+        diagnostics = get_marty_rs_diagnostics(
+            backend, required_capability="did_identifier_derivation"
+        )
     else:
         diagnostics = {
             "available": True,
@@ -52,6 +55,7 @@ def initialize_native_flow_backend(
                 "haip_response_encryption",
                 "oid4vp_x509_identity",
                 "siop_jwk_id_token_verification",
+                "did_identifier_derivation",
             ],
         }
     _backend = backend
@@ -402,6 +406,36 @@ def oid4vp_x509_hash_client_identity(
             "FLOW.INVALID_NATIVE_RESULT: x509 identity values are invalid"
         )
     return client_id, x5c
+
+
+def derive_p256_did_identifier(
+    public_jwk: dict[str, Any], method: str
+) -> str:
+    """Derive a self-describing verifier DID through the Rust backend."""
+    expected_prefix = {"did:jwk": "did:jwk:", "did:key": "did:key:"}.get(method)
+    if expected_prefix is None:
+        raise NativeFlowOperationError(
+            f"FLOW.UNSUPPORTED_DID_METHOD: unsupported DID method {method}"
+        )
+    try:
+        result = _native().derive_p256_did_identifier(
+            json.dumps(public_jwk, separators=(",", ":"), sort_keys=True),
+            method,
+        )
+    except NativeFlowOperationError:
+        raise
+    except Exception as error:
+        raise NativeFlowOperationError(str(error)) from error
+    if (
+        not isinstance(result, str)
+        or not result.startswith(expected_prefix)
+        or len(result) > 2048
+        or any(character.isspace() for character in result)
+    ):
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: DID identifier derivation returned an invalid value"
+        )
+    return result
 
 
 def verify_siop_jwk_id_token(id_token: str) -> tuple[dict[str, Any], str]:

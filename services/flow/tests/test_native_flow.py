@@ -311,6 +311,53 @@ def test_missing_siop_verification_capability_fails_startup(
     ]
 
 
+def test_missing_did_identifier_capability_fails_startup(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    backend = object()
+    requested: list[str | None] = []
+    monkeypatch.setattr(
+        native,
+        "load_marty_rs",
+        lambda *, required_capability=None: backend,
+    )
+
+    prior_capabilities = {
+        "credential_presentation_metadata",
+        "openid4vp_mdoc_handover",
+        "haip_response_encryption",
+        "oid4vp_x509_identity",
+        "siop_jwk_id_token_verification",
+    }
+
+    def diagnostics(_backend, *, required_capability: str | None = None):
+        assert _backend is backend
+        requested.append(required_capability)
+        if required_capability in prior_capabilities:
+            return {
+                "available": True,
+                "capabilities": ["flow_state_machine", *sorted(prior_capabilities)],
+            }
+        raise NativeBackendUnavailable(
+            f"missing required native capability: {required_capability}"
+        )
+
+    monkeypatch.setattr(native, "_backend", None)
+    monkeypatch.setattr(native, "_diagnostics", None)
+    monkeypatch.setattr(native, "get_marty_rs_diagnostics", diagnostics)
+
+    with pytest.raises(NativeBackendUnavailable, match="did_identifier_derivation"):
+        native.initialize_native_flow_backend()
+    assert requested == [
+        "credential_presentation_metadata",
+        "openid4vp_mdoc_handover",
+        "haip_response_encryption",
+        "oid4vp_x509_identity",
+        "siop_jwk_id_token_verification",
+        "did_identifier_derivation",
+    ]
+
+
 def test_malformed_native_decision_fails_closed(monkeypatch: pytest.MonkeyPatch):
     class MalformedBackend:
         @staticmethod
@@ -436,6 +483,76 @@ def test_x509_identity_adapter_uses_native_contract():
         "certificate bundle",
         {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
     ) == ("x509_hash:thumbprint", ["base64-der-leaf"])
+
+
+def test_did_identifier_adapter_uses_native_contract():
+    public_jwk = {
+        "alg": "ES256",
+        "crv": "P-256",
+        "kid": "key-1",
+        "kty": "EC",
+        "use": "sig",
+        "x": "x-coordinate",
+        "y": "y-coordinate",
+    }
+
+    class DidBackend:
+        @staticmethod
+        def derive_p256_did_identifier(public_jwk_json: str, method: str) -> str:
+            assert json.loads(public_jwk_json) == public_jwk
+            assert method == "did:key"
+            return "did:key:zNativeIdentifier"
+
+    native.initialize_native_flow_backend(DidBackend())
+    assert (
+        native.derive_p256_did_identifier(public_jwk, "did:key")
+        == "did:key:zNativeIdentifier"
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "result"),
+    [
+        ("did:key", None),
+        ("did:key", "did:jwk:wrong-method"),
+        ("did:jwk", "did:jwk:contains whitespace"),
+        ("did:jwk", "did:jwk:" + "a" * 2049),
+    ],
+)
+def test_malformed_native_did_identifier_fails_closed(method, result):
+    class MalformedBackend:
+        @staticmethod
+        def derive_p256_did_identifier(_public_jwk_json: str, _method: str):
+            return result
+
+    native.initialize_native_flow_backend(MalformedBackend())
+    with pytest.raises(native.NativeFlowOperationError, match="INVALID_NATIVE_RESULT"):
+        native.derive_p256_did_identifier(
+            {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+            method,
+        )
+
+
+def test_native_did_identifier_matches_existing_public_vectors():
+    native.initialize_native_flow_backend()
+    public_jwk = {
+        "alg": "ES256",
+        "crv": "P-256",
+        "kid": "key-1",
+        "kty": "EC",
+        "use": "sig",
+        "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+        "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+    }
+    assert native.derive_p256_did_identifier(public_jwk, "did:jwk") == (
+        "did:jwk:eyJhbGciOiJFUzI1NiIsImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ1c2Ui"
+        "OiJzaWciLCJ4IjoiYXhmUjh1RXNRa2Y0dk9ibFk2UkE4bmNEZllFdDZ6T2c5S0U1UmRp"
+        "WXdwWSIsInkiOiJULU5DNHY0YWY1dU81LXRLZkEtZUZpdk9NMWRyTVY3T3k3WkFhRGVf"
+        "VWZVIn0"
+    )
+    assert native.derive_p256_did_identifier(public_jwk, "did:key") == (
+        "did:key:zDnaepsL7AXenJkVYdkh5KuKsSU7Ykh7kyXaLLU7auN9FWSiZ"
+    )
 
 
 def test_x509_identity_adapter_matches_certificate_vector():
