@@ -22,6 +22,9 @@ on:
       beta_source_id:
         description: Exact coordinated source-snapshot ID reported by beta
         required: true
+      marty_protocol_sha:
+        description: Exact Marty Protocol commit used to validate deployed discovery
+        required: true
   repository_dispatch:
     types: [beta-deployed]
 
@@ -52,6 +55,7 @@ jobs:
       CD_RUN_ID: ${{ inputs.cd_run_id || github.event.client_payload.cd_run_id }}
       MARTY_UI_SHA: ${{ inputs.marty_ui_sha || github.event.client_payload.marty_ui_sha || github.sha }}
       BETA_SOURCE_ID: ${{ inputs.beta_source_id || github.event.client_payload.beta_source_id }}
+      MARTY_PROTOCOL_SHA: ${{ inputs.marty_protocol_sha || github.event.client_payload.marty_protocol_sha }}
       GH_TOKEN: ${{ github.token }}
       CI: "true"
     steps:
@@ -109,27 +113,18 @@ jobs:
             "$manifest" >/dev/null
 
           core_ref="$(jq -er '[.components[] | select(.repository == "ElevenID/marty-core") | .commit] | unique | .[0]' "$manifest")"
-          protocol_ref="$(python - <<'PY'
-          import re
-          from pathlib import Path
-
-          text = Path('.github/workflows/ci.yml').read_text(encoding='utf-8')
-          matches = re.findall(r'^\s*MARTY_PROTOCOL_REF:\s*([0-9a-f]{40})\s*$', text, re.MULTILINE)
-          if len(matches) != 1:
-              raise SystemExit('CI must pin exactly one full MARTY_PROTOCOL_REF')
-          print(matches[0])
-          PY
-          )"
-          for ref_name in core_ref protocol_ref; do
-            if [[ ! "${!ref_name}" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "$ref_name must resolve to a full 40-character commit SHA." >&2
-              exit 1
-            fi
-          done
+          if [[ ! "$core_ref" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "core_ref must resolve to a full 40-character commit SHA." >&2
+            exit 1
+          fi
+          if [[ ! "$MARTY_PROTOCOL_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "MARTY_PROTOCOL_SHA must be a full 40-character commit SHA." >&2
+            exit 1
+          fi
           echo "core=$core_ref" >> "$GITHUB_OUTPUT"
-          echo "protocol=$protocol_ref" >> "$GITHUB_OUTPUT"
+          echo "protocol=$MARTY_PROTOCOL_SHA" >> "$GITHUB_OUTPUT"
           echo "MARTY_CORE_REF=$core_ref" >> "$GITHUB_ENV"
-          echo "MARTY_PROTOCOL_REF=$protocol_ref" >> "$GITHUB_ENV"
+          echo "MARTY_PROTOCOL_REF=$MARTY_PROTOCOL_SHA" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -299,6 +294,7 @@ jobs:
             --arg marty_ui_sha "$MARTY_UI_SHA" \
             --arg beta_source_id "$BETA_SOURCE_ID" \
             --arg marty_core_sha "$MARTY_CORE_REF" \
+            --arg marty_protocol_sha "$MARTY_PROTOCOL_REF" \
             --arg beta_origin "$BETA_ORIGIN" \
             --arg mip_version "0.4.1" \
             '{
@@ -308,6 +304,7 @@ jobs:
               marty_ui_sha: $marty_ui_sha,
               beta_source_id: $beta_source_id,
               marty_core_sha: $marty_core_sha,
+              marty_protocol_sha: $marty_protocol_sha,
               beta_origin: $beta_origin,
               mip_version: $mip_version
             }' > tests/artifacts/release-context.json
