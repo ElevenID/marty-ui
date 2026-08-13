@@ -986,6 +986,7 @@ def collection_items(probe: dict[str, Any]) -> list[dict[str, Any]]:
     for candidate in (
         body.get("data"),
         body.get("items"),
+        body.get("identities"),
         body.get("profiles"),
         body.get("keys"),
         body.get("services"),
@@ -1008,6 +1009,27 @@ def find_resource_with_name(probe: dict[str, Any], name_fragment: str) -> dict[s
             item
             for item in collection_items(probe)
             if name_fragment in str(item.get("name") or "")
+        ),
+        None,
+    )
+
+
+def find_issuer_identity(
+    probe: dict[str, Any],
+    issuer_did: str,
+    *,
+    key_purpose: str = "vc_jwt_issuer",
+    credential_format: str = "SD_JWT_VC",
+    algorithm: str = "ES256",
+) -> dict[str, Any] | None:
+    return next(
+        (
+            item
+            for item in collection_items(probe)
+            if item.get("issuer_did") == issuer_did
+            and item.get("key_purpose") == key_purpose
+            and item.get("credential_format") == credential_format
+            and item.get("algorithm") == algorithm
         ),
         None,
     )
@@ -1041,6 +1063,28 @@ def wait_for_named_resource(
         )
         if is_active(resource):
             return resource, last_probe
+        page.wait_for_timeout(250)
+    return None, last_probe
+
+
+def wait_for_issuer_identity(
+    page: Page,
+    organization_id: str,
+    issuer_did: str,
+    *,
+    timeout: int = 60_000,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    deadline = time.monotonic() + (timeout / 1000)
+    last_probe: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        last_probe = fetch_org_collection(
+            page,
+            "/v1/signing-keys/issuer-identities",
+            organization_id,
+        )
+        identity = find_issuer_identity(last_probe, issuer_did)
+        if is_active(identity):
+            return identity, last_probe
         page.wait_for_timeout(250)
     return None, last_probe
 
@@ -1181,46 +1225,57 @@ def create_issuer_identity(audit: Audit, run_id: str) -> None:
             audit.snapshot("issuer-identity-continue-unavailable", "Continue Anyway was unavailable after the signing-key recommendation.")
             return
 
-    for choice in [re.compile(r"did:jwk", re.I), re.compile(r"did:key", re.I), re.compile(r"web", re.I)]:
-        if audit.click_text(choice, timeout=1500):
-            break
-    audit.snapshot("issuer-method-selected", "Selected issuer DID method where possible.")
-    audit.click_role("button", re.compile(r"next", re.I), timeout=3000)
+    issuer_did_input = page.get_by_label(re.compile(r"^Issuer DID", re.I)).first
+    issuer_did = issuer_did_input.input_value(timeout=3000).strip()
+    if not issuer_did.startswith("did:"):
+        audit.snapshot("issuer-identity-invalid-did", "Issuer identity wizard did not provide a valid DID.")
+        return
+    audit.snapshot(
+        "issuer-identity-filled",
+        "Confirmed the provider-neutral issuer DID and signing tuple.",
+        {"issuer_did": issuer_did},
+    )
+    if not audit.click_role(
+        "button",
+        re.compile(r"^create managed identity$", re.I),
+        timeout=5000,
+    ):
+        audit.snapshot("issuer-identity-submit-blocked", "Create managed identity was unavailable.")
+        return
 
-    if text_visible(page, "Console key creation currently requires", 1000):
-        audit.snapshot(
-            "issuer-key-create-disabled",
-            "Issuer identity wizard correctly disabled console key creation for an external-only signing service.",
-        )
-        audit.click_text(re.compile(r"existing", re.I), timeout=1500)
-    else:
-        for choice in [re.compile(r"create new", re.I), re.compile(r"existing", re.I)]:
-            if audit.click_text(choice, timeout=1500):
-                break
-    audit.snapshot("issuer-key-source-selected", "Selected issuer key source where possible.")
-    audit.click_role("button", re.compile(r"next", re.I), timeout=3000)
-
-    audit.fill_label(re.compile(r"key name|name", re.I), f"Audit Issuer Key {run_id}")
-    audit.snapshot("issuer-key-filled", "Filled issuer key data where possible.")
-    # Walk remaining steps until submit or blocked.
-    for index in range(4):
-        if audit.click_role("button", re.compile(r"create|publish|finish|submit|save", re.I), timeout=1500):
-            break
-        if not audit.click_role("button", re.compile(r"next", re.I), timeout=1500):
-            break
-        audit.snapshot(f"issuer-step-{index + 1}", "Advanced issuer identity wizard one step.")
-    wait_for_creating_to_settle(page, timeout=30000)
-    audit.settle(5000)
     organization_id = active_organization_id(page)
-    probe = fetch_org_collection(page, "/v1/signing-keys/issuer-profiles", organization_id)
-    issuer = find_resource_with_name(probe, f"Audit Issuer Key {run_id}")
+    issuer, probe = wait_for_issuer_identity(page, organization_id, issuer_did)
     if not is_active(issuer):
-        audit.snapshot("issuer-identity-state-mismatch", "The run-created issuer identity was not active.")
+        audit.snapshot(
+            "issuer-identity-state-mismatch",
+            "The run-created issuer identity did not become active through the public DID-first API.",
+            {"issuer_did": issuer_did, "probe": probe},
+        )
+        return
+    try:
+        page.wait_for_url(
+            re.compile(r"/console/org/deploy/issuer-identity/?$"),
+            timeout=30_000,
+        )
+    except PlaywrightTimeoutError:
+        audit.snapshot(
+            "issuer-identity-submit-unsettled",
+            "The public issuer identity became active, but the UI submission did not complete.",
+            {"issuer_did": issuer_did},
+        )
         return
     audit.snapshot(
         "issuer-identity-active",
         "Created an active issuer identity.",
-        {"issuer_identity": {"id": issuer.get("id"), "name": issuer.get("name"), "status": issuer.get("status")}},
+        {
+            "issuer_identity": {
+                "issuer_did": issuer.get("issuer_did"),
+                "key_purpose": issuer.get("key_purpose"),
+                "credential_format": issuer.get("credential_format"),
+                "algorithm": issuer.get("algorithm"),
+                "status": issuer.get("status"),
+            }
+        },
     )
 
 
@@ -1732,7 +1787,6 @@ def verify_resource_inventory(audit: Audit, run_id: str) -> None:
     organization_id = active_organization_id(page)
     specs = [
         ("compliance_profile", "/v1/compliance-profiles", "OID4VC Core", False),
-        ("issuer_identity", "/v1/signing-keys/issuer-profiles", f"Audit Issuer Key {run_id}", True),
         ("trust_profile", "/v1/trust-profiles", f"Audit Trust Profile {run_id}", False),
         ("revocation_profile", "/v1/revocation-profiles", f"Audit Lifecycle Status {run_id}", False),
         ("credential_template", "/v1/credential-templates", f"Audit Employee Credential {run_id}", False),
@@ -1747,6 +1801,31 @@ def verify_resource_inventory(audit: Audit, run_id: str) -> None:
     missing: list[str] = []
     probes: dict[str, dict[str, Any]] = {}
     resources: dict[str, dict[str, Any]] = {}
+
+    issuer_path = "/v1/signing-keys/issuer-identities"
+    issuer_probe = fetch_org_collection(page, issuer_path, organization_id)
+    issuer = next(
+        (
+            item
+            for item in collection_items(issuer_probe)
+            if str(item.get("issuer_did") or "").endswith(
+                f":orgs:audit-production-flow-{run_id}"
+            )
+            and is_active(item)
+        ),
+        None,
+    )
+    probes[issuer_path] = issuer_probe
+    if issuer is None:
+        missing.append("issuer_identity")
+    else:
+        resources["issuer_identity"] = issuer
+        inventory.append({
+            "resource_type": "issuer_identity",
+            "id": issuer.get("issuer_did"),
+            "name": issuer.get("issuer_did"),
+            "status": issuer.get("status"),
+        })
 
     for resource_type, path, name, partial_name in specs:
         if path not in probes:
@@ -1791,7 +1870,7 @@ def verify_resource_inventory(audit: Audit, run_id: str) -> None:
 
         expected_links = [
             ("credential.compliance_profile_id", credential.get("compliance_profile_id"), compliance.get("id")),
-            ("credential.issuer_profile_id", credential.get("issuer_profile_id"), issuer.get("id")),
+            ("credential.issuer_did", credential.get("issuer_did"), issuer.get("issuer_did")),
             ("credential.trust_profile_id", credential.get("trust_profile_id"), trust.get("id")),
             ("credential.revocation_profile_id", credential.get("revocation_profile_id"), revocation.get("id")),
             ("application.credential_template_id", application.get("credential_template_id"), credential.get("id")),
