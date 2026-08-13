@@ -109,8 +109,16 @@ async fn redis_allocations_and_mutations_are_atomic_and_python_compatible() {
 }
 
 async fn install_released_schema(pool: &PgPool) {
+    let mut transaction = pool.begin().await.unwrap();
+    // PostgreSQL's CREATE SCHEMA IF NOT EXISTS can still race when separate
+    // integration tests initialize the same schema concurrently. Serialize
+    // only this test DDL; the storage contracts themselves remain parallel.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('revocation_profile_service')::bigint)")
+        .execute(&mut *transaction)
+        .await
+        .unwrap();
     sqlx::query("CREATE SCHEMA IF NOT EXISTS revocation_profile_service")
-        .execute(pool)
+        .execute(&mut *transaction)
         .await
         .unwrap();
     sqlx::query(
@@ -129,7 +137,8 @@ async fn install_released_schema(pool: &PgPool) {
         )
         "#,
     )
-    .execute(pool)
+    .execute(&mut *transaction)
     .await
     .unwrap();
+    transaction.commit().await.unwrap();
 }
