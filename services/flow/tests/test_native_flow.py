@@ -10,6 +10,9 @@ from flow import native
 
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "flow_state.json"
+MDOC_HANDOVER_FIXTURE_PATH = (
+    Path(__file__).parent / "fixtures" / "openid4vp_mdoc_handover.json"
+)
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +57,39 @@ def test_shared_transition_and_graph_vectors_use_the_native_kernel():
     assert native.select_next_step(graph, "approve", "failure") is None
 
 
+def test_shared_mdoc_handover_vectors_use_the_native_kernel():
+    diagnostics = native.initialize_native_flow_backend()
+    assert "openid4vp_mdoc_handover" in diagnostics["capabilities"]
+    fixture = json.loads(MDOC_HANDOVER_FIXTURE_PATH.read_text(encoding="utf-8"))
+
+    for case in fixture["valid"]:
+        transcript = native.build_openid4vp_mdoc_session_transcript(
+            client_id=case["client_id"],
+            nonce=case["nonce"],
+            response_uri=case["response_uri"],
+            response_encryption_jwk=case["response_encryption_jwk"],
+        )
+        assert transcript.hex() == case["session_transcript_hex"], case["name"]
+        if "binding_digests" in case:
+            assert native.openid4vp_mdoc_binding_digests(
+                session_transcript=transcript,
+                client_id=case["client_id"],
+                nonce=case["nonce"],
+                response_uri=case["response_uri"],
+                response_encryption_jwk=case["response_encryption_jwk"],
+                presentation=case["presentation"],
+            ) == case["binding_digests"]
+
+    for case in fixture["invalid"]:
+        with pytest.raises(native.NativeFlowOperationError):
+            native.build_openid4vp_mdoc_session_transcript(
+                client_id=case["client_id"],
+                nonce=case["nonce"],
+                response_uri=case["response_uri"],
+                response_encryption_jwk=case["response_encryption_jwk"],
+            )
+
+
 def test_missing_native_backend_fails_closed(monkeypatch: pytest.MonkeyPatch):
     def unavailable(*, required_capability: str | None = None):
         raise NativeBackendUnavailable(
@@ -92,6 +128,38 @@ def test_missing_presentation_metadata_capability_fails_startup(
         NativeBackendUnavailable, match="credential_presentation_metadata"
     ):
         native.initialize_native_flow_backend()
+
+
+def test_missing_mdoc_handover_capability_fails_startup(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    backend = object()
+    requested: list[str | None] = []
+
+    def load(*, required_capability: str | None = None):
+        assert required_capability == "flow_state_machine"
+        return backend
+
+    def diagnostics(_backend, *, required_capability: str | None = None):
+        assert _backend is backend
+        requested.append(required_capability)
+        if required_capability == "openid4vp_mdoc_handover":
+            raise NativeBackendUnavailable(
+                "missing required native capability: openid4vp_mdoc_handover"
+            )
+        return {"available": True}
+
+    monkeypatch.setattr(native, "_backend", None)
+    monkeypatch.setattr(native, "_diagnostics", None)
+    monkeypatch.setattr(native, "load_marty_rs", load)
+    monkeypatch.setattr(native, "get_marty_rs_diagnostics", diagnostics)
+
+    with pytest.raises(NativeBackendUnavailable, match="openid4vp_mdoc_handover"):
+        native.initialize_native_flow_backend()
+    assert requested == [
+        "credential_presentation_metadata",
+        "openid4vp_mdoc_handover",
+    ]
 
 
 def test_malformed_native_decision_fails_closed(monkeypatch: pytest.MonkeyPatch):
