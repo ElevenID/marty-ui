@@ -2080,38 +2080,113 @@ def _matches_configured_issuer_identifiers(
     return not issuer_candidates.isdisjoint(configured_candidates)
 
 
-def _sd_jwt_unverified_issuer(vp_token: str) -> str | None:
-    """Read an SD-JWT issuer solely to select an already-pinned key.
+def _sd_jwt_unverified_key_selector(
+    vp_token: str,
+) -> tuple[str | None, str | None]:
+    """Read an SD-JWT issuer and kid solely to select an already-pinned key.
 
-    This does not establish trust: the returned value is matched exactly to a
-    trust-profile override before signature verification runs.
+    This does not establish trust: the returned values are matched to an
+    already-governed Trust Profile key before signature verification runs.
     """
     try:
-        _header, payload = _jwt_header_and_payload(vp_token.split("~", 1)[0])
+        header, payload = _jwt_header_and_payload(vp_token.split("~", 1)[0])
     except Exception:
-        return None
+        return None, None
     issuer = payload.get("iss")
-    return issuer if isinstance(issuer, str) and issuer else None
+    kid = header.get("kid")
+    return (
+        issuer if isinstance(issuer, str) and issuer else None,
+        kid if isinstance(kid, str) and kid else None,
+    )
+
+
+def _public_jwk(value: object) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or not isinstance(value.get("kty"), str):
+        return None
+    if {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}.intersection(value):
+        return None
+    return dict(value)
+
+
+def _select_governed_issuer_jwk(
+    trust_profile_data: dict[str, Any],
+    issuer: str,
+    kid: str | None,
+) -> dict[str, Any] | None:
+    """Select one public key from one exact, currently trusted relationship."""
+    relationships = trust_profile_data.get("issuer_relationships")
+    if not isinstance(relationships, list):
+        return None
+    matches = [
+        relationship
+        for relationship in relationships
+        if isinstance(relationship, dict)
+        and isinstance(relationship.get("issuer_id"), str)
+        and _normalized_relationship_issuer_id(relationship["issuer_id"])
+        == _normalized_relationship_issuer_id(issuer)
+    ]
+    if len(matches) != 1:
+        return None
+    relationship = matches[0]
+    relationship_valid, _error = _evaluate_normalized_issuer_relationship(
+        issuer_did=issuer,
+        relationships=[relationship],
+        constraints=None,
+    )
+    if not relationship_valid:
+        return None
+
+    raw_keys = relationship.get("verification_keys")
+    if not isinstance(raw_keys, list):
+        return None
+    keys = [_public_jwk(value) for value in raw_keys]
+    if any(key is None for key in keys):
+        return None
+    public_keys = [key for key in keys if key is not None]
+    if kid:
+        identified = [key for key in public_keys if key.get("kid") == kid]
+        if len(identified) == 1:
+            return identified[0]
+        # A single unlabelled governed key remains unambiguous even when the
+        # credential carries an issuer-local kid that the registry omitted.
+        if len(public_keys) == 1 and not public_keys[0].get("kid"):
+            return public_keys[0]
+        return None
+    return public_keys[0] if len(public_keys) == 1 else None
 
 
 def _pinned_issuer_jwk(
-    trust_profile_data: dict[str, Any] | None, issuer: str | None
+    trust_profile_data: dict[str, Any] | None,
+    issuer: str | None,
+    kid: str | None = None,
 ) -> dict[str, Any] | None:
     if not trust_profile_data or not issuer:
+        return None
+    if str(trust_profile_data.get("status") or "").lower() != "active":
         return None
     overrides = trust_profile_data.get("system_issuer_overrides") or {}
     if not isinstance(overrides, dict):
         return None
-    issuer_candidates = _issuer_identifier_candidates(issuer)
+    matching_overrides: list[dict[str, Any]] = []
     for identifier, override in overrides.items():
         if not isinstance(identifier, str) or not isinstance(override, dict):
             continue
-        if issuer_candidates.isdisjoint(_issuer_identifier_candidates(identifier)):
+        if _normalized_relationship_issuer_id(
+            identifier
+        ) != _normalized_relationship_issuer_id(issuer):
             continue
-        public_jwk = override.get("public_jwk")
-        if isinstance(public_jwk, dict) and public_jwk.get("kty"):
-            return public_jwk
-    return None
+        matching_overrides.append(override)
+    if len(matching_overrides) > 1:
+        return None
+    if matching_overrides:
+        public_jwk = _public_jwk(matching_overrides[0].get("public_jwk"))
+        if public_jwk is None:
+            return None
+        configured_kid = public_jwk.get("kid")
+        if kid and configured_kid and configured_kid != kid:
+            return None
+        return public_jwk
+    return _select_governed_issuer_jwk(trust_profile_data, issuer, kid)
 
 
 def _mdoc_trust_certificates_pem(
@@ -4475,11 +4550,15 @@ async def evaluate_presentation(
             policy.organization_id,
         )
 
+    sd_jwt_issuer, sd_jwt_kid = (
+        _sd_jwt_unverified_key_selector(request.vp_token)
+        if credential_format == "sd-jwt" and isinstance(request.vp_token, str)
+        else (None, None)
+    )
     pinned_issuer_jwk = _pinned_issuer_jwk(
         trust_profile_data,
-        _sd_jwt_unverified_issuer(request.vp_token)
-        if credential_format == "sd-jwt" and isinstance(request.vp_token, str)
-        else None,
+        sd_jwt_issuer,
+        sd_jwt_kid,
     )
 
     mdoc_root_certs_pem, mdoc_pinned_issuer_certs_pem = _mdoc_trust_certificates_pem(

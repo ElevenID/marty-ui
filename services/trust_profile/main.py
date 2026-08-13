@@ -1549,6 +1549,21 @@ class TrustDecisionIssuerResponse(BaseModel):
     valid_from: str
     valid_until: str | None = None
     revoked_at: str | None = None
+    verification_keys: list[dict[str, Any]] = Field(
+        default_factory=list,
+        max_length=32,
+    )
+
+    @field_validator("verification_keys")
+    @classmethod
+    def validate_verification_keys(
+        cls, values: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        for value in values:
+            if not isinstance(value.get("kty"), str) or not value["kty"].strip():
+                raise ValueError("issuer verification keys must be public JWK objects")
+        _reject_private_custody_metadata({"verification_keys": values})
+        return values
 
 
 class InternalTrustProfileResponse(TrustProfileResponse):
@@ -1654,6 +1669,22 @@ async def _internal_profile_to_response(
                 status_code=503,
                 detail="Trust Profile contains a cross-organization issuer relationship",
             )
+        verification_keys = (issuer.metadata or {}).get("verification_keys", [])
+        if (
+            not isinstance(verification_keys, list)
+            or len(verification_keys) > 32
+            or any(
+                not isinstance(key, dict)
+                or not isinstance(key.get("kty"), str)
+                or not key["kty"].strip()
+                for key in verification_keys
+            )
+            or _find_private_custody_metadata(verification_keys) is not None
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="Trust Profile contains invalid issuer verification keys",
+            )
         decisions.append(
             TrustDecisionIssuerResponse(
                 issuer_id=issuer.issuer_id,
@@ -1669,6 +1700,7 @@ async def _internal_profile_to_response(
                 revoked_at=(
                     issuer.revoked_at.isoformat() if issuer.revoked_at else None
                 ),
+                verification_keys=verification_keys,
             )
         )
 
