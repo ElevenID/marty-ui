@@ -1,7 +1,7 @@
 {
   "schema": "marty.rust-ownership/v1",
   "roadmap": "docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md",
-  "updated": "2026-08-11",
+  "updated": "2026-08-13",
   "policy": {
     "canonical_rule": "Each deterministic protocol, policy, validation, cryptographic, or state-machine capability has one Rust implementation.",
     "fallback_rule": "Required native capabilities fail closed; runtime fallback to Python or Dart is prohibited.",
@@ -200,6 +200,24 @@
       ]
     },
     {
+      "id": "oid4vp-request-construction",
+      "phase": 5,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-core",
+        "paths": ["marty-oid4vci/src/presentation_request.rs"],
+        "binding_paths": ["marty-bindings/src/lib.rs"]
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-ui",
+          "paths": ["services/flow/main.py", "services/verification/main.py"],
+          "language": "python",
+          "disposition": "policy-template-dto-adapters-only"
+        }
+      ]
+    },
+    {
       "id": "wallet-oid4vc",
       "phase": 6,
       "status": "planned",
@@ -362,6 +380,12 @@
         "id": "no-direct-did-native-imports",
         "glob": "services/common/did_resolution.py",
         "pattern": "(?:from|import)\\s+(?:marty_rs|_marty_rs)",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-python-oid4vp-request-builder",
+        "glob": "services/**/*.py",
+        "pattern": "(?:_WALLET_FORMATS_FALLBACK|_oid4vp_wallet_registry_formats|_oid4vp_format_alg|_oid4vp_presentation_formats|_is_sd_jwt_format|_is_mdoc_format|_string_filter_for_values|_sd_jwt_vct_values|_dcql_format_name|_json_schema_const_values|_dcql_meta_for_descriptor|_dcql_claims_for_descriptor|default-credential|default_requirement)",
         "expected_matches": {}
       },
       {
