@@ -21,22 +21,6 @@ def _environment() -> dict[str, str]:
         "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS": "900",
         "CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID": "org-signing-system",
         "CANVAS_LTI_TOOL_ISSUER_DID": "did:web:beta.elevenidllc.com:orgs:marty",
-        "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS": "ip-marty-vc-jwt-issuer",
-        "CANVAS_LTI_TOOL_ACTIVE_KID": "did:web:beta.elevenidllc.com:orgs:marty#lti-tool-marty-rs256",
-        "CANVAS_LTI_TOOL_PUBLIC_JWKS": json.dumps(
-            {
-                "keys": [
-                    {
-                        "kty": "RSA",
-                        "kid": "did:web:beta.elevenidllc.com:orgs:marty#lti-tool-marty-rs256",
-                        "alg": "RS256",
-                        "use": "sig",
-                        "n": "public-modulus",
-                        "e": "AQAB",
-                    }
-                ]
-            }
-        ),
         "CANVAS_SYNC_PROCESSOR": "issuance.infrastructure.api.canvas_routes:process_authoritative_canvas_sync_target",
         "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "600",
     }
@@ -52,15 +36,44 @@ def _install_runtime(
         capabilities,
         "_container",
         lambda name: (
-            dict(issuance if name == capabilities.ISSUANCE_CONTAINER else worker),
+            dict(issuance if name == capabilities.ISSUANCE_SERVICE else worker),
             "sha256:" + "a" * 64,
             "elevenid-local/issuance:test",
         ),
     )
-    configured = json.loads(issuance["CANVAS_LTI_TOOL_PUBLIC_JWKS"])["keys"][0]
     monkeypatch.setattr(
-        capabilities, "_public_jwks", lambda: {configured["kid"]: configured}
+        capabilities,
+        "_public_jwks",
+        lambda issuer_did: {
+            f"{issuer_did}#lti-tool-marty-rs256": {
+                "kid": f"{issuer_did}#lti-tool-marty-rs256"
+            }
+        },
     )
+
+
+def test_beta_container_discovery_is_compose_project_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, ...]] = []
+
+    def fake_docker_json(*args: str) -> str:
+        captured.append(args)
+        return "container-id"
+
+    monkeypatch.setattr(capabilities, "_docker_json", fake_docker_json)
+    assert capabilities._container_id("issuance") == "container-id"
+    assert captured == [
+        (
+            "ps",
+            "--filter",
+            "label=com.docker.compose.project=elevenid-beta",
+            "--filter",
+            "label=com.docker.compose.service=issuance",
+            "--format",
+            "{{json .ID}}",
+        )
+    ]
 
 
 def test_beta_capability_preflight_proves_deployed_runtime_without_secret_output(
