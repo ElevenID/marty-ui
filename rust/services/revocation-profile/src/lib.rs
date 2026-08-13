@@ -1,7 +1,9 @@
 pub mod domain;
 pub mod grpc;
 pub mod http;
+pub mod operations;
 pub mod postgres;
+pub mod postgres_operations;
 pub mod redis_status;
 pub mod repository;
 pub mod service;
@@ -14,7 +16,9 @@ pub mod proto {
 pub use domain::*;
 pub use grpc::RevocationProfileGrpc;
 pub use http::{Authorization, AuthorizationError, InternalServiceAuth, RevocationProfileHttp};
+pub use operations::*;
 pub use postgres::PgProfileRepository;
+pub use postgres_operations::PgRevocationOperationRepository;
 pub use redis_status::RedisStatusRepository;
 pub use repository::{InMemoryProfileRepository, ProfileRepository};
 pub use service::{RevocationProfileService, ServiceError};
