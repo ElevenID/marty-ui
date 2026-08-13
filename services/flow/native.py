@@ -36,6 +36,9 @@ def initialize_native_flow_backend(
         diagnostics = get_marty_rs_diagnostics(
             backend, required_capability="oid4vp_x509_identity"
         )
+        diagnostics = get_marty_rs_diagnostics(
+            backend, required_capability="siop_jwk_id_token_verification"
+        )
     else:
         diagnostics = {
             "available": True,
@@ -48,6 +51,7 @@ def initialize_native_flow_backend(
                 "openid4vp_mdoc_handover",
                 "haip_response_encryption",
                 "oid4vp_x509_identity",
+                "siop_jwk_id_token_verification",
             ],
         }
     _backend = backend
@@ -378,7 +382,6 @@ def oid4vp_x509_hash_client_identity(
         raise
     except Exception as error:
         raise NativeFlowOperationError(str(error)) from error
-
     if set(result) != {"client_id", "x5c"}:
         raise NativeFlowOperationError(
             "FLOW.INVALID_NATIVE_RESULT: x509 identity shape is invalid"
@@ -399,6 +402,30 @@ def oid4vp_x509_hash_client_identity(
             "FLOW.INVALID_NATIVE_RESULT: x509 identity values are invalid"
         )
     return client_id, x5c
+
+
+def verify_siop_jwk_id_token(id_token: str) -> tuple[dict[str, Any], str]:
+    """Verify a JWK-thumbprint SIOPv2 token through the Rust backend."""
+    try:
+        result = _json_object(
+            _native().siop_verify_jwk_id_token(id_token),
+            "siop_verify_jwk_id_token",
+        )
+    except NativeFlowOperationError:
+        raise
+    except Exception as error:
+        raise NativeFlowOperationError(str(error)) from error
+    if set(result) != {"claims", "signing_algorithm"}:
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: SIOPv2 verification shape is invalid"
+        )
+    claims = result["claims"]
+    algorithm = result["signing_algorithm"]
+    if not isinstance(claims, dict) or algorithm not in {"ES256", "EdDSA"}:
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: SIOPv2 verification values are invalid"
+        )
+    return claims, algorithm
 
 
 def evaluate_transition(
