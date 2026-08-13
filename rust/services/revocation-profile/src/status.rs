@@ -1,4 +1,6 @@
+use crate::domain::utc_now;
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use marty_status::{BitstringStatusList, StatusListError, TokenStatusList};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -39,6 +41,10 @@ pub struct StatusListRecord {
     pub bits_per_status: u8,
     pub data: Vec<u8>,
     pub version: u64,
+    pub published_at: Option<DateTime<Utc>>,
+    pub url: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 impl StatusListRecord {
@@ -53,6 +59,7 @@ impl StatusListRecord {
                 TokenStatusList::new(size, format.bits_per_status())?.to_bytes()
             }
         };
+        let now = utc_now();
         Ok(Self {
             id: Uuid::new_v4().to_string(),
             scope,
@@ -61,6 +68,10 @@ impl StatusListRecord {
             bits_per_status: format.bits_per_status(),
             data,
             version: 0,
+            published_at: None,
+            url: None,
+            created_at: now,
+            updated_at: now,
         })
     }
 
@@ -85,6 +96,7 @@ impl StatusListRecord {
             }
         };
         self.version = self.version.saturating_add(1);
+        self.updated_at = utc_now();
         Ok(())
     }
 
