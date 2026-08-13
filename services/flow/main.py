@@ -92,9 +92,11 @@ from flow.callback_outbox import (
 from flow.infrastructure.adapters import PostgresFlowRepository
 from flow.native import (
     NativeFlowOperationError,
+    build_openid4vp_mdoc_session_transcript as _build_openid4vp_mdoc_session_transcript,
     evaluate_transition as evaluate_native_flow_transition,
     initialize_native_flow_backend,
     is_terminal_status as is_native_terminal_status,
+    openid4vp_mdoc_binding_digests as _openid4vp_mdoc_binding_digests,
     select_next_step as select_native_next_step,
     validate_graph as validate_native_flow_graph,
 )
@@ -4961,112 +4963,6 @@ def _base64url_decode(data: str) -> bytes:
     """Base64url decode with optional padding omitted."""
     padding = "=" * (-len(data) % 4)
     return base64.urlsafe_b64decode((data + padding).encode("ascii"))
-
-
-def _cbor_length(major_type: int, length: int) -> bytes:
-    """Encode a canonical definite-length CBOR header."""
-    if length < 24:
-        return bytes([(major_type << 5) | length])
-    if length <= 0xFF:
-        return bytes([(major_type << 5) | 24, length])
-    if length <= 0xFFFF:
-        return bytes([(major_type << 5) | 25]) + length.to_bytes(2, "big")
-    if length <= 0xFFFFFFFF:
-        return bytes([(major_type << 5) | 26]) + length.to_bytes(4, "big")
-    return bytes([(major_type << 5) | 27]) + length.to_bytes(8, "big")
-
-
-def _cbor_encode_handover_value(value: Any) -> bytes:
-    """Encode only the types used by ISO OpenID4VP HandoverInfo."""
-    if value is None:
-        return b"\xf6"
-    if isinstance(value, bytes):
-        return _cbor_length(2, len(value)) + value
-    if isinstance(value, str):
-        encoded = value.encode("utf-8")
-        return _cbor_length(3, len(encoded)) + encoded
-    if isinstance(value, list):
-        return _cbor_length(4, len(value)) + b"".join(
-            _cbor_encode_handover_value(item) for item in value
-        )
-    raise TypeError(f"Unsupported OpenID4VP handover CBOR type: {type(value).__name__}")
-
-
-def _openid4vp_response_key_thumbprint(
-    response_encryption_jwk: dict[str, Any] | None,
-) -> bytes | None:
-    """Return the raw RFC 7638 thumbprint used by OpenID4VP HandoverInfo."""
-    if response_encryption_jwk is None:
-        return None
-    if response_encryption_jwk.get("kty") != "EC":
-        raise ValueError("OpenID4VP response-encryption JWK must be an EC key")
-    required = ("crv", "kty", "x", "y")
-    if any(not isinstance(response_encryption_jwk.get(name), str) for name in required):
-        raise ValueError("OpenID4VP response-encryption JWK is incomplete")
-    canonical = json.dumps(
-        {name: response_encryption_jwk[name] for name in required},
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(canonical).digest()
-
-
-def _build_openid4vp_mdoc_session_transcript(
-    *,
-    client_id: str,
-    nonce: str,
-    response_uri: str,
-    response_encryption_jwk: dict[str, Any] | None,
-) -> bytes:
-    """Build ISO 18013-7 OpenID4VP SessionTranscript from verifier-owned state."""
-    if not client_id or not nonce or not response_uri:
-        raise ValueError(
-            "OpenID4VP mdoc handover requires client_id, nonce, and response_uri"
-        )
-    handover_info = [
-        client_id,
-        nonce,
-        _openid4vp_response_key_thumbprint(response_encryption_jwk),
-        response_uri,
-    ]
-    handover_digest = hashlib.sha256(
-        _cbor_encode_handover_value(handover_info)
-    ).digest()
-    return _cbor_encode_handover_value(
-        [None, None, ["OpenID4VPHandover", handover_digest]]
-    )
-
-
-def _openid4vp_mdoc_binding_digests(
-    *,
-    session_transcript: bytes,
-    client_id: str,
-    nonce: str,
-    response_uri: str,
-    response_encryption_jwk: dict[str, Any] | None,
-    presentation: str,
-) -> dict[str, str]:
-    """Return non-reversible diagnostics for an mdoc request binding.
-
-    Official interoperability runs can compare these digests with values
-    exported by an unmodified external runner without logging the request
-    nonce, verifier identity, callback URL, response key, or transcript.
-    """
-    response_key_thumbprint = _openid4vp_response_key_thumbprint(
-        response_encryption_jwk
-    )
-    return {
-        "transcript_sha256": hashlib.sha256(session_transcript).hexdigest(),
-        "client_id_sha256": hashlib.sha256(client_id.encode("utf-8")).hexdigest(),
-        "nonce_sha256": hashlib.sha256(nonce.encode("utf-8")).hexdigest(),
-        "response_uri_sha256": hashlib.sha256(response_uri.encode("utf-8")).hexdigest(),
-        "response_key_thumbprint_sha256": (
-            hashlib.sha256(response_key_thumbprint).hexdigest()
-            if response_key_thumbprint is not None
-            else "none"
-        ),
-        "presentation_sha256": hashlib.sha256(presentation.encode("utf-8")).hexdigest(),
-    }
 
 
 def _verifier_x509_certificates() -> list[x509.Certificate]:

@@ -218,6 +218,24 @@
       ]
     },
     {
+      "id": "openid4vp-mdoc-handover",
+      "phase": 5,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-core",
+        "paths": ["marty-iso18013/src/openid4vp.rs"],
+        "binding_paths": ["marty-bindings/src/mdoc.rs"]
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-ui",
+          "paths": ["services/flow/native.py", "services/flow/main.py"],
+          "language": "python",
+          "disposition": "adapter-and-orchestration-only"
+        }
+      ]
+    },
+    {
       "id": "wallet-oid4vc",
       "phase": 6,
       "status": "planned",
@@ -446,6 +464,12 @@
         "id": "no-python-device-proof-kernel",
         "glob": "services/device_registration/*.py",
         "pattern": "(?:padding\\.PSS|public_key\\.verify\\()",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-python-openid4vp-mdoc-handover-kernel",
+        "glob": "services/**/*.py",
+        "pattern": "def\\s+_(?:cbor_length|cbor_encode_handover_value|openid4vp_response_key_thumbprint|build_openid4vp_mdoc_session_transcript|openid4vp_mdoc_binding_digests)\\s*\\(",
         "expected_matches": {}
       }
     ]
