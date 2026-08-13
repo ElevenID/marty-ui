@@ -1,7 +1,10 @@
 use crate::domain::utc_now;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use marty_status::{BitstringStatusList, StatusListError, TokenStatusList};
+use marty_status::{
+    BitstringStatusList, BitstringStatusListCredentialSubject, StatusListError, TokenStatusList,
+    TokenStatusListClaim,
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
@@ -129,6 +132,30 @@ impl StatusListRecord {
             .to_base64url()?),
         }
     }
+
+    pub fn token_claim(&self) -> Result<TokenStatusListClaim, StatusError> {
+        if self.format != StatusListFormat::TokenStatusList {
+            return Err(StatusError::FormatMismatch);
+        }
+        Ok(
+            TokenStatusList::from_bytes(self.data.clone(), self.size, self.bits_per_status)?
+                .claim()?,
+        )
+    }
+
+    pub fn bitstring_credential_subject(
+        &self,
+        id: impl Into<String>,
+        purpose: impl Into<String>,
+    ) -> Result<BitstringStatusListCredentialSubject, StatusError> {
+        if self.format != StatusListFormat::Bitstring {
+            return Err(StatusError::FormatMismatch);
+        }
+        Ok(
+            BitstringStatusList::from_bytes(self.data.clone(), self.size)?
+                .credential_subject(id, purpose)?,
+        )
+    }
 }
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -137,6 +164,8 @@ pub enum StatusError {
     Canonical(#[from] StatusListError),
     #[error("status {0} must be 0 or 1 for a bitstring status list")]
     InvalidBitstringStatus(u8),
+    #[error("status-list record format does not match the requested document")]
+    FormatMismatch,
     #[error("status repository operation failed: {0}")]
     Repository(String),
     #[error("status list is full for scope {0}")]
