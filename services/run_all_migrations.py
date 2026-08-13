@@ -16,6 +16,7 @@ Environment Variables:
 """
 
 import base64
+import hashlib
 import json
 import os
 import sys
@@ -308,8 +309,14 @@ def _jwks_storage_key(organization_id: str) -> str:
     return f"org:{organization_id}:signing-key-jwks"
 
 
-def _did_doc_storage_key(organization_id: str) -> str:
-    return f"org:{organization_id}:signing-key-did-document"
+def _did_doc_storage_key(
+    organization_id: str, issuer_did: str | None = None
+) -> str:
+    legacy_key = f"org:{organization_id}:signing-key-did-document"
+    if issuer_did is None:
+        return legacy_key
+    digest = hashlib.sha256(issuer_did.encode("utf-8")).hexdigest()
+    return f"{legacy_key}:did:{digest}"
 
 
 def _issuer_profiles_storage_key(organization_id: str) -> str:
@@ -608,6 +615,68 @@ def _save_json_to_redis(redis_client: Any, key: str, document: dict[str, Any]) -
     redis_client.set(key, json.dumps(document))
 
 
+def _backfill_scoped_did_documents(
+    redis_client: Any, organization_id: str, legacy_document: dict[str, Any]
+) -> None:
+    """Split a legacy mixed organization document into exact DID records."""
+    methods = legacy_document.get("verificationMethod")
+    if not isinstance(methods, list):
+        return
+    methods_by_controller: dict[str, list[dict[str, Any]]] = {}
+    for method in methods:
+        if not isinstance(method, dict):
+            continue
+        controller = method.get("controller")
+        method_id = method.get("id")
+        if (
+            not isinstance(controller, str)
+            or not controller.startswith("did:")
+            or not isinstance(method_id, str)
+            or not (method_id == controller or method_id.startswith(f"{controller}#"))
+        ):
+            continue
+        methods_by_controller.setdefault(controller, []).append(dict(method))
+
+    relationships = (
+        "authentication",
+        "assertionMethod",
+        "capabilityInvocation",
+        "capabilityDelegation",
+    )
+    for controller, controller_methods in methods_by_controller.items():
+        scoped_key = _did_doc_storage_key(organization_id, controller)
+        existing = _load_json_from_redis(redis_client, scoped_key, {})
+        if existing:
+            if existing.get("id") != controller:
+                raise RuntimeError(
+                    "Scoped DID document identity does not match its storage key"
+                )
+            continue
+        scoped: dict[str, Any] = {
+            "id": controller,
+            "controller": controller,
+            "verificationMethod": controller_methods,
+        }
+        for relationship in relationships:
+            entries = legacy_document.get(relationship)
+            if not isinstance(entries, list):
+                continue
+            selected: list[Any] = []
+            for entry in entries:
+                identifier = entry.get("id") if isinstance(entry, dict) else entry
+                if isinstance(identifier, str) and (
+                    identifier == controller or identifier.startswith(f"{controller}#")
+                ):
+                    selected.append(entry)
+            if selected:
+                scoped[relationship] = selected
+        if isinstance(legacy_document.get("@context"), (str, list, dict)):
+            scoped["@context"] = legacy_document["@context"]
+        if isinstance(legacy_document.get("updated_at"), str):
+            scoped["updated_at"] = legacy_document["updated_at"]
+        _save_json_to_redis(redis_client, scoped_key, scoped)
+
+
 def _seed_signing_registry(
     redis_client: Any, organization_id: str, key_records: list[dict[str, Any]]
 ) -> None:
@@ -756,7 +825,14 @@ def _seed_did_and_jwks(
     issuer_did: str,
     key_records: list[dict[str, Any]],
 ) -> None:
-    did_key = _did_doc_storage_key(organization_id)
+    legacy_did_key = _did_doc_storage_key(organization_id)
+    legacy_did_doc = _load_json_from_redis(redis_client, legacy_did_key, {})
+    _backfill_scoped_did_documents(
+        redis_client,
+        organization_id,
+        legacy_did_doc,
+    )
+    did_key = _did_doc_storage_key(organization_id, issuer_did)
     did_doc = _load_json_from_redis(
         redis_client,
         did_key,
@@ -826,6 +902,13 @@ def _seed_did_and_jwks(
     did_doc["assertionMethod"] = assertion
     did_doc["updated_at"] = _utcnow_iso()
     _save_json_to_redis(redis_client, did_key, did_doc)
+    # Retain the historical organization-wide view for administrative clients.
+    # Runtime DID resolution reads the exact scoped key above.
+    _save_json_to_redis(
+        redis_client,
+        legacy_did_key,
+        did_doc,
+    )
     _save_json_to_redis(
         redis_client,
         _jwks_storage_key(organization_id),
