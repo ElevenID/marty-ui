@@ -224,7 +224,6 @@ jobs:
         shell: bash
         run: |
           test -f marty-core/Cargo.lock
-          test -f marty-core/vendor/core2-0.4.0/Cargo.toml
           test -f marty-core/marty-test-wallet/Cargo.toml
           cargo metadata --locked --no-deps --format-version 1 \
             --manifest-path marty-core/Cargo.toml >/dev/null

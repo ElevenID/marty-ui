@@ -137,6 +137,10 @@ def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> No
     assert "--arg source_id \"$BETA_SOURCE_ID\"" in workflow
     assert "beta_source_id: $beta_source_id" in workflow
     assert "CI must pin exactly one full MARTY_PROTOCOL_REF" in workflow
+    assert "test -f marty-core/Cargo.lock" in workflow
+    assert "test -f marty-core/marty-test-wallet/Cargo.toml" in workflow
+    assert "cargo metadata --locked --no-deps" in workflow
+    assert "vendor/core2" not in workflow
     assert "${{ vars.MARTY_CORE_REF }}" not in workflow
     assert "${{ vars.MARTY_PROTOCOL_REF }}" not in workflow
     assert 'workflowName\' <<<"$run")" = "CD"' not in workflow
