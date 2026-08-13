@@ -186,7 +186,11 @@ def test_seed_issuer_did_publishes_lti_assertion_but_credential_jwks_excludes_it
     did_document = json.loads(
         redis.store[migrations._did_doc_storage_key(organization_id)]
     )
+    scoped_did_document = json.loads(
+        redis.store[migrations._did_doc_storage_key(organization_id, issuer_did)]
+    )
     issuer_jwks = json.loads(redis.store[migrations._jwks_storage_key(organization_id)])
+    assert scoped_did_document == did_document
     serialized_did = json.dumps(did_document)
     assert "cred-issuer-marty-rs256" in serialized_did
     assert "lti-tool-marty-rs256" in serialized_did
@@ -195,6 +199,51 @@ def test_seed_issuer_did_publishes_lti_assertion_but_credential_jwks_excludes_it
         for method in did_document["assertionMethod"]
     )
     assert [key["kid"] for key in issuer_jwks["keys"]] == ["cred-issuer-marty-rs256"]
+
+
+def test_seed_issuer_did_backfills_legacy_mixed_documents_by_controller() -> None:
+    redis = FakeRedis()
+    organization_id = "00000000-0000-0000-0000-000000000001"
+    seeded_did = "did:web:beta.elevenidllc.com:orgs:marty"
+    suite_did = "did:web:beta.elevenidllc.com:orgs:official-suite"
+    seeded_method = f"{seeded_did}#seeded-key"
+    suite_method = f"{suite_did}#suite-key"
+    redis.store[migrations._did_doc_storage_key(organization_id)] = json.dumps(
+        {
+            "id": suite_did,
+            "controller": suite_did,
+            "verificationMethod": [
+                {
+                    "id": seeded_method,
+                    "controller": seeded_did,
+                    "publicKeyJwk": {"kty": "EC", "crv": "P-256"},
+                },
+                {
+                    "id": suite_method,
+                    "controller": suite_did,
+                    "publicKeyJwk": {"kty": "EC", "crv": "P-256"},
+                },
+            ],
+            "assertionMethod": [seeded_method, suite_method],
+        }
+    )
+
+    migrations._seed_did_and_jwks(redis, organization_id, seeded_did, [])
+
+    seeded_document = json.loads(
+        redis.store[migrations._did_doc_storage_key(organization_id, seeded_did)]
+    )
+    suite_document = json.loads(
+        redis.store[migrations._did_doc_storage_key(organization_id, suite_did)]
+    )
+    assert [
+        method["id"] for method in seeded_document["verificationMethod"]
+    ] == [seeded_method]
+    assert seeded_document["assertionMethod"] == [seeded_method]
+    assert [method["id"] for method in suite_document["verificationMethod"]] == [
+        suite_method
+    ]
+    assert suite_document["assertionMethod"] == [suite_method]
 
 
 def test_seed_issuer_profiles_creates_active_marty_kms_profiles():
