@@ -42,8 +42,6 @@ from flow.main import (
     _openid4vp_mdoc_binding_digests,
     _build_presentation_definition,
     _create_oid4vci_artifact,
-    _dcql_claims_for_descriptor,
-    _dcql_meta_for_descriptor,
     _oid4vp_did_web_document,
     _select_vp_token_for_evaluation,
     _validate_credential_layer_references,
@@ -625,38 +623,22 @@ async def test_request_object_signing_uses_did_scoped_api_only(
     assert token.endswith(".AQ")
 
 
-def test_mdoc_dcql_uses_doctype_and_two_element_claim_paths() -> None:
-    descriptor = {
-        "id": "mdl",
-        "format": {"mso_mdoc": {"alg": ["ES256"]}},
-        "_marty_mdoc": {
-            "doctype": "org.iso.18013.5.1.mDL",
-            "claims": [
-                {
-                    "id": "claim_given_name",
-                    "path": ["org.iso.18013.5.1", "given_name"],
-                    "intent_to_retain": False,
-                }
-            ],
-        },
-    }
-
-    assert _dcql_meta_for_descriptor(descriptor, "mso_mdoc") == {
-        "doctype_value": "org.iso.18013.5.1.mDL"
-    }
-    assert _dcql_claims_for_descriptor(descriptor, "mso_mdoc") == [
-        {
-            "id": "claim_given_name",
-            "path": ["org.iso.18013.5.1", "given_name"],
-            "intent_to_retain": False,
-        }
-    ]
-
-
 @pytest.mark.asyncio
 async def test_build_presentation_definition_preserves_mdoc_policy_claims(
     monkeypatch,
 ) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_native_builder(request: dict) -> dict:
+        captured.update(request)
+        return {
+            "presentation_definition": {
+                "id": request["id"],
+                "input_descriptors": [{"id": "mdl"}],
+            },
+            "dcql_query": {"credentials": [{"id": "mdl", "format": "mso_mdoc"}]},
+        }
+
     class FakePresentationPolicyStub:
         def __init__(self, _channel):
             pass
@@ -733,18 +715,23 @@ async def test_build_presentation_definition_preserves_mdoc_policy_claims(
         object(),
         raising=False,
     )
+    monkeypatch.setattr(
+        "flow.main.build_oid4vp_presentation_request", fake_native_builder
+    )
+    monkeypatch.setattr(
+        "flow.main.wallet_registry_format_names",
+        lambda: ["dc+sd-jwt", "mso_mdoc"],
+    )
 
     definition = await _build_presentation_definition("policy-1")
-    [descriptor] = definition["input_descriptors"]
-
-    assert _dcql_meta_for_descriptor(descriptor, "mso_mdoc") == {
-        "doctype_value": "org.iso.18013.5.1.mDL"
-    }
-    assert _dcql_claims_for_descriptor(descriptor, "mso_mdoc") == [
+    assert definition["input_descriptors"] == [{"id": "mdl"}]
+    [requirement] = captured["requirements"]
+    assert requirement["credential_doctype"] == "org.iso.18013.5.1.mDL"
+    assert requirement["mdoc_claims"] == [
         {
-            "id": f"claim_{name}",
-            "path": ["org.iso.18013.5.1", name],
-            "intent_to_retain": False,
+            "claim_name": name,
+            "namespace": "org.iso.18013.5.1",
+            "element_identifier": name,
         }
         for name in ("family_name", "given_name", "birth_date")
     ]
@@ -906,6 +893,31 @@ def _raw_segment(payload: bytes) -> str:
 def _decode_jwt_segment(segment: str) -> dict:
     padding = "=" * (-len(segment) % 4)
     return json.loads(base64.urlsafe_b64decode((segment + padding).encode()).decode())
+
+
+def _native_artifacts_fixture(builder):
+    """Adapt legacy request-object fixtures to the native two-artifact boundary."""
+
+    async def build(policy_id: str) -> dict:
+        definition = await builder(policy_id)
+        explicit_query = definition.pop("_test_dcql_query", None)
+        credentials = explicit_query or {
+            "credentials": [
+                {
+                    "id": descriptor["id"],
+                    "format": next(
+                        iter(descriptor.get("format", {})), "jwt_vc_json"
+                    ),
+                }
+                for descriptor in definition["input_descriptors"]
+            ]
+        }
+        return {
+            "presentation_definition": definition,
+            "dcql_query": credentials,
+        }
+
+    return build
 
 
 def _form_request(values: dict[str, str]) -> Request:
@@ -1817,6 +1829,7 @@ async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
     assert client_identifier not in parsed.query
     assert fetched_request_uri not in parsed.query
 
+    @_native_artifacts_fixture
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
@@ -1826,7 +1839,7 @@ async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
         }
 
     monkeypatch.setattr(
-        "flow.main._build_presentation_definition",
+        "flow.main._build_presentation_request_artifacts",
         _fake_presentation_definition,
     )
     signed_request = await get_verification_request_object(started.instance_id, repo)
@@ -1853,6 +1866,7 @@ async def test_start_verification_request_object_carries_one_signed_jar_without_
         },
     )
 
+    @_native_artifacts_fixture
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
@@ -1862,7 +1876,7 @@ async def test_start_verification_request_object_carries_one_signed_jar_without_
         }
 
     monkeypatch.setattr(
-        "flow.main._build_presentation_definition", _fake_presentation_definition
+        "flow.main._build_presentation_request_artifacts", _fake_presentation_definition
     )
     repo = InMemoryFlowRepository()
     started = await start_verification_flow(
@@ -1919,6 +1933,7 @@ async def test_start_verification_url_query_uses_direct_unsigned_parameters(
         },
     )
 
+    @_native_artifacts_fixture
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
@@ -1935,7 +1950,7 @@ async def test_start_verification_url_query_uses_direct_unsigned_parameters(
         pytest.fail("native URL-query transport must not sign a Request Object")
 
     monkeypatch.setattr(
-        "flow.main._build_presentation_definition", _fake_presentation_definition
+        "flow.main._build_presentation_request_artifacts", _fake_presentation_definition
     )
     monkeypatch.setattr(
         "flow.main._sign_request_object_with_issuer_did",
@@ -2074,6 +2089,7 @@ async def test_started_post_request_uri_transports_wallet_nonce_into_signed_requ
     assert parameters["request_uri_method"] == ["post"]
     assert len(parameters["request_uri"]) == 1
 
+    @_native_artifacts_fixture
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
@@ -2083,7 +2099,7 @@ async def test_started_post_request_uri_transports_wallet_nonce_into_signed_requ
         }
 
     monkeypatch.setattr(
-        "flow.main._build_presentation_definition",
+        "flow.main._build_presentation_request_artifacts",
         _fake_presentation_definition,
     )
     signed_request = await get_verification_request_object(
@@ -2120,6 +2136,7 @@ async def test_get_verification_request_object_records_presentation_request_mess
     )
     await repo.save_instance(instance)
 
+    @_native_artifacts_fixture
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
@@ -2129,7 +2146,7 @@ async def test_get_verification_request_object_records_presentation_request_mess
         }
 
     monkeypatch.setattr(
-        "flow.main._build_presentation_definition", _fake_presentation_definition
+        "flow.main._build_presentation_request_artifacts", _fake_presentation_definition
     )
 
     response = await get_verification_request_object(instance.id, repo)
@@ -2224,9 +2241,25 @@ async def test_get_verification_request_object_uses_dcql_vct_values(monkeypatch)
     )
     await repo.save_instance(instance)
 
+    @_native_artifacts_fixture
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
+            "_test_dcql_query": {
+                "credentials": [
+                    {
+                        "id": "req-marty-open-badge-login",
+                        "format": "dc+sd-jwt",
+                        "meta": {
+                            "vct_values": [
+                                "https://beta.elevenidllc.com/credentials/"
+                                "marty-verified-member-badge"
+                            ]
+                        },
+                        "claims": [{"id": "claim_email", "path": ["email"]}],
+                    }
+                ]
+            },
             "input_descriptors": [
                 {
                     "id": "req-marty-open-badge-login",
@@ -2254,7 +2287,7 @@ async def test_get_verification_request_object_uses_dcql_vct_values(monkeypatch)
         }
 
     monkeypatch.setattr(
-        "flow.main._build_presentation_definition", _fake_presentation_definition
+        "flow.main._build_presentation_request_artifacts", _fake_presentation_definition
     )
 
     response = await get_verification_request_object(instance.id, repo)
@@ -2293,6 +2326,7 @@ async def test_get_verification_request_object_supports_lissi_compat_profile(
     )
     await repo.save_instance(instance)
 
+    @_native_artifacts_fixture
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
@@ -2302,7 +2336,7 @@ async def test_get_verification_request_object_supports_lissi_compat_profile(
         }
 
     monkeypatch.setattr(
-        "flow.main._build_presentation_definition", _fake_presentation_definition
+        "flow.main._build_presentation_request_artifacts", _fake_presentation_definition
     )
 
     response = await get_verification_request_object(instance.id, repo, compat="lissi")
@@ -2350,6 +2384,7 @@ async def test_get_verification_request_object_supports_redirect_uri_client_id_p
     )
     await repo.save_instance(instance)
 
+    @_native_artifacts_fixture
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
@@ -2359,7 +2394,7 @@ async def test_get_verification_request_object_supports_redirect_uri_client_id_p
         }
 
     monkeypatch.setattr(
-        "flow.main._build_presentation_definition", _fake_presentation_definition
+        "flow.main._build_presentation_request_artifacts", _fake_presentation_definition
     )
     response = await get_verification_request_object(instance.id, repo)
     _header, payload, _signature = response.body.decode().split(".", 2)
@@ -2379,6 +2414,7 @@ async def test_haip_request_uses_a_fresh_per_flow_response_encryption_key(monkey
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://verifier.example")
     repo = InMemoryFlowRepository()
 
+    @_native_artifacts_fixture
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
@@ -2388,7 +2424,7 @@ async def test_haip_request_uses_a_fresh_per_flow_response_encryption_key(monkey
         }
 
     monkeypatch.setattr(
-        "flow.main._build_presentation_definition", _fake_presentation_definition
+        "flow.main._build_presentation_request_artifacts", _fake_presentation_definition
     )
     instances = []
     for _ in range(2):
@@ -2458,6 +2494,7 @@ async def test_x509_hash_request_uses_certificate_client_id_and_x5c_header(monke
     )
     await repo.save_instance(instance)
 
+    @_native_artifacts_fixture
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
@@ -2467,7 +2504,7 @@ async def test_x509_hash_request_uses_certificate_client_id_and_x5c_header(monke
         }
 
     monkeypatch.setattr(
-        "flow.main._build_presentation_definition", _fake_presentation_definition
+        "flow.main._build_presentation_request_artifacts", _fake_presentation_definition
     )
     response = await get_verification_request_object(instance.id, repo)
     header, payload, _signature = response.body.decode().split(".", 2)
@@ -2497,6 +2534,7 @@ async def test_post_request_uri_binds_wallet_nonce_to_signed_request(monkeypatch
     )
     await repo.save_instance(instance)
 
+    @_native_artifacts_fixture
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
@@ -2506,7 +2544,7 @@ async def test_post_request_uri_binds_wallet_nonce_to_signed_request(monkeypatch
         }
 
     monkeypatch.setattr(
-        "flow.main._build_presentation_definition", _fake_presentation_definition
+        "flow.main._build_presentation_request_artifacts", _fake_presentation_definition
     )
     response = await get_verification_request_object(
         instance.id, repo, request=_form_request({"wallet_nonce": "wallet-nonce-1"})
@@ -2686,6 +2724,7 @@ async def test_get_verification_request_object_supports_dc_api(monkeypatch):
     )
     await repo.save_instance(instance)
 
+    @_native_artifacts_fixture
     async def _fake_presentation_definition(_policy_id: str) -> dict:
         return {
             "id": "pd-1",
@@ -2695,7 +2734,7 @@ async def test_get_verification_request_object_supports_dc_api(monkeypatch):
         }
 
     monkeypatch.setattr(
-        "flow.main._build_presentation_definition", _fake_presentation_definition
+        "flow.main._build_presentation_request_artifacts", _fake_presentation_definition
     )
 
     response = await get_verification_request_object(
@@ -2788,41 +2827,8 @@ def test_select_vp_token_rejects_ambiguous_dcql_transport_shape(wrapped):
     assert _select_vp_token_for_evaluation(wrapped) == wrapped
 
 
-def test_dcql_claims_include_required_direct_sd_jwt_paths():
-    descriptor = {
-        "constraints": {
-            "fields": [
-                {
-                    "path": ["$.vct"],
-                    "filter": {"const": "https://example.test/MemberCredential"},
-                },
-                {
-                    "path": [
-                        "$.vc.credentialSubject.email",
-                        "$.credentialSubject.email",
-                        "$.email",
-                    ],
-                    "optional": False,
-                },
-                {
-                    "path": [
-                        "$.vc.credentialSubject.given_name",
-                        "$.credentialSubject.given_name",
-                        "$.given_name",
-                    ],
-                    "optional": True,
-                },
-            ]
-        }
-    }
-
-    assert _dcql_claims_for_descriptor(descriptor) == [
-        {"id": "claim_email", "path": ["email"]}
-    ]
-
-
 @pytest.mark.asyncio
-async def test_build_presentation_definition_requests_email_only_for_member_login(
+async def test_build_presentation_definition_maps_policy_records_to_native_input(
     monkeypatch,
 ):
     requested_claims = [
@@ -2834,6 +2840,7 @@ async def test_build_presentation_definition_requests_email_only_for_member_logi
             "intent_to_retain": False,
         }
     ]
+    captured: dict[str, object] = {}
 
     class FakePresentationPolicyStub:
         def __init__(self, _channel):
@@ -2848,12 +2855,10 @@ async def test_build_presentation_definition_requests_email_only_for_member_logi
                             "id": "req-member-credential",
                             "credential_template_id": "template-1",
                             "display_name": "Member Credential",
-                            "credential_payload_format": "ietf_sd_jwt",
                             "requested_claims": requested_claims,
                         }
                     ]
                 ),
-                organization_id="org-1",
             )
 
     class FakeCredentialTemplateStub:
@@ -2865,202 +2870,70 @@ async def test_build_presentation_definition_requests_email_only_for_member_logi
                 id="template-1",
                 credential_type="MemberCredential",
                 vct="https://marty.example/credentials/MemberCredential",
+                doctype="",
                 supported_formats=["sd_jwt_vc"],
+                claims=[],
             )
 
-    monkeypatch.setattr(
-        "marty_proto.v1.presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub",
-        FakePresentationPolicyStub,
-    )
-    monkeypatch.setattr(
-        "marty_proto.v1.credential_template_service_pb2_grpc.CredentialTemplateServiceStub",
-        FakeCredentialTemplateStub,
-    )
-    monkeypatch.setattr("flow.main.app.state.pp_grpc_channel", object(), raising=False)
-    monkeypatch.setattr("flow.main.app.state.ct_grpc_channel", object(), raising=False)
-
-    presentation_definition = await _build_presentation_definition("policy-1")
-    descriptor = presentation_definition["input_descriptors"][0]
-    fields = descriptor["constraints"]["fields"]
-    type_fields = [field for field in fields if "filter" in field]
-    named_fields = [
-        field for field in descriptor["constraints"]["fields"] if "name" in field
-    ]
-
-    assert type_fields[0] == {
-        "path": ["$.vct"],
-        "filter": {
-            "type": "string",
-            "const": "https://marty.example/credentials/MemberCredential",
-        },
-    }
-    assert type_fields[1] == {
-        "path": ["$.vc.type", "$.type"],
-        "filter": {
-            "anyOf": [
-                {"type": "array", "contains": {"const": "MemberCredential"}},
-                {"type": "string", "const": "MemberCredential"},
-            ],
-        },
-        "optional": True,
-    }
-    assert descriptor["constraints"]["limit_disclosure"] == "required"
-    assert named_fields == [
-        {
-            "name": "Email Address",
-            "purpose": "Identify your account",
-            "path": [
-                "$.vc.credentialSubject.email",
-                "$.credentialSubject.email",
-                "$.email",
-            ],
-            "intent_to_retain": False,
-            "optional": False,
-        }
-    ]
-    assert _dcql_claims_for_descriptor(descriptor) == [
-        {"id": "claim_email", "path": ["email"]}
-    ]
-
-
-@pytest.mark.asyncio
-async def test_build_presentation_definition_accepts_current_and_legacy_open_badge_vct(
-    monkeypatch,
-):
-    class FakePresentationPolicyStub:
-        def __init__(self, _channel):
-            pass
-
-        async def GetPolicy(self, _request):
-            return SimpleNamespace(
-                id="policy-1",
-                credential_requirements_json=json.dumps(
-                    [
-                        {
-                            "id": "req-marty-open-badge-login",
-                            "credential_template_id": "template-open-badge",
-                            "display_name": "Marty Verified Member Badge",
-                            "credential_payload_format": "sd_jwt_vc",
-                            "requested_claims": [
-                                {
-                                    "claim_name": "email",
-                                    "display_name": "Email Address",
-                                    "required": True,
-                                }
-                            ],
-                        }
-                    ]
-                ),
-                organization_id="org-1",
-            )
-
-    class FakeCredentialTemplateStub:
-        def __init__(self, _channel):
-            pass
-
-        async def GetTemplate(self, _request):
-            return SimpleNamespace(
-                id="template-open-badge",
-                credential_type="open_badge",
-                vct="https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
-                supported_formats=["sd_jwt_vc"],
-            )
-
-    monkeypatch.setattr(
-        "marty_proto.v1.presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub",
-        FakePresentationPolicyStub,
-    )
-    monkeypatch.setattr(
-        "marty_proto.v1.credential_template_service_pb2_grpc.CredentialTemplateServiceStub",
-        FakeCredentialTemplateStub,
-    )
-    monkeypatch.setattr("flow.main.app.state.pp_grpc_channel", object(), raising=False)
-    monkeypatch.setattr("flow.main.app.state.ct_grpc_channel", object(), raising=False)
-
-    presentation_definition = await _build_presentation_definition("policy-1")
-    descriptor = presentation_definition["input_descriptors"][0]
-    assert descriptor["_marty_credential_profile"] == "open_badge"
-    assert descriptor["_marty_presentation_metadata"] == {
-        "format": "dc+sd-jwt",
-        "meta": {
-            "vct_values": [
-                "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
-                "https://marty.example/credentials/open_badge",
-            ]
-        },
-    }
-    [vct_field] = [
-        field
-        for field in descriptor["constraints"]["fields"]
-        if field.get("path") == ["$.vct"]
-    ]
-
-    assert vct_field["filter"] == {
-        "type": "string",
-        "enum": [
-            "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
-            "https://marty.example/credentials/open_badge",
-        ],
-    }
-
-
-@pytest.mark.asyncio
-async def test_open_badge_dcql_uses_canonical_rust_issuer_metadata(
-    monkeypatch,
-) -> None:
-    async def _fake_presentation_definition(_policy_id: str) -> dict:
+    def fake_native_builder(request: dict) -> dict:
+        captured.update(request)
         return {
-            "id": "pd-1",
-            "input_descriptors": [
-                {
-                    "id": "req-marty-open-badge-login",
-                    "_marty_credential_profile": "open_badge",
-                    "format": {"jwt_vc_json": {"alg": ["ES256"]}},
-                    "constraints": {
-                        "fields": [
-                            {
-                                "path": ["$.vc.type", "$.type"],
-                                "filter": {"const": "open_badge"},
-                            }
-                        ]
-                    },
-                }
-            ],
-        }
-
-    captured: list[str] = []
-
-    def _native_metadata(
-        profile: str,
-        credential_format: str,
-        type_identifier: str,
-    ) -> dict:
-        captured.append(profile)
-        assert credential_format == "jwt_vc_json"
-        assert type_identifier == ""
-        return {
-            "format": "jwt_vc_json",
-            "meta": {
-                "type_values": [["VerifiableCredential", "OpenBadgeCredential"]]
+            "presentation_definition": {
+                "id": request["id"],
+                "input_descriptors": [{"id": "req-member-credential"}],
+            },
+            "dcql_query": {
+                "credentials": [
+                    {"id": "req-member-credential", "format": "dc+sd-jwt"}
+                ]
             },
         }
 
     monkeypatch.setattr(
-        "flow.main._build_presentation_definition", _fake_presentation_definition
+        "marty_proto.v1.presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub",
+        FakePresentationPolicyStub,
     )
     monkeypatch.setattr(
-        "flow.main.credential_profile_presentation_metadata", _native_metadata
+        "marty_proto.v1.credential_template_service_pb2_grpc.CredentialTemplateServiceStub",
+        FakeCredentialTemplateStub,
     )
-    instance = FlowInstance(
-        flow_definition_id="__verification__",
-        organization_id="org-1",
-        context={"presentation_policy_id": "policy-1"},
+    monkeypatch.setattr("flow.main.app.state.pp_grpc_channel", object(), raising=False)
+    monkeypatch.setattr("flow.main.app.state.ct_grpc_channel", object(), raising=False)
+    monkeypatch.setattr(
+        "flow.main.wallet_registry_format_names",
+        lambda: ["dc+sd-jwt", "mso_mdoc"],
+    )
+    monkeypatch.setattr(
+        "flow.main.build_oid4vp_presentation_request", fake_native_builder
     )
 
-    query = await flow_main._oid4vp_credential_query(instance)
+    definition = await _build_presentation_definition("policy-1")
 
-    assert captured == ["open_badge"]
-    assert query == {
+    assert definition["input_descriptors"] == [{"id": "req-member-credential"}]
+    [requirement] = captured["requirements"]
+    assert requirement == {
+        "id": "req-member-credential",
+        "display_name": "Member Credential",
+        "description": None,
+        "credential_type": "MemberCredential",
+        "credential_vct": "https://marty.example/credentials/MemberCredential",
+        "credential_doctype": "",
+        "supported_formats": ["sd_jwt_vc"],
+        "requested_claims": requested_claims,
+        "mdoc_claims": [],
+    }
+    assert captured["wallet_formats"] == ["dc+sd-jwt", "mso_mdoc"]
+
+
+@pytest.mark.asyncio
+async def test_oid4vp_query_uses_native_artifact_without_python_reconstruction(
+    monkeypatch,
+) -> None:
+    artifacts = {
+        "presentation_definition": {
+            "id": "pd-1",
+            "input_descriptors": [{"id": "req-marty-open-badge-login"}],
+        },
         "dcql_query": {
             "credentials": [
                 {
@@ -3073,9 +2946,27 @@ async def test_open_badge_dcql_uses_canonical_rust_issuer_metadata(
                     },
                 }
             ]
-        }
+        },
     }
 
+    async def fake_artifacts(_policy_id: str) -> dict:
+        return artifacts
+
+    monkeypatch.setattr(
+        "flow.main._build_presentation_request_artifacts", fake_artifacts
+    )
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        context={"presentation_policy_id": "policy-1"},
+    )
+
+    assert await flow_main._oid4vp_credential_query(instance) == {
+        "dcql_query": artifacts["dcql_query"]
+    }
+    assert await flow_main._oid4vp_credential_query(
+        instance, lissi_compat=True
+    ) == {"presentation_definition": artifacts["presentation_definition"]}
 
 @pytest.mark.asyncio
 async def test_submit_verification_without_policy_does_not_claim_transaction():
