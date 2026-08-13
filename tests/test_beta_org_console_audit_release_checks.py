@@ -207,3 +207,33 @@ def test_release_checks_block_cancelled_document_navigation() -> None:
 
     assert checks["status"] == "blocked"
     assert checks["blockers"][0]["code"] == "unexpected_failed_request"
+
+
+def test_collection_items_supports_public_issuer_identity_envelope() -> None:
+    audit = _load_audit_module()
+    identity = {
+        "issuer_did": "did:web:beta.example:orgs:audit",
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256",
+        "status": "active",
+    }
+
+    assert audit.collection_items({"body": {"identities": [identity]}}) == [identity]
+    assert audit.find_issuer_identity(
+        {"body": {"identities": [identity]}},
+        identity["issuer_did"],
+    ) == identity
+
+
+def test_beta_audit_uses_only_public_issuer_identity_route() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "beta_org_console_audit.py"
+    ).read_text(encoding="utf-8")
+
+    assert '"/v1/signing-keys/issuer-identities"' in source
+    assert '"/v1/signing-keys/issuer-profiles"' not in source
+    assert "credential.issuer_did" in source
+    assert "credential.issuer_profile_id" not in source
