@@ -10,6 +10,7 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+    open-pull-requests-limit: 2
 
   - package-ecosystem: npm
     directory: /ui
@@ -23,6 +24,11 @@ updates:
       ui-development:
         dependency-type: development
         patterns: ["*"]
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
 
   - package-ecosystem: npm
     directory: /tests
@@ -34,6 +40,12 @@ updates:
     groups:
       browser-tests:
         patterns: ["*"]
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
+    open-pull-requests-limit: 3
 
   - package-ecosystem: npm
     directory: /tests/canvas-oss-contract
@@ -45,6 +57,12 @@ updates:
     groups:
       canvas-contract:
         patterns: ["*"]
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
+    open-pull-requests-limit: 3
 
   - package-ecosystem: pip
     directory: /
@@ -54,6 +72,14 @@ updates:
       time: "08:00"
       timezone: "America/Denver"
     open-pull-requests-limit: 5
+    groups:
+      python-dependencies:
+        patterns: ["*"]
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
 
   - package-ecosystem: pip
     directory: /docker/canvas-sandbox
@@ -62,3 +88,12 @@ updates:
       day: sunday
       time: "09:00"
       timezone: "America/Denver"
+    open-pull-requests-limit: 3
+    groups:
+      canvas-python-dependencies:
+        patterns: ["*"]
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+      semver-minor-days: 7
+      semver-patch-days: 3
