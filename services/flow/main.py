@@ -72,6 +72,14 @@ from marty_common import (
 from marty_common.org_authorization import get_organization_client
 from marty_common.service_setup import create_service_app
 from common.grpc_factory import create_grpc_channel
+from common.native_backend import NativeOperationError
+from common.oid4vp_native import (
+    build_oid4vp_presentation_request,
+    credential_requirement_input,
+    initialize_native_oid4vp_backend,
+    parse_policy_requirements,
+    wallet_registry_format_names,
+)
 from common.webhook_signatures import is_valid_event_secret, payload_digest
 from flow.callback_outbox import (
     CallbackOutboxEvent,
@@ -84,7 +92,6 @@ from flow.callback_outbox import (
 from flow.infrastructure.adapters import PostgresFlowRepository
 from flow.native import (
     NativeFlowOperationError,
-    credential_profile_presentation_metadata,
     evaluate_transition as evaluate_native_flow_transition,
     initialize_native_flow_backend,
     is_terminal_status as is_native_terminal_status,
@@ -4457,524 +4464,67 @@ async def start_verification_flow(
     )
 
 
-async def _build_presentation_definition(presentation_policy_id: str) -> dict:
-    """
-    Build a proper OID4VP presentation_definition from a presentation policy.
+async def _build_presentation_request_artifacts(
+    presentation_policy_id: str,
+) -> dict[str, Any]:
+    """Fetch application records and delegate all OID4VP construction to Rust."""
+    if not presentation_policy_id:
+        raise NativeOperationError("OID4VP requests require a presentation policy")
 
-    Fetches the policy and each referenced credential template so that
-    ``input_descriptors`` contain real credential-type filters that a wallet
-    can match against its stored credentials.
-    """
-    import json as _json
-    from marty_proto.v1 import presentation_policy_service_pb2 as pp_pb2
-    from marty_proto.v1 import presentation_policy_service_pb2_grpc as pp_grpc
     from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
     from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
+    from marty_proto.v1 import presentation_policy_service_pb2 as pp_pb2
+    from marty_proto.v1 import presentation_policy_service_pb2_grpc as pp_grpc
 
     pp_stub = pp_grpc.PresentationPolicyServiceStub(app.state.pp_grpc_channel)
-    ct_stub = ct_grpc.CredentialTemplateServiceStub(app.state.ct_grpc_channel)
-
-    policy: dict = {"credential_requirements": []}
-    if presentation_policy_id:
-        try:
-            pp_resp = await pp_stub.GetPolicy(
-                pp_pb2.GetPolicyRequest(policy_id=presentation_policy_id)
-            )
-            if pp_resp.id:
-                policy = {
-                    "credential_requirements": _json.loads(
-                        pp_resp.credential_requirements_json
-                    )
-                    if pp_resp.credential_requirements_json
-                    else [],
-                    "organization_id": pp_resp.organization_id,
-                }
-        except Exception as exc:
-            logger.warning(
-                f"_build_presentation_definition: could not fetch policy "
-                f"{presentation_policy_id}: {exc}"
-            )
-
-    input_descriptors: list[dict] = []
-    for i, req in enumerate(policy.get("credential_requirements", [])):
-        template_id = req.get("credential_template_id", "")
-        descriptor_id = req.get("id") or f"descriptor-{i}"
-        display_name = req.get("display_name") or f"Credential {i + 1}"
-        purpose = req.get("description") or f"Present {display_name}"
-
-        credential_type: str | None = None
-        credential_vct: str | None = None
-        credential_doctype: str | None = None
-        supported_formats: list[str] = []
-        template_mdoc_claims: dict[str, tuple[str, str]] = {}
-        if template_id:
-            try:
-                tmpl_resp = await ct_stub.GetTemplate(
-                    ct_pb2.GetTemplateRequest(template_id=template_id)
-                )
-                if tmpl_resp.id:
-                    credential_type = tmpl_resp.credential_type or None
-                    credential_vct = tmpl_resp.vct or None
-                    credential_doctype = getattr(tmpl_resp, "doctype", "") or None
-                    supported_formats = list(tmpl_resp.supported_formats) or []
-                    template_mdoc_claims = {
-                        claim.name: (
-                            claim.mdoc_namespace,
-                            claim.mdoc_element_identifier or claim.name,
-                        )
-                        for claim in getattr(tmpl_resp, "claims", [])
-                        if claim.mdoc_namespace
-                    }
-            except Exception as exc:
-                logger.warning(
-                    f"_build_presentation_definition: could not fetch template "
-                    f"{template_id}: {exc}"
-                )
-
-        credential_profile = "open_badge" if credential_type == "open_badge" else None
-        profile_presentation_metadata: dict[str, Any] | None = None
-        if credential_profile:
-            profile_formats = _oid4vp_presentation_formats(supported_formats)
-            profile_format = next(iter(profile_formats), "jwt_vc_json")
-            profile_presentation_metadata = credential_profile_presentation_metadata(
-                credential_profile,
-                profile_format,
-                credential_vct or "",
-            )
-            type_values = profile_presentation_metadata["meta"].get("type_values")
-            if type_values:
-                credential_type = type_values[0][-1]
-
-        # Build type-filter constraint based on format.  Presentation Exchange
-        # fields are conjunctive, so the SD-JWT vct selector must be the only
-        # required type selector for an SD-JWT login badge.  Compatibility type
-        # hints are optional; otherwise wallets can report "no credentials" for
-        # a perfectly valid SD-JWT VC that does not also carry vc.type.
-        fields: list[dict] = []
-        if credential_type:
-            if _is_mdoc_format(supported_formats):
-                # ISO 18013-5 mDoc — filter by docType
-                fields.append(
-                    {
-                        "path": ["$.mdoc.docType", "$.docType"],
-                        "filter": {"type": "string", "const": credential_type},
-                    }
-                )
-            elif _is_sd_jwt_format(supported_formats):
-                # SD-JWT VC — primary filter by vct claim
-                vct_values = (
-                    profile_presentation_metadata["meta"]["vct_values"]
-                    if profile_presentation_metadata
-                    else _sd_jwt_vct_values(credential_vct, credential_type)
-                )
-                fields.append(
-                    {
-                        "path": ["$.vct"],
-                        "filter": _string_filter_for_values(vct_values),
-                    }
-                )
-                # Optional W3C/Open Badge type hint for wallets that use it for
-                # display/ranking. It MUST NOT be required for SD-JWT matching.
-                fields.append(
-                    {
-                        "path": ["$.vc.type", "$.type"],
-                        "filter": {
-                            "anyOf": [
-                                {
-                                    "type": "array",
-                                    "contains": {"const": credential_type},
-                                },
-                                {"type": "string", "const": credential_type},
-                            ],
-                        },
-                        "optional": True,
-                    }
-                )
-            else:
-                # W3C JWT VC — filter by vc.type array
-                fields.append(
-                    {
-                        "path": ["$.vc.type", "$.type"],
-                        "filter": {
-                            "anyOf": [
-                                {
-                                    "type": "array",
-                                    "contains": {"const": credential_type},
-                                },
-                                {"type": "string", "const": credential_type},
-                            ],
-                        },
-                    }
-                )
-
-        # Add path hints for required claims (enables selective disclosure)
-        mdoc_claim_requests: list[dict[str, Any]] = []
-        for claim in req.get("requested_claims", []):
-            claim_name = (
-                claim.get("claim_name")
-                if isinstance(claim, dict)
-                else getattr(claim, "claim_name", None)
-            )
-            if claim_name:
-                claim_display_name = (
-                    claim.get("display_name")
-                    if isinstance(claim, dict)
-                    else getattr(claim, "display_name", None)
-                ) or str(claim_name).replace("_", " ").title()
-                claim_purpose = (
-                    claim.get("purpose")
-                    if isinstance(claim, dict)
-                    else getattr(claim, "purpose", None)
-                ) or f"Share {claim_display_name}"
-                retain_claim = (
-                    claim.get("intent_to_retain", False)
-                    if isinstance(claim, dict)
-                    else getattr(claim, "intent_to_retain", False)
-                )
-                if _is_mdoc_format(supported_formats):
-                    mdoc_path = template_mdoc_claims.get(str(claim_name))
-                    if mdoc_path:
-                        mdoc_claim_requests.append(
-                            {
-                                "id": "claim_"
-                                + str(claim_name).replace("-", "_").replace(".", "_"),
-                                "path": [mdoc_path[0], mdoc_path[1]],
-                                "intent_to_retain": bool(retain_claim),
-                            }
-                        )
-                fields.append(
-                    {
-                        "name": claim_display_name,
-                        "purpose": claim_purpose,
-                        "path": [
-                            f"$.vc.credentialSubject.{claim_name}",
-                            f"$.credentialSubject.{claim_name}",
-                            f"$.{claim_name}",
-                        ],
-                        "intent_to_retain": bool(retain_claim),
-                        "optional": not (
-                            claim.get("required", False)
-                            if isinstance(claim, dict)
-                            else getattr(claim, "required", False)
-                        ),
-                    }
-                )
-
-        descriptor: dict = {
-            "id": descriptor_id,
-            "name": display_name,
-            "purpose": purpose,
-        }
-        if credential_profile:
-            # This is an application profile alias, not a wire credential type.
-            # Rust owns its canonical issued/presentation representation.
-            descriptor["_marty_credential_profile"] = credential_profile
-            descriptor["_marty_presentation_metadata"] = (
-                profile_presentation_metadata
-            )
-        if _is_mdoc_format(supported_formats):
-            descriptor["_marty_mdoc"] = {
-                "doctype": credential_doctype or credential_type or "",
-                "claims": mdoc_claim_requests,
-            }
-        descriptor["format"] = _oid4vp_presentation_formats(supported_formats)
-        if fields:
-            descriptor["constraints"] = {"fields": fields}
-            if _is_sd_jwt_format(supported_formats):
-                descriptor["constraints"]["limit_disclosure"] = "required"
-
-        input_descriptors.append(descriptor)
-
-    # Fallback: no requirements in policy
-    if not input_descriptors:
-        input_descriptors = [
-            {
-                "id": "default_requirement",
-                "name": "Credential Presentation",
-                "purpose": "Present credentials per policy requirements",
-                "constraints": {"fields": []},
-            }
-        ]
-
-    # Collect all unique supported formats across descriptors for the top-level format
-    _top_formats: dict[str, Any] = {}
-    for desc in input_descriptors:
-        for fmt_key, fmt_val in desc.get("format", {}).items():
-            if fmt_key not in _top_formats:
-                _top_formats[fmt_key] = fmt_val
-    if not _top_formats:
-        _top_formats = {"jwt_vp": {"alg": ["ES256", "EdDSA"]}}
-
-    return {
-        "id": str(uuid.uuid4()),
-        "format": _top_formats,
-        "input_descriptors": input_descriptors,
-    }
-
-
-# ── OID4VP presentation formats: derived from wallet registry entries ─────
-# Each wallet registry entry declares supported_formats that map directly to
-# OID4VP presentation format identifiers.  The canonical catalog lives in
-# credential_template/main.py (SYSTEM_WALLET_CATALOG); a local fallback keeps
-# presentation working when the module isn't importable at runtime.
-
-_WALLET_FORMATS_FALLBACK: dict[str, dict[str, Any]] = {
-    "vc+sd-jwt": {
-        "sd-jwt_alg_values": ["ES256", "EdDSA"],
-        "kb-jwt_alg_values": ["ES256", "EdDSA"],
-    },
-    "dc+sd-jwt": {
-        "sd-jwt_alg_values": ["ES256", "EdDSA"],
-        "kb-jwt_alg_values": ["ES256", "EdDSA"],
-    },
-    "mso_mdoc": {"alg": ["ES256", "ES384"]},
-    "jwt_vp": {"alg": ["ES256", "EdDSA"]},
-    "ldp_vp": {"proof_type": ["Ed25519Signature2020"]},
-}
-
-
-def _oid4vp_wallet_registry_formats() -> dict[str, dict[str, Any]]:
-    """Collect all unique OID4VP format identifiers from the wallet registry."""
-    try:
-        from credential_template.main import SYSTEM_WALLET_CATALOG  # type: ignore[import-untyped]
-
-        result: dict[str, dict[str, Any]] = {}
-        for entry in SYSTEM_WALLET_CATALOG:
-            for fmt in entry.supported_formats:
-                fmt_s = (fmt or "").strip()
-                if fmt_s and fmt_s not in result:
-                    result[fmt_s] = _oid4vp_format_alg(fmt_s)
-        if result:
-            logger.debug(
-                "_oid4vp_wallet_registry_formats: loaded %d formats from SYSTEM_WALLET_CATALOG",
-                len(result),
-            )
-            return result
-    except ImportError:
-        pass
-    # Fallback: use the locally-maintained copy (must match SYSTEM_WALLET_CATALOG)
-    logger.debug(
-        "_oid4vp_wallet_registry_formats: using local fallback (%d formats)",
-        len(_WALLET_FORMATS_FALLBACK),
+    policy = await pp_stub.GetPolicy(
+        pp_pb2.GetPolicyRequest(policy_id=presentation_policy_id)
     )
-    return dict(_WALLET_FORMATS_FALLBACK)
+    if not policy.id:
+        raise NativeOperationError(
+            f"Presentation policy {presentation_policy_id} was not found"
+        )
+    requirements = parse_policy_requirements(
+        presentation_policy_id, policy.credential_requirements_json
+    )
 
-
-def _oid4vp_format_alg(fmt: str) -> dict[str, Any]:
-    """Return algorithm constraints for a given OID4VP format identifier."""
-    fmt_n = (fmt or "").strip().lower()
-    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc"}:
-        return dict(_SD_JWT_PRESENTATION_ALGS)
-    if fmt_n in {"mso_mdoc", "mdoc"}:
-        return {"alg": ["ES256", "ES384"]}
-    if fmt_n in {"jwt_vp", "jwt_vc", "jwt_vc_json"}:
-        return {"alg": ["ES256", "EdDSA"]}
-    if fmt_n == "ldp_vp":
-        return {"proof_type": ["Ed25519Signature2020"]}
-    return {"alg": ["ES256", "EdDSA"]}
-
-
-def _oid4vp_presentation_formats(
-    template_supported_formats: list[str],
-) -> dict[str, Any]:
-    """Derive OID4VP format identifiers from template formats × wallet registry.
-
-    The credential template declares format *families* (e.g. sd_jwt_vc, mso_mdoc).
-    The wallet registry declares the exact format *identifiers* each wallet expects.
-    This function returns the union of all wallet-supported identifiers in the
-    template's format families, so the presentation request works for every
-    registered wallet without hardcoding format strings.
-    """
-    _SD_FAMILY = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt"}
-    _DOC_FAMILY = {"mso_mdoc", "mdoc"}
-    _JWTVP_FAMILY = {"jwt_vc", "jwt_vc_json", "jwt_vp"}
-
-    template_family: set[str] = set()
-    for f in template_supported_formats:
-        fn = (f or "").strip().lower()
-        if fn in _SD_FAMILY:
-            template_family.add("sd_jwt")
-        elif fn in _DOC_FAMILY:
-            template_family.add("mdoc")
-        elif fn in _JWTVP_FAMILY:
-            template_family.add("jwt_vp")
-        else:
-            template_family.add(fn)
-
-    # Collect wallet-registry formats in the template's families
-    result: dict[str, Any] = {}
-    registry_formats = _oid4vp_wallet_registry_formats()
-    for fmt_key, fmt_alg in registry_formats.items():
-        fn = (fmt_key or "").strip().lower()
-        if (
-            ("sd_jwt" in template_family and fn in _SD_FAMILY)
-            or ("mdoc" in template_family and fn in _DOC_FAMILY)
-            or ("jwt_vp" in template_family and fn in _JWTVP_FAMILY)
-            or fn in template_family
-        ):
-            result[fmt_key] = fmt_alg
-
-    if not result:
-        return {
-            "jwt_vp": {"alg": ["ES256", "EdDSA"]},
-            "ldp_vp": {"proof_type": ["Ed25519Signature2020"]},
-        }
-    return result
-
-
-def _is_sd_jwt_format(supported_formats: list[str]) -> bool:
-    _SD = {"sd_jwt_vc", "vc+sd-jwt", "dc+sd-jwt"}
-    return any((f or "").strip().lower() in _SD for f in supported_formats)
-
-
-def _is_mdoc_format(supported_formats: list[str]) -> bool:
-    _DOC = {"mso_mdoc", "mdoc"}
-    return any((f or "").strip().lower() in _DOC for f in supported_formats)
-
-
-def _string_filter_for_values(values: list[str]) -> dict[str, Any]:
-    """Build a JSON Schema string filter for one or more accepted values."""
-    unique_values = [
-        value for i, value in enumerate(values) if value and value not in values[:i]
-    ]
-    if len(unique_values) == 1:
-        return {"type": "string", "const": unique_values[0]}
-    return {"type": "string", "enum": unique_values}
-
-
-def _sd_jwt_vct_values(
-    credential_vct: str | None, credential_type: str | None
-) -> list[str]:
-    """Return the template's generic SD-JWT VC type identifier."""
-    value = credential_vct or credential_type
-    return [value] if value else []
-
-
-def _dcql_format_name(fmt: str) -> str:
-    """Normalize OID4VP/registry format identifiers to DCQL format names."""
-    fmt_n = (fmt or "").strip().lower()
-    if fmt_n in {"jwt_vp", "jwt_vc", "jwt_vc_json"}:
-        return "jwt_vc_json"
-    if fmt_n == "ldp_vp":
-        return "ldp_vc"
-    if fmt_n in {"vc+sd-jwt", "dc+sd-jwt", "sd_jwt_vc"}:
-        return "dc+sd-jwt"
-    if fmt_n in {"mso_mdoc", "mdoc"}:
-        return "mso_mdoc"
-    return fmt
-
-
-def _json_schema_const_values(schema: dict[str, Any] | None) -> list[str]:
-    """Extract string const/enum values from a JSON Schema fragment."""
-    if not isinstance(schema, dict):
-        return []
-
-    values: list[str] = []
-
-    def _append(value: Any) -> None:
-        if isinstance(value, str) and value not in values:
-            values.append(value)
-
-    _append(schema.get("const"))
-    enum_values = schema.get("enum")
-    if isinstance(enum_values, list):
-        for enum_value in enum_values:
-            _append(enum_value)
-
-    contains = schema.get("contains")
-    if isinstance(contains, dict):
-        for value in _json_schema_const_values(contains):
-            _append(value)
-
-    for keyword in ("anyOf", "oneOf", "allOf"):
-        options = schema.get(keyword)
-        if isinstance(options, list):
-            for option in options:
-                if isinstance(option, dict):
-                    for value in _json_schema_const_values(option):
-                        _append(value)
-
-    return values
-
-
-def _dcql_meta_for_descriptor(
-    descriptor: dict[str, Any], fmt_name: str
-) -> dict[str, Any]:
-    """Derive DCQL meta from Presentation Exchange type/vct filters."""
-    if fmt_name == "mso_mdoc":
-        mdoc = descriptor.get("_marty_mdoc")
-        doctype = mdoc.get("doctype") if isinstance(mdoc, dict) else None
-        if isinstance(doctype, str) and doctype:
-            return {"doctype_value": doctype}
-    sd_jwt_formats = {"dc+sd-jwt", "vc+sd-jwt", "sd_jwt_vc"}
-    for constraint_field in descriptor.get("constraints", {}).get("fields", []):
-        values = _json_schema_const_values(constraint_field.get("filter"))
-        if not values:
-            continue
-        paths = constraint_field.get("path", [])
-        if fmt_name in sd_jwt_formats or "$.vct" in paths:
-            return {"vct_values": values}
-        if any(path in {"$.vc.type", "$.type"} for path in paths):
-            return {
-                "type_values": [["VerifiableCredential", value] for value in values]
-            }
-    return {}
-
-
-def _dcql_claims_for_descriptor(
-    descriptor: dict[str, Any], fmt_name: str | None = None
-) -> list[dict[str, Any]]:
-    """Derive DCQL claim requests from Presentation Exchange fields."""
-    if fmt_name == "mso_mdoc":
-        mdoc = descriptor.get("_marty_mdoc")
-        candidates = mdoc.get("claims", []) if isinstance(mdoc, dict) else []
-        return [
-            {
-                "id": claim["id"],
-                "path": list(claim["path"]),
-                "intent_to_retain": bool(claim.get("intent_to_retain", False)),
-            }
-            for claim in candidates
-            if isinstance(claim, dict)
-            and isinstance(claim.get("id"), str)
-            and isinstance(claim.get("path"), list)
-            and len(claim["path"]) == 2
-            and all(isinstance(value, str) and value for value in claim["path"])
-        ]
-
-    fields = descriptor.get("constraints", {}).get("fields", [])
-    required_fields = [field for field in fields if not field.get("optional")]
-    candidate_fields = required_fields or fields
-
-    claims: list[dict[str, Any]] = []
-    seen: set[tuple[str, ...]] = set()
-    for candidate_field in candidate_fields:
-        if candidate_field.get("filter"):
-            continue
-        for path in reversed(candidate_field.get("path", [])):
-            if not isinstance(path, str) or not path.startswith("$."):
-                continue
-            claim_path = path[2:].split(".")
-            if not claim_path or claim_path[0] in {
-                "vc",
-                "credentialSubject",
-                "type",
-                "vct",
-            }:
-                continue
-            key = tuple(claim_path)
-            if key in seen:
-                break
-            seen.add(key)
-            claims.append(
-                {
-                    "id": "claim_"
-                    + "_".join(part.replace("-", "_") for part in claim_path),
-                    "path": claim_path,
-                }
+    ct_stub = ct_grpc.CredentialTemplateServiceStub(app.state.ct_grpc_channel)
+    native_requirements: list[dict[str, Any]] = []
+    for requirement in requirements:
+        template_id = str(
+            requirement.get("credential_template_id", "") or ""
+        ).strip()
+        if not template_id:
+            raise NativeOperationError(
+                f"Presentation policy {presentation_policy_id} has a requirement "
+                "without a template"
             )
-            break
-    return claims
+        template = await ct_stub.GetTemplate(
+            ct_pb2.GetTemplateRequest(template_id=template_id)
+        )
+        if not template.id:
+            raise NativeOperationError(
+                f"Credential template {template_id} was not found"
+            )
+        native_requirements.append(
+            credential_requirement_input(requirement, template)
+        )
+
+    return build_oid4vp_presentation_request(
+        {
+            "id": str(uuid.uuid4()),
+            "requirements": native_requirements,
+            "wallet_formats": wallet_registry_format_names(),
+        }
+    )
+
+
+async def _build_presentation_definition(
+    presentation_policy_id: str,
+) -> dict[str, Any]:
+    """Compatibility adapter returning Rust's Presentation Exchange artifact."""
+    artifacts = await _build_presentation_request_artifacts(presentation_policy_id)
+    return artifacts["presentation_definition"]
 
 
 async def _oid4vp_credential_query(
@@ -4982,65 +4532,13 @@ async def _oid4vp_credential_query(
     *,
     lissi_compat: bool = False,
 ) -> dict[str, Any]:
-    """Build the production credential query shared by every OID4VP transport."""
-    presentation_definition = await _build_presentation_definition(
+    """Return one of the equivalent credential queries constructed by Rust."""
+    artifacts = await _build_presentation_request_artifacts(
         instance.context.get("presentation_policy_id", "")
     )
-
-    dcql_entries: list[dict[str, Any]] = []
-    for descriptor in presentation_definition.get("input_descriptors", []):
-        format_map = descriptor.get("format", {})
-        first_format = next(iter(format_map), "jwt_vc_json")
-        credential_profile = descriptor.get("_marty_credential_profile")
-        native_metadata = None
-        if isinstance(credential_profile, str) and credential_profile:
-            native_metadata = descriptor.get("_marty_presentation_metadata")
-            if not isinstance(native_metadata, dict):
-                native_metadata = credential_profile_presentation_metadata(
-                    credential_profile,
-                    first_format,
-                    "",
-                )
-            format_name = native_metadata["format"]
-        else:
-            format_name = _dcql_format_name(first_format)
-        entry: dict[str, Any] = {
-            "id": descriptor["id"],
-            "format": format_name,
-        }
-        metadata = (
-            native_metadata["meta"]
-            if native_metadata is not None
-            else _dcql_meta_for_descriptor(descriptor, format_name)
-        )
-        if metadata:
-            entry["meta"] = metadata
-        claims = _dcql_claims_for_descriptor(descriptor, format_name)
-        if claims:
-            entry["claims"] = claims
-        dcql_entries.append(entry)
-
-    if not dcql_entries:
-        dcql_entries = [{"id": "default-credential", "format": "jwt_vc_json"}]
-
     if lissi_compat:
-        return {
-            "presentation_definition": {
-                **presentation_definition,
-                "input_descriptors": [
-                    {
-                        key: value
-                        for key, value in descriptor.items()
-                        if not key.startswith("_marty_")
-                    }
-                    for descriptor in presentation_definition.get(
-                        "input_descriptors", []
-                    )
-                ],
-            }
-        }
-    return {"dcql_query": {"credentials": dcql_entries}}
-
+        return {"presentation_definition": artifacts["presentation_definition"]}
+    return {"dcql_query": artifacts["dcql_query"]}
 
 async def _unsigned_oid4vp_url_query(
     instance: FlowInstance,
@@ -7537,6 +7035,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         native_diagnostics["backend"],
         native_diagnostics["version"],
         ",".join(native_diagnostics["capabilities"]),
+    )
+    oid4vp_diagnostics = initialize_native_oid4vp_backend()
+    app.state.oid4vp_native_backend_diagnostics = oid4vp_diagnostics
+    logger.info(
+        "Native OID4VP builder ready: backend=%s version=%s capabilities=%s",
+        oid4vp_diagnostics["backend"],
+        oid4vp_diagnostics["version"],
+        ",".join(oid4vp_diagnostics["capabilities"]),
     )
     callback_secret = _read_secret_value("FLOW_WEBHOOK_SECRET")
     if (

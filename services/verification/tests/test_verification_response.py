@@ -340,42 +340,32 @@ def test_get_request_object_returns_dcql_only() -> None:
     store.save(session)
     client = _build_client(store)
 
-    original_builder = verification._build_presentation_definition
+    original_builder = verification._build_presentation_request_artifacts
 
-    async def _fake_build_presentation_definition(_session: verification.VerificationSession) -> dict:
+    async def _fake_build_artifacts(_session: verification.VerificationSession) -> dict:
         return {
-            "id": "pd-1",
-            "input_descriptors": [
-                {
-                    "id": "req-member-credential",
-                    "format": {"dc+sd-jwt": {"sd-jwt_alg_values": ["ES256"]}},
-                    "constraints": {
-                        "fields": [
-                            {
-                                "path": ["$.vct"],
-                                "filter": {
-                                    "type": "string",
-                                    "const": "https://example.test/credentials/member",
-                                },
-                            },
-                            {
-                                "path": [
-                                    "$.vc.credentialSubject.email",
-                                    "$.credentialSubject.email",
-                                    "$.email",
-                                ],
-                            },
-                        ]
-                    },
-                }
-            ],
+            "presentation_definition": {"id": "pd-1"},
+            "dcql_query": {
+                "credentials": [
+                    {
+                        "id": "req-member-credential",
+                        "format": "dc+sd-jwt",
+                        "meta": {
+                            "vct_values": [
+                                "https://example.test/credentials/member"
+                            ]
+                        },
+                        "claims": [{"id": "claim_email", "path": ["email"]}],
+                    }
+                ]
+            },
         }
 
-    verification._build_presentation_definition = _fake_build_presentation_definition
+    verification._build_presentation_request_artifacts = _fake_build_artifacts
     try:
         response = client.get(f"/v1/verify/{session.session_id}/request")
     finally:
-        verification._build_presentation_definition = original_builder
+        verification._build_presentation_request_artifacts = original_builder
 
     assert response.status_code == 200
     body = response.json()
