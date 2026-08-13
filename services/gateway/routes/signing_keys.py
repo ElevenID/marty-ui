@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import hmac
 import json
 import logging
@@ -977,8 +978,14 @@ def _service_certificates_storage_key(organization_id: str) -> str:
     return f"org:{organization_id}:signing-key-service-certificates"
 
 
-def _did_doc_storage_key(organization_id: str) -> str:
-    return f"org:{organization_id}:signing-key-did-document"
+def _did_doc_storage_key(
+    organization_id: str, issuer_did: str | None = None
+) -> str:
+    legacy_key = f"org:{organization_id}:signing-key-did-document"
+    if issuer_did is None:
+        return legacy_key
+    digest = hashlib.sha256(issuer_did.encode("utf-8")).hexdigest()
+    return f"{legacy_key}:did:{digest}"
 
 
 _SLUG_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,128}$")
@@ -1531,6 +1538,39 @@ async def _save_json_document(
     if redis_client is None:
         return
     await redis_client.set(storage_key, json.dumps(doc))
+
+
+async def _load_did_document_for_identity(
+    request: Request,
+    organization_id: str,
+    issuer_did: str,
+    default: dict[str, Any],
+) -> dict[str, Any]:
+    """Load one DID's document without mixing another org identity into it.
+
+    Older deployments stored one mutable document per organization. New writes
+    are DID-scoped; the legacy fallback remains readable so operators can
+    upgrade before every issuer identity has been republished.
+    """
+    missing_key = "__marty_scoped_did_document_missing__"
+    scoped = await _load_json_document(
+        request,
+        _did_doc_storage_key(organization_id, issuer_did),
+        {missing_key: True},
+    )
+    if scoped.get(missing_key) is not True:
+        if scoped.get("id") != issuer_did:
+            raise HTTPException(
+                status_code=503,
+                detail="Scoped DID document identity does not match its registry key.",
+            )
+        return scoped
+    legacy = await _load_json_document(
+        request,
+        _did_doc_storage_key(organization_id),
+        default,
+    )
+    return _retarget_did_document(legacy, issuer_did)
 
 
 def _merge_discovered_capabilities(
@@ -4305,21 +4345,9 @@ async def publish_service_to_did(
         "provider": normalized.get("provider"),
         "has_x5c": bool(x5c),
     }
-    services = registry.get("services") if isinstance(registry, dict) else []
-    service_idx = next(
-        (i for i, s in enumerate(services) if s.get("id") == service_id), None
-    )
-    if from_registry and service_idx is not None:
-        services[service_idx]["discovered_capabilities"] = (
-            _merge_discovered_capabilities(services[service_idx], discovered)
-        )
-        services[service_idx]["updated_at"] = _utcnow_iso()
-        registry["services"] = services
-        await _save_registered_service_registry(request, resolved_org_id, registry)
-
     did_doc = await _load_json_document(
         request,
-        _did_doc_storage_key(resolved_org_id),
+        _did_doc_storage_key(resolved_org_id, did_id),
         {
             "id": did_id,
             "controller": did_id,
@@ -4328,9 +4356,12 @@ async def publish_service_to_did(
             "updated_at": _utcnow_iso(),
         },
     )
+    if did_doc.get("id") != did_id:
+        raise HTTPException(
+            status_code=503,
+            detail="Scoped DID document identity does not match its registry key.",
+        )
 
-    # Ensure the document id matches the resolved DID (may have been created with a placeholder)
-    did_doc["id"] = did_id
     did_doc["controller"] = did_id
 
     methods = (
@@ -4355,11 +4386,38 @@ async def publish_service_to_did(
     assertion.append(verification_method["id"])
     did_doc["assertionMethod"] = assertion
     did_doc["updated_at"] = _utcnow_iso()
-    await _save_json_document(request, _did_doc_storage_key(resolved_org_id), did_doc)
 
-    # --- Store slug → org_id mapping for public did:web resolution ----------------
+    # Reserve the public route before persisting its document. A conflicting
+    # slug must not leave behind an unreachable DID document; same-org retries
+    # remain idempotent.
     if org_slug:
         await _claim_did_web_slug(request, org_slug, resolved_org_id)
+
+    await _save_json_document(
+        request,
+        _did_doc_storage_key(resolved_org_id, did_id),
+        did_doc,
+    )
+    # Preserve the legacy organization view for older administrative clients.
+    # Resolution paths use the scoped document above and never combine it with
+    # another DID owned by the same organization.
+    await _save_json_document(request, _did_doc_storage_key(resolved_org_id), did_doc)
+
+    # Only report a successful discovery after the identity-bound document is
+    # stored. This prevents a failed publication from leaving false-success
+    # capability metadata.
+    services = registry.get("services") if isinstance(registry, dict) else []
+    service_idx = next(
+        (i for i, service in enumerate(services) if service.get("id") == service_id),
+        None,
+    )
+    if from_registry and service_idx is not None:
+        services[service_idx]["discovered_capabilities"] = (
+            _merge_discovered_capabilities(services[service_idx], discovered)
+        )
+        services[service_idx]["updated_at"] = _utcnow_iso()
+        registry["services"] = services
+        await _save_registered_service_registry(request, resolved_org_id, registry)
 
     return JSONResponse(
         content={
@@ -6344,13 +6402,12 @@ async def _resolve_org_scoped_issuer_identity(
         "assertionMethod": [],
         "updated_at": _utcnow_iso(),
     }
-    did_doc = await _load_json_document(
+    did_doc = await _load_did_document_for_identity(
         request,
-        _did_doc_storage_key(organization_id),
+        organization_id,
+        issuer_did,
         did_doc_default,
     )
-    if did_doc.get("id") != issuer_did:
-        did_doc = _retarget_did_document(did_doc, issuer_did)
 
     last_mismatch_detail = (
         "No matching DID verification method was found for the issuer profile."
@@ -7612,9 +7669,10 @@ async def resolve_did_web_by_slug(request: Request, org_slug: str):
     public_domain = domain_cfg.get("public_domain", "")
     fallback_did = f"did:web:{public_domain}:orgs:{safe_slug}"
 
-    did_doc = await _load_json_document(
+    did_doc = await _load_did_document_for_identity(
         request,
-        _did_doc_storage_key(org_id),
+        org_id,
+        fallback_did,
         {
             "id": fallback_did,
             "controller": fallback_did,
@@ -7655,9 +7713,10 @@ async def resolve_did_web_root(request: Request):
     public_domain = domain_cfg.get("public_domain", "")
     fallback_did = f"did:web:{public_domain}"
 
-    did_doc = await _load_json_document(
+    did_doc = await _load_did_document_for_identity(
         request,
-        _did_doc_storage_key(default_org_id),
+        default_org_id,
+        fallback_did,
         {
             "id": fallback_did,
             "controller": fallback_did,

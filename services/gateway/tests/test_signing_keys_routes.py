@@ -3852,6 +3852,92 @@ async def test_resolve_did_web_by_slug_returns_did_document(
 
 
 @pytest.mark.asyncio
+async def test_resolve_did_web_by_slug_prefers_exact_scoped_document(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A second org DID must not inherit methods from the legacy org document."""
+    monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
+    issuer_did = "did:web:beta.elevenidllc.com:orgs:official-suite"
+    issuer_method = f"{issuer_did}#issuer-key"
+    seeded_did = "did:web:beta.elevenidllc.com:orgs:marty"
+    seeded_method = f"{seeded_did}#seeded-key"
+    documents = {
+        "did-web-slug:official-suite": "org_shared",
+        signing_keys._did_doc_storage_key("org_shared"): json.dumps(
+            {
+                "id": seeded_did,
+                "verificationMethod": [
+                    {
+                        "id": seeded_method,
+                        "controller": seeded_did,
+                        "publicKeyJwk": {"kty": "EC", "crv": "P-256"},
+                    }
+                ],
+                "assertionMethod": [seeded_method],
+            }
+        ),
+        signing_keys._did_doc_storage_key("org_shared", issuer_did): json.dumps(
+            {
+                "id": issuer_did,
+                "controller": issuer_did,
+                "verificationMethod": [
+                    {
+                        "id": issuer_method,
+                        "controller": issuer_did,
+                        "publicKeyJwk": {"kty": "EC", "crv": "P-256"},
+                    }
+                ],
+                "assertionMethod": [issuer_method],
+            }
+        ),
+    }
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(side_effect=lambda key: documents.get(key))
+    request = _build_public_request(redis_client=redis_mock)
+
+    response = await signing_keys.resolve_did_web_by_slug(
+        request=request, org_slug="official-suite"
+    )
+
+    data = json.loads(response.body)
+    assert data["id"] == issuer_did
+    assert [method["id"] for method in data["verificationMethod"]] == [
+        issuer_method
+    ]
+    assert data["assertionMethod"] == [issuer_method]
+    assert seeded_method not in json.dumps(data)
+
+
+@pytest.mark.asyncio
+async def test_resolve_did_web_by_slug_rejects_changed_scoped_identity(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A corrupted scoped record must not be retargeted into a trusted identity."""
+    monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
+    requested_did = "did:web:beta.elevenidllc.com:orgs:acme"
+    changed_did = "did:web:beta.elevenidllc.com:orgs:changed"
+    documents = {
+        "did-web-slug:acme": "org_acme",
+        signing_keys._did_doc_storage_key("org_acme", requested_did): json.dumps(
+            {
+                "id": changed_did,
+                "verificationMethod": [],
+                "assertionMethod": [],
+            }
+        ),
+    }
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(side_effect=lambda key: documents.get(key))
+    request = _build_public_request(redis_client=redis_mock)
+
+    with pytest.raises(signing_keys.HTTPException) as exc_info:
+        await signing_keys.resolve_did_web_by_slug(request=request, org_slug="acme")
+
+    assert exc_info.value.status_code == 503
+    assert "identity does not match" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_resolve_did_web_by_slug_rejects_invalid_slug(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -4031,7 +4117,85 @@ async def test_publish_service_to_did_stores_slug_mapping(
         "did:web:beta.elevenidllc.com%3A8443:orgs:acme-corp#"
     )
 
+    scoped_key = signing_keys._did_doc_storage_key(
+        "org_123", "did:web:beta.elevenidllc.com%3A8443:orgs:acme-corp"
+    )
+    scoped_writes = [
+        call
+        for call in redis_mock.set.await_args_list
+        if call.args and call.args[0] == scoped_key
+    ]
+    assert len(scoped_writes) == 1
+    scoped_document = json.loads(scoped_writes[0].args[1])
+    assert scoped_document["id"] == (
+        "did:web:beta.elevenidllc.com%3A8443:orgs:acme-corp"
+    )
+    assert [
+        method["id"] for method in scoped_document["verificationMethod"]
+    ] == [data["verification_method"]["id"]]
+
     redis_mock.set.assert_any_await("did-web-slug:acme-corp", "org_123", nx=True)
+
+
+@pytest.mark.asyncio
+async def test_publish_service_to_did_rejects_changed_scoped_identity(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Publishing must not retarget a record stored for another DID identity."""
+    test_service = {
+        "id": "svc-bao",
+        "service_type": "openbao-transit",
+        "key_reference": "cred-issuer-es256",
+        "algorithms": ["ES256"],
+    }
+
+    async def fake_load_registry(request, org_id):
+        return {"services": [test_service], "default_service_id": None}
+
+    monkeypatch.setattr(
+        signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+    monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
+    monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
+
+    class FakeAdapter:
+        async def get_public_key_jwk(self, config: dict):
+            return {"kty": "EC", "crv": "P-256", "x": "abc", "y": "def"}
+
+    monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
+
+    requested_did = "did:web:beta.elevenidllc.com:orgs:acme"
+    changed_did = "did:web:beta.elevenidllc.com:orgs:changed"
+    scoped_key = signing_keys._did_doc_storage_key("org_123", requested_did)
+    redis_mock = AsyncMock()
+    redis_mock.get = AsyncMock(
+        side_effect=lambda key: (
+            json.dumps(
+                {
+                    "id": changed_did,
+                    "controller": changed_did,
+                    "verificationMethod": [],
+                    "assertionMethod": [],
+                }
+            )
+            if key == scoped_key
+            else None
+        )
+    )
+    redis_mock.set = AsyncMock(return_value=True)
+    request = _build_request("org_123", redis_client=redis_mock)
+
+    with pytest.raises(signing_keys.HTTPException) as exc_info:
+        await signing_keys.publish_service_to_did(
+            request=request,
+            service_id="svc-bao",
+            body={"did_id": requested_did, "org_slug": "acme"},
+            organization_id=None,
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "identity does not match" in str(exc_info.value.detail)
+    redis_mock.set.assert_not_awaited()
 
 
 @pytest.mark.asyncio
