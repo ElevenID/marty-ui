@@ -125,8 +125,9 @@ def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> No
     assert permissions["actions"] == "read"
     assert permissions["attestations"] == "read"
     assert permissions["contents"] == "read"
-    assert "ref: ${{ env.MARTY_UI_SHA }}" in workflow
-    assert 'test "$(git rev-parse HEAD)" = "$MARTY_UI_SHA"' in workflow
+    assert "ref: ${{ env.MARTY_UI_SHA }}" not in workflow
+    assert 'test "$(git rev-parse HEAD)" = "$EVIDENCE_TOOLING_SHA"' in workflow
+    assert 'git cat-file -e "$MARTY_UI_SHA^{commit}"' in workflow
     assert "BETA_SOURCE_ID must be a full 40-character source-snapshot ID" in workflow
     assert 'test "$(jq -r \'.workflowName\' <<<"$run")" = "Stack release"' in workflow
     assert 'gh release download "v$RELEASE_VERSION"' in workflow
@@ -138,6 +139,7 @@ def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> No
     assert "--arg source_id \"$BETA_SOURCE_ID\"" in workflow
     assert "beta_source_id: $beta_source_id" in workflow
     assert "marty_protocol_sha: $marty_protocol_sha" in workflow
+    assert "evidence_tooling_sha: $evidence_tooling_sha" in workflow
     assert "MARTY_PROTOCOL_SHA must be a full 40-character commit SHA" in workflow
     assert "CI must pin exactly one full MARTY_PROTOCOL_REF" not in workflow
     assert "test -f marty-core/Cargo.lock" in workflow
