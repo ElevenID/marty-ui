@@ -1044,6 +1044,8 @@ async def _verify_credential_by_format(
                 "error": f"Unsupported credential format: {credential_format}",
                 "claims": {},
             }
+    except (NativeBackendUnavailable, NativeOperationError):
+        raise
     except Exception as e:
         logger.error(f"Verification error for {credential_format}: {e}")
         return {
@@ -1246,16 +1248,6 @@ async def _verify_w3c_vc(
     result_format = credential_profile or "w3c-vc"
 
     _marty_rs = _load_marty_rs_binding()
-    if _marty_rs is None:
-        logger.warning("_marty_rs not available — W3C VC verification disabled")
-        return {
-            "verified": False,
-            "claims": {},
-            "issuer_did": "unknown",
-            "format": result_format,
-            "error": "marty-rs bindings not installed",
-        }
-
     did_resolution_provenance: dict[str, str] | None = None
     try:
         verifier = getattr(_marty_rs, verifier_name, None)
@@ -1348,6 +1340,8 @@ async def _verify_w3c_vc(
                 else f"VCDM JWT verification rejected the credential ({error_count} error(s))"
             ),
         }
+    except NativeBackendUnavailable:
+        raise
     except Exception as e:
         logger.error("%s Rust verification failed: %s", result_format, e)
         return {
@@ -1414,84 +1408,30 @@ async def _verify_sd_jwt(
     audience: str | None,
     issuer_public_jwk: dict[str, Any] | None = None,
 ) -> dict:
-    """
-    Decode an SD-JWT VC and extract all Claims (base claims + disclosures).
-
-    Format:  ``<JWT>~<disclosure_1>~<disclosure_2>~...[~<KB-JWT>]``
-
-    Each disclosure is a base64url-encoded JSON array:
-      ``[salt, claim_name, claim_value]``
-
-    Note: This implementation does NOT cryptographically verify the JWT
-    signature or validate the issuer trust chain.  That is the responsibility
-    of the trust-profile service and the Rust marty-rs bridge.  In a
-    production deployment, wrap this with
-    ``marty_rs.verify_sd_jwt(vp_token, issuer_public_jwk, audience, nonce)``
-    before trusting the extracted claims.
-    """
+    """Verify SD-JWT in Rust and expose only Rust-reconstructed claims."""
     try:
-        # Split SD-JWT into JWT part and disclosures
-        # The last segment may be a key-binding JWT (non-empty, starts with 'e')
         segments = vp_token.split("~")
         jwt_part = segments[0]
-        disclosure_parts = [
-            s
-            for s in segments[1:]
-            if s and "." not in s  # KB-JWT would contain dots
-        ]
-
-        # Decode JWT payload
         header, payload = _jwt_header_and_payload(jwt_part)
 
-        # Collect base (non-selective) claims — exclude SD-JWT internals
-        _SD_INTERNAL = {"_sd", "_sd_alg", "cnf", "..."}
-        claims: dict = {
-            k: v
-            for k, v in payload.items()
-            if k not in _SD_INTERNAL and not k.startswith("_")
-        }
-
-        # Decode each disclosure and merge
-        for disc in disclosure_parts:
-            try:
-                decoded = json.loads(_b64decode_unpadded(disc))
-                if isinstance(decoded, list) and len(decoded) == 3:
-                    _salt, claim_name, claim_value = decoded
-                    claims[str(claim_name)] = claim_value
-            except Exception as disc_exc:
-                logger.debug(f"Skipping malformed disclosure: {disc_exc}")
-
-        # Optional: validate nonce if the payload carries it
-        if nonce and payload.get("nonce") and payload["nonce"] != nonce:
-            return {
-                "verified": False,
-                "error": "Nonce mismatch",
-                "claims": claims,
-            }
-
         issuer = payload.get("iss") or payload.get("issuer", "unknown")
-        subject = payload.get("sub") or payload.get("subject", "unknown")
 
         if not isinstance(issuer, str) or not issuer:
             return {
                 "verified": False,
-                "claims": claims,
+                "claims": {},
                 "issuer_did": str(issuer or "unknown"),
-                "subject": subject,
+                "subject": "unknown",
                 "format": "sd-jwt",
                 "error": "SD-JWT issuer is missing",
             }
 
         marty_rs = _load_marty_rs_binding()
-        if marty_rs is None or not hasattr(marty_rs, "verify_sd_jwt"):
-            return {
-                "verified": False,
-                "claims": claims,
-                "issuer_did": issuer,
-                "subject": subject,
-                "format": "sd-jwt",
-                "error": "marty-rs SD-JWT verification bindings are not installed",
-            }
+        verifier = getattr(marty_rs, "verify_sd_jwt", None)
+        if not callable(verifier):
+            raise NativeBackendUnavailable(
+                "The Marty Rust backend does not expose verify_sd_jwt"
+            )
 
         did_resolution_provenance: dict[str, str] | None = None
         try:
@@ -1509,24 +1449,33 @@ async def _verify_sd_jwt(
             else:
                 return {
                     "verified": False,
-                    "claims": claims,
+                    "claims": {},
                     "issuer_did": issuer,
-                    "subject": subject,
+                    "subject": "unknown",
                     "format": "sd-jwt",
                     "error": "SD-JWT issuer is not a DID and has no pinned trust-profile JWK",
                 }
-            result_json = marty_rs.verify_sd_jwt(
+            result_json = verifier(
                 vp_token,
                 json.dumps(public_jwk, separators=(",", ":"), sort_keys=True),
                 audience,
                 nonce,
             )
-            rust_result = (
-                json.loads(result_json)
-                if isinstance(result_json, str) and result_json.strip()
-                else {}
-            )
-            if isinstance(rust_result, dict) and rust_result.get("valid") is False:
+            if not isinstance(result_json, str) or not result_json.strip():
+                raise NativeOperationError(
+                    "Rust SD-JWT verification returned an empty result"
+                )
+            try:
+                rust_result = json.loads(result_json)
+            except json.JSONDecodeError as exc:
+                raise NativeOperationError(
+                    "Rust SD-JWT verification returned invalid JSON"
+                ) from exc
+            if not isinstance(rust_result, dict):
+                raise NativeOperationError(
+                    "Rust SD-JWT verification returned a non-object result"
+                )
+            if rust_result.get("valid") is False:
                 errors = rust_result.get("errors") or []
                 error_message = (
                     "; ".join(str(error) for error in errors)
@@ -1535,9 +1484,9 @@ async def _verify_sd_jwt(
                 )
                 return {
                     "verified": False,
-                    "claims": claims,
+                    "claims": {},
                     "issuer_did": issuer,
-                    "subject": subject,
+                    "subject": "unknown",
                     "format": "sd-jwt",
                     "error": error_message,
                     "verification_evidence": (
@@ -1546,23 +1495,29 @@ async def _verify_sd_jwt(
                         else {}
                     ),
                 }
-            if isinstance(rust_result, dict):
-                claims.update(
-                    {
-                        key: value
-                        for key, value in rust_result.items()
-                        if key not in _SD_INTERNAL and not str(key).startswith("_")
-                    }
+            verified_issuer = rust_result.get("iss") or rust_result.get("issuer")
+            if verified_issuer != issuer:
+                raise NativeOperationError(
+                    "Rust SD-JWT verification returned a mismatched issuer"
                 )
+            subject = rust_result.get("sub") or rust_result.get("subject", "unknown")
+            sd_internal = {"_sd", "_sd_alg", "cnf", "...", "valid", "errors"}
+            claims = {
+                key: value
+                for key, value in rust_result.items()
+                if key not in sd_internal and not str(key).startswith("_")
+            }
+        except (NativeBackendUnavailable, NativeOperationError):
+            raise
         except Exception as exc:
             error_message = str(exc)
             if "DID resolution failed" not in error_message:
                 error_message = f"SD-JWT verification failed: {error_message}"
             return {
                 "verified": False,
-                "claims": claims,
+                "claims": {},
                 "issuer_did": issuer,
-                "subject": subject,
+                "subject": "unknown",
                 "format": "sd-jwt",
                 "error": error_message,
                 "verification_evidence": (
@@ -1579,7 +1534,7 @@ async def _verify_sd_jwt(
         )
         verification_evidence = _jwt_verification_evidence(
             header,
-            payload,
+            rust_result,
             holder_binding_verified=bool(
                 kb_jwt_present and (nonce is not None or audience is not None)
             ),
@@ -1614,6 +1569,8 @@ async def _verify_sd_jwt(
             "error": None,
         }
 
+    except (NativeBackendUnavailable, NativeOperationError):
+        raise
     except Exception as exc:
         logger.error(f"SD-JWT decode error: {exc}")
         return {"verified": False, "error": str(exc), "claims": {}}
@@ -1726,15 +1683,12 @@ def _verify_mdoc(
 ) -> dict:
     """Verify mDoc/ISO 18013-5 credential via Rust mDoc verification."""
     marty_rs = _load_marty_rs_binding()
-    if marty_rs is None:
-        logger.warning("_marty_rs not available — mDoc verification disabled")
-        return {
-            "verified": False,
-            "claims": {},
-            "issuer_did": "unknown",
-            "format": "mdoc",
-            "error": "marty-rs bindings not installed",
-        }
+    verify_presentation = getattr(marty_rs, "verify_mdoc_presentation", None)
+    extract_claims = getattr(marty_rs, "verify_mdoc_cbor", None)
+    if not callable(verify_presentation) or not callable(extract_claims):
+        raise NativeBackendUnavailable(
+            "The Marty Rust backend does not expose complete mDoc verification"
+        )
 
     try:
         import base64 as _b64
@@ -1765,7 +1719,7 @@ def _verify_mdoc(
         if not trusted_root_certs_pem and not pinned_issuer_certs_pem:
             raise ValueError("No trusted mdoc issuer certificates are configured")
 
-        result = marty_rs.verify_mdoc_presentation(
+        result = verify_presentation(
             cbor_bytes,
             session_transcript_cbor,
             trusted_root_certs_pem,
@@ -1798,7 +1752,7 @@ def _verify_mdoc(
         )
         claims: dict[str, Any] = {}
         if is_valid:
-            extracted = marty_rs.verify_mdoc_cbor(cbor_bytes)
+            extracted = extract_claims(cbor_bytes)
             if isinstance(extracted, dict):
                 claims = extracted
 
@@ -1830,6 +1784,8 @@ def _verify_mdoc(
                 "credential_count": len(result.document_types),
             },
         }
+    except NativeBackendUnavailable:
+        raise
     except Exception as e:
         logger.error("mDoc Rust verification failed: %s", e)
         return {
@@ -1909,7 +1865,7 @@ def _run_open_badge_verify(
     try:
         from marty_verification_py import open_badge_ob2_verify, open_badge_ob3_verify
     except ImportError as exc:
-        raise RuntimeError(
+        raise NativeBackendUnavailable(
             "marty_verification_py Open Badge bindings are not installed"
         ) from exc
 
@@ -4793,17 +4749,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await setup_org_client(app, "presentation-policy")
 
-    # Initialize Cedar engine for credential verification policies.
-    # Some deployed images may carry an older marty_common package that does not
-    # yet expose with_credential_verification(); gracefully fall back to defaults.
-    if hasattr(CedarEngine, "with_credential_verification"):
-        app.state.cedar_engine = CedarEngine.with_credential_verification()
-        logger.info("Cedar engine initialized for credential verification")
-    else:
-        app.state.cedar_engine = CedarEngine.with_defaults()
-        logger.warning(
-            "CedarEngine.with_credential_verification unavailable; falling back to default Cedar policies"
+    # Credential verification must use the policy-specific engine. An older
+    # package is an incompatible deployment, not a reason to change policy.
+    credential_policy_engine = getattr(
+        CedarEngine, "with_credential_verification", None
+    )
+    if not callable(credential_policy_engine):
+        raise NativeBackendUnavailable(
+            "Cedar credential-verification policy engine is unavailable"
         )
+    app.state.cedar_engine = credential_policy_engine()
+    logger.info("Cedar engine initialized for credential verification")
 
     # Start gRPC server
     from common.grpc_factory import create_grpc_server, start_grpc_server_port
