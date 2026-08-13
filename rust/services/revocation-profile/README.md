@@ -12,8 +12,9 @@ and a Redis adapter compatible with the existing keys and JSON records. Redis
 index allocation is atomic and status mutations use bounded compare-and-swap;
 the mutation itself still runs only through `marty-status`.
 
-It is not selected by any compose profile. Shared Python/Rust HTTP vectors and
-the disposable executable contract cover the compatibility, authorization,
-storage, readiness, diagnostics, and HTTP/gRPC startup boundaries. Coordinated
-beta selection, application-consumer evidence, and soak gates must still pass
-before the Python service is removed.
+It is selected only by the beta tunnel overlay for the next coordinated beta
+release. Shared Python/Rust HTTP vectors and the disposable executable contract
+cover the compatibility, authorization, storage, readiness, diagnostics, and
+HTTP/gRPC startup boundaries. Application-consumer evidence and the security
+soak gate must still pass before the Python service is removed. Production and
+persistent self-host profiles remain unchanged.

@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -191,7 +190,7 @@ def test_beta_compose_uses_the_generated_database_password_without_source_overla
     assert "./services/gateway/routes/signing_keys.py" not in tunnel
 
 
-def test_beta_runner_targets_only_the_beta_projects_and_rust_event_stream() -> None:
+def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
     deploy = text("scripts/deploy-local-beta-release.ps1")
     restore = text("scripts/restore-local-beta-release.ps1")
     beta = text("docker-compose.beta.yml")
@@ -203,6 +202,13 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_event_stream() -> N
     assert "docker-compose.beta.yml" in deploy
     assert "deploy-config\\compose\\tunnel-beta\\event-stream-rust.yml" in deploy
     assert "deploy-config/compose/tunnel-beta/event-stream-rust.yml" in restore
+    assert "deploy-config\\compose\\tunnel-beta\\revocation-profile-rust.yml" in deploy
+    assert "deploy-config/compose/tunnel-beta/revocation-profile-rust.yml" in restore
+    revocation_overlay = text(
+        "deploy-config/compose/tunnel-beta/revocation-profile-rust.yml"
+    )
+    assert "ENVIRONMENT: beta" in revocation_overlay
+    assert "GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set" in revocation_overlay
     assert "-TunnelEnvFile" in deploy and "-GeneratedEnvFile" in deploy
     assert 'mip_version -ne "0.4.1"' in deploy
     assert 'mip_version = "0.4.1"' in deploy
