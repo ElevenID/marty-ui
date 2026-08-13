@@ -1,9 +1,24 @@
-FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS builder
+# syntax=docker/dockerfile:1.7
+FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS chef
 
-WORKDIR /build
+RUN cargo install cargo-chef --locked --version 0.1.78
+
+WORKDIR /build/rust
+
+FROM chef AS planner
+
 COPY rust /build/rust
 COPY proto /build/proto
-WORKDIR /build/rust
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+
+COPY --from=planner /build/rust/recipe.json recipe.json
+COPY proto /build/proto
+RUN cargo chef cook --locked --release --workspace --recipe-path recipe.json
+
+COPY rust /build/rust
+COPY proto /build/proto
 RUN cargo build --locked --release -p marty-revocation-profile --bin marty-revocation-profile
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
