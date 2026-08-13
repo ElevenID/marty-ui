@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 from common.native_backend import NativeBackendUnavailable
 from flow import native
@@ -167,7 +174,6 @@ def test_missing_haip_response_encryption_capability_fails_startup(
 ):
     backend = object()
     requested: list[str | None] = []
-
     monkeypatch.setattr(
         native,
         "load_marty_rs",
@@ -205,6 +211,52 @@ def test_missing_haip_response_encryption_capability_fails_startup(
         "credential_presentation_metadata",
         "openid4vp_mdoc_handover",
         "haip_response_encryption",
+    ]
+
+
+def test_missing_x509_identity_capability_fails_startup(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    backend = object()
+    requested: list[str | None] = []
+    monkeypatch.setattr(
+        native,
+        "load_marty_rs",
+        lambda *, required_capability=None: backend,
+    )
+
+    def diagnostics(_backend, *, required_capability: str | None = None):
+        assert _backend is backend
+        requested.append(required_capability)
+        if required_capability in {
+            "credential_presentation_metadata",
+            "openid4vp_mdoc_handover",
+            "haip_response_encryption",
+        }:
+            return {
+                "available": True,
+                "capabilities": [
+                    "flow_state_machine",
+                    "credential_presentation_metadata",
+                    "openid4vp_mdoc_handover",
+                    "haip_response_encryption",
+                ],
+            }
+        raise NativeBackendUnavailable(
+            f"missing required native capability: {required_capability}"
+        )
+
+    monkeypatch.setattr(native, "_backend", None)
+    monkeypatch.setattr(native, "_diagnostics", None)
+    monkeypatch.setattr(native, "get_marty_rs_diagnostics", diagnostics)
+
+    with pytest.raises(NativeBackendUnavailable, match="oid4vp_x509_identity"):
+        native.initialize_native_flow_backend()
+    assert requested == [
+        "credential_presentation_metadata",
+        "openid4vp_mdoc_handover",
+        "haip_response_encryption",
+        "oid4vp_x509_identity",
     ]
 
 
@@ -306,6 +358,91 @@ def test_credential_profile_presentation_metadata_uses_native_contract():
             "type_values": [["VerifiableCredential", "OpenBadgeCredential"]]
         },
     }
+
+
+def test_x509_identity_adapter_uses_native_contract():
+    class IdentityBackend:
+        @staticmethod
+        def oid4vp_x509_hash_client_identity(
+            certificate_bundle_pem: str, public_jwk_json: str
+        ) -> str:
+            assert certificate_bundle_pem == "certificate bundle"
+            assert json.loads(public_jwk_json) == {
+                "crv": "P-256",
+                "kty": "EC",
+                "x": "x",
+                "y": "y",
+            }
+            return json.dumps(
+                {
+                    "client_id": "x509_hash:thumbprint",
+                    "x5c": ["base64-der-leaf"],
+                }
+            )
+
+    native.initialize_native_flow_backend(IdentityBackend())
+    assert native.oid4vp_x509_hash_client_identity(
+        "certificate bundle",
+        {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+    ) == ("x509_hash:thumbprint", ["base64-der-leaf"])
+
+
+def test_x509_identity_adapter_matches_certificate_vector():
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "OID4VP Verifier")])
+    now = datetime.now(timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(1)
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
+    numbers = key.public_key().public_numbers()
+
+    def encoded_coordinate(value: int) -> str:
+        return base64.urlsafe_b64encode(value.to_bytes(32, "big")).rstrip(b"=").decode()
+
+    der = certificate.public_bytes(serialization.Encoding.DER)
+    client_id, x5c = native.oid4vp_x509_hash_client_identity(
+        certificate.public_bytes(serialization.Encoding.PEM).decode(),
+        {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": encoded_coordinate(numbers.x),
+            "y": encoded_coordinate(numbers.y),
+        },
+    )
+    expected_hash = base64.urlsafe_b64encode(hashlib.sha256(der).digest()).rstrip(b"=")
+    assert client_id == f"x509_hash:{expected_hash.decode()}"
+    assert x5c == [base64.b64encode(der).decode()]
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        "{}",
+        json.dumps({"client_id": "invalid", "x5c": ["certificate"]}),
+        json.dumps({"client_id": "x509_hash:value", "x5c": []}),
+    ],
+)
+def test_malformed_native_x509_identity_fails_closed(result: str):
+    class MalformedBackend:
+        @staticmethod
+        def oid4vp_x509_hash_client_identity(
+            _certificate_bundle_pem: str, _public_jwk_json: str
+        ) -> str:
+            return result
+
+    native.initialize_native_flow_backend(MalformedBackend())
+    with pytest.raises(native.NativeFlowOperationError, match="INVALID_NATIVE_RESULT"):
+        native.oid4vp_x509_hash_client_identity(
+            "certificate bundle",
+            {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+        )
 
 
 def test_legacy_sd_jwt_profile_metadata_uses_native_vct_contract():

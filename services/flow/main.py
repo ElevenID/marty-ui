@@ -53,9 +53,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from jwcrypto import jwk
 from jwcrypto import jwt as jwcrypto_jwt
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from typing import Annotated
@@ -99,6 +98,7 @@ from flow.native import (
     initialize_native_flow_backend,
     is_terminal_status as is_native_terminal_status,
     openid4vp_mdoc_binding_digests as _openid4vp_mdoc_binding_digests,
+    oid4vp_x509_hash_client_identity as native_oid4vp_x509_hash_client_identity,
     select_next_step as select_native_next_step,
     validate_haip_response_header as validate_native_haip_response_header,
     validate_graph as validate_native_flow_graph,
@@ -4966,37 +4966,17 @@ def _base64url_decode(data: str) -> bytes:
     return base64.urlsafe_b64decode((data + padding).encode("ascii"))
 
 
-def _verifier_x509_certificates() -> list[x509.Certificate]:
-    """Load the verifier leaf certificate and any issuer chain certificates.
-
-    ``x509_hash`` is derived from the leaf, while a HAIP request object must
-    include the complete leaf-to-trust-anchor chain in its ``x5c`` header.
-    PEM bundles are accepted in the natural order: leaf first, then issuers.
-    """
+def _verifier_x509_certificate_bundle() -> str:
+    """Load the configured leaf-first verifier certificate bundle."""
     certificate_pem = os.environ.get("VERIFIER_X509_CERT_PEM")
     certificate_file = os.environ.get("VERIFIER_X509_CERT_FILE")
     if certificate_pem:
-        data = certificate_pem.encode("utf-8")
+        return certificate_pem
     elif certificate_file and os.path.isfile(certificate_file):
-        data = Path(certificate_file).read_bytes()
-    else:
-        raise RuntimeError(
-            "VERIFIER_X509_CERT_PEM or VERIFIER_X509_CERT_FILE is required for x509_hash"
-        )
-    pem_certificates = re.findall(
-        rb"-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----",
-        data,
+        return Path(certificate_file).read_text(encoding="utf-8")
+    raise RuntimeError(
+        "VERIFIER_X509_CERT_PEM or VERIFIER_X509_CERT_FILE is required for x509_hash"
     )
-    if not pem_certificates:
-        raise RuntimeError("VERIFIER_X509_CERT_* contains no PEM certificate")
-    return [
-        x509.load_pem_x509_certificate(certificate) for certificate in pem_certificates
-    ]
-
-
-def _verifier_x509_certificate() -> x509.Certificate:
-    """Return the leaf certificate used for the x509_hash client identifier."""
-    return _verifier_x509_certificates()[0]
 
 
 def _ec_public_key_from_jwk(public_jwk: dict[str, Any]) -> ec.EllipticCurvePublicKey:
@@ -5015,32 +4995,10 @@ def _ec_public_key_from_jwk(public_jwk: dict[str, Any]) -> ec.EllipticCurvePubli
 def _x509_hash_client_id_and_header(
     public_jwk: dict[str, Any],
 ) -> tuple[str, list[str]]:
-    """Return the OID4VP x509_hash identifier and JOSE ``x5c`` certificate."""
-    certificates = _verifier_x509_certificates()
-    certificate = certificates[0]
-    der = certificate.public_bytes(serialization.Encoding.DER)
-    certificate_hash = hashes.Hash(hashes.SHA256())
-    certificate_hash.update(der)
-    digest = _base64url_encode(certificate_hash.finalize())
-
-    certificate_public = certificate.public_key()
-    profile_public = _ec_public_key_from_jwk(public_jwk)
-    if not isinstance(certificate_public, ec.EllipticCurvePublicKey) or (
-        certificate_public.public_numbers() != profile_public.public_numbers()
-    ):
-        raise RuntimeError(
-            "VERIFIER_X509_CERT_* public key must match the issuer profile signing identity"
-        )
-    # x5c carries the leaf and intermediates.  A verifier's configured trust
-    # anchor is deliberately omitted: HAIP validators reject trust anchors in
-    # the JOSE header and obtain them from their configured trust store.
-    x5c_certificates = certificates
-    if len(certificates) > 1 and certificates[-1].issuer == certificates[-1].subject:
-        x5c_certificates = certificates[:-1]
-    return f"x509_hash:{digest}", [
-        base64.b64encode(item.public_bytes(serialization.Encoding.DER)).decode("ascii")
-        for item in x5c_certificates
-    ]
+    """Delegate x509_hash and x5c construction to the Rust identity kernel."""
+    return native_oid4vp_x509_hash_client_identity(
+        _verifier_x509_certificate_bundle(), public_jwk
+    )
 
 
 def _verifier_public_jwk(signing_identity: dict[str, Any]) -> dict[str, str]:
