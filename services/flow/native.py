@@ -33,6 +33,9 @@ def initialize_native_flow_backend(
         diagnostics = get_marty_rs_diagnostics(
             backend, required_capability="haip_response_encryption"
         )
+        diagnostics = get_marty_rs_diagnostics(
+            backend, required_capability="oid4vp_x509_identity"
+        )
     else:
         diagnostics = {
             "available": True,
@@ -44,6 +47,7 @@ def initialize_native_flow_backend(
                 "credential_presentation_metadata",
                 "openid4vp_mdoc_handover",
                 "haip_response_encryption",
+                "oid4vp_x509_identity",
             ],
         }
     _backend = backend
@@ -355,6 +359,46 @@ def decrypt_haip_response(compact_jwe: str, private_jwk: dict[str, Any]) -> byte
             "FLOW.INVALID_NATIVE_RESULT: HAIP decryption did not return bytes"
         )
     return plaintext
+
+
+def oid4vp_x509_hash_client_identity(
+    certificate_bundle_pem: str,
+    public_jwk: dict[str, Any],
+) -> tuple[str, list[str]]:
+    """Build an x509_hash identity through the canonical Rust backend."""
+    try:
+        result = _json_object(
+            _native().oid4vp_x509_hash_client_identity(
+                certificate_bundle_pem,
+                json.dumps(public_jwk, separators=(",", ":"), sort_keys=True),
+            ),
+            "oid4vp_x509_hash_client_identity",
+        )
+    except NativeFlowOperationError:
+        raise
+    except Exception as error:
+        raise NativeFlowOperationError(str(error)) from error
+
+    if set(result) != {"client_id", "x5c"}:
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: x509 identity shape is invalid"
+        )
+    client_id = result["client_id"]
+    x5c = result["x5c"]
+    if (
+        not isinstance(client_id, str)
+        or not client_id.startswith("x509_hash:")
+        or not isinstance(x5c, list)
+        or not x5c
+        or any(
+            not isinstance(certificate, str) or not certificate
+            for certificate in x5c
+        )
+    ):
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: x509 identity values are invalid"
+        )
+    return client_id, x5c
 
 
 def evaluate_transition(
