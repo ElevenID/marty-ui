@@ -27,6 +27,9 @@ def initialize_native_flow_backend(
         diagnostics = get_marty_rs_diagnostics(
             backend, required_capability="credential_presentation_metadata"
         )
+        diagnostics = get_marty_rs_diagnostics(
+            backend, required_capability="openid4vp_mdoc_handover"
+        )
     else:
         diagnostics = {
             "available": True,
@@ -36,6 +39,7 @@ def initialize_native_flow_backend(
             "capabilities": [
                 "flow_state_machine",
                 "credential_presentation_metadata",
+                "openid4vp_mdoc_handover",
             ],
         }
     _backend = backend
@@ -72,6 +76,148 @@ def _json_object(raw: Any, operation: str) -> dict[str, Any]:
         raise NativeFlowOperationError(
             f"FLOW.INVALID_NATIVE_RESULT: {operation} did not return an object"
         )
+    return result
+
+
+def _jwk_json(response_encryption_jwk: dict[str, Any] | None) -> str | None:
+    if response_encryption_jwk is None:
+        return None
+    if not isinstance(response_encryption_jwk, dict):
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_OPENID4VP_RESPONSE_KEY: expected a JWK object"
+        )
+    try:
+        return json.dumps(
+            response_encryption_jwk,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError) as error:
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_OPENID4VP_RESPONSE_KEY: JWK is not JSON serializable"
+        ) from error
+
+
+def _native_bytes(raw: Any, operation: str, *, expected_length: int) -> bytes:
+    if isinstance(raw, bytes):
+        result = raw
+    elif isinstance(raw, bytearray):
+        result = bytes(raw)
+    elif isinstance(raw, list) and all(
+        isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 255
+        for value in raw
+    ):
+        result = bytes(raw)
+    else:
+        raise NativeFlowOperationError(
+            f"FLOW.INVALID_NATIVE_RESULT: {operation} did not return bytes"
+        )
+    if len(result) != expected_length:
+        raise NativeFlowOperationError(
+            f"FLOW.INVALID_NATIVE_RESULT: {operation} returned an invalid length"
+        )
+    return result
+
+
+def build_openid4vp_mdoc_session_transcript(
+    *,
+    client_id: str,
+    nonce: str,
+    response_uri: str,
+    response_encryption_jwk: dict[str, Any] | None,
+) -> bytes:
+    """Build verifier-bound ISO 18013-7 bytes in the canonical Rust kernel."""
+    try:
+        raw = _native().build_openid4vp_mdoc_session_transcript(
+            client_id,
+            nonce,
+            response_uri,
+            _jwk_json(response_encryption_jwk),
+        )
+        transcript = _native_bytes(
+            raw,
+            "build_openid4vp_mdoc_session_transcript",
+            expected_length=56,
+        )
+    except NativeFlowOperationError:
+        raise
+    except Exception as error:
+        raise NativeFlowOperationError(str(error)) from error
+    if not transcript.startswith(b"\x83\xf6\xf6\x82qOpenID4VPHandover"):
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: OpenID4VP mdoc transcript shape is invalid"
+        )
+    return transcript
+
+
+def openid4vp_response_key_thumbprint(
+    response_encryption_jwk: dict[str, Any] | None,
+) -> bytes | None:
+    """Return the Rust-owned raw RFC 7638 response-key thumbprint."""
+    jwk_json = _jwk_json(response_encryption_jwk)
+    if jwk_json is None:
+        return None
+    try:
+        return _native_bytes(
+            _native().openid4vp_response_key_thumbprint(jwk_json),
+            "openid4vp_response_key_thumbprint",
+            expected_length=32,
+        )
+    except NativeFlowOperationError:
+        raise
+    except Exception as error:
+        raise NativeFlowOperationError(str(error)) from error
+
+
+def openid4vp_mdoc_binding_digests(
+    *,
+    session_transcript: bytes,
+    client_id: str,
+    nonce: str,
+    response_uri: str,
+    response_encryption_jwk: dict[str, Any] | None,
+    presentation: str,
+) -> dict[str, str]:
+    """Return Rust-owned non-reversible mdoc binding diagnostics."""
+    try:
+        result = _json_object(
+            _native().openid4vp_mdoc_binding_digests(
+                session_transcript,
+                client_id,
+                nonce,
+                response_uri,
+                _jwk_json(response_encryption_jwk),
+                presentation,
+            ),
+            "openid4vp_mdoc_binding_digests",
+        )
+    except NativeFlowOperationError:
+        raise
+    except Exception as error:
+        raise NativeFlowOperationError(str(error)) from error
+    expected = {
+        "transcript_sha256",
+        "client_id_sha256",
+        "nonce_sha256",
+        "response_uri_sha256",
+        "response_key_thumbprint_sha256",
+        "presentation_sha256",
+    }
+    if set(result) != expected:
+        raise NativeFlowOperationError(
+            "FLOW.INVALID_NATIVE_RESULT: mdoc binding diagnostic shape is invalid"
+        )
+    for name, value in result.items():
+        if name == "response_key_thumbprint_sha256" and value == "none":
+            continue
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise NativeFlowOperationError(
+                "FLOW.INVALID_NATIVE_RESULT: mdoc binding diagnostic digest is invalid"
+            )
     return result
 
 
