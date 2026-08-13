@@ -103,6 +103,11 @@ storybook-static/
 .vitest/
 tests/artifacts/
 
+# Runtime state and generated browser evidence belong in local volumes or CI artifacts.
+.selfhost-state/
+tests/demo-recordings/
+tests/demo-recordings-report/
+
 # =============================================================================
 # Debug / Development Scripts
 # =============================================================================
