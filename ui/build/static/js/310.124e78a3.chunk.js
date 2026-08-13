@@ -1,1 +1,0 @@
-(self.webpackChunkmarty_ui=self.webpackChunkmarty_ui||[]).push([[310],{310:()=>{}}]);

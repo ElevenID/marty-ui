@@ -56,6 +56,13 @@ Thumbs.db
 
 # Self-host pre-built dist (large build artifact)
 ui/dist-selfhost/
+ui/build/
+
+# Generated local state and recorded test output
+.selfhost-state/
+tests/demo-recordings/
+tests/demo-recordings-report/
+tests/artifacts/
 
 # macOS-specific pre-built wheels (useless in Linux containers)
 wheels/

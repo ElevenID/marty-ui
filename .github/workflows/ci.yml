@@ -38,9 +38,13 @@ jobs:
         run: python scripts/check_rust_ownership.py
 
   test-ui:
-    name: UI Tests
+    name: UI Tests (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     defaults:
       run:
         working-directory: ui
@@ -62,9 +66,10 @@ jobs:
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
       - run: bun install
       - name: Type check
+        if: matrix.shard == 1
         run: bunx tsc -p tsconfig.build.json --noEmit
       - name: Unit tests
-        run: node ./node_modules/vitest/vitest.mjs run
+        run: node ./node_modules/vitest/vitest.mjs run --shard=${{ matrix.shard }}/2
 
   test-services:
     name: Service Tests
@@ -163,6 +168,7 @@ jobs:
       CARGO_INCREMENTAL: 0
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -231,7 +237,8 @@ jobs:
       - name: Build event-stream image
         run: >-
           docker build
-          --file rust/services/event-stream/Dockerfile
+          --file rust/services/Dockerfile.ci
+          --target event_stream
           --tag marty-event-stream:ci
           --build-arg MARTY_RELEASE_VERSION=ci
           --build-arg MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
@@ -239,7 +246,8 @@ jobs:
       - name: Build revocation-profile image
         run: >-
           docker build
-          --file rust/services/revocation-profile/Dockerfile
+          --file rust/services/Dockerfile.ci
+          --target revocation_profile
           --tag marty-revocation-profile:ci
           --build-arg MARTY_RELEASE_VERSION=ci
           --build-arg MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
