@@ -996,6 +996,23 @@ async def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_c
     assert result["verified"] is True
     assert result["issuer_did"] == "did:key:issuer"
     assert result["claims"] == {"id": "did:key:holder", "role": "member"}
+    assert result["verification_evidence"] == {
+        "kind": "presentation",
+        "verified_proofs": 1,
+        "verified_credentials": 1,
+        "credential_count": 1,
+        "algorithm": None,
+        "issued_at": None,
+        "expires_at": None,
+        "validity_checked": True,
+        "is_expired": False,
+        "holder_binding_verified": True,
+        "holder_binding_method": "DEVICE_KEY",
+        "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+        "challenge_verified": True,
+        "audience_verified": True,
+        "did_resolution": [],
+    }
     assert requests == [
         {
             "document": document,
@@ -1003,6 +1020,99 @@ async def test_vcdm_data_integrity_uses_released_binding_and_extracts_verified_c
             "expected_domain": "verifier",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_vcdm_data_integrity_does_not_invent_replay_or_binding_facts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_vcdm_data_integrity=lambda _request: json.dumps(
+                {
+                    "valid": True,
+                    "kind": "credential",
+                    "verified_proofs": 1,
+                    "verified_credentials": 1,
+                    "errors": [],
+                }
+            )
+        ),
+    )
+
+    result = await pp._verify_vcdm_data_integrity(
+        {
+            "type": ["VerifiableCredential"],
+            "issuer": "did:key:issuer",
+            "credentialSubject": {"id": "did:key:holder"},
+        },
+        None,
+        None,
+    )
+
+    evidence = result["verification_evidence"]
+    assert evidence["holder_binding_verified"] is False
+    assert "holder_binding_method" not in evidence
+    assert "proof_profile" not in evidence
+    assert "challenge_verified" not in evidence
+    assert "audience_verified" not in evidence
+    assert "replay_check_verified" not in evidence
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "binding_result",
+    [
+        {
+            "valid": True,
+            "kind": "credential",
+            "verified_proofs": 1,
+            "verified_credentials": 1,
+            "errors": [],
+        },
+        {
+            "valid": True,
+            "kind": "presentation",
+            "verified_proofs": 0,
+            "verified_credentials": 1,
+            "errors": [],
+        },
+    ],
+)
+async def test_vcdm_presentation_binding_requires_explicit_verified_proof_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    binding_result: dict[str, object],
+) -> None:
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_vcdm_data_integrity=lambda _request: json.dumps(binding_result)
+        ),
+    )
+
+    result = await pp._verify_vcdm_data_integrity(
+        {
+            "type": ["VerifiablePresentation"],
+            "holder": "did:key:holder",
+            "verifiableCredential": [
+                {
+                    "type": ["VerifiableCredential"],
+                    "issuer": "did:key:issuer",
+                    "credentialSubject": {"id": "did:key:holder"},
+                }
+            ],
+        },
+        "challenge",
+        "verifier",
+    )
+
+    evidence = result["verification_evidence"]
+    assert evidence["holder_binding_verified"] is False
+    assert "holder_binding_method" not in evidence
+    assert "proof_profile" not in evidence
 
 
 @pytest.mark.asyncio
@@ -3440,6 +3550,94 @@ def test_required_holder_binding_needs_explicit_verifier_evidence(
     assert response.decision == "deny"
     assert response.verified_claims == {}
     assert "holder binding was not verified" in response.decision_reason
+
+
+def test_vcdm_verified_presentation_binding_satisfies_native_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer = "did:web:marty.test:orgs:tenant-a"
+    repo = pp.InMemoryPresentationPolicyRepository()
+    policy = pp.PresentationPolicy(
+        id="50000000-0000-0000-0000-000000000005",
+        organization_id="org-1",
+        name="W3C Data Integrity presentation",
+        status=pp.PolicyStatus.ACTIVE,
+        trust_profile_id="60000000-0000-0000-0000-000000000002",
+        holder_binding=pp.HolderBinding(
+            required=True,
+            binding_methods=["DEVICE_KEY"],
+            proof_profiles=["OID4VP_VERIFIABLE_PRESENTATION"],
+            proof_freshness={
+                "challenge_required": True,
+                "audience_binding_required": True,
+                "replay_detection_required": False,
+            },
+        ),
+        credential_requirements=[
+            pp.CredentialRequirement(
+                credential_template_id="70000000-0000-0000-0000-000000000001",
+                credential_payload_format="w3c_vcdm_v2_di",
+                requested_claims=[
+                    pp.RequestedClaim(
+                        claim_name="id",
+                        display_name="Subject",
+                        required=False,
+                    )
+                ],
+            )
+        ],
+    )
+    asyncio.run(repo.save(policy))
+    profile_data = _install_marty_trust_profile(
+        monkeypatch,
+        allowed_issuers=[],
+        issuer_relationships=[_normalized_issuer_relationship(issuer_id=issuer)],
+    )
+    assert profile_data["issuer_relationships"] is not None
+    monkeypatch.setattr(pp, "_detect_credential_format", lambda _token: "w3c-vcdm-di")
+    monkeypatch.setattr(
+        pp,
+        "_verify_credential_by_format",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "claims": {"id": "did:example:holder"},
+            "issuer_did": issuer,
+            "format": "w3c-vcdm-di",
+            "error": None,
+            "revocation_checked": False,
+            "not_revoked": None,
+            "verification_evidence": {
+                "algorithm": "eddsa-rdfc-2022",
+                "issued_at": int(datetime.now(timezone.utc).timestamp()),
+                "expires_at": None,
+                "validity_checked": True,
+                "is_expired": False,
+                "holder_binding_verified": True,
+                "holder_binding_method": "DEVICE_KEY",
+                "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+                "challenge_verified": True,
+                "audience_verified": True,
+                "credential_count": 1,
+            },
+        },
+    )
+
+    response = asyncio.run(
+        pp.evaluate_presentation(
+            policy.id,
+            pp.EvaluatePresentationRequest(
+                vp_token={"type": ["VerifiablePresentation"]},
+                nonce="challenge",
+                audience="verifier.example",
+            ),
+            repo=repo,
+            cedar_engine=_allowing_cedar_engine(),
+        )
+    )
+
+    assert response.result == "passed"
+    assert response.decision == "allow"
+    assert response.verified_claims == {"id": "did:example:holder"}
 
 
 @pytest.mark.parametrize("engine_source", ["http", "internal"])
