@@ -93,11 +93,14 @@ from flow.infrastructure.adapters import PostgresFlowRepository
 from flow.native import (
     NativeFlowOperationError,
     build_openid4vp_mdoc_session_transcript as _build_openid4vp_mdoc_session_transcript,
+    decrypt_haip_response as decrypt_native_haip_response,
     evaluate_transition as evaluate_native_flow_transition,
+    generate_haip_response_encryption_key as generate_native_haip_response_encryption_key,
     initialize_native_flow_backend,
     is_terminal_status as is_native_terminal_status,
     openid4vp_mdoc_binding_digests as _openid4vp_mdoc_binding_digests,
     select_next_step as select_native_next_step,
+    validate_haip_response_header as validate_native_haip_response_header,
     validate_graph as validate_native_flow_graph,
 )
 from protocol_version import MIP_VERSION
@@ -134,8 +137,6 @@ _DC_API_JWT_RESPONSE_MODE = "dc_api.jwt"
 _HAIP_JWE_ALG = "ECDH-ES"
 _HAIP_JWE_ENC = "A256GCM"
 _HAIP_JWE_ENC_VALUES = ["A128GCM", _HAIP_JWE_ENC]
-_SUPPORTED_HAIP_JWE_ALGS = {_HAIP_JWE_ALG}
-_SUPPORTED_HAIP_JWE_ENCS = set(_HAIP_JWE_ENC_VALUES)
 
 
 def _origin_for_base_url(base_url: str) -> str:
@@ -5056,12 +5057,8 @@ def _verifier_public_jwk(signing_identity: dict[str, Any]) -> dict[str, str]:
 
 def _new_haip_response_encryption_key() -> tuple[dict[str, str], dict[str, str]]:
     """Create a fresh P-256 response-encryption key for one verification flow."""
-    private = jwk.JWK.generate(kty="EC", crv="P-256", kid=f"oid4vp-haip-{uuid.uuid4()}")
-    private_data = json.loads(private.export_private())
-    public_data = json.loads(private.export_public())
-    public_data.update({"alg": _HAIP_JWE_ALG, "use": "enc"})
-    private_data.update({"alg": _HAIP_JWE_ALG, "use": "enc"})
-    return public_data, private_data
+    public, private = generate_native_haip_response_encryption_key()
+    return public, private
 
 
 async def _wrap_flow_private_jwk(
@@ -5342,37 +5339,6 @@ def _parse_presentation_submission(
     )
 
 
-def _decode_compact_jose_header(compact_token: str) -> dict[str, Any]:
-    parts = compact_token.split(".")
-    if len(parts) != 5:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_request",
-                "error_description": "DigitalCredential.data.response must be a compact JWE",
-            },
-        )
-    try:
-        header = json.loads(_base64url_decode(parts[0]))
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_request",
-                "error_description": f"Malformed dc_api.jwt JWE header: {exc}",
-            },
-        ) from exc
-    if not isinstance(header, dict):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_request",
-                "error_description": "dc_api.jwt JWE header must be a JSON object",
-            },
-        )
-    return header
-
-
 def _parse_decrypted_dc_api_response(payload_bytes: bytes) -> dict[str, Any]:
     try:
         payload_text = payload_bytes.decode("utf-8").strip()
@@ -5422,25 +5388,8 @@ def _decrypt_jwt_response(
     _validate_encrypted_response_header(encrypted_response, field_name=field_name)
 
     try:
-        from jwcrypto import jwe as jwcrypto_jwe
-        from jwcrypto import jwk as jwcrypto_jwk
-    except ImportError as exc:
-        logger.error(
-            "jwcrypto is required for HAIP dc_api.jwt decryption", exc_info=True
-        )
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "server_error",
-                "error_description": "HAIP dc_api.jwt decryption dependency is not installed",
-            },
-        ) from exc
-
-    try:
-        key = jwcrypto_jwk.JWK.from_json(json.dumps(private_jwk))
-        token = jwcrypto_jwe.JWE()
-        token.deserialize(encrypted_response, key=key)
-    except Exception as exc:
+        plaintext = decrypt_native_haip_response(encrypted_response, private_jwk)
+    except NativeFlowOperationError as exc:
         logger.info("Failed to decrypt %s response", field_name, exc_info=True)
         raise HTTPException(
             status_code=400,
@@ -5450,7 +5399,7 @@ def _decrypt_jwt_response(
             },
         ) from exc
 
-    return _parse_decrypted_dc_api_response(token.payload)
+    return _parse_decrypted_dc_api_response(plaintext)
 
 
 def _validate_encrypted_response_header(
@@ -5468,27 +5417,29 @@ def _validate_encrypted_response_header(
             },
         )
 
-    header = _decode_compact_jose_header(encrypted_response)
-    alg = header.get("alg")
-    enc = header.get("enc")
-    if alg not in _SUPPORTED_HAIP_JWE_ALGS:
+    try:
+        return validate_native_haip_response_header(encrypted_response)
+    except NativeFlowOperationError as exc:
+        native_error = str(exc)
+        if "expected 5 parts" in native_error:
+            description = f"{field_name} must be a non-empty compact JWE string"
+        elif "Unsupported key algorithm:" in native_error:
+            algorithm = native_error.rsplit("Unsupported key algorithm:", 1)[1].strip()
+            description = f"Unsupported {field_name} JWE alg: {algorithm}"
+        elif "Unsupported content encryption:" in native_error:
+            encryption = native_error.rsplit(
+                "Unsupported content encryption:", 1
+            )[1].strip()
+            description = f"Unsupported {field_name} JWE enc: {encryption}"
+        else:
+            description = f"Invalid {field_name} JWE: {native_error}"
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "invalid_request",
-                "error_description": f"Unsupported {field_name} JWE alg: {alg}",
+                "error_description": description,
             },
-        )
-    if enc not in _SUPPORTED_HAIP_JWE_ENCS:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_request",
-                "error_description": f"Unsupported {field_name} JWE enc: {enc}",
-            },
-        )
-
-    return header
+        ) from exc
 
 
 def _decrypt_dc_api_jwt_response(
