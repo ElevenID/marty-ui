@@ -1,6 +1,8 @@
 use marty_revocation_profile::{
-    CredentialFormat, NewProfile, PgProfileRepository, ProfileRepository, RedisStatusRepository,
-    RevocationProfile, RevocationProfileService, StatusListFormat, StatusRepository,
+    CascadeOperationType, CascadeRevocationOperation, CascadeStatus, CredentialFormat, NewProfile,
+    PgProfileRepository, PgRevocationOperationRepository, ProfileRepository, RedisStatusRepository,
+    RevocationBatch, RevocationOperationRepository, RevocationProfile, RevocationProfileService,
+    StatusListFormat, StatusRepository, TriggerEntityType,
 };
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -108,6 +110,73 @@ async fn redis_allocations_and_mutations_are_atomic_and_python_compatible() {
         .is_err());
 }
 
+#[tokio::test]
+#[ignore = "requires MARTY_TEST_POSTGRES_URL"]
+async fn postgres_preserves_cascade_and_batch_operations() {
+    let database_url = std::env::var("MARTY_TEST_POSTGRES_URL").expect("test PostgreSQL URL");
+    let pool = PgPool::connect(&database_url).await.unwrap();
+    install_released_schema(&pool).await;
+    install_operation_schema(&pool).await;
+    let profiles = PgProfileRepository::from_pool(pool.clone());
+    let operations = PgRevocationOperationRepository::from_pool(pool.clone());
+    let profile =
+        RevocationProfile::new("org-storage-operations".into(), "operations".into(), None);
+    profiles.save(profile.clone()).await.unwrap();
+    let now =
+        chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
+    let cascade = CascadeRevocationOperation {
+        id: Uuid::new_v4().to_string(),
+        organization_id: "org-storage-operations".into(),
+        operation_type: CascadeOperationType::IssuerRevocation,
+        trigger_entity_type: TriggerEntityType::Issuer,
+        trigger_entity_id: "issuer-1".into(),
+        status: CascadeStatus::PendingConfirmation,
+        affected_credential_count: 1,
+        affected_credential_ids: vec!["credential-1".into()],
+        requires_confirmation: true,
+        confirmed_at: None,
+        confirmed_by: None,
+        max_cascade_depth: 3,
+        current_depth: 0,
+        circuit_breaker_threshold: 1_000,
+        circuit_breaker_triggered: false,
+        can_rollback: true,
+        rollback_snapshot: Some(serde_json::json!({"credential": "credential-1"})),
+        rolled_back_at: None,
+        rolled_back_by: None,
+        error_message: None,
+        metadata: Some(serde_json::json!({"source": "contract"})),
+        created_at: now,
+        updated_at: now,
+        completed_at: None,
+    };
+    operations.save_cascade(cascade.clone()).await.unwrap();
+    assert_eq!(
+        operations.get_cascade(&cascade.id).await.unwrap(),
+        Some(cascade.clone())
+    );
+    let batch = RevocationBatch::new(
+        "org-storage-operations".into(),
+        profile.id.clone(),
+        "1h".into(),
+        "SD_JWT_VC".into(),
+        vec!["credential-1".into()],
+    )
+    .unwrap();
+    operations.save_batch(batch.clone()).await.unwrap();
+    assert_eq!(
+        operations.get_batch(&batch.id).await.unwrap(),
+        Some(batch.clone())
+    );
+    sqlx::query("DELETE FROM revocation_profile_service.revocation_profiles WHERE id = $1")
+        .bind(&profile.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(operations.get_batch(&batch.id).await.unwrap().is_none());
+    operations.delete_cascade(&cascade.id).await.unwrap();
+}
+
 async fn install_released_schema(pool: &PgPool) {
     let mut transaction = pool.begin().await.unwrap();
     // PostgreSQL's CREATE SCHEMA IF NOT EXISTS can still race when separate
@@ -141,4 +210,26 @@ async fn install_released_schema(pool: &PgPool) {
     .await
     .unwrap();
     transaction.commit().await.unwrap();
+}
+
+async fn install_operation_schema(pool: &PgPool) {
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS revocation_profile_service.cascade_revocation_operations (
+            id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, operation_type TEXT NOT NULL,
+            trigger_entity_type TEXT NOT NULL, trigger_entity_id TEXT NOT NULL, status TEXT NOT NULL,
+            affected_credential_count BIGINT NOT NULL, affected_credential_ids JSONB NOT NULL,
+            requires_confirmation BOOLEAN NOT NULL, confirmed_at TIMESTAMPTZ, confirmed_by TEXT,
+            max_cascade_depth SMALLINT NOT NULL, current_depth SMALLINT NOT NULL,
+            circuit_breaker_threshold BIGINT NOT NULL, circuit_breaker_triggered BOOLEAN NOT NULL,
+            can_rollback BOOLEAN NOT NULL, rollback_snapshot JSONB, rolled_back_at TIMESTAMPTZ,
+            rolled_back_by TEXT, error_message TEXT, metadata JSONB, created_at TIMESTAMPTZ NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL, completed_at TIMESTAMPTZ)
+    "#).execute(pool).await.unwrap();
+    sqlx::query(r#"
+        CREATE TABLE IF NOT EXISTS revocation_profile_service.revocation_batches (
+            id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
+            revocation_profile_id TEXT NOT NULL REFERENCES revocation_profile_service.revocation_profiles(id) ON DELETE CASCADE,
+            batch_interval TEXT NOT NULL, credential_format TEXT NOT NULL, credential_ids JSONB NOT NULL,
+            status TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL, published_at TIMESTAMPTZ)
+    "#).execute(pool).await.unwrap();
 }
