@@ -199,6 +199,75 @@ def test_disabled_holder_binding_serializes_to_canonical_shape() -> None:
     assert payload["holder_binding"] == {"required": False}
 
 
+def _proof_only_policy_payload() -> dict:
+    return {
+        "organization_id": "org-1",
+        "name": "Verify presentation proof",
+        "credential_requirements": [],
+        "holder_binding": {
+            "required": True,
+            "binding_methods": ["DEVICE_KEY"],
+            "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+            "proof_freshness": {
+                "challenge_required": True,
+                "audience_binding_required": True,
+                "replay_detection_required": False,
+            },
+        },
+    }
+
+
+def test_policy_request_accepts_proof_only_holder_binding() -> None:
+    body = PresentationPolicyCreate.model_validate(_proof_only_policy_payload())
+
+    payload = verification._validated_policy_payload(body)
+
+    assert payload["credential_requirements"] == []
+    assert payload["holder_binding"] == _proof_only_policy_payload()["holder_binding"]
+
+
+def test_policy_request_rejects_policy_without_any_obligation() -> None:
+    payload = _proof_only_policy_payload()
+    payload["holder_binding"] = {"required": False}
+
+    with pytest.raises(ValidationError, match="holder-bound presentation proof"):
+        PresentationPolicyCreate.model_validate(payload)
+
+
+@pytest.mark.asyncio
+async def test_create_proof_only_policy_forwards_without_template_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _proof_only_policy_payload()
+    body = PresentationPolicyCreate.model_validate(payload)
+    request = JsonRequest(payload)
+    template_loader = AsyncMock()
+    monkeypatch.setattr(verification, "_load_credential_template", template_loader)
+    monkeypatch.setattr(
+        verification,
+        "get_registry",
+        lambda: SimpleNamespace(
+            get_service_url=lambda service: "http://presentation-policy:8000"
+        ),
+    )
+    expected_response = SimpleNamespace(status_code=201)
+    proxy = AsyncMock(return_value=expected_response)
+    monkeypatch.setattr(verification, "proxy_request", proxy)
+    monkeypatch.setattr(
+        verification,
+        "_sanitize_presentation_policy_response",
+        lambda response: response,
+    )
+
+    response = await verification.create_presentation_policy(body, request)
+
+    assert response is expected_response
+    template_loader.assert_not_awaited()
+    forwarded = json.loads(proxy.await_args.kwargs["body_override"])
+    assert forwarded["credential_requirements"] == []
+    assert forwarded["holder_binding"] == payload["holder_binding"]
+
+
 @pytest.mark.asyncio
 async def test_authoritative_body_is_serialized_from_validated_model(
     monkeypatch: pytest.MonkeyPatch,
