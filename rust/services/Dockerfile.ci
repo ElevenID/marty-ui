@@ -1,0 +1,56 @@
+# CI-only multi-target image build. Both binaries are compiled in one shared
+# layer so validating two production-equivalent images does not rebuild their
+# common Rust dependency graph.
+FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS builder
+
+WORKDIR /build
+COPY rust /build/rust
+COPY proto /build/proto
+WORKDIR /build/rust
+RUN cargo build --locked --release \
+    -p marty-event-stream --bin marty-event-stream \
+    -p marty-revocation-profile --bin marty-revocation-profile
+
+FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin marty
+
+USER 10001:10001
+
+FROM runtime AS event_stream
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-event-stream /usr/local/bin/marty-event-stream
+ENV EVENT_STREAM_SERVICE_PORT=8015 \
+    EVENT_STREAM_GRPC_ENABLED=true \
+    EVENT_STREAM_GRPC_PORT=9015 \
+    RUST_LOG=info
+EXPOSE 8015 9015
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8015/health"]
+ENTRYPOINT ["/usr/local/bin/marty-event-stream"]
+
+FROM runtime AS revocation_profile
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-revocation-profile /usr/local/bin/marty-revocation-profile
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV REVOCATION_PROFILE_SERVICE_PORT=8013 \
+    RP_GRPC_ENABLED=true \
+    RP_GRPC_PORT=9013 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8013 9013
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8013/health"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-revocation-profile"]
