@@ -63,13 +63,14 @@ impl RevocationTimingMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RevocationMechanism {
     Ocsp,
     Crl,
     BitstringStatusList,
     TokenStatusList,
+    #[serde(rename = "STATUS_LIST_2021")]
     LegacyRevocationList,
 }
 
@@ -80,7 +81,7 @@ impl RevocationMechanism {
             Self::Crl => "CRL",
             Self::BitstringStatusList => "BITSTRING_STATUS_LIST",
             Self::TokenStatusList => "TOKEN_STATUS_LIST",
-            Self::LegacyRevocationList => "LEGACY_REVOCATION_LIST",
+            Self::LegacyRevocationList => "STATUS_LIST_2021",
         }
     }
 }
