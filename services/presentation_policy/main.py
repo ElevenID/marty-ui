@@ -291,6 +291,7 @@ class PresentationPolicy:
     accepted_credential_types: list[str] = field(default_factory=list)
     credential_requirements: list[CredentialRequirement] = field(default_factory=list)
     alternative_requirements: list[AlternativeRequirement] = field(default_factory=list)
+    presentation_proof_required: bool = False
     trust_profile_id: str | None = None
     holder_binding: HolderBinding = field(default_factory=HolderBinding)
     freshness: FreshnessPolicy | None = None
@@ -1144,13 +1145,20 @@ async def _verify_vcdm_data_integrity(
         else []
     )
     verified_proofs = result.get("verified_proofs")
-    holder_binding_verified = bool(
+    verified_credentials = result.get("verified_credentials")
+    presentation_verified = bool(
         verified
         and is_presentation
         and result.get("kind") == "presentation"
         and isinstance(verified_proofs, int)
         and not isinstance(verified_proofs, bool)
         and verified_proofs > 0
+        and isinstance(verified_credentials, int)
+        and not isinstance(verified_credentials, bool)
+        and verified_credentials == len(embedded_credentials)
+    )
+    holder_binding_verified = bool(
+        presentation_verified
         and (nonce is not None or audience is not None)
     )
     evidence_document = (
@@ -1187,8 +1195,9 @@ async def _verify_vcdm_data_integrity(
         "verification_evidence": {
             "kind": result.get("kind"),
             "verified_proofs": verified_proofs or 0,
-            "verified_credentials": result.get("verified_credentials", 0),
+            "verified_credentials": verified_credentials or 0,
             "credential_count": len(embedded_credentials) if is_presentation else 1,
+            "presentation_verified": presentation_verified,
             "algorithm": result.get("algorithm") or proof_algorithm,
             "issued_at": _first_present(
                 evidence_document.get("validFrom"),
@@ -3034,12 +3043,13 @@ async def create_presentation_policy(
         not request.credential_requirements
         and not request.required_claims
         and not request.alternative_requirements
+        and not (request.holder_binding or {}).get("required", False)
     ):
         raise HTTPException(
             status_code=400,
             detail=(
-                "At least one required claim, credential requirement, or "
-                "alternative requirement is required"
+                "At least one required claim, credential requirement, alternative "
+                "requirement, or holder-bound presentation proof is required"
             ),
         )
     # MIP §7.2 — each credential_requirement MUST have ≥1 requested_claims
@@ -3058,6 +3068,13 @@ async def create_presentation_policy(
             detail="credential_ranking_weights are required when credential_ranking_strategy is CUSTOM",
         )
 
+    holder_binding = normalize_holder_binding(request.holder_binding)
+    presentation_only = bool(
+        holder_binding.required
+        and not request.credential_requirements
+        and not request.required_claims
+        and not request.alternative_requirements
+    )
     policy = PresentationPolicy(
         organization_id=request.organization_id,
         name=request.name,
@@ -3065,13 +3082,14 @@ async def create_presentation_policy(
         purpose=request.purpose,
         accepted_credential_types=request.accepted_credential_types,
         trust_profile_id=request.trust_profile_id,
-        holder_binding=normalize_holder_binding(request.holder_binding),
+        holder_binding=holder_binding,
         freshness=FreshnessPolicy(**request.freshness) if request.freshness else None,
         issuer_constraints=IssuerConstraints(**request.issuer_constraints)
         if request.issuer_constraints
         else None,
         credential_ranking_strategy=request.credential_ranking_strategy,
         credential_ranking_weights=request.credential_ranking_weights,
+        presentation_proof_required=presentation_only,
         compliance_profile_id=request.compliance_profile_id,
         prefer_predicates=request.prefer_predicates,
         fallback_policy=request.fallback_policy,
@@ -3282,6 +3300,12 @@ async def update_presentation_policy(
                 )
             policy.alternative_requirements.append(alt)
 
+    policy.presentation_proof_required = bool(
+        policy.holder_binding.required
+        and not policy.credential_requirements
+        and not policy.alternative_requirements
+    )
+
     policy.updated_at = datetime.now(timezone.utc)
     await repo.save(policy)
     return _policy_to_response(policy)
@@ -3308,10 +3332,17 @@ async def activate_presentation_policy(
     )
     ensure_membership_permission(membership, "presentation-policy", "activate")
 
-    if not policy.credential_requirements and not policy.alternative_requirements:
+    if (
+        not policy.credential_requirements
+        and not policy.alternative_requirements
+        and not policy.presentation_proof_required
+    ):
         raise HTTPException(
             status_code=400,
-            detail="Policy must have at least one credential requirement",
+            detail=(
+                "Policy must have at least one credential or "
+                "presentation-proof requirement"
+            ),
         )
 
     policy.activate()
@@ -3563,7 +3594,7 @@ def _native_policy(policy: PresentationPolicy) -> dict[str, Any]:
         "max_proof_age_seconds",
         proof_freshness.get("max_age_seconds"),
     )
-    return {
+    native_policy: dict[str, Any] = {
         "id": policy.id,
         "name": policy.name,
         "organization_id": policy.organization_id,
@@ -3628,6 +3659,9 @@ def _native_policy(policy: PresentationPolicy) -> dict[str, Any]:
             else None
         ),
     }
+    if policy.presentation_proof_required:
+        native_policy["presentation_proof_required"] = True
+    return native_policy
 
 
 def _native_epoch_seconds(value: object) -> int | None:
@@ -3783,6 +3817,94 @@ def _native_policy_response(
         evaluation_timestamp=evaluation_time,
         nonce=request.nonce,
     )
+
+
+def _evaluate_native_presentation_facts(
+    *,
+    policy: PresentationPolicy,
+    request: EvaluatePresentationRequest,
+    http_request: Request | None,
+    native_policy_evaluator: NativePresentationPolicyEvaluator | None,
+    verification_ok: bool,
+    verification_evidence: dict[str, Any],
+    evaluation_time: datetime,
+    verify_nonce: str | None,
+    verify_audience: str | None,
+) -> PolicyEvaluationResponse:
+    """Evaluate a verified presentation without fabricating credential facts."""
+    evaluator = native_policy_evaluator
+    if evaluator is None and http_request is not None:
+        evaluator = getattr(http_request.app.state, "native_policy_evaluator", None)
+    if evaluator is None:
+        evaluator = _native_policy_evaluator
+    if evaluator is None:
+        evaluator = NativePresentationPolicyEvaluator()
+
+    presentation_verified = bool(
+        verification_ok
+        and verification_evidence.get("presentation_verified") is True
+    )
+    holder_binding_verified = bool(
+        presentation_verified
+        and verification_evidence.get("holder_binding_verified") is True
+    )
+    holder_binding_method = verification_evidence.get("holder_binding_method")
+    if not isinstance(holder_binding_method, str) or not holder_binding_method:
+        holder_binding_method = None
+    proof_profile = verification_evidence.get("proof_profile")
+    if not isinstance(proof_profile, str) or not proof_profile:
+        proof_profile = None
+    challenge_verified = (
+        verification_evidence.get("challenge_verified")
+        if presentation_verified
+        else False
+    )
+    if presentation_verified and not isinstance(challenge_verified, bool):
+        challenge_verified = holder_binding_verified and verify_nonce is not None
+    audience_verified = (
+        verification_evidence.get("audience_verified")
+        if presentation_verified
+        else False
+    )
+    if presentation_verified and not isinstance(audience_verified, bool):
+        audience_verified = holder_binding_verified and verify_audience is not None
+    replay_check_verified = (
+        verification_evidence.get("replay_check_verified")
+        if presentation_verified
+        else False
+    )
+    if presentation_verified and not isinstance(replay_check_verified, bool):
+        replay_check_verified = False
+
+    proof_epoch_seconds = _native_epoch_seconds(
+        verification_evidence.get("proof_issued_at")
+    )
+    if proof_epoch_seconds is None:
+        proof_age_seconds = verification_evidence.get("proof_age_seconds")
+        if (
+            isinstance(proof_age_seconds, int)
+            and not isinstance(proof_age_seconds, bool)
+            and 0 <= proof_age_seconds <= int(evaluation_time.timestamp())
+        ):
+            proof_epoch_seconds = int(evaluation_time.timestamp()) - proof_age_seconds
+
+    native_result = evaluator.evaluate(
+        {
+            "policy": _native_policy(policy),
+            "credentials": [],
+            "evaluation_time_epoch_seconds": int(evaluation_time.timestamp()),
+            "presentation_verified": presentation_verified,
+            "holder_binding_verified": holder_binding_verified,
+            "holder_binding_method": holder_binding_method,
+            "proof_profile": proof_profile,
+            "challenge_verified": challenge_verified,
+            "audience_verified": audience_verified,
+            "replay_check_verified": replay_check_verified,
+            "proof_epoch_seconds": proof_epoch_seconds,
+            "presentation_count": 1,
+        }
+    )
+    return _native_policy_response(policy, request, native_result)
 
 
 def _failed_policy_response(
@@ -4262,22 +4384,28 @@ async def evaluate_presentation(
             detail=f"Policy is not active (status: {policy.status.value})",
         )
 
-    # This endpoint accepts one presentation token and currently returns one
-    # credential evidence record. It cannot safely prove N-of-M alternatives or
-    # bind one authenticated credential to multiple credential requirements.
+    # This endpoint accepts one presentation token and currently returns either
+    # one credential evidence record or one independently verified presentation
+    # proof. It cannot safely prove N-of-M alternatives or bind one authenticated
+    # credential to multiple credential requirements.
+    presentation_only = bool(
+        policy.presentation_proof_required
+        and not policy.credential_requirements
+        and not policy.alternative_requirements
+    )
     if policy.alternative_requirements:
         return _failed_policy_response(
             policy,
             request,
             "Alternative credential requirements require descriptor-bound per-credential evidence",
         )
-    if len(policy.credential_requirements) != 1:
+    if not presentation_only and len(policy.credential_requirements) != 1:
         return _failed_policy_response(
             policy,
             request,
             "Exactly one credential requirement is supported per presentation token",
         )
-    if not policy.credential_requirements[0].required:
+    if not presentation_only and not policy.credential_requirements[0].required:
         return _failed_policy_response(
             policy,
             request,
@@ -4330,7 +4458,11 @@ async def evaluate_presentation(
     # Select an explicitly pinned public JWK before signature verification.
     # This supports authoritative non-DID issuers without weakening the normal
     # DID path: the key comes only from the policy's Trust Profile.
-    trust_profile_id = request.trust_profile_id or policy.trust_profile_id
+    trust_profile_id = (
+        None
+        if presentation_only
+        else request.trust_profile_id or policy.trust_profile_id
+    )
     if not trust_profile_id:
         for requirement in policy.credential_requirements:
             if requirement.trust_profile_id:
@@ -4387,6 +4519,18 @@ async def evaluate_presentation(
     if not isinstance(verification_evidence, dict):
         verification_evidence = {}
     evaluation_time = datetime.now(timezone.utc)
+    if presentation_only:
+        return _evaluate_native_presentation_facts(
+            policy=policy,
+            request=request,
+            http_request=http_request,
+            native_policy_evaluator=native_policy_evaluator,
+            verification_ok=verification_ok,
+            verification_evidence=verification_evidence,
+            evaluation_time=evaluation_time,
+            verify_nonce=verify_nonce,
+            verify_audience=verify_audience,
+        )
     credential_count = verification_evidence.get("credential_count", 1)
     if (
         isinstance(credential_count, bool)
