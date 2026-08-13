@@ -152,6 +152,15 @@ def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> No
     assert "build-ready-manifest-$RELEASE_VERSION" not in workflow
 
 
+def test_beta_lifecycle_installs_each_playwright_browser_revision() -> None:
+    workflow = _text(".github/workflows/e2e-tests.yml")
+
+    assert "playwright==1.56.0" in workflow
+    assert "-python-1.56.0" in workflow
+    assert "npx playwright install --with-deps chromium" in workflow
+    assert "python -m playwright install chromium" in workflow
+
+
 def test_stack_release_ui_smoke_checks_real_homepage_content() -> None:
     workflow = _text(".github/workflows/cd.yml")
 
