@@ -2207,6 +2207,121 @@ async def test_verify_sd_jwt_requires_native_capability(monkeypatch) -> None:
         )
 
 
+def _governed_sd_jwt_relationship(**updates: object) -> dict[str, object]:
+    relationship: dict[str, object] = {
+        "issuer_id": "https://issuer.example/test/instance-1",
+        "trust_level": 100,
+        "relationship_status": "TRUSTED",
+        "compliance_status": "COMPLIANT",
+        "accreditations": [],
+        "valid_from": "2026-01-01T00:00:00Z",
+        "valid_until": "2030-01-01T00:00:00Z",
+        "revoked_at": None,
+        "verification_keys": [],
+    }
+    relationship.update(updates)
+    return relationship
+
+
+def test_selects_exact_governed_sd_jwt_issuer_key() -> None:
+    issuer = "https://issuer.example/test/instance-1"
+    public_jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "public-x",
+        "y": "public-y",
+    }
+    relationship = _governed_sd_jwt_relationship(
+        issuer_id=issuer,
+        verification_keys=[public_jwk],
+    )
+
+    assert pp._pinned_issuer_jwk(
+        {"status": "active", "issuer_relationships": [relationship]},
+        issuer,
+        "issuer-local-key-id",
+    ) == public_jwk
+
+
+@pytest.mark.parametrize(
+    "relationships,kid",
+    [
+        (
+            [
+                _governed_sd_jwt_relationship(
+                    issuer_id="https://issuer.example/test/other",
+                    verification_keys=[{"kty": "EC", "crv": "P-256"}],
+                )
+            ],
+            None,
+        ),
+        (
+            [
+                _governed_sd_jwt_relationship(
+                    issuer_id="https://issuer.example/test/instance-1",
+                    relationship_status="DENIED",
+                    verification_keys=[{"kty": "EC", "crv": "P-256"}],
+                )
+            ],
+            None,
+        ),
+        (
+            [
+                _governed_sd_jwt_relationship(
+                    issuer_id="https://issuer.example/test/instance-1",
+                    verification_keys=[
+                        {"kty": "EC", "crv": "P-256", "kid": "one"},
+                        {"kty": "EC", "crv": "P-256", "kid": "two"},
+                    ],
+                )
+            ],
+            None,
+        ),
+        (
+            [
+                _governed_sd_jwt_relationship(
+                    issuer_id="https://issuer.example/test/instance-1",
+                    verification_keys=[
+                        {"kty": "EC", "crv": "P-256", "d": "private"}
+                    ],
+                )
+            ],
+            None,
+        ),
+    ],
+)
+def test_governed_sd_jwt_key_selection_fails_closed(
+    relationships: list[dict[str, object]], kid: str | None
+) -> None:
+    assert (
+        pp._pinned_issuer_jwk(
+            {"status": "active", "issuer_relationships": relationships},
+            "https://issuer.example/test/instance-1",
+            kid,
+        )
+        is None
+    )
+
+
+def test_pinned_sd_jwt_override_does_not_collapse_url_paths() -> None:
+    public_jwk = {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}
+
+    assert (
+        pp._pinned_issuer_jwk(
+            {
+                "status": "active",
+                "system_issuer_overrides": {
+                    "https://issuer.example/test/trusted": {
+                        "public_jwk": public_jwk
+                    }
+                },
+            },
+            "https://issuer.example/test/attacker",
+        )
+        is None
+    )
+
+
 def test_verify_open_badge_v3_uses_binding_and_flattens_claims(monkeypatch) -> None:
     credential = {
         "@context": ["https://purl.imsglobal.org/spec/ob/v3p0/context.json"],

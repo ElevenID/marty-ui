@@ -667,6 +667,16 @@ def test_internal_get_trust_profile_materializes_normalized_issuer_decision() ->
         compliance_status=trust_profile.IssuerEntityComplianceStatus.ACCREDITED,
         accreditation_body="Example Accreditation Authority",
         accreditations=["ISO27001", "FIPS140-2"],
+        metadata={
+            "verification_keys": [
+                {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": "public-x",
+                    "y": "public-y",
+                }
+            ]
+        },
     )
     relationship = trust_profile.TrustProfileIssuer(
         trust_profile_id=profile.id,
@@ -690,6 +700,14 @@ def test_internal_get_trust_profile_materializes_normalized_issuer_decision() ->
             "accreditation_body": "Example Accreditation Authority",
             "accreditations": ["ISO27001", "FIPS140-2"],
             "valid_from": issuer.valid_from.isoformat(),
+            "verification_keys": [
+                {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": "public-x",
+                    "y": "public-y",
+                }
+            ],
         }
     ]
     assert get_membership.await_count == 0
@@ -716,6 +734,37 @@ def test_internal_get_trust_profile_fails_closed_for_cross_org_relationship() ->
     assert response.status_code == 503
     assert response.json() == {
         "detail": "Trust Profile contains a cross-organization issuer relationship"
+    }
+
+
+def test_internal_get_trust_profile_fails_closed_for_invalid_verification_keys() -> (
+    None
+):
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = asyncio.run(_save_profile(repo))
+    issuer = trust_profile.IssuerEntity(
+        organization_id=profile.organization_id,
+        issuer_id="https://issuer.example",
+        display_name="Malformed Issuer",
+        metadata={
+            "verification_keys": [
+                {"kty": "EC", "crv": "P-256", "d": "private-material"}
+            ]
+        },
+    )
+    relationship = trust_profile.TrustProfileIssuer(
+        trust_profile_id=profile.id,
+        issuer_id=issuer.id,
+    )
+    asyncio.run(repo.save_issuer_entity(issuer))
+    asyncio.run(repo.save_profile_issuer(relationship))
+    client, _ = _build_client(repo)
+
+    response = client.get(f"/internal/v1/trust-profiles/{profile.id}")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Trust Profile contains invalid issuer verification keys"
     }
 
 
