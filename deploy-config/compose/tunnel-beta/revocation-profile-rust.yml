@@ -1,0 +1,22 @@
+# Beta-only Rust revocation-profile cutover.
+#
+# This overlay is consumed by scripts/deploy-local-beta-release.ps1 after the
+# base and tunnel profiles. Production and persistent self-host compose files
+# intentionally continue to select the preceding Python image until a separate
+# promotion decision is approved.
+
+services:
+  revocation-profile:
+    build: !override
+      context: .
+      dockerfile: rust/services/revocation-profile/Dockerfile
+      args:
+        MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+        MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
+    environment:
+      ENVIRONMENT: beta
+      GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set for beta Rust services}
+      REVOCATION_PROFILE_SERVICE_PORT: "8013"
+      RP_GRPC_ENABLED: "true"
+      RP_GRPC_PORT: "9013"
+      RUST_LOG: ${REVOCATION_PROFILE_RUST_LOG:-info}
