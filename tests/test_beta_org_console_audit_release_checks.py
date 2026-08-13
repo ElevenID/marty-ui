@@ -237,3 +237,29 @@ def test_beta_audit_uses_only_public_issuer_identity_route() -> None:
     assert '"/v1/signing-keys/issuer-profiles"' not in source
     assert "credential.issuer_did" in source
     assert "credential.issuer_profile_id" not in source
+
+
+def test_beta_audit_adds_trust_by_public_issuer_did() -> None:
+    audit = _load_audit_module()
+    identity = {
+        "issuer_did": "did:web:beta.example:orgs:audit-production-flow-20260813010101",
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256",
+        "status": "active",
+    }
+
+    assert audit.find_audit_issuer_identity(
+        {"body": {"identities": [identity]}},
+        "20260813010101",
+    ) == identity
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "beta_org_console_audit.py"
+    ).read_text(encoding="utf-8")
+    assert "wizard.trustProfile.issuerDid" in source
+    assert "wizard.trustProfile.addIssuer" in source
+    assert "wizard.trustProfile.existingIssuerProfile" not in source
+    assert "wizard.trustProfile.useIssuerProfile" not in source

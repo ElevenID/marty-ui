@@ -1035,6 +1035,23 @@ def find_issuer_identity(
     )
 
 
+def find_audit_issuer_identity(
+    probe: dict[str, Any],
+    run_id: str,
+) -> dict[str, Any] | None:
+    return next(
+        (
+            item
+            for item in collection_items(probe)
+            if str(item.get("issuer_did") or "").endswith(
+                f":orgs:audit-production-flow-{run_id}"
+            )
+            and is_active(item)
+        ),
+        None,
+    )
+
+
 def is_active(resource: dict[str, Any] | None) -> bool:
     return bool(resource) and (
         str(resource.get("status") or "").strip().lower() == "active"
@@ -1293,37 +1310,71 @@ def create_trust_profile(audit: Audit, run_id: str) -> None:
         audit.snapshot("trust-basics-next-blocked", "Next was unavailable after trust basics.")
         return
 
-    trusted_existing_identity = audit.select_mui_option(
-        "wizard.trustProfile.existingIssuerProfile",
-        re.compile(rf"Audit Issuer Key {run_id}|Audit Issuer|did:jwk|did:web", re.I),
-        timeout=10_000,
+    organization_id = active_organization_id(page)
+    identity_probe = fetch_org_collection(
+        page,
+        "/v1/signing-keys/issuer-identities",
+        organization_id,
     )
-    if trusted_existing_identity:
-        audit.click_test_id("wizard.trustProfile.useIssuerProfile", timeout=3000)
-    else:
+    issuer = find_audit_issuer_identity(identity_probe, run_id)
+    if issuer is None:
         audit.snapshot(
             "trust-managed-issuer-blocked",
-            "Trust Profile creation stopped because the managed issuer identity was unavailable.",
+            "Trust Profile creation stopped because the public issuer identity was unavailable.",
+            {"issuer_identity_probe": identity_probe},
         )
         return
-    audit.snapshot("trust-source-added", "Added the audit issuer identity as a trust source if the form accepted it.")
 
-    for index in range(4):
-        if audit.click_role("button", re.compile(r"activate|create|submit|finish", re.I), timeout=1200):
-            break
-        if audit.click_role("button", re.compile(r"skip", re.I), timeout=1200):
-            audit.snapshot(f"trust-skip-{index + 1}", "Skipped optional trust step.")
-            continue
-        if not audit.click_role("button", re.compile(r"next", re.I), timeout=2000):
-            break
-        audit.snapshot(f"trust-next-{index + 1}", "Advanced trust wizard one step.")
-    wait_for_creating_to_settle(page, timeout=15000)
-    audit.settle(5000)
-    organization_id = active_organization_id(page)
-    probe = fetch_org_collection(page, "/v1/trust-profiles", organization_id)
-    profile = find_named_resource(probe, name)
+    try:
+        page.get_by_test_id("wizard.trustProfile.issuerDid").fill(
+            str(issuer["issuer_did"]),
+            timeout=5000,
+        )
+        page.get_by_label(re.compile(r"^Name$", re.I)).first.fill(
+            "Audit Issuer",
+            timeout=3000,
+        )
+    except PlaywrightError as exc:
+        audit.snapshot(
+            "trust-issuer-did-fill-blocked",
+            "The Trust Profile DID issuer fields were unavailable.",
+            {"selector_error": repr(exc)},
+        )
+        return
+    if not audit.click_test_id("wizard.trustProfile.addIssuer", timeout=5000):
+        audit.snapshot("trust-issuer-add-blocked", "The audit issuer DID could not be added.")
+        return
+    audit.snapshot(
+        "trust-source-added",
+        "Added the public audit issuer DID as an explicit trust source.",
+        {"issuer_did": issuer.get("issuer_did")},
+    )
+
+    if not audit.click_test_id("wizard.trustProfile.next", timeout=5000):
+        audit.snapshot("trust-source-next-blocked", "Next was unavailable after adding the issuer DID.")
+        return
+    audit.snapshot("trust-validation-opened", "Reached the optional cryptographic policy step.")
+    if not audit.click_test_id("wizard.trustProfile.skip", timeout=5000):
+        audit.snapshot("trust-validation-skip-blocked", "The optional cryptographic policy step could not be skipped.")
+        return
+    audit.snapshot("trust-review-opened", "Reviewed the DID-scoped Trust Profile before activation.")
+    if not audit.click_test_id("wizard.trustProfile.submit", timeout=5000):
+        audit.snapshot("trust-profile-submit-blocked", "Create and Activate was unavailable.")
+        return
+
+    profile, probe = wait_for_named_resource(
+        page,
+        "/v1/trust-profiles",
+        organization_id,
+        name,
+        timeout=60_000,
+    )
     if not is_active(profile):
-        audit.snapshot("trust-profile-state-mismatch", "The run-created Trust Profile was not active.")
+        audit.snapshot(
+            "trust-profile-state-mismatch",
+            "The run-created Trust Profile was not active.",
+            {"trust_profile_probe": probe},
+        )
         return
     audit.snapshot(
         "trust-profile-active",
@@ -1804,17 +1855,7 @@ def verify_resource_inventory(audit: Audit, run_id: str) -> None:
 
     issuer_path = "/v1/signing-keys/issuer-identities"
     issuer_probe = fetch_org_collection(page, issuer_path, organization_id)
-    issuer = next(
-        (
-            item
-            for item in collection_items(issuer_probe)
-            if str(item.get("issuer_did") or "").endswith(
-                f":orgs:audit-production-flow-{run_id}"
-            )
-            and is_active(item)
-        ),
-        None,
-    )
+    issuer = find_audit_issuer_identity(issuer_probe, run_id)
     probes[issuer_path] = issuer_probe
     if issuer is None:
         missing.append("issuer_identity")
