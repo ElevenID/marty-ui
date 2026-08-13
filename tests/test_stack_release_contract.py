@@ -113,6 +113,36 @@ def test_stack_release_publishes_signed_evidence() -> None:
     assert "pytest tests/oss_stack" in workflow
 
 
+def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> None:
+    workflow = _text(".github/workflows/e2e-tests.yml")
+    document = yaml.safe_load(workflow)
+    inputs = document[True]["workflow_dispatch"]["inputs"]
+    permissions = document["permissions"]
+
+    assert inputs["marty_ui_sha"]["required"] is True
+    assert inputs["beta_source_id"]["required"] is True
+    assert permissions["actions"] == "read"
+    assert permissions["attestations"] == "read"
+    assert permissions["contents"] == "read"
+    assert "ref: ${{ env.MARTY_UI_SHA }}" in workflow
+    assert 'test "$(git rev-parse HEAD)" = "$MARTY_UI_SHA"' in workflow
+    assert "BETA_SOURCE_ID must be a full 40-character source-snapshot ID" in workflow
+    assert 'test "$(jq -r \'.workflowName\' <<<"$run")" = "Stack release"' in workflow
+    assert 'gh release download "v$RELEASE_VERSION"' in workflow
+    assert "--pattern stack-manifest.json" in workflow
+    assert "sha256sum --check --ignore-missing SHA256SUMS" in workflow
+    assert "gh attestation verify tests/artifacts/build-evidence/stack-manifest.json" in workflow
+    assert '.schema == "marty.stack/v1"' in workflow
+    assert '.repository == "ElevenID/marty-core"' in workflow
+    assert "--arg source_id \"$BETA_SOURCE_ID\"" in workflow
+    assert "beta_source_id: $beta_source_id" in workflow
+    assert "CI must pin exactly one full MARTY_PROTOCOL_REF" in workflow
+    assert "${{ vars.MARTY_CORE_REF }}" not in workflow
+    assert "${{ vars.MARTY_PROTOCOL_REF }}" not in workflow
+    assert 'workflowName\' <<<"$run")" = "CD"' not in workflow
+    assert "build-ready-manifest-$RELEASE_VERSION" not in workflow
+
+
 def test_stack_release_ui_smoke_checks_real_homepage_content() -> None:
     workflow = _text(".github/workflows/cd.yml")
 
