@@ -243,7 +243,7 @@ pub struct RevocationProfile {
 
 impl RevocationProfile {
     pub fn new(organization_id: String, name: String, description: Option<String>) -> Self {
-        let now = Utc::now();
+        let now = utc_now();
         Self {
             id: Uuid::new_v4().to_string(),
             organization_id,
@@ -265,8 +265,13 @@ impl RevocationProfile {
 
     pub fn activate(&mut self) {
         self.status = RevocationProfileStatus::Active;
-        self.updated_at = Utc::now();
+        self.updated_at = utc_now();
     }
+}
+
+pub(crate) fn utc_now() -> DateTime<Utc> {
+    DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
+        .expect("current UTC timestamp is representable")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

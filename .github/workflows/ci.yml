@@ -131,6 +131,29 @@ jobs:
   test-rust-services:
     name: Rust Service Tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
+        env:
+          POSTGRES_USER: marty
+          POSTGRES_PASSWORD: marty-test
+          POSTGRES_DB: marty_revocation_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U marty -d marty_revocation_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+      redis:
+        image: redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
     permissions:
       contents: read
     steps:
@@ -145,6 +168,14 @@ jobs:
       - name: Test Rust service contracts
         working-directory: rust
         run: cargo test --locked --workspace
+      - name: Test Rust revocation storage contracts
+        working-directory: rust
+        env:
+          MARTY_TEST_POSTGRES_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
+          MARTY_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+        run: >-
+          cargo test --locked -p marty-revocation-profile
+          --test storage_contract -- --ignored
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
