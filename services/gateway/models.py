@@ -2057,7 +2057,15 @@ class CredentialEvaluationResult(BaseModel):
     satisfied: bool
     issuer_did: str | None = None
     claim_results: list[ClaimEvaluationResult] = []
+    trust_check_passed: bool = True
+    freshness_check_passed: bool = True
+    signature_valid: bool = True
+    revocation_checked: bool | None = None
+    not_revoked: bool | None = None
+    revocation_status: str | None = None
+    error_codes: list[str] = []
     errors: list[str] = []
+    warnings: list[str] = []
 
 
 class PolicyEvaluationResponse(BaseModel):
@@ -2067,6 +2075,8 @@ class PolicyEvaluationResponse(BaseModel):
     credential_results: list[CredentialEvaluationResult]
     decision: str
     decision_reason: str
+    error_codes: list[str] = []
+    warnings: list[str] = []
     verified_claims: dict
     evaluation_timestamp: str
 
@@ -2170,6 +2180,9 @@ class VerificationResultResponse(BaseModel):
     decision: str | None = None
     decision_reason: str | None = None
     verified_claims: dict
+    credential_results: list[CredentialEvaluationResult] = []
+    error_codes: list[str] = []
+    warnings: list[str] = []
     evaluation_timestamp: str | None = None
 
 

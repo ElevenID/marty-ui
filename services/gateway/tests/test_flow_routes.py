@@ -12,6 +12,7 @@ from gateway.models import (
     FlowInstanceCreate,
     FlowInstanceResponse,
     StartVerificationFlowRequest,
+    VerificationResultResponse,
 )
 
 
@@ -162,6 +163,49 @@ def test_flow_instance_response_rejects_nested_private_service_state() -> None:
         flows._sanitize_public_response(response, FlowInstanceResponse)
 
     assert exc_info.value.status_code == 502
+
+
+def test_verification_result_preserves_component_status_evidence() -> None:
+    response = Response(
+        content=flows.json.dumps(
+            {
+                "instance_id": "instance-1",
+                "status": "COMPLETED",
+                "result": "passed",
+                "decision": "allow",
+                "decision_reason": "All requirements satisfied",
+                "verified_claims": {"given_name": "Marty"},
+                "credential_results": [
+                    {
+                        "credential_template_id": "template-1",
+                        "satisfied": True,
+                        "issuer_did": "did:web:issuer.example",
+                        "claim_results": [],
+                        "trust_check_passed": True,
+                        "freshness_check_passed": True,
+                        "signature_valid": True,
+                        "revocation_checked": True,
+                        "not_revoked": True,
+                        "revocation_status": "valid",
+                        "error_codes": [],
+                        "errors": [],
+                        "warnings": ["status evidence is current"],
+                    }
+                ],
+                "error_codes": [],
+                "warnings": ["status evidence is current"],
+                "evaluation_timestamp": "2026-08-14T00:00:00Z",
+            }
+        ),
+        media_type="application/json",
+    )
+
+    sanitized = flows._sanitize_public_response(response, VerificationResultResponse)
+    body = flows.json.loads(bytes(sanitized.body))
+    assert body["credential_results"][0]["revocation_checked"] is True
+    assert body["credential_results"][0]["not_revoked"] is True
+    assert body["credential_results"][0]["trust_check_passed"] is True
+    assert body["warnings"] == ["status evidence is current"]
 
 
 def test_flow_patch_serializes_only_validated_public_fields() -> None:

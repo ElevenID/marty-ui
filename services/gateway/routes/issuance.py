@@ -307,12 +307,22 @@ issued_credential_router = APIRouter(
 def _require_selected_organization(request: Request, organization_id: str) -> None:
     """Bind an issuance management request to the authenticated tenant."""
     state = getattr(request, "state", None)
-    selected = str(getattr(state, "organization_id", "") or "").strip()
-    if selected and selected != organization_id:
+    selected = str(
+        getattr(state, "organization_id", "")
+        or getattr(state, "session_organization_id", "")
+        or ""
+    ).strip()
+    if not selected:
+        raise HTTPException(
+            status_code=403,
+            detail="A selected organization context is required",
+        )
+    if selected != organization_id:
         raise HTTPException(
             status_code=403,
             detail="organization_id does not match the authorized organization context",
         )
+    state.organization_id = organization_id
 
 
 def _validated_json_body(body) -> bytes:
@@ -718,8 +728,13 @@ async def get_issuance(issuance_id: str, request: Request) -> Response:
 
 
 @issuance_router.post("/{issuance_id}/revoke", summary="Revoke Issuance")
-async def revoke_issuance(issuance_id: str, request: Request) -> Response:
+async def revoke_issuance(
+    issuance_id: str,
+    request: Request,
+    organization_id: str = Query(..., min_length=1, max_length=255),
+) -> Response:
     """Revoke a credential issuance transaction."""
+    _require_selected_organization(request, organization_id)
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(
@@ -734,9 +749,12 @@ async def revoke_issuance(issuance_id: str, request: Request) -> Response:
     "/{issuance_id}/revocation-status", summary="Get Revocation Status"
 )
 async def get_issuance_revocation_status(
-    issuance_id: str, request: Request
+    issuance_id: str,
+    request: Request,
+    organization_id: str = Query(..., min_length=1, max_length=255),
 ) -> Response:
     """Get the revocation status of an issuance transaction."""
+    _require_selected_organization(request, organization_id)
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(

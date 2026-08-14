@@ -43,7 +43,6 @@ $script:ComposeFiles = @(
     (Join-Path $script:RepoRoot "docker-compose.beta.yml"),
     (Join-Path $script:RepoRoot "docker-compose.profile.dev.yml"),
     (Join-Path $script:RepoRoot "docker-compose.profile.tunnel.yml"),
-    (Join-Path $script:RepoRoot "deploy-config\compose\tunnel-beta\revocation-profile-rust.yml"),
     (Join-Path $script:RepoRoot "docker-compose.profile.waltid.yml"),
     (Join-Path $script:RepoRoot "docker-compose.profile.canvas-real.yml"),
     (Join-Path $script:RepoRoot "docker-compose.profile.canvas-sandbox.yml")

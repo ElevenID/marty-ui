@@ -22,13 +22,15 @@ The selected deterministic protocol, cryptographic, policy, validation,
 state-machine, wallet, licensing, DTC, and VDS-NC kernels now have one
 canonical Rust owner. The final Flow P-256 `did:jwk`/`did:key` caller cutover
 is included in the closing source-cleanup change. The machine-readable
-inventory records these workstreams as `native-active` and keeps only the two
-whole-service runtime cutovers below open.
+inventory records these workstreams as `native-active`. Event-stream has been
+deleted from Python and now runs as one Rust implementation in every deployment
+definition. This closing change does the same for revocation-profile, including
+its schema migrator.
 
 | Remaining gate | Current state | Completion evidence required |
 |---|---|---|
-| Event-stream whole-service removal | Rust is active on beta v1.1.165; this change deletes `services/event_stream` and makes the shared service image dispatch the canonical Rust binary for every stack | Black-box HTTP/gRPC behavior, unchanged-consumer, failure, packaging, and regression contracts pass against the executable before merging |
-| Revocation-profile whole-service removal | Rust HTTP/gRPC/storage/runtime implementation and beta overlay are packaged; legacy Python orchestration remains | A black-box issuance, status publication, revocation, and re-verification lifecycle plus failure, concurrency, storage, packaging, and regression contracts pass before deleting the superseded Python service |
+| Event-stream whole-service removal | Complete: `services/event_stream` is deleted and the shared image dispatches the canonical Rust executable in every stack | The executable-level public HTTP/gRPC behavior, tenant filtering, health, packaging, and regression contracts are retained in CI |
+| Revocation-profile whole-service removal | This change deletes the Python service, status-list kernel, and Alembic ownership and makes the shared image dispatch the canonical Rust executable in every stack | The public issuance/status/revocation/re-verification lifecycle plus failure, concurrency, storage, migration, packaging, and regression contracts pass against the exact candidate before merging |
 | Phase 9 release and evidence | Source cutovers are merged or in the closing dependency-ordered release/caller change; beta remains pinned | Immutable Rust/UI releases, one beta-only update after the deletion set lands, language/dependency measurements, and a production-promotion evidence package without promotion |
 
 Until those gates pass, this roadmap is not complete. Production and
@@ -157,7 +159,7 @@ Use the event-stream service as the first whole-service replacement because it h
 - Cover Token Status List and Bitstring Status List encoding, compression, allocation, mutation, validation, and error semantics with standards and property tests.
 - Rebuild revocation-profile orchestration as a Rust service, preserving REST, gRPC, persistence, Redis atomicity, issuer configuration, tenancy, and events.
 - Keep certificate-provider or external revocation integrations as adapters to the canonical Rust decisions.
-- Delete `status_list_manager.py` and the superseded Python service code after implementation-independent behavioral, parity, and failure gates pass.
+- Run advisory-lock-protected Rust schema migrations before downstream shared migrations, then delete `status_list_manager.py`, Alembic ownership, and the superseded Python service after implementation-independent behavioral, parity, and failure gates pass.
 
 **Parity gate:** Existing credentials remain readable, indices and status transitions are preserved, concurrent allocation is safe, and all published bytes match the approved vectors.
 

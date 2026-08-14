@@ -23,11 +23,11 @@ class FakeRedis:
         return True
 
 
-def test_revocation_schema_precedes_dependent_migrations() -> None:
+def test_revocation_schema_is_removed_from_the_python_migration_graph() -> None:
     order = [service["name"] for service in migrations.SERVICES]
 
-    assert order.index("revocation_profile") < order.index("credential_template")
-    assert order.index("revocation_profile") < order.index("trust_profile")
+    assert "revocation_profile" not in order
+    assert order.index("credential_template") < order.index("trust_profile")
 
 
 def test_notification_schema_is_owned_by_the_deployment_migration_runner() -> None:

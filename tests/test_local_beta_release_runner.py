@@ -205,14 +205,11 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
     assert "event-stream-rust.yml" not in restore
     assert "dockerfile: rust/services/event-stream/Dockerfile" not in base
     assert "EVENT_STREAM_SERVICE_PORT=8015" in base
-    assert "deploy-config\\compose\\tunnel-beta\\revocation-profile-rust.yml" in deploy
-    assert "deploy-config/compose/tunnel-beta/revocation-profile-rust.yml" in restore
-    revocation_overlay = text(
-        "deploy-config/compose/tunnel-beta/revocation-profile-rust.yml"
-    )
-    assert "ENVIRONMENT: beta" in revocation_overlay
-    assert "GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set" in revocation_overlay
-    assert revocation_overlay.count("<<: *beta-grpc-service-auth") == 17
+    assert "revocation-profile-rust.yml" not in deploy
+    assert "revocation-profile-rust.yml" not in restore
+    assert "ENVIRONMENT: beta" in beta
+    assert "GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set" in beta
+    assert beta.count("<<: *beta-grpc-service-auth") == 17
     assert "-TunnelEnvFile" in deploy and "-GeneratedEnvFile" in deploy
     assert 'mip_version -ne "0.4.1"' in deploy
     assert 'mip_version = "0.4.1"' in deploy

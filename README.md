@@ -343,7 +343,7 @@ Typical areas:
 
 - `services/trust_profile/`
 - `services/presentation_policy/`
-- `services/revocation_profile/`
+- `rust/services/revocation-profile/` (canonical Rust service)
 - `services/notification/`
 - `services/auth/`
 - `services/gateway/`

@@ -4107,6 +4107,9 @@ def test_mdoc_direct_pin_lifecycle_supplies_separate_status_evidence(
     )
 
     assert response.decision == "allow"
+    assert response.credential_results[0].revocation_checked is True
+    assert response.credential_results[0].not_revoked is True
+    assert response.credential_results[0].revocation_status == "valid"
     assert raw_result["revocation_checked"] is True
     assert raw_result["not_revoked"] is True
     assert raw_result["status_evidence"]["method"] == (
