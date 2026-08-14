@@ -42,3 +42,25 @@ deletion requires at least fourteen. Pair daily reports with the unchanged
 contract, lifecycle, and failure suites before approving deletion. A failed or
 missing sample must be investigated and documented; this tool never shortens a
 roadmap gate or authorizes production promotion.
+
+Before a deletion PR, verify the complete immutable sample set. The verifier
+uses independent check inventories for each service, permits no gap longer than
+26 hours, resets only the affected service window after a failed sample, and
+rejects mixed release/source evidence:
+
+```powershell
+python scripts/verify_rust_beta_soak_window.py `
+  --reports tests/artifacts/rust-beta-soak/*.json `
+  --release-version 1.1.160 `
+  --source-revision 347180823949a3b2b5d3f2c4689bec8bd4a39f28 `
+  --cutover-at 2026-08-13T21:42:51Z `
+  --require-eligible event-stream `
+  --output tests/artifacts/rust-beta-soak-window.json
+```
+
+Use `--require-eligible revocation-profile` for the fourteen-day gate or
+`--require-eligible all` for the final combined removal audit. The generated
+`marty.rust-beta-soak-window/v1` document records the current window start,
+duration, samples, distinct UTC dates, interruptions, and independent deletion
+eligibility. A successful time window remains only one part of the full roadmap
+deletion gate.
