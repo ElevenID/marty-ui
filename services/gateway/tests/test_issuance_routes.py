@@ -64,6 +64,49 @@ class _NamedRegistry:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "expected_path"),
+    (
+        (
+            issuance.revoke_issuance,
+            "/v1/issuance/transactions/issuance-1/revoke",
+        ),
+        (
+            issuance.get_issuance_revocation_status,
+            "/v1/issuance/transactions/issuance-1/revocation-status",
+        ),
+    ),
+)
+async def test_issuance_revocation_routes_require_selected_organization(
+    monkeypatch: pytest.MonkeyPatch,
+    route,
+    expected_path: str,
+) -> None:
+    request = _build_request(session_org_id="org-1")
+    request.state.organization_id = None
+    captured: dict[str, object] = {}
+
+    async def _proxy(request, service_url, path, inject_headers=None):
+        captured.update(path=path, inject_headers=inject_headers)
+        return JSONResponse({"status": "active"})
+
+    monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(issuance, "proxy_request", _proxy)
+    monkeypatch.setattr(issuance, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
+
+    response = await route("issuance-1", request, "org-1")
+    assert response.status_code == 200
+    assert request.state.organization_id == "org-1"
+    assert captured == {
+        "path": expected_path,
+        "inject_headers": {"X-API-Key": "secret"},
+    }
+
+    with pytest.raises(HTTPException, match="organization_id does not match"):
+        await route("issuance-1", request, "org-2")
+
+
+@pytest.mark.asyncio
 async def test_application_template_activation_delegates_authoritative_validation(
     monkeypatch: pytest.MonkeyPatch,
 ):

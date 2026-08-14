@@ -16,14 +16,14 @@ Startup runs an advisory-lock-protected, idempotent Rust schema migrator and
 ensures the released default Marty profile exists without overwriting an
 existing profile. This preserves both fresh-database setup and databases that
 already ran the historical Alembic revisions, and removes the last schema/seed
-dependency on the Python service before its deletion gate.
+dependency on the removed Python service.
 Set `RP_MIGRATE_ONLY=true` to run that database step and exit without requiring
 Redis, organization gRPC, or service-auth configuration; the final deletion
 change can therefore run Rust before the remaining shared migration graph.
 
-It is selected only by the beta tunnel overlay for the next coordinated beta
-release. Shared Python/Rust HTTP vectors and the disposable executable contract
-cover the compatibility, authorization, storage, readiness, diagnostics, and
-HTTP/gRPC startup boundaries. Application-consumer evidence and the security
-soak gate must still pass before the Python service is removed. Production and
-persistent self-host profiles remain unchanged.
+The shared service image dispatches revocation-profile directly to this binary,
+and the same binary runs its one-shot migration before the remaining shared
+schema graph. Golden vectors and the disposable executable contract cover the
+compatibility, authorization, storage, migration, readiness, diagnostics, and
+HTTP/gRPC startup boundaries. Image rollback is the only rollback mechanism;
+there is no Python runtime fallback.

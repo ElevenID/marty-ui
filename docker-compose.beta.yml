@@ -6,6 +6,9 @@ networks:
   marty-network:
     name: elevenid-beta-network
 
+x-beta-grpc-service-auth: &beta-grpc-service-auth
+  GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set for beta Rust services}
+
 services:
   redis:
     environment:
@@ -19,28 +22,87 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379
       MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}
 
+  revocation-profile-migrate:
+    environment:
+      ENVIRONMENT: beta
+      PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
+
   gateway:
     environment:
+      <<: *beta-grpc-service-auth
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379
 
   auth:
     environment:
+      <<: *beta-grpc-service-auth
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/0
       CREDENTIAL_LOGIN_ORGANIZATION_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}
       CREDENTIAL_LOGIN_ISSUER_DID: ${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}
 
   organization:
     environment:
+      <<: *beta-grpc-service-auth
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379
+
+  credential-template:
+    environment:
+      <<: *beta-grpc-service-auth
+
+  trust-profile:
+    environment:
+      <<: *beta-grpc-service-auth
+
+  applicant:
+    environment:
+      <<: *beta-grpc-service-auth
+
+  notification:
+    environment:
+      <<: *beta-grpc-service-auth
+
+  compliance-profile:
+    environment:
+      <<: *beta-grpc-service-auth
+
+  presentation-policy:
+    environment:
+      <<: *beta-grpc-service-auth
+
+  deployment-profile:
+    environment:
+      <<: *beta-grpc-service-auth
 
   flow:
     environment:
+      <<: *beta-grpc-service-auth
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379
 
   revocation-profile:
     environment:
+      <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/4
+      RP_GRPC_ENABLED: "true"
+      RUST_LOG: ${REVOCATION_PROFILE_RUST_LOG:-info}
+
+  device-registration:
+    environment:
+      <<: *beta-grpc-service-auth
+
+  event-stream:
+    environment:
+      <<: *beta-grpc-service-auth
+
+  issuance:
+    environment:
+      <<: *beta-grpc-service-auth
+
+  canvas-sync-worker:
+    environment:
+      <<: *beta-grpc-service-auth
 
   verification:
     environment:
+      <<: *beta-grpc-service-auth
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/3

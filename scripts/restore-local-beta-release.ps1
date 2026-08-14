@@ -32,7 +32,7 @@ $uiProject = "elevenid-beta-ui"
 $env:MARTY_NETWORK_NAME = "elevenid-beta-network"
 $composeFiles = @(
     "docker-compose.base.yml", "docker-compose.beta.yml", "docker-compose.profile.dev.yml",
-    "docker-compose.profile.tunnel.yml", "deploy-config/compose/tunnel-beta/revocation-profile-rust.yml",
+    "docker-compose.profile.tunnel.yml",
     "docker-compose.profile.waltid.yml",
     "docker-compose.profile.canvas-real.yml", "docker-compose.profile.canvas-sandbox.yml"
 ) | ForEach-Object { Join-Path $repoRoot $_ }

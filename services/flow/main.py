@@ -2151,6 +2151,9 @@ class VerificationResultResponse(BaseModel):
     decision: str | None = None  # allow, deny, manual_review
     decision_reason: str | None = None
     verified_claims: dict
+    credential_results: list[dict[str, Any]] = Field(default_factory=list)
+    error_codes: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
     evaluation_timestamp: str | None = None
 
 
@@ -2598,6 +2601,21 @@ def _verification_result_to_response(
     verified_claims = _public_flow_value(raw_result.get("verified_claims", {}))
     if not isinstance(verified_claims, dict):
         verified_claims = {}
+    credential_results = _public_flow_value(raw_result.get("credential_results", []))
+    if not isinstance(credential_results, list) or any(
+        not isinstance(result, dict) for result in credential_results
+    ):
+        credential_results = []
+    error_codes = _public_flow_value(raw_result.get("error_codes", []))
+    if not isinstance(error_codes, list) or any(
+        not isinstance(code, str) for code in error_codes
+    ):
+        error_codes = []
+    warnings = _public_flow_value(raw_result.get("warnings", []))
+    if not isinstance(warnings, list) or any(
+        not isinstance(warning, str) for warning in warnings
+    ):
+        warnings = []
     return VerificationResultResponse(
         instance_id=instance.id,
         status=_protocol_status_for_instance(instance.status),
@@ -2605,6 +2623,9 @@ def _verification_result_to_response(
         decision=raw_result.get("decision"),
         decision_reason=raw_result.get("decision_reason") or instance.error,
         verified_claims=verified_claims,
+        credential_results=credential_results,
+        error_codes=error_codes,
+        warnings=warnings,
         evaluation_timestamp=(
             instance.completed_at.isoformat() if instance.completed_at else None
         ),
@@ -5392,18 +5413,7 @@ def _verification_submission_digest(
 def _terminal_verification_response(
     instance: FlowInstance,
 ) -> VerificationResultResponse:
-    result = instance.result or {}
-    return VerificationResultResponse(
-        instance_id=instance.id,
-        status=_protocol_status_for_instance(instance.status),
-        result=str(result.get("evaluation_result") or "failed"),
-        decision=str(result.get("decision") or "deny"),
-        decision_reason=str(result.get("decision_reason") or ""),
-        verified_claims=result.get("verified_claims")
-        if isinstance(result.get("verified_claims"), dict)
-        else {},
-        evaluation_timestamp=(instance.completed_at or instance.updated_at).isoformat(),
-    )
+    return _verification_result_to_response(instance)
 
 
 def _raise_verification_replay_conflict() -> None:
@@ -5694,6 +5704,33 @@ async def _submit_verification_response_internal(
     final_allowed = evaluation_result == "passed" and evaluation_decision == "allow"
     if not final_allowed:
         verified_claims = {}
+    public_credential_results = _public_flow_value(credential_results)
+    if not isinstance(public_credential_results, list) or any(
+        not isinstance(result, dict) for result in public_credential_results
+    ):
+        public_credential_results = []
+    error_codes = sorted(
+        {
+            code
+            for result in public_credential_results
+            for code in (
+                result.get("error_codes", [])
+                if isinstance(result.get("error_codes", []), list)
+                else []
+            )
+            if isinstance(code, str) and code
+        }
+    )
+    warnings = [
+        warning
+        for result in public_credential_results
+        for warning in (
+            result.get("warnings", [])
+            if isinstance(result.get("warnings", []), list)
+            else []
+        )
+        if isinstance(warning, str) and warning
+    ]
     instance.context.pop("vp_token", None)
     instance.context.pop("vp_token_raw", None)
     instance.context.pop("presentation_submission", None)
@@ -5728,8 +5765,25 @@ async def _submit_verification_response_internal(
         "decision": evaluation_decision,
         "decision_reason": decision_reason,
         "verified_claims": verified_claims,
+        "credential_results": public_credential_results,
+        "error_codes": error_codes,
+        "warnings": warnings,
         "submission_digest": submission_digest,
     }
+
+    component_revocation_checked = bool(public_credential_results) and all(
+        result.get("revocation_checked") is True
+        for result in public_credential_results
+    )
+    component_not_revoked = (
+        all(result.get("not_revoked") is True for result in public_credential_results)
+        if component_revocation_checked
+        else None
+    )
+    component_trust_valid = bool(public_credential_results) and all(
+        result.get("trust_check_passed") is True
+        for result in public_credential_results
+    )
 
     verification_result_message = MIPMessage(
         message_type=MessageType.VERIFICATION_RESULT,
@@ -5751,9 +5805,15 @@ async def _submit_verification_response_internal(
                 )
                 for claim_name, claim_value in verified_claims.items()
             ],
-            trust_chain_valid=evaluation_result == "passed",
-            revocation_checked=bool(policy_id),
-            revocation_status="VALID" if evaluation_result == "passed" else "UNKNOWN",
+            trust_chain_valid=component_trust_valid,
+            revocation_checked=component_revocation_checked,
+            revocation_status=(
+                "VALID"
+                if component_not_revoked is True
+                else "REVOKED"
+                if component_not_revoked is False
+                else "UNKNOWN"
+            ),
             evaluated_at=datetime.now(timezone.utc),
             verifier_nonce=instance.context.get("nonce", ""),
         ),
@@ -5845,15 +5905,7 @@ async def _submit_verification_response_internal(
                 instance.id,
             )
 
-    return VerificationResultResponse(
-        instance_id=instance.id,
-        status=_protocol_status_for_instance(instance.status),
-        result=evaluation_result,
-        decision=evaluation_decision,
-        decision_reason=decision_reason,
-        verified_claims=verified_claims,
-        evaluation_timestamp=datetime.now(timezone.utc).isoformat(),
-    )
+    return _verification_result_to_response(instance)
 
 
 async def submit_verification_response(

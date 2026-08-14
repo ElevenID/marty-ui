@@ -281,6 +281,11 @@ struct CreateProfileRequest {
     automation_config: Option<RevocationAutomationConfig>,
     #[serde(default)]
     status_list_url: Option<String>,
+    // The legacy public request model accepted this orchestration-only field
+    // without persisting it on the profile. Keep that wire compatibility while
+    // continuing to reject every other unknown field.
+    #[serde(default, rename = "metadata")]
+    _metadata: Option<Value>,
     #[serde(default = "default_supported_formats")]
     supported_formats: Vec<CredentialFormat>,
 }
@@ -1411,6 +1416,7 @@ mod tests {
                     "mechanism_priority": ["OCSP", "BITSTRING_STATUS_LIST"],
                     "check_mode": "OFFLINE_GRACE",
                     "offline_grace_seconds": 7200,
+                    "metadata": {"source": "public-client-contract"},
                     "issuer_config": {
                         "auto_allocate_index": true,
                         "batch_update_interval_seconds": 600,

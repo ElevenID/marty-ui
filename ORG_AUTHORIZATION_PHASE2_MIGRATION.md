@@ -369,7 +369,7 @@ Extend [marty-integration-tests/tests/integration/test_org_authorization.py](../
 3. [services/compliance_profile/main.py](services/compliance_profile/main.py) - **592 lines total**, 7 endpoints secured
 4. [services/presentation_policy/main.py](services/presentation_policy/main.py) - **1147 lines total**, 8 endpoints secured
 5. [services/deployment_profile/main.py](services/deployment_profile/main.py) - **675 lines total**, 8 endpoints secured
-6. [services/revocation_profile/main.py](services/revocation_profile/main.py) - **739 lines total**, 5 endpoints secured
+6. Legacy `services/revocation_profile/main.py` - **removed after the canonical Rust service cutover**, 5 endpoints preserved
 
 **Total Lines Modified:** ~5,268 lines across 6 services  
 **Total Endpoints Secured:** 53 endpoints

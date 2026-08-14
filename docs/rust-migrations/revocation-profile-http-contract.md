@@ -1,6 +1,6 @@
 # Revocation Profile Rust HTTP Contract
 
-This document records the compatibility boundary for the Rust revocation-profile HTTP adapter. The adapter is not selected by Compose until the coordinated beta release after all roadmap work lands.
+This document records the compatibility boundary for the canonical Rust revocation-profile HTTP adapter. The shared service image dispatches this service directly to the Rust binary.
 
 ## Profile routes in this slice
 
@@ -27,12 +27,12 @@ The Rust adapter intentionally exposes only the established protocol response fi
 
 `STATUS_LIST_2021` is the external spelling for the legacy status-list mechanism. The Rust domain serializes this spelling directly so a second mapping implementation is not required by callers.
 
-## Remaining cutover work
+## Removal gate
 
-- Complete the roadmap-wide consolidation and deletion gates before selecting the image in the coordinated beta release.
-- Run the unchanged application-consumer suites against the coordinated beta topology before removing the Python compatibility service.
+- Require the fourteen-day beta soak and unchanged application-consumer lifecycle evidence before merging the Python deletion change.
+- Keep rollback at the immutable-image boundary; never restore a runtime Python fallback.
 
-The administrative HTTP boundary is covered by the shared language-neutral vectors in `tests/fixtures/revocation_profile_http_vectors.json`. Both the Python compatibility service and Rust adapter execute the same valid, authorization-failure, malformed, timing-dependency, HTTPS, and legacy-spelling cases. The fixture compares stable response fields and normalizes only generated profile IDs and timestamps.
+The administrative HTTP boundary is covered by the shared language-neutral vectors in `tests/fixtures/revocation_profile_http_vectors.json`. The Rust adapter preserves the approved valid, authorization-failure, malformed, timing-dependency, HTTPS, and legacy-spelling cases. The fixture compares stable response fields and normalizes only generated profile IDs and timestamps.
 
 ## Executable and operational contract
 
@@ -40,8 +40,8 @@ The Rust executable uses the released PostgreSQL schema and Python-compatible Re
 
 `DATABASE_URL`, `REDIS_URL`, and `ORG_GRPC_TARGET` are required. Outside development, `GRPC_SERVICE_TOKEN` or `GRPC_SERVICE_TOKEN_FILE` must provide a non-placeholder token of at least 32 characters. SQLAlchemy PostgreSQL driver spellings are normalized for SQLx; non-PostgreSQL URLs and non-HTTPS status-list base URLs fail startup.
 
-The executable co-hosts HTTP on port `8013` and gRPC on `9013`, coordinates graceful shutdown, emits structured JSON traces, and exposes `/health`, `/ready`, `/startup`, `/health/native-backend`, and `/metrics`. Readiness fails with `503` unless PostgreSQL, Redis, and organization authorization are all reachable. The native diagnostics identify the canonical Rust backend, package version, release, build revision, and capabilities. The digest-pinned image is buildable but remains unselected by Compose until the coordinated beta release.
+The executable co-hosts HTTP on port `8013` and gRPC on `9013`, coordinates graceful shutdown, emits structured JSON traces, and exposes `/health`, `/ready`, `/startup`, `/health/native-backend`, and `/metrics`. Readiness fails with `503` unless PostgreSQL, Redis, and organization authorization are all reachable. The native diagnostics identify the canonical Rust backend, package version, release, build revision, and capabilities. The digest-pinned shared service image contains and selects the binary for every deployment profile.
 
-CI launches the compiled executable against disposable PostgreSQL and Redis plus an authenticated organization gRPC server. The executable contract requires all readiness components, exact native release/build diagnostics, durable HTTP create/list behavior, missing-identity denial, unauthenticated gRPC denial, and authenticated gRPC health. This complements the shared Python/Rust HTTP vectors without introducing a runtime test mode or mock fallback.
+CI launches the compiled executable against disposable PostgreSQL and Redis plus an authenticated organization gRPC server. The executable contract requires all readiness components, exact native release/build diagnostics, durable HTTP create/list behavior, missing-identity denial, unauthenticated gRPC denial, and authenticated gRPC health. This complements the shared golden vectors without introducing a runtime test mode or mock fallback.
 
-This slice makes no deployment or Compose selection change.
+`RP_MIGRATE_ONLY=true` runs the advisory-lock-protected Rust schema migration and exits before Redis, organization gRPC, or service-auth initialization. Compose and Kubernetes run this mode before the remaining shared migration graph.

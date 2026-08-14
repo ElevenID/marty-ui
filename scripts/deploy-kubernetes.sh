@@ -416,6 +416,13 @@ cmd_deploy() {
   kubectl rollout status statefulset/rabbitmq -n "$NAMESPACE" --timeout=180s
 
   step "Running database migrations…"
+  kubectl delete job revocation-profile-migrations -n "$NAMESPACE" --ignore-not-found=true
+  apply_manifest "${K8S_DIR}/05b-revocation-profile-migrations.yaml"
+  info "Waiting for revocation-profile migrations to complete..."
+  kubectl wait --for=condition=complete job/revocation-profile-migrations -n "$NAMESPACE" --timeout=300s \
+    || { kubectl logs job/revocation-profile-migrations -n "$NAMESPACE" --tail=50; error "Revocation-profile migration job failed"; }
+  success "Revocation-profile Rust migrations completed"
+
   kubectl delete job db-migrate -n "$NAMESPACE" --ignore-not-found=true
   apply_manifest "${K8S_DIR}/06-db-migrate.yaml"
   info "Waiting for migration job to complete…"
