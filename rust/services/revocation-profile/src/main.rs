@@ -1,6 +1,7 @@
 use marty_revocation_profile::{
-    operational_router, proto::revocation_profile_service_server::RevocationProfileServiceServer,
-    BackendReadiness, Config, NativeDiagnostics, OperationalState, OrganizationAuthorization,
+    migrate_and_seed, migration_only_from_env, operational_router,
+    proto::revocation_profile_service_server::RevocationProfileServiceServer, BackendReadiness,
+    Config, MigrationConfig, NativeDiagnostics, OperationalState, OrganizationAuthorization,
     PgProfileRepository, PgRevocationOperationRepository, RedisStatusRepository,
     RevocationProfileGrpc, RevocationProfileHttp, RevocationProfileService,
 };
@@ -22,6 +23,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    if migration_only_from_env()? {
+        let config = MigrationConfig::from_env()?;
+        let pool = PgPoolOptions::new()
+            .max_connections(config.database_max_connections)
+            .acquire_timeout(Duration::from_secs(10))
+            .connect(&config.database_url)
+            .await?;
+        migrate_and_seed(&pool, &config.organization_id, &config.status_list_base_url).await?;
+        info!("Rust revocation-profile schema migration completed");
+        return Ok(());
+    }
+
     let config = Config::from_env().map_err(|error| {
         error!(%error, "invalid revocation-profile configuration");
         error
@@ -31,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .acquire_timeout(Duration::from_secs(10))
         .connect(&config.database_url)
         .await?;
+    migrate_and_seed(&pool, &config.organization_id, &config.status_list_base_url).await?;
     let redis_client = redis::Client::open(config.redis_url.as_str())?;
     let redis_connection = redis_client.get_connection_manager().await?;
     let authorization = OrganizationAuthorization::connect_lazy(
