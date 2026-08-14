@@ -52,6 +52,23 @@ def test_compose_files_have_no_duplicate_mapping_keys() -> None:
         _assert_unique_yaml_keys(document, path)
 
 
+def test_base_stack_host_publications_are_loopback_only() -> None:
+    compose = yaml.safe_load(
+        (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+    )
+    published_ports = {
+        service: [str(port) for port in definition.get("ports", [])]
+        for service, definition in compose["services"].items()
+        if definition.get("ports")
+    }
+
+    assert published_ports
+    for service, ports in published_ports.items():
+        assert all(port.startswith("127.0.0.1:") for port in ports), (
+            f"{service} publishes a non-loopback host port: {ports}"
+        )
+
+
 def test_issuer_did_identity_returns_only_public_did_material(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -7,7 +7,9 @@
 #   docker compose -f docker-compose.base.yml -f docker-compose.profile.ghcr.yml up -d
 #
 # Infrastructure services (postgres, redis, keycloak, mailpit) come from
-# docker-compose.base.yml unchanged. Only application services are overridden.
+# docker-compose.base.yml. Every inherited host publication is loopback-only;
+# public traffic must enter through a governed edge proxy/tunnel. Only
+# application images and builds are overridden here.
 
 x-service-image: &service-image
   image: ${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to an immutable digest}
