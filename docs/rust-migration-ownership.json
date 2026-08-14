@@ -79,7 +79,10 @@
       "legacy": [
         {
           "repository": "ElevenID/marty-credentials",
-          "paths": ["services/issuance_service.py", "services/verification_service.py"],
+          "paths": [
+            "python/marty_credentials/adapters/services/issuance_service.py",
+            "python/marty_credentials/adapters/services/verification_service.py"
+          ],
           "language": "python",
           "disposition": "retain-orchestration-remove-kernel"
         }
@@ -260,12 +263,27 @@
       "canonical": {
         "repository": "ElevenID/marty-core",
         "paths": ["marty-oid4vci/src", "marty-iso18013/src"],
-        "binding_paths": ["flutter-rust-bridge"]
+        "binding_paths": []
       },
+      "bindings": [
+        {
+          "repository": "ElevenID/marty-authenticator",
+          "paths": ["rust/src", "lib/rust/marty_bridge.dart"],
+          "disposition": "ffi-and-generated-adapter-only"
+        }
+      ],
       "legacy": [
         {
           "repository": "ElevenID/marty-authenticator",
-          "paths": ["lib", "test/unit_test/utils/oid4vci_offer_uri_test.dart"],
+          "paths": [
+            "lib/services/qr_scanner_service_enhanced.dart",
+            "lib/services/spruce_client_extended.dart",
+            "lib/services/spruce_platform_service_extended.dart",
+            "lib/views/credential_selection_view.dart",
+            "lib/widgets/qr_scanner_enhanced.dart",
+            "lib/utils/oid4vci_offer_uri.dart",
+            "test/unit_test/utils/oid4vci_offer_uri_test.dart"
+          ],
           "language": "dart",
           "disposition": "retain-ui-platform-remove-protocol"
         }
@@ -319,7 +337,13 @@
       "legacy": [
         {
           "repository": "ElevenID/marty-subscriptions",
-          "paths": ["python"],
+          "paths": [
+            "packages/marty_commerce/entitlement_provider.py",
+            "packages/marty_commerce/license_gate.py",
+            "packages/marty_commerce/license_issuer.py",
+            "packages/marty_commerce/licensing.py",
+            "packages/marty_commerce/plans.py"
+          ],
           "language": "python",
           "disposition": "remove-evaluator-retain-provider-sync"
         }

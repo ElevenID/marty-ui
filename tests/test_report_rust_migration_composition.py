@@ -50,6 +50,13 @@ def _ownership(tmp_path: Path, *, second_repository: bool = False) -> Path:
                     "paths": ["rust/src"],
                     "binding_paths": ["rust/bindings.rs"],
                 },
+                "bindings": [
+                    {
+                        "repository": "ElevenID/example",
+                        "paths": ["bridge/src"],
+                        "disposition": "ffi-adapter-only",
+                    }
+                ],
                 "legacy": [
                     {
                         "repository": legacy_repository,
@@ -73,6 +80,7 @@ def test_reports_tracked_maintained_source_and_ignores_untracked_and_generated(t
         {
             "rust/src/lib.rs": "fn answer() -> u8 {\n    42\n}\n",
             "rust/bindings.rs": "pub fn binding() {}\n",
+            "bridge/src/lib.rs": "pub fn ffi_binding() {}\n",
             "python/kernel.py": "def answer():\n    return 42\n",
             "generated/client.py": "generated = True\n",
         },
@@ -86,11 +94,12 @@ def test_reports_tracked_maintained_source_and_ignores_untracked_and_generated(t
     )
 
     source = report["repositories"]["ElevenID/example"]["source"]
-    assert source["languages"]["Rust"]["files"] == 2
+    assert source["languages"]["Rust"]["files"] == 3
     assert source["languages"]["Python"]["files"] == 1
     assert source["excluded_from_maintained_source"]["files"] == 1
     capability = report["capabilities"][0]
     assert capability["canonical"]["source"]["languages"]["Rust"]["files"] == 2
+    assert capability["bindings"][0]["source"]["languages"]["Rust"]["files"] == 1
     assert capability["legacy"][0]["source"]["languages"]["Python"]["files"] == 1
     assert report["missing_paths"] == []
     assert report["generated_at"] == "2026-08-14T00:00:00+00:00"
@@ -175,6 +184,7 @@ def test_reports_missing_owned_paths_without_treating_them_as_success(tmp_path):
 
     assert report["capabilities"][0]["canonical"]["source"]["totals"]["files"] == 0
     assert {item["path"] for item in report["missing_paths"]} == {
+        "bridge/src",
         "python/kernel.py",
         "rust/bindings.rs",
         "rust/src",

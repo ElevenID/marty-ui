@@ -326,6 +326,26 @@ def _capability_evidence(
                 {"capability": capability["id"], "kind": "canonical", "repository": canonical["repository"], "path": path}
             )
 
+        binding_results = []
+        for binding in capability.get("bindings", []):
+            binding_files, binding_missing = _files_for_paths(
+                tracked.get(binding["repository"], []), binding.get("paths", [])
+            )
+            binding_results.append(
+                {
+                    **binding,
+                    "source": source_metrics(
+                        Path(repositories[binding["repository"]]["path"]), binding_files
+                    )
+                    if binding["repository"] in repositories
+                    else None,
+                }
+            )
+            for path in binding_missing:
+                missing_paths.append(
+                    {"capability": capability["id"], "kind": "binding", "repository": binding["repository"], "path": path}
+                )
+
         legacy_results = []
         for legacy in capability.get("legacy", []):
             legacy_files, legacy_missing = _files_for_paths(
@@ -351,6 +371,7 @@ def _capability_evidence(
                 "phase": capability["phase"],
                 "status": capability["status"],
                 "canonical": canonical_result,
+                "bindings": binding_results,
                 "legacy": legacy_results,
             }
         )
@@ -412,6 +433,11 @@ def build_report(
         legacy["repository"]
         for capability in ownership["capabilities"]
         for legacy in capability.get("legacy", [])
+    )
+    required.update(
+        binding["repository"]
+        for capability in ownership["capabilities"]
+        for binding in capability.get("bindings", [])
     )
     missing_repositories = sorted(required - repository_paths.keys())
     if require_all_repositories and missing_repositories:
