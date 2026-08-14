@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import FastAPI
@@ -12,6 +12,10 @@ from pydantic import ValidationError
 
 from services.credential_template import main as credential_template
 from services.credential_template.infrastructure.models import credential_templates_table
+
+_require_trust_profile_accepts_issuer = (
+	credential_template._require_trust_profile_accepts_issuer
+)
 
 
 @pytest.mark.parametrize(
@@ -852,6 +856,49 @@ def test_trust_profile_issuer_identifiers_use_only_enabled_direct_issuers() -> N
 		"did:web:allowed.example",
 		"did:jwk:trusted",
 	}
+
+
+def test_trust_profile_lookup_uses_internal_service_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+	issuer_did = "did:web:issuer.example:orgs:test"
+	response = SimpleNamespace(
+		status_code=200,
+		json=lambda: {
+			"status": "ACTIVE",
+			"allowed_issuers": [issuer_did],
+			"trust_sources": [],
+		},
+	)
+	get = AsyncMock(return_value=response)
+	client = SimpleNamespace(get=get)
+
+	class AsyncClientContext:
+		async def __aenter__(self):
+			return client
+
+		async def __aexit__(self, exc_type, exc, traceback):
+			return False
+
+	monkeypatch.setattr(
+		credential_template.httpx,
+		"AsyncClient",
+		lambda **_kwargs: AsyncClientContext(),
+	)
+	headers = {"x-service-token": "s" * 48}
+	service_headers = Mock(return_value=headers)
+	monkeypatch.setattr(credential_template, "internal_service_headers", service_headers)
+
+	asyncio.run(
+		_require_trust_profile_accepts_issuer(
+			trust_profile_id="trust-profile-1",
+			issuer_did=issuer_did,
+		)
+	)
+
+	service_headers.assert_called_once_with()
+	get.assert_awaited_once_with(
+		"http://trust-profile:8004/internal/v1/trust-profiles/trust-profile-1",
+		headers=headers,
+	)
 
 
 def test_internal_credential_configurations_do_not_emit_default_fallback() -> None:
