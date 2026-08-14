@@ -1,7 +1,5 @@
-mod support;
-
+use crate::support::{start_organization_server, TOKEN};
 use marty_revocation_profile::{Authorization, AuthorizationError, OrganizationAuthorization};
-use support::{start_organization_server, TOKEN};
 
 #[tokio::test]
 async fn propagates_service_token_and_preserves_permission_contract() {

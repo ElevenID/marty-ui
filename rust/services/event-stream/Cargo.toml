@@ -8,6 +8,11 @@ repository.workspace = true
 rust-version.workspace = true
 publish = false
 
+[[bin]]
+name = "marty-event-stream"
+path = "src/main.rs"
+test = false
+
 [dependencies]
 axum.workspace = true
 chrono.workspace = true
@@ -20,14 +25,15 @@ tokio.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
 tonic-health.workspace = true
+tonic-prost.workspace = true
 tower.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [build-dependencies]
-protoc-bin-vendored = "3"
-tonic-build = "0.12"
+protoc-bin-vendored.workspace = true
+tonic-prost-build.workspace = true
 
 [dev-dependencies]
 tower.workspace = true

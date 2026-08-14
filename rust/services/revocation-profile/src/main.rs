@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let http_listener = TcpListener::bind(config.http_addr).await?;
 
     let grpc_service = RevocationProfileGrpc::new(service);
-    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
         .set_serving::<RevocationProfileServiceServer<RevocationProfileGrpc>>()
         .await;
