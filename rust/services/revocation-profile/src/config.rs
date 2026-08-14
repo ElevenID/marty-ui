@@ -25,8 +25,17 @@ pub struct Config {
     pub organization_grpc_target: String,
     pub service_token: Option<String>,
     pub status_list_base_url: String,
+    pub organization_id: String,
     pub release_version: String,
     pub build_revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrationConfig {
+    pub database_url: String,
+    pub database_max_connections: u32,
+    pub organization_id: String,
+    pub status_list_base_url: String,
 }
 
 impl Config {
@@ -56,11 +65,18 @@ impl Config {
         }
 
         let status_list_base_url = value(values, "STATUS_LIST_BASE_URL")
+            .or_else(|| value(values, "PUBLIC_API_URL"))
             .unwrap_or_else(|| DEFAULT_STATUS_LIST_BASE_URL.into())
             .trim_end_matches('/')
             .to_string();
-        if !status_list_base_url.starts_with("https://") {
-            return Err("STATUS_LIST_BASE_URL must use HTTPS".into());
+        let organization_id =
+            value(values, "MARTY_ORG_ID").unwrap_or_else(|| crate::DEFAULT_ORGANIZATION_ID.into());
+        if !(status_list_base_url.starts_with("https://")
+            || is_development && status_list_base_url.starts_with("http://"))
+        {
+            return Err(
+                "STATUS_LIST_BASE_URL or PUBLIC_API_URL must use HTTPS outside development".into(),
+            );
         }
 
         let http_port = parse(values, "REVOCATION_PROFILE_SERVICE_PORT", DEFAULT_HTTP_PORT)?;
@@ -88,11 +104,58 @@ impl Config {
             organization_grpc_target: normalize_grpc_target(&organization_grpc_target),
             service_token,
             status_list_base_url,
+            organization_id,
             release_version: value(values, "MARTY_RELEASE_VERSION")
                 .unwrap_or_else(|| "development".into()),
             build_revision: value(values, "MARTY_UI_SHA").unwrap_or_else(|| "unknown".into()),
         })
     }
+}
+
+impl MigrationConfig {
+    pub fn from_env() -> Result<Self, String> {
+        Self::from_values(&env::vars().collect())
+    }
+
+    fn from_values(values: &HashMap<String, String>) -> Result<Self, String> {
+        let environment = value(values, "ENVIRONMENT")
+            .unwrap_or_else(|| "development".into())
+            .to_ascii_lowercase();
+        let is_development = DEVELOPMENT_ENVIRONMENTS.contains(&environment.as_str());
+        let database_url = normalize_database_url(&required(values, "DATABASE_URL")?)?;
+        let database_max_connections = parse(
+            values,
+            "RP_DATABASE_MAX_CONNECTIONS",
+            DEFAULT_DATABASE_CONNECTIONS,
+        )?;
+        if database_max_connections == 0 {
+            return Err("RP_DATABASE_MAX_CONNECTIONS must be greater than zero".into());
+        }
+        let organization_id =
+            value(values, "MARTY_ORG_ID").unwrap_or_else(|| crate::DEFAULT_ORGANIZATION_ID.into());
+        let status_list_base_url = value(values, "STATUS_LIST_BASE_URL")
+            .or_else(|| value(values, "PUBLIC_API_URL"))
+            .unwrap_or_else(|| DEFAULT_STATUS_LIST_BASE_URL.into())
+            .trim_end_matches('/')
+            .to_string();
+        if !(status_list_base_url.starts_with("https://")
+            || is_development && status_list_base_url.starts_with("http://"))
+        {
+            return Err(
+                "STATUS_LIST_BASE_URL or PUBLIC_API_URL must use HTTPS outside development".into(),
+            );
+        }
+        Ok(Self {
+            database_url,
+            database_max_connections,
+            organization_id,
+            status_list_base_url,
+        })
+    }
+}
+
+pub fn migration_only_from_env() -> Result<bool, String> {
+    parse_bool(&env::vars().collect(), "RP_MIGRATE_ONLY", false)
 }
 
 fn value(values: &HashMap<String, String>, name: &str) -> Option<String> {
@@ -222,6 +285,7 @@ mod tests {
             "postgresql://marty:secret@postgres/marty"
         );
         assert_eq!(config.status_list_base_url, DEFAULT_STATUS_LIST_BASE_URL);
+        assert_eq!(config.organization_id, crate::DEFAULT_ORGANIZATION_ID);
         assert_eq!(config.service_token, None);
     }
 
@@ -254,11 +318,46 @@ mod tests {
         assert!(Config::from_values(&values, |_| unreachable!()).is_err());
 
         let mut values = required_values("development");
-        values.insert("STATUS_LIST_BASE_URL".into(), "http://status.test".into());
+        values.insert("STATUS_LIST_BASE_URL".into(), "ftp://status.test".into());
         assert!(Config::from_values(&values, |_| unreachable!()).is_err());
 
         let mut values = required_values("development");
         values.insert("RP_DATABASE_MAX_CONNECTIONS".into(), "0".into());
         assert!(Config::from_values(&values, |_| unreachable!()).is_err());
+    }
+
+    #[test]
+    fn public_api_url_is_the_development_status_origin_but_production_requires_https() {
+        let mut values = required_values("development");
+        values.insert("PUBLIC_API_URL".into(), "http://gateway:8000/".into());
+        let config = Config::from_values(&values, |_| unreachable!()).unwrap();
+        assert_eq!(config.status_list_base_url, "http://gateway:8000");
+
+        values.insert("ENVIRONMENT".into(), "beta".into());
+        values.insert("GRPC_SERVICE_TOKEN".into(), "a".repeat(32));
+        assert!(Config::from_values(&values, |_| unreachable!()).is_err());
+
+        values.insert("PUBLIC_API_URL".into(), "https://beta.example.test/".into());
+        let config = Config::from_values(&values, |_| unreachable!()).unwrap();
+        assert_eq!(config.status_list_base_url, "https://beta.example.test");
+    }
+
+    #[test]
+    fn migration_config_needs_only_database_and_public_identity_inputs() {
+        let values = HashMap::from([
+            (
+                "DATABASE_URL".into(),
+                "postgresql+asyncpg://marty:secret@postgres/marty".into(),
+            ),
+            ("ENVIRONMENT".into(), "beta".into()),
+            ("PUBLIC_API_URL".into(), "https://beta.example.test".into()),
+        ]);
+        let config = MigrationConfig::from_values(&values).unwrap();
+        assert_eq!(
+            config.database_url,
+            "postgresql://marty:secret@postgres/marty"
+        );
+        assert_eq!(config.organization_id, crate::DEFAULT_ORGANIZATION_ID);
+        assert_eq!(config.status_list_base_url, "https://beta.example.test");
     }
 }

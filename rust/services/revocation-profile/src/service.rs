@@ -71,9 +71,9 @@ impl RevocationProfileService {
         public_base_url: impl Into<String>,
     ) -> Result<Self, ServiceError> {
         let public_base_url = public_base_url.into().trim_end_matches('/').to_string();
-        if !public_base_url.starts_with("https://") {
+        if !public_base_url.starts_with("https://") && !public_base_url.starts_with("http://") {
             return Err(ServiceError::InvalidArgument(
-                "status-list public base URL must use HTTPS".into(),
+                "status-list public base URL must use HTTP or HTTPS".into(),
             ));
         }
         Ok(Self {
@@ -299,7 +299,7 @@ impl RevocationProfileService {
             .status_list_base_url
             .as_deref()
             .map(str::trim)
-            .filter(|value| value.starts_with("https://"))
+            .filter(|value| value.starts_with("https://") || value.starts_with("http://"))
             .map(|value| value.trim_end_matches('/'));
         let base = configured
             .and_then(|value| {

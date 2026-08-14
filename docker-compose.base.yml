@@ -908,6 +908,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       REDIS_URL: redis://redis:6379/4
       ORG_GRPC_TARGET: organization:9002
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       RP_GRPC_PORT: "9013"
     ports:
       - "8013:8013"

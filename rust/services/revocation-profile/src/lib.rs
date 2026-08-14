@@ -3,6 +3,7 @@ pub mod config;
 pub mod domain;
 pub mod grpc;
 pub mod http;
+pub mod migration;
 pub mod operations;
 pub mod postgres;
 pub mod postgres_operations;
@@ -21,10 +22,11 @@ pub mod organization_proto {
 }
 
 pub use authorization::OrganizationAuthorization;
-pub use config::Config;
+pub use config::{migration_only_from_env, Config, MigrationConfig};
 pub use domain::*;
 pub use grpc::RevocationProfileGrpc;
 pub use http::{Authorization, AuthorizationError, InternalServiceAuth, RevocationProfileHttp};
+pub use migration::{migrate_and_seed, DEFAULT_ORGANIZATION_ID, DEFAULT_REVOCATION_PROFILE_ID};
 pub use operations::*;
 pub use postgres::PgProfileRepository;
 pub use postgres_operations::PgRevocationOperationRepository;
