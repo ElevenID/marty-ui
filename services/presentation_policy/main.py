@@ -2366,48 +2366,91 @@ def _credential_age_seconds(
 def _normalized_issuer_policy_evidence(
     trust_profile_data: dict[str, Any] | None,
     issuer_did: str,
+    *,
+    credential_format: str | None = None,
+    verification_result: dict[str, Any] | None = None,
+    verification_evidence: dict[str, Any] | None = None,
+    trust_check_passed: bool = False,
 ) -> dict[str, Any] | None:
-    """Return Cedar facts only from one exact normalized issuer relationship."""
+    """Return Cedar facts from a relationship or proven mdoc direct anchor."""
     if not trust_profile_data:
         return None
     relationships = trust_profile_data.get("issuer_relationships")
-    if not isinstance(relationships, list):
+    if relationships is not None and not isinstance(relationships, list):
         return None
-    matched = [
-        relationship
-        for relationship in relationships
-        if isinstance(relationship, dict)
-        and isinstance(relationship.get("issuer_id"), str)
-        and _normalized_relationship_issuer_id(relationship["issuer_id"])
-        == _normalized_relationship_issuer_id(issuer_did)
-    ]
-    if len(matched) != 1:
-        return None
-    relationship = matched[0]
-    trust_level = relationship.get("trust_level")
+    normalized_relationships = relationships or []
+    if normalized_relationships:
+        matched = [
+            relationship
+            for relationship in normalized_relationships
+            if isinstance(relationship, dict)
+            and isinstance(relationship.get("issuer_id"), str)
+            and _normalized_relationship_issuer_id(relationship["issuer_id"])
+            == _normalized_relationship_issuer_id(issuer_did)
+        ]
+        if len(matched) != 1:
+            return None
+        relationship = matched[0]
+        trust_level = relationship.get("trust_level")
+        if (
+            isinstance(trust_level, bool)
+            or not isinstance(trust_level, int)
+            or not 0 <= trust_level <= 100
+        ):
+            return None
+        compliance_status = relationship.get("compliance_status")
+        accreditations = relationship.get("accreditations")
+        if not isinstance(accreditations, list) or any(
+            not isinstance(accreditation, str) or not accreditation.strip()
+            for accreditation in accreditations
+        ):
+            return None
+        return {
+            "issuer_trust_level": trust_level,
+            "compliance_status": (
+                compliance_status.upper()
+                if isinstance(compliance_status, str) and compliance_status
+                else None
+            ),
+            "accreditations": [
+                accreditation.strip().casefold() for accreditation in accreditations
+            ],
+        }
+
+    # ISO mdoc authenticates an X.509 document signer against the exact roots
+    # and direct pins supplied from the active Trust Profile. When no richer
+    # issuer relationship exists, that complete native proof is deterministic
+    # direct-anchor trust. It conveys no accreditation or compliance claims.
     if (
-        isinstance(trust_level, bool)
-        or not isinstance(trust_level, int)
-        or not 0 <= trust_level <= 100
+        credential_format != "mdoc"
+        or str(trust_profile_data.get("status") or "").lower() != "active"
+        or trust_check_passed is not True
+        or not isinstance(verification_result, dict)
+        or verification_result.get("verified") is not True
+        or verification_result.get("issuer_signature_valid") is not True
+        or verification_result.get("issuer_trusted") is not True
+        or verification_result.get("device_authentication_valid") is not True
+        or not isinstance(verification_evidence, dict)
+        or verification_evidence.get("holder_binding_verified") is not True
+        or verification_evidence.get("issuer_id") != issuer_did
     ):
         return None
-    compliance_status = relationship.get("compliance_status")
-    accreditations = relationship.get("accreditations")
-    if not isinstance(accreditations, list) or any(
-        not isinstance(accreditation, str) or not accreditation.strip()
-        for accreditation in accreditations
+
+    certificate_sha256 = verification_evidence.get("issuer_certificate_sha256")
+    if (
+        not isinstance(certificate_sha256, str)
+        or issuer_did != f"x509-sha256:{certificate_sha256}"
+        or len(certificate_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in certificate_sha256)
     ):
+        return None
+    roots, pinned_issuers = _mdoc_trust_certificates_pem(trust_profile_data)
+    if not roots and not pinned_issuers:
         return None
     return {
-        "issuer_trust_level": trust_level,
-        "compliance_status": (
-            compliance_status.upper()
-            if isinstance(compliance_status, str) and compliance_status
-            else None
-        ),
-        "accreditations": [
-            accreditation.strip().casefold() for accreditation in accreditations
-        ],
+        "issuer_trust_level": 100,
+        "compliance_status": None,
+        "accreditations": [],
     }
 
 
@@ -4116,6 +4159,10 @@ def _evaluate_native_facts(
     issuer_policy_evidence = _normalized_issuer_policy_evidence(
         trust_profile_data,
         issuer_did,
+        credential_format=credential_format,
+        verification_result=verification_result,
+        verification_evidence=verification_evidence,
+        trust_check_passed=trust_check_passed,
     )
     algorithm = verification_evidence.get("algorithm")
     validity_checked = verification_evidence.get("validity_checked")
