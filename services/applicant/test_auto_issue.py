@@ -149,13 +149,96 @@ def test_issuance_status_sync_authenticates_internal_request(monkeypatch):
     monkeypatch.setenv("ISSUANCE_API_KEY", "issuance-internal-test-key")
     monkeypatch.setattr(service.httpx, "AsyncClient", Client)
 
-    result = run(service._get_issuance_transaction_context("tx-1"))
+    result = run(service._get_issuance_transaction_context("tx-1", "org-1"))
 
     assert result == {"id": "tx-1", "status": "credential_issued"}
     assert captured["url"].endswith("/v1/issuance/transactions/tx-1")
     assert captured["headers"] == {
-        "X-API-Key": "issuance-internal-test-key"
+        "X-API-Key": "issuance-internal-test-key",
+        "X-Organization-ID": "org-1",
     }
+
+
+def test_issuance_status_sync_fails_closed_on_authorization_error(monkeypatch):
+    class Response:
+        status_code = 403
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, _url, **_kwargs):
+            return Response()
+
+    monkeypatch.setattr(service.httpx, "AsyncClient", Client)
+
+    with pytest.raises(HTTPException) as exc_info:
+        run(service._get_issuance_transaction_context("tx-1", "org-1"))
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Issuance transaction reconciliation is temporarily unavailable"
+
+
+def test_credential_inventory_authenticates_each_tenant_request(monkeypatch):
+    captured = []
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return []
+
+    class Client:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, url, **kwargs):
+            captured.append({"url": url, **kwargs})
+            return Response()
+
+    class Repo:
+        @staticmethod
+        async def list_by_user_id(_user_id):
+            return [
+                SimpleNamespace(id="applicant-1", organization_id="org-1"),
+                SimpleNamespace(id="applicant-2", organization_id="org-2"),
+            ]
+
+    monkeypatch.setenv("ISSUANCE_API_KEY", "issuance-internal-test-key")
+    monkeypatch.setattr(service.httpx, "AsyncClient", Client)
+
+    result = run(service.get_my_issued_credentials(
+        status=None,
+        limit=100,
+        offset=0,
+        x_user_id="user-1",
+        repo=Repo(),
+    ))
+
+    assert result == {"items": [], "total": 0, "limit": 100, "offset": 0}
+    assert [call["headers"] for call in captured] == [
+        {
+            "X-API-Key": "issuance-internal-test-key",
+            "X-Organization-ID": "org-1",
+        },
+        {
+            "X-API-Key": "issuance-internal-test-key",
+            "X-Organization-ID": "org-2",
+        },
+    ]
 
 
 @pytest.fixture()
