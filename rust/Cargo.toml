@@ -1,5 +1,5 @@
 [workspace]
-members = ["services/event-stream", "services/revocation-profile", "services/signing-keys"]
+members = ["services/event-stream", "services/notification", "services/revocation-profile", "services/signing-keys"]
 resolver = "2"
 
 [workspace.package]
@@ -14,19 +14,25 @@ async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 futures-core = "0.3"
+hmac = "0.12"
+hex = "0.4"
 http = "1"
 marty-status = { version = "=0.1.50", git = "https://github.com/ElevenID/marty-core", rev = "edc80a0369b850ac0864b26208d57a23f475aca9" }
 prost = "0.14"
 protoc-bin-vendored = "3"
+rand = "0.9"
 redis = { version = "1.5", default-features = false, features = ["connection-manager", "script", "tokio-comp"] }
+regex = "1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["chrono", "json", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["net", "sync"] }
-tonic = "0.14"
+tonic = { version = "0.14", features = ["tls-ring"] }
 tonic-health = "0.14"
 tonic-prost = "0.14"
 tonic-prost-build = "0.14"
@@ -34,7 +40,8 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-uuid = { version = "1", features = ["serde", "v4"] }
+uuid = { version = "1", features = ["serde", "v4", "v5"] }
+url = "2"
 
 [profile.dev]
 debug = "line-tables-only"

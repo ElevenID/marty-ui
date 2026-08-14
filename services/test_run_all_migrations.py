@@ -30,10 +30,10 @@ def test_revocation_schema_is_removed_from_the_python_migration_graph() -> None:
     assert order.index("credential_template") < order.index("trust_profile")
 
 
-def test_notification_schema_is_owned_by_the_deployment_migration_runner() -> None:
+def test_notification_schema_is_removed_from_the_python_migration_graph() -> None:
     services = {service["name"]: service["module"] for service in migrations.SERVICES}
 
-    assert services["notification"] == "notification.infrastructure.models"
+    assert "notification" not in services
 
 
 def test_notification_webhook_envelope_key_is_prepared_before_migration(

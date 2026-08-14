@@ -24,6 +24,11 @@ if [ "$MODULE_NAME" = "signing_keys" ]; then
 	exec /usr/local/bin/marty-signing-keys
 fi
 
+if [ "$MODULE_NAME" = "notification" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-notification
+fi
+
 echo "Starting service: $SERVICE_NAME (module: $MODULE_NAME)"
 echo "Working directory: $(pwd)"
 echo "Python version: $(python --version)"

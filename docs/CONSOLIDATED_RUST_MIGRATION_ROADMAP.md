@@ -40,6 +40,14 @@ part of this roadmap and are tracked as `planned` until their Rust cutovers
 and deletion gates pass. Production and persistent self-host configurations
 remain intentionally unchanged.
 
+The notification/webhook workstream is now `native-active`: the Rust service
+owns REST, gRPC, PostgreSQL migrations and persistence, Transit-bound secrets,
+SSRF-resistant delivery, and the durable outbox. Language-neutral HTTP, gRPC,
+HMAC, migration, concurrency, and PostgreSQL/OpenBao contracts passed before
+the superseded Python service, adapters, migrations, and implementation tests
+were deleted. This cutover is packaged but is not deployed separately; it
+remains part of the one aggregate wave-two beta update.
+
 ## Wave two — ordered by removable non-Rust implementation
 
 Wave two is delivered in descending order of the non-Rust implementation that
@@ -50,7 +58,7 @@ order work, not completion metrics and not permission to discard behavior.
 |---|---|---:|---|
 | 1 | Signing-key and KMS service | approximately 7,820 Python lines | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
 | 2 | Marty CLI and API client | approximately 6,212 JavaScript lines | native Rust workspace and executable in `marty-cli` |
-| 3 | Notification and webhook service | approximately 3,976 Python lines | Rust service in `marty-ui` using the established service foundation |
+| 3 | Notification and webhook service — `native-active` | approximately 3,976 production Python lines; 7,142 total Python/service lines deleted | `marty-notification` in `marty-ui` |
 | 4 | Credential attestation, evidence, governance, and VCDM decisions | approximately 2,711 Python lines | `marty-oid4vci` and `marty-verification`, consumed by `marty-credentials` |
 | 5 | Passport-chip EAC and active authentication | approximately 2,283 Python lines | `marty-verification::chip_io` and `marty-crypto::iso9796` |
 | 6 | Subscription API-key lifecycle | approximately 539 Python lines | focused Rust package/service kernel in `marty-subscriptions` |

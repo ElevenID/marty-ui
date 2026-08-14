@@ -1,0 +1,59 @@
+{
+  "valid_send": {
+    "organization_id": "org-a",
+    "recipient_id": "user-a",
+    "title": "Credential ready",
+    "message": "Open the application to continue.",
+    "event_type": "credential.issued",
+    "priority": "urgent",
+    "data": {"application_id": "application-a", "status": "ISSUED"},
+    "target": {
+      "organization_id": "org-a",
+      "user_id": "user-a",
+      "channels": ["FCM", "SSE"]
+    }
+  },
+  "protected_payload": {
+    "organization_id": "org-a",
+    "recipient_id": "user-a",
+    "title": "Unsafe",
+    "data": {"credential": "raw-value"}
+  },
+  "valid_webhook": {
+    "organization_id": "org-a",
+    "name": "Primary endpoint",
+    "url": "https://example.com/marty",
+    "event_types": ["application.approved"],
+    "secret": "0123456789abcdef0123456789abcdef"
+  },
+  "valid_subscription": {
+    "organization_id": "org-a",
+    "name": "Application approvals",
+    "event_types": ["application.approved"],
+    "delivery_channel": "WEBHOOK",
+    "delivery_target_id": "$WEBHOOK_ID",
+    "retry_policy": {"max_attempts": 3, "initial_backoff_seconds": 1, "max_backoff_seconds": 30}
+  },
+  "valid_internal_event": {
+    "event_id": "event/application-a/approved",
+    "event_type": "application.approved",
+    "aggregate_id": "application-a",
+    "aggregate_type": "application",
+    "organization_id": "org-a",
+    "data": {
+      "applicant_id": "applicant-a",
+      "application_id": "application-a",
+      "credential_template_id": "template-a",
+      "status": "APPROVED"
+    }
+  },
+  "webhook_signature": {
+    "secret": "0123456789abcdef0123456789abcdef",
+    "payload": {
+      "id": "event-1",
+      "type": "application.approved",
+      "timestamp": "2026-08-14T00:00:00Z"
+    },
+    "expected": "sha256=72c6022263cf4689a66e3d659e6471c92fd88d5649f7accec6db6b6466e83cd2"
+  }
+}
