@@ -187,6 +187,28 @@ def test_flow_definition_update_is_patch_only() -> None:
 
 
 @pytest.mark.asyncio
+async def test_public_gateway_rejects_application_approval_workload_events() -> None:
+    route = next(
+        route
+        for route in flows.flow_router.routes
+        if getattr(route, "path", "")
+        == "/v1/flows/webhooks/application-approved"
+    )
+
+    assert route.methods == {"POST"}
+    assert route.include_in_schema is False
+
+    with pytest.raises(flows.HTTPException) as exc_info:
+        await route.endpoint()
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == {
+        "error": "application_event_auth_required",
+        "message": "Application approval events require internal workload authentication.",
+    }
+
+
+@pytest.mark.asyncio
 async def test_flow_start_rejects_selected_organization_mismatch_before_proxy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
