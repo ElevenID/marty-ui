@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Technical migration complete — beta evidence accepted; production promotion requires separate approval
+**Status:** Wave one complete at beta; wave two implementation active; production promotion requires separate approval
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
@@ -18,7 +18,7 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 
 ## Implementation status (2026-08-14)
 
-The selected deterministic protocol, cryptographic, policy, validation,
+The first-wave deterministic protocol, cryptographic, policy, validation,
 state-machine, wallet, licensing, DTC, and VDS-NC kernels have one canonical
 Rust owner. The machine-readable inventory records all 19 governed
 capabilities as `native-active`. Remaining Python and Dart files listed by the
@@ -32,10 +32,90 @@ decision kernel.
 | Revocation-profile whole-service removal | Complete: the Python service, status-list kernel, and Alembic ownership are deleted; the shared image dispatches the canonical Rust executable | Public issuance/status/revocation/re-verification behavior plus failure, concurrency, storage, migration, packaging, and regression contracts passed before merge |
 | Phase 9 release and evidence | Complete at the approved beta boundary | Immutable Rust/UI releases, a single beta update, commit-pinned composition evidence, fail-closed checks, and the protected public lifecycle run are recorded in the [final migration evidence](rust-migrations/final-migration-evidence-2026-08-14.md) |
 
-All implementation, deletion, enforcement, packaging, and beta behavioral
-gates in this roadmap have passed. Production and persistent self-host
-configurations remain intentionally unchanged; promotion is a separate
-operational decision and is not remaining migration implementation.
+All first-wave implementation, deletion, enforcement, packaging, and beta
+behavioral gates have passed. A follow-up inventory found eight coherent
+second-wave targets that still contain deterministic security decisions or
+whole-service behavior in Python, JavaScript, or Dart. Those targets are now
+part of this roadmap and are tracked as `planned` until their Rust cutovers
+and deletion gates pass. Production and persistent self-host configurations
+remain intentionally unchanged.
+
+## Wave two — ordered by removable non-Rust implementation
+
+Wave two is delivered in descending order of the non-Rust implementation that
+can be removed after parity. Line counts are physical source estimates used to
+order work, not completion metrics and not permission to discard behavior.
+
+| Order | Workstream | Baseline removable source | Canonical destination |
+|---|---|---:|---|
+| 1 | Signing-key and KMS service | approximately 7,820 Python lines | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
+| 2 | Marty CLI and API client | approximately 6,212 JavaScript lines | native Rust workspace and executable in `marty-cli` |
+| 3 | Notification and webhook service | approximately 3,976 Python lines | Rust service in `marty-ui` using the established service foundation |
+| 4 | Credential attestation, evidence, governance, and VCDM decisions | approximately 2,711 Python lines | `marty-oid4vci` and `marty-verification`, consumed by `marty-credentials` |
+| 5 | Passport-chip EAC and active authentication | approximately 2,283 Python lines | `marty-verification::chip_io` and `marty-crypto::iso9796` |
+| 6 | Subscription API-key lifecycle | approximately 539 Python lines | focused Rust package/service kernel in `marty-subscriptions` |
+| 7 | Trust-registry synchronization kernel | approximately 433 Python lines | `marty-verification` trust registry plus `marty-crypto` certificate validation |
+| 8 | Wallet status-list and liveness decisions | at least 378 Dart kernel lines | `marty-status`, `marty-verification`, and `marty-biometrics` through Flutter Rust Bridge |
+
+The ordering applies to starting each workstream. A prerequisite canonical
+crate PR may land before its consuming service PR, but a smaller workstream is
+not substituted for an unfinished larger one merely to improve language
+statistics.
+
+### Wave-two porting requirements
+
+This wave is a functionality-preserving port, not a feature-reduction project.
+Before deleting any source, each workstream must inventory intended behavior
+from public routes, schemas, CLI help and output, provider contracts, storage
+semantics, configuration, error responses, observability, and tests. Existing
+implementation defects are captured as explicit negative fixtures; security
+corrections must retain the surrounding feature rather than remove its path.
+
+1. **Signing-key and KMS:** preserve all service, key lifecycle, CSR,
+   certificate, JWKS, DID, issuer-profile, wrapping, signing, rotation, audit,
+   provider-capability, and provider-interoperability behavior. Provider SDK
+   transports become Rust trait adapters. Python route, KMS, migration, and JWK
+   conversion implementations are deleted after public HTTP and provider-stub
+   contracts pass.
+2. **CLI:** preserve command names, aliases, options, config/environment
+   precedence, authentication, secret handling, API requests, stdout/stderr,
+   machine-readable output, and exit codes. The current black-box HTTP-stub
+   suite runs against both executables before the Node package is replaced.
+3. **Notification:** preserve REST and gRPC APIs, schemas, HMAC payloads,
+   destination security, subscription and webhook lifecycle, atomic outbox
+   leasing, idempotency, retries, circuit breaking, secret envelopes,
+   persistence, metrics, and provider delivery contracts.
+4. **Credential decisions:** preserve key-attestation claims and trust policy,
+   token-status validation, evidence transitions and reconciliation, canonical
+   governance digests, purpose authorization, and VCDM validation. Python keeps
+   external fetching, tenant composition, persistence, and API orchestration
+   only when those layers do not determine the result.
+5. **Passport chip:** preserve every intended BAC/PACE/EAC, active
+   authentication, APDU, secure-messaging, DG15, and ISO 9796 outcome. Placeholder
+   or mock cryptography is never treated as valid behavior; standards vectors
+   and APDU transcripts define the replacement. A feature may be retired only
+   through an explicit public-caller and contract inventory proving it was not
+   intended or exposed.
+6. **API keys:** preserve key formats, hashing, masking, scopes, CIDR rules,
+   expiry, rotation, plan quotas, storage, and audit behavior. Redis quota
+   consumption becomes atomic and unavailable enforcement fails closed in
+   production-like profiles.
+7. **Trust registry:** preserve bounded destination fetching, pagination,
+   sequence and token handling, atomic delta application, removals, certificate
+   profile checks, persistence, and synchronization scheduling. Rust owns feed,
+   state-machine, and X.509 decisions; orchestration may retain HTTP and storage
+   adapters.
+8. **Wallet status and liveness:** preserve supported status purposes, caching,
+   user-visible states, challenge steps, camera flow, and offline behavior.
+   Rust owns signed status-list trust/freshness/bit decisions and canonical
+   liveness challenge signing/validation. Status-check failure cannot silently
+   produce a valid credential, and no embedded development secret is accepted
+   as a production trust root.
+
+Every workstream adds language-neutral fixtures that execute directly against
+Rust and through the public wrapper, service, mobile bridge, or executable.
+Tests that import private functions from the implementation being removed do
+not satisfy the parity gate.
 
 ## Non-negotiable outcomes
 
@@ -317,14 +397,18 @@ Benchmark the canonical kernel and end-to-end caller before cutover. Rust must n
 
 ## Beta rollout and observability
 
-Each workstream uses staged beta deployment:
+Wave one used staged beta deployment. During wave two, each workstream builds,
+tests, and produces immutable artifacts in CI or isolated local test lanes, but
+does not repeatedly update the shared beta deployment. After all wave-two PRs
+land, one commit-pinned aggregate is deployed to beta and the full smoke,
+conformance, end-to-end, failure, and observability suite is run once against
+that aggregate.
 
-1. Build and test the Rust-backed artifact in CI.
-2. Deploy to an isolated beta lane or a limited beta service set.
-3. Run smoke, conformance, and end-to-end verification.
-4. Observe normalized failure codes, native availability, panic/crash rate, latency, memory, event lag, and contract errors.
-5. Expand to the full beta lane.
-6. Remove the superseded implementation after its deletion gate passes.
+The final aggregate check observes normalized failure codes, native
+availability, panic/crash rate, latency, memory, event lag, provider errors,
+and public contract failures. Production and persistent self-hosted deployment
+remain unchanged. Rollback redeploys the prior beta artifact rather than
+enabling a non-Rust implementation.
 
 Before v1, elapsed-time soak windows are supporting release evidence rather than
 code-deletion blockers. A superseded implementation is removed as soon as its
@@ -351,7 +435,9 @@ Rollback redeploys the last known-good beta artifact. Databases and events must 
 
 ## Measures of completion
 
-The roadmap met the following completion conditions on 2026-08-14:
+Wave one met the following completion conditions on 2026-08-14. The complete
+roadmap meets them again only after every wave-two workstream is `native-active`
+and the final aggregate beta evidence is accepted:
 
 - all unconditional workstreams have passed their deletion gates;
 - every conditional DTC/VDS-NC service has been migrated or retired;
@@ -363,7 +449,7 @@ The roadmap met the following completion conditions on 2026-08-14:
 - CI enforces the ownership model; and
 - a production promotion package exists, based on beta evidence, for separate approval.
 
-The evidence for these conditions is captured in
+The wave-one evidence for these conditions is captured in
 [`final-migration-evidence-2026-08-14.md`](rust-migrations/final-migration-evidence-2026-08-14.md).
 Promoting the accepted artifacts beyond beta remains explicitly out of scope.
 
@@ -393,7 +479,7 @@ They become candidates only when a measured correctness, security, reliability, 
 | Language reduction becomes vanity work | Target ranking is based on security, duplication, operational simplification, and whole-service removal. |
 | Beta changes leak into persistent environments | Beta-only deployment changes and separate production/self-host approval. |
 
-## Completed dependency order
+## Completed wave-one dependency order
 
 The implementation landed in the following dependency order:
 
@@ -410,3 +496,7 @@ The implementation landed in the following dependency order:
 
 Dependency adjustments were recorded in the implementation PR chain and
 preserved the single-owner rule.
+
+Wave two follows the removable-source order above. Its dependency chain and
+exact deleted-source inventory are recorded as PRs land, and completion is not
+declared until the final aggregate beta evidence is commit-pinned.
