@@ -21,6 +21,10 @@ def _required_steps():
         {"label": "post-org-probe", "body_excerpt": "Dashboard"},
         {"label": "kms-service-configured", "body_excerpt": "Key management"},
         {"label": "issuer-identity-active", "body_excerpt": "Issuer identity"},
+        {
+            "label": "verifier-issuer-identity-active",
+            "body_excerpt": "OID4VP request-signing identity",
+        },
         {"label": "compliance-profile-available", "body_excerpt": "Compliance profile"},
         {"label": "trust-profile-active", "body_excerpt": "Trust profile"},
         {"label": "revocation-profile-activated", "body_excerpt": "Revocation profile"},
@@ -345,3 +349,37 @@ def test_beta_audit_refuses_unverified_organization_exports(
 
     with pytest.raises(ValueError, match=message):
         audit.verified_audit_organization_id(report)
+
+
+def test_beta_audit_provisions_public_oid4vp_request_signing_identity() -> None:
+    audit = _load_audit_module()
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.payload = None
+            self.script = ""
+
+        def evaluate(self, script: str, payload: dict) -> dict:
+            self.script = script
+            self.payload = payload
+            return {"status": 200, "ok": True, "created": True, "error": None}
+
+    page = FakePage()
+    result = audit.provision_verifier_issuer_identity(
+        page,
+        "a60371ca-7250-4a51-9598-f8e972044f31",
+        "did:web:beta.elevenidllc.com:orgs:audit-production-flow",
+        "20260814112250",
+    )
+
+    assert result == {"status": 200, "ok": True, "created": True, "error": None}
+    assert page.payload == {
+        "organization_id": "a60371ca-7250-4a51-9598-f8e972044f31",
+        "issuer_did": "did:web:beta.elevenidllc.com:orgs:audit-production-flow",
+        "idempotency_key": "beta-audit-oid4vp-20260814112250",
+    }
+    assert "'oid4vp_request_signing'" in page.script
+    assert "'SD_JWT_VC'" in page.script
+    assert "'ES256'" in page.script
+    assert "signing_service_id" not in page.script
+    assert "signing_key_reference" not in page.script
