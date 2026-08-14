@@ -973,7 +973,7 @@ spec:
             - name: VERIF_GRPC_PORT
               value: "9017"
             - name: VERIF_GRPC_ENABLED
-              value: "true"
+              value: "false"
             - name: PUBLIC_BASE_URL
               valueFrom:
                 configMapKeyRef:
