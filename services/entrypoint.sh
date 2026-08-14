@@ -9,6 +9,11 @@ fi
 # Convert hyphens to underscores for Python module names
 MODULE_NAME=$(echo "$SERVICE_NAME" | tr '-' '_')
 
+if [ "$MODULE_NAME" = "event_stream" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-event-stream
+fi
+
 echo "Starting service: $SERVICE_NAME (module: $MODULE_NAME)"
 echo "Working directory: $(pwd)"
 echo "Python version: $(python --version)"

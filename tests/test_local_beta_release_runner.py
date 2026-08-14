@@ -201,8 +201,10 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
     assert '$script:BetaUiProject = "elevenid-beta-ui"' in deploy
     assert '$script:BetaNetwork = "elevenid-beta-network"' in deploy
     assert "docker-compose.beta.yml" in deploy
-    assert "deploy-config\\compose\\tunnel-beta\\event-stream-rust.yml" in deploy
-    assert "deploy-config/compose/tunnel-beta/event-stream-rust.yml" in restore
+    assert "event-stream-rust.yml" not in deploy
+    assert "event-stream-rust.yml" not in restore
+    assert "dockerfile: rust/services/event-stream/Dockerfile" not in base
+    assert "EVENT_STREAM_SERVICE_PORT=8015" in base
     assert "deploy-config\\compose\\tunnel-beta\\revocation-profile-rust.yml" in deploy
     assert "deploy-config/compose/tunnel-beta/revocation-profile-rust.yml" in restore
     revocation_overlay = text(

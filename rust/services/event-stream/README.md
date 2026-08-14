@@ -6,6 +6,6 @@ bounded subscriber queues, drop-on-backpressure behavior, health endpoints, and
 Prometheus scrape endpoint.
 
 Python producers and the gateway continue to use the existing generated gRPC
-client. The legacy Python event-stream server remains only until the beta image
-cutover and deletion gate pass; it is not a runtime fallback.
+client. The service image dispatches the `event-stream` role directly to this
+binary; there is no Python server or runtime fallback.
 

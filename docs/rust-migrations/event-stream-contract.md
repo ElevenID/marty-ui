@@ -4,7 +4,7 @@
 
 **Canonical binary:** `rust/services/event-stream`
 
-**Legacy server pending beta deletion:** `services/event_stream`
+**Legacy server:** Removed after black-box parity and failure gates passed.
 
 The Rust service preserves the current public and operational contract before
 the Python process is removed. Producer normalization remains in
@@ -16,7 +16,7 @@ gRPC client adapter and does not implement server fan-out decisions.
 | Surface | Existing behavior | Rust parity evidence |
 |---|---|---|
 | gRPC service | `marty.ui.event_stream.v1.EventStreamService` | Generated directly from the existing protobuf. |
-| `Subscribe` | Server stream filtered by event type, organization, and aggregate type; empty filters match all. | Rust unit and live generated-client contract tests. |
+| `Subscribe` | Server stream filtered by event type, organization, and aggregate type; empty filters match all. | Black-box executable generated-client contract plus focused boundary tests. |
 | Subscriber identity | Server generates a UUID when absent; a repeated explicit ID replaces the active registration. | Generation-safe replacement test prevents an old stream from deleting its replacement. |
 | `Publish` | Fan out to matching active streams and return the number successfully queued. | gRPC contract test verifies tenant isolation and exact notified count. |
 | Backpressure | Per-subscriber queue capacity 256; full queues drop the event for that subscriber without blocking other publishers. | Boundary test fills the queue and verifies the drop counter. |
@@ -38,6 +38,11 @@ gRPC client adapter and does not implement server fan-out decisions.
    health, disconnects, event lag, drops, memory, and latency.
 4. Roll back by restoring the prior beta image; no runtime Python fallback is
    permitted.
-5. After the seven-day beta evidence window, delete `services/event_stream`,
-   its server-only tests and packaging, then enforce the Rust owner in CI.
+5. Before v1, accumulated beta samples are supporting evidence rather than an
+   elapsed-time deletion blocker. Once the black-box executable, unchanged
+   consumer, failure, packaging, and regression contracts pass, delete
+   `services/event_stream`, its server-only tests and overlay. The shared
+   service image dispatches `event-stream` directly to
+   `/usr/local/bin/marty-event-stream`, and ownership metadata prevents a
+   Python server from returning.
 

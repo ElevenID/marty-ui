@@ -6,7 +6,7 @@
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-08-13
+**Last updated:** 2026-08-14
 
 ## Objective
 
@@ -16,7 +16,7 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Implementation status (2026-08-13)
+## Implementation status (2026-08-14)
 
 The selected deterministic protocol, cryptographic, policy, validation,
 state-machine, wallet, licensing, DTC, and VDS-NC kernels now have one
@@ -27,9 +27,9 @@ whole-service runtime cutovers below open.
 
 | Remaining gate | Current state | Completion evidence required |
 |---|---|---|
-| Event-stream whole-service removal | Rust binary and beta overlay are packaged; legacy Python service remains for non-beta stacks | One coordinated beta deployment, contract/operational evidence, required soak, then deletion of `services/event_stream` and Python image/package references |
-| Revocation-profile whole-service removal | Rust HTTP/gRPC/storage/runtime implementation and beta overlay are packaged; legacy Python orchestration remains | One coordinated beta deployment, status/revocation parity and operational evidence, required soak, then deletion of superseded Python service/kernel code and dependencies |
-| Phase 9 release and evidence | Source cutovers are merged or in the closing dependency-ordered release/caller change; beta remains pinned | Immutable Rust/UI releases, one beta-only update, seven-day service and fourteen-day security evidence windows, language/dependency measurements, and a production-promotion evidence package without promotion |
+| Event-stream whole-service removal | Rust is active on beta v1.1.165; this change deletes `services/event_stream` and makes the shared service image dispatch the canonical Rust binary for every stack | Black-box HTTP/gRPC behavior, unchanged-consumer, failure, packaging, and regression contracts pass against the executable before merging |
+| Revocation-profile whole-service removal | Rust HTTP/gRPC/storage/runtime implementation and beta overlay are packaged; legacy Python orchestration remains | A black-box issuance, status publication, revocation, and re-verification lifecycle plus failure, concurrency, storage, packaging, and regression contracts pass before deleting the superseded Python service |
+| Phase 9 release and evidence | Source cutovers are merged or in the closing dependency-ordered release/caller change; beta remains pinned | Immutable Rust/UI releases, one beta-only update after the deletion set lands, language/dependency measurements, and a production-promotion evidence package without promotion |
 
 Until those gates pass, this roadmap is not complete. Production and
 persistent self-host configurations remain unchanged.
@@ -157,7 +157,7 @@ Use the event-stream service as the first whole-service replacement because it h
 - Cover Token Status List and Bitstring Status List encoding, compression, allocation, mutation, validation, and error semantics with standards and property tests.
 - Rebuild revocation-profile orchestration as a Rust service, preserving REST, gRPC, persistence, Redis atomicity, issuer configuration, tenancy, and events.
 - Keep certificate-provider or external revocation integrations as adapters to the canonical Rust decisions.
-- Delete `status_list_manager.py` and the superseded Python service code after beta parity and soak gates pass.
+- Delete `status_list_manager.py` and the superseded Python service code after implementation-independent behavioral, parity, and failure gates pass.
 
 **Parity gate:** Existing credentials remain readable, indices and status transitions are preserved, concurrent allocation is safe, and all published bytes match the approved vectors.
 
@@ -265,7 +265,7 @@ Non-Rust implementation code can be removed only when all of the following are t
 - shared golden vectors and differential tests pass;
 - REST/gRPC/event/mobile contracts and integration suites pass;
 - malformed, unsupported, unavailable-backend, and adversarial inputs fail closed;
-- beta observability shows acceptable correctness, reliability, and latency;
+- beta or an isolated production-like lane shows acceptable correctness, reliability, and latency;
 - rollback uses an earlier image rather than an alternate implementation;
 - repository search confirms no runtime imports or references remain;
 - package manifests and container images no longer carry dependencies used only by the removed code;
@@ -293,6 +293,9 @@ Adapters that contain serialization, DTO mapping, or framework glue may remain t
 
 ### Service and application parity
 
+- Behavioral tests must target published protocols, generated schemas, fixtures,
+  executable artifacts, or public APIs. They must not instantiate, mock, import,
+  or inspect the implementation being replaced as proof of parity.
 - OpenAPI and protobuf compatibility checks.
 - Recorded-request differential tests with secrets and personal data removed.
 - Database/Redis migration and concurrency tests.
@@ -315,7 +318,11 @@ Each workstream uses staged beta deployment:
 5. Expand to the full beta lane.
 6. Remove the superseded implementation after its deletion gate passes.
 
-Security-sensitive workstreams should accumulate at least fourteen consecutive days of acceptable beta evidence after final cutover; lower-risk service migrations should accumulate at least seven. A release owner may extend these windows. Shortening them requires an explicit documented risk acceptance.
+Before v1, elapsed-time soak windows are supporting release evidence rather than
+code-deletion blockers. A superseded implementation is removed as soon as its
+implementation-independent behavioral, failure, ownership, packaging, and
+regression gates pass. A release owner may still require an explicit soak for a
+specific promotion, but that does not preserve a second runtime implementation.
 
 Daily read-only service samples use the sanitized
 [`marty.rust-beta-soak/v1`](rust-migrations/beta-soak-evidence.md) collector.
