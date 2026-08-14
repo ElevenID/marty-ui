@@ -35,10 +35,9 @@ decision kernel.
 All first-wave implementation, deletion, enforcement, packaging, and beta
 behavioral gates have passed. A follow-up inventory found eight coherent
 second-wave targets that still contain deterministic security decisions or
-whole-service behavior in Python, JavaScript, or Dart. Those targets are now
-part of this roadmap and are tracked as `planned` until their Rust cutovers
-and deletion gates pass. Production and persistent self-host configurations
-remain intentionally unchanged.
+whole-service behavior in Python, JavaScript, or Dart. Two workstreams are now
+`cutover-in-progress`; the remaining six are `planned`. Production and
+persistent self-host configurations remain intentionally unchanged.
 
 ## Wave two — ordered by removable non-Rust implementation
 
@@ -46,16 +45,16 @@ Wave two is delivered in descending order of the non-Rust implementation that
 can be removed after parity. Line counts are physical source estimates used to
 order work, not completion metrics and not permission to discard behavior.
 
-| Order | Workstream | Baseline removable source | Canonical destination |
-|---|---|---:|---|
-| 1 | Signing-key and KMS service | approximately 7,820 Python lines | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
-| 2 | Marty CLI and API client | approximately 6,212 JavaScript lines | native Rust workspace and executable in `marty-cli` |
-| 3 | Notification and webhook service | approximately 3,976 Python lines | Rust service in `marty-ui` using the established service foundation |
-| 4 | Credential attestation, evidence, governance, and VCDM decisions | approximately 2,711 Python lines | `marty-oid4vci` and `marty-verification`, consumed by `marty-credentials` |
-| 5 | Passport-chip EAC and active authentication | approximately 2,283 Python lines | `marty-verification::chip_io` and `marty-crypto::iso9796` |
-| 6 | Subscription API-key lifecycle | approximately 539 Python lines | focused Rust package/service kernel in `marty-subscriptions` |
-| 7 | Trust-registry synchronization kernel | approximately 433 Python lines | `marty-verification` trust registry plus `marty-crypto` certificate validation |
-| 8 | Wallet status-list and liveness decisions | at least 378 Dart kernel lines | `marty-status`, `marty-verification`, and `marty-biometrics` through Flutter Rust Bridge |
+| Order | Workstream | Baseline removable source | Status | Canonical destination |
+|---|---|---:|---|---|
+| 1 | Signing-key and KMS service | approximately 7,820 Python lines | Cutover in progress: the Rust kernel, registry, persistence, provider adapters, public documents, and issuer-profile slices are implemented in the open PR stack | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
+| 2 | Marty CLI and API client | approximately 7,342 deleted handwritten JavaScript lines | Cutover in progress: native CLI and Rust/WASM browser client are implemented, compatibility-tested, and deleted; merge and release remain | native Rust workspace, executable, and browser/WASM client in `marty-cli` |
+| 3 | Notification and webhook service | approximately 3,976 Python lines | Planned | Rust service in `marty-ui` using the established service foundation |
+| 4 | Credential attestation, evidence, governance, and VCDM decisions | approximately 2,711 Python lines | Planned | `marty-oid4vci` and `marty-verification`, consumed by `marty-credentials` |
+| 5 | Passport-chip EAC and active authentication | approximately 2,283 Python lines | Planned | `marty-verification::chip_io` and `marty-crypto::iso9796` |
+| 6 | Subscription API-key lifecycle | approximately 539 Python lines | Planned | focused Rust package/service kernel in `marty-subscriptions` |
+| 7 | Trust-registry synchronization kernel | approximately 433 Python lines | Planned | `marty-verification` trust registry plus `marty-crypto` certificate validation |
+| 8 | Wallet status-list and liveness decisions | at least 378 Dart kernel lines | Planned | `marty-status`, `marty-verification`, and `marty-biometrics` through Flutter Rust Bridge |
 
 The ordering applies to starting each workstream. A prerequisite canonical
 crate PR may land before its consuming service PR, but a smaller workstream is
@@ -116,6 +115,26 @@ Every workstream adds language-neutral fixtures that execute directly against
 Rust and through the public wrapper, service, mobile bridge, or executable.
 Tests that import private functions from the implementation being removed do
 not satisfy the parity gate.
+
+### Active wave-two evidence
+
+- Signing-key/KMS implementation is split across
+  [marty-core PR 229](https://github.com/ElevenID/marty-core/pull/229) and
+  [marty-ui PRs 515](https://github.com/ElevenID/marty-ui/pull/515),
+  [518](https://github.com/ElevenID/marty-ui/pull/518),
+  [520](https://github.com/ElevenID/marty-ui/pull/520),
+  [522](https://github.com/ElevenID/marty-ui/pull/522),
+  [524](https://github.com/ElevenID/marty-ui/pull/524), and
+  [527](https://github.com/ElevenID/marty-ui/pull/527). The stack remains
+  deployment-neutral until it lands as a whole.
+- [marty-cli PR 14](https://github.com/ElevenID/marty-cli/pull/14) replaces the
+  Node executable and browser HTTP kernel with one Rust implementation. Its
+  language-neutral command vectors, native HTTP tests, Rust/WASM compatibility
+  tests, release-shaped package check, unchanged UI service suite, and UI
+  production bundle passed before the superseded handwritten JavaScript was
+  deleted.
+- No wave-two slice updates beta independently. One commit-pinned aggregate
+  beta deployment and evidence run occurs only after all workstreams land.
 
 ## Non-negotiable outcomes
 
