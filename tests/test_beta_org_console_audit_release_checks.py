@@ -278,27 +278,44 @@ def _passing_inventory_report(organization_id: str) -> dict:
             {
                 "label": "resource-inventory-verified",
                 "organization_id": organization_id,
-                "inventory": [{"resource_type": "credential_template"}],
+                "inventory": [
+                    {
+                        "resource_type": "credential_template",
+                        "id": "10000000-0000-0000-0000-000000000010",
+                        "status": "ACTIVE",
+                    },
+                    {
+                        "resource_type": "presentation_policy",
+                        "id": "10000000-0000-0000-0000-000000000020",
+                        "status": "active",
+                    },
+                ],
             }
         ],
     }
 
 
-def test_beta_audit_exports_verified_organization_for_later_steps(tmp_path: Path) -> None:
+def test_beta_audit_exports_verified_lifecycle_resources_for_later_steps(tmp_path: Path) -> None:
     audit = _load_audit_module()
     organization_id = "a60371ca-7250-4a51-9598-f8e972044f31"
     github_env = tmp_path / "github-env"
     github_env.write_text("EXISTING=value\n", encoding="utf-8")
 
-    exported = audit.export_audit_organization(
+    exported = audit.export_audit_lifecycle_environment(
         _passing_inventory_report(organization_id),
         github_env,
     )
 
-    assert exported == organization_id
+    assert exported == {
+        "BETA_AUDIT_ORG_ID": organization_id,
+        "BETA_AUDIT_TEMPLATE_ID": "10000000-0000-0000-0000-000000000010",
+        "BETA_AUDIT_POLICY_ID": "10000000-0000-0000-0000-000000000020",
+    }
     assert github_env.read_text(encoding="utf-8").splitlines() == [
         "EXISTING=value",
         f"BETA_AUDIT_ORG_ID={organization_id}",
+        "BETA_AUDIT_TEMPLATE_ID=10000000-0000-0000-0000-000000000010",
+        "BETA_AUDIT_POLICY_ID=10000000-0000-0000-0000-000000000020",
     ]
 
 
@@ -317,11 +334,11 @@ def test_beta_audit_exports_verified_organization_for_later_steps(tmp_path: Path
                 "release_checks": {"status": "pass"},
                 "steps": [],
             },
-            "exactly one verified organization ID",
+            "exactly one verified inventory",
         ),
         (
             _passing_inventory_report("not-a-uuid"),
-            "must be a UUID",
+            "BETA_AUDIT_ORG_ID must be a UUID",
         ),
         (
             {
@@ -337,7 +354,7 @@ def test_beta_audit_exports_verified_organization_for_later_steps(tmp_path: Path
                     },
                 ],
             },
-            "exactly one verified organization ID",
+            "exactly one verified inventory",
         ),
     ],
 )
@@ -348,7 +365,40 @@ def test_beta_audit_refuses_unverified_organization_exports(
     audit = _load_audit_module()
 
     with pytest.raises(ValueError, match=message):
-        audit.verified_audit_organization_id(report)
+        audit.verified_audit_lifecycle_environment(report)
+
+
+@pytest.mark.parametrize(
+    "mutation, message",
+    [
+        (
+            lambda inventory: inventory.pop(0),
+            "exactly one active BETA_AUDIT_TEMPLATE_ID",
+        ),
+        (
+            lambda inventory: inventory.append(dict(inventory[0])),
+            "exactly one active BETA_AUDIT_TEMPLATE_ID",
+        ),
+        (
+            lambda inventory: inventory[1].update(status="draft"),
+            "exactly one active BETA_AUDIT_POLICY_ID",
+        ),
+        (
+            lambda inventory: inventory[1].update(id="not-a-uuid"),
+            "BETA_AUDIT_POLICY_ID must be a UUID",
+        ),
+    ],
+)
+def test_beta_audit_refuses_unverified_lifecycle_resource_exports(
+    mutation,
+    message: str,
+) -> None:
+    audit = _load_audit_module()
+    report = _passing_inventory_report("a60371ca-7250-4a51-9598-f8e972044f31")
+    mutation(report["steps"][0]["inventory"])
+
+    with pytest.raises(ValueError, match=message):
+        audit.verified_audit_lifecycle_environment(report)
 
 
 def test_beta_audit_provisions_public_oid4vp_request_signing_identity() -> None:
