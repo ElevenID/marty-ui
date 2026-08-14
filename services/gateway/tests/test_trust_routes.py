@@ -224,6 +224,31 @@ def test_public_trust_profile_model_rejects_placeholder_registry_imports() -> No
     assert current_policy.revocation_policy.check_mode == "SKIP"
     assert current_policy.revocation_profile_id == "revocation-profile-1"
 
+    public_time_policy = TrustProfileCreate.model_validate(
+        {
+            **base,
+            "time_policy": {
+                "clock_skew_seconds": 900,
+                "require_freshness": True,
+                "freshness_window_seconds": 21_600,
+            },
+        }
+    )
+    assert public_time_policy.time_policy is not None
+    assert public_time_policy.time_policy.clock_skew_seconds == 900
+    assert public_time_policy.time_policy.freshness_window_seconds == 21_600
+
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        TrustProfileCreate.model_validate(
+            {
+                **base,
+                "time_policy": {
+                    "max_clock_skew_seconds": 900,
+                    "credential_freshness_hours": 6,
+                },
+            }
+        )
+
     with pytest.raises(ValidationError, match="extra_forbidden"):
         TrustProfileCreate.model_validate(
             {

@@ -143,6 +143,29 @@ class RevocationPolicyModel(BaseModel):
     check_mode: Literal["HARD_FAIL", "SOFT_FAIL", "SKIP"] = "HARD_FAIL"
 
 
+class TrustTimePolicyModel(BaseModel):
+    """Public Trust Profile time-policy contract, expressed in seconds."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    clock_skew_seconds: int = Field(default=300, ge=0, le=86_400)
+    require_freshness: bool = False
+    freshness_window_seconds: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_freshness_window(self) -> "TrustTimePolicyModel":
+        if self.require_freshness and self.freshness_window_seconds is None:
+            raise ValueError(
+                "freshness_window_seconds is required when freshness is enabled"
+            )
+        if (
+            self.freshness_window_seconds is not None
+            and self.freshness_window_seconds % 3600 != 0
+        ):
+            raise ValueError("freshness_window_seconds must use whole-hour precision")
+        return self
+
+
 class TrustProfileCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -161,6 +184,7 @@ class TrustProfileCreate(BaseModel):
     allow_self_signed: bool | None = None
     revocation_policy: RevocationPolicyModel | None = None
     revocation_profile_id: str | None = None
+    time_policy: TrustTimePolicyModel | None = None
     supported_formats: list[str] = Field(default_factory=lambda: ["SD_JWT_VC", "MDOC"])
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
@@ -187,6 +211,7 @@ class TrustProfileUpdate(BaseModel):
     allow_self_signed: bool | None = None
     revocation_policy: RevocationPolicyModel | None = None
     revocation_profile_id: str | None = None
+    time_policy: TrustTimePolicyModel | None = None
     supported_formats: list[str] | None = None
     allowed_issuers: list[str] | None = None
     denied_issuers: list[str] | None = None
