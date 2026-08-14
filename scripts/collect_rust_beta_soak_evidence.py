@@ -24,6 +24,7 @@ EXPECTED_REVOCATION_CAPABILITIES = {
     "status-document",
     "cascade-revocation",
     "revocation-batch",
+    "schema-migration",
 }
 SERVICE_PORTS = {
     "event-stream": "8015/tcp",

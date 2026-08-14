@@ -19,6 +19,15 @@ SPEC.loader.exec_module(COLLECTOR)
 RELEASE = "1.1.160"
 SOURCE = "a" * 40
 BETA = "https://beta.elevenidllc.com"
+PUBLISHED_REVOCATION_CAPABILITIES = {
+    "cascade-revocation",
+    "profile-lifecycle",
+    "revocation-batch",
+    "schema-migration",
+    "status-allocation",
+    "status-document",
+    "status-mutation",
+}
 
 
 def _inspection(service: str, port: str, *, restarts: int = 0) -> dict:
@@ -117,7 +126,7 @@ def _dependencies(*, restarts: int = 0, dropped: int = 0):
             "backend": "marty-status-rust",
             "release_version": RELEASE,
             "build_revision": SOURCE,
-            "capabilities": sorted(COLLECTOR.EXPECTED_REVOCATION_CAPABILITIES),
+            "capabilities": sorted(PUBLISHED_REVOCATION_CAPABILITIES),
         },
     }
 
@@ -171,6 +180,12 @@ def test_collects_sanitized_passing_beta_soak_evidence() -> None:
     assert report["services"]["event-stream"]["restart_count"] == 0
     assert report["metrics"]["event_stream"]["marty_event_stream_published_total"] == 15
     assert "logs" not in json.dumps(report).lower()
+
+
+def test_collector_tracks_the_published_native_capability_contract() -> None:
+    assert COLLECTOR.EXPECTED_REVOCATION_CAPABILITIES == (
+        PUBLISHED_REVOCATION_CAPABILITIES
+    )
 
 
 @pytest.mark.parametrize(
