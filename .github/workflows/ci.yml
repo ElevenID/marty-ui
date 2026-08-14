@@ -72,7 +72,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '' }}
         run: |
           set -uo pipefail
-          node scripts/run-vitest-shard.mjs --plan 3 >/dev/null
+          node scripts/run-vitest-shard.mjs --plan 4 >/dev/null
 
           changed_tests=()
           if [[ -n "$BASE_SHA" ]]; then
@@ -110,13 +110,13 @@ jobs:
           exit "$status"
 
   test-ui:
-    name: UI Tests (${{ matrix.shard }}/3)
+    name: UI Tests (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     defaults:
       run:
         working-directory: ui
@@ -138,7 +138,44 @@ jobs:
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
       - run: bun install
       - name: Unit tests
-        run: node scripts/run-vitest-shard.mjs ${{ matrix.shard }} 3
+        env:
+          VITEST_TIMING_OUTPUT: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json
+        run: node scripts/run-vitest-shard.mjs ${{ matrix.shard }} 4
+      - name: Upload per-file test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ui-vitest-timing-${{ matrix.shard }}
+          path: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  refresh-ui-test-timings:
+    name: Refresh UI Test Timings
+    needs: test-ui
+    if: needs.test-ui.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Download timing observations
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: ui-vitest-timing-*
+          path: ${{ runner.temp }}/ui-vitest-timings
+          merge-multiple: true
+      - name: Produce refreshed timing plan
+        run: >-
+          node ui/scripts/update-vitest-timings.mjs
+          "${{ runner.temp }}/ui-vitest-timings"
+          --output "${{ runner.temp }}/ui-vitest.json"
+      - name: Upload refreshed timing plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ui-vitest-timings-refreshed
+          path: ${{ runner.temp }}/ui-vitest.json
+          retention-days: 14
 
   test-services:
     name: Service Tests
@@ -159,18 +196,18 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres -d marty_atomic_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+          --health-interval 1s
+          --health-timeout 2s
+          --health-retries 30
       redis:
         image: redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
         ports:
           - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+          --health-interval 1s
+          --health-timeout 2s
+          --health-retries 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -238,6 +275,38 @@ jobs:
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
+      - name: Compile reusable Rust test executables
+        working-directory: rust
+        shell: bash
+        run: >-
+          cargo test --locked --workspace --no-run --message-format=json
+          > "$RUNNER_TEMP/rust-test-artifacts.json"
+      - name: Package database contract executables
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          contract_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "contracts")
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$contract_executable" || ! -x "$contract_executable" ]]; then
+            echo "Unable to locate the compiled revocation contracts executable." >&2
+            exit 1
+          fi
+          contract_relative="${contract_executable#"$PWD/"}"
+          test -x target/debug/marty-revocation-profile
+          tar -czf "$RUNNER_TEMP/rust-db-test-bundle.tar.gz" \
+            "$contract_relative" \
+            target/debug/marty-revocation-profile
+      - name: Publish reusable database contract executables
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rust-db-test-bundle-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rust-db-test-bundle.tar.gz
+          retention-days: 1
       - name: Test Rust service contracts
         working-directory: rust
         run: cargo test --locked --workspace
@@ -272,12 +341,9 @@ jobs:
           --health-timeout 3s
           --health-retries 30
     permissions:
+      actions: read
       contents: read
     env:
-      CARGO_INCREMENTAL: 0
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
       MARTY_TEST_POSTGRES_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
       MARTY_TEST_REDIS_URL: redis://127.0.0.1:6379/0
       MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
@@ -286,25 +352,47 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
-        with:
-          toolchain: 1.95.0
-      - name: Use mold linker
-        uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444
-        with:
-          mold-version: 2.41.0
-      - name: Enable compiler cache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-        with:
-          version: v0.16.0
+      - name: Download reusable database contract executables
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifact_name="rust-db-test-bundle-${GITHUB_RUN_ATTEMPT}"
+          deadline=$((SECONDS + 300))
+          artifact_id=""
+          while (( SECONDS < deadline )); do
+            artifact_id="$(curl --fail --silent --show-error \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=$artifact_name" \
+              | jq -r --arg name "$artifact_name" '.artifacts[] | select(.name == $name and .expired == false) | .id' \
+              | head -n 1)"
+            [[ -n "$artifact_id" ]] && break
+            sleep 2
+          done
+          if [[ -z "$artifact_id" ]]; then
+            echo "Timed out waiting for $artifact_name from Rust Service Tests." >&2
+            exit 1
+          fi
+          curl --fail --location --silent --show-error \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" \
+            --output "$RUNNER_TEMP/rust-db-test-bundle.zip"
+          unzip -q "$RUNNER_TEMP/rust-db-test-bundle.zip" -d "$RUNNER_TEMP/rust-db-test-bundle"
+          tar -xzf "$RUNNER_TEMP/rust-db-test-bundle/rust-db-test-bundle.tar.gz" -C rust
       - name: Test Rust revocation database and runtime contracts
         working-directory: rust
-        run: >-
-          cargo test --locked -p marty-revocation-profile
-          --test contracts -- --ignored --test-threads=1
-      - name: Report compiler cache effectiveness
-        if: always()
-        run: sccache --show-stats
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'contracts-*' -perm -u+x)
+          if (( ${#contracts[@]} != 1 )); then
+            printf 'Expected one contracts executable, found %s.\n' "${#contracts[@]}" >&2
+            exit 1
+          fi
+          "${contracts[0]}" --ignored --test-threads=1
 
   rust-lint-policy:
     name: Rust Lint and Packaging
@@ -412,7 +500,7 @@ jobs:
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
-          cache-to: ${{ github.event_name == 'pull_request' && 'type=gha,mode=min,scope=marty-ui-rust-service-images' || '' }}
+          cache-to: ${{ github.event_name == 'pull_request' && 'type=gha,mode=max,scope=marty-ui-rust-service-images' || '' }}
       - name: Build revocation-profile image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
@@ -616,14 +704,30 @@ jobs:
   test-credential-lifecycle-browser:
     name: MIP 0.4 Credential Lifecycle Browser Gate
     runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.62.1-noble@sha256:dcc5531e97840b9b5e794f2814476b21571c5124a3fca2267d73041f56e7580e
+    env:
+      # This gate uses the Playwright browser already baked into the pinned
+      # image; Puppeteer's separate Chrome download is only used by prerendering.
+      PUPPETEER_SKIP_DOWNLOAD: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: tests/package-lock.json
+      - name: Install pinned Bun without additional system packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun_archive="$RUNNER_TEMP/bun-linux-x64.zip"
+          bun_extract="$RUNNER_TEMP/bun-extract"
+          bun_bin="$RUNNER_TEMP/bun-bin"
+          curl --fail --location --silent --show-error \
+            https://github.com/oven-sh/bun/releases/download/bun-v1.3.12/bun-linux-x64.zip \
+            --output "$bun_archive"
+          echo '11dc3ee11bc1695e149737c6ca3d5619302cf4346e6b8a6ec7988967ef01ddc5  '"$bun_archive" \
+            | sha256sum --check --strict
+          python3 -m zipfile -e "$bun_archive" "$bun_extract"
+          mkdir -p "$bun_bin"
+          install -m 0755 "$bun_extract/bun-linux-x64/bun" "$bun_bin/bun"
+          echo "$bun_bin" >>"$GITHUB_PATH"
       - name: Install UI dependencies
         working-directory: ui
         shell: bash
@@ -639,9 +743,6 @@ jobs:
       - name: Install Playwright dependencies
         working-directory: tests
         run: npm ci
-      - name: Install pinned Chromium headless shell and system dependencies
-        working-directory: tests
-        run: npx playwright install --with-deps --only-shell chromium
       - name: Run deterministic credential lifecycle gate
         working-directory: tests
         run: npx playwright test --config playwright.applicant-wallet.config.js
@@ -672,17 +773,34 @@ jobs:
         run: uv pip install --system bandit semgrep pip-audit
       - name: Run security scans concurrently
         shell: bash
+        env:
+          SEMGREP_SEND_METRICS: "off"
+          SEMGREP_ENABLE_VERSION_CHECK: "0"
         run: |
           set -uo pipefail
-          pip-audit -r requirements-services.txt &
+          timing_dir="$RUNNER_TEMP/security-scan-timings"
+          mkdir -p "$timing_dir"
+          timed() {
+            local name="$1"
+            shift
+            local started ended status
+            started="$(date +%s)"
+            "$@"
+            status=$?
+            ended="$(date +%s)"
+            printf '%s\t%s\t%s\n' "$name" "$((ended - started))" "$status" >"$timing_dir/$name.tsv"
+            return "$status"
+          }
+
+          timed pip-audit pip-audit -r requirements-services.txt &
           pip_audit_pid=$!
-          (cd ui && bun audit && npm audit --package-lock-only --audit-level=low) &
+          (cd ui && timed ui-audit bash -c 'bun audit && npm audit --package-lock-only --audit-level=low') &
           ui_audit_pid=$!
-          (cd tests && npm audit --package-lock-only --audit-level=low) &
+          (cd tests && timed tests-audit npm audit --package-lock-only --audit-level=low) &
           tests_audit_pid=$!
-          (bandit -r services/ packages/ -f json -o bandit-report.json || true) &
+          (timed bandit bandit -r services/ packages/ -f json -o bandit-report.json || true) &
           bandit_pid=$!
-          (semgrep scan --config=auto --json --output semgrep-report.json services/ packages/ || true) &
+          (timed semgrep semgrep scan --config=auto --json --output semgrep-report.json services/ packages/ || true) &
           semgrep_pid=$!
 
           status=0
@@ -691,6 +809,16 @@ jobs:
           wait "$tests_audit_pid" || status=1
           wait "$bandit_pid" || status=1
           wait "$semgrep_pid" || status=1
+
+          {
+            echo '### Security scan performance'
+            echo
+            echo '| Scanner | Seconds | Exit status |'
+            echo '| --- | ---: | ---: |'
+            sort "$timing_dir"/*.tsv | while IFS=$'\t' read -r name seconds scan_status; do
+              echo "| $name | $seconds | $scan_status |"
+            done
+          } >>"$GITHUB_STEP_SUMMARY"
           exit "$status"
       - name: Upload security reports
         if: always()
@@ -700,6 +828,7 @@ jobs:
           path: |
             bandit-report.json
             semgrep-report.json
+            ${{ runner.temp }}/security-scan-timings/
           retention-days: 14
 
   rust-supply-chain:

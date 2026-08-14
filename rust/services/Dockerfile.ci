@@ -4,7 +4,15 @@
 # compiled together in one shared production-equivalent layer.
 FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS chef
 
-RUN cargo install cargo-chef --locked --version 0.1.78
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends mold \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+
+RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=marty-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    cargo install cargo-chef --locked --version 0.1.78
 
 WORKDIR /build/rust
 
@@ -18,11 +26,15 @@ FROM chef AS builder
 
 COPY --from=planner /build/rust/recipe.json recipe.json
 COPY proto /build/proto
-RUN cargo chef cook --locked --release --workspace --recipe-path recipe.json
+RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=marty-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    cargo chef cook --locked --release --workspace --recipe-path recipe.json
 
 COPY rust /build/rust
 COPY proto /build/proto
-RUN cargo build --locked --release \
+RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=marty-cargo-git,target=/usr/local/cargo/git,sharing=locked \
+    cargo build --locked --release \
     -p marty-event-stream --bin marty-event-stream \
     -p marty-revocation-profile --bin marty-revocation-profile
 
