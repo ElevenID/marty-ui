@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 from types import SimpleNamespace
 
 import httpx
@@ -7,6 +8,120 @@ import pytest
 from fastapi import FastAPI, Request
 
 from gateway import proxy
+
+
+@pytest.mark.asyncio
+async def test_proxy_request_completes_partial_mip_error_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Client:
+        async def request(self, *, method, url, headers, content, timeout):
+            return httpx.Response(
+                400,
+                json={
+                    "error": "invalid_request",
+                    "error_description": "Request validation failed",
+                },
+            )
+
+    monkeypatch.setattr(proxy, "_http_client", Client())
+
+    app = FastAPI()
+
+    @app.post("/proxy")
+    async def proxy_route(request: Request):
+        return await proxy.proxy_request(
+            request,
+            "http://flow:8006",
+            "/v1/flows/instances",
+        )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as test_client:
+        response = await test_client.post("/proxy", json={"private": "sentinel"})
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"] == "invalid_request"
+    assert body["error_description"] == "Request validation failed"
+    uuid.UUID(body["message_id"])
+    assert "sentinel" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_proxy_request_preserves_complete_mip_error_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Client:
+        async def request(self, *, method, url, headers, content, timeout):
+            return httpx.Response(
+                409,
+                json={
+                    "error": "conflict",
+                    "error_description": "The operation conflicts",
+                    "message_id": "service-correlation-1",
+                },
+            )
+
+    monkeypatch.setattr(proxy, "_http_client", Client())
+
+    app = FastAPI()
+
+    @app.get("/proxy")
+    async def proxy_route(request: Request):
+        return await proxy.proxy_request(
+            request,
+            "http://flow:8006",
+            "/v1/flows/instances/instance-1",
+        )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as test_client:
+        response = await test_client.get("/proxy")
+
+    assert response.status_code == 409
+    assert response.json()["message_id"] == "service-correlation-1"
+
+
+@pytest.mark.asyncio
+async def test_proxy_request_does_not_reflect_unstructured_downstream_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Client:
+        async def request(self, *, method, url, headers, content, timeout):
+            return httpx.Response(500, content=b"private-downstream-sentinel")
+
+    monkeypatch.setattr(proxy, "_http_client", Client())
+
+    app = FastAPI()
+
+    @app.get("/proxy")
+    async def proxy_route(request: Request):
+        return await proxy.proxy_request(
+            request,
+            "http://flow:8006",
+            "/v1/flows/instances/instance-1",
+        )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+    ) as test_client:
+        response = await test_client.get("/proxy")
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error"] == "service_error"
+    assert body["error_description"] == "Downstream service request failed"
+    uuid.UUID(body["message_id"])
+    assert "private-downstream-sentinel" not in response.text
 
 
 @pytest.mark.asyncio

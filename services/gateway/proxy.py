@@ -257,20 +257,27 @@ async def proxy_request(
             except Exception:
                 logger.debug("Failed to parse error response body as JSON from %s (status %d)", url, response.status_code)
                 err_body = {}
-            if "error" in err_body and "error_description" in err_body:
+            body_payload = err_body if isinstance(err_body, dict) else {}
+            if (
+                isinstance(body_payload.get("error"), str)
+                and isinstance(body_payload.get("error_description"), str)
+                and isinstance(body_payload.get("message_id"), str)
+                and body_payload["message_id"].strip()
+            ):
                 # Already MIP-format — pass through unchanged
                 pass
             else:
                 # Wrap FastAPI-style {"detail": "..."} or unknown formats
-                detail = err_body.get("detail") if isinstance(err_body, dict) else None
+                detail = body_payload.get("detail")
                 detail_payload = detail if isinstance(detail, dict) else {}
-                error = detail_payload.get("error") or err_body.get("error", "service_error")
+                error = detail_payload.get("error") or body_payload.get("error", "service_error")
                 message = (
                     detail_payload.get("message")
                     or (detail if isinstance(detail, str) else None)
-                    or response.text[:200]
+                    or body_payload.get("error_description")
+                    or "Downstream service request failed"
                 )
-                details = err_body.get("details")
+                details = body_payload.get("details")
                 if detail_payload:
                     details = {
                         key: value
