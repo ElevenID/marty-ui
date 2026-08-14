@@ -37,7 +37,8 @@ def _isolate_native_registry_boundary(monkeypatch: pytest.MonkeyPatch):
             "openbao-transit": ("openbao", "OpenBao Transit", "vault-transit"),
         }
         provider, label, protocol = service_defaults.get(
-            normalized.get("service_type"), service_defaults["custom-transit-compatible"]
+            normalized.get("service_type"),
+            service_defaults["custom-transit-compatible"],
         )
         normalized.setdefault("provider", provider)
         normalized.setdefault("provider_label", label)
@@ -167,9 +168,7 @@ def _isolate_native_registry_boundary(monkeypatch: pytest.MonkeyPatch):
     async def resolve_slug(_slug):
         return None
 
-    async def load_did_document(
-        _organization_id, *, did_id=None, fallback_did=None
-    ):
+    async def load_did_document(_organization_id, *, did_id=None, fallback_did=None):
         identity = fallback_did or did_id or ""
         return (
             {
@@ -180,6 +179,165 @@ def _isolate_native_registry_boundary(monkeypatch: pytest.MonkeyPatch):
             },
             False,
         )
+
+    profiles_by_org: dict[str, list[dict]] = {}
+
+    async def normalize_profile(
+        organization_id, body, *, existing=None, profile_id=None
+    ):
+        if not body.get("issuer_did") and not (existing or {}).get("issuer_did"):
+            request = httpx.Request("POST", "http://rust-signing/internal/profiles")
+            response = httpx.Response(
+                422, json={"detail": "issuer_did is required."}, request=request
+            )
+            raise httpx.HTTPStatusError(
+                "invalid profile", request=request, response=response
+            )
+        profile = dict(existing or {})
+        profile.update(body)
+        profile.setdefault(
+            "id",
+            profile_id or f"ip-{len(profiles_by_org.get(organization_id, [])) + 1}",
+        )
+        profile["organization_id"] = organization_id
+        profile.setdefault("name", "")
+        profile.setdefault("issuer_mode", "org_managed")
+        profile.setdefault("signing_key_reference", "")
+        profile.setdefault("verification_method_id", "")
+        profile.setdefault("key_purpose", "vc_jwt_issuer")
+        profile.setdefault("credential_format", "")
+        profile.setdefault("algorithm", "")
+        profile.setdefault("status", "draft")
+        profile.setdefault("created_at", "2026-08-14T00:00:00Z")
+        profile["updated_at"] = "2026-08-14T00:00:00Z"
+        profile.setdefault(
+            "key_attestation_policy",
+            {
+                "mode": "disabled",
+                "trusted_root_certificates_pem": [],
+                "allowed_algorithms": [],
+                "required_key_storage": [],
+                "required_user_authentication": [],
+                "max_age_seconds": 300,
+                "require_nonce": True,
+                "status_validation": "required",
+                "status_list_allowed_origins": [],
+                "status_list_trusted_root_certificates_pem": [],
+                "status_list_allowed_algorithms": [],
+                "status_list_max_age_seconds": 86400,
+                "status_list_allow_private_hosts": False,
+                "status_list_tls_ca_certificates_pem": [],
+            },
+        )
+        return profile
+
+    async def validate_profile_binding(_organization_id, **_kwargs):
+        return None
+
+    async def list_profiles(organization_id):
+        return [dict(profile) for profile in profiles_by_org.get(organization_id, [])]
+
+    async def get_profile(organization_id, profile_id):
+        for profile in profiles_by_org.get(organization_id, []):
+            if profile.get("id") == profile_id:
+                return dict(profile)
+        request = httpx.Request("GET", "http://rust-signing/internal/profiles")
+        response = httpx.Response(
+            404, json={"detail": "Issuer profile not found."}, request=request
+        )
+        raise httpx.HTTPStatusError("not found", request=request, response=response)
+
+    async def save_profile(organization_id, profile):
+        profiles = profiles_by_org.setdefault(organization_id, [])
+        for index, current in enumerate(profiles):
+            if current.get("id") == profile.get("id"):
+                profiles[index] = dict(profile)
+                return dict(profile)
+        profiles.append(dict(profile))
+        return dict(profile)
+
+    async def delete_profile(organization_id, profile_id):
+        profiles = profiles_by_org.setdefault(organization_id, [])
+        if not any(profile.get("id") == profile_id for profile in profiles):
+            request = httpx.Request("DELETE", "http://rust-signing/internal/profiles")
+            response = httpx.Response(
+                404, json={"detail": "Issuer profile not found."}, request=request
+            )
+            raise httpx.HTTPStatusError("not found", request=request, response=response)
+        profiles[:] = [
+            profile for profile in profiles if profile.get("id") != profile_id
+        ]
+        return profile_id
+
+    async def find_profiles(organization_id, selectors):
+        matches = await list_profiles(organization_id)
+        for name in (
+            "issuer_did",
+            "issuer_mode",
+            "key_purpose",
+            "credential_format",
+            "algorithm",
+        ):
+            if selectors.get(name):
+                matches = [
+                    profile
+                    for profile in matches
+                    if profile.get(name) == selectors[name]
+                ]
+        if selectors.get("active_only"):
+            matches = [
+                profile
+                for profile in matches
+                if str(profile.get("status", "")).lower() == "active"
+            ]
+        if selectors.get("require_signing_service"):
+            matches = [
+                profile for profile in matches if profile.get("signing_service_id")
+            ]
+        if selectors.get("require_signing_key_reference"):
+            matches = [
+                profile for profile in matches if profile.get("signing_key_reference")
+            ]
+        return matches
+
+    async def find_duplicate(organization_id, profile, *, service_key_reference=None):
+        for candidate in profiles_by_org.get(organization_id, []):
+            if (
+                candidate.get("status") != "revoked"
+                and candidate.get("issuer_did") == profile.get("issuer_did")
+                and candidate.get("signing_service_id")
+                == profile.get("signing_service_id")
+                and (
+                    candidate.get("signing_key_reference")
+                    or service_key_reference
+                    or ""
+                )
+                == (profile.get("signing_key_reference") or "")
+                and (candidate.get("key_purpose") or "vc_jwt_issuer")
+                == (profile.get("key_purpose") or "vc_jwt_issuer")
+            ):
+                return dict(candidate), True
+        return None, False
+
+    async def bind_profile_registry(_organization_id, _profile):
+        return await load_registry(_organization_id)
+
+    async def custody_format(_organization_id, credential_format, key_purpose):
+        purpose_formats = {
+            "oid4vp_request_signing": "oauth-authz-req+jwt",
+            "lti_tool_signing": "lti_tool_jwt",
+            "vdsnc_signing": "mso_mdoc",
+            "csca": "mso_mdoc",
+        }
+        formats = {
+            "MDOC": "mso_mdoc",
+            "SD_JWT_VC": "dc+sd-jwt",
+            "VC_JWT": "jwt_vc_json",
+            "JSON_LD": "ldp_vc",
+            "ZK_MDOC": "zk_mdoc",
+            "ICAO_EMRTD": "icao_emrtd",
+        }
+        return purpose_formats.get(key_purpose) or formats[credential_format]
 
     async def resolve_registry(
         registry,
@@ -235,7 +393,11 @@ def _isolate_native_registry_boundary(monkeypatch: pytest.MonkeyPatch):
             for reference, purposes in bindings.items()
             if key_purpose in purposes
         ]
-        if key_purpose and not candidates and service.get("id") == signing_keys.MANAGED_OPENBAO_SERVICE_ID:
+        if (
+            key_purpose
+            and not candidates
+            and service.get("id") == signing_keys.MANAGED_OPENBAO_SERVICE_ID
+        ):
             prefixes = {
                 "oid4vp_request_signing": "oid4vp-verifier-",
                 "lti_tool_signing": "lti-tool-",
@@ -246,7 +408,9 @@ def _isolate_native_registry_boundary(monkeypatch: pytest.MonkeyPatch):
                 candidates = [
                     str(key.get("provider_key_name") or key.get("id"))
                     for key in (keys or [])
-                    if str(key.get("provider_key_name") or key.get("id")).startswith(prefix)
+                    if str(key.get("provider_key_name") or key.get("id")).startswith(
+                        prefix
+                    )
                 ]
         if algorithm and candidates:
             algorithm_by_reference = {
@@ -264,10 +428,16 @@ def _isolate_native_registry_boundary(monkeypatch: pytest.MonkeyPatch):
             key_reference = None
         return service, key_reference
 
-    monkeypatch.setattr(signing_keys, "normalize_native_signing_service", normalize_service)
-    monkeypatch.setattr(signing_keys, "normalize_native_signing_registry", normalize_registry)
+    monkeypatch.setattr(
+        signing_keys, "normalize_native_signing_service", normalize_service
+    )
+    monkeypatch.setattr(
+        signing_keys, "normalize_native_signing_registry", normalize_registry
+    )
     monkeypatch.setattr(signing_keys, "get_native_signing_service_catalog", catalog)
-    monkeypatch.setattr(signing_keys, "resolve_native_signing_registry", resolve_registry)
+    monkeypatch.setattr(
+        signing_keys, "resolve_native_signing_registry", resolve_registry
+    )
     monkeypatch.setattr(signing_keys, "load_native_signing_registry", load_registry)
     monkeypatch.setattr(signing_keys, "save_native_signing_registry", save_registry)
     monkeypatch.setattr(
@@ -285,146 +455,26 @@ def _isolate_native_registry_boundary(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         signing_keys, "load_native_signing_did_document", load_did_document
     )
-
-
-def _key_attestation_root_pem() -> str:
-    from datetime import timedelta
-
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import ec
-    from cryptography.x509.oid import NameOID
-
-    key = ec.generate_private_key(ec.SECP256R1())
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Wallet Provider Root")])
-    now = datetime.now(timezone.utc)
-    certificate = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(now - timedelta(minutes=1))
-        .not_valid_after(now + timedelta(days=1))
-        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
-        .sign(key, hashes.SHA256())
+    monkeypatch.setattr(
+        signing_keys, "normalize_native_issuer_profile", normalize_profile
     )
-    return certificate.public_bytes(serialization.Encoding.PEM).decode()
-
-
-def test_issuer_profile_key_attestation_policy_is_provider_neutral_and_fail_closed() -> (
-    None
-):
-    root_pem = _key_attestation_root_pem()
-    profile = signing_keys._normalize_issuer_profile(
-        {
-            "issuer_did": "did:web:issuer.example",
-            "signing_service_id": "managed-openbao-transit",
-            "key_attestation_policy": {
-                "mode": "required",
-                "trusted_root_certificates_pem": [root_pem],
-                "allowed_algorithms": ["ES256"],
-                "required_key_storage": ["iso_18045_high"],
-                "required_user_authentication": ["iso_18045_high"],
-                "max_age_seconds": 600,
-                "require_nonce": True,
-                "status_validation": "required",
-                "status_list_allowed_origins": [
-                    "https://status.wallet-provider.example/"
-                ],
-                "status_list_trusted_root_certificates_pem": [root_pem],
-                "status_list_allowed_algorithms": ["ES256"],
-                "status_list_max_age_seconds": 43200,
-                "status_list_allow_private_hosts": False,
-                "status_list_tls_ca_certificates_pem": [],
-            },
-        },
-        org_id="org-a",
+    monkeypatch.setattr(
+        signing_keys, "validate_native_issuer_profile_binding", validate_profile_binding
     )
-
-    assert profile["organization_id"] == "org-a"
-    assert profile["key_attestation_policy"] == {
-        "mode": "required",
-        "trusted_root_certificates_pem": [root_pem.strip()],
-        "allowed_algorithms": ["ES256"],
-        "required_key_storage": ["iso_18045_high"],
-        "required_user_authentication": ["iso_18045_high"],
-        "max_age_seconds": 600,
-        "require_nonce": True,
-        "status_validation": "required",
-        "status_list_allowed_origins": ["https://status.wallet-provider.example"],
-        "status_list_trusted_root_certificates_pem": [root_pem.strip()],
-        "status_list_allowed_algorithms": ["ES256"],
-        "status_list_max_age_seconds": 43200,
-        "status_list_allow_private_hosts": False,
-        "status_list_tls_ca_certificates_pem": [],
-    }
-    serialized = json.dumps(profile)
-    assert "signing_key_reference" in profile
-    assert "private_key" not in serialized
-    assert "kms_key" not in serialized
-
-
-def test_issuer_profile_key_attestation_policy_defaults_disabled() -> None:
-    profile = signing_keys._normalize_issuer_profile(
-        {
-            "issuer_did": "did:web:issuer.example",
-            "signing_service_id": "managed-openbao-transit",
-        },
-        org_id="org-a",
+    monkeypatch.setattr(signing_keys, "list_native_issuer_profiles", list_profiles)
+    monkeypatch.setattr(signing_keys, "get_native_issuer_profile", get_profile)
+    monkeypatch.setattr(signing_keys, "save_native_issuer_profile", save_profile)
+    monkeypatch.setattr(signing_keys, "delete_native_issuer_profile", delete_profile)
+    monkeypatch.setattr(signing_keys, "find_native_issuer_profiles", find_profiles)
+    monkeypatch.setattr(
+        signing_keys, "find_native_duplicate_issuer_profile", find_duplicate
     )
-
-    assert profile["key_attestation_policy"]["mode"] == "disabled"
-    assert profile["key_attestation_policy"]["trusted_root_certificates_pem"] == []
-
-
-@pytest.mark.parametrize(
-    ("policy", "message"),
-    [
-        (
-            {"mode": "required", "allowed_algorithms": ["ES256"]},
-            "requires trusted roots",
-        ),
-        (
-            {
-                "mode": "required",
-                "trusted_root_certificates_pem": ["not a certificate"],
-                "allowed_algorithms": ["ES256"],
-            },
-            "invalid trusted root certificate",
-        ),
-        (
-            {
-                "mode": "required",
-                "trusted_root_certificates_pem": ["unused"],
-                "allowed_algorithms": ["HS256"],
-            },
-            "Unsupported key attestation algorithms",
-        ),
-        (
-            {
-                "mode": "required",
-                "trusted_root_certificates_pem": [_key_attestation_root_pem()],
-                "allowed_algorithms": ["ES256"],
-                "status_validation": "required",
-            },
-            "requires at least one status-list allowed origin",
-        ),
-        ({"mode": "bypass"}, "Invalid key attestation mode"),
-    ],
-)
-def test_issuer_profile_rejects_unsafe_key_attestation_policy(
-    policy: dict[str, object], message: str
-) -> None:
-    with pytest.raises(HTTPException, match=message):
-        signing_keys._normalize_issuer_profile(
-            {
-                "issuer_did": "did:web:issuer.example",
-                "signing_service_id": "managed-openbao-transit",
-                "key_attestation_policy": policy,
-            },
-            org_id="org-a",
-        )
+    monkeypatch.setattr(
+        signing_keys, "bind_native_issuer_profile_registry", bind_profile_registry
+    )
+    monkeypatch.setattr(
+        signing_keys, "resolve_native_profile_custody_format", custody_format
+    )
 
 
 def test_public_holder_key_api_never_exposes_derived_key_references() -> None:
@@ -955,8 +1005,6 @@ async def test_validate_signing_key_service_uses_rust_decision(
 # =============================================================================
 
 
-
-
 def test_managed_service_capabilities_come_from_inventory_and_tenant_bindings():
     snapshot = {
         "config": {
@@ -985,8 +1033,6 @@ def test_managed_service_capabilities_come_from_inventory_and_tenant_bindings():
     assert service is not None
     assert "vc_jwt_issuer" in service["key_purposes"]
     assert "oid4vp_request_signing" in service["key_purposes"]
-
-
 
 
 @pytest.mark.asyncio
@@ -1173,62 +1219,6 @@ async def test_list_service_capabilities_proxies_to_signing_keys_service(
     )
 
 
-def test_lti_tool_signing_is_distinct_and_rs256_only():
-    assert "lti_tool_signing" in signing_keys.KEY_PURPOSES
-    assert signing_keys.KEY_PURPOSE_CREDENTIAL_FORMATS["lti_tool_signing"] == (
-        "lti_tool_jwt",
-    )
-
-
-def test_lti_tool_signing_profile_is_did_resolvable_but_key_is_exclusive() -> None:
-    profile = signing_keys._normalize_issuer_profile(
-        {
-            "issuer_did": "did:web:canvas.example:tool",
-            "signing_service_id": "shared-kms",
-            "signing_key_reference": "lti-tool-canvas-rs256",
-            "verification_method_id": (
-                "did:web:canvas.example:tool#lti-tool-canvas-rs256"
-            ),
-            "key_purpose": "lti_tool_signing",
-            "algorithm": "RS256",
-            "status": "active",
-        },
-        org_id="org-1",
-    )
-
-    signing_keys._assert_issuer_profile_key_compatible(
-        profile,
-        {
-            "key_reference_purposes": {
-                "shared-kms": {
-                    "lti-tool-canvas-rs256": ["lti_tool_signing"],
-                }
-            }
-        },
-    )
-    signing_keys._assert_issuer_profile_key_compatible(
-        profile,
-        {"key_reference_purposes": {}},
-    )
-
-    with pytest.raises(HTTPException, match="exclusively"):
-        signing_keys._assert_issuer_profile_key_compatible(
-            profile,
-            {
-                "key_reference_purposes": {
-                    "shared-kms": {
-                        "lti-tool-canvas-rs256": [
-                            "lti_tool_signing",
-                            "vc_jwt_issuer",
-                        ],
-                    }
-                }
-            },
-        )
-
-
-
-
 # ---------------------------------------------------------------------------
 # Certificate Lifecycle Tests (GAP-004)
 # ---------------------------------------------------------------------------
@@ -1253,8 +1243,6 @@ def test_same_public_jwk_ignores_only_jose_metadata():
     assert signing_keys._same_public_jwk(certificate_jwk, did_jwk)
     certificate_jwk["y"] = "other-coordinate"
     assert not signing_keys._same_public_jwk(certificate_jwk, did_jwk)
-
-
 
 
 @pytest.mark.asyncio
@@ -3099,6 +3087,11 @@ async def test_lti_signing_fails_closed_when_issuer_profile_registry_is_invalid(
         "_load_registered_service_registry",
         fake_load_registry,
     )
+    monkeypatch.setattr(
+        signing_keys,
+        "list_native_issuer_profiles",
+        AsyncMock(side_effect=RuntimeError("Issuer profile registry is invalid")),
+    )
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(return_value="not-json")
 
@@ -3151,20 +3144,6 @@ def test_lti_key_creation_uses_protocol_specific_namespace() -> None:
                     "reused-key": ["vc_jwt_issuer", "lti_tool_signing"],
                 },
             }
-        )
-
-    with pytest.raises(FastAPIHTTPException, match="reserved for LTI"):
-        signing_keys._assert_issuer_profile_key_compatible(
-            {
-                "signing_service_id": "shared-kms",
-                "signing_key_reference": "lti-key",
-                "key_purpose": "vc_jwt_issuer",
-            },
-            {
-                "key_reference_purposes": {
-                    "shared-kms": {"lti-key": ["lti_tool_signing"]},
-                },
-            },
         )
 
 
@@ -3653,9 +3632,7 @@ async def test_resolve_did_web_by_slug_prefers_exact_scoped_document(
         AsyncMock(return_value="org_shared"),
     )
     native_load = AsyncMock(return_value=(scoped_document, True))
-    monkeypatch.setattr(
-        signing_keys, "load_native_signing_did_document", native_load
-    )
+    monkeypatch.setattr(signing_keys, "load_native_signing_did_document", native_load)
     request = _build_public_request()
 
     response = await signing_keys.resolve_did_web_by_slug(
@@ -3664,9 +3641,7 @@ async def test_resolve_did_web_by_slug_prefers_exact_scoped_document(
 
     data = json.loads(response.body)
     assert data["id"] == issuer_did
-    assert [method["id"] for method in data["verificationMethod"]] == [
-        issuer_method
-    ]
+    assert [method["id"] for method in data["verificationMethod"]] == [issuer_method]
     assert data["assertionMethod"] == [issuer_method]
     assert seeded_method not in json.dumps(data)
     assert native_load.await_args.kwargs["did_id"] == issuer_did
@@ -3839,9 +3814,7 @@ async def test_resolve_did_web_root_retargets_org_scoped_document(
         "load_native_signing_did_document",
         AsyncMock(side_effect=[(did_doc, False), (did_doc, True)]),
     )
-    request = _build_public_request(
-        path="/.well-known/did.json"
-    )
+    request = _build_public_request(path="/.well-known/did.json")
 
     response = await signing_keys.resolve_did_web_root(request=request)
 
@@ -3908,9 +3881,7 @@ async def test_publish_service_to_did_stores_slug_mapping(
             },
         }
     )
-    monkeypatch.setattr(
-        signing_keys, "publish_native_signing_did", native_publish
-    )
+    monkeypatch.setattr(signing_keys, "publish_native_signing_did", native_publish)
 
     request = _build_request("org_123")
     response = await signing_keys.publish_service_to_did(
@@ -4176,15 +4147,12 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 
-    stored = {}
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(return_value=None)
-
-    async def fake_set(key, value):
-        stored[key] = value
-
-    redis_mock.set = AsyncMock(side_effect=fake_set)
-    native_save = AsyncMock(side_effect=lambda _organization_id, registry: registry)
+    native_profile_save = AsyncMock(
+        side_effect=lambda _organization_id, profile: profile
+    )
+    native_bind = AsyncMock(return_value={"services": [], "key_reference_purposes": {}})
 
     async def fake_resolve_effective_service(*args, **kwargs):
         return (
@@ -4213,7 +4181,10 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(
         signing_keys, "publish_service_to_did", fake_publish_service_to_did
     )
-    monkeypatch.setattr(signing_keys, "save_native_signing_registry", native_save)
+    monkeypatch.setattr(signing_keys, "save_native_issuer_profile", native_profile_save)
+    monkeypatch.setattr(
+        signing_keys, "bind_native_issuer_profile_registry", native_bind
+    )
 
     request = _build_request("org_issuer", redis_client=redis_mock)
     response = await signing_keys.create_issuer_profile(
@@ -4240,16 +4211,8 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
     assert profile["algorithm"] == "ES256"
     assert profile["id"].startswith("ip-")
 
-    # Python owns the profile document; Rust owns the signing-service registry.
-    assert "org:org_issuer:issuer-profiles" in stored
-    native_save.assert_awaited_once()
-    assert native_save.await_args.args[0] == "org_issuer"
-    registry = native_save.await_args.args[1]
-    assert registry["key_reference_purposes"] == {
-        "svc-bao": {"cred-issuer-test-es256": ["vc_jwt_issuer"]}
-    }
-    assert registry["type_defaults"]["vc_jwt_issuer"] == "svc-bao"
-    assert registry["format_defaults"]["dc+sd-jwt"] == "svc-bao"
+    native_profile_save.assert_awaited_once_with("org_issuer", profile)
+    native_bind.assert_awaited_once_with("org_issuer", profile)
     assert published_body["org_slug"] == "acme"
 
 
@@ -4433,8 +4396,8 @@ async def test_create_issuer_profile_duplicate_tuple_returns_existing_without_re
     assert second_body["profile"]["id"] == first_body["profile"]["id"]
     assert second_body["profile"]["name"] == "My Issuer"
     assert publish_count == 1
-    saved_profiles = json.loads(stored["org:org_issuer:issuer-profiles"])["profiles"]
-    assert len(saved_profiles) == 1
+    listed = await signing_keys.list_issuer_profiles(request, organization_id=None)
+    assert len(json.loads(listed.body)["profiles"]) == 1
 
 
 @pytest.mark.asyncio
@@ -4468,6 +4431,21 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
             }
         )
     }
+    repaired = {
+        **json.loads(stored[storage_key])["profiles"][0],
+        "status": "active",
+        "signing_key_reference": "cred-issuer-test-es256",
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256",
+    }
+    saved_profile = AsyncMock(side_effect=lambda _organization_id, profile: profile)
+    monkeypatch.setattr(
+        signing_keys,
+        "find_native_duplicate_issuer_profile",
+        AsyncMock(return_value=(repaired, True)),
+    )
+    monkeypatch.setattr(signing_keys, "save_native_issuer_profile", saved_profile)
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(side_effect=lambda key: stored.get(key))
 
@@ -4539,15 +4517,15 @@ async def test_create_issuer_profile_duplicate_repairs_stale_draft(
     )
     assert publish_count == 1
 
-    saved_profiles = json.loads(stored[storage_key])["profiles"]
-    assert len(saved_profiles) == 1
-    assert saved_profiles[0]["id"] == "ip-stale"
-    assert saved_profiles[0]["status"] == "active"
-    assert saved_profiles[0]["key_purpose"] == "vc_jwt_issuer"
-    assert saved_profiles[0]["credential_format"] == "SD_JWT_VC"
-    assert saved_profiles[0]["algorithm"] == "ES256"
+    saved_profile.assert_awaited_once()
+    persisted = saved_profile.await_args.args[1]
+    assert persisted["id"] == "ip-stale"
+    assert persisted["status"] == "active"
+    assert persisted["key_purpose"] == "vc_jwt_issuer"
+    assert persisted["credential_format"] == "SD_JWT_VC"
+    assert persisted["algorithm"] == "ES256"
     assert (
-        saved_profiles[0]["verification_method_id"]
+        persisted["verification_method_id"]
         == "did:web:beta.elevenidllc.com:orgs:acme#cred-issuer-test-es256"
     )
 
@@ -4602,6 +4580,11 @@ async def test_list_issuer_profiles_returns_all(monkeypatch: pytest.MonkeyPatch)
 
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(return_value=profiles_doc)
+    monkeypatch.setattr(
+        signing_keys,
+        "list_native_issuer_profiles",
+        AsyncMock(return_value=json.loads(profiles_doc)["profiles"]),
+    )
 
     request = _build_request("org_issuer", redis_client=redis_mock)
     response = await signing_keys.list_issuer_profiles(
@@ -4641,6 +4624,11 @@ async def test_get_issuer_profile_returns_single(monkeypatch: pytest.MonkeyPatch
 
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(return_value=profiles_doc)
+    monkeypatch.setattr(
+        signing_keys,
+        "get_native_issuer_profile",
+        AsyncMock(return_value=json.loads(profiles_doc)["profiles"][1]),
+    )
 
     request = _build_request("org_issuer", redis_client=redis_mock)
     response = await signing_keys.get_issuer_profile(
@@ -4731,6 +4719,11 @@ async def test_update_issuer_profile_patches_fields(monkeypatch: pytest.MonkeyPa
         "_resolve_effective_service",
         fake_resolve_effective_service,
     )
+    monkeypatch.setattr(
+        signing_keys,
+        "get_native_issuer_profile",
+        AsyncMock(return_value=existing["profiles"][0]),
+    )
 
     request = _build_request("org_issuer", redis_client=redis_mock)
     response = await signing_keys.update_issuer_profile(
@@ -4770,6 +4763,8 @@ async def test_delete_issuer_profile_removes_entry(monkeypatch: pytest.MonkeyPat
         stored[key] = json.loads(value)
 
     redis_mock.set = AsyncMock(side_effect=fake_set)
+    native_delete = AsyncMock(return_value="ip-2")
+    monkeypatch.setattr(signing_keys, "delete_native_issuer_profile", native_delete)
 
     request = _build_request("org_issuer", redis_client=redis_mock)
     response = await signing_keys.delete_issuer_profile(
@@ -4782,10 +4777,7 @@ async def test_delete_issuer_profile_removes_entry(monkeypatch: pytest.MonkeyPat
     data = json.loads(response.body)
     assert data["deleted"] == "ip-2"
 
-    # Verify only ip-1 remains
-    saved_profiles = stored["org:org_issuer:issuer-profiles"]["profiles"]
-    assert len(saved_profiles) == 1
-    assert saved_profiles[0]["id"] == "ip-1"
+    native_delete.assert_awaited_once_with("org_issuer", "ip-2")
 
 
 @pytest.mark.asyncio
@@ -4877,6 +4869,11 @@ async def test_internal_resolve_issuer_context_resolves_exact_did(
         signing_keys,
         "load_native_signing_registry",
         AsyncMock(return_value=docs["org:org_issuer:signing-key-services"]),
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "find_native_issuer_profiles",
+        AsyncMock(return_value=[docs["org:org_issuer:issuer-profiles"]["profiles"][1]]),
     )
     monkeypatch.setattr(
         signing_keys,
@@ -5093,6 +5090,11 @@ async def test_internal_resolve_issuer_context_defaults_to_org_managed_mode(
         "load_native_signing_registry",
         AsyncMock(return_value=docs["org:org_issuer:signing-key-services"]),
     )
+    monkeypatch.setattr(
+        signing_keys,
+        "find_native_issuer_profiles",
+        AsyncMock(return_value=[docs["org:org_issuer:issuer-profiles"]["profiles"][1]]),
+    )
 
     response = await signing_keys.internal_resolve_issuer_context(
         request=request,
@@ -5304,10 +5306,19 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
     monkeypatch.setattr(
         signing_keys,
         "load_native_signing_did_document",
-        AsyncMock(
-            return_value=(docs["org:org_issuer:signing-key-did-document"], True)
-        ),
+        AsyncMock(return_value=(docs["org:org_issuer:signing-key-did-document"], True)),
     )
+
+    async def find_profiles(_organization_id, selectors):
+        return [
+            profile
+            for profile in docs["org:org_issuer:issuer-profiles"]["profiles"]
+            if profile["issuer_did"] == selectors["issuer_did"]
+            and profile["key_purpose"] == selectors["key_purpose"]
+            and profile["algorithm"] == selectors["algorithm"]
+        ]
+
+    monkeypatch.setattr(signing_keys, "find_native_issuer_profiles", find_profiles)
     monkeypatch.setattr(
         signing_keys,
         "_service_x5c_chain",
@@ -5464,9 +5475,12 @@ async def test_internal_resolve_issuer_did_rejects_ambiguous_active_profiles(
     monkeypatch.setattr(
         signing_keys,
         "load_native_signing_did_document",
-        AsyncMock(
-            return_value=(docs["org:org_issuer:signing-key-did-document"], True)
-        ),
+        AsyncMock(return_value=(docs["org:org_issuer:signing-key-did-document"], True)),
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "find_native_issuer_profiles",
+        AsyncMock(return_value=docs["org:org_issuer:issuer-profiles"]["profiles"]),
     )
 
     from fastapi import HTTPException as FastAPIHTTPException
@@ -5608,7 +5622,9 @@ async def test_internal_resolve_issuer_did_rejects_unknown_org_issuer(
 
 
 @pytest.mark.asyncio
-async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
+async def test_public_issuer_identities_hide_profile_and_custody_coordinates(
+    monkeypatch: pytest.MonkeyPatch,
+):
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(
         return_value=json.dumps(
@@ -5639,6 +5655,12 @@ async def test_public_issuer_identities_hide_profile_and_custody_coordinates():
                 ]
             }
         )
+    )
+    profiles = json.loads(redis_mock.get.return_value)["profiles"]
+    monkeypatch.setattr(
+        signing_keys,
+        "find_native_issuer_profiles",
+        AsyncMock(return_value=[profiles[0]]),
     )
     response = await signing_keys.list_public_issuer_identities(
         request=_build_request("org_issuer", redis_client=redis_mock),
@@ -5694,8 +5716,8 @@ async def test_matching_public_identity_preserves_eddsa_exact_tuple(
     }
     monkeypatch.setattr(
         signing_keys,
-        "_load_json_document",
-        AsyncMock(return_value={"profiles": [profile]}),
+        "find_native_issuer_profiles",
+        AsyncMock(return_value=[profile]),
     )
     monkeypatch.setattr(
         signing_keys,
@@ -5713,10 +5735,6 @@ async def test_matching_public_identity_preserves_eddsa_exact_tuple(
             )
         ),
     )
-    monkeypatch.setattr(
-        signing_keys, "_assert_issuer_profile_key_compatible", lambda *_: None
-    )
-
     matches = await signing_keys._matching_issuer_identity_profiles(
         _build_request("org_issuer"), operation
     )
@@ -5726,7 +5744,9 @@ async def test_matching_public_identity_preserves_eddsa_exact_tuple(
 
 
 @pytest.mark.asyncio
-async def test_public_issuer_identities_fail_closed_on_ambiguous_profiles():
+async def test_public_issuer_identities_fail_closed_on_ambiguous_profiles(
+    monkeypatch: pytest.MonkeyPatch,
+):
     profile = {
         "organization_id": "org_issuer",
         "issuer_did": "did:web:issuer.example",
@@ -5746,6 +5766,16 @@ async def test_public_issuer_identities_fail_closed_on_ambiguous_profiles():
             }
         )
     )
+    monkeypatch.setattr(
+        signing_keys,
+        "find_native_issuer_profiles",
+        AsyncMock(
+            return_value=[
+                {**profile, "id": "profile-one"},
+                {**profile, "id": "profile-two"},
+            ]
+        ),
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         await signing_keys.list_public_issuer_identities(
@@ -5758,6 +5788,25 @@ async def test_public_issuer_identities_fail_closed_on_ambiguous_profiles():
     assert exc_info.value.status_code == 409
     assert "profile-one" not in str(exc_info.value.detail)
     assert "profile-two" not in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_issuer_profiles_fail_closed_when_native_backend_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        signing_keys,
+        "list_native_issuer_profiles",
+        AsyncMock(side_effect=RuntimeError("service not configured")),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await signing_keys.list_issuer_profiles(
+            request=_build_request("org_issuer"), organization_id=None
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "Native issuer-profile backend is unavailable" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
@@ -5815,7 +5864,9 @@ def test_public_router_exposes_identities_not_private_issuer_profiles() -> None:
     assert "/v1/signing-keys/issuer-identities" in public_paths
     assert "/v1/signing-keys/issuer-identities/resolve" in public_paths
     assert "/v1/signing-keys/issuer-identities/certificate" in public_paths
-    assert not any(path.startswith("/v1/signing-keys/issuer-profiles") for path in public_paths)
+    assert not any(
+        path.startswith("/v1/signing-keys/issuer-profiles") for path in public_paths
+    )
     assert "/internal/signing-keys/issuer-profiles" in internal_paths
     assert "/internal/signing-keys/issuer-profiles/{profile_id}" in internal_paths
 

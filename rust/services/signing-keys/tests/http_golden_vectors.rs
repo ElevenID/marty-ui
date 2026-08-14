@@ -207,3 +207,73 @@ async fn internal_document_routes_require_auth_and_fail_closed_without_storage()
         .unwrap();
     assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
+
+#[tokio::test]
+async fn internal_profile_routes_require_auth_use_vectors_and_fail_closed_without_storage() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/issuer_profile_vectors.json")).unwrap();
+    let normalize_body = serde_json::json!({
+        "body": fixture["normalize"]["body"],
+        "profile_id": fixture["normalize"]["profile_id"],
+        "now": fixture["normalize"]["now"],
+    })
+    .to_string();
+    let unauthorized = marty_signing_keys::http::router()
+        .oneshot(
+            Request::post("/internal/profiles/org-a/normalize")
+                .header("content-type", "application/json")
+                .body(Body::from(normalize_body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let normalized = marty_signing_keys::http::router()
+        .oneshot(
+            Request::post("/internal/profiles/org-a/normalize")
+                .header("content-type", "application/json")
+                .header("x-api-key", "dev-signing-keys-internal-api-key")
+                .body(Body::from(normalize_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(normalized.status(), StatusCode::OK);
+    let result: Value =
+        serde_json::from_slice(&to_bytes(normalized.into_body(), usize::MAX).await.unwrap())
+            .unwrap();
+    assert_eq!(result["profile"], fixture["normalize"]["expected"]);
+
+    let custody = marty_signing_keys::http::router()
+        .oneshot(
+            Request::post("/internal/profiles/org-a/custody-format")
+                .header("content-type", "application/json")
+                .header("x-api-key", "dev-signing-keys-internal-api-key")
+                .body(Body::from(
+                    serde_json::json!({
+                        "credential_format": "SD_JWT_VC",
+                        "key_purpose": "lti_tool_signing"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(custody.status(), StatusCode::OK);
+    let result: Value =
+        serde_json::from_slice(&to_bytes(custody.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(result, serde_json::json!({"wire_format": "lti_tool_jwt"}));
+
+    let unavailable = marty_signing_keys::http::router()
+        .oneshot(
+            Request::get("/internal/profiles/org-a")
+                .header("x-api-key", "dev-signing-keys-internal-api-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+}

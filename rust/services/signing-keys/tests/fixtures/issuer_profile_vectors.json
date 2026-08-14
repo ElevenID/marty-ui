@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "normalize": {
+    "organization_id": "org-a",
+    "now": "2026-08-14T00:00:00Z",
+    "profile_id": "ip-vector",
+    "body": {
+      "name": "Issuer A",
+      "issuer_did": "did:web:issuer.example:orgs:acme",
+      "signing_service_id": "svc-a",
+      "signing_key_reference": "key-a",
+      "key_purpose": "vc_jwt_issuer",
+      "credential_format": "SD_JWT_VC",
+      "algorithm": "ES256",
+      "status": "active"
+    },
+    "expected": {
+      "id": "ip-vector",
+      "organization_id": "org-a",
+      "name": "Issuer A",
+      "issuer_mode": "org_managed",
+      "issuer_did": "did:web:issuer.example:orgs:acme",
+      "signing_service_id": "svc-a",
+      "signing_key_reference": "key-a",
+      "verification_method_id": "",
+      "key_purpose": "vc_jwt_issuer",
+      "credential_format": "SD_JWT_VC",
+      "algorithm": "ES256",
+      "key_attestation_policy": {
+        "mode": "disabled",
+        "trusted_root_certificates_pem": [],
+        "allowed_algorithms": [],
+        "required_key_storage": [],
+        "required_user_authentication": [],
+        "max_age_seconds": 300,
+        "require_nonce": true,
+        "status_validation": "required",
+        "status_list_allowed_origins": [],
+        "status_list_trusted_root_certificates_pem": [],
+        "status_list_allowed_algorithms": [],
+        "status_list_max_age_seconds": 86400,
+        "status_list_allow_private_hosts": false,
+        "status_list_tls_ca_certificates_pem": []
+      },
+      "status": "active",
+      "created_at": "2026-08-14T00:00:00Z",
+      "updated_at": "2026-08-14T00:00:00Z"
+    }
+  },
+  "duplicate": {
+    "profiles": [
+      {
+        "id": "ip-stale",
+        "organization_id": "org-a",
+        "name": "Stale Draft",
+        "issuer_mode": "org_managed",
+        "issuer_did": "did:web:issuer.example:orgs:acme",
+        "signing_service_id": "svc-a",
+        "signing_key_reference": "",
+        "verification_method_id": "",
+        "key_purpose": "",
+        "credential_format": "",
+        "algorithm": "",
+        "status": "draft"
+      }
+    ],
+    "request": {
+      "profile": {
+        "id": "ip-new",
+        "organization_id": "org-a",
+        "name": "Activated Issuer",
+        "issuer_did": "did:web:issuer.example:orgs:acme",
+        "signing_service_id": "svc-a",
+        "signing_key_reference": "key-a",
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256",
+        "status": "active"
+      },
+      "service_key_reference": "key-a"
+    },
+    "expected": {
+      "id": "ip-stale",
+      "organization_id": "org-a",
+      "name": "Stale Draft",
+      "issuer_mode": "org_managed",
+      "issuer_did": "did:web:issuer.example:orgs:acme",
+      "signing_service_id": "svc-a",
+      "signing_key_reference": "key-a",
+      "verification_method_id": "",
+      "key_purpose": "vc_jwt_issuer",
+      "credential_format": "SD_JWT_VC",
+      "algorithm": "ES256",
+      "status": "active"
+    }
+  },
+  "find": {
+    "organization_id": "org-a",
+    "profiles": [
+      {"id": "match", "organization_id": "org-a", "issuer_did": "did:web:issuer.example:orgs:acme", "key_purpose": "vc_jwt_issuer", "credential_format": "SD_JWT_VC", "algorithm": "es256", "status": "active"},
+      {"id": "draft", "organization_id": "org-a", "issuer_did": "did:web:issuer.example:orgs:acme", "key_purpose": "vc_jwt_issuer", "credential_format": "SD_JWT_VC", "algorithm": "ES256", "status": "draft"},
+      {"id": "other-org", "organization_id": "org-b", "issuer_did": "did:web:issuer.example:orgs:acme", "key_purpose": "vc_jwt_issuer", "credential_format": "SD_JWT_VC", "algorithm": "ES256", "status": "active"}
+    ],
+    "request": {
+      "active_only": true,
+      "issuer_did": "did:web:issuer.example:orgs:acme",
+      "key_purpose": "vc_jwt_issuer",
+      "credential_format": "SD_JWT_VC",
+      "algorithm": "ES256"
+    },
+    "expected_ids": ["match"]
+  },
+  "binding": {
+    "profile": {
+      "signing_service_id": "svc-a",
+      "signing_key_reference": "key-a",
+      "key_purpose": "vc_jwt_issuer",
+      "algorithm": "ES256"
+    },
+    "service": {
+      "id": "svc-a",
+      "key_purposes": ["vc_jwt_issuer"],
+      "algorithms": ["ES256"]
+    },
+    "registry": {
+      "key_reference_purposes": {
+        "svc-a": {"key-a": ["vc_jwt_issuer"]}
+      }
+    }
+  },
+  "invalid_normalize": [
+    {"body": {"signing_service_id": "svc-a"}, "error_contains": "issuer_did is required"},
+    {"body": {"issuer_did": "https://issuer.example", "signing_service_id": "svc-a"}, "error_contains": "DID string"},
+    {"body": {"issuer_did": "did:web:issuer.example", "signing_service_id": "svc-a", "algorithm": "HS256"}, "error_contains": "Invalid algorithm"},
+    {"body": {"issuer_did": "did:web:issuer.example", "signing_service_id": "svc-a", "credential_format": "unknown"}, "error_contains": "credential_format"}
+  ]
+}

@@ -6,9 +6,15 @@ use crate::documents::{
 };
 use crate::domain::{key_purposes, service_capabilities};
 use crate::kms::{self, ProviderRequest, SignRequest};
+use crate::profiles::{
+    self, CustodyFormatRequest, CustodyFormatResponse, DuplicateProfileRequest,
+    DuplicateProfileResponse, FindProfilesRequest, NormalizeProfileRequest, ProfileStore,
+    ValidateBindingRequest,
+};
 use crate::registry::{
-    self, NormalizeRegistryRequest, NormalizeRegistryResponse, NormalizeServiceRequest,
-    NormalizeServiceResponse, RegistryStore, ResolveRequest, ResolveResponse, SaveRegistryRequest,
+    self, BindProfileRequest, NormalizeRegistryRequest, NormalizeRegistryResponse,
+    NormalizeServiceRequest, NormalizeServiceResponse, RegistryStore, ResolveRequest,
+    ResolveResponse, SaveRegistryRequest,
 };
 use crate::validation::{self, ValidationRequest};
 use axum::{
@@ -33,7 +39,7 @@ struct HealthResponse {
 struct ServiceStatus {
     service_name: &'static str,
     phase: &'static str,
-    migrated_capabilities: [&'static str; 10],
+    migrated_capabilities: [&'static str; 11],
     pending_capabilities: [&'static str; 2],
 }
 
@@ -42,6 +48,7 @@ struct AppState {
     internal_api_key: Arc<str>,
     registry_store: Option<RegistryStore>,
     document_store: Option<DocumentStore>,
+    profile_store: Option<ProfileStore>,
 }
 
 pub fn router() -> Router {
@@ -49,13 +56,14 @@ pub fn router() -> Router {
 }
 
 pub fn router_with_internal_api_key(internal_api_key: String) -> Router {
-    router_with_dependencies(internal_api_key, None, None)
+    router_with_dependencies(internal_api_key, None, None, None)
 }
 
 pub fn router_with_dependencies(
     internal_api_key: String,
     registry_store: Option<RegistryStore>,
     document_store: Option<DocumentStore>,
+    profile_store: Option<ProfileStore>,
 ) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -81,6 +89,10 @@ pub fn router_with_dependencies(
         )
         .route("/internal/registry/normalize", post(normalize_registry))
         .route("/internal/registry/resolve", post(resolve_registry))
+        .route(
+            "/internal/registry/{organization_id}/bind-profile",
+            post(bind_registry_profile),
+        )
         .route(
             "/internal/registry/{organization_id}",
             get(load_registry).put(save_registry),
@@ -117,11 +129,37 @@ pub fn router_with_dependencies(
             axum::routing::put(publish_did),
         )
         .route("/internal/documents/did-web/{slug}", get(resolve_did_slug))
+        .route(
+            "/internal/profiles/{organization_id}/normalize",
+            post(normalize_profile),
+        )
+        .route(
+            "/internal/profiles/{organization_id}/validate-binding",
+            post(validate_profile_binding),
+        )
+        .route(
+            "/internal/profiles/{organization_id}/custody-format",
+            post(resolve_profile_custody_format),
+        )
+        .route(
+            "/internal/profiles/{organization_id}/find",
+            post(find_profiles),
+        )
+        .route(
+            "/internal/profiles/{organization_id}/find-duplicate",
+            post(find_duplicate_profile),
+        )
+        .route("/internal/profiles/{organization_id}", get(list_profiles))
+        .route(
+            "/internal/profiles/{organization_id}/{profile_id}",
+            get(get_profile).put(put_profile).delete(delete_profile),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(AppState {
             internal_api_key: Arc::from(internal_api_key),
             registry_store,
             document_store,
+            profile_store,
         })
 }
 
@@ -234,6 +272,24 @@ async fn save_registry(
         .ok_or_else(registry_unavailable)?;
     store
         .save(&organization_id, &request.registry)
+        .await
+        .map(Json)
+        .map_err(registry_error)
+}
+
+async fn bind_registry_profile(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<BindProfileRequest>,
+) -> Result<Json<serde_json::Value>, RegistryHttpError> {
+    authorize_registry(&state, &headers)?;
+    let store = state
+        .registry_store
+        .as_ref()
+        .ok_or_else(registry_unavailable)?;
+    store
+        .bind_profile(&organization_id, &request.profile)
         .await
         .map(Json)
         .map_err(registry_error)
@@ -447,6 +503,156 @@ fn document_error(error: documents::DocumentError) -> DocumentHttpError {
     )
 }
 
+type ProfileHttpError = (StatusCode, Json<serde_json::Value>);
+
+async fn normalize_profile(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<NormalizeProfileRequest>,
+) -> Result<Json<serde_json::Value>, ProfileHttpError> {
+    authorize_profiles(&state, &headers)?;
+    profiles::normalize_profile(&organization_id, request)
+        .map(|profile| Json(serde_json::json!({"profile": profile})))
+        .map_err(profile_error)
+}
+
+async fn validate_profile_binding(
+    State(state): State<AppState>,
+    Path(_organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<ValidateBindingRequest>,
+) -> Result<Json<serde_json::Value>, ProfileHttpError> {
+    authorize_profiles(&state, &headers)?;
+    profiles::validate_binding(&request).map_err(profile_error)?;
+    Ok(Json(serde_json::json!({"ok": true})))
+}
+
+async fn resolve_profile_custody_format(
+    State(state): State<AppState>,
+    Path(_organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<CustodyFormatRequest>,
+) -> Result<Json<CustodyFormatResponse>, ProfileHttpError> {
+    authorize_profiles(&state, &headers)?;
+    profiles::custody_format(&request)
+        .map(Json)
+        .map_err(profile_error)
+}
+
+async fn list_profiles(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ProfileHttpError> {
+    authorize_profiles(&state, &headers)?;
+    profile_store(&state)?
+        .list(&organization_id)
+        .await
+        .map(Json)
+        .map_err(profile_error)
+}
+
+async fn get_profile(
+    State(state): State<AppState>,
+    Path((organization_id, profile_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ProfileHttpError> {
+    authorize_profiles(&state, &headers)?;
+    profile_store(&state)?
+        .get(&organization_id, &profile_id)
+        .await
+        .map(|profile| Json(serde_json::json!({"profile": profile})))
+        .map_err(profile_error)
+}
+
+async fn put_profile(
+    State(state): State<AppState>,
+    Path((organization_id, profile_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(profile): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ProfileHttpError> {
+    authorize_profiles(&state, &headers)?;
+    profile_store(&state)?
+        .put(&organization_id, &profile_id, profile)
+        .await
+        .map(|profile| Json(serde_json::json!({"profile": profile})))
+        .map_err(profile_error)
+}
+
+async fn delete_profile(
+    State(state): State<AppState>,
+    Path((organization_id, profile_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ProfileHttpError> {
+    authorize_profiles(&state, &headers)?;
+    profile_store(&state)?
+        .delete(&organization_id, &profile_id)
+        .await
+        .map_err(profile_error)?;
+    Ok(Json(serde_json::json!({"deleted": profile_id})))
+}
+
+async fn find_profiles(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<FindProfilesRequest>,
+) -> Result<Json<serde_json::Value>, ProfileHttpError> {
+    authorize_profiles(&state, &headers)?;
+    profile_store(&state)?
+        .find(&organization_id, request)
+        .await
+        .map(|profiles| Json(serde_json::json!({"profiles": profiles})))
+        .map_err(profile_error)
+}
+
+async fn find_duplicate_profile(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<DuplicateProfileRequest>,
+) -> Result<Json<DuplicateProfileResponse>, ProfileHttpError> {
+    authorize_profiles(&state, &headers)?;
+    profile_store(&state)?
+        .find_duplicate(&organization_id, request)
+        .await
+        .map(Json)
+        .map_err(profile_error)
+}
+
+fn profile_store(state: &AppState) -> Result<&ProfileStore, ProfileHttpError> {
+    state.profile_store.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"detail": "issuer profile storage is unavailable"})),
+        )
+    })
+}
+
+fn authorize_profiles(state: &AppState, headers: &HeaderMap) -> Result<(), ProfileHttpError> {
+    authorize_internal(state, headers).map_err(|error| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"detail": error.to_string()})),
+        )
+    })
+}
+
+fn profile_error(error: profiles::ProfileError) -> ProfileHttpError {
+    let status = match &error {
+        profiles::ProfileError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        profiles::ProfileError::Conflict(_) => StatusCode::CONFLICT,
+        profiles::ProfileError::NotFound(_) => StatusCode::NOT_FOUND,
+        profiles::ProfileError::Storage(_) => StatusCode::SERVICE_UNAVAILABLE,
+        profiles::ProfileError::Corrupt(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (
+        status,
+        Json(serde_json::json!({"detail": error.to_string()})),
+    )
+}
+
 fn authorize_internal(state: &AppState, headers: &HeaderMap) -> Result<(), kms::KmsError> {
     let candidate = headers
         .get("x-api-key")
@@ -496,6 +702,7 @@ async fn service_status() -> Json<ServiceStatus> {
             "registry-persistence",
             "certificate-document-persistence",
             "jwks-did-publication-persistence",
+            "issuer-profile-policy-selection-persistence",
         ],
         pending_capabilities: ["audit-event-storage", "compliance-summary-computation"],
     })

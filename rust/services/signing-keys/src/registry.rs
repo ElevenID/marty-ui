@@ -75,6 +75,80 @@ impl RegistryStore {
         Ok(normalized)
     }
 
+    pub async fn bind_profile(
+        &self,
+        organization_id: &str,
+        profile: &Value,
+    ) -> Result<Value, RegistryError> {
+        let profile = profile.as_object().ok_or_else(|| {
+            RegistryError::Invalid("Issuer profile must be an object.".to_string())
+        })?;
+        let required = |name: &str| {
+            profile
+                .get(name)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    RegistryError::Invalid(
+                        "Issuer profile has an incomplete KMS purpose binding.".to_string(),
+                    )
+                })
+        };
+        let service_id = required("signing_service_id")?;
+        let key_reference = required("signing_key_reference")?;
+        let key_purpose = required("key_purpose")?;
+        if !is_key_purpose(&key_purpose) {
+            return Err(RegistryError::Invalid(format!(
+                "Invalid key_purpose '{key_purpose}'."
+            )));
+        }
+
+        let mut registry = self.load(organization_id).await?;
+        let bindings = registry
+            .as_object_mut()
+            .expect("normalized registry object")
+            .entry("key_reference_purposes")
+            .or_insert_with(|| json!({}));
+        let bindings = bindings
+            .as_object_mut()
+            .expect("normalized registry bindings object");
+        let references = bindings
+            .entry(service_id.clone())
+            .or_insert_with(|| json!({}))
+            .as_object_mut()
+            .expect("normalized service bindings object");
+        let purposes = references
+            .entry(key_reference)
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .expect("normalized purpose bindings array");
+        if !purposes
+            .iter()
+            .any(|value| value.as_str() == Some(&key_purpose))
+        {
+            purposes.push(Value::String(key_purpose.clone()));
+        }
+        purposes.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+        let normalized_bindings = normalize_bindings(registry.get("key_reference_purposes"));
+        validate_lti_bindings(&normalized_bindings)?;
+        registry["key_reference_purposes"] = json!(normalized_bindings);
+
+        set_default(&mut registry, "type_defaults", &key_purpose, &service_id);
+        for format in formats_for_purposes(std::slice::from_ref(&key_purpose)) {
+            set_default(&mut registry, "format_defaults", &format, &service_id);
+        }
+        if registry
+            .get("default_service_id")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            registry["default_service_id"] = Value::String(service_id);
+        }
+        self.save(organization_id, &registry).await
+    }
+
     pub fn connection(&self) -> ConnectionManager {
         self.connection.clone()
     }
@@ -83,6 +157,11 @@ impl RegistryStore {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SaveRegistryRequest {
     pub registry: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BindProfileRequest {
+    pub profile: Value,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -655,6 +734,19 @@ fn string_map(value: Option<&Value>) -> BTreeMap<String, String> {
         .flatten()
         .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_string())))
         .collect()
+}
+
+fn set_default(registry: &mut Value, field: &str, key: &str, value: &str) {
+    let values = registry
+        .as_object_mut()
+        .expect("normalized registry object")
+        .entry(field)
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .expect("normalized registry defaults object");
+    values
+        .entry(key.to_string())
+        .or_insert_with(|| Value::String(value.to_string()));
 }
 
 fn string_or<'a>(value: Option<&'a Value>, default: &'a str) -> &'a str {

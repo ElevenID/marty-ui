@@ -3,5 +3,6 @@ pub mod documents;
 pub mod domain;
 pub mod http;
 pub mod kms;
+pub mod profiles;
 pub mod registry;
 pub mod validation;

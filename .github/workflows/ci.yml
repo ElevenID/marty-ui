@@ -347,11 +347,23 @@ jobs:
             exit 1
           fi
           document_relative="${document_executable#"$PWD/"}"
+          issuer_profile_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "issuer_profile_storage_contract")
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$issuer_profile_executable" || ! -x "$issuer_profile_executable" ]]; then
+            echo "Unable to locate the compiled issuer profile contract executable." >&2
+            exit 1
+          fi
+          issuer_profile_relative="${issuer_profile_executable#"$PWD/"}"
           test -x target/debug/marty-revocation-profile
           tar -cf "$RUNNER_TEMP/rust-db-test-bundle.tar" \
             "$contract_relative" \
             "$registry_relative" \
             "$document_relative" \
+            "$issuer_profile_relative" \
             target/debug/marty-revocation-profile
       - name: Publish reusable database contract executables
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -437,6 +449,12 @@ jobs:
             exit 1
           fi
           "${document_contracts[0]}" --ignored --test-threads=1
+          mapfile -t issuer_profile_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'issuer_profile_storage_contract-*' -perm -u+x)
+          if (( ${#issuer_profile_contracts[@]} != 1 )); then
+            printf 'Expected one issuer profile contract executable, found %s.\n' "${#issuer_profile_contracts[@]}" >&2
+            exit 1
+          fi
+          "${issuer_profile_contracts[0]}" --ignored --test-threads=1
 
   rust-lint-policy:
     name: Rust Lint and Packaging
