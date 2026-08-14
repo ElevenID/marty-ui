@@ -19,6 +19,11 @@ if [ "$MODULE_NAME" = "revocation_profile" ]; then
 	exec /usr/local/bin/marty-revocation-profile
 fi
 
+if [ "$MODULE_NAME" = "signing_keys" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-signing-keys
+fi
+
 echo "Starting service: $SERVICE_NAME (module: $MODULE_NAME)"
 echo "Working directory: $(pwd)"
 echo "Python version: $(python --version)"

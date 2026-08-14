@@ -1177,59 +1177,12 @@ Verification is handled through two complementary approaches:
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
 
-    async def signing_keys_local_readiness(client: httpx.AsyncClient) -> dict:
-        details = {"status": "healthy", "mode": "gateway-local"}
-        redis_client = getattr(app.state, "redis_client", None)
-        if redis_client is None:
-            return {
-                "status": "unhealthy",
-                "mode": "gateway-local",
-                "error": "redis storage is not configured",
-            }
-        try:
-            await redis_client.ping()
-        except Exception as exc:
-            return {"status": "unreachable", "mode": "gateway-local", "error": str(exc)}
-
-        bao_addr = os.environ.get("BAO_ADDR")
-        if bao_addr:
-            headers = {}
-            bao_token = os.environ.get("BAO_TOKEN")
-            bao_token_file = os.environ.get("BAO_TOKEN_FILE")
-            if not bao_token and bao_token_file:
-                try:
-                    with open(bao_token_file, encoding="utf-8") as handle:
-                        bao_token = handle.read().strip()
-                except OSError:
-                    bao_token = None
-            if bao_token:
-                headers["X-Vault-Token"] = bao_token
-            try:
-                response = await client.get(
-                    f"{bao_addr.rstrip('/')}/v1/sys/health",
-                    headers=headers,
-                    timeout=3.0,
-                )
-                details["openbao_status_code"] = response.status_code
-                if response.status_code not in {200, 429, 472, 473}:
-                    details["status"] = "unhealthy"
-            except Exception as exc:
-                return {
-                    "status": "unreachable",
-                    "mode": "gateway-local",
-                    "error": f"openbao: {exc}",
-                }
-        return details
-
     async def readiness_check():
         registry = get_registry()
         client = get_http_client()
         services = {}
 
         for service in _required_ready_services():
-            if service == "signing-keys":
-                services[service] = await signing_keys_local_readiness(client)
-                continue
             url = registry.get_service_url(service)
             if not url:
                 services[service] = {"status": "missing", "url": None}

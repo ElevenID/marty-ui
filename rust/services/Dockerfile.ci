@@ -24,7 +24,8 @@ COPY rust /build/rust
 COPY proto /build/proto
 RUN cargo build --locked --release \
     -p marty-event-stream --bin marty-event-stream \
-    -p marty-revocation-profile --bin marty-revocation-profile
+    -p marty-revocation-profile --bin marty-revocation-profile \
+    -p marty-signing-keys --bin marty-signing-keys
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
 
@@ -69,3 +70,19 @@ EXPOSE 8013 9013
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=5 \
     CMD ["curl", "--fail", "http://127.0.0.1:8013/health"]
 ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-revocation-profile"]
+
+FROM runtime AS signing_keys
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-signing-keys /usr/local/bin/marty-signing-keys
+ENV SIGNING_KEYS_SERVICE_PORT=8017 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8017
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8017/health"]
+ENTRYPOINT ["/usr/local/bin/marty-signing-keys"]

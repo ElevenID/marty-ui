@@ -30,16 +30,6 @@ class _HealthClient:
         return SimpleNamespace(status_code=status)
 
 
-class _Redis:
-    def __init__(self, error: Exception | None = None):
-        self.error = error
-
-    async def ping(self):
-        if self.error:
-            raise self.error
-        return True
-
-
 async def _get(app, path: str) -> httpx.Response:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -116,36 +106,48 @@ async def test_health_ready_returns_503_when_required_service_is_unreachable(mon
 
 
 @pytest.mark.asyncio
-async def test_health_ready_checks_gateway_local_signing_keys_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_health_ready_checks_rust_signing_keys_service(monkeypatch: pytest.MonkeyPatch) -> None:
     app = gateway_main.create_app()
-    app.state.redis_client = _Redis()
     monkeypatch.setattr(gateway_main, "_required_ready_services", lambda: ("signing-keys",))
-    monkeypatch.setattr(gateway_main, "get_http_client", lambda: _HealthClient({}))
-    monkeypatch.delenv("BAO_ADDR", raising=False)
+    monkeypatch.setattr(
+        gateway_main,
+        "get_registry",
+        lambda: _Registry({"signing-keys": "http://signing-keys:8017"}),
+    )
+    monkeypatch.setattr(
+        gateway_main,
+        "get_http_client",
+        lambda: _HealthClient({"http://signing-keys:8017/health": 200}),
+    )
 
     response = await _get(app, "/health/ready")
 
     assert response.status_code == 200
     body = response.json()
     assert body["services"]["signing-keys"]["status"] == "healthy"
-    assert body["services"]["signing-keys"]["mode"] == "gateway-local"
+    assert body["services"]["signing-keys"]["url"] == "http://signing-keys:8017"
 
 
 @pytest.mark.asyncio
-async def test_health_ready_fails_when_openbao_is_sealed(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_health_ready_fails_when_rust_signing_keys_service_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
     app = gateway_main.create_app()
-    app.state.redis_client = _Redis()
     monkeypatch.setattr(gateway_main, "_required_ready_services", lambda: ("signing-keys",))
-    monkeypatch.setenv("BAO_ADDR", "http://openbao:8200")
+    monkeypatch.setattr(
+        gateway_main,
+        "get_registry",
+        lambda: _Registry({"signing-keys": "http://signing-keys:8017"}),
+    )
     monkeypatch.setattr(
         gateway_main,
         "get_http_client",
-        lambda: _HealthClient({"http://openbao:8200/v1/sys/health": 503}),
+        lambda: _HealthClient(
+            {"http://signing-keys:8017/health": httpx.ConnectError("connection refused")}
+        ),
     )
 
     response = await _get(app, "/health/ready")
 
     assert response.status_code == 503
     body = response.json()
-    assert body["services"]["signing-keys"]["status"] == "unhealthy"
-    assert body["services"]["signing-keys"]["openbao_status_code"] == 503
+    assert body["services"]["signing-keys"]["status"] == "unreachable"
+    assert body["services"]["signing-keys"]["url"] == "http://signing-keys:8017"
