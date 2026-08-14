@@ -380,6 +380,40 @@ def test_template_response_rejects_legacy_row_without_managed_issuer_did(
 	assert "no managed issuer_did" in exc_info.value.detail
 
 
+@pytest.mark.parametrize("legacy_issuer_did", [None, "", "did:", "https://issuer.example"])
+def test_template_response_catalogues_deprecated_legacy_row_without_claiming_an_issuer(
+	legacy_issuer_did: str | None,
+) -> None:
+	template = asyncio.run(
+		_save_template(credential_template.InMemoryCredentialTemplateRepository())
+	)
+	template.status = credential_template.TemplateStatus.DEPRECATED
+	template.issuer_did = legacy_issuer_did
+
+	response = credential_template._template_to_response(template)
+
+	assert response.status == "DEPRECATED"
+	assert response.issuer_did is None
+
+
+def test_deprecated_legacy_row_without_issuer_cannot_create_invalid_draft() -> None:
+	repo = credential_template.InMemoryCredentialTemplateRepository()
+	template = asyncio.run(_save_template(repo))
+	template.status = credential_template.TemplateStatus.DEPRECATED
+	template.issuer_did = None
+	client, _ = _build_client(repo)
+
+	response = client.post(
+		f"/v1/credential-templates/{template.id}/new-version",
+		headers={"x-user-id": "user-1"},
+	)
+
+	assert response.status_code == 409
+	assert "no managed issuer_did" in response.json()["detail"]
+	stored = asyncio.run(repo.list("org-1"))
+	assert stored == [template]
+
+
 def test_create_mdoc_template_uses_doctype_without_fabricating_vct() -> None:
 	repo = credential_template.InMemoryCredentialTemplateRepository()
 	client, _ = _build_client(repo)

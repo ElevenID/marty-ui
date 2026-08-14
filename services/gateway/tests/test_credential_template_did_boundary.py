@@ -183,6 +183,29 @@ def test_public_template_response_schema_has_no_custody_routing_fields() -> None
         assert field not in response_schema["properties"]
 
 
+def test_public_template_response_requires_issuer_except_for_deprecated_history() -> None:
+    payload = {
+        "id": "template-1",
+        "organization_id": "org-1",
+        "name": "Legacy template",
+        "description": None,
+        "status": "DEPRECATED",
+        "credential_type": "MemberCredential",
+        "compliance_profile_id": "compliance-1",
+        "claims": [],
+        "validity_rules": {},
+        "created_at": "2026-08-14T00:00:00Z",
+    }
+
+    deprecated = credentials.CredentialTemplateResponse.model_validate(payload)
+    assert deprecated.issuer_did is None
+
+    with pytest.raises(ValidationError, match="issuer_did is required"):
+        credentials.CredentialTemplateResponse.model_validate(
+            {**payload, "status": "ACTIVE"}
+        )
+
+
 @pytest.mark.asyncio
 async def test_mdoc_template_infers_signing_wire_format_from_supported_formats(
     monkeypatch: pytest.MonkeyPatch,

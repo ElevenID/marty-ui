@@ -1071,10 +1071,16 @@ class CredentialTemplateResponse(BaseModel):
     revocation_profile_id: str | None = None
     claims: list[dict]
     validity_rules: dict
-    issuer_did: str = Field(pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
+    issuer_did: str | None = Field(None, pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
     privacy_posture: dict | None = None
     created_at: str
     updated_at: str
+
+    @model_validator(mode="after")
+    def require_managed_issuer_for_usable_template(self) -> "CredentialTemplateResponse":
+        if self.status.strip().upper() != TemplateStatus.DEPRECATED.value.upper() and not self.issuer_did:
+            raise ValueError("issuer_did is required for non-deprecated Credential Templates")
+        return self
 
 
 def _days_from_seconds(seconds: int) -> int:
@@ -2076,7 +2082,8 @@ async def create_new_version(
         user_id=user_id,
         organization_id=template.organization_id,
     )
-    
+
+    _managed_template_issuer_did(template)
     new_template = template.new_version()
     await repo.save(new_template)
     return _template_to_response(new_template)
@@ -2155,9 +2162,15 @@ async def add_claim(
     return _template_to_response(template)
 
 
-def _template_to_response(template: CredentialTemplate) -> CredentialTemplateResponse:
-    issuer_did = str(template.issuer_did or "").strip()
-    if re.fullmatch(r"did:[a-z0-9]+:.+", issuer_did) is None:
+def _managed_template_issuer_did(
+    template: CredentialTemplate,
+    *,
+    allow_deprecated_legacy: bool = False,
+) -> str | None:
+    issuer_did = str(template.issuer_did or "").strip() or None
+    if issuer_did is None or re.fullmatch(r"did:[a-z0-9]+:.+", issuer_did) is None:
+        if allow_deprecated_legacy and template.status == TemplateStatus.DEPRECATED:
+            return None
         raise HTTPException(
             status_code=409,
             detail=(
@@ -2165,6 +2178,14 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
                 "template to an active organization-owned issuer DID before use."
             ),
         )
+    return issuer_did
+
+
+def _template_to_response(template: CredentialTemplate) -> CredentialTemplateResponse:
+    issuer_did = _managed_template_issuer_did(
+        template,
+        allow_deprecated_legacy=True,
+    )
 
     canonical_payload_format = normalize_credential_payload_format(
         template.credential_payload_format,
