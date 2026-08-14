@@ -4,16 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       release_version:
-        description: Release version used by the build-ready manifest artifact
+        description: Release version published by the successful stack release
         required: true
-      cd_run_id:
-        description: Successful CD workflow run containing the build-ready manifest
+      stack_release_run_id:
+        description: Successful Stack release workflow run for the immutable release
         required: true
       beta_lifecycle_run_id:
-        description: Successful beta lifecycle workflow run for the same Marty UI SHA
-        required: true
-      marty_ui_sha:
-        description: Exact 40-character Marty UI commit SHA under test
+        description: Successful beta lifecycle workflow run for the deployed source snapshot
         required: true
       beta_origin:
         description: Beta origin tested by both browser and device lanes
@@ -32,6 +29,7 @@ concurrency:
 
 permissions:
   actions: read
+  attestations: read
   contents: read
 
 jobs:
@@ -43,29 +41,22 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_VERSION: ${{ inputs.release_version }}
-      CD_RUN_ID: ${{ inputs.cd_run_id }}
+      STACK_RELEASE_RUN_ID: ${{ inputs.stack_release_run_id }}
       BETA_LIFECYCLE_RUN_ID: ${{ inputs.beta_lifecycle_run_id }}
-      MARTY_UI_SHA: ${{ inputs.marty_ui_sha }}
       BETA_ORIGIN: ${{ inputs.beta_origin }}
       WALLET_EVIDENCE_URL: ${{ inputs.wallet_evidence_url }}
       WALLET_EVIDENCE_SHA256: ${{ inputs.wallet_evidence_sha256 }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: ${{ env.MARTY_UI_SHA }}
-
-      - name: Require immutable release inputs
+      - name: Require successful immutable source runs
+        id: source_runs
         shell: bash
         run: |
-          if [[ ! "$MARTY_UI_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "marty_ui_sha must be a full 40-character commit SHA." >&2
-            exit 1
-          fi
+          set -euo pipefail
           if [[ ! "$WALLET_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
             echo "wallet_evidence_sha256 must be a lowercase SHA-256." >&2
             exit 1
           fi
-          if [[ ! "$CD_RUN_ID" =~ ^[0-9]+$ || ! "$BETA_LIFECYCLE_RUN_ID" =~ ^[0-9]+$ ]]; then
+          if [[ ! "$STACK_RELEASE_RUN_ID" =~ ^[0-9]+$ || ! "$BETA_LIFECYCLE_RUN_ID" =~ ^[0-9]+$ ]]; then
             echo "Workflow run IDs must be numeric." >&2
             exit 1
           fi
@@ -73,32 +64,58 @@ jobs:
             echo "wallet_evidence_url must use HTTPS." >&2
             exit 1
           fi
-          test "$(git rev-parse HEAD)" = "$MARTY_UI_SHA"
+          stack_run="$(gh run view "$STACK_RELEASE_RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion,event,headBranch,headSha,status,workflowName)"
+          test "$(jq -r '.status' <<<"$stack_run")" = "completed"
+          test "$(jq -r '.conclusion' <<<"$stack_run")" = "success"
+          test "$(jq -r '.workflowName' <<<"$stack_run")" = "Stack release"
+          test "$(jq -r '.headBranch' <<<"$stack_run")" = "v$RELEASE_VERSION"
+          release_sha="$(jq -r '.headSha' <<<"$stack_run")"
+          if [[ ! "$release_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Stack release head SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
 
-      - name: Require successful source workflow runs
+          lifecycle_run="$(gh run view "$BETA_LIFECYCLE_RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion,headSha,status,workflowName)"
+          test "$(jq -r '.status' <<<"$lifecycle_run")" = "completed"
+          test "$(jq -r '.conclusion' <<<"$lifecycle_run")" = "success"
+          test "$(jq -r '.workflowName' <<<"$lifecycle_run")" = "MIP 0.4 Beta Credential Lifecycle"
+          tooling_sha="$(jq -r '.headSha' <<<"$lifecycle_run")"
+          if [[ ! "$tooling_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Beta lifecycle head SHA must be a full lowercase commit SHA." >&2
+            exit 1
+          fi
+          echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
+          echo "tooling_sha=$tooling_sha" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ steps.source_runs.outputs.tooling_sha }}
+
+      - name: Require exact evidence tooling checkout
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ steps.source_runs.outputs.tooling_sha }}"
+
+      - name: Download and verify signed stack manifest
+        id: stack_manifest
         shell: bash
         run: |
-          verify_run() {
-            local run_id="$1"
-            local expected_workflow="$2"
-            local run
-            run="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json conclusion,headSha,status,workflowName)"
-            test "$(jq -r '.status' <<<"$run")" = "completed"
-            test "$(jq -r '.conclusion' <<<"$run")" = "success"
-            test "$(jq -r '.headSha' <<<"$run")" = "$MARTY_UI_SHA"
-            test "$(jq -r '.workflowName' <<<"$run")" = "$expected_workflow"
-          }
-          verify_run "$CD_RUN_ID" "CD"
-          verify_run "$BETA_LIFECYCLE_RUN_ID" "MIP 0.4 Beta Credential Lifecycle"
-
-      - name: Download build-ready manifest
-        shell: bash
-        run: |
-          mkdir -p build-evidence
-          gh run download "$CD_RUN_ID" \
+          set -euo pipefail
+          mkdir -p stack-evidence
+          gh release download "v$RELEASE_VERSION" \
             --repo "$GITHUB_REPOSITORY" \
-            --name "build-ready-manifest-$RELEASE_VERSION" \
-            --dir build-evidence
+            --pattern stack-manifest.json \
+            --pattern SHA256SUMS \
+            --dir stack-evidence
+          grep ' stack-manifest.json$' stack-evidence/SHA256SUMS > stack-evidence/stack-manifest.SHA256
+          test "$(wc -l < stack-evidence/stack-manifest.SHA256)" -eq 1
+          (
+            cd stack-evidence
+            sha256sum --check --strict stack-manifest.SHA256
+          )
+          gh attestation verify stack-evidence/stack-manifest.json \
+            --repo "$GITHUB_REPOSITORY"
+          manifest_sha256="$(sha256sum stack-evidence/stack-manifest.json | awk '{print $1}')"
+          echo "sha256=$manifest_sha256" >> "$GITHUB_OUTPUT"
 
       - name: Download beta lifecycle evidence
         shell: bash
@@ -148,17 +165,18 @@ jobs:
         shell: bash
         run: |
           python scripts/promote_release_evidence.py \
-            --build-manifest build-evidence/build-ready-manifest.json \
+            --stack-manifest stack-evidence/stack-manifest.json \
+            --stack-manifest-sha256 "${{ steps.stack_manifest.outputs.sha256 }}" \
             --beta-evidence beta-evidence \
             --wallet-evidence wallet-conformance-evidence.json \
             --wallet-evidence-sha256 "$WALLET_EVIDENCE_SHA256" \
             --attachment-verification wallet-attachment-verification.json \
             --requirements deploy-config/catalog/wallet-conformance-requirements.json \
             --release-version "$RELEASE_VERSION" \
-            --cd-run-id "$CD_RUN_ID" \
+            --stack-release-run-id "$STACK_RELEASE_RUN_ID" \
             --beta-run-id "$BETA_LIFECYCLE_RUN_ID" \
             --promotion-run-id "$GITHUB_RUN_ID" \
-            --marty-ui-sha "$MARTY_UI_SHA" \
+            --marty-ui-release-sha "${{ steps.source_runs.outputs.release_sha }}" \
             --beta-origin "$BETA_ORIGIN" \
             --output release-ready-manifest.json
 
@@ -175,8 +193,10 @@ jobs:
         run: |
           jq -r '
             "## Release-ready attestation\n" +
-            "- Release: `" + .release_version + "`\n" +
-            "- Marty UI: `" + .repositories.marty_ui + "`\n" +
+            "- Release: `" + .release + "`\n" +
+            "- Marty UI release: `" + .release_attestation.stack_release.marty_ui_release_sha + "`\n" +
+            "- Beta source: `" + .beta_evidence.beta_source_id + "`\n" +
+            "- Stack manifest: `" + .release_attestation.stack_release.manifest_sha256 + "`\n" +
             "- Beta lifecycle run: `" + .release_attestation.beta_lifecycle.workflow_run_id + "`\n" +
             "- Wallet evidence: `" + .release_attestation.wallet_conformance.evidence_sha256 + "`\n" +
             "- Release ready: `" + (.release_ready | tostring) + "`"

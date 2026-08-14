@@ -77,9 +77,7 @@ def test_ci_and_stack_lock_pin_the_same_marty_common_release() -> None:
         for component in lock["components"]
         if component["name"] == "marty-common"
     )
-    artifact = next(
-        item for item in common["artifacts"] if item["type"] == "python"
-    )
+    artifact = next(item for item in common["artifacts"] if item["type"] == "python")
 
     assert common["version"] == "0.2.8"
     assert common["commit"] == "cac6dd5222e9b8d65c79df0f8964751cf1b88300"
@@ -119,27 +117,33 @@ def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> No
     inputs = document[True]["workflow_dispatch"]["inputs"]
     permissions = document["permissions"]
 
-    assert inputs["marty_ui_sha"]["required"] is True
+    assert inputs["marty_ui_release_sha"]["required"] is True
+    assert inputs["stack_release_run_id"]["required"] is True
+    assert "cd_run_id" not in inputs
     assert inputs["beta_source_id"]["required"] is True
     assert inputs["marty_protocol_sha"]["required"] is True
     assert permissions["actions"] == "read"
     assert permissions["attestations"] == "read"
     assert permissions["contents"] == "read"
-    assert "ref: ${{ env.MARTY_UI_SHA }}" not in workflow
+    assert "ref: ${{ env.MARTY_UI_RELEASE_SHA }}" not in workflow
     assert 'test "$(git rev-parse HEAD)" = "$EVIDENCE_TOOLING_SHA"' in workflow
-    assert 'git cat-file -e "$MARTY_UI_SHA^{commit}"' in workflow
+    assert 'git cat-file -e "$MARTY_UI_RELEASE_SHA^{commit}"' in workflow
     assert "BETA_SOURCE_ID must be a full 40-character source-snapshot ID" in workflow
     assert 'test "$(jq -r \'.workflowName\' <<<"$run")" = "Stack release"' in workflow
     assert 'gh release download "v$RELEASE_VERSION"' in workflow
     assert "--pattern stack-manifest.json" in workflow
     assert "sha256sum --check --ignore-missing SHA256SUMS" in workflow
-    assert "gh attestation verify tests/artifacts/build-evidence/stack-manifest.json" in workflow
+    assert (
+        "gh attestation verify tests/artifacts/build-evidence/stack-manifest.json"
+        in workflow
+    )
     assert '.schema == "marty.stack/v1"' in workflow
     assert '.repository == "ElevenID/marty-core"' in workflow
-    assert "--arg source_id \"$BETA_SOURCE_ID\"" in workflow
+    assert '--arg source_id "$BETA_SOURCE_ID"' in workflow
     assert "beta_source_id: $beta_source_id" in workflow
     assert "marty_protocol_sha: $marty_protocol_sha" in workflow
     assert "evidence_tooling_sha: $evidence_tooling_sha" in workflow
+    assert "stack_manifest_sha256: $stack_manifest_sha256" in workflow
     assert "MARTY_PROTOCOL_SHA must be a full 40-character commit SHA" in workflow
     assert "CI must pin exactly one full MARTY_PROTOCOL_REF" not in workflow
     assert "test -f marty-core/Cargo.lock" in workflow
@@ -150,6 +154,37 @@ def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> No
     assert "${{ vars.MARTY_PROTOCOL_REF }}" not in workflow
     assert 'workflowName\' <<<"$run")" = "CD"' not in workflow
     assert "build-ready-manifest-$RELEASE_VERSION" not in workflow
+
+
+def test_wallet_promotion_uses_signed_stack_and_distinct_release_source_lineage() -> (
+    None
+):
+    workflow = _text(".github/workflows/wallet-conformance.yml")
+    document = yaml.safe_load(workflow)
+    inputs = document[True]["workflow_dispatch"]["inputs"]
+    permissions = document["permissions"]
+
+    assert inputs["stack_release_run_id"]["required"] is True
+    assert inputs["beta_lifecycle_run_id"]["required"] is True
+    assert "cd_run_id" not in inputs
+    assert "marty_ui_sha" not in inputs
+    assert permissions["actions"] == "read"
+    assert permissions["attestations"] == "read"
+    assert permissions["contents"] == "read"
+    assert (
+        'test "$(jq -r \'.workflowName\' <<<"$stack_run")" = "Stack release"'
+        in workflow
+    )
+    assert 'gh release download "v$RELEASE_VERSION"' in workflow
+    assert "--pattern stack-manifest.json" in workflow
+    assert "sha256sum --check --strict stack-manifest.SHA256" in workflow
+    assert "gh attestation verify stack-evidence/stack-manifest.json" in workflow
+    assert "ref: ${{ steps.source_runs.outputs.tooling_sha }}" in workflow
+    assert "--stack-manifest-sha256" in workflow
+    assert "--marty-ui-release-sha" in workflow
+    assert "--stack-release-run-id" in workflow
+    assert "--build-manifest" not in workflow
+    assert '"CD"' not in workflow
 
 
 def test_beta_lifecycle_installs_each_playwright_browser_revision() -> None:
@@ -264,14 +299,21 @@ def test_service_images_install_every_required_native_backend() -> None:
 
     for dockerfile in (service, migrations):
         assert 'MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}"' in dockerfile
-        assert 'MARTY_VERIFICATION_WHEEL="/tmp/${MARTY_VERIFICATION_URI##*/}"' in dockerfile
+        assert (
+            'MARTY_VERIFICATION_WHEEL="/tmp/${MARTY_VERIFICATION_URI##*/}"'
+            in dockerfile
+        )
         assert 'MARTY_ISO18013_WHEEL="/tmp/${MARTY_ISO18013_URI##*/}"' in dockerfile
         assert '"$MARTY_VERIFICATION_WHEEL"' in dockerfile
         assert '"$MARTY_ISO18013_WHEEL"' in dockerfile
 
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
-    for name in ("marty-core-python", "marty-verification-python", "marty-iso18013-python"):
+    for name in (
+        "marty-core-python",
+        "marty-verification-python",
+        "marty-iso18013-python",
+    ):
         assert components[name]["version"] == "0.1.54"
         assert components[name]["commit"] == "4f38c736fa5a28f155f00c6da03fe3ee4bf69375"
 
