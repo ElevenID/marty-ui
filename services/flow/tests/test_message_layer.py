@@ -2696,6 +2696,133 @@ async def test_oid4vp_direct_post_callback_returns_only_the_standard_empty_objec
     assert response.status_code == 200
     assert response.body == b"{}"
     assert called
+    assert called["kwargs"]["permit_idempotent_terminal_replay"] is False
+
+
+@pytest.mark.asyncio
+async def test_oid4vp_direct_post_rejects_an_identical_terminal_replay(monkeypatch):
+    _install_accepting_evaluation_stub(monkeypatch)
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={
+            "nonce": "nonce-public-replay",
+            "presentation_policy_id": "policy-1",
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+    vp_token = (
+        f"{_jwt_segment({'alg': 'none'})}."
+        f"{_jwt_segment({'nonce': 'nonce-public-replay'})}."
+    )
+
+    accepted = await flow_main.submit_oid4vp_direct_post_response(
+        instance.id,
+        vp_token,
+        None,
+        None,
+        repo,
+        None,
+    )
+    assert accepted.status_code == 200
+
+    with pytest.raises(HTTPException) as replay:
+        await flow_main.submit_oid4vp_direct_post_response(
+            instance.id,
+            vp_token,
+            None,
+            None,
+            repo,
+            None,
+        )
+
+    assert replay.value.status_code == 409
+    assert replay.value.detail["error"] == "verification_response_already_processed"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_identical_direct_posts_have_one_public_success(monkeypatch):
+    _install_accepting_evaluation_stub(monkeypatch)
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+        context={
+            "nonce": "nonce-public-concurrent-replay",
+            "presentation_policy_id": "policy-1",
+        },
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+    await repo.save_instance(instance)
+    vp_token = (
+        f"{_jwt_segment({'alg': 'none'})}."
+        f"{_jwt_segment({'nonce': 'nonce-public-concurrent-replay'})}."
+    )
+
+    outcomes = await asyncio.gather(
+        flow_main.submit_oid4vp_direct_post_response(
+            instance.id, vp_token, None, None, repo, None
+        ),
+        flow_main.submit_oid4vp_direct_post_response(
+            instance.id, vp_token, None, None, repo, None
+        ),
+        return_exceptions=True,
+    )
+
+    successes = [outcome for outcome in outcomes if not isinstance(outcome, Exception)]
+    conflicts = [outcome for outcome in outcomes if isinstance(outcome, HTTPException)]
+    assert len(successes) == 1
+    assert successes[0].status_code == 200
+    assert len(conflicts) == 1
+    assert conflicts[0].status_code == 409
+    assert conflicts[0].detail["error"] == "verification_response_already_processed"
+
+
+@pytest.mark.asyncio
+async def test_verification_result_endpoint_rejects_nonterminal_state(monkeypatch):
+    repo = InMemoryFlowRepository()
+    instance = FlowInstance(
+        flow_definition_id="__verification__",
+        organization_id="org-1",
+        status=FlowInstanceStatus.AWAITING_WALLET,
+    )
+    await repo.save_instance(instance)
+    org_client = _FakeOrgClient(_FakeMembership({"flow-instance:view"}))
+    monkeypatch.setattr(flow_main.app.state, "org_client", org_client, raising=False)
+
+    with pytest.raises(HTTPException) as pending:
+        await flow_main.get_flow_instance_result(
+            instance.id,
+            user_id="user-1",
+            repo=repo,
+        )
+
+    assert pending.value.status_code == 409
+    assert pending.value.detail["error"] == "verification_result_pending"
+    assert org_client.calls == [("user-1", "org-1")]
+
+    instance.transition_to(FlowInstanceStatus.IN_PROGRESS)
+    instance.transition_to(FlowInstanceStatus.COMPLETED)
+    instance.result = {
+        "evaluation_result": "passed",
+        "decision": "allow",
+        "verified_claims": {"role": "member"},
+    }
+    await repo.save_instance(instance)
+
+    terminal = await flow_main.get_flow_instance_result(
+        instance.id,
+        user_id="user-1",
+        repo=repo,
+    )
+    assert terminal.status == "COMPLETED"
+    assert terminal.result == "passed"
+    assert terminal.decision == "allow"
+    assert terminal.verified_claims == {"role": "member"}
 
 
 @pytest.mark.asyncio
