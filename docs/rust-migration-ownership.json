@@ -378,7 +378,7 @@
     {
       "id": "signing-key-kms",
       "phase": 9,
-      "status": "planned",
+      "status": "cutover-in-progress",
       "canonical": {
         "repository": "ElevenID/marty-core",
         "paths": ["marty-crypto/src", "marty-verification/src/jwk"],
@@ -402,18 +402,24 @@
     {
       "id": "native-cli",
       "phase": 9,
-      "status": "planned",
+      "status": "cutover-in-progress",
       "canonical": {
         "repository": "ElevenID/marty-cli",
         "paths": ["crates"],
-        "binding_paths": []
+        "binding_paths": [
+          "packages/api-core/src/index.js",
+          "packages/api-core/src/wasm"
+        ]
       },
       "legacy": [
         {
           "repository": "ElevenID/marty-cli",
-          "paths": ["bin", "src", "packages/api-core"],
+          "paths": [
+            "bin/marty.js",
+            "packages/api-core/src/index.js"
+          ],
           "language": "javascript",
-          "disposition": "replace-executable-and-delete-node-runtime"
+          "disposition": "thin-launch-and-binding-adapters-only"
         }
       ]
     },
