@@ -3287,6 +3287,7 @@ async def list_presentation_policies(
 )
 async def get_presentation_policy(
     policy_id: str,
+    http_request: Request,
     user_id: str = Depends(get_current_user_id),
     repo: InMemoryPresentationPolicyRepository = Depends(get_repo),
 ) -> PresentationPolicyResponse:
@@ -3294,14 +3295,12 @@ async def get_presentation_policy(
     policy = await repo.get(policy_id)
     if not policy:
         raise HTTPException(status_code=404, detail="Presentation Policy not found")
-    # Service-to-service callers (non-UUID user IDs like "auth-service", "flow")
-    # are allowed to read policies without an org membership check.
-    try:
-        uuid.UUID(user_id)
-        is_service_user = False
-    except (ValueError, AttributeError):
-        is_service_user = True
-    if not is_service_user:
+
+    if not _authorize_gateway_api_key_policy_read(
+        http_request,
+        user_id=user_id,
+        organization_id=policy.organization_id,
+    ):
         membership = await app.state.org_client.get_membership(
             user_id, policy.organization_id
         )
@@ -4073,6 +4072,72 @@ def _failed_policy_response(
 _API_KEY_VERIFICATION_SCOPES = frozenset(
     {"credentials:read", "flows:execute", "admin:full"}
 )
+_API_KEY_PRESENTATION_POLICY_READ_SCOPES = frozenset(
+    {"trust:read", "trust:write", "admin:full"}
+)
+
+
+def _authorize_gateway_api_key_request(
+    request: Request,
+    *,
+    user_id: str,
+    organization_id: str,
+    required_permission: str,
+    allowed_scopes: frozenset[str],
+    operation: str,
+) -> bool:
+    """Validate a complete gateway-owned API-key principal context.
+
+    API-key IDs, scope grants, and route permissions are distinct values.  The
+    backend binds all three to the policy's organization instead of inferring
+    authority from the shape of ``X-User-Id``.  Any partial API-key context
+    fails closed; callers without API-key context continue through user RBAC.
+    """
+    api_key_id = request.headers.get("x-api-key-id", "").strip()
+    forwarded_organization = request.headers.get("x-organization-id", "").strip()
+    forwarded_permission = request.headers.get("x-required-permission", "").strip()
+    forwarded_scopes = request.headers.get("x-api-key-scopes", "")
+    scopes = {scope.strip() for scope in forwarded_scopes.split(",") if scope.strip()}
+    api_key_principal = user_id.startswith("api_key:")
+    has_api_key_context = bool(
+        api_key_id
+        or api_key_principal
+        or forwarded_scopes.strip()
+        or request.headers.get("x-api-key-id") is not None
+        or request.headers.get("x-api-key-scopes") is not None
+    )
+    if not has_api_key_context:
+        return False
+
+    if (
+        not api_key_id
+        or user_id != f"api_key:{api_key_id}"
+        or forwarded_organization != organization_id
+        or forwarded_permission != required_permission
+        or not scopes.intersection(allowed_scopes)
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=f"API key is not authorized to {operation}",
+        )
+    return True
+
+
+def _authorize_gateway_api_key_policy_read(
+    request: Request,
+    *,
+    user_id: str,
+    organization_id: str,
+) -> bool:
+    """Authorize an organization-bound API key to read one saved policy."""
+    return _authorize_gateway_api_key_request(
+        request,
+        user_id=user_id,
+        organization_id=organization_id,
+        required_permission="presentation-policy:view",
+        allowed_scopes=_API_KEY_PRESENTATION_POLICY_READ_SCOPES,
+        operation="read this presentation policy",
+    )
 
 
 def _authorize_gateway_api_key_evaluation(
@@ -4089,28 +4154,14 @@ def _authorize_gateway_api_key_evaluation(
     forwarded context before treating the principal as an API key; a partial
     or inconsistent context fails closed instead of falling back to user RBAC.
     """
-    api_key_id = request.headers.get("x-api-key-id", "").strip()
-    if not api_key_id:
-        return False
-
-    forwarded_organization = request.headers.get("x-organization-id", "").strip()
-    required_permission = request.headers.get("x-required-permission", "").strip()
-    scopes = {
-        scope.strip()
-        for scope in request.headers.get("x-api-key-scopes", "").split(",")
-        if scope.strip()
-    }
-    if (
-        user_id != f"api_key:{api_key_id}"
-        or forwarded_organization != organization_id
-        or required_permission != "verification:execute"
-        or not scopes.intersection(_API_KEY_VERIFICATION_SCOPES)
-    ):
-        raise HTTPException(
-            status_code=403,
-            detail="API key is not authorized to evaluate this presentation policy",
-        )
-    return True
+    return _authorize_gateway_api_key_request(
+        request,
+        user_id=user_id,
+        organization_id=organization_id,
+        required_permission="verification:execute",
+        allowed_scopes=_API_KEY_VERIFICATION_SCOPES,
+        operation="evaluate this presentation policy",
+    )
 
 
 def _evaluate_native_facts(
