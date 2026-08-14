@@ -289,7 +289,7 @@ jobs:
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Validate beta-only Rust service overlays
+      - name: Validate canonical Rust service packaging
         env:
           MARTY_RS_URI: https://example.invalid/marty-rs.whl
           MARTY_RS_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -307,9 +307,9 @@ jobs:
           rendered="$(docker compose \
             --file docker-compose.base.yml \
             --file docker-compose.profile.tunnel.yml \
-            --file deploy-config/compose/tunnel-beta/event-stream-rust.yml \
             config event-stream)"
-          grep -F 'dockerfile: rust/services/event-stream/Dockerfile' <<<"$rendered"
+          grep -F 'dockerfile: services/Dockerfile' <<<"$rendered"
+          grep -F 'EVENT_STREAM_SERVICE_PORT: "8015"' <<<"$rendered"
           grep -F 'RUST_LOG: info' <<<"$rendered"
           rendered="$(docker compose \
             --file docker-compose.base.yml \

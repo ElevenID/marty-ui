@@ -1,4 +1,11 @@
 # Public Marty service image. Build context: marty-ui repository root.
+FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS event-stream-builder
+
+WORKDIR /build/rust
+COPY rust /build/rust
+COPY proto /build/proto
+RUN cargo build --locked --release -p marty-event-stream --bin marty-event-stream
+
 FROM python:3.12-slim
 
 ARG SERVICE_NAME
@@ -60,6 +67,7 @@ RUN test -n "$MARTY_RS_URI" \
 COPY packages/marty_proto /app/packages/marty_proto
 COPY services /app/services
 COPY scripts/load-secrets-env.sh /app/load-secrets-env.sh
+COPY --from=event-stream-builder /build/rust/target/release/marty-event-stream /usr/local/bin/marty-event-stream
 RUN chmod +x /app/services/entrypoint.sh /app/load-secrets-env.sh \
     && adduser --disabled-password --gecos '' appuser \
     && install -d -o appuser -g appuser -m 0700 /app/data

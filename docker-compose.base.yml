@@ -965,8 +965,10 @@ services:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: event_stream
     environment:
+      - EVENT_STREAM_SERVICE_PORT=8015
       - EVENT_STREAM_GRPC_ENABLED=true
       - EVENT_STREAM_GRPC_PORT=9015
+      - RUST_LOG=${EVENT_STREAM_RUST_LOG:-info}
       - OTEL_EXPORTER_OTLP_ENDPOINT=jaeger:4317
     ports:
       - "8015:8015"
