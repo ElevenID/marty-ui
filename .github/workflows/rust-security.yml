@@ -1,0 +1,24 @@
+name: Rust Supply Chain
+
+on:
+  schedule:
+    - cron: "21 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-supply-chain:
+    name: Rust Supply Chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Audit Rust advisories, licenses, bans, and sources
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
+        with:
+          manifest-path: rust/Cargo.toml
+          command: check
+          command-arguments: advisories bans licenses sources
