@@ -9,7 +9,7 @@ search_queries:
   - "marty-ui release stack-lock release version"
   - "release workflow stack-lock immutable tag"
   - "test_stack_release_contract release version"
-  - "marty-common v0.2.11 immutable release wheel digest and provenance"
+  - "marty-common v0.2.12 immutable release wheel digest and provenance"
   - "previous prepare UI release commit"
 candidate_implementations:
   - path: release/stack-lock.json
