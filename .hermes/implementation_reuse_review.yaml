@@ -9,18 +9,19 @@ search_queries:
   - "marty-ui release stack-lock release version"
   - "release workflow stack-lock immutable tag"
   - "test_stack_release_contract release version"
+  - "marty-common v0.2.12 immutable release wheel digest and provenance"
   - "previous prepare UI release commit"
 candidate_implementations:
   - path: release/stack-lock.json
     language: JSON
     disposition: reuse_existing_release_manifest
-  - path: .github/workflows/release.yml
+  - path: .github/workflows/cd.yml
     language: YAML
     disposition: reuse_existing_immutable_release_pipeline
   - path: tests/test_stack_release_contract.py
     language: Python
     disposition: reuse_existing_release_contract_gate
-  - path: dbf04caf4902dbced7f6680600480f223f5b3134
+  - path: ccf8819d8957809131b1c79595069d2d8bd2f04c
     language: Git commit
     disposition: reuse_previous_patch_release_pattern
 no_match_statement: ""
