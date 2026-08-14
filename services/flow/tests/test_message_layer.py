@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import pytest
 from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
 from jwcrypto import jwt as jwcrypto_jwt
 from jwcrypto import jwk as jwcrypto_jwk
 from pydantic import ValidationError
@@ -141,6 +142,54 @@ def test_public_start_and_advance_reject_reserved_service_evidence() -> None:
         AdvanceFlowRequest.model_validate(
             {"data": {"_marty_precondition_evidence_v1": {}}}
         )
+
+
+@pytest.mark.asyncio
+async def test_public_validation_response_never_reflects_submitted_input() -> None:
+    submitted_secret = "must-not-be-reflected"
+    validation_error = RequestValidationError(
+        [
+            {
+                "type": "value_error",
+                "loc": ("body",),
+                "msg": "Value error, private service state cannot be supplied",
+                "input": {"api_key": submitted_secret},
+                "ctx": {"error": f"rejected {submitted_secret}"},
+            }
+        ]
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/flows/instances",
+            "headers": [],
+        }
+    )
+    handler = flow_main.app.exception_handlers[RequestValidationError]
+    response = await handler(request, validation_error)
+    body = json.loads(response.body)
+
+    assert response.status_code == 400
+    assert body == {
+        "error": "invalid_request",
+        "error_description": "Request validation failed",
+    }
+    assert submitted_secret not in response.body.decode("utf-8")
+
+
+def test_public_validation_description_lists_only_missing_fields() -> None:
+    description = flow_main._validation_error_description(
+        [
+            {"type": "missing", "loc": ("body", "organization_id")},
+            {"type": "missing", "loc": ("body", "flow_definition_id")},
+            {"type": "missing", "loc": ("body", "organization_id")},
+        ]
+    )
+
+    assert description == (
+        "Missing required parameter(s): organization_id, flow_definition_id"
+    )
 
 
 def test_private_precondition_evidence_is_not_returned_publicly() -> None:

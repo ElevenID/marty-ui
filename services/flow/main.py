@@ -6954,22 +6954,31 @@ For orchestrating multi-step credential journeys (issuance, renewal, revocation)
     ) -> JSONResponse:
         # OID4VP §6.4 / RFC 9126 §2.2: missing or malformed request parameters
         # must return HTTP 400 with error=invalid_request, not FastAPI's default 422.
-        errors = exc.errors()
-        missing = [e["loc"][-1] for e in errors if e.get("type") == "missing"]
-        description = (
-            f"Missing required parameter(s): {', '.join(str(m) for m in missing)}"
-            if missing
-            else str(errors)
-        )
         return JSONResponse(
             status_code=400,
             content={
                 "error": "invalid_request",
-                "error_description": description,
+                "error_description": _validation_error_description(exc.errors()),
             },
         )
 
     return app
+
+
+def _validation_error_description(errors: list[dict[str, Any]]) -> str:
+    """Describe malformed requests without reflecting submitted values."""
+    missing: list[str] = []
+    for error in errors:
+        if error.get("type") != "missing":
+            continue
+        location = error.get("loc")
+        if isinstance(location, (list, tuple)) and location:
+            field = str(location[-1])
+            if field not in missing:
+                missing.append(field)
+    if missing:
+        return f"Missing required parameter(s): {', '.join(missing)}"
+    return "Request validation failed"
 
 
 app = create_app()
