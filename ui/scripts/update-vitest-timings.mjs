@@ -10,6 +10,18 @@ function normalizePath(path) {
   return path.replaceAll('\\', '/')
 }
 
+function relativeTestPath(absolutePath) {
+  const normalized = normalizePath(absolutePath)
+  const local = normalizePath(relative(uiRoot, absolutePath))
+  if (!local.startsWith('../')) return local
+
+  // Timing artifacts can be downloaded and refreshed on a different machine.
+  const uiMarker = '/ui/'
+  const markerIndex = normalized.lastIndexOf(uiMarker)
+  if (markerIndex >= 0) return normalized.slice(markerIndex + uiMarker.length)
+  throw new Error(`test result is outside the UI root: ${absolutePath}`)
+}
+
 function discoverReports(path) {
   const resolvedPath = resolve(path)
   if (!statSync(resolvedPath).isDirectory()) return [resolvedPath]
@@ -31,8 +43,10 @@ const observed = new Map()
 for (const reportPath of args.flatMap(discoverReports)) {
   const report = JSON.parse(readFileSync(reportPath, 'utf8'))
   for (const result of report.testResults ?? []) {
-    const path = normalizePath(relative(uiRoot, result.name))
-    if (path.startsWith('../')) throw new Error(`test result is outside the UI root: ${result.name}`)
+    const path = relativeTestPath(result.name)
+    if (!/^src\/.+\.(test|spec)\.(ts|tsx)$/.test(path)) {
+      throw new Error(`unexpected Vitest result path: ${result.name}`)
+    }
     const duration = Math.max(1, Math.round(result.endTime - result.startTime))
     observed.set(path, duration)
   }
