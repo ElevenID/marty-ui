@@ -74,6 +74,10 @@ impl RegistryStore {
             .map_err(|error| RegistryError::Storage(error.to_string()))?;
         Ok(normalized)
     }
+
+    pub fn connection(&self) -> ConnectionManager {
+        self.connection.clone()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

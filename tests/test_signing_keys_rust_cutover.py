@@ -89,6 +89,46 @@ def test_registry_normalization_resolution_and_storage_have_one_rust_owner() -> 
     assert 'format!("org:{organization_id}:signing-key-services")' in rust_registry
 
 
+def test_certificate_jwks_and_did_documents_have_one_rust_owner() -> None:
+    route = (ROOT / "services" / "gateway" / "routes" / "signing_keys.py").read_text(
+        encoding="utf-8"
+    )
+    adapter = (ROOT / "services" / "gateway" / "native_signing_keys.py").read_text(
+        encoding="utf-8"
+    )
+    rust_documents = (
+        ROOT / "rust" / "services" / "signing-keys" / "src" / "documents.rs"
+    ).read_text(encoding="utf-8")
+
+    for path in (
+        "/internal/documents/certificate/inspect",
+        "/internal/documents/certificate-alerts",
+        "/certificates/{quote(service_id, safe='')}",
+        "/jwks/{quote(service_id, safe='')}",
+        "/did/{quote(service_id, safe='')}",
+        "/internal/documents/did-web/{quote(slug, safe='')}",
+    ):
+        assert path in adapter
+    for superseded_name in (
+        "_jwks_storage_key",
+        "_service_certificates_storage_key",
+        "_did_doc_storage_key",
+        "_did_web_slug_key",
+        "_claim_did_web_slug",
+        "_load_did_registry_document",
+        "_extract_cert_expiry_date",
+    ):
+        assert superseded_name not in route
+    for owner in (
+        "pub struct DocumentStore",
+        "pub fn inspect_certificate",
+        "pub fn certificate_alerts",
+        "pub fn build_jwks_document",
+        "pub fn build_did_document",
+    ):
+        assert owner in rust_documents
+
+
 def test_base_stack_wires_gateway_to_the_rust_signing_keys_service() -> None:
     compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
 

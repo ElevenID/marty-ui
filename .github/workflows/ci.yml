@@ -336,10 +336,22 @@ jobs:
             exit 1
           fi
           registry_relative="${registry_executable#"$PWD/"}"
+          document_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "document_storage_contract")
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$document_executable" || ! -x "$document_executable" ]]; then
+            echo "Unable to locate the compiled signing document contract executable." >&2
+            exit 1
+          fi
+          document_relative="${document_executable#"$PWD/"}"
           test -x target/debug/marty-revocation-profile
           tar -cf "$RUNNER_TEMP/rust-db-test-bundle.tar" \
             "$contract_relative" \
             "$registry_relative" \
+            "$document_relative" \
             target/debug/marty-revocation-profile
       - name: Publish reusable database contract executables
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -419,6 +431,12 @@ jobs:
             exit 1
           fi
           "${registry_contracts[0]}" --ignored --test-threads=1
+          mapfile -t document_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'document_storage_contract-*' -perm -u+x)
+          if (( ${#document_contracts[@]} != 1 )); then
+            printf 'Expected one signing document contract executable, found %s.\n' "${#document_contracts[@]}" >&2
+            exit 1
+          fi
+          "${document_contracts[0]}" --ignored --test-threads=1
 
   rust-lint-policy:
     name: Rust Lint and Packaging

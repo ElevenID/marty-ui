@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "certificate": {
+    "cert_pem": "-----BEGIN CERTIFICATE-----\nMIIBQjCB6aADAgECAgEBMAoGCCqGSM49BAMCMCIxIDAeBgNVBAMMF01hcnR5IEtN\nUyBHb2xkZW4gVmVjdG9yMB4XDTI1MDEwMTAwMDAwMFoXDTM1MDEwMTAwMDAwMFow\nIjEgMB4GA1UEAwwXTWFydHkgS01TIEdvbGRlbiBWZWN0b3IwWTATBgcqhkjOPQIB\nBggqhkjOPQMBBwNCAARrF9Hy4SxCR/i85uVjpEDydwN9gS3rM6D0oTlF2JjClk/j\nQuL+Gn+bjufrSnwPnhYrzjNXazFezsu2QGg3v1H1oxAwDjAMBgNVHRMBAf8EAjAA\nMAoGCCqGSM49BAMCA0gAMEUCIQDxRJ9WyO6FqNuj5grveoi+YUVMMT2897b63u2+\npKzB+QIgMdUrlzNpWgptWJdIfevUBxxxjrYhAluinK1azgaqfYQ=\n-----END CERTIFICATE-----\n",
+    "expected_expiry": "2035-01-01T00:00:00Z",
+    "expected_jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+      "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+    },
+    "expected_x5c": "MIIBQjCB6aADAgECAgEBMAoGCCqGSM49BAMCMCIxIDAeBgNVBAMMF01hcnR5IEtNUyBHb2xkZW4gVmVjdG9yMB4XDTI1MDEwMTAwMDAwMFoXDTM1MDEwMTAwMDAwMFowIjEgMB4GA1UEAwwXTWFydHkgS01TIEdvbGRlbiBWZWN0b3IwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARrF9Hy4SxCR/i85uVjpEDydwN9gS3rM6D0oTlF2JjClk/jQuL+Gn+bjufrSnwPnhYrzjNXazFezsu2QGg3v1H1oxAwDjAMBgNVHRMBAf8EAjAAMAoGCCqGSM49BAMCA0gAMEUCIQDxRJ9WyO6FqNuj5grveoi+YUVMMT2897b63u2+pKzB+QIgMdUrlzNpWgptWJdIfevUBxxxjrYhAluinK1azgaqfYQ="
+  },
+  "certificate_alerts": {
+    "input": {
+      "now": "2026-08-14T00:00:00Z",
+      "days_until_expiry": 30,
+      "services": [
+        {"id": "later", "name": "Later", "cert_expires_at": "2026-09-03T00:00:00Z"},
+        {"id": "critical", "name": "Critical", "cert_expires_at": "2026-08-19T00:00:00Z"},
+        {"id": "ignored", "name": "Ignored", "cert_expires_at": "not-a-time"},
+        {"id": "outside", "name": "Outside", "cert_expires_at": "2026-10-01T00:00:00Z"}
+      ]
+    },
+    "expected": [
+      {"service_id": "critical", "service_name": "Critical", "cert_expires_at": "2026-08-19T00:00:00Z", "days_until_expiry": 5, "status": "critical"},
+      {"service_id": "later", "service_name": "Later", "cert_expires_at": "2026-09-03T00:00:00Z", "days_until_expiry": 20, "status": "warning"}
+    ]
+  },
+  "jwks": {
+    "organization_id": "org-a",
+    "service_id": "svc-a",
+    "existing": {
+      "keys": [
+        {"kid": "old", "service_id": "svc-a", "kty": "EC"},
+        {"kid": "keep", "service_id": "svc-b", "kty": "RSA"}
+      ]
+    },
+    "request": {
+      "jwk": {"public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "private"}},
+      "key_reference": "key-a"
+    },
+    "expected_jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "x",
+      "y": "y",
+      "kid": "key-a",
+      "service_id": "svc-a",
+      "key_reference": "key-a"
+    },
+    "expected_kept_kid": "keep"
+  },
+  "did": {
+    "service_id": "svc-a",
+    "request": {
+      "jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "private"},
+      "public_domain": "Issuer.Example:8443",
+      "org_slug": "Acme",
+      "key_reference": "issuer key"
+    },
+    "expected_did": "did:web:issuer.example%3A8443:orgs:acme",
+    "expected_method_id": "did:web:issuer.example%3A8443:orgs:acme#issuer-key"
+  },
+  "invalid_did_requests": [
+    {"jwk": {"kty": "EC"}, "public_domain": "https://issuer.example", "org_slug": "acme"},
+    {"jwk": {"kty": "EC"}, "public_domain": "issuer.example", "did_id": "did:web:issuer.example:admin:path"},
+    {"jwk": {"kty": "EC"}, "public_domain": "issuer.example", "did_id": "did:web:issuer.example:orgs:acme", "org_slug": "other"}
+  ]
+}

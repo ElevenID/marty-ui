@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import hashlib
 import hmac
 import json
 import logging
@@ -51,13 +50,23 @@ from gateway.models import (
 )
 from gateway.proxy import get_registry, proxy_request
 from gateway.native_signing_keys import (
+    calculate_native_certificate_alerts,
+    delete_native_signing_jwk,
+    get_native_certificate_overrides,
+    get_native_signing_jwks,
     get_native_signing_service_catalog,
     get_native_kms_adapter,
+    load_native_signing_did_document,
     load_native_signing_registry,
     normalize_native_signing_registry,
     normalize_native_signing_service,
+    publish_native_signing_did,
+    publish_native_signing_jwk,
+    resolve_native_did_web_slug,
     resolve_native_signing_registry,
     save_native_signing_registry,
+    store_native_signing_certificate,
+    update_native_signing_jwk,
     validate_native_signing_service,
 )
 
@@ -804,42 +813,11 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _jwks_storage_key(organization_id: str) -> str:
-    return f"org:{organization_id}:signing-key-jwks"
-
-
-def _service_certificates_storage_key(organization_id: str) -> str:
-    """Store certificate attachments separately from service registrations.
-
-    Managed signing services are derived from the live OpenBao inventory and
-    are intentionally excluded from the writable service registry.  Keeping
-    their public certificate material in a small sidecar document lets the
-    normal certificate API work for both managed and external services without
-    persisting provider credentials or a stale copy of the managed service.
-    """
-    return f"org:{organization_id}:signing-key-service-certificates"
-
-
-def _did_doc_storage_key(
-    organization_id: str, issuer_did: str | None = None
-) -> str:
-    legacy_key = f"org:{organization_id}:signing-key-did-document"
-    if issuer_did is None:
-        return legacy_key
-    digest = hashlib.sha256(issuer_did.encode("utf-8")).hexdigest()
-    return f"{legacy_key}:did:{digest}"
-
-
 _SLUG_PATTERN = re.compile(r"^[a-zA-Z0-9._-]{1,128}$")
 _DID_WEB_DOMAIN_PATTERN = re.compile(r"^[a-zA-Z0-9.-]+(?::[0-9]{1,5})?$")
 _DID_WEB_DOMAIN_LABEL_PATTERN = re.compile(
     r"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$"
 )
-
-
-def _did_web_slug_key(slug: str) -> str:
-    """Redis key mapping a normalised org slug to its organization ID."""
-    return f"did-web-slug:{slug}"
 
 
 def _normalize_did_web_domain(value: Any) -> str | None:
@@ -891,66 +869,6 @@ def _did_web_org_slug(did_id: Any, *, public_domain: str | None = None) -> str |
         return None
     slug = parts[4].lower()
     return slug if _SLUG_PATTERN.fullmatch(slug) else None
-
-
-async def _claim_did_web_slug(
-    request: Request, slug: str, organization_id: str
-) -> None:
-    """Atomically claim a public did:web slug without allowing tenant takeover."""
-    redis_client = getattr(request.app.state, "redis_client", None)
-    if redis_client is None:
-        raise HTTPException(
-            status_code=503, detail="DID web slug registry is unavailable."
-        )
-
-    storage_key = _did_web_slug_key(slug)
-
-    def stored_organization(value: Any) -> str | None:
-        if isinstance(value, bytes):
-            try:
-                return value.decode("utf-8")
-            except UnicodeDecodeError:
-                return None
-        return value if isinstance(value, str) else None
-
-    try:
-        existing_raw = await redis_client.get(storage_key)
-        if existing_raw is not None:
-            existing = stored_organization(existing_raw)
-            if existing == organization_id:
-                return
-            if existing is None:
-                raise HTTPException(
-                    status_code=503,
-                    detail="DID web slug registry contains invalid data.",
-                )
-            raise HTTPException(
-                status_code=409, detail=f"DID web slug '{slug}' is already in use."
-            )
-
-        claimed = await redis_client.set(storage_key, organization_id, nx=True)
-        if claimed:
-            return
-
-        # Another request won the SET NX race. Same-organization retries are
-        # idempotent; a different owner is a deterministic conflict.
-        existing = stored_organization(await redis_client.get(storage_key))
-        if existing == organization_id:
-            return
-        if existing is None:
-            raise HTTPException(
-                status_code=503, detail="DID web slug claim could not be confirmed."
-            )
-        raise HTTPException(
-            status_code=409, detail=f"DID web slug '{slug}' is already in use."
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("DID web slug claim failed for %s: %s", slug, exc, exc_info=True)
-        raise HTTPException(
-            status_code=503, detail="DID web slug registry is unavailable."
-        ) from exc
 
 
 def _issuer_profiles_storage_key(organization_id: str) -> str:
@@ -1260,13 +1178,10 @@ async def _service_certificate_overrides(
     request: Request,
     organization_id: str | None,
 ) -> dict[str, dict[str, str]]:
+    del request
     if not organization_id:
         return {}
-    document = await _load_json_document(
-        request,
-        _service_certificates_storage_key(organization_id),
-        {"services": {}},
-    )
+    document = await get_native_certificate_overrides(organization_id)
     raw_services = document.get("services") if isinstance(document, dict) else None
     if not isinstance(raw_services, dict):
         return {}
@@ -1311,35 +1226,6 @@ async def _load_json_document(
     except Exception:
         return dict(default)
     return parsed if isinstance(parsed, dict) else dict(default)
-
-
-async def _load_did_registry_document(
-    request: Request, storage_key: str
-) -> dict[str, Any] | None:
-    """Load an optional DID document without converting registry failure to absence."""
-    redis_client = getattr(request.app.state, "redis_client", None)
-    if redis_client is None:
-        raise HTTPException(status_code=503, detail="DID document registry is unavailable.")
-    try:
-        payload = await redis_client.get(storage_key)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503, detail="DID document registry is unavailable."
-        ) from exc
-    if payload is None:
-        return None
-    try:
-        decoded = payload if isinstance(payload, str) else payload.decode()
-        parsed = json.loads(decoded)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503, detail="DID document registry contains invalid data."
-        ) from exc
-    if not isinstance(parsed, dict):
-        raise HTTPException(
-            status_code=503, detail="DID document registry contains invalid data."
-        )
-    return parsed
 
 
 async def _credential_issuer_key_references(
@@ -1423,20 +1309,34 @@ async def _load_did_document_for_identity(
     are DID-scoped; the legacy fallback remains readable so operators can
     upgrade before every issuer identity has been republished.
     """
-    scoped = await _load_did_registry_document(
-        request, _did_doc_storage_key(organization_id, issuer_did)
-    )
-    if scoped is not None:
+    del request
+    try:
+        scoped, found = await load_native_signing_did_document(
+            organization_id,
+            did_id=issuer_did,
+            fallback_did=issuer_did,
+        )
+    except (httpx.HTTPError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=503, detail="DID document registry is unavailable."
+        ) from exc
+    if found:
         if scoped.get("id") != issuer_did:
             raise HTTPException(
                 status_code=503,
                 detail="Scoped DID document identity does not match its registry key.",
             )
         return scoped
-    legacy = await _load_did_registry_document(
-        request, _did_doc_storage_key(organization_id)
-    )
-    return _retarget_did_document(legacy or dict(default), issuer_did)
+    try:
+        legacy, legacy_found = await load_native_signing_did_document(
+            organization_id,
+            fallback_did=issuer_did,
+        )
+    except (httpx.HTTPError, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=503, detail="DID document registry is unavailable."
+        ) from exc
+    return _retarget_did_document(legacy if legacy_found else dict(default), issuer_did)
 
 
 def _merge_discovered_capabilities(
@@ -2381,24 +2281,6 @@ async def list_service_capabilities(request: Request):
 # ---------------------------------------------------------------------------
 
 
-def _extract_cert_expiry_date(cert_pem: str) -> str | None:
-    """Extract the expiry date from a PEM-encoded certificate."""
-    try:
-        from cryptography import x509
-        from cryptography.hazmat.backends import default_backend
-
-        cert_bytes = cert_pem.encode() if isinstance(cert_pem, str) else cert_pem
-        cert = x509.load_pem_x509_certificate(cert_bytes, default_backend())
-        expiry = cert.not_valid_after_utc
-        # Convert to ISO string: remove +00:00 suffix and append Z
-        iso_str = expiry.isoformat()
-        if iso_str.endswith("+00:00"):
-            iso_str = iso_str[:-6]  # Remove timezone
-        return iso_str + "Z"
-    except Exception:  # noqa: BLE001
-        return None
-
-
 async def _generate_csr_from_service(
     service_config: dict[str, Any],
 ) -> str | None:
@@ -2524,50 +2406,23 @@ async def store_service_certificate(
     if not cert_pem:
         raise HTTPException(status_code=400, detail="cert_pem is required.")
 
-    # Extract expiry date from certificate
-    cert_expires_at = _extract_cert_expiry_date(cert_pem)
-
-    registry, _, normalized, from_registry = await _resolve_effective_service(
+    _, _, normalized, _ = await _resolve_effective_service(
         request,
         resolved_org_id,
         service_id,
     )
-    services = registry.get("services") if isinstance(registry, dict) else []
-    service_idx = next(
-        (i for i, s in enumerate(services) if s.get("id") == service_id), None
-    )
-
-    updated_at = _utcnow_iso()
-    attachment = {
-        "cert_pem": cert_pem,
-        "cert_chain_pem": cert_chain_pem or "",
-        "cert_expires_at": cert_expires_at or "",
-        "updated_at": updated_at,
-    }
-    certificate_document = await _load_json_document(
-        request,
-        _service_certificates_storage_key(resolved_org_id),
-        {"services": {}},
-    )
-    certificate_services = certificate_document.get("services")
-    if not isinstance(certificate_services, dict):
-        certificate_services = {}
-    certificate_services[service_id] = attachment
-    certificate_document["services"] = certificate_services
-    certificate_document["updated_at"] = updated_at
-    await _save_json_document(
-        request,
-        _service_certificates_storage_key(resolved_org_id),
-        certificate_document,
-    )
-
-    # Preserve the existing registry representation for writable external
-    # services. Managed services have no registry row, so their attachment is
-    # supplied exclusively by the sidecar document above.
-    if from_registry and service_idx is not None:
-        services[service_idx].update(attachment)
-        registry["services"] = services
-        await _save_registered_service_registry(request, resolved_org_id, registry)
+    try:
+        attachment = await store_native_signing_certificate(
+            resolved_org_id,
+            service_id,
+            cert_pem=cert_pem,
+            cert_chain_pem=cert_chain_pem,
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=_httpx_error_detail(exc),
+        ) from exc
 
     normalized = _apply_service_certificate_override(
         normalized, {service_id: attachment}
@@ -2577,7 +2432,7 @@ async def store_service_certificate(
             "ok": True,
             "service_id": service_id,
             "cert_pem": cert_pem[:100] + "..." if len(cert_pem) > 100 else cert_pem,
-            "cert_expires_at": cert_expires_at,
+            "cert_expires_at": attachment["cert_expires_at"],
             "stored_at": _utcnow_iso(),
             "service": normalized,
         }
@@ -2639,40 +2494,11 @@ async def list_certificate_expiry_alerts(
     )
     services = config.get("services") if isinstance(config, dict) else []
 
-    now = datetime.now(timezone.utc)
-    expiry_threshold = now + timedelta(days=days_until_expiry)
-
-    alerts: list[dict[str, Any]] = []
-    for svc in services:
-        if isinstance(svc, dict):
-            cert_expires_at = svc.get("cert_expires_at")
-            if cert_expires_at:
-                try:
-                    expiry_dt = datetime.fromisoformat(
-                        cert_expires_at.replace("Z", "+00:00")
-                    )
-                    if expiry_dt <= expiry_threshold:
-                        # Don't require normalization - we have what we need
-                        days_left = (expiry_dt - now).days
-                        alerts.append(
-                            {
-                                "service_id": svc.get("id"),
-                                "service_name": svc.get("name"),
-                                "cert_expires_at": cert_expires_at,
-                                "days_until_expiry": max(0, days_left),
-                                "status": "critical" if days_left <= 7 else "warning",
-                            }
-                        )
-                except ValueError:
-                    pass
-
-    return JSONResponse(
-        content={
-            "alerts": sorted(alerts, key=lambda a: a["days_until_expiry"]),
-            "alert_threshold_days": days_until_expiry,
-            "checked_at": _utcnow_iso(),
-        }
+    result = await calculate_native_certificate_alerts(
+        [service for service in services if isinstance(service, dict)],
+        days_until_expiry,
     )
+    return JSONResponse(content=result)
 
 
 # ---------------------------------------------------------------------------
@@ -2744,9 +2570,26 @@ async def publish_service_to_jwks(
         "provider": normalized.get("provider"),
     }
 
+    try:
+        publication = await publish_native_signing_jwk(
+            resolved_org_id,
+            service_id,
+            jwk=jwk,
+            key_reference=normalized.get("key_reference"),
+            cert_pem=normalized.get("cert_pem"),
+            cert_chain_pem=normalized.get("cert_chain_pem"),
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=_httpx_error_detail(exc),
+        ) from exc
+
+    stored_jwk = publication["jwk"]
     services = registry.get("services") if isinstance(registry, dict) else []
     service_idx = next(
-        (i for i, s in enumerate(services) if s.get("id") == service_id), None
+        (i for i, service in enumerate(services) if service.get("id") == service_id),
+        None,
     )
     if from_registry and service_idx is not None:
         services[service_idx]["discovered_capabilities"] = (
@@ -2756,39 +2599,6 @@ async def publish_service_to_jwks(
         registry["services"] = services
         await _save_registered_service_registry(request, resolved_org_id, registry)
 
-    jwks_doc = await _load_json_document(
-        request,
-        _jwks_storage_key(resolved_org_id),
-        {"keys": [], "organization_id": resolved_org_id, "updated_at": _utcnow_iso()},
-    )
-    existing_keys = (
-        jwks_doc.get("keys") if isinstance(jwks_doc.get("keys"), list) else []
-    )
-
-    kid = jwk.get("kid") or normalized.get("key_reference") or service_id
-    stored_jwk = dict(jwk)
-    stored_jwk["kid"] = kid
-    stored_jwk["service_id"] = service_id
-    stored_jwk["key_reference"] = normalized.get("key_reference")
-    if normalized.get("cert_chain_pem"):
-        x5c = _service_x5c_chain(normalized)
-        if x5c:
-            stored_jwk["x5c"] = x5c
-
-    updated_keys = [
-        existing
-        for existing in existing_keys
-        if not (
-            isinstance(existing, dict)
-            and (existing.get("kid") == kid or existing.get("service_id") == service_id)
-        )
-    ]
-    updated_keys.append(stored_jwk)
-    jwks_doc["keys"] = updated_keys
-    jwks_doc["organization_id"] = resolved_org_id
-    jwks_doc["updated_at"] = _utcnow_iso()
-    await _save_json_document(request, _jwks_storage_key(resolved_org_id), jwks_doc)
-
     return JSONResponse(
         content={
             "ok": True,
@@ -2797,7 +2607,7 @@ async def publish_service_to_jwks(
             "jwk": stored_jwk,
             "jwks_document": {
                 "organization_id": resolved_org_id,
-                "key_count": len(updated_keys),
+                "key_count": publication["key_count"],
             },
             "published_at": _utcnow_iso(),
         }
@@ -2870,88 +2680,40 @@ async def publish_service_to_did(
             detail="Provider did not return a usable public key for DID publication.",
         )
 
-    # --- Resolve DID identifier ---------------------------------------------------
-    # Only an exact DID on this gateway's configured did:web domain may claim a
-    # local public slug. External and root DIDs remain publishable without a
-    # local mapping for compatibility.
-    configured_public_domain = _normalize_did_web_domain(
-        _domain_config(request).get("public_domain")
-    )
-    if not configured_public_domain:
-        raise HTTPException(
-            status_code=503, detail="PUBLIC_DOMAIN is not a valid did:web domain."
-        )
-
-    raw_did_id = body.get("did_id")
-    if raw_did_id is not None and (
-        not isinstance(raw_did_id, str)
-        or not raw_did_id
-        or raw_did_id != raw_did_id.strip()
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="did_id must be a non-empty DID without surrounding whitespace.",
-        )
-    did_id = raw_did_id
-
-    raw_org_slug = body.get("org_slug")
-    if raw_org_slug is not None and (
-        not isinstance(raw_org_slug, str) or not _SLUG_PATTERN.fullmatch(raw_org_slug)
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="org_slug must contain only letters, numbers, '.', '_' or '-'.",
-        )
-    org_slug = raw_org_slug.lower() if isinstance(raw_org_slug, str) else None
-
-    if not did_id:
-        org_slug = org_slug or resolved_org_id.lower()
-        if not _SLUG_PATTERN.fullmatch(org_slug):
-            raise HTTPException(
-                status_code=422,
-                detail="Organization ID cannot be used as a did:web slug.",
-            )
-        did_domain = configured_public_domain.replace(":", "%3A")
-        did_id = f"did:web:{did_domain}:orgs:{org_slug}"
-    elif did_id.startswith("did:web:"):
-        local_slug = _did_web_org_slug(did_id, public_domain=configured_public_domain)
-        did_domain = _did_web_domain(did_id)
-        if (
-            did_domain == configured_public_domain
-            and len(did_id.split(":")) != 3
-            and local_slug is None
-        ):
-            raise HTTPException(
-                status_code=422,
-                detail="Local did:web identifiers must use did:web:<PUBLIC_DOMAIN>:orgs:<slug>.",
-            )
-        if org_slug is not None and local_slug != org_slug:
-            raise HTTPException(
-                status_code=422,
-                detail="org_slug must match a path-scoped DID on the configured PUBLIC_DOMAIN.",
-            )
-        org_slug = org_slug or local_slug
-    elif org_slug is not None:
-        raise HTTPException(
-            status_code=422,
-            detail="org_slug is only valid for a local path-scoped did:web identifier.",
-        )
-
-    # Build verification method structure
-    vm_id = body.get("fragment") or _did_fragment_for_key_reference(
-        service_id, key_reference
-    )
-    verification_method = {
-        "id": f"{did_id}#{vm_id}",
-        "type": "JsonWebKey",
-        "controller": did_id,
-        "publicKeyJwk": jwk,
+    public_domain = _domain_config(request).get("public_domain")
+    native_payload = {
+        "jwk": jwk,
+        "public_domain": public_domain,
+        "did_id": body.get("did_id"),
+        "org_slug": body.get("org_slug") or resolved_org_id.lower(),
+        "fragment": body.get("fragment"),
+        "key_reference": key_reference,
+        "cert_pem": normalized.get("cert_pem"),
+        "cert_chain_pem": normalized.get("cert_chain_pem"),
     }
+    # An explicit non-local DID cannot inherit the fallback local slug.
+    if body.get("did_id") is not None and body.get("org_slug") is None:
+        native_payload["org_slug"] = None
+    try:
+        publication = await publish_native_signing_did(
+            resolved_org_id,
+            service_id,
+            native_payload,
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=_httpx_error_detail(exc),
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="DID document registry is unavailable."
+        ) from exc
 
-    # Add certificate chain if present
-    x5c = _service_x5c_chain(normalized)
-    if x5c:
-        verification_method["x5c"] = x5c
+    verification_method = publication["verification_method"]
+    did_doc = publication["document"]
+    methods = did_doc.get("verificationMethod") or []
+    x5c = verification_method.get("x5c") or []
 
     discovered = {
         "public_key_export": True,
@@ -2960,64 +2722,6 @@ async def publish_service_to_did(
         "provider": normalized.get("provider"),
         "has_x5c": bool(x5c),
     }
-    did_doc = await _load_did_registry_document(
-        request, _did_doc_storage_key(resolved_org_id, did_id)
-    )
-    if did_doc is None:
-        did_doc = {
-            "id": did_id,
-            "controller": did_id,
-            "verificationMethod": [],
-            "assertionMethod": [],
-            "updated_at": _utcnow_iso(),
-        }
-    if did_doc.get("id") != did_id:
-        raise HTTPException(
-            status_code=503,
-            detail="Scoped DID document identity does not match its registry key.",
-        )
-
-    did_doc["controller"] = did_id
-
-    methods = (
-        did_doc.get("verificationMethod")
-        if isinstance(did_doc.get("verificationMethod"), list)
-        else []
-    )
-    methods = [
-        m
-        for m in methods
-        if not (isinstance(m, dict) and m.get("id") == verification_method["id"])
-    ]
-    methods.append(verification_method)
-    did_doc["verificationMethod"] = methods
-
-    assertion = (
-        did_doc.get("assertionMethod")
-        if isinstance(did_doc.get("assertionMethod"), list)
-        else []
-    )
-    assertion = [entry for entry in assertion if entry != verification_method["id"]]
-    assertion.append(verification_method["id"])
-    did_doc["assertionMethod"] = assertion
-    did_doc["updated_at"] = _utcnow_iso()
-
-    # Reserve the public route before persisting its document. A conflicting
-    # slug must not leave behind an unreachable DID document; same-org retries
-    # remain idempotent.
-    if org_slug:
-        await _claim_did_web_slug(request, org_slug, resolved_org_id)
-
-    await _save_json_document(
-        request,
-        _did_doc_storage_key(resolved_org_id, did_id),
-        did_doc,
-    )
-    # Preserve the legacy organization view for older administrative clients.
-    # Resolution paths use the scoped document above and never combine it with
-    # another DID owned by the same organization.
-    await _save_json_document(request, _did_doc_storage_key(resolved_org_id), did_doc)
-
     # Only report a successful discovery after the identity-bound document is
     # stored. This prevents a failed publication from leaving false-success
     # capability metadata.
@@ -3055,11 +2759,7 @@ async def get_organization_jwks(
     organization_id: str | None = Query(None),
 ):
     resolved_org_id = _resolve_org_id(request, organization_id)
-    jwks_doc = await _load_json_document(
-        request,
-        _jwks_storage_key(resolved_org_id),
-        {"keys": [], "organization_id": resolved_org_id, "updated_at": _utcnow_iso()},
-    )
+    jwks_doc = await get_native_signing_jwks(resolved_org_id)
     return JSONResponse(content=jwks_doc)
 
 
@@ -3072,16 +2772,9 @@ async def get_organization_did_document(
     domain_cfg = _domain_config(request)
     public_domain = domain_cfg.get("public_domain", "")
     fallback_did = f"did:web:{public_domain}:orgs:{resolved_org_id}"
-    did_doc = await _load_json_document(
-        request,
-        _did_doc_storage_key(resolved_org_id),
-        {
-            "id": fallback_did,
-            "controller": fallback_did,
-            "verificationMethod": [],
-            "assertionMethod": [],
-            "updated_at": _utcnow_iso(),
-        },
+    did_doc, _ = await load_native_signing_did_document(
+        resolved_org_id,
+        fallback_did=fallback_did,
     )
     return JSONResponse(content=did_doc)
 
@@ -6173,35 +5866,18 @@ async def update_signing_key(
     """
     resolved_org_id = _resolve_org_id(request, organization_id)
 
-    # Load current JWKS document and patch the matching key entry
-    storage_key = _jwks_storage_key(resolved_org_id)
-    jwks_doc = await _load_json_document(request, storage_key, {"keys": []})
-    jwks_keys: list[dict[str, Any]] = jwks_doc.get("keys") or []
-    idx = next(
-        (
-            i
-            for i, k in enumerate(jwks_keys)
-            if k.get("kid") == key_id or k.get("provider_key_name") == key_id
-        ),
-        None,
-    )
-    if idx is None:
+    try:
+        updated = await update_native_signing_jwk(resolved_org_id, key_id, body)
+    except httpx.HTTPStatusError as exc:
         raise HTTPException(
-            status_code=404, detail=f"Signing key '{key_id}' not found in org JWKS."
-        )
-
-    allowed_updates = {"name", "status", "aliases", "key_aliases"}
-    for field in allowed_updates:
-        if field in body:
-            jwks_keys[idx][field] = body[field]
-
-    jwks_doc["keys"] = jwks_keys
-    await _save_json_document(request, storage_key, jwks_doc)
+            status_code=exc.response.status_code,
+            detail=_httpx_error_detail(exc),
+        ) from exc
     return JSONResponse(
         content={
             "ok": True,
             "key_id": key_id,
-            "updated": list(set(body.keys()) & allowed_updates),
+            "updated": updated,
         }
     )
 
@@ -6219,22 +5895,14 @@ async def delete_signing_key(
     """
     resolved_org_id = _resolve_org_id(request, organization_id)
 
-    storage_key = _jwks_storage_key(resolved_org_id)
-    jwks_doc = await _load_json_document(request, storage_key, {"keys": []})
-    jwks_keys: list[dict[str, Any]] = jwks_doc.get("keys") or []
-    filtered = [
-        k
-        for k in jwks_keys
-        if k.get("kid") != key_id and k.get("provider_key_name") != key_id
-    ]
-    if len(filtered) == len(jwks_keys):
+    try:
+        removed = await delete_native_signing_jwk(resolved_org_id, key_id)
+    except httpx.HTTPStatusError as exc:
         raise HTTPException(
-            status_code=404, detail=f"Signing key '{key_id}' not found in org JWKS."
-        )
-
-    jwks_doc["keys"] = filtered
-    await _save_json_document(request, storage_key, jwks_doc)
-    return JSONResponse(content={"ok": True, "key_id": key_id, "removed": True})
+            status_code=exc.response.status_code,
+            detail=_httpx_error_detail(exc),
+        ) from exc
+    return JSONResponse(content={"ok": True, "key_id": key_id, "removed": removed})
 
 
 # ---------------------------------------------------------------------------
@@ -6260,15 +5928,15 @@ async def resolve_did_web_by_slug(request: Request, org_slug: str):
     if not _SLUG_PATTERN.match(safe_slug):
         raise HTTPException(status_code=400, detail="Invalid organization slug.")
 
-    redis_client = getattr(request.app.state, "redis_client", None)
-    if redis_client is None:
-        raise HTTPException(status_code=503, detail="Storage unavailable.")
-
-    org_id = await redis_client.get(_did_web_slug_key(safe_slug))
+    try:
+        org_id = await resolve_native_did_web_slug(safe_slug)
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=_httpx_error_detail(exc),
+        ) from exc
     if not org_id:
         raise HTTPException(status_code=404, detail="Organization DID not found.")
-
-    org_id = org_id if isinstance(org_id, str) else org_id.decode()
 
     domain_cfg = _domain_config(request)
     public_domain = domain_cfg.get("public_domain", "")
