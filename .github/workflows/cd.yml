@@ -282,6 +282,11 @@ jobs:
   public-stack-smoke:
     needs: [validate-stack, build-ui, build-services]
     runs-on: ubuntu-latest
+    env:
+      # This deletion candidate must exercise the canonical Rust revocation
+      # migrator/runtime. The released integration adapter keeps this overlay
+      # opt-in so pre-cutover releases retain their existing topology.
+      COMPOSE_FILE: docker-compose.yml:docker-compose.rust-revocation.yml
     permissions:
       contents: read
       packages: read
@@ -442,7 +447,7 @@ jobs:
           python ../marty-ui/scripts/wait_for_public_services.py \
             --url http://127.0.0.1:28000/health/services --timeout 120
           exited_services="$(docker compose --env-file .env.stack ps --status exited --services)"
-          unexpected_exits="$(printf '%s\n' "$exited_services" | awk '$0 != "" && $0 != "migrations" && $0 != "issuance-migrations"')"
+          unexpected_exits="$(printf '%s\n' "$exited_services" | awk '$0 != "" && $0 != "migrations" && $0 != "issuance-migrations" && $0 != "revocation-profile-migrations"')"
           if [ -n "$unexpected_exits" ]; then
             echo "Public-stack services exited unexpectedly:"
             echo "$unexpected_exits"

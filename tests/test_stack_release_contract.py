@@ -230,7 +230,38 @@ def test_stack_release_allows_only_successful_one_shot_exits() -> None:
     )
     assert '$0 != "migrations"' in workflow
     assert '$0 != "issuance-migrations"' in workflow
+    assert '$0 != "revocation-profile-migrations"' in workflow
     assert "grep -v '^migrations$' || true" not in workflow
+
+
+def test_revocation_deletion_release_uses_the_rust_candidate_overlay() -> None:
+    workflow = _text(".github/workflows/cd.yml")
+
+    assert "COMPOSE_FILE: docker-compose.yml:docker-compose.rust-revocation.yml" in workflow
+    assert "ref: ${{ needs.validate-stack.outputs.integration_commit }}" in workflow
+
+    lock = json.loads(_text("release/stack-lock.json"))
+    integration = next(
+        component
+        for component in lock["components"]
+        if component["name"] == "marty-integration-tests"
+    )
+    assert integration["version"] == "1.2.61"
+    assert integration["commit"] == "0da10b1730165edeb3285d6af73607287fc4ae40"
+    assert integration["artifacts"][0]["digest"] == (
+        "sha256:f435492494ab44ada9e1baabe7ff5ae0954eab27ed738d3cb4eb8ca974dab81a"
+    )
+
+    issuance = next(
+        component
+        for component in lock["components"]
+        if component["name"] == "marty-credentials-issuance"
+    )
+    assert issuance["version"] == "0.1.59"
+    assert issuance["commit"] == "ebf510290287d3ddd2804714d15da14b339990f9"
+    assert issuance["artifacts"][0]["digest"] == (
+        "sha256:6b0cc5fcca2ae214e2d258de02af7e7031d710184d499a9aad68c408c2c0aff4"
+    )
 
 
 def test_stack_release_is_tag_only_and_targets_the_validated_tag() -> None:
