@@ -1071,6 +1071,8 @@ services:
       - "127.0.0.1:8012:8012"
       - "127.0.0.1:9017:9017"
     depends_on:
+      credential-template:
+        condition: service_healthy
       presentation-policy:
         condition: service_healthy
       redis:
@@ -1116,8 +1118,6 @@ services:
       device-registration:
         condition: service_healthy
       event-stream:
-        condition: service_healthy
-      verification:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:9901/ready"]

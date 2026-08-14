@@ -108,13 +108,6 @@ static_resources:
                             cluster: event_stream_grpc
                             timeout: 0s  # streaming — no timeout
 
-                        # Verification Service → verification:9017
-                        - match:
-                            prefix: "/marty.ui.verification.v1.VerificationService/"
-                          route:
-                            cluster: verification_grpc
-                            timeout: 60s
-
                         # ── REST→gRPC Transcoding Routes ──────────────────
                         # These match incoming HTTP/JSON requests before the
                         # grpc_json_transcoder rewrites them to gRPC paths.
@@ -224,7 +217,6 @@ static_resources:
                         - marty.ui.flow.v1.FlowService
                         - marty.ui.revocation_profile.v1.RevocationProfileService
                         - marty.ui.event_stream.v1.EventStreamService
-                        - marty.ui.verification.v1.VerificationService
                       print_options:
                         add_whitespace: true
                         always_print_primitive_fields: true
@@ -496,30 +488,3 @@ static_resources:
           healthy_threshold: 2
           grpc_health_check:
             service_name: "marty.ui.event_stream.v1.EventStreamService"
-
-    # Verification Service
-    - name: verification_grpc
-      connect_timeout: 5s
-      type: STRICT_DNS
-      lb_policy: ROUND_ROBIN
-      typed_extension_protocol_options:
-        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
-          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
-          explicit_http_config:
-            http2_protocol_options: {}
-      load_assignment:
-        cluster_name: verification_grpc
-        endpoints:
-          - lb_endpoints:
-              - endpoint:
-                  address:
-                    socket_address:
-                      address: verification
-                      port_value: 9017
-      health_checks:
-        - timeout: 3s
-          interval: 10s
-          unhealthy_threshold: 3
-          healthy_threshold: 2
-          grpc_health_check:
-            service_name: "marty.ui.verification.v1.VerificationService"

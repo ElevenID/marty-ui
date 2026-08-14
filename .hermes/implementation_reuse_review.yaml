@@ -1,0 +1,60 @@
+status: complete
+search_scope:
+  - current_module_or_crate
+  - current_repository
+  - workspace_crates_packages_and_services
+  - bindings_adapters_ffi_and_api_layers
+  - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
+search_queries:
+  - "verification session organization_id presentation_policy_id request submit"
+  - "ensure_membership_permission get_organization_client"
+  - "authorize gateway api key organization required permission scopes"
+  - "presentation policy organization_id status credential requirements"
+  - "credential template organization_id status GetTemplate"
+  - "VerificationServiceStub StartVerification caller"
+  - "VERIF_GRPC_ENABLED verification_grpc Envoy deployment"
+  - "OID4VP request builder parse_policy_requirements credential_requirement_input"
+candidate_implementations:
+  - path: services/verification/main.py
+    language: Python
+    disposition: extend_existing_service_boundary
+  - path: services/presentation_policy/main.py
+    language: Python
+    disposition: reuse_gateway_context_and_membership_authorization_pattern
+  - path: services/credential_template/main.py
+    language: Python
+    disposition: reuse_authoritative_resource_owner_validation_pattern
+  - path: services/common/oid4vp_native.py
+    language: Python/Rust binding
+    disposition: retain_thin_binding_to_existing_rust_request_builder
+  - path: services/common/grpc_factory.py
+    language: Python
+    disposition: reuse_workload_authenticated_downstream_channel
+  - path: services/gateway/proxy.py
+    language: Python
+    disposition: reuse_gateway_owned_internal_header_sanitization
+no_match_statement: >-
+  No production caller or identity-bearing inbound contract exists for the
+  standalone Verification gRPC API. The safe reuse decision is to close that
+  dormant production ingress while retaining its local adapter, rather than
+  create a parallel authorization protocol or invent an authorized workload.
+decision: extend_existing
+canonical_implementation:
+  path: services/verification/main.py
+  language: Python
+rust_disposition: rust_not_applicable
+non_rust_rationale: >-
+  This change binds HTTP/gRPC transport ingress, gateway-authenticated identity,
+  organization membership, and authoritative service-owned resource metadata.
+  Those are service-boundary and deployment concerns. Existing OID4VP domain
+  construction remains in the canonical Rust backend through the existing thin
+  services/common/oid4vp_native.py binding; no protocol, cryptographic, or
+  validation algorithm is duplicated in Python.
+non_rust_exception_approval: ""
+intentional_duplicate_exception:
+  rationale: ""
+  divergence_owner: ""
+  synchronization_or_compatibility_strategy: ""
+  retirement_or_convergence_plan: ""
+  architecture_decision_ref: ""
+  human_approval: ""

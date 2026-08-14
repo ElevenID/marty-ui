@@ -5,6 +5,7 @@ Contains SessionCache, AuthMiddleware, MIPVersionMiddleware,
 RateLimitMiddleware, ContentTypeEnforcementMiddleware, and the
 MIP §17.7 error-response builder.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Session Cache
 # =============================================================================
+
 
 class SessionCache:
     """Simple in-memory cache for session validation with TTL."""
@@ -74,6 +76,7 @@ class SessionCache:
 # MIP §17.7 — Standardized error response envelope
 # =============================================================================
 
+
 def mip_error_response(
     status_code: int,
     error: str,
@@ -104,23 +107,27 @@ def mip_error_response(
 # Auth Middleware
 # =============================================================================
 
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """Middleware that validates sessions via gRPC and injects user context headers."""
 
     def __init__(self, app, session_cache: SessionCache):
         super().__init__(app)
         self.session_cache = session_cache
-        self.api_key_cache = SessionCache(ttl_seconds=int(os.environ.get("API_KEY_AUTH_CACHE_TTL", "30")))
+        self.api_key_cache = SessionCache(
+            ttl_seconds=int(os.environ.get("API_KEY_AUTH_CACHE_TTL", "30"))
+        )
 
     async def dispatch(self, request: Request, call_next):
         """Process request and inject user context headers."""
         import re as _re
+
         # Get route configuration
         route_config = get_route_config(request.url.path)
 
         # OID4VP wallet-facing endpoints must be public (wallet has no session cookie)
         _WALLET_PUBLIC = _re.compile(
-            r"^/v1/flows/instances/[^/]+/(request|submit)$"
+            r"^/v1/(?:flows/instances|verify)/[^/]+/(request|submit)$"
         )
         _STATUS_LIST_PUBLIC = _re.compile(
             r"^/v1/organizations/[^/]+/revocation-profiles/[^/]+/status-lists/[^/]+/[^/]+$"
@@ -163,7 +170,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Extract session ID from cookie
         session_id = request.cookies.get("sessionId")
         if not session_id:
-            logger.warning(f"No session cookie for authenticated route: {request.url.path}")
+            logger.warning(
+                f"No session cookie for authenticated route: {request.url.path}"
+            )
             return mip_error_response(
                 status_code=401,
                 error="unauthorized",
@@ -212,7 +221,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Add headers to request for downstream services
         request.state.user_id = user_id
         request.state.user_email = email
-        request.state.user_domain = email.split("@")[1] if email and "@" in email else None
+        request.state.user_domain = (
+            email.split("@")[1] if email and "@" in email else None
+        )
         request.state.session_organization_id = user_data.get("organization_id")
 
         # Proceed with request
@@ -306,6 +317,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 # MIP Version Middleware
 # =============================================================================
 
+
 class MIPVersionMiddleware(BaseHTTPMiddleware):
     """Inject X-MIP-Version on responses and check mip_version on requests."""
 
@@ -349,7 +361,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if session_id:
             return f"sid:{hashlib.sha256(session_id.encode()).hexdigest()[:16]}"
         forwarded = request.headers.get("x-forwarded-for")
-        ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
+        ip = (
+            forwarded.split(",")[0].strip()
+            if forwarded
+            else (request.client.host if request.client else "unknown")
+        )
         return f"ip:{ip}"
 
     def _bucket_name(self, path: str) -> str:
@@ -372,9 +388,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return -1
         """
         result = await redis_client.eval(
-            lua, 1, key,
-            str(window_start), str(_RATE_LIMIT_RPM),
-            str(now), member, str(int(_RATE_LIMIT_WINDOW) + 1),
+            lua,
+            1,
+            key,
+            str(window_start),
+            str(_RATE_LIMIT_RPM),
+            str(now),
+            member,
+            str(int(_RATE_LIMIT_WINDOW) + 1),
         )
         if result == -1:
             return False, 0
@@ -386,7 +407,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         window_start = now - _RATE_LIMIT_WINDOW
         timestamps = self._local_buckets[key]
         # Prune expired
-        self._local_buckets[key] = timestamps = [t for t in timestamps if t > window_start]
+        self._local_buckets[key] = timestamps = [
+            t for t in timestamps if t > window_start
+        ]
         if len(timestamps) >= _RATE_LIMIT_RPM:
             return False, 0
         timestamps.append(now)
@@ -410,7 +433,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             try:
                 allowed, remaining = await self._check_redis(redis_client, rate_key)
             except Exception:
-                logger.warning("Redis rate limit check failed, falling back to local", exc_info=True)
+                logger.warning(
+                    "Redis rate limit check failed, falling back to local",
+                    exc_info=True,
+                )
                 # Redis failure — fall back to local
                 allowed, remaining = self._check_local(rate_key)
         else:
@@ -435,24 +461,31 @@ class ContentTypeEnforcementMiddleware(BaseHTTPMiddleware):
 
     _METHODS_WITH_BODY = {"POST", "PUT", "PATCH"}
     _EXEMPT_PREFIXES = (
-        "/v1/issuance/token",       # OAuth token endpoint: application/x-www-form-urlencoded
-        "/v1/issuance/par",         # PAR endpoint (RFC 9126): application/x-www-form-urlencoded
-        "/v1/issuance/nonce",       # OID4VCI nonce endpoint: wallets may POST empty/non-JSON bodies
-        "/v1/flows/instances/",     # OID4VP submit: application/x-www-form-urlencoded
-        "/v1/flows/siop/submit",    # SIOPv2 submit
-        "/v1/auth/",               # Auth service may use form data
+        "/v1/issuance/token",  # OAuth token endpoint: application/x-www-form-urlencoded
+        "/v1/issuance/par",  # PAR endpoint (RFC 9126): application/x-www-form-urlencoded
+        "/v1/issuance/nonce",  # OID4VCI nonce endpoint: wallets may POST empty/non-JSON bodies
+        "/v1/flows/instances/",  # OID4VP submit: application/x-www-form-urlencoded
+        "/v1/flows/siop/submit",  # SIOPv2 submit
+        "/v1/auth/",  # Auth service may use form data
     )
 
     async def dispatch(self, request: Request, call_next):
         if request.method in self._METHODS_WITH_BODY:
-            ct = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+            ct = (
+                (request.headers.get("content-type") or "")
+                .split(";")[0]
+                .strip()
+                .lower()
+            )
             if ct and ct not in (
                 "application/json",
                 "application/scim+json",
                 "application/x-www-form-urlencoded",
                 "multipart/form-data",
             ):
-                if not any(request.url.path.startswith(p) for p in self._EXEMPT_PREFIXES):
+                if not any(
+                    request.url.path.startswith(p) for p in self._EXEMPT_PREFIXES
+                ):
                     return mip_error_response(
                         status_code=415,
                         error="unsupported_media_type",

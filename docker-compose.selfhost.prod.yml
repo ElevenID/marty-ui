@@ -865,7 +865,9 @@ services:
       VERIFICATION_SERVICE_PORT: "8012"
       PP_GRPC_TARGET: presentation-policy:9009
       VERIF_GRPC_PORT: "9017"
-      VERIF_GRPC_ENABLED: "true"
+      # The inbound proto carries no authenticated tenant principal and has no
+      # production callers. Keep this ingress closed until that contract exists.
+      VERIF_GRPC_ENABLED: "false"
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
       REDIS_URL: redis://redis:6379/3
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
@@ -877,6 +879,8 @@ services:
       - verification_workload_client_key
       - workload_identity_ca_cert
     depends_on:
+      credential-template:
+        condition: service_healthy
       presentation-policy:
         condition: service_healthy
       redis:
