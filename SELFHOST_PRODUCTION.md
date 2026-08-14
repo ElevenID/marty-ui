@@ -139,6 +139,12 @@ Create these files under `SELFHOST_SECRET_DIR`:
 - `pp_workload_server_key`
 - `flow_workload_client_cert`
 - `flow_workload_client_key`
+- `flow_workload_server_cert`
+- `flow_workload_server_key`
+- `auth_workload_client_cert`
+- `auth_workload_client_key`
+- `applicant_workload_client_cert`
+- `applicant_workload_client_key`
 - `verification_workload_client_cert`
 - `verification_workload_client_key`
 - `openbao_service_token`

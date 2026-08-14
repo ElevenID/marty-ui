@@ -62,7 +62,12 @@ def _normalize_grpc_callback_url(value: str | None) -> str | None:
         except ValueError:
             is_ip_address = False
 
-        if hostname and "." not in hostname and hostname not in {"localhost", "0"} and not is_ip_address:
+        if (
+            hostname
+            and "." not in hostname
+            and hostname not in {"localhost", "0"}
+            and not is_ip_address
+        ):
             return value
 
     raise ValueError("callback_url must be https or an internal service URL")
@@ -135,12 +140,16 @@ def _instance_to_pb(inst: Any) -> flow_service_pb2.FlowInstanceResponse:
         error=inst.error or "",
         created_at=inst.created_at.isoformat(),
         updated_at=inst.updated_at.isoformat(),
-        flow_id="" if inst.flow_definition_id.startswith("__") else inst.flow_definition_id,
+        flow_id=""
+        if inst.flow_definition_id.startswith("__")
+        else inst.flow_definition_id,
         protocol_status=protocol_status,
         flow_type=_response_flow_type(inst) or "",
         current_step=str((inst.context or {}).get("current_step_name") or ""),
         current_step_index=int((inst.context or {}).get("current_step_index") or 0),
-        issued_credential_id=str((inst.context or {}).get("issued_credential_id") or ""),
+        issued_credential_id=str(
+            (inst.context or {}).get("issued_credential_id") or ""
+        ),
         error_code=str((inst.context or {}).get("error_code") or ""),
     )
 
@@ -215,7 +224,9 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             organization_id=request.organization_id,
             name=request.name,
             description=request.description or None,
-            flow_type=FlowType(request.flow_type) if request.flow_type else FlowType.OID4VCI_PRE_AUTHORIZED,
+            flow_type=FlowType(request.flow_type)
+            if request.flow_type
+            else FlowType.OID4VCI_PRE_AUTHORIZED,
             start_step_id=request.start_step_id or "",
             preconditions=list(request.preconditions),
             credential_template_id=request.credential_template_id or None,
@@ -241,11 +252,15 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
         for t in request.transitions:
             from_id = step_id_map.get(t.from_step_id, t.from_step_id)
             to_id = step_id_map.get(t.to_step_id, t.to_step_id)
-            flow.transitions.append(FlowTransition(
-                from_step_id=from_id,
-                to_step_id=to_id,
-                condition=TransitionCondition(t.condition) if t.condition else TransitionCondition.SUCCESS,
-            ))
+            flow.transitions.append(
+                FlowTransition(
+                    from_step_id=from_id,
+                    to_step_id=to_id,
+                    condition=TransitionCondition(t.condition)
+                    if t.condition
+                    else TransitionCondition.SUCCESS,
+                )
+            )
 
         if not flow.start_step_id and flow.steps:
             flow.start_step_id = flow.steps[0].id
@@ -360,11 +375,13 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
         )
 
         if flow_def.start_step_id:
-            instance.step_history.append({
-                "step_id": flow_def.start_step_id,
-                "entered_at": now.isoformat(),
-                "status": "entered",
-            })
+            instance.step_history.append(
+                {
+                    "step_id": flow_def.start_step_id,
+                    "entered_at": now.isoformat(),
+                    "status": "entered",
+                }
+            )
 
         if _effective_flow_type(flow_def) == FlowType.OID4VCI_PRE_AUTHORIZED:
             try:
@@ -379,6 +396,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
         # Auto-create OID4VCI artifact if applicable
         if _effective_flow_type(flow_def) == FlowType.OID4VCI_PRE_AUTHORIZED:
             from flow.main import _create_oid4vci_artifact
+
             await _create_oid4vci_artifact(instance, flow_def, repo)
 
         logger.info("gRPC StartFlowInstance: %s", instance.id)
@@ -398,7 +416,9 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
         from flow.main import _parse_flow_instance_status
 
         repo = self._get_repo()
-        status_filter = _parse_flow_instance_status(request.status) if request.status else None
+        status_filter = (
+            _parse_flow_instance_status(request.status) if request.status else None
+        )
         instances = await repo.list_instances(
             request.organization_id,
             request.flow_definition_id or None,
@@ -436,9 +456,14 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             context.set_details("Flow instance not found")
             return flow_service_pb2.FlowInstanceResponse()
 
-        if instance.status not in (FlowInstanceStatus.IN_PROGRESS, FlowInstanceStatus.AWAITING_WALLET):
+        if instance.status not in (
+            FlowInstanceStatus.IN_PROGRESS,
+            FlowInstanceStatus.AWAITING_WALLET,
+        ):
             context.set_code(grpc.StatusCode.FAILED_PRECONDITION)
-            context.set_details(f"Cannot advance flow in {instance.status.value} status")
+            context.set_details(
+                f"Cannot advance flow in {instance.status.value} status"
+            )
             return flow_service_pb2.FlowInstanceResponse()
 
         flow_def = await repo.get_definition(instance.flow_definition_id)
@@ -461,7 +486,11 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
                 context.set_details(f"Preconditions not met: {', '.join(unmet)}")
                 return flow_service_pb2.FlowInstanceResponse()
 
-        condition = TransitionCondition(request.step_result) if request.step_result else TransitionCondition.SUCCESS
+        condition = (
+            TransitionCondition(request.step_result)
+            if request.step_result
+            else TransitionCondition.SUCCESS
+        )
         if instance.status == FlowInstanceStatus.AWAITING_WALLET:
             instance.transition_to(
                 FlowInstanceStatus.IN_PROGRESS,
@@ -485,17 +514,21 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
         instance.context.update(dict(request.data))
 
         if instance.step_history:
-            instance.step_history[-1]["completed_at"] = datetime.now(timezone.utc).isoformat()
+            instance.step_history[-1]["completed_at"] = datetime.now(
+                timezone.utc
+            ).isoformat()
             instance.step_history[-1]["result"] = request.step_result
 
         now = datetime.now(timezone.utc)
         if next_step_id:
             instance.current_step_id = next_step_id
-            instance.step_history.append({
-                "step_id": next_step_id,
-                "entered_at": now.isoformat(),
-                "status": "entered",
-            })
+            instance.step_history.append(
+                {
+                    "step_id": next_step_id,
+                    "entered_at": now.isoformat(),
+                    "status": "entered",
+                }
+            )
             next_step = next((s for s in flow_def.steps if s.id == next_step_id), None)
             if next_step and next_step.step_type == StepType.END:
                 instance.transition_to(FlowInstanceStatus.COMPLETED)
@@ -509,8 +542,14 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
 
         instance.updated_at = now
         await repo.save_instance(instance)
-        logger.info("gRPC AdvanceFlowInstance: %s → %s", instance.id, instance.status.value)
-        event_type = "completed" if instance.status.value in ("completed", "failed") else "advanced"
+        logger.info(
+            "gRPC AdvanceFlowInstance: %s → %s", instance.id, instance.status.value
+        )
+        event_type = (
+            "completed"
+            if instance.status.value in ("completed", "failed")
+            else "advanced"
+        )
         await self._emit_flow_event(event_type, instance)
         return _instance_to_pb(instance)
 
@@ -555,16 +594,22 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             return flow_service_pb2.FlowResultResponse()
 
         result = instance.result or {}
-        verified_claims = {k: str(v) for k, v in result.items()} if isinstance(result, dict) else {}
+        verified_claims = (
+            {k: str(v) for k, v in result.items()} if isinstance(result, dict) else {}
+        )
 
         return flow_service_pb2.FlowResultResponse(
             instance_id=instance.id,
             status=_protocol_status_for_instance(instance.status),
             result=json.dumps(result) if result else "",
             decision=result.get("decision", "") if isinstance(result, dict) else "",
-            decision_reason=result.get("decision_reason", "") if isinstance(result, dict) else "",
+            decision_reason=result.get("decision_reason", "")
+            if isinstance(result, dict)
+            else "",
             verified_claims=verified_claims,
-            evaluation_timestamp=instance.completed_at.isoformat() if instance.completed_at else "",
+            evaluation_timestamp=instance.completed_at.isoformat()
+            if instance.completed_at
+            else "",
         )
 
     async def ListFlowArtifacts(self, request, context):
@@ -585,7 +630,11 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
     # ------------------------------------------------------------------ #
 
     async def StartVerification(self, request, context):
-        from flow.main import StartVerificationFlowRequest
+        from flow.main import (
+            AUTH_WORKLOAD_IDENTITY,
+            StartVerificationFlowRequest,
+            VerificationStartPrincipal,
+        )
 
         try:
             callback_url = _normalize_grpc_callback_url(request.callback_url or None)
@@ -607,7 +656,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
 
             result = await self._start_verification(
                 request=req,
-                user_id=request.user_id or "grpc-service",
+                principal=VerificationStartPrincipal.workload(AUTH_WORKLOAD_IDENTITY),
                 repo=self._get_repo(),
             )
         except Exception as exc:
@@ -657,8 +706,7 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
                 else ()
             )
             metadata = {
-                str(item.key).lower(): str(item.value)
-                for item in invocation_metadata
+                str(item.key).lower(): str(item.value) for item in invocation_metadata
             }
             auth_evidence = await self._authenticate_application_approved(
                 event=raw_event,
@@ -727,7 +775,11 @@ class FlowServiceGrpc(flow_service_pb2_grpc.FlowServiceServicer):
             except asyncio.QueueFull:
                 logger.warning("Dropping flow event for slow subscriber %s", sub_id)
             except Exception:
-                logger.warning("Failed to enqueue flow event for subscriber %s — marking stale", sub_id, exc_info=True)
+                logger.warning(
+                    "Failed to enqueue flow event for subscriber %s — marking stale",
+                    sub_id,
+                    exc_info=True,
+                )
                 stale.append(sub_id)
         for sid in stale:
             self._stream_queues.pop(sid, None)

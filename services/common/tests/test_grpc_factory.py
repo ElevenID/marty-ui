@@ -99,10 +99,13 @@ class TestStartGrpcServerPort:
 
         server, health = create_grpc_server("test-svc")
 
-        with patch.dict(os.environ, {
-            "GRPC_TLS_CERT": str(cert_file),
-            "GRPC_TLS_KEY": str(key_file),
-        }):
+        with patch.dict(
+            os.environ,
+            {
+                "GRPC_TLS_CERT": str(cert_file),
+                "GRPC_TLS_KEY": str(key_file),
+            },
+        ):
             # ssl_server_credentials will fail with fake cert data,
             # but we verify the path is taken
             try:
@@ -183,7 +186,9 @@ class TestServiceAuthentication:
 
         interceptors = channel_factory.call_args.kwargs["interceptors"]
         token_interceptor = next(
-            item for item in interceptors if isinstance(item, ServiceTokenClientInterceptor)
+            item
+            for item in interceptors
+            if isinstance(item, ServiceTokenClientInterceptor)
         )
         assert token_interceptor._token == token
 
@@ -368,6 +373,34 @@ class TestWorkloadIdentityAuthentication:
         )
         original.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_deny_by_default_also_covers_server_streaming(self):
+        async def stream(_request, _context):
+            yield "should-not-be-visible"
+
+        original = MagicMock(side_effect=stream)
+        handler = grpc.unary_stream_rpc_method_handler(original)
+        continuation = AsyncMock(return_value=handler)
+        details = SimpleNamespace(
+            method="/marty.test.v1.Verifier/StreamSecrets",
+            invocation_metadata=(),
+        )
+        intercepted = await WorkloadIdentityInterceptor(
+            self._authorization()
+        ).intercept_service(continuation, details)
+        context = self._context(self._FLOW_IDENTITY)
+
+        responses = [
+            response async for response in intercepted.unary_stream(object(), context)
+        ]
+
+        assert responses == []
+        context.abort.assert_awaited_once_with(
+            grpc.StatusCode.PERMISSION_DENIED,
+            "The authenticated workload is not authorized for this RPC",
+        )
+        original.assert_not_called()
+
     @pytest.mark.parametrize(
         "service_source",
         ["flow/main.py", "verification/main.py"],
@@ -391,6 +424,29 @@ class TestWorkloadIdentityAuthentication:
         assert "spiffe://marty.internal/service/verification" in source
         assert "require_workload_identity=True" in source
 
+    @pytest.mark.parametrize(
+        "service_source",
+        ["auth/main.py", "common/events.py"],
+    )
+    def test_flow_callers_require_workload_identity(self, service_source):
+        source = (Path(__file__).resolve().parents[2] / service_source).read_text(
+            encoding="utf-8"
+        )
+
+        assert "require_workload_identity=True" in source
+
+    def test_flow_server_authorizes_only_exact_rpc_workloads(self):
+        source = (Path(__file__).resolve().parents[2] / "flow/main.py").read_text(
+            encoding="utf-8"
+        )
+
+        assert "workload_identity_authorization=" in source
+        assert "spiffe://marty.internal/service/auth" in source
+        assert "spiffe://marty.internal/service/applicant" in source
+        assert "StartVerification" in source
+        assert "ApplicationApproved" in source
+        assert "require_workload_identity=True" in source
+
     @staticmethod
     def _certificate_material(tmp_path):
         now = datetime.now(timezone.utc)
@@ -412,7 +468,9 @@ class TestWorkloadIdentityAuthentication:
             key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
             cert = (
                 x509.CertificateBuilder()
-                .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)]))
+                .subject_name(
+                    x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+                )
                 .issuer_name(ca_name)
                 .public_key(key.public_key())
                 .serial_number(x509.random_serial_number())
@@ -462,25 +520,15 @@ class TestWorkloadIdentityAuthentication:
         return paths
 
     @pytest.mark.asyncio
-    async def test_real_mtls_peer_uri_authorizes_rpc(
-        self, monkeypatch, tmp_path
-    ):
+    async def test_real_mtls_peer_uri_authorizes_rpc(self, monkeypatch, tmp_path):
         paths = self._certificate_material(tmp_path)
         monkeypatch.setenv("ENVIRONMENT", "production")
         monkeypatch.setenv("GRPC_SERVICE_TOKEN", "s" * 48)
         monkeypatch.setenv("GRPC_WORKLOAD_TLS_CA_CERT", str(paths["ca"]))
-        monkeypatch.setenv(
-            "GRPC_WORKLOAD_TLS_SERVER_CERT", str(paths["server_cert"])
-        )
-        monkeypatch.setenv(
-            "GRPC_WORKLOAD_TLS_SERVER_KEY", str(paths["server_key"])
-        )
-        monkeypatch.setenv(
-            "GRPC_WORKLOAD_TLS_CLIENT_CERT", str(paths["client_cert"])
-        )
-        monkeypatch.setenv(
-            "GRPC_WORKLOAD_TLS_CLIENT_KEY", str(paths["client_key"])
-        )
+        monkeypatch.setenv("GRPC_WORKLOAD_TLS_SERVER_CERT", str(paths["server_cert"]))
+        monkeypatch.setenv("GRPC_WORKLOAD_TLS_SERVER_KEY", str(paths["server_key"]))
+        monkeypatch.setenv("GRPC_WORKLOAD_TLS_CLIENT_CERT", str(paths["client_cert"]))
+        monkeypatch.setenv("GRPC_WORKLOAD_TLS_CLIENT_KEY", str(paths["client_key"]))
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.bind(("127.0.0.1", 0))
