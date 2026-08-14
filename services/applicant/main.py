@@ -62,6 +62,17 @@ def _service_secret(name: str) -> str:
         return ""
 
 
+def _issuance_management_headers(organization_id: str | None = None) -> dict[str, str]:
+    """Authenticate and tenant-bind an outbound Issuance management call."""
+    headers: dict[str, str] = {}
+    api_key = _service_secret("ISSUANCE_API_KEY")
+    if api_key:
+        headers["X-API-Key"] = api_key
+    if organization_id:
+        headers["X-Organization-ID"] = organization_id
+    return headers
+
+
 def _identity_headers(
     x_user_id: str | None,
     x_user_email: str | None = None,
@@ -81,14 +92,10 @@ def _identity_headers(
 
 
 async def _load_application_template(template_id: str) -> dict[str, Any]:
-    headers: dict[str, str] = {}
-    api_key = _service_secret("ISSUANCE_API_KEY")
-    if api_key:
-        headers["X-API-Key"] = api_key
     async with httpx.AsyncClient(timeout=5.0) as client:
         response = await client.get(
             f"{ISSUANCE_SERVICE_URL}/v1/application-templates/{template_id}",
-            headers=headers,
+            headers=_issuance_management_headers(),
         )
     if response.status_code == 404:
         raise HTTPException(status_code=422, detail="Application Template not found")
@@ -551,26 +558,35 @@ def _advance_applicant_to_credentialed(applicant: "Applicant") -> None:
         _set_applicant_status(applicant, ApplicantStatus.CREDENTIALED)
 
 
-async def _get_issuance_transaction_context(transaction_id: str | None) -> dict[str, Any] | None:
+async def _get_issuance_transaction_context(
+    transaction_id: str | None,
+    organization_id: str,
+) -> dict[str, Any] | None:
     if not transaction_id or transaction_id.startswith("local-"):
         return None
-    headers: dict[str, str] = {}
-    api_key = _service_secret("ISSUANCE_API_KEY")
-    if api_key:
-        headers["X-API-Key"] = api_key
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
             response = await client.get(
                 f"{ISSUANCE_SERVICE_URL}/v1/issuance/transactions/{transaction_id}",
-                headers=headers,
+                headers=_issuance_management_headers(organization_id),
             )
         if response.status_code == 404:
             return None
+        if response.status_code >= 400:
+            raise HTTPException(
+                status_code=503,
+                detail="Issuance transaction reconciliation is temporarily unavailable",
+            )
         response.raise_for_status()
         return response.json()
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.debug("Unable to sync issuance transaction %s: %s", transaction_id, exc)
-        return None
+        logger.warning("Unable to sync issuance transaction %s: %s", transaction_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Issuance transaction reconciliation is temporarily unavailable",
+        ) from exc
 
 
 async def _sync_application_issuance_state(
@@ -596,7 +612,7 @@ async def _sync_application_issuance_state(
         changed = True
 
     transaction_id = application.system_data.get("issuance_transaction_id")
-    tx = await _get_issuance_transaction_context(transaction_id)
+    tx = await _get_issuance_transaction_context(transaction_id, application.organization_id)
     if not tx:
         if changed and save:
             await repo.save_application(application)
@@ -3097,10 +3113,6 @@ async def get_my_issued_credentials(
     user_id, _, _ = _identity_headers(x_user_id)
     profiles = await repo.list_by_user_id(user_id)
     records: list[dict[str, Any]] = []
-    headers: dict[str, str] = {}
-    api_key = _service_secret("ISSUANCE_API_KEY")
-    if api_key:
-        headers["X-API-Key"] = api_key
     async with httpx.AsyncClient(timeout=5.0) as client:
         for profile in profiles:
             response = await client.get(
@@ -3110,12 +3122,10 @@ async def get_my_issued_credentials(
                     "subject_id": profile.id,
                     "limit": 500,
                 },
-                headers=headers,
+                headers=_issuance_management_headers(profile.organization_id),
             )
-            if response.status_code >= 500:
-                raise HTTPException(status_code=503, detail="Credential inventory is temporarily unavailable")
             if response.status_code >= 400:
-                continue
+                raise HTTPException(status_code=503, detail="Credential inventory is temporarily unavailable")
             payload = response.json()
             items = payload if isinstance(payload, list) else payload.get("items", payload.get("credentials", []))
             for item in items if isinstance(items, list) else []:
