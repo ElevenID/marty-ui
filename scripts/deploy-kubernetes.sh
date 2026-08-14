@@ -229,6 +229,9 @@ cmd_setup_secrets() {
   local integration_secret_master_key canvas_credentials_shared_secret openbao_service_token
   local workload_identity_ca_cert pp_workload_server_cert pp_workload_server_key
   local flow_workload_client_cert flow_workload_client_key
+  local flow_workload_server_cert flow_workload_server_key
+  local auth_workload_client_cert auth_workload_client_key
+  local applicant_workload_client_cert applicant_workload_client_key
   local verification_workload_client_cert verification_workload_client_key
   local session_secret_key
   local cloudflare_tunnel_token
@@ -254,6 +257,12 @@ cmd_setup_secrets() {
   pp_workload_server_key="$(resolve_secret_input PP_WORKLOAD_SERVER_KEY)"
   flow_workload_client_cert="$(resolve_secret_input FLOW_WORKLOAD_CLIENT_CERT)"
   flow_workload_client_key="$(resolve_secret_input FLOW_WORKLOAD_CLIENT_KEY)"
+  flow_workload_server_cert="$(resolve_secret_input FLOW_WORKLOAD_SERVER_CERT)"
+  flow_workload_server_key="$(resolve_secret_input FLOW_WORKLOAD_SERVER_KEY)"
+  auth_workload_client_cert="$(resolve_secret_input AUTH_WORKLOAD_CLIENT_CERT)"
+  auth_workload_client_key="$(resolve_secret_input AUTH_WORKLOAD_CLIENT_KEY)"
+  applicant_workload_client_cert="$(resolve_secret_input APPLICANT_WORKLOAD_CLIENT_CERT)"
+  applicant_workload_client_key="$(resolve_secret_input APPLICANT_WORKLOAD_CLIENT_KEY)"
   verification_workload_client_cert="$(resolve_secret_input VERIFICATION_WORKLOAD_CLIENT_CERT)"
   verification_workload_client_key="$(resolve_secret_input VERIFICATION_WORKLOAD_CLIENT_KEY)"
   flow_webhook_secret="$(resolve_secret_input FLOW_WEBHOOK_SECRET)"
@@ -316,6 +325,24 @@ cmd_setup_secrets() {
     --from-literal=ca.crt="$workload_identity_ca_cert" \
     --from-literal=tls.crt="$flow_workload_client_cert" \
     --from-literal=tls.key="$flow_workload_client_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic flow-server-workload-tls \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$workload_identity_ca_cert" \
+    --from-literal=tls.crt="$flow_workload_server_cert" \
+    --from-literal=tls.key="$flow_workload_server_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic auth-workload-tls \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$workload_identity_ca_cert" \
+    --from-literal=tls.crt="$auth_workload_client_cert" \
+    --from-literal=tls.key="$auth_workload_client_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic applicant-workload-tls \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$workload_identity_ca_cert" \
+    --from-literal=tls.crt="$applicant_workload_client_cert" \
+    --from-literal=tls.key="$applicant_workload_client_key" \
     --dry-run=client -o yaml | kubectl apply -f -
   kubectl create secret generic verification-workload-tls \
     --namespace="$NAMESPACE" \

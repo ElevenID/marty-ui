@@ -71,7 +71,9 @@ def read_service_token() -> str:
             "development environments."
         )
     if token.lower().startswith(_PLACEHOLDER_SECRET_PREFIXES):
-        raise RuntimeError("GRPC_SERVICE_TOKEN must not be a placeholder in production.")
+        raise RuntimeError(
+            "GRPC_SERVICE_TOKEN must not be a placeholder in production."
+        )
     if len(token) < 32:
         raise RuntimeError(
             "GRPC_SERVICE_TOKEN must contain at least 32 characters in production."
@@ -107,7 +109,16 @@ class MetricsClientInterceptor(grpc_aio.UnaryUnaryClientInterceptor):
                 "Outbound gRPC request duration",
                 ["source_service", "method"],
                 buckets=[
-                    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0,
+                    0.005,
+                    0.01,
+                    0.025,
+                    0.05,
+                    0.1,
+                    0.25,
+                    0.5,
+                    1.0,
+                    2.5,
+                    5.0,
                 ],
             )
             self._error_counter = Counter(
@@ -187,10 +198,14 @@ class ServiceTokenClientInterceptor(
         return client_call_details._replace(metadata=metadata)
 
     async def intercept_unary_unary(self, continuation, client_call_details, request):
-        return await continuation(self._authenticated_details(client_call_details), request)
+        return await continuation(
+            self._authenticated_details(client_call_details), request
+        )
 
     async def intercept_unary_stream(self, continuation, client_call_details, request):
-        return await continuation(self._authenticated_details(client_call_details), request)
+        return await continuation(
+            self._authenticated_details(client_call_details), request
+        )
 
     async def intercept_stream_unary(
         self, continuation, client_call_details, request_iterator
@@ -242,7 +257,16 @@ class LoggingMetricsInterceptor(grpc_aio.ServerInterceptor):
                 "gRPC request duration",
                 ["service", "method"],
                 buckets=[
-                    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0,
+                    0.005,
+                    0.01,
+                    0.025,
+                    0.05,
+                    0.1,
+                    0.25,
+                    0.5,
+                    1.0,
+                    2.5,
+                    5.0,
                 ],
             )
             self._error_counter = Counter(
@@ -294,7 +318,9 @@ class LoggingMetricsInterceptor(grpc_aio.ServerInterceptor):
                 ).inc()
             logger.warning(
                 "gRPC %s failed peer=%s error=%s",
-                method, peer, exc,
+                method,
+                peer,
+                exc,
             )
             raise
         finally:
@@ -313,7 +339,9 @@ class LoggingMetricsInterceptor(grpc_aio.ServerInterceptor):
             if status == "OK":
                 logger.info(
                     "gRPC %s peer=%s status=OK duration=%.3fs",
-                    method, peer, duration,
+                    method,
+                    peer,
+                    duration,
                 )
 
 
@@ -340,13 +368,15 @@ class CorrelationIdInterceptor(grpc_aio.ServerInterceptor):
 
         async def _wrapped(request, context):
             cid = ""
-            metadata = dict(context.invocation_metadata()) if hasattr(context, "invocation_metadata") else {}
+            metadata = (
+                dict(context.invocation_metadata())
+                if hasattr(context, "invocation_metadata")
+                else {}
+            )
             cid = metadata.get(self._HEADER, "")
             if cid:
                 correlation_id_var.set(cid)
-                context.set_trailing_metadata(
-                    [(self._HEADER, cid)]
-                )
+                context.set_trailing_metadata([(self._HEADER, cid)])
             result = original(request, context)
             if inspect.isawaitable(result):
                 result = await result
@@ -444,9 +474,7 @@ def _configured_paths(
     """Return complete path configuration or reject a partial configuration."""
     values = tuple(os.environ.get(name, "").strip() for name in names)
     if any(values) and not all(values):
-        missing = ", ".join(
-            name for name, value in zip(names, values) if not value
-        )
+        missing = ", ".join(name for name, value in zip(names, values) if not value)
         raise RuntimeError(f"Incomplete {purpose} configuration; missing {missing}.")
     return values if all(values) else None
 
@@ -471,8 +499,7 @@ def _auth_context_values(context: Any, key: str) -> tuple[bytes, ...]:
     auth_context = context.auth_context() if hasattr(context, "auth_context") else {}
     values = auth_context.get(key, auth_context.get(key.encode("ascii"), ()))
     return tuple(
-        value if isinstance(value, bytes) else str(value).encode()
-        for value in values
+        value if isinstance(value, bytes) else str(value).encode() for value in values
     )
 
 
@@ -506,9 +533,7 @@ class WorkloadIdentityInterceptor(grpc_aio.ServerInterceptor):
         if not any(value.lower() in {b"ssl", b"tls"} for value in transport):
             return frozenset()
         identities: set[str] = set()
-        for value in _auth_context_values(
-            context, "x509_subject_alternative_name"
-        ):
+        for value in _auth_context_values(context, "x509_subject_alternative_name"):
             try:
                 identities.add(value.decode("utf-8", errors="strict"))
             except UnicodeDecodeError:
@@ -525,7 +550,7 @@ class WorkloadIdentityInterceptor(grpc_aio.ServerInterceptor):
             return None
         allowed = self._allowed_identities_by_method.get(method, frozenset())
 
-        async def authorized_unary(request, context):
+        async def authorize(context) -> bool:
             peer_identities = self._peer_identities(context)
             if not peer_identities:
                 logger.warning(
@@ -536,27 +561,68 @@ class WorkloadIdentityInterceptor(grpc_aio.ServerInterceptor):
                     grpc.StatusCode.UNAUTHENTICATED,
                     "A mutually authenticated workload identity is required",
                 )
-                return None
+                return False
             if peer_identities.isdisjoint(allowed):
-                logger.warning(
-                    "Rejected unauthorized workload gRPC call to %s", method
-                )
+                logger.warning("Rejected unauthorized workload gRPC call to %s", method)
                 await context.abort(
                     grpc.StatusCode.PERMISSION_DENIED,
                     "The authenticated workload is not authorized for this RPC",
                 )
+                return False
+            return True
+
+        async def authorized_unary_unary(request, context):
+            if not await authorize(context):
                 return None
             result = handler.unary_unary(request, context)
             return await result if inspect.isawaitable(result) else result
 
-        if not handler.unary_unary:
-            raise RuntimeError(
-                f"Workload identity authorization requires unary RPCs: {method}"
+        async def authorized_unary_stream(request, context):
+            if not await authorize(context):
+                return
+            responses = handler.unary_stream(request, context)
+            if inspect.isawaitable(responses):
+                responses = await responses
+            async for response in responses:
+                yield response
+
+        async def authorized_stream_unary(request_iterator, context):
+            if not await authorize(context):
+                return None
+            result = handler.stream_unary(request_iterator, context)
+            return await result if inspect.isawaitable(result) else result
+
+        async def authorized_stream_stream(request_iterator, context):
+            if not await authorize(context):
+                return
+            responses = handler.stream_stream(request_iterator, context)
+            if inspect.isawaitable(responses):
+                responses = await responses
+            async for response in responses:
+                yield response
+
+        handler_kwargs = {
+            "request_deserializer": handler.request_deserializer,
+            "response_serializer": handler.response_serializer,
+        }
+        if handler.unary_unary:
+            return grpc.unary_unary_rpc_method_handler(
+                authorized_unary_unary,
+                **handler_kwargs,
             )
-        return grpc.unary_unary_rpc_method_handler(
-            authorized_unary,
-            request_deserializer=handler.request_deserializer,
-            response_serializer=handler.response_serializer,
+        if handler.unary_stream:
+            return grpc.unary_stream_rpc_method_handler(
+                authorized_unary_stream,
+                **handler_kwargs,
+            )
+        if handler.stream_unary:
+            return grpc.stream_unary_rpc_method_handler(
+                authorized_stream_unary,
+                **handler_kwargs,
+            )
+        return grpc.stream_stream_rpc_method_handler(
+            authorized_stream_stream,
+            **handler_kwargs,
         )
 
 
@@ -759,11 +825,9 @@ def start_grpc_server_port(
         server.add_secure_port(addr, credentials)
         logger.info("gRPC server bound to %s (TLS enabled)", addr)
     else:
-        insecure_allowed = (
-            _is_dev_environment()
-            or os.environ.get("GRPC_INSECURE_ALLOWED", "").lower()
-            in ("true", "1", "yes")
-        )
+        insecure_allowed = _is_dev_environment() or os.environ.get(
+            "GRPC_INSECURE_ALLOWED", ""
+        ).lower() in ("true", "1", "yes")
         if not insecure_allowed:
             raise RuntimeError(
                 f"Refusing to start gRPC server on {addr} without TLS in "
@@ -782,7 +846,7 @@ def start_grpc_server_port(
 
     # Mark all services as SERVING
     if health_servicer:
-        for svc in (service_names or []):
+        for svc in service_names or []:
             health_servicer.set(svc, health_pb2.HealthCheckResponse.SERVING)
         health_servicer.set("", health_pb2.HealthCheckResponse.SERVING)
 
@@ -854,16 +918,16 @@ def create_grpc_channel(
     )
     if credentials:
         channel = grpc_aio.secure_channel(
-            target, credentials, options=options,
+            target,
+            credentials,
+            options=options,
             interceptors=all_interceptors or None,
         )
         logger.info("gRPC channel to %s (TLS enabled)", target)
     else:
-        insecure_allowed = (
-            _is_dev_environment()
-            or os.environ.get("GRPC_INSECURE_ALLOWED", "").lower()
-            in ("true", "1", "yes")
-        )
+        insecure_allowed = _is_dev_environment() or os.environ.get(
+            "GRPC_INSECURE_ALLOWED", ""
+        ).lower() in ("true", "1", "yes")
         if not insecure_allowed:
             raise RuntimeError(
                 f"Refusing to open insecure gRPC channel to {target} in "
@@ -871,7 +935,8 @@ def create_grpc_channel(
                 f"GRPC_INSECURE_ALLOWED=true to override."
             )
         channel = grpc_aio.insecure_channel(
-            target, options=options,
+            target,
+            options=options,
             interceptors=all_interceptors or None,
         )
         logger.warning("gRPC channel to %s (insecure — dev mode)", target)

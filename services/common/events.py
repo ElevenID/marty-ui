@@ -93,7 +93,11 @@ class EventPublisher:
             from common.grpc_factory import create_grpc_channel
 
             flow_grpc_target = os.environ.get("FLOW_GRPC_TARGET", "flow:9011")
-            self._flow_grpc_channel = create_grpc_channel(flow_grpc_target)
+            self._flow_grpc_channel = create_grpc_channel(
+                flow_grpc_target,
+                service_name="applicant",
+                require_workload_identity=True,
+            )
         return self._flow_grpc_channel
 
     def _get_notification_ingest_url(self) -> str | None:

@@ -112,6 +112,33 @@ from common.application_event_auth import (
     validate_application_event_configuration,
 )
 
+
+AUTH_WORKLOAD_IDENTITY = "spiffe://marty.internal/service/auth"
+APPLICANT_WORKLOAD_IDENTITY = "spiffe://marty.internal/service/applicant"
+
+
+@dataclass(frozen=True)
+class VerificationStartPrincipal:
+    """A verification caller whose authority comes from one trusted boundary."""
+
+    user_id: str | None = None
+    workload_identity: str | None = None
+
+    def __post_init__(self) -> None:
+        if bool(self.user_id) == bool(self.workload_identity):
+            raise ValueError(
+                "Verification principal must contain exactly one user or workload identity"
+            )
+
+    @classmethod
+    def user(cls, user_id: str) -> "VerificationStartPrincipal":
+        return cls(user_id=user_id)
+
+    @classmethod
+    def workload(cls, identity: str) -> "VerificationStartPrincipal":
+        return cls(workload_identity=identity)
+
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -2210,6 +2237,36 @@ def get_current_user_id(x_user_id: Annotated[str, Header()]) -> str:
     return x_user_id
 
 
+def get_verification_start_principal(
+    user_id: str = Depends(get_current_user_id),
+) -> VerificationStartPrincipal:
+    """Create an end-user principal only from gateway-authenticated context."""
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        raise HTTPException(status_code=401, detail="Authenticated user is required.")
+    return VerificationStartPrincipal.user(normalized_user_id)
+
+
+async def _authorize_verification_start(
+    principal: VerificationStartPrincipal,
+    organization_id: str,
+) -> None:
+    """Require tenant membership or the exact authenticated Auth workload."""
+    if principal.workload_identity is not None:
+        if principal.workload_identity != AUTH_WORKLOAD_IDENTITY:
+            raise HTTPException(
+                status_code=403,
+                detail="Authenticated workload cannot start verification flows.",
+            )
+        return
+
+    membership = await app.state.org_client.get_membership(
+        principal.user_id,
+        organization_id,
+    )
+    ensure_membership_permission(membership, "verification", "execute")
+
+
 # =============================================================================
 # Helper Functions
 # =============================================================================
@@ -2828,6 +2885,7 @@ async def _build_wallet_offers_from_template(
         # Fetch credential template via gRPC
         from marty_proto.v1 import credential_template_service_pb2 as ct_pb2
         from marty_proto.v1 import credential_template_service_pb2_grpc as ct_grpc
+
         ct_grpc_target = os.environ.get("CT_GRPC_TARGET", "credential-template:9003")
         async with create_grpc_channel(
             ct_grpc_target,
@@ -4225,7 +4283,7 @@ def _oid4vp_client_identity(
 )
 async def start_verification_flow(
     request: StartVerificationFlowRequest,
-    user_id: str = Depends(get_current_user_id),
+    principal: VerificationStartPrincipal = Depends(get_verification_start_principal),
     repo: InMemoryFlowRepository = Depends(get_repo),
 ) -> VerificationRequestResponse:
     """
@@ -4257,6 +4315,7 @@ async def start_verification_flow(
                 status_code=422,
                 detail="issuer_did is required to start a signed verification flow.",
             )
+        await _authorize_verification_start(principal, organization_id)
         _require_registered_callback(organization_id, request.callback_url)
         signing_identity = await _oid4vp_issuer_identity(
             organization_id,
@@ -4323,6 +4382,14 @@ async def start_verification_flow(
             detail="HAIP verifier support is not enabled for this deployment",
         )
 
+    requested_organization_id = str(request.organization_id or "").strip()
+    if not requested_organization_id:
+        raise HTTPException(
+            status_code=422,
+            detail="organization_id is required to start a verification flow.",
+        )
+    await _authorize_verification_start(principal, requested_organization_id)
+
     # Resolve the real organization_id from the presentation policy so that the
     # instance carries a valid org and the membership check in get_flow_instance
     # (and other endpoints) enforces actual authorization.
@@ -4348,12 +4415,6 @@ async def start_verification_flow(
             detail=f"Presentation policy not found or service unavailable: {request.presentation_policy_id}",
         )
 
-    requested_organization_id = str(request.organization_id or "").strip()
-    if not requested_organization_id:
-        raise HTTPException(
-            status_code=422,
-            detail="organization_id is required to start a verification flow.",
-        )
     if requested_organization_id != organization_id:
         raise HTTPException(
             status_code=403,
@@ -4365,20 +4426,6 @@ async def start_verification_flow(
             status_code=422,
             detail="issuer_did is required to start a verification flow.",
         )
-
-    # Verify that the requesting user is actually a member of the policy's org
-    # before creating the instance. Service-to-service callers (non-UUID user IDs
-    # like "auth-service") bypass this check so the credential-login flow works.
-    try:
-        import uuid as _uuid
-
-        _uuid.UUID(user_id)
-        is_service_user = False
-    except (ValueError, AttributeError):
-        is_service_user = True
-    if not is_service_user:
-        membership = await app.state.org_client.get_membership(user_id, organization_id)
-        ensure_membership_permission(membership, "verification", "execute")
 
     # Create a verification flow instance directly
     signing_identity = await _oid4vp_issuer_identity(
@@ -4529,9 +4576,7 @@ async def _build_presentation_request_artifacts(
     ct_stub = ct_grpc.CredentialTemplateServiceStub(app.state.ct_grpc_channel)
     native_requirements: list[dict[str, Any]] = []
     for requirement in requirements:
-        template_id = str(
-            requirement.get("credential_template_id", "") or ""
-        ).strip()
+        template_id = str(requirement.get("credential_template_id", "") or "").strip()
         if not template_id:
             raise NativeOperationError(
                 f"Presentation policy {presentation_policy_id} has a requirement "
@@ -4544,9 +4589,7 @@ async def _build_presentation_request_artifacts(
             raise NativeOperationError(
                 f"Credential template {template_id} was not found"
             )
-        native_requirements.append(
-            credential_requirement_input(requirement, template)
-        )
+        native_requirements.append(credential_requirement_input(requirement, template))
 
     return build_oid4vp_presentation_request(
         {
@@ -4577,6 +4620,7 @@ async def _oid4vp_credential_query(
     if lissi_compat:
         return {"presentation_definition": artifacts["presentation_definition"]}
     return {"dcql_query": artifacts["dcql_query"]}
+
 
 async def _unsigned_oid4vp_url_query(
     instance: FlowInstance,
@@ -5379,9 +5423,9 @@ def _validate_encrypted_response_header(
             algorithm = native_error.rsplit("Unsupported key algorithm:", 1)[1].strip()
             description = f"Unsupported {field_name} JWE alg: {algorithm}"
         elif "Unsupported content encryption:" in native_error:
-            encryption = native_error.rsplit(
-                "Unsupported content encryption:", 1
-            )[1].strip()
+            encryption = native_error.rsplit("Unsupported content encryption:", 1)[
+                1
+            ].strip()
             description = f"Unsupported {field_name} JWE enc: {encryption}"
         else:
             description = f"Invalid {field_name} JWE: {native_error}"
@@ -5801,8 +5845,7 @@ async def _submit_verification_response_internal(
     }
 
     component_revocation_checked = bool(public_credential_results) and all(
-        result.get("revocation_checked") is True
-        for result in public_credential_results
+        result.get("revocation_checked") is True for result in public_credential_results
     )
     component_not_revoked = (
         all(result.get("not_revoked") is True for result in public_credential_results)
@@ -5810,8 +5853,7 @@ async def _submit_verification_response_internal(
         else None
     )
     component_trust_valid = bool(public_credential_results) and all(
-        result.get("trust_check_passed") is True
-        for result in public_credential_results
+        result.get("trust_check_passed") is True for result in public_credential_results
     )
 
     verification_result_message = MIPMessage(
@@ -6192,11 +6234,20 @@ async def start_siop_flow(
     import secrets
     from datetime import timedelta
 
+    organization_id = str(request.organization_id or "").strip()
+    if not organization_id:
+        raise HTTPException(
+            status_code=422,
+            detail="organization_id is required to start a SIOPv2 flow.",
+        )
+    membership = await app.state.org_client.get_membership(user_id, organization_id)
+    ensure_membership_permission(membership, "verification", "execute")
+
     nonce = secrets.token_urlsafe(32)
     flow_definition_id = str(uuid.uuid4())
     instance = FlowInstance(
         flow_definition_id=flow_definition_id,
-        organization_id=request.organization_id or "__unknown__",
+        organization_id=organization_id,
         status=FlowInstanceStatus.AWAITING_WALLET,
         context={
             "flow_definition_reference": "__siop_v2__",
@@ -6317,7 +6368,9 @@ async def submit_siop_id_token(
             "Flow instance is not a SIOPv2 transaction", error="invalid_request"
         )
     if instance.expires_at and datetime.now(timezone.utc) > instance.expires_at:
-        instance.transition_to(FlowInstanceStatus.EXPIRED, event="siop_submission_expired")
+        instance.transition_to(
+            FlowInstanceStatus.EXPIRED, event="siop_submission_expired"
+        )
         await repo.save_instance(instance)
         raise HTTPException(status_code=410, detail="SIOPv2 transaction has expired")
     if instance.status not in {
@@ -6605,59 +6658,59 @@ async def handle_application_approved(
             return value.value if isinstance(value, Enum) else value
 
         semantics_payload = {
-                "application_id": event.aggregate_id,
-                "organization_id": flow_def.organization_id,
-                "flow_definition_id": flow_def.id,
-                "flow_definition_name": flow_def.name,
-                "flow_definition_description": flow_def.description,
-                "flow_definition_version": flow_def.version,
-                "flow_status": enum_value(flow_def.status),
-                "flow_type": enum_value(flow_def.flow_type),
-                "flow_extension": flow_def.extension or {},
-                "steps": [
-                    {
-                        "id": step.id,
-                        "name": step.name,
-                        "description": step.description,
-                        "step_type": enum_value(step.step_type),
-                        "config": step.config,
-                        "approval_strategy": step.approval_strategy,
-                        "timeout_seconds": step.timeout_seconds,
-                        "conditions": step.conditions,
-                    }
-                    for step in flow_def.steps
-                ],
-                "transitions": [
-                    {
-                        "id": transition.id,
-                        "from_step_id": transition.from_step_id,
-                        "to_step_id": transition.to_step_id,
-                        "condition": enum_value(transition.condition),
-                        "condition_expression": transition.condition_expression,
-                    }
-                    for transition in flow_def.transitions
-                ],
-                "start_step_id": flow_def.start_step_id,
-                "preconditions": flow_def.preconditions,
-                "credential_template_id": flow_def.credential_template_id,
-                "application_template_id": flow_def.application_template_id,
-                "presentation_policy_id": flow_def.presentation_policy_id,
-                "delivery_destination_profile_id": (
-                    flow_def.delivery_destination_profile_id
-                ),
-                "deployment_profile_id": flow_def.deployment_profile_id,
-                "deployment_profile_ids": flow_def.deployment_profile_ids,
-                "trust_profile_id": flow_def.trust_profile_id,
-                "approval_strategy": flow_def.approval_strategy,
-                "hooks": flow_def.hooks,
-                "trigger": flow_def.trigger,
-                "default_timeout_seconds": flow_def.default_timeout_seconds,
-                "max_retries": flow_def.max_retries,
-                "retry_cooldown_minutes": flow_def.retry_cooldown_minutes,
-                "enable_resume": flow_def.enable_resume,
-                "applicant_id": applicant_id,
-                "claims": event_claims,
-            }
+            "application_id": event.aggregate_id,
+            "organization_id": flow_def.organization_id,
+            "flow_definition_id": flow_def.id,
+            "flow_definition_name": flow_def.name,
+            "flow_definition_description": flow_def.description,
+            "flow_definition_version": flow_def.version,
+            "flow_status": enum_value(flow_def.status),
+            "flow_type": enum_value(flow_def.flow_type),
+            "flow_extension": flow_def.extension or {},
+            "steps": [
+                {
+                    "id": step.id,
+                    "name": step.name,
+                    "description": step.description,
+                    "step_type": enum_value(step.step_type),
+                    "config": step.config,
+                    "approval_strategy": step.approval_strategy,
+                    "timeout_seconds": step.timeout_seconds,
+                    "conditions": step.conditions,
+                }
+                for step in flow_def.steps
+            ],
+            "transitions": [
+                {
+                    "id": transition.id,
+                    "from_step_id": transition.from_step_id,
+                    "to_step_id": transition.to_step_id,
+                    "condition": enum_value(transition.condition),
+                    "condition_expression": transition.condition_expression,
+                }
+                for transition in flow_def.transitions
+            ],
+            "start_step_id": flow_def.start_step_id,
+            "preconditions": flow_def.preconditions,
+            "credential_template_id": flow_def.credential_template_id,
+            "application_template_id": flow_def.application_template_id,
+            "presentation_policy_id": flow_def.presentation_policy_id,
+            "delivery_destination_profile_id": (
+                flow_def.delivery_destination_profile_id
+            ),
+            "deployment_profile_id": flow_def.deployment_profile_id,
+            "deployment_profile_ids": flow_def.deployment_profile_ids,
+            "trust_profile_id": flow_def.trust_profile_id,
+            "approval_strategy": flow_def.approval_strategy,
+            "hooks": flow_def.hooks,
+            "trigger": flow_def.trigger,
+            "default_timeout_seconds": flow_def.default_timeout_seconds,
+            "max_retries": flow_def.max_retries,
+            "retry_cooldown_minutes": flow_def.retry_cooldown_minutes,
+            "enable_resume": flow_def.enable_resume,
+            "applicant_id": applicant_id,
+            "claims": event_claims,
+        }
         if issuance_attempt_id:
             semantics_payload["issuance_attempt_id"] = issuance_attempt_id
             semantics_version = "v2"
@@ -6684,9 +6737,7 @@ async def handle_application_approved(
     planned_instances: list[tuple[FlowInstance, dict[str, str]]] = []
     for flow_def in matching_flows:
         application_flow_key_hash = logical_key(flow_def)
-        offer_semantics_hash, offer_semantics_context_key = semantics_contract(
-            flow_def
-        )
+        offer_semantics_hash, offer_semantics_context_key = semantics_contract(flow_def)
         initial_context = {
             "applicant_id": applicant_id,
             "application_id": event.aggregate_id or "",
@@ -6975,7 +7026,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     grpc_port = int(os.environ.get("FLOW_GRPC_PORT", "9011"))
-    grpc_server, health_servicer = create_grpc_server("flow")
+    flow_service = "marty.ui.flow.v1.FlowService"
+    grpc_server, health_servicer = create_grpc_server(
+        "flow",
+        workload_identity_authorization={
+            f"/{flow_service}/StartVerification": {AUTH_WORKLOAD_IDENTITY},
+            f"/{flow_service}/ApplicationApproved": {APPLICANT_WORKLOAD_IDENTITY},
+        },
+    )
     flow_servicer = FlowServiceGrpc(
         start_verification_fn=start_verification_flow,
         application_approved_fn=handle_application_approved,
@@ -6986,8 +7044,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     start_grpc_server_port(
         grpc_server,
         grpc_port,
-        service_names=["marty.ui.flow.v1.FlowService"],
+        service_names=[flow_service],
         health_servicer=health_servicer,
+        require_workload_identity=True,
     )
     await grpc_server.start()
     logger.info(f"Flow gRPC server listening on :{grpc_port}")
@@ -7031,7 +7090,10 @@ For orchestrating multi-step credential journeys (issuance, renewal, revocation)
     @app.get("/health/native-backend")
     async def native_backend_health() -> dict[str, Any]:
         diagnostics = getattr(app.state, "native_backend_diagnostics", None)
-        if not isinstance(diagnostics, dict) or diagnostics.get("available") is not True:
+        if (
+            not isinstance(diagnostics, dict)
+            or diagnostics.get("available") is not True
+        ):
             raise HTTPException(status_code=503, detail="Native backend is unavailable")
         return {"status": "ready", **diagnostics}
 

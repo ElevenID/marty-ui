@@ -16,8 +16,6 @@ from typing import AsyncGenerator
 
 import redis.asyncio as redis
 from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from marty_common.service_setup import create_service_app
 
 from .application.use_cases import AuthenticateUseCase, SessionUseCase
@@ -27,12 +25,19 @@ from .infrastructure.adapters.http_adapter import (
     internal_router,
     router as auth_router,
 )
-from .infrastructure.adapters.applicant_profile_adapter import ApplicantProfileProvisioningAdapter
+from .infrastructure.adapters.applicant_profile_adapter import (
+    ApplicantProfileProvisioningAdapter,
+)
 from .infrastructure.adapters.keycloak_admin_adapter import build_keycloak_admin_adapter
 from .infrastructure.adapters.oidc_adapter import KeycloakOIDCAdapter, OIDCConfig
 from .infrastructure.adapters.postgres_audit_adapter import PostgresAuditRepository
-from .infrastructure.adapters.redis_adapter import RedisPKCEStateRepository, RedisSessionRepository
-from .infrastructure.adapters.user_provisioning_adapter import InMemoryUserProvisioningAdapter
+from .infrastructure.adapters.redis_adapter import (
+    RedisPKCEStateRepository,
+    RedisSessionRepository,
+)
+from .infrastructure.adapters.user_provisioning_adapter import (
+    InMemoryUserProvisioningAdapter,
+)
 
 # Configure logging
 logging.basicConfig(
@@ -79,7 +84,9 @@ def get_config() -> dict:
             ),
             "allowed_algorithms": tuple(
                 value.strip()
-                for value in os.environ.get("OIDC_ALLOWED_ALGORITHMS", "RS256").split(",")
+                for value in os.environ.get("OIDC_ALLOWED_ALGORITHMS", "RS256").split(
+                    ","
+                )
                 if value.strip()
             ),
             "redirect_uri": os.environ.get(
@@ -100,8 +107,12 @@ def get_config() -> dict:
             "path": "/",
         },
         "credential_login_policy_id": os.environ.get("CREDENTIAL_LOGIN_POLICY_ID", ""),
-        "auth_service_internal_url": os.environ.get("AUTH_SERVICE_INTERNAL_URL", "http://auth:8001"),
-        "issuance_service_url": os.environ.get("ISSUANCE_SERVICE_URL", "http://issuance:8005"),
+        "auth_service_internal_url": os.environ.get(
+            "AUTH_SERVICE_INTERNAL_URL", "http://auth:8001"
+        ),
+        "issuance_service_url": os.environ.get(
+            "ISSUANCE_SERVICE_URL", "http://issuance:8005"
+        ),
     }
 
 
@@ -109,22 +120,23 @@ def get_config() -> dict:
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan manager."""
     logger.info(f"Starting {SERVICE_NAME}...")
-    
+
     config = get_config()
-    
+
     # Initialize Redis client
     redis_client = redis.from_url(config["redis_url"], decode_responses=True)
-    
+
     # Initialize PostgreSQL for audit logging
     from marty_common.database import DatabaseManager, DatabaseConfig
+
     db = DatabaseManager(DatabaseConfig.from_env("auth"))
     async_session_factory = db.session_factory
     audit_repository = PostgresAuditRepository(async_session_factory)
-    
+
     # Initialize adapters
     session_repository = RedisSessionRepository(redis_client)
     pkce_repository = RedisPKCEStateRepository(redis_client)
-    
+
     oidc_config = OIDCConfig(
         issuer_url=config["oidc"]["issuer_url"],
         client_id=config["oidc"]["client_id"],
@@ -143,25 +155,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         native_diagnostics["version"],
         ",".join(native_diagnostics["capabilities"]),
     )
-    
+
     # gRPC channels
     from common.grpc_factory import create_grpc_channel
+
     org_grpc_target = os.environ.get("ORG_GRPC_TARGET", "organization:9002")
     org_grpc_channel = create_grpc_channel(org_grpc_target, service_name="auth")
 
     flow_grpc_target = os.environ.get("FLOW_GRPC_TARGET", "flow:9011")
-    flow_grpc_channel = create_grpc_channel(flow_grpc_target, service_name="auth")
+    flow_grpc_channel = create_grpc_channel(
+        flow_grpc_target,
+        service_name="auth",
+        require_workload_identity=True,
+    )
     app.state.flow_grpc_channel = flow_grpc_channel
 
     # Use in-memory provisioning for now (can swap to JIT adapter)
-    user_provisioning = InMemoryUserProvisioningAdapter(org_grpc_channel=org_grpc_channel)
+    user_provisioning = InMemoryUserProvisioningAdapter(
+        org_grpc_channel=org_grpc_channel
+    )
     applicant_profile_provisioner = ApplicantProfileProvisioningAdapter()
-    
+
     # Initialize event publisher (gRPC event bus)
     from auth.infrastructure.adapters.event_adapter import EventStreamPublisherAdapter
 
     event_publisher = EventStreamPublisherAdapter()
-    
+
     # Initialize use cases
     authenticate_use_case = AuthenticateUseCase(
         session_repository=session_repository,
@@ -173,11 +192,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         session_ttl_seconds=config["session_ttl_seconds"],
         post_logout_redirect_uri=config["oidc"]["post_logout_redirect_uri"],
     )
-    
+
     session_use_case = SessionUseCase(
         session_repository=session_repository,
     )
-    
+
     # Keycloak admin adapter (optional — for token exchange in credential login)
     kc_admin_adapter = build_keycloak_admin_adapter(
         token_validator=oidc_provider.validator,
@@ -223,7 +242,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     add_AuthServiceServicer_to_server(auth_servicer, grpc_server)
     start_grpc_server_port(
-        grpc_server, grpc_port,
+        grpc_server,
+        grpc_port,
         service_names=["marty.ui.auth.v1.AuthService"],
         health_servicer=health_servicer,
     )
@@ -264,7 +284,10 @@ def create_app() -> FastAPI:
     @app.get("/health/native-backend")
     async def native_backend_health() -> dict:
         diagnostics = getattr(app.state, "native_backend_diagnostics", None)
-        if not isinstance(diagnostics, dict) or diagnostics.get("available") is not True:
+        if (
+            not isinstance(diagnostics, dict)
+            or diagnostics.get("available") is not True
+        ):
             raise HTTPException(status_code=503, detail="Native backend is unavailable")
         return {"status": "ready", **diagnostics}
 
@@ -326,6 +349,7 @@ app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         app,
         host="0.0.0.0",

@@ -216,6 +216,12 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: FLOW_WEBHOOK_SECRET
+            - name: GRPC_WORKLOAD_TLS_CLIENT_CERT
+              value: /var/run/secrets/marty/workload/tls.crt
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KEY
+              value: /var/run/secrets/marty/workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_CA_CERT
+              value: /var/run/secrets/marty/workload/ca.crt
             - name: AUTH_SERVICE_PORT
               value: "8001"
             - name: UI_BASE_URL
@@ -300,6 +306,10 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: AUTH_SERVICE_INTERNAL_URL
+          volumeMounts:
+            - name: auth-workload-tls
+              mountPath: /var/run/secrets/marty/workload
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -319,6 +329,10 @@ spec:
               port: 8001
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: auth-workload-tls
+          secret:
+            secretName: auth-workload-tls
 ---
 apiVersion: v1
 kind: Service
@@ -1071,6 +1085,12 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: FLOW_APPLICATION_EVENT_HMAC_KEY
+            - name: GRPC_WORKLOAD_TLS_CLIENT_CERT
+              value: /var/run/secrets/marty/workload/tls.crt
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KEY
+              value: /var/run/secrets/marty/workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_CA_CERT
+              value: /var/run/secrets/marty/workload/ca.crt
             - name: APPLICANT_SERVICE_PORT
               value: "8006"
             - name: DATABASE_URL
@@ -1100,6 +1120,9 @@ spec:
           volumeMounts:
             - name: applicant-data
               mountPath: /app/data
+            - name: applicant-workload-tls
+              mountPath: /var/run/secrets/marty/workload
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /health
@@ -1116,6 +1139,9 @@ spec:
         - name: applicant-data
           persistentVolumeClaim:
             claimName: applicant-data
+        - name: applicant-workload-tls
+          secret:
+            secretName: applicant-workload-tls
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -1590,6 +1616,10 @@ spec:
               value: /var/run/secrets/marty/workload/tls.crt
             - name: GRPC_WORKLOAD_TLS_CLIENT_KEY
               value: /var/run/secrets/marty/workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_SERVER_CERT
+              value: /var/run/secrets/marty/flow-server-workload/tls.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KEY
+              value: /var/run/secrets/marty/flow-server-workload/tls.key
             - name: GRPC_WORKLOAD_TLS_CA_CERT
               value: /var/run/secrets/marty/workload/ca.crt
             - name: FLOW_WEBHOOK_SECRET
@@ -1628,6 +1658,9 @@ spec:
             - name: flow-workload-tls
               mountPath: /var/run/secrets/marty/workload
               readOnly: true
+            - name: flow-server-workload-tls
+              mountPath: /var/run/secrets/marty/flow-server-workload
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -1651,6 +1684,9 @@ spec:
         - name: flow-workload-tls
           secret:
             secretName: flow-workload-tls
+        - name: flow-server-workload-tls
+          secret:
+            secretName: flow-server-workload-tls
 ---
 apiVersion: v1
 kind: Service
