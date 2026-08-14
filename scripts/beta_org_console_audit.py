@@ -256,6 +256,7 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
         "post-org-probe",
         "kms-service-configured",
         "issuer-identity-active",
+        "verifier-issuer-identity-active",
         "compliance-profile-available",
         "trust-profile-active",
         "revocation-profile-activated",
@@ -1139,6 +1140,48 @@ def wait_for_issuer_identity(
     return None, last_probe
 
 
+def provision_verifier_issuer_identity(
+    page: Page,
+    organization_id: str,
+    issuer_did: str,
+    run_id: str,
+) -> dict[str, Any]:
+    """Ensure the public DID tuple required to sign OID4VP requests."""
+    return page.evaluate(
+        """
+        async (payload) => {
+          const response = await fetch('/v1/signing-keys/issuer-identities', {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+              'Idempotency-Key': payload.idempotency_key,
+            },
+            body: JSON.stringify({
+              organization_id: payload.organization_id,
+              issuer_did: payload.issuer_did,
+              key_purpose: 'oid4vp_request_signing',
+              credential_format: 'SD_JWT_VC',
+              algorithm: 'ES256',
+            }),
+          });
+          const body = await response.json().catch(() => null);
+          return {
+            status: response.status,
+            ok: response.ok,
+            created: body?.created === true,
+            error: response.ok ? null : body?.detail || body?.message || 'Provisioning failed.',
+          };
+        }
+        """,
+        {
+            "organization_id": organization_id,
+            "issuer_did": issuer_did,
+            "idempotency_key": f"beta-audit-oid4vp-{run_id}",
+        },
+    )
+
+
 def create_org(audit: Audit, run_id: str, email: str) -> str | None:
     page = audit.page
     slug = f"audit-prod-flow-{run_id}"
@@ -1325,6 +1368,46 @@ def create_issuer_identity(audit: Audit, run_id: str) -> None:
                 "algorithm": issuer.get("algorithm"),
                 "status": issuer.get("status"),
             }
+        },
+    )
+
+    verifier_result = provision_verifier_issuer_identity(
+        page,
+        organization_id,
+        issuer_did,
+        run_id,
+    )
+    verifier, verifier_probe = wait_for_issuer_identity(
+        page,
+        organization_id,
+        issuer_did,
+        key_purpose="oid4vp_request_signing",
+        credential_format="SD_JWT_VC",
+        algorithm="ES256",
+    )
+    if not verifier_result.get("ok") or not is_active(verifier):
+        audit.snapshot(
+            "verifier-issuer-identity-state-mismatch",
+            "The public OID4VP request-signing identity did not become active.",
+            {
+                "provisioning": verifier_result,
+                "issuer_did": issuer_did,
+                "probe": verifier_probe,
+            },
+        )
+        return
+    audit.snapshot(
+        "verifier-issuer-identity-active",
+        "Created an active public OID4VP request-signing identity.",
+        {
+            "issuer_identity": {
+                "issuer_did": verifier.get("issuer_did"),
+                "key_purpose": verifier.get("key_purpose"),
+                "credential_format": verifier.get("credential_format"),
+                "algorithm": verifier.get("algorithm"),
+                "status": verifier.get("status"),
+            },
+            "created": bool(verifier_result.get("created")),
         },
     )
 
@@ -1899,6 +1982,26 @@ def verify_resource_inventory(audit: Audit, run_id: str) -> None:
             "id": issuer.get("issuer_did"),
             "name": issuer.get("issuer_did"),
             "status": issuer.get("status"),
+        })
+
+    verifier_issuer = None
+    if issuer is not None:
+        verifier_issuer = find_issuer_identity(
+            issuer_probe,
+            str(issuer.get("issuer_did") or ""),
+            key_purpose="oid4vp_request_signing",
+            credential_format="SD_JWT_VC",
+            algorithm="ES256",
+        )
+    if verifier_issuer is None:
+        missing.append("verifier_issuer_identity")
+    else:
+        resources["verifier_issuer_identity"] = verifier_issuer
+        inventory.append({
+            "resource_type": "verifier_issuer_identity",
+            "id": verifier_issuer.get("issuer_did"),
+            "name": verifier_issuer.get("issuer_did"),
+            "status": verifier_issuer.get("status"),
         })
 
     for resource_type, path, name, partial_name in specs:
