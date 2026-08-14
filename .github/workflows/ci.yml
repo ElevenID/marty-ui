@@ -216,6 +216,38 @@ jobs:
   test-rust-services:
     name: Rust Service Tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.95.0
+      - name: Use mold linker
+        uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444
+        with:
+          mold-version: 2.41.0
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Test Rust service contracts
+        working-directory: rust
+        run: cargo test --locked --workspace
+      - name: Report compiler cache effectiveness
+        if: always()
+        run: sccache --show-stats
+
+  test-rust-db-contracts:
+    name: Rust Database Contracts
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f
@@ -246,12 +278,56 @@ jobs:
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
+      MARTY_TEST_POSTGRES_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
+      MARTY_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+      MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
+      MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME: marty_revocation_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.95.0
+      - name: Use mold linker
+        uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444
+        with:
+          mold-version: 2.41.0
+      - name: Enable compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Test Rust revocation database and runtime contracts
+        working-directory: rust
+        run: >-
+          cargo test --locked -p marty-revocation-profile
+          --test contracts -- --ignored --test-threads=1
+      - name: Report compiler cache effectiveness
+        if: always()
+        run: sccache --show-stats
+
+  rust-lint-policy:
+    name: Rust Lint and Packaging
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: 0
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
           toolchain: 1.95.0
           components: clippy,rustfmt
+      - name: Use mold linker
+        uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444
+        with:
+          mold-version: 2.41.0
       - name: Enable compiler cache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
@@ -259,33 +335,6 @@ jobs:
       - name: Check formatting
         working-directory: rust
         run: cargo fmt --all -- --check
-      - name: Test Rust service contracts
-        working-directory: rust
-        run: cargo test --locked --workspace
-      - name: Test Rust revocation storage contracts
-        working-directory: rust
-        env:
-          MARTY_TEST_POSTGRES_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
-          MARTY_TEST_REDIS_URL: redis://127.0.0.1:6379/0
-        run: >-
-          cargo test --locked -p marty-revocation-profile
-          --test storage_contract -- --ignored
-      - name: Test Rust revocation executable contract
-        working-directory: rust
-        env:
-          MARTY_TEST_POSTGRES_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
-          MARTY_TEST_REDIS_URL: redis://127.0.0.1:6379/0
-        run: >-
-          cargo test --locked -p marty-revocation-profile
-          --test runtime_contract -- --ignored
-      - name: Test Rust revocation migration contract
-        working-directory: rust
-        env:
-          MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
-          MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME: marty_revocation_test
-        run: >-
-          cargo test --locked -p marty-revocation-profile
-          --test migration_contract -- --ignored
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -319,6 +368,9 @@ jobs:
           grep -F 'dockerfile: rust/services/revocation-profile/Dockerfile' <<<"$rendered"
           grep -F 'ENVIRONMENT: beta' <<<"$rendered"
           grep -F 'RUST_LOG: info' <<<"$rendered"
+      - name: Report compiler cache effectiveness
+        if: always()
+        run: sccache --show-stats
 
   test-rust-service-images:
     name: Rust Service Images
@@ -635,10 +687,26 @@ jobs:
             semgrep-report.json
           retention-days: 14
 
+  rust-supply-chain:
+    name: Rust Supply Chain
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Audit Rust advisories, licenses, bans, and sources
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
+        with:
+          manifest-path: rust/Cargo.toml
+          command: check
+          command-arguments: advisories bans licenses sources
+
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [lint, fast-feedback, test-ui, test-services, test-rust-services, test-rust-service-images, flow-idempotency-contract, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security]
+    needs: [lint, fast-feedback, test-ui, test-services, test-rust-services, test-rust-db-contracts, rust-lint-policy, test-rust-service-images, flow-idempotency-contract, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
     runs-on: ubuntu-latest
     permissions:
       actions: read

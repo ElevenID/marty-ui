@@ -1,5 +1,4 @@
-mod support;
-
+use crate::support::{start_organization_server, TOKEN};
 use marty_revocation_profile::proto::{
     revocation_profile_service_client::RevocationProfileServiceClient, HealthCheckRequest,
 };
@@ -10,7 +9,6 @@ use std::{
     process::{Child, Command, Stdio},
     time::Duration,
 };
-use support::{start_organization_server, TOKEN};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
