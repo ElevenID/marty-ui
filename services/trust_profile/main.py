@@ -778,10 +778,26 @@ class RevocationPolicyModel(BaseModel):
 
 
 class TimePolicyModel(BaseModel):
-    max_clock_skew_seconds: int = 300
-    credential_freshness_hours: int | None = None
-    require_not_before: bool = True
-    require_expiration: bool = True
+    """Public Trust Profile time-policy contract, expressed in seconds."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    clock_skew_seconds: int = Field(default=300, ge=0, le=86_400)
+    require_freshness: bool = False
+    freshness_window_seconds: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_freshness_window(self) -> "TimePolicyModel":
+        if self.require_freshness and self.freshness_window_seconds is None:
+            raise ValueError(
+                "freshness_window_seconds is required when freshness is enabled"
+            )
+        if (
+            self.freshness_window_seconds is not None
+            and self.freshness_window_seconds % 3600 != 0
+        ):
+            raise ValueError("freshness_window_seconds must use whole-hour precision")
+        return self
 
 
 class CreateTrustProfileRequest(BaseModel):
@@ -2179,10 +2195,15 @@ async def create_trust_profile(
     # Set time policy
     if request.time_policy:
         profile.time_policy = TimePolicy(
-            max_clock_skew_seconds=request.time_policy.max_clock_skew_seconds,
-            credential_freshness_hours=request.time_policy.credential_freshness_hours,
-            require_not_before=request.time_policy.require_not_before,
-            require_expiration=request.time_policy.require_expiration,
+            max_clock_skew_seconds=request.time_policy.clock_skew_seconds,
+            credential_freshness_hours=(
+                request.time_policy.freshness_window_seconds // 3600
+                if request.time_policy.require_freshness
+                and request.time_policy.freshness_window_seconds is not None
+                else None
+            ),
+            require_not_before=True,
+            require_expiration=True,
         )
 
     await repo.save_profile(profile)
@@ -2551,6 +2572,18 @@ async def update_trust_profile(
         )
     if request.revocation_profile_id is not None:
         profile.revocation_profile_id = request.revocation_profile_id
+    if request.time_policy is not None:
+        profile.time_policy = TimePolicy(
+            max_clock_skew_seconds=request.time_policy.clock_skew_seconds,
+            credential_freshness_hours=(
+                request.time_policy.freshness_window_seconds // 3600
+                if request.time_policy.require_freshness
+                and request.time_policy.freshness_window_seconds is not None
+                else None
+            ),
+            require_not_before=profile.time_policy.require_not_before,
+            require_expiration=profile.time_policy.require_expiration,
+        )
     if request.supported_formats is not None:
         if not request.supported_formats:
             raise HTTPException(

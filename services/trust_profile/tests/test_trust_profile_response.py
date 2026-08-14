@@ -836,10 +836,9 @@ def test_create_trust_profile_returns_canonical_fields() -> None:
                 "cache_duration_hours": 1,
             },
             "time_policy": {
-                "max_clock_skew_seconds": 60,
-                "credential_freshness_hours": 1,
-                "require_not_before": True,
-                "require_expiration": True,
+                "clock_skew_seconds": 60,
+                "require_freshness": True,
+                "freshness_window_seconds": 3600,
             },
             "supported_formats": ["mdoc", "SD_JWT_VC"],
             "allowed_issuers": ["did:example:eudi-1"],
@@ -855,7 +854,12 @@ def test_create_trust_profile_returns_canonical_fields() -> None:
     assert body["allowed_algorithms"] == ["ES256"]
     assert body["supported_formats"] == ["MDOC", "SD_JWT_VC"]
     assert body["revocation_policy"]["cache_ttl_seconds"] == 3600
-    assert body["time_policy"]["require_freshness"] is True
+    assert body["time_policy"] == {
+        "clock_skew_seconds": 60,
+        "max_credential_age_seconds": 3600,
+        "require_freshness": True,
+        "freshness_window_seconds": 3600,
+    }
     assert body["verification_policy_set_id"] == "policy-set-2"
     assert body["compatible_compliance_codes"] == ["EUDI_PID"]
     assert body["status"] == "draft"
@@ -972,6 +976,33 @@ def test_update_trust_profile_clears_to_deny_all_when_trust_sources_are_removed(
     body = response.json()
     assert body["trust_sources"] == []
     assert body["allowed_issuers"] == []
+    get_membership.assert_awaited_once_with("user-1", "org-1")
+
+
+def test_update_trust_profile_uses_public_time_policy_contract() -> None:
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    profile = asyncio.run(_save_profile(repo))
+    client, get_membership = _build_client(repo)
+
+    response = client.patch(
+        f"/v1/trust-profiles/{profile.id}",
+        headers={"x-user-id": "user-1"},
+        json={
+            "time_policy": {
+                "clock_skew_seconds": 900,
+                "require_freshness": False,
+                "freshness_window_seconds": 21_600,
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["time_policy"] == {
+        "clock_skew_seconds": 900,
+        "max_credential_age_seconds": None,
+        "require_freshness": False,
+        "freshness_window_seconds": None,
+    }
     get_membership.assert_awaited_once_with("user-1", "org-1")
 
 
