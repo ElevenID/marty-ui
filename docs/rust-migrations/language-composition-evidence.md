@@ -43,8 +43,9 @@ python scripts/report_rust_migration_composition.py `
 The report includes each repository's exact commit, dirty state, maintained
 source files/bytes/physical lines/nonblank lines by language, and dependencies
 declared in Cargo, Python, Node, and Dart manifests. Capability records expose
-the same metrics for canonical and legacy ownership paths. Missing paths remain
-explicit evidence; they are not converted to an empty successful result.
+the same metrics for canonical implementation, cross-repository binding, and
+legacy ownership paths. Missing paths remain explicit evidence; they are not
+converted to an empty successful result.
 
 Generated, vendored, fixture, snapshot, coverage, and build-output directories
 are excluded from the maintained-source totals. Their aggregate source metrics
