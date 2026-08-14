@@ -3550,6 +3550,9 @@ class CredentialEvaluationResult(BaseModel):
     trust_check_passed: bool = True
     freshness_check_passed: bool = True
     signature_valid: bool = True
+    revocation_checked: bool | None = None
+    not_revoked: bool | None = None
+    revocation_status: str | None = None
     error_codes: list[str] = []
     errors: list[str] = []
     warnings: list[str] = []
@@ -4383,7 +4386,19 @@ def _evaluate_native_facts(
     }
 
     native_result = evaluator.evaluate(native_request)
-    return _native_policy_response(policy, request, native_result)
+    response = _native_policy_response(policy, request, native_result)
+    revocation_status = (
+        "valid"
+        if revocation_checked is True and not_revoked is True
+        else "revoked"
+        if revocation_checked is True and not_revoked is False
+        else "unknown"
+    )
+    for credential_result in response.credential_results:
+        credential_result.revocation_checked = revocation_checked
+        credential_result.not_revoked = not_revoked
+        credential_result.revocation_status = revocation_status
+    return response
 
 
 @router.post(

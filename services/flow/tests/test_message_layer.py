@@ -3069,7 +3069,18 @@ async def test_submit_verification_response_forwards_flow_trust_profile_to_polic
                 decision_reason="Official signer is trusted",
                 verified_claims_json='{"given_name":"Marty"}',
                 credential_results_json=json.dumps(
-                    [{"signature_valid": True, "satisfied": True}]
+                    [
+                        {
+                            "signature_valid": True,
+                            "satisfied": True,
+                            "trust_check_passed": True,
+                            "revocation_checked": True,
+                            "not_revoked": True,
+                            "revocation_status": "valid",
+                            "error_codes": [],
+                            "warnings": ["status evidence is current"],
+                        }
+                    ]
                 ),
             )
 
@@ -3108,6 +3119,17 @@ async def test_submit_verification_response_forwards_flow_trust_profile_to_polic
     )
 
     assert response.result == "passed"
+    assert response.credential_results[0]["revocation_checked"] is True
+    assert response.credential_results[0]["not_revoked"] is True
+    assert response.error_codes == []
+    assert response.warnings == ["status evidence is current"]
+    persisted = await repo.get_instance(instance.id)
+    assert persisted is not None
+    polled = flow_main._verification_result_to_response(persisted)
+    assert polled.credential_results == response.credential_results
+    verification_message = persisted.context["mip_messages"]["verification_result"]
+    assert verification_message["payload"]["revocation_checked"] is True
+    assert verification_message["payload"]["revocation_status"] == "VALID"
     assert captured["policy_id"] == "policy-1"
     assert captured["trust_profile_id"] == "trust-1"
     context = captured["context"]
