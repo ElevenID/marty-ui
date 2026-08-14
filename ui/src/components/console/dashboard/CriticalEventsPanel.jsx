@@ -79,6 +79,18 @@ function formatRelativeTime(dateString, t) {
   return date.toLocaleTimeString();
 }
 
+function formatEventDetails(details) {
+  if (details === null || details === undefined) return '';
+  if (typeof details === 'string') return details;
+  if (typeof details === 'number' || typeof details === 'boolean') return String(details);
+
+  try {
+    return JSON.stringify(details);
+  } catch {
+    return '[Unserializable event details]';
+  }
+}
+
 /**
  * Critical event item
  */
@@ -92,6 +104,7 @@ function CriticalEventItem({ event }) {
   };
   
   const Icon = config.icon;
+  const details = formatEventDetails(event.details);
 
   return (
     <ListItem
@@ -124,9 +137,9 @@ function CriticalEventItem({ event }) {
             <Typography variant="caption" color="text.secondary">
               {formatRelativeTime(event.timestamp, t)}
             </Typography>
-            {event.details && (
+            {details && (
               <Typography variant="caption" color="text.secondary">
-                {event.details}
+                {details}
               </Typography>
             )}
           </Box>

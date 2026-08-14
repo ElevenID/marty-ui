@@ -433,6 +433,35 @@ describe('ConsoleDashboard', () => {
       expect(screen.getByText('Organization audit log storage is not configured for this deployment.')).toBeInTheDocument()
       expect(screen.getByText(/Message ID: msg-audit-1/i)).toBeInTheDocument()
     })
+
+    it('should render structured critical-event details without crashing', () => {
+      mockDashboardReturn = {
+        data: {
+          ...fullDashboardData,
+          criticalEvents: [{
+            id: 'event-structured-details',
+            timestamp: new Date().toISOString(),
+            type: 'api.key.revoked.event',
+            severity: 'warning',
+            message: 'API key revoked',
+            details: {
+              event_data: { api_key_id: 'key-1' },
+              source_service: 'organization',
+              source_event_id: 'source-event-1',
+              source_event_type: 'api.key.revoked.event',
+            },
+          }],
+        },
+        loading: false,
+        error: null,
+        refetch: vi.fn(),
+      }
+
+      render(<ConsoleDashboard />)
+
+      expect(screen.getByText('API key revoked')).toBeInTheDocument()
+      expect(screen.getByText(/"source_service":"organization"/)).toBeInTheDocument()
+    })
   })
 
   describe('System Health', () => {
