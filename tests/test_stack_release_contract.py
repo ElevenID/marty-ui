@@ -293,6 +293,19 @@ def test_public_builds_do_not_checkout_sibling_sources() -> None:
     assert "sha256sum --check --strict" in dockerfiles
 
 
+def test_stack_release_requires_annotated_tag_on_exact_protected_main() -> None:
+    workflow = _text(".github/workflows/cd.yml")
+
+    assert "Require annotated release tag on exact protected main" in workflow
+    assert "+refs/heads/main:refs/remotes/origin/main" in workflow
+    assert '"refs/tags/$TAG:refs/tags/$TAG"' in workflow
+    assert 'test "$(git cat-file -t "refs/tags/$TAG")" = tag' in workflow
+    assert 'tagged_commit="$(git rev-parse "refs/tags/$TAG^{commit}")"' in workflow
+    assert 'main_commit="$(git rev-parse refs/remotes/origin/main)"' in workflow
+    assert 'test "$RUN_SHA" = "$tagged_commit"' in workflow
+    assert 'test "$tagged_commit" = "$main_commit"' in workflow
+
+
 def test_service_images_install_every_required_native_backend() -> None:
     service = _text("services/Dockerfile")
     migrations = _text("services/Dockerfile.migrations")
