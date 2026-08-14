@@ -115,6 +115,32 @@ async def test_same_application_and_flow_recover_one_instance_and_artifact(
 
 
 @pytest.mark.asyncio
+async def test_legacy_application_flow_identity_matches_v1_golden_vector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def initiate(_instance, _flow_definition):
+        return _issuance_response()
+
+    monkeypatch.setattr(flow_main, "_initiate_credential_layer_issuance", initiate)
+    repo = InMemoryFlowRepository()
+    flow = _flow()
+    flow.id = "flow-1"
+    await repo.save_definition(flow)
+
+    result = await handle_application_approved(_event(), repo, _evidence())
+    instance = await repo.get_instance(result["instance_ids"][0])
+
+    assert instance is not None
+    assert instance.application_flow_key_hash == (
+        "ab771ddf180185687b4e03b891a3ffdf98ad99fe0180f8293833e0b1ebc93f94"
+    )
+    assert instance.context["_marty_application_offer_semantics_hash_v1"] == (
+        "bb93923944e5662895fe14c0ee2e49b16e883d7c09fc7e591adab258f7bf3cb6"
+    )
+    assert "_marty_application_offer_semantics_hash_v2" not in instance.context
+
+
+@pytest.mark.asyncio
 async def test_retry_recovers_after_instance_commit_before_artifact_commit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -265,6 +291,86 @@ async def test_same_application_flow_rejects_changed_issuance_claims(
         await handle_application_approved(changed, repo, _evidence())
 
     assert len(await repo.list_instances("org-1")) == 1
+
+
+@pytest.mark.asyncio
+async def test_distinct_issuance_attempts_create_distinct_offers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def initiate(_instance, _flow_definition):
+        nonlocal calls
+        calls += 1
+        response = _issuance_response()
+        response["id"] = f"transaction-{calls}"
+        response["credential_offer_uri"] = (
+            f"openid-credential-offer://?credential_offer={calls}"
+        )
+        response["pre_auth_code"] = f"pre-authorized-{calls}"
+        return response
+
+    monkeypatch.setattr(flow_main, "_initiate_credential_layer_issuance", initiate)
+    repo = InMemoryFlowRepository()
+    await repo.save_definition(_flow())
+    first_event = _event()
+    first_event.data.update(
+        {
+            "triggered_by_event": "application.manual_issue",
+            "issuance_attempt_id": "10000000-0000-4000-8000-000000000001",
+        }
+    )
+    second_event = _event()
+    second_event.data.update(
+        {
+            "triggered_by_event": "application.manual_issue",
+            "issuance_attempt_id": "20000000-0000-4000-8000-000000000002",
+        }
+    )
+    second_event.data["claims"]["profile"]["level"] = 3
+    second_evidence = ApplicationEventEvidence(
+        producer="marty-applicant-service",
+        audience="marty-flow-application-approved",
+        event_id_sha256="c" * 64,
+        payload_sha256="d" * 64,
+        authenticated_at="2026-08-09T12:01:00+00:00",
+    )
+
+    first = await handle_application_approved(first_event, repo, _evidence())
+    second = await handle_application_approved(second_event, repo, second_evidence)
+    recovered = await handle_application_approved(
+        second_event,
+        repo,
+        second_evidence,
+    )
+
+    assert calls == 2
+    assert first["instance_ids"] != second["instance_ids"]
+    assert second == recovered
+    assert len(await repo.list_instances("org-1")) == 2
+    assert first["offers"][0]["credential_offer_transaction_id"] == "transaction-1"
+    assert second["offers"][0]["credential_offer_transaction_id"] == "transaction-2"
+
+
+@pytest.mark.asyncio
+async def test_manual_issuance_requires_a_canonical_attempt_identity() -> None:
+    repo = InMemoryFlowRepository()
+    await repo.save_definition(_flow())
+    event = _event()
+    event.data["triggered_by_event"] = "application.manual_issue"
+
+    with pytest.raises(
+        ApplicationOfferConflictError,
+        match="requires issuance_attempt_id",
+    ):
+        await handle_application_approved(event, repo, _evidence())
+
+    event.data["issuance_attempt_id"] = "not-a-uuid"
+    with pytest.raises(
+        ApplicationOfferConflictError,
+        match="canonical UUID",
+    ):
+        await handle_application_approved(event, repo, _evidence())
 
 
 @pytest.mark.asyncio

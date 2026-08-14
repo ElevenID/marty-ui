@@ -918,8 +918,12 @@ class PostgresFlowRepository:
                         "application flow reservation was not recoverable"
                     )
                 selected = self._instance_from_row(instance_row)
+                semantics_context_key = plan_entry.get(
+                    "offer_semantics_context_key",
+                    "_marty_application_offer_semantics_hash_v1",
+                )
                 if (
-                    selected.context.get("_marty_application_offer_semantics_hash_v1")
+                    selected.context.get(semantics_context_key)
                     != plan_entry["offer_semantics_hash"]
                 ):
                     await session.rollback()
