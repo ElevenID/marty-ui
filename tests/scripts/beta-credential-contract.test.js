@@ -11,6 +11,7 @@ const {
   credentialConfigurationIdForWaltid,
   credentialInventoryEvidence,
   verificationResultEvidence,
+  verificationSessionRequest,
 } = require('./beta-credential-contract');
 
 test('beta gates target the canonical Marty organization and Open Badge login contract', () => {
@@ -107,4 +108,31 @@ test('verification evidence fails closed for malformed response bodies and lists
       warnings: [],
     },
   );
+});
+
+test('verification session request includes the public verifier identity contract', () => {
+  assert.deepEqual(verificationSessionRequest({
+    organizationId: '10000000-0000-0000-0000-000000000001',
+    presentationPolicyId: '10000000-0000-0000-0000-000000000002',
+    issuerDid: 'did:web:beta.example:orgs:audit',
+    externalReference: 'Suspended credential audit',
+  }), {
+    organization_id: '10000000-0000-0000-0000-000000000001',
+    presentation_policy_id: '10000000-0000-0000-0000-000000000002',
+    issuer_did: 'did:web:beta.example:orgs:audit',
+    external_reference: 'Suspended credential audit',
+  });
+});
+
+test('verification session request fails closed without exact public identifiers', () => {
+  const valid = {
+    organizationId: '10000000-0000-0000-0000-000000000001',
+    presentationPolicyId: '10000000-0000-0000-0000-000000000002',
+    issuerDid: 'did:web:beta.example:orgs:audit',
+    externalReference: 'Lifecycle audit',
+  };
+  assert.throws(() => verificationSessionRequest({ ...valid, organizationId: 'org' }), /UUID/);
+  assert.throws(() => verificationSessionRequest({ ...valid, presentationPolicyId: '' }), /UUID/);
+  assert.throws(() => verificationSessionRequest({ ...valid, issuerDid: '' }), /DID/);
+  assert.throws(() => verificationSessionRequest({ ...valid, externalReference: '' }), /non-empty/);
 });

@@ -451,6 +451,23 @@ def verified_audit_lifecycle_environment(report: dict[str, Any]) -> dict[str, st
         except ValueError as exc:
             raise ValueError(f"verified {name} must be a UUID") from exc
         environment[name] = value
+
+    verifier_dids = [
+        str(item.get("id") or "").strip()
+        for item in step.get("inventory", [])
+        if isinstance(item, dict)
+        and item.get("resource_type") == "verifier_issuer_identity"
+        and str(item.get("status") or "").lower() == "active"
+    ]
+    if len(verifier_dids) != 1:
+        raise ValueError(
+            "verified inventory must contain exactly one active "
+            "BETA_AUDIT_VERIFIER_DID"
+        )
+    verifier_did = verifier_dids[0]
+    if not re.fullmatch(r"did:[a-z0-9]+:\S+", verifier_did):
+        raise ValueError("verified BETA_AUDIT_VERIFIER_DID must be a DID")
+    environment["BETA_AUDIT_VERIFIER_DID"] = verifier_did
     return environment
 
 
@@ -2274,7 +2291,8 @@ def main() -> int:
             "[audit] exported_lifecycle_resources="
             f"organization:{environment['BETA_AUDIT_ORG_ID']},"
             f"template:{environment['BETA_AUDIT_TEMPLATE_ID']},"
-            f"policy:{environment['BETA_AUDIT_POLICY_ID']}"
+            f"policy:{environment['BETA_AUDIT_POLICY_ID']},"
+            f"verifier:{environment['BETA_AUDIT_VERIFIER_DID']}"
         )
 
     return 0 if report["release_checks"]["status"] == "pass" else 1

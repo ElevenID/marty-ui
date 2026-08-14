@@ -56,6 +56,33 @@ function verificationResultEvidence(body, httpStatus = null) {
   };
 }
 
+function verificationSessionRequest({
+  organizationId,
+  presentationPolicyId,
+  issuerDid,
+  externalReference,
+}) {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (typeof organizationId !== 'string' || !uuid.test(organizationId)) {
+    throw new TypeError('organizationId must be a UUID');
+  }
+  if (typeof presentationPolicyId !== 'string' || !uuid.test(presentationPolicyId)) {
+    throw new TypeError('presentationPolicyId must be a UUID');
+  }
+  if (typeof issuerDid !== 'string' || !/^did:[a-z0-9]+:\S+$/i.test(issuerDid)) {
+    throw new TypeError('issuerDid must be a DID');
+  }
+  if (typeof externalReference !== 'string' || !externalReference.trim()) {
+    throw new TypeError('externalReference must be a non-empty string');
+  }
+  return {
+    organization_id: organizationId,
+    presentation_policy_id: presentationPolicyId,
+    issuer_did: issuerDid,
+    external_reference: externalReference,
+  };
+}
+
 module.exports = {
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LIFECYCLE_POLICY_ID,
@@ -65,4 +92,5 @@ module.exports = {
   credentialConfigurationIdForWaltid,
   credentialInventoryEvidence,
   verificationResultEvidence,
+  verificationSessionRequest,
 };
