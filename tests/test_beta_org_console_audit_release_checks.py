@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 def _load_audit_module():
     script_path = Path(__file__).resolve().parents[1] / "scripts" / "beta_org_console_audit.py"
@@ -263,3 +265,83 @@ def test_beta_audit_adds_trust_by_public_issuer_did() -> None:
     assert "wizard.trustProfile.addIssuer" in source
     assert "wizard.trustProfile.existingIssuerProfile" not in source
     assert "wizard.trustProfile.useIssuerProfile" not in source
+
+
+def _passing_inventory_report(organization_id: str) -> dict:
+    return {
+        "release_checks": {"status": "pass"},
+        "steps": [
+            {
+                "label": "resource-inventory-verified",
+                "organization_id": organization_id,
+                "inventory": [{"resource_type": "credential_template"}],
+            }
+        ],
+    }
+
+
+def test_beta_audit_exports_verified_organization_for_later_steps(tmp_path: Path) -> None:
+    audit = _load_audit_module()
+    organization_id = "a60371ca-7250-4a51-9598-f8e972044f31"
+    github_env = tmp_path / "github-env"
+    github_env.write_text("EXISTING=value\n", encoding="utf-8")
+
+    exported = audit.export_audit_organization(
+        _passing_inventory_report(organization_id),
+        github_env,
+    )
+
+    assert exported == organization_id
+    assert github_env.read_text(encoding="utf-8").splitlines() == [
+        "EXISTING=value",
+        f"BETA_AUDIT_ORG_ID={organization_id}",
+    ]
+
+
+@pytest.mark.parametrize(
+    "report, message",
+    [
+        (
+            {
+                "release_checks": {"status": "blocked"},
+                "steps": [],
+            },
+            "non-passing audit",
+        ),
+        (
+            {
+                "release_checks": {"status": "pass"},
+                "steps": [],
+            },
+            "exactly one verified organization ID",
+        ),
+        (
+            _passing_inventory_report("not-a-uuid"),
+            "must be a UUID",
+        ),
+        (
+            {
+                "release_checks": {"status": "pass"},
+                "steps": [
+                    {
+                        "label": "resource-inventory-verified",
+                        "organization_id": "a60371ca-7250-4a51-9598-f8e972044f31",
+                    },
+                    {
+                        "label": "resource-inventory-verified",
+                        "organization_id": "d028f6d7-522d-4362-99c0-c70833f0962a",
+                    },
+                ],
+            },
+            "exactly one verified organization ID",
+        ),
+    ],
+)
+def test_beta_audit_refuses_unverified_organization_exports(
+    report: dict,
+    message: str,
+) -> None:
+    audit = _load_audit_module()
+
+    with pytest.raises(ValueError, match=message):
+        audit.verified_audit_organization_id(report)

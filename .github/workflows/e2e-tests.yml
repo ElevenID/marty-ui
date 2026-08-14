@@ -328,7 +328,10 @@ jobs:
             }' > tests/artifacts/release-context.json
 
       - name: Create and activate every organization credential primitive
-        run: python scripts/beta_org_console_audit.py --base-url "$BETA_ORIGIN"
+        run: >-
+          python scripts/beta_org_console_audit.py
+          --base-url "$BETA_ORIGIN"
+          --github-env "$GITHUB_ENV"
 
       - name: Probe canonical and removed applicant contracts
         run: node tests/scripts/probe-beta-membership-badge.js

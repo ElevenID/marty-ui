@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
+from uuid import UUID
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, TimeoutError as PlaywrightTimeoutError
@@ -405,6 +406,38 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
             ),
         },
     }
+
+
+def verified_audit_organization_id(report: dict[str, Any]) -> str:
+    """Return the one organization proven by a passing inventory audit."""
+    if report.get("release_checks", {}).get("status") != "pass":
+        raise ValueError("cannot export an organization from a non-passing audit")
+
+    organization_ids = {
+        str(step.get("organization_id") or "").strip()
+        for step in report.get("steps", [])
+        if step.get("label") == "resource-inventory-verified"
+    }
+    organization_ids.discard("")
+    if len(organization_ids) != 1:
+        raise ValueError(
+            "passing audit must contain exactly one verified organization ID"
+        )
+
+    organization_id = organization_ids.pop()
+    try:
+        UUID(organization_id)
+    except ValueError as exc:
+        raise ValueError("verified organization ID must be a UUID") from exc
+    return organization_id
+
+
+def export_audit_organization(report: dict[str, Any], github_env: Path) -> str:
+    """Bind later GitHub Actions steps to the organization this audit verified."""
+    organization_id = verified_audit_organization_id(report)
+    with github_env.open("a", encoding="utf-8", newline="\n") as env_file:
+        env_file.write(f"BETA_AUDIT_ORG_ID={organization_id}\n")
+    return organization_id
 
 
 class Audit:
@@ -1986,6 +2019,15 @@ def main() -> int:
         default=1300,
         help="How long each labeled recording step remains visible. Defaults to 1300 ms.",
     )
+    parser.add_argument(
+        "--github-env",
+        type=Path,
+        default=None,
+        help=(
+            "Append the verified organization ID to this GitHub Actions environment "
+            "file for subsequent lifecycle steps."
+        ),
+    )
     args = parser.parse_args()
 
     env = load_env_file(ENV_FILE)
@@ -2077,6 +2119,10 @@ def main() -> int:
             report_path = artifact_dir / "report.json"
             report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
             print(f"[audit] report={report_path}")
+
+    if args.github_env is not None and report["release_checks"]["status"] == "pass":
+        organization_id = export_audit_organization(report, args.github_env)
+        print(f"[audit] exported_organization_id={organization_id}")
 
     return 0 if report["release_checks"]["status"] == "pass" else 1
 
