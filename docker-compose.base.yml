@@ -332,6 +332,7 @@ services:
       COMPLIANCE_PROFILE_SERVICE_URL: http://compliance-profile:8008
       PRESENTATION_POLICY_SERVICE_URL: http://presentation-policy:8009
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
+      SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017
       FLOW_SERVICE_URL: http://flow:8011
       DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
       ISSUANCE_SERVICE_URL: http://issuance:8005
@@ -380,6 +381,8 @@ services:
       presentation-policy:
         condition: service_healthy
       deployment-profile:
+        condition: service_healthy
+      signing-keys:
         condition: service_healthy
       flow:
         condition: service_healthy
@@ -720,6 +723,32 @@ services:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8010/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+    restart: unless-stopped
+
+  signing-keys:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        <<: *marty_service_build_artifacts
+        SERVICE_NAME: signing-keys
+    environment:
+      SIGNING_KEYS_SERVICE_PORT: "8017"
+      MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+      MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
+      RUST_LOG: info
+    ports:
+      - "127.0.0.1:8017:8017"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8017/health"]
       interval: 10s
       timeout: 5s
       retries: 3

@@ -383,6 +383,13 @@ jobs:
             config revocation-profile-migrate db-migrate)"
           grep -F 'RP_MIGRATE_ONLY: "true"' <<<"$rendered"
           grep -F 'condition: service_completed_successfully' <<<"$rendered"
+          rendered="$(docker compose \
+            --file docker-compose.base.yml \
+            --file docker-compose.profile.tunnel.yml \
+            config signing-keys gateway)"
+          grep -F 'SIGNING_KEYS_SERVICE_PORT: "8017"' <<<"$rendered"
+          grep -F 'SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017' <<<"$rendered"
+          grep -F 'RUST_LOG: info' <<<"$rendered"
       - name: Report compiler cache effectiveness
         if: always()
         run: sccache --show-stats
@@ -422,6 +429,20 @@ jobs:
           load: true
           push: false
           tags: marty-revocation-profile:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Build signing-keys image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: signing_keys
+          load: true
+          push: false
+          tags: marty-signing-keys:ci
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}

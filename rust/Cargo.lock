@@ -1082,6 +1082,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-signing-keys"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "http",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "marty-status"
 version = "0.1.50"
 source = "git+https://github.com/ElevenID/marty-core?rev=edc80a0369b850ac0864b26208d57a23f475aca9#edc80a0369b850ac0864b26208d57a23f475aca9"

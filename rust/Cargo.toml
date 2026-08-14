@@ -1,5 +1,5 @@
 [workspace]
-members = ["services/event-stream", "services/revocation-profile"]
+members = ["services/event-stream", "services/revocation-profile", "services/signing-keys"]
 resolver = "2"
 
 [workspace.package]
