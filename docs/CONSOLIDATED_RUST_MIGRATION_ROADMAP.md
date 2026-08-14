@@ -317,6 +317,11 @@ Each workstream uses staged beta deployment:
 
 Security-sensitive workstreams should accumulate at least fourteen consecutive days of acceptable beta evidence after final cutover; lower-risk service migrations should accumulate at least seven. A release owner may extend these windows. Shortening them requires an explicit documented risk acceptance.
 
+Daily read-only service samples use the sanitized
+[`marty.rust-beta-soak/v1`](rust-migrations/beta-soak-evidence.md) collector.
+Each sample is supporting evidence only; it does not replace contract,
+lifecycle, failure, or protected-device gates.
+
 Rollback redeploys the last known-good beta artifact. Databases and events must remain forward/backward compatible across the rollback window or have a tested forward repair. No phase modifies production or persistent self-host deployment configuration.
 
 ## Git and delivery workflow
