@@ -3709,9 +3709,9 @@ async def get_flow_instance_result(
 ) -> VerificationResultResponse:
     """OID4VP-1FINAL §8.7 — Relying-party result polling endpoint.
 
-    Returns the current verification state and any verified claims for the
-    given flow instance. Before submission the state is ``awaiting_wallet``; after a
-    successful VP submission it is ``completed``.
+    Returns only a terminal verification decision and its verified claims.
+    Callers that need the current transaction state use the flow-instance endpoint;
+    polling this result resource before finalization returns HTTP 409.
     """
     instance = await repo.get_instance(instance_id)
     if not instance:
@@ -3720,6 +3720,19 @@ async def get_flow_instance_result(
         user_id, instance.organization_id
     )
     ensure_membership_permission(membership, "flow-instance", "view")
+    if instance.status not in {
+        FlowInstanceStatus.COMPLETED,
+        FlowInstanceStatus.FAILED,
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "verification_result_pending",
+                "error_description": (
+                    "The verification transaction has no terminal result"
+                ),
+            },
+        )
     return _verification_result_to_response(instance)
 
 
@@ -5428,6 +5441,18 @@ def _raise_verification_replay_conflict() -> None:
     )
 
 
+def _raise_verification_already_processed() -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "verification_response_already_processed",
+            "error_description": (
+                "This verification transaction already processed a wallet response"
+            ),
+        },
+    )
+
+
 async def _submit_verification_response_internal(
     instance_id: str,
     vp_token: str,
@@ -5435,6 +5460,8 @@ async def _submit_verification_response_internal(
     state: str | None,
     repo: InMemoryFlowRepository,
     verification_audience: str | None = None,
+    *,
+    permit_idempotent_terminal_replay: bool = True,
 ) -> VerificationResultResponse:
     instance = await repo.get_instance(instance_id)
     if not instance:
@@ -5453,7 +5480,9 @@ async def _submit_verification_response_internal(
         if isinstance(prior_digest, str) and hmac.compare_digest(
             prior_digest, submission_digest
         ):
-            return _terminal_verification_response(instance)
+            if permit_idempotent_terminal_replay:
+                return _terminal_verification_response(instance)
+            _raise_verification_already_processed()
         _raise_verification_replay_conflict()
 
     if instance.expires_at and datetime.now(timezone.utc) > instance.expires_at:
@@ -5880,7 +5909,9 @@ async def _submit_verification_response_internal(
             and isinstance(prior_digest, str)
             and hmac.compare_digest(prior_digest, submission_digest)
         ):
-            return _terminal_verification_response(current)
+            if permit_idempotent_terminal_replay:
+                return _terminal_verification_response(current)
+            _raise_verification_already_processed()
         _raise_verification_replay_conflict()
     logger.info(
         "Completed verification flow: %s result=%s decision=%s reason=%s",
@@ -5915,6 +5946,8 @@ async def submit_verification_response(
     state: str = Form(None),
     repo: InMemoryFlowRepository = Depends(get_repo),
     response: str | None = Form(None),
+    *,
+    permit_idempotent_terminal_replay: bool = True,
 ) -> VerificationResultResponse:
     """
     Submit a VP token to complete a verification flow.
@@ -5961,6 +5994,7 @@ async def submit_verification_response(
         presentation_submission=presentation_submission,
         state=state,
         repo=repo,
+        permit_idempotent_terminal_replay=permit_idempotent_terminal_replay,
     )
 
 
@@ -5986,6 +6020,7 @@ async def submit_oid4vp_direct_post_response(
         state,
         repo,
         response,
+        permit_idempotent_terminal_replay=False,
     )
     if result.decision != "allow" or result.result != "passed":
         # A wallet needs an HTTP failure for a rejected VP. The detailed
