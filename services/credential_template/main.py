@@ -36,6 +36,7 @@ from typing import Annotated
 from marty_common import OrganizationContext, require_org_membership
 from marty_common.service_setup import create_service_app
 from common.grpc_factory import create_grpc_channel
+from common.internal_service_auth import internal_service_headers
 
 from credential_template.infrastructure.adapters import (
     PostgresCredentialTemplateRepository,
@@ -1633,7 +1634,10 @@ async def _require_trust_profile_accepts_issuer(
     base_url = os.environ.get("TRUST_PROFILE_SERVICE_URL", "http://trust-profile:8004").rstrip("/")
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
-            response = await client.get(f"{base_url}/internal/v1/trust-profiles/{trust_profile_id}")
+            response = await client.get(
+                f"{base_url}/internal/v1/trust-profiles/{trust_profile_id}",
+                headers=internal_service_headers(),
+            )
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=503,
