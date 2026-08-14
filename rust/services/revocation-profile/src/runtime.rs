@@ -40,6 +40,7 @@ impl NativeDiagnostics {
                 "status-document",
                 "cascade-revocation",
                 "revocation-batch",
+                "schema-migration",
             ],
         }
     }
