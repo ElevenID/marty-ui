@@ -158,6 +158,30 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Rust owns the revocation-profile schema. Complete this one-shot migration
+  # before the remaining shared Alembic graph reads that schema.
+  revocation-profile-migrate:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: revocation-profile
+    environment:
+      <<: *runtime-env
+      SERVICE_NAME: revocation_profile
+      RP_MIGRATE_ONLY: "true"
+      DATABASE_URL_TEMPLATE: *database-url-sync-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      RUST_LOG: ${REVOCATION_PROFILE_RUST_LOG:-info}
+    secrets:
+      - marty_db_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    restart: "no"
+
   db-migrate:
     build:
       context: .
@@ -183,6 +207,8 @@ services:
       - marty_db_password
       - openbao_service_token
     depends_on:
+      revocation-profile-migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -854,13 +880,16 @@ services:
         SERVICE_NAME: revocation-profile
     environment:
       <<: *runtime-env
+      SERVICE_NAME: revocation_profile
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       REVOCATION_PROFILE_SERVICE_PORT: "8013"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       REDIS_URL: redis://redis:6379/4
       ORG_GRPC_TARGET: organization:9002
+      RP_GRPC_ENABLED: "true"
       RP_GRPC_PORT: "9013"
+      RUST_LOG: ${REVOCATION_PROFILE_RUST_LOG:-info}
     secrets:
       - marty_db_password
       - grpc_service_token

@@ -36,6 +36,12 @@ services:
     pull_policy: always
     build: !reset null
 
+  revocation-profile-migrate:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: revocation_profile
+
   gateway:
     <<: *service-image
     build: !reset null

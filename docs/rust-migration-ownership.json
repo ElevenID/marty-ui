@@ -138,19 +138,13 @@
     {
       "id": "status-and-revocation",
       "phase": 3,
-      "status": "cutover-in-progress",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-core",
         "paths": ["marty-status/src"],
         "binding_paths": ["marty-bindings/src/lib.rs"]
       },
       "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/revocation_profile/status_list_manager.py", "services/revocation_profile/main.py"],
-          "language": "python",
-          "disposition": "native-kernel-adapter-pending-rust-service-cutover"
-        },
         {
           "repository": "ElevenID/marty-credentials",
           "paths": ["rust"],
@@ -528,18 +522,6 @@
         "id": "no-presentation-policy-default-engine-fallback",
         "glob": "services/presentation_policy/*.py",
         "pattern": "CedarEngine\\.with_defaults",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-python-status-list-kernel",
-        "glob": "services/revocation_profile/status_list_manager.py",
-        "pattern": "(?:import\\s+zlib|bytearray\\(status_list\\.data\\)|1\\s*<<\\s*\\(7\\s*-\\s*bit_index\\)|urlsafe_b64encode\\(compressed\\))",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-direct-revocation-native-imports",
-        "glob": "services/revocation_profile/*.py",
-        "pattern": "(?:from|import)\\s+(?:marty_rs|_marty_rs)",
         "expected_matches": {}
       },
       {

@@ -31,15 +31,14 @@ publication orchestration until the Phase 3 Rust service cutover.
 
 ## Native and rollback behavior
 
-The service refuses to start unless `_marty_rs` reports the `status_list`
-capability and exposes raw-byte constructors plus canonical encoders. Native
+The Rust service imports the canonical `marty-status` crate directly. Native
 diagnostics are available at `/health/native-backend`. There is no Python
-mutation or compression fallback. Rollback redeploys the preceding immutable
-beta image and never selects a second runtime implementation.
+mutation, compression, transport, persistence, or orchestration fallback.
+Rollback redeploys the preceding immutable image and never selects a second
+runtime implementation.
 
 ## Deletion inventory
 
-This slice removes Python bit mutation and zlib/base64 status encoding from
-`services/revocation_profile/status_list_manager.py`. Redis and API adapters
-remain intentionally. The remaining Python service is deleted only after the
-separate Rust revocation-service contract, beta cutover, and soak gate pass.
+The superseded Python status-list and revocation-profile service directory is
+deleted after the Rust service contract, beta cutover, and soak gate. Rust now
+owns the HTTP/gRPC, PostgreSQL, Redis, migration, and status-list implementation.

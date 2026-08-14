@@ -26,6 +26,11 @@ services:
     image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/db-migrate:${SELFHOST_IMAGE_TAG:?SELFHOST_IMAGE_TAG must be set to an immutable release tag}
     pull_policy: always
 
+  revocation-profile-migrate:
+    <<: *selfhost-service-image
+    environment:
+      SERVICE_NAME: revocation_profile
+
   cloudflared:
     build: !reset null
     image: ${SELFHOST_IMAGE_PREFIX:-ghcr.io/elevenid/marty-ui}/cloudflared-wrapper:${SELFHOST_IMAGE_TAG:?SELFHOST_IMAGE_TAG must be set to an immutable release tag}

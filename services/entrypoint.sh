@@ -14,6 +14,11 @@ if [ "$MODULE_NAME" = "event_stream" ]; then
 	exec /usr/local/bin/marty-event-stream
 fi
 
+if [ "$MODULE_NAME" = "revocation_profile" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-revocation-profile
+fi
+
 echo "Starting service: $SERVICE_NAME (module: $MODULE_NAME)"
 echo "Working directory: $(pwd)"
 echo "Python version: $(python --version)"

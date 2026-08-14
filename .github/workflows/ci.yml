@@ -338,7 +338,7 @@ jobs:
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
-      - name: Validate canonical Rust service packaging
+      - name: Validate canonical Rust service packaging and migration ordering
         env:
           MARTY_RS_URI: https://example.invalid/marty-rs.whl
           MARTY_RS_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
@@ -350,7 +350,14 @@ jobs:
           MARTY_COMMON_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
           MARTY_ISSUANCE_IMAGE: example.invalid/issuance@sha256:2222222222222222222222222222222222222222222222222222222222222222
           MARTY_DOCS_IMAGE: example.invalid/docs@sha256:3333333333333333333333333333333333333333333333333333333333333333
+          MARTY_SERVICES_IMAGE: example.invalid/services@sha256:6666666666666666666666666666666666666666666666666666666666666666
+          MARTY_MIGRATIONS_IMAGE: example.invalid/migrations@sha256:7777777777777777777777777777777777777777777777777777777777777777
+          MARTY_UI_IMAGE: example.invalid/ui@sha256:8888888888888888888888888888888888888888888888888888888888888888
           GRPC_SERVICE_TOKEN: ci-only-token-with-at-least-32-characters
+          REDIS_PASSWORD: ci-only-redis-password
+          MARTY_ISSUER_DID: did:web:beta.example.test
+          MARTY_ORG_ID: 00000000-0000-0000-0000-000000000001
+          PUBLIC_API_URL: https://beta.example.test
         run: |
           set -euo pipefail
           rendered="$(docker compose \
@@ -362,12 +369,20 @@ jobs:
           grep -F 'RUST_LOG: info' <<<"$rendered"
           rendered="$(docker compose \
             --file docker-compose.base.yml \
+            --file docker-compose.beta.yml \
             --file docker-compose.profile.tunnel.yml \
-            --file deploy-config/compose/tunnel-beta/revocation-profile-rust.yml \
             config revocation-profile)"
-          grep -F 'dockerfile: rust/services/revocation-profile/Dockerfile' <<<"$rendered"
+          grep -F 'dockerfile: services/Dockerfile' <<<"$rendered"
           grep -F 'ENVIRONMENT: beta' <<<"$rendered"
           grep -F 'RUST_LOG: info' <<<"$rendered"
+          grep -F 'GRPC_SERVICE_TOKEN: ci-only-token-with-at-least-32-characters' <<<"$rendered"
+          rendered="$(docker compose \
+            --file docker-compose.base.yml \
+            --file docker-compose.beta.yml \
+            --file docker-compose.profile.ghcr.yml \
+            config revocation-profile-migrate db-migrate)"
+          grep -F 'RP_MIGRATE_ONLY: "true"' <<<"$rendered"
+          grep -F 'condition: service_completed_successfully' <<<"$rendered"
       - name: Report compiler cache effectiveness
         if: always()
         run: sccache --show-stats
