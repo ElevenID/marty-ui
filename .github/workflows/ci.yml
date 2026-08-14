@@ -31,20 +31,92 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
-      - run: pip install ruff
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: "0.11.3"
+          enable-cache: false
+      - run: uv pip install --system ruff
       - name: Check Python correctness
         run: ruff check services/ packages/ --select E9,F63,F7,F82
       - name: Enforce canonical Rust ownership
         run: python scripts/check_rust_ownership.py
 
+  fast-feedback:
+    name: Fast Feedback
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24"
+      - name: Bootstrap released UI dependencies
+        working-directory: ui
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error "$MARTY_API_CORE_URI" --output "$RUNNER_TEMP/marty-api-core.tgz"
+          curl --fail --location --silent --show-error "$MARTY_BLOG_URI" --output "$RUNNER_TEMP/marty-blog.tgz"
+          echo "${MARTY_API_CORE_DIGEST#sha256:}  $RUNNER_TEMP/marty-api-core.tgz" | sha256sum --check --strict
+          echo "${MARTY_BLOG_DIGEST#sha256:}  $RUNNER_TEMP/marty-blog.tgz" | sha256sum --check --strict
+          bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
+          bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
+          bun install
+      - name: Validate shard completeness and run fast checks
+        working-directory: ui
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '' }}
+        run: |
+          set -uo pipefail
+          node scripts/run-vitest-shard.mjs --plan 3 >/dev/null
+
+          changed_tests=()
+          if [[ -n "$BASE_SHA" ]]; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+            mapfile -t changed_files < <(git diff --name-only --relative "$BASE_SHA" HEAD -- src)
+            for changed_file in "${changed_files[@]}"; do
+              if [[ "$changed_file" =~ \.(test|spec)\.(ts|tsx)$ ]] && [[ -f "$changed_file" ]]; then
+                changed_tests+=("$changed_file")
+                continue
+              fi
+              stem="${changed_file%.*}"
+              for suffix in test.ts test.tsx spec.ts spec.tsx; do
+                candidate="${stem}.${suffix}"
+                [[ -f "$candidate" ]] && changed_tests+=("$candidate")
+              done
+            done
+          fi
+
+          bun x tsc -p tsconfig.build.json --noEmit &
+          typecheck_pid=$!
+          tests_pid=""
+          if (( ${#changed_tests[@]} > 0 )); then
+            mapfile -t changed_tests < <(printf '%s\n' "${changed_tests[@]}" | sort -u)
+            node ./node_modules/vitest/vitest.mjs run --bail=1 "${changed_tests[@]}" &
+            tests_pid=$!
+          else
+            echo "No changed or adjacent UI test files; the complete timing-balanced suite is still running."
+          fi
+
+          status=0
+          wait "$typecheck_pid" || status=1
+          if [[ -n "$tests_pid" ]]; then
+            wait "$tests_pid" || status=1
+          fi
+          exit "$status"
+
   test-ui:
-    name: UI Tests (${{ matrix.shard }}/2)
+    name: UI Tests (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     defaults:
       run:
         working-directory: ui
@@ -65,11 +137,8 @@ jobs:
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
       - run: bun install
-      - name: Type check
-        if: matrix.shard == 1
-        run: bunx tsc -p tsconfig.build.json --noEmit
       - name: Unit tests
-        run: node ./node_modules/vitest/vitest.mjs run --shard=${{ matrix.shard }}/2
+        run: node scripts/run-vitest-shard.mjs ${{ matrix.shard }} 3
 
   test-services:
     name: Service Tests
@@ -107,6 +176,14 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: "0.11.3"
+          enable-cache: true
+          cache-dependency-glob: |
+            requirements-services.txt
+            release/stack-lock.json
+          cache-suffix: service-tests
       - name: Install dependencies
         shell: bash
         run: |
@@ -129,9 +206,9 @@ jobs:
           echo "${marty_rs_digest#sha256:}  $marty_rs_wheel" | sha256sum --check --strict
           echo "${verification_digest#sha256:}  $verification_wheel" | sha256sum --check --strict
           echo "${iso18013_digest#sha256:}  $iso18013_wheel" | sha256sum --check --strict
-          pip install -r requirements-services.txt
-          pip install psycopg2-binary==2.9.10
-          pip install "$marty_common_wheel" "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
+          uv pip install --system -r requirements-services.txt
+          uv pip install --system psycopg2-binary==2.9.10
+          uv pip install --system "$marty_common_wheel" "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
       - name: Run tests
         working-directory: services
         run: python -m pytest -v --tb=short -x
@@ -371,8 +448,14 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: "0.11.3"
+          enable-cache: true
+          cache-dependency-glob: requirements-services.txt
+          cache-suffix: public-contract
       - name: Install contract-check dependencies
-        run: pip install -r requirements-services.txt jsonschema
+        run: uv pip install --system -r requirements-services.txt jsonschema
       - name: Enforce public response contract
         run: python scripts/check_public_protocol_contract.py --protocol-root marty-protocol
 
@@ -386,6 +469,14 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: "0.11.3"
+          enable-cache: true
+          cache-dependency-glob: |
+            requirements-services.txt
+            release/stack-lock.json
+          cache-suffix: release-contracts
       - name: Install released test dependencies
         shell: bash
         run: |
@@ -408,7 +499,7 @@ jobs:
           marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"
           curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$marty_common_wheel"
           echo "${MARTY_COMMON_DIGEST#sha256:}  $marty_common_wheel" | sha256sum --check --strict
-          pip install pytest pyyaml jsonschema cryptography playwright "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel" "$marty_common_wheel"
+          uv pip install --system pytest pyyaml jsonschema cryptography playwright "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel" "$marty_common_wheel"
       - name: Verify released mdoc binding evidence contract
         shell: bash
         run: |
@@ -481,20 +572,9 @@ jobs:
       - name: Install Playwright dependencies
         working-directory: tests
         run: npm ci
-      - name: Cache Chromium
-        id: playwright-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('tests/package-lock.json') }}
-      - name: Install Chromium
+      - name: Install pinned Chromium headless shell and system dependencies
         working-directory: tests
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium
-      - name: Install Chromium system dependencies
-        working-directory: tests
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
+        run: npx playwright install --with-deps --only-shell chromium
       - name: Run deterministic credential lifecycle gate
         working-directory: tests
         run: npx playwright test --config playwright.applicant-wallet.config.js
@@ -516,20 +596,35 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: "0.11.3"
+          enable-cache: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
       - name: Install scanners
-        run: pip install bandit semgrep pip-audit
-      - name: Dependency vulnerability gates
+        run: uv pip install --system bandit semgrep pip-audit
+      - name: Run security scans concurrently
         shell: bash
         run: |
-          set -euo pipefail
-          pip-audit -r requirements-services.txt
-          (cd ui && bun audit && npm audit --package-lock-only --audit-level=low)
-          (cd tests && npm audit --package-lock-only --audit-level=low)
-      - name: Bandit SAST
-        run: bandit -r services/ packages/ -f json -o bandit-report.json || true
-      - name: Semgrep audit
-        run: semgrep scan --config=auto --json --output semgrep-report.json services/ packages/ || true
+          set -uo pipefail
+          pip-audit -r requirements-services.txt &
+          pip_audit_pid=$!
+          (cd ui && bun audit && npm audit --package-lock-only --audit-level=low) &
+          ui_audit_pid=$!
+          (cd tests && npm audit --package-lock-only --audit-level=low) &
+          tests_audit_pid=$!
+          (bandit -r services/ packages/ -f json -o bandit-report.json || true) &
+          bandit_pid=$!
+          (semgrep scan --config=auto --json --output semgrep-report.json services/ packages/ || true) &
+          semgrep_pid=$!
+
+          status=0
+          wait "$pip_audit_pid" || status=1
+          wait "$ui_audit_pid" || status=1
+          wait "$tests_audit_pid" || status=1
+          wait "$bandit_pid" || status=1
+          wait "$semgrep_pid" || status=1
+          exit "$status"
       - name: Upload security reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -543,7 +638,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [lint, test-ui, test-services, test-rust-services, test-rust-service-images, flow-idempotency-contract, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security]
+    needs: [lint, fast-feedback, test-ui, test-services, test-rust-services, test-rust-service-images, flow-idempotency-contract, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security]
     runs-on: ubuntu-latest
     permissions:
       actions: read
