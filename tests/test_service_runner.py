@@ -79,7 +79,7 @@ def test_event_stream_has_only_the_canonical_rust_server() -> None:
     assert not list((ROOT / "services" / "event_stream").glob("*.py"))
     assert "cargo build --locked --release -p marty-event-stream" in dockerfile
     assert (
-        "COPY --from=event-stream-builder "
+        "COPY --from=rust-service-builder "
         "/build/rust/target/release/marty-event-stream "
         "/usr/local/bin/marty-event-stream"
     ) in dockerfile
