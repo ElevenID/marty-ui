@@ -197,6 +197,7 @@ async def _initiate_issuance_via_flow(
     application: "ApplicantApplication",
     applicant: "Applicant",
     claims: dict[str, Any],
+    issuance_attempt_id: str,
 ) -> dict[str, Any] | None:
     """Trigger OID4VCI issuance via flow-service webhook orchestration.
 
@@ -221,6 +222,7 @@ async def _initiate_issuance_via_flow(
             "application_status": application.status.value.lower(),
             "application_approved_at": application.reviewed_at.isoformat() if application.reviewed_at else timestamp,
             "triggered_by_event": "application.manual_issue",
+            "issuance_attempt_id": issuance_attempt_id,
             "claims": claims,
         },
     }
@@ -282,6 +284,70 @@ async def _initiate_issuance_via_flow(
         "status": selected_offer.get("issuance_status") or "pending",
         "source": "flow",
     }
+
+
+_ACTIVE_ISSUANCE_ATTEMPT_KEY = "active_issuance_attempt"
+
+
+def _canonical_issuance_attempt_id(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        canonical = str(uuid.UUID(value))
+    except (ValueError, AttributeError):
+        return None
+    return canonical if canonical == value.lower() else None
+
+
+async def _reserve_issuance_attempt(
+    application: "ApplicantApplication",
+    claims: dict[str, Any],
+    repo: Any,
+) -> tuple[str, dict[str, Any]]:
+    """Persist one retry-stable issuance identity and its exact claim snapshot."""
+    active = application.system_data.get(_ACTIVE_ISSUANCE_ATTEMPT_KEY)
+    if active is not None:
+        if not isinstance(active, dict):
+            raise HTTPException(
+                status_code=500,
+                detail="Persisted issuance attempt state is invalid",
+            )
+        attempt_id = _canonical_issuance_attempt_id(active.get("id"))
+        active_claims = active.get("claims")
+        if attempt_id is None or not isinstance(active_claims, dict):
+            raise HTTPException(
+                status_code=500,
+                detail="Persisted issuance attempt state is invalid",
+            )
+        return attempt_id, dict(active_claims)
+
+    attempt_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    application.system_data[_ACTIVE_ISSUANCE_ATTEMPT_KEY] = {
+        "id": attempt_id,
+        "claims": claims,
+        "created_at": now.isoformat(),
+    }
+    application.updated_at = now
+    await repo.save_application(application)
+    return attempt_id, claims
+
+
+def _complete_issuance_attempt(
+    application: "ApplicantApplication",
+    issuance_attempt_id: str,
+) -> None:
+    active = application.system_data.get(_ACTIVE_ISSUANCE_ATTEMPT_KEY)
+    if (
+        not isinstance(active, dict)
+        or _canonical_issuance_attempt_id(active.get("id")) != issuance_attempt_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Issuance attempt state changed before completion",
+        )
+    application.system_data.pop(_ACTIVE_ISSUANCE_ATTEMPT_KEY, None)
+    application.system_data["last_issuance_attempt_id"] = issuance_attempt_id
 
 
 # =============================================================================
@@ -2204,12 +2270,18 @@ async def auto_issue_application(
 
     template = await _load_application_template(application.application_template_id)
     claims = _build_credential_claims(application, applicant, template)
+    issuance_attempt_id, claims = await _reserve_issuance_attempt(
+        application,
+        claims,
+        repo,
+    )
 
     try:
         issuance = await _initiate_issuance_via_flow(
             application=application,
             applicant=applicant,
             claims=claims,
+            issuance_attempt_id=issuance_attempt_id,
         )
     except HTTPException as exc:
         if exc.status_code == 409:
@@ -2244,6 +2316,7 @@ async def auto_issue_application(
     application.system_data["credential_offer_labels"] = issuance.get("credential_offer_labels") or {}
     application.system_data["offer_generated_at"] = datetime.now(timezone.utc).isoformat()
     application.system_data["issuance_status"] = issuance.get("status") or "pending"
+    _complete_issuance_attempt(application, issuance_attempt_id)
     application.claim_state = ClaimState.OFFER_READY
     application.claim_blocker = None
     if issuance.get("flow_instance_id"):
@@ -2486,12 +2559,18 @@ async def issue_application(
 
     template = await _load_application_template(application.application_template_id)
     claims = _build_credential_claims(application, applicant, template)
+    issuance_attempt_id, claims = await _reserve_issuance_attempt(
+        application,
+        claims,
+        repo,
+    )
 
     try:
         issuance = await _initiate_issuance_via_flow(
             application=application,
             applicant=applicant,
             claims=claims,
+            issuance_attempt_id=issuance_attempt_id,
         )
     except HTTPException as exc:
         if exc.status_code == 409:
@@ -2526,6 +2605,7 @@ async def issue_application(
     application.system_data["credential_offer_labels"] = issuance.get("credential_offer_labels") or {}
     application.system_data["offer_generated_at"] = datetime.now(timezone.utc).isoformat()
     application.system_data["issuance_status"] = issuance.get("status") or "pending"
+    _complete_issuance_attempt(application, issuance_attempt_id)
     application.claim_state = ClaimState.OFFER_READY
     application.claim_blocker = None
     if issuance.get("flow_instance_id"):

@@ -97,6 +97,7 @@ def test_manual_issuance_trigger_signs_exact_payload(monkeypatch):
             application=application,
             applicant=applicant,
             claims={"given_name": "Ada", "roles": ["member"]},
+            issuance_attempt_id="10000000-0000-4000-8000-000000000001",
         )
     )
 
@@ -116,6 +117,9 @@ def test_manual_issuance_trigger_signs_exact_payload(monkeypatch):
     )
     assert len(evidence.payload_sha256) == 64
     assert captured["json"]["data"]["claims"]["roles"] == ["member"]
+    assert captured["json"]["data"]["issuance_attempt_id"] == (
+        "10000000-0000-4000-8000-000000000001"
+    )
 
 
 def test_issuance_status_sync_authenticates_internal_request(monkeypatch):
@@ -729,9 +733,12 @@ def test_claim_reissues_an_expired_offer(client, repo, seeded, monkeypatch):
     run(repo.save_application(application))
     calls = 0
 
-    async def issue(**_kwargs):
+    captured = {}
+
+    async def issue(**kwargs):
         nonlocal calls
         calls += 1
+        captured.update(kwargs)
         return {
             "id": "replacement-transaction",
             "status": "pending",
@@ -750,3 +757,68 @@ def test_claim_reissues_an_expired_offer(client, repo, seeded, monkeypatch):
     assert response.status_code == 200
     assert calls == 1
     assert response.json()["credential_offer_uri"].endswith("replacement-offer")
+    attempt_id = captured["issuance_attempt_id"]
+    assert service._canonical_issuance_attempt_id(attempt_id) == attempt_id
+    saved = run(repo.get_application(application_id))
+    assert "active_issuance_attempt" not in saved.system_data
+    assert saved.system_data["last_issuance_attempt_id"] == attempt_id
+
+
+def test_uncertain_flow_failure_retries_the_exact_issuance_attempt(
+    client,
+    repo,
+    seeded,
+    template,
+    monkeypatch,
+):
+    template["claim_collection_rules"] = [
+        {
+            "claim_name": "issued_at",
+            "source": "SYSTEM",
+            "source_config": {"system_field": "current.datetime"},
+        }
+    ]
+    application_id = create_application(client).json()["id"]
+    application = run(repo.get_application(application_id))
+    application.status = ApplicationStatus.APPROVED
+    run(repo.save_application(application))
+    calls = []
+
+    async def uncertain(**kwargs):
+        calls.append(kwargs)
+        raise HTTPException(status_code=502, detail="uncertain flow result")
+
+    monkeypatch.setattr(service, "_initiate_issuance_via_flow", uncertain)
+    first = client.post(
+        f"/v1/me/applications/{application_id}/claim",
+        headers=self_headers(),
+        json={},
+    )
+    assert first.status_code == 502
+
+    async def recover(**kwargs):
+        calls.append(kwargs)
+        return {
+            "id": "recovered-transaction",
+            "status": "pending",
+            "credential_offer_uri": "openid-credential-offer://recovered-offer",
+            "expires_at": "2099-01-01T00:00:00Z",
+        }
+
+    monkeypatch.setattr(service, "_initiate_issuance_via_flow", recover)
+    second = client.post(
+        f"/v1/me/applications/{application_id}/claim",
+        headers=self_headers(),
+        json={},
+    )
+
+    assert second.status_code == 200, second.text
+    assert len(calls) == 2
+    assert calls[0]["issuance_attempt_id"] == calls[1]["issuance_attempt_id"]
+    assert calls[0]["claims"] == calls[1]["claims"]
+    assert calls[0]["claims"]["issued_at"].endswith("+00:00")
+    saved = run(repo.get_application(application_id))
+    assert "active_issuance_attempt" not in saved.system_data
+    assert saved.system_data["last_issuance_attempt_id"] == (
+        calls[1]["issuance_attempt_id"]
+    )

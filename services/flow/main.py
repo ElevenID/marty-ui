@@ -1637,8 +1637,12 @@ class InMemoryFlowRepository:
                 if selected is None:
                     selected = candidate
                     staged_instances.append((logical_key, selected))
+                semantics_context_key = plan_entry.get(
+                    "offer_semantics_context_key",
+                    "_marty_application_offer_semantics_hash_v1",
+                )
                 if (
-                    selected.context.get("_marty_application_offer_semantics_hash_v1")
+                    selected.context.get(semantics_context_key)
                     != plan_entry["offer_semantics_hash"]
                 ):
                     raise ApplicationOfferConflictError(
@@ -6431,6 +6435,27 @@ async def handle_application_approved(
         str(event.data.get("credential_template_id") or "").strip() or None
     )
     triggered_by_event = str(event.data.get("triggered_by_event") or "").strip()
+    raw_issuance_attempt_id = event.data.get("issuance_attempt_id")
+    issuance_attempt_id: str | None = None
+    if raw_issuance_attempt_id is not None:
+        if not isinstance(raw_issuance_attempt_id, str):
+            raise ApplicationOfferConflictError(
+                "issuance_attempt_id must be a canonical UUID string"
+            )
+        try:
+            issuance_attempt_id = str(uuid.UUID(raw_issuance_attempt_id))
+        except ValueError as exc:
+            raise ApplicationOfferConflictError(
+                "issuance_attempt_id must be a canonical UUID string"
+            ) from exc
+        if issuance_attempt_id != raw_issuance_attempt_id.lower():
+            raise ApplicationOfferConflictError(
+                "issuance_attempt_id must be a canonical UUID string"
+            )
+    if triggered_by_event == "application.manual_issue" and not issuance_attempt_id:
+        raise ApplicationOfferConflictError(
+            "manual application issuance requires issuance_attempt_id"
+        )
 
     # Find active OID4VCI flows explicitly configured for application-approved
     # issuance. If the caller provides credential_template_id, only matching
@@ -6465,6 +6490,20 @@ async def handle_application_approved(
     logger.info("[auto-trigger] event claim keys=%s", list(event_claims.keys()))
 
     def logical_key(flow_def: FlowDefinition) -> str:
+        if issuance_attempt_id:
+            material = json.dumps(
+                [
+                    event.organization_id,
+                    event.aggregate_id,
+                    issuance_attempt_id,
+                    flow_def.id,
+                ],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            return hashlib.sha256(
+                f"marty:application-flow-offer:v2:{material}".encode()
+            ).hexdigest()
         material = json.dumps(
             [event.organization_id, event.aggregate_id, flow_def.id],
             ensure_ascii=False,
@@ -6474,12 +6513,11 @@ async def handle_application_approved(
             f"marty:application-flow-offer:v1:{material}".encode()
         ).hexdigest()
 
-    def semantics_hash(flow_def: FlowDefinition) -> str:
+    def semantics_contract(flow_def: FlowDefinition) -> tuple[str, str]:
         def enum_value(value: Any) -> Any:
             return value.value if isinstance(value, Enum) else value
 
-        semantics = json.dumps(
-            {
+        semantics_payload = {
                 "application_id": event.aggregate_id,
                 "organization_id": flow_def.organization_id,
                 "flow_definition_id": flow_def.id,
@@ -6532,22 +6570,36 @@ async def handle_application_approved(
                 "enable_resume": flow_def.enable_resume,
                 "applicant_id": applicant_id,
                 "claims": event_claims,
-            },
+            }
+        if issuance_attempt_id:
+            semantics_payload["issuance_attempt_id"] = issuance_attempt_id
+            semantics_version = "v2"
+            context_key = "_marty_application_offer_semantics_hash_v2"
+        else:
+            semantics_version = "v1"
+            context_key = "_marty_application_offer_semantics_hash_v1"
+        semantics = json.dumps(
+            semantics_payload,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
             allow_nan=False,
         )
-        return hashlib.sha256(
-            f"marty:application-offer-semantics:v1:{semantics}".encode()
-        ).hexdigest()
+        return (
+            hashlib.sha256(
+                f"marty:application-offer-semantics:{semantics_version}:{semantics}".encode()
+            ).hexdigest(),
+            context_key,
+        )
 
     from datetime import timedelta
 
     planned_instances: list[tuple[FlowInstance, dict[str, str]]] = []
     for flow_def in matching_flows:
         application_flow_key_hash = logical_key(flow_def)
-        offer_semantics_hash = semantics_hash(flow_def)
+        offer_semantics_hash, offer_semantics_context_key = semantics_contract(
+            flow_def
+        )
         initial_context = {
             "applicant_id": applicant_id,
             "application_id": event.aggregate_id or "",
@@ -6562,8 +6614,10 @@ async def handle_application_approved(
             _PRECONDITION_EVIDENCE_KEY: {
                 "application_approved": auth_evidence.as_dict(),
             },
-            "_marty_application_offer_semantics_hash_v1": offer_semantics_hash,
+            offer_semantics_context_key: offer_semantics_hash,
         }
+        if issuance_attempt_id:
+            initial_context["issuance_attempt_id"] = issuance_attempt_id
         instance = FlowInstance(
             flow_definition_id=flow_def.id,
             organization_id=flow_def.organization_id,
@@ -6595,6 +6649,7 @@ async def handle_application_approved(
                     "flow_definition_id": flow_def.id,
                     "application_flow_key_hash": application_flow_key_hash,
                     "offer_semantics_hash": offer_semantics_hash,
+                    "offer_semantics_context_key": offer_semantics_context_key,
                     "flow_definition_version": str(flow_def.version),
                 },
             )
@@ -6642,9 +6697,12 @@ async def handle_application_approved(
     failed_flow_ids: list[str] = []
     for plan_entry in receipt.flow_plan:
         flow_def = flow_by_id.get(plan_entry["flow_definition_id"])
+        current_semantics_hash = (
+            semantics_contract(flow_def)[0] if flow_def is not None else None
+        )
         if (
             flow_def is None
-            or semantics_hash(flow_def) != plan_entry["offer_semantics_hash"]
+            or current_semantics_hash != plan_entry["offer_semantics_hash"]
         ):
             raise ApplicationOfferConflictError(
                 "the durably selected application flow is unavailable or has changed"
