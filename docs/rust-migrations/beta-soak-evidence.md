@@ -36,12 +36,11 @@ sample:
   other personal data.
 
 Keep each successful report immutable. A report is one observation, not an
-entire soak window. Event-stream deletion still requires at least seven
-consecutive days after its final beta cutover; security-sensitive revocation
-deletion requires at least fourteen. Pair daily reports with the unchanged
-contract, lifecycle, and failure suites before approving deletion. A failed or
-missing sample must be investigated and documented; this tool never shortens a
-roadmap gate or authorizes production promotion.
+entire soak window. Before v1, these samples are supporting operational and
+promotion evidence; elapsed time is not a code-deletion blocker once the
+implementation-independent behavioral, failure, ownership, packaging, and
+regression gates pass. A failed sample must still be investigated and
+documented. The collector never authorizes production promotion.
 
 Before a deletion PR, verify the complete immutable sample set. The verifier
 uses independent check inventories for each service, permits no gap longer than
@@ -58,9 +57,10 @@ python scripts/verify_rust_beta_soak_window.py `
   --output tests/artifacts/rust-beta-soak-window.json
 ```
 
-Use `--require-eligible revocation-profile` for the fourteen-day gate or
-`--require-eligible all` for the final combined removal audit. The generated
+Use `--require-eligible revocation-profile` for a release-owner-requested
+fourteen-day promotion window or `--require-eligible all` for a combined
+operational audit. The generated
 `marty.rust-beta-soak-window/v1` document records the current window start,
 duration, samples, distinct UTC dates, interruptions, and independent deletion
-eligibility. A successful time window remains only one part of the full roadmap
-deletion gate.
+eligibility. These optional windows do not restore or preserve a superseded
+runtime implementation.
