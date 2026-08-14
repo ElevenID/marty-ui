@@ -1,0 +1,26 @@
+{
+  "purposes": {
+    "purposes": [
+      {"id":"vc_jwt_issuer","allowed_algorithms":["ES256","ES384","EdDSA","RS256"],"credential_formats":["jwt_vc_json","dc+sd-jwt","ldp_vc"]},
+      {"id":"mdoc_dsc","allowed_algorithms":["ES256","ES384","EdDSA"],"credential_formats":["mso_mdoc","zk_mdoc"]},
+      {"id":"x509_doc_signer","allowed_algorithms":["ES256","ES384","EdDSA","RS256"],"credential_formats":["mso_mdoc","zk_mdoc"]},
+      {"id":"holder_binding","allowed_algorithms":["ES256","EdDSA"],"credential_formats":["mso_mdoc","zk_mdoc","dc+sd-jwt"]},
+      {"id":"presentation_signing","allowed_algorithms":["ES256","EdDSA"],"credential_formats":["jwt_vc_json","dc+sd-jwt","mso_mdoc","zk_mdoc"]},
+      {"id":"oid4vp_request_signing","allowed_algorithms":["ES256"],"credential_formats":["oauth-authz-req+jwt"]},
+      {"id":"vdsnc_signing","allowed_algorithms":["ES256","ES384","EdDSA"],"credential_formats":["mso_mdoc"]},
+      {"id":"csca","allowed_algorithms":["ES256","ES384","EdDSA","RS256"],"credential_formats":["mso_mdoc","zk_mdoc"]},
+      {"id":"jwks_signing","allowed_algorithms":["ES256","ES384","EdDSA","RS256"],"credential_formats":["jwt_vc_json","dc+sd-jwt"]},
+      {"id":"lti_tool_signing","allowed_algorithms":["RS256"],"credential_formats":["lti_tool_jwt"]}
+    ]
+  },
+  "service_capabilities": {
+    "service_capabilities": [
+      {"service_type_id":"openbao-transit","label":"OpenBao Transit","capabilities":{"supported_algorithms":["ES256","ES384","RS256","EdDSA"],"signature_encoding":"der","public_key_export":true,"hardware_attestation":false,"key_import":false,"key_create":true,"key_delete":true,"key_list":true,"rotation":true}},
+      {"service_type_id":"hashicorp-vault-transit","label":"HashiCorp Vault Transit","capabilities":{"supported_algorithms":["ES256","ES384","RS256","EdDSA"],"signature_encoding":"der","public_key_export":true,"hardware_attestation":false,"key_import":false,"key_create":true,"key_delete":true,"key_list":true,"rotation":true}},
+      {"service_type_id":"aws-kms","label":"AWS KMS","capabilities":{"supported_algorithms":["ES256","ES384","RS256"],"signature_encoding":"der","public_key_export":true,"hardware_attestation":true,"key_import":true,"key_create":true,"key_delete":false,"key_list":false,"rotation":true}},
+      {"service_type_id":"azure-key-vault","label":"Azure Key Vault","capabilities":{"supported_algorithms":["ES256","ES384","RS256","EdDSA"],"signature_encoding":"der","public_key_export":true,"hardware_attestation":true,"key_import":true,"key_create":true,"key_delete":true,"key_list":true,"rotation":true}},
+      {"service_type_id":"gcp-cloud-kms","label":"Google Cloud KMS","capabilities":{"supported_algorithms":["ES256","ES384","RS256","EdDSA"],"signature_encoding":"der","public_key_export":true,"hardware_attestation":true,"key_import":true,"key_create":true,"key_delete":false,"key_list":true,"rotation":true}},
+      {"service_type_id":"custom-transit-compatible","label":"Custom Transit-Compatible Service","capabilities":{"supported_algorithms":["ES256","ES384","RS256","EdDSA"],"signature_encoding":"raw_ieee_p1363","public_key_export":false,"hardware_attestation":false,"key_import":false,"key_create":false,"key_delete":false,"key_list":false,"rotation":false}}
+    ]
+  }
+}
