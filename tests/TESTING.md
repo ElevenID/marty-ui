@@ -575,10 +575,13 @@ The PR browser gate is deterministic and mocked. The real deployed lifecycle is
 `.github/workflows/e2e-tests.yml`, triggered manually or by the deployment
 orchestrator with the `beta-deployed` repository-dispatch event.
 
-Every dispatch must identify `release_version` and `cd_run_id` in addition to
-the beta origin and audit organization. The workflow downloads that CD run's
-build-ready manifest, requires the run to be a successful `CD` execution at the
-workflow checkout SHA, and rejects a manifest for another release or revision.
+Every dispatch must identify `release_version`, `stack_release_run_id`, the
+immutable `marty_ui_release_sha` used by that release, the deployed `beta_source_id`,
+and the independently pinned `marty_protocol_sha`, in addition to the beta
+origin and audit organization. The workflow requires a successful `Stack
+release` run for the exact tag and commit, verifies the released
+`marty.stack/v1` manifest checksum and GitHub attestation, and rejects a
+manifest for another release or revision.
 The deployed services and UI images independently expose their embedded release
 identity at `/.well-known/marty-release` and `/marty-ui-release.json`; both must
 match before any browser journey starts.
@@ -595,7 +598,7 @@ secrets.TEST_VENDOR_PASSWORD
 ```
 
 Every release environment must have at least one required reviewer, self-review
-and administrator bypass disabled, and a protected-branch or custom deployment-branch policy. CD
+and administrator bypass disabled, and a protected-branch or custom deployment-branch policy. The release workflow
 checks the live GitHub configuration before running repository tests or building
 an image:
 
@@ -627,35 +630,14 @@ The job starts the deterministic Marty browser wallet and fails unless:
 - lifecycle status is organization-owned and wrong-organization actions return `403`;
 - no required fixture is missing.
 
-CD also requires exact 40-character `MARTY_PROTOCOL_REF`,
-`MARTY_CREDENTIALS_REF`, `MARTY_CORE_REF`, `MARTY_CLI_REF`, `MARTY_BLOG_REF`,
-and `MARTY_SUBSCRIPTIONS_REF` repository variables. Configure the protected `beta-migration-rehearsal`
-environment with:
-
-```text
-secrets.MIGRATION_REHEARSAL_DATABASE_URL
-secrets.MIGRATION_REHEARSAL_DATABASE_MARKER
-vars.MIGRATION_REHEARSAL_SNAPSHOT_ID
-vars.MIGRATION_REHEARSAL_PUBLIC_API_URL
-```
-
-The marker must begin with `beta-copy-`, be at least six characters, and appear
-in the rehearsal database URL. The snapshot ID identifies the beta snapshot
-restored into that isolated database. There is no empty-schema fallback. CD
-requires the public URL to be the exact absolute HTTPS beta origin, applies the
-one-way migration with that origin, verifies it, captures built image digests, and
-emits `build-ready-manifest-<version>` only after the beta-copy rehearsal
-succeeds.
-The deployed beta environment must also set `MARTY_MIGRATION_PROFILE=beta`;
-do not let a tunnel deployment inherit the compose `dev` profile.
-Before building, CD also requires successful exact-SHA source workflows: `CI`
-for Marty Protocol and Marty Credentials, and `MIP Release Wallet` for Marty
-Core. The Core release lane verifies the tracked lockfile and vendored patch,
-tests the final-spec OID4VCI engine and browser wallet, and compiles the Python
-bindings against that same locked engine.
-This manifest is not a promotion attestation: `release_ready` remains false until
-the deployed beta lifecycle and protected wallet-login lanes pass against the
-same repository revisions and image digests.
+The Stack release consumes the exact component commits and artifact digests in
+`release/stack-lock.json`, builds the Marty UI images, and publishes a signed,
+checksummed `stack-manifest.json`. The deployed beta environment must set
+`MARTY_MIGRATION_PROFILE=beta`; do not let a tunnel deployment inherit the
+compose `dev` profile. The stack manifest is immutable build provenance, not a
+promotion attestation: it becomes release-ready only after the deployed beta
+lifecycle and protected wallet-login lanes pass against its release commit and
+the explicitly recorded beta source snapshot.
 
 SpruceKit Open Badge login remains a protected device-lab gate because SpruceKit
 Mobile is a native SDK/showcase rather than a hosted browser wallet. Its evidence
@@ -665,11 +647,12 @@ and authenticated Marty session without changing the standards-compliant request
 
 ### Protected Wallet Conformance Promotion
 
-CD intentionally emits only `build-ready-manifest-<version>` with
-`release_ready: false`. The beta lifecycle workflow adds `release-context.json`
-to its evidence artifact so the stack-release run, release version, tested UI SHA,
-beta source snapshot, Marty Core SHA, explicitly pinned Marty Protocol SHA, beta
-origin, MIP version, current evidence-tooling SHA, and workflow run cannot be
+The Stack release publishes a signed `marty.stack/v1` manifest without claiming
+that beta or protected devices passed. The beta lifecycle workflow adds
+`release-context.json` to its evidence artifact so the stack-release run,
+manifest SHA-256, release version, immutable UI release SHA, beta source
+snapshot, Marty Core SHA, explicitly pinned Marty Protocol SHA, beta origin,
+MIP version, current evidence-tooling SHA, and workflow run cannot be
 substituted later. The protocol SHA is supplied independently because schema
 corrections do not require a beta redeployment or a new application release.
 The immutable application release is verified against its stack release while
@@ -698,21 +681,22 @@ protections as the other release environments. Dispatch the workflow with:
 
 ```text
 release_version
-cd_run_id
+stack_release_run_id
 beta_lifecycle_run_id
-marty_ui_sha
 beta_origin
 wallet_evidence_url
 wallet_evidence_sha256
 ```
 
-The evidence JSON follows schema v2 in
+The evidence JSON follows schema v3 in
 `docs/wallet-conformance-evidence-template.json`; authoritative required checks
 and wallet IDs are in
 `deploy-config/catalog/wallet-conformance-requirements.json`. The protected job
-downloads the build-ready and beta artifacts by run ID, requires both source
-workflow runs to have completed successfully at the exact Marty UI SHA, verifies
-the Marty Core wallet revision and all seven coordinated repository revisions,
+downloads and attests the released stack manifest, downloads the beta artifact
+by run ID, and checks out the exact evidence-tooling commit used by that
+lifecycle run. It separately verifies the immutable Marty UI release commit,
+the deployed beta source ID, the Marty Core and Protocol revisions, and the
+stack-manifest checksum before it
 downloads the device evidence over HTTPS, checks its SHA-256, and validates:
 
 - SpruceKit badge receipt, badge and issuer display, signed request resolution,
@@ -737,8 +721,9 @@ active app-specific targets require device evidence, and `wr-waltid-001` is an
 explicit inactive external blocker. `wr-didcomm-001` is a push integration and
 is tested as a service flow, not misclassified as a wallet handoff.
 
-Only that workflow can publish `release-ready-manifest-<version>`. The promoted
-manifest contains hashes and non-sensitive summaries, not holder email or raw
-device evidence. It records the successful CD, beta lifecycle, and promotion run
+Only that workflow can publish the `marty.release-ready/v1`
+`release-ready-manifest-<version>` package. The promoted manifest contains
+hashes and non-sensitive summaries, not holder email or raw
+device evidence. It records the successful Stack release, beta lifecycle, and promotion run
 IDs plus verified attachment kind, hash, and byte count; protected attachment
 URLs are not copied into the release-ready manifest.

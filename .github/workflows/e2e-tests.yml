@@ -13,10 +13,10 @@ on:
       release_version:
         description: Release version published by the successful stack release
         required: true
-      cd_run_id:
+      stack_release_run_id:
         description: Successful Stack release run that built the deployed release
         required: true
-      marty_ui_sha:
+      marty_ui_release_sha:
         description: Exact 40-character Marty UI commit used by the stack release
         required: true
       beta_source_id:
@@ -52,8 +52,8 @@ jobs:
       TEST_VENDOR_PASSWORD: ${{ secrets.TEST_VENDOR_PASSWORD }}
       MARTY_TEST_WALLET_ORIGIN: http://127.0.0.1:8787
       RELEASE_VERSION: ${{ inputs.release_version || github.event.client_payload.release_version }}
-      CD_RUN_ID: ${{ inputs.cd_run_id || github.event.client_payload.cd_run_id }}
-      MARTY_UI_SHA: ${{ inputs.marty_ui_sha || github.event.client_payload.marty_ui_sha || github.sha }}
+      STACK_RELEASE_RUN_ID: ${{ inputs.stack_release_run_id || github.event.client_payload.stack_release_run_id }}
+      MARTY_UI_RELEASE_SHA: ${{ inputs.marty_ui_release_sha || github.event.client_payload.marty_ui_release_sha }}
       BETA_SOURCE_ID: ${{ inputs.beta_source_id || github.event.client_payload.beta_source_id }}
       MARTY_PROTOCOL_SHA: ${{ inputs.marty_protocol_sha || github.event.client_payload.marty_protocol_sha }}
       EVIDENCE_TOOLING_SHA: ${{ github.sha }}
@@ -67,8 +67,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ ! "$MARTY_UI_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "MARTY_UI_SHA must be a full 40-character commit SHA." >&2
+          if [[ ! "$MARTY_UI_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "MARTY_UI_RELEASE_SHA must be a full 40-character commit SHA." >&2
             exit 1
           fi
           if [[ ! "$EVIDENCE_TOOLING_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -76,15 +76,15 @@ jobs:
             exit 1
           fi
           test "$(git rev-parse HEAD)" = "$EVIDENCE_TOOLING_SHA"
-          git fetch --no-tags --depth=1 origin "$MARTY_UI_SHA"
-          git cat-file -e "$MARTY_UI_SHA^{commit}"
+          git fetch --no-tags --depth=1 origin "$MARTY_UI_RELEASE_SHA"
+          git cat-file -e "$MARTY_UI_RELEASE_SHA^{commit}"
 
-          run="$(gh run view "$CD_RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion,event,headBranch,headSha,status,workflowName)"
+          run="$(gh run view "$STACK_RELEASE_RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion,event,headBranch,headSha,status,workflowName)"
           test "$(jq -r '.status' <<<"$run")" = "completed"
           test "$(jq -r '.conclusion' <<<"$run")" = "success"
           test "$(jq -r '.event' <<<"$run")" = "push"
           test "$(jq -r '.headBranch' <<<"$run")" = "v$RELEASE_VERSION"
-          test "$(jq -r '.headSha' <<<"$run")" = "$MARTY_UI_SHA"
+          test "$(jq -r '.headSha' <<<"$run")" = "$MARTY_UI_RELEASE_SHA"
           test "$(jq -r '.workflowName' <<<"$run")" = "Stack release"
 
           mkdir -p tests/artifacts/build-evidence
@@ -99,12 +99,17 @@ jobs:
           )
           gh attestation verify tests/artifacts/build-evidence/stack-manifest.json \
             --repo "$GITHUB_REPOSITORY"
+          stack_manifest_sha256="$(sha256sum tests/artifacts/build-evidence/stack-manifest.json | awk '{print $1}')"
+          if [[ ! "$stack_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "stack_manifest_sha256 must be a lowercase SHA-256." >&2
+            exit 1
+          fi
 
           manifest=tests/artifacts/build-evidence/stack-manifest.json
           jq -e \
             --arg release "marty-ui@$RELEASE_VERSION" \
             --arg version "$RELEASE_VERSION" \
-            --arg sha "$MARTY_UI_SHA" \
+            --arg sha "$MARTY_UI_RELEASE_SHA" \
             '.schema == "marty.stack/v1" and
              .release == $release and
              any(.components[];
@@ -128,8 +133,10 @@ jobs:
           fi
           echo "core=$core_ref" >> "$GITHUB_OUTPUT"
           echo "protocol=$MARTY_PROTOCOL_SHA" >> "$GITHUB_OUTPUT"
+          echo "stack_manifest_sha256=$stack_manifest_sha256" >> "$GITHUB_OUTPUT"
           echo "MARTY_CORE_REF=$core_ref" >> "$GITHUB_ENV"
           echo "MARTY_PROTOCOL_REF=$MARTY_PROTOCOL_SHA" >> "$GITHUB_ENV"
+          echo "STACK_MANIFEST_SHA256=$stack_manifest_sha256" >> "$GITHUB_ENV"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -162,14 +169,14 @@ jobs:
       - name: Require the full-stack fixture manifest
         shell: bash
         run: |
-          for name in BETA_ORIGIN BETA_AUDIT_ORG_ID TEST_APPLICANT_EMAIL TEST_APPLICANT_PASSWORD TEST_VENDOR_EMAIL TEST_VENDOR_PASSWORD RELEASE_VERSION CD_RUN_ID MARTY_UI_SHA BETA_SOURCE_ID MARTY_CORE_REF MARTY_PROTOCOL_REF; do
+          for name in BETA_ORIGIN BETA_AUDIT_ORG_ID TEST_APPLICANT_EMAIL TEST_APPLICANT_PASSWORD TEST_VENDOR_EMAIL TEST_VENDOR_PASSWORD RELEASE_VERSION STACK_RELEASE_RUN_ID MARTY_UI_RELEASE_SHA BETA_SOURCE_ID MARTY_CORE_REF MARTY_PROTOCOL_REF STACK_MANIFEST_SHA256; do
             if [[ -z "${!name}" ]]; then
               echo "$name is required by the beta-lifecycle environment." >&2
               exit 1
             fi
           done
-          if [[ ! "$CD_RUN_ID" =~ ^[0-9]+$ ]]; then
-            echo "CD_RUN_ID must be numeric." >&2
+          if [[ ! "$STACK_RELEASE_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "STACK_RELEASE_RUN_ID must be numeric." >&2
             exit 1
           fi
           if [[ ! "$BETA_SOURCE_ID" =~ ^[0-9a-f]{40}$ ]]; then
@@ -296,9 +303,10 @@ jobs:
           mkdir -p tests/artifacts
           jq -n \
             --arg run_id "$GITHUB_RUN_ID" \
-            --arg cd_run_id "$CD_RUN_ID" \
+            --arg stack_release_run_id "$STACK_RELEASE_RUN_ID" \
             --arg release_version "$RELEASE_VERSION" \
-            --arg marty_ui_sha "$MARTY_UI_SHA" \
+            --arg marty_ui_release_sha "$MARTY_UI_RELEASE_SHA" \
+            --arg stack_manifest_sha256 "$STACK_MANIFEST_SHA256" \
             --arg beta_source_id "$BETA_SOURCE_ID" \
             --arg marty_core_sha "$MARTY_CORE_REF" \
             --arg marty_protocol_sha "$MARTY_PROTOCOL_REF" \
@@ -307,9 +315,10 @@ jobs:
             --arg mip_version "0.4.1" \
             '{
               run_id: $run_id,
-              cd_run_id: $cd_run_id,
+              stack_release_run_id: $stack_release_run_id,
               release_version: $release_version,
-              marty_ui_sha: $marty_ui_sha,
+              marty_ui_release_sha: $marty_ui_release_sha,
+              stack_manifest_sha256: $stack_manifest_sha256,
               beta_source_id: $beta_source_id,
               marty_core_sha: $marty_core_sha,
               marty_protocol_sha: $marty_protocol_sha,
