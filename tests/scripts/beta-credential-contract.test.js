@@ -10,6 +10,7 @@ const {
   DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
   credentialConfigurationIdForWaltid,
   credentialInventoryEvidence,
+  verificationResultEvidence,
 } = require('./beta-credential-contract');
 
 test('beta gates target the canonical Marty organization and Open Badge login contract', () => {
@@ -44,4 +45,66 @@ test('walt.id compatibility keeps its explicit SD-JWT route aliases deterministi
   assert.equal(credentialConfigurationIdForWaltid('open_badge'), 'open_badge#sd-jwt');
   assert.equal(credentialConfigurationIdForWaltid('open_badge#sd-jwt'), 'open_badge#sd-jwt');
   assert.equal(credentialConfigurationIdForWaltid('open_badge#apple-wallet'), 'open_badge#sd-jwt');
+});
+
+test('verification evidence follows the canonical flat public result contract', () => {
+  assert.deepEqual(
+    verificationResultEvidence({
+      status: 'completed',
+      result: 'passed',
+      decision: 'allow',
+      decision_reason: 'All checks passed',
+      error_codes: [],
+      warnings: ['non-blocking notice'],
+    }, 200),
+    {
+      httpStatus: 200,
+      status: 'COMPLETED',
+      evaluation: 'passed',
+      decision: 'allow',
+      decisionReason: 'All checks passed',
+      errorCodes: [],
+      warnings: ['non-blocking notice'],
+    },
+  );
+});
+
+test('verification evidence rejects the retired nested result contract', () => {
+  const evidence = verificationResultEvidence({
+    status: 'COMPLETED',
+    result: {
+      evaluation_result: 'passed',
+      decision: 'allow',
+      decision_reason: 'Retired response shape',
+    },
+  }, 200);
+
+  assert.equal(evidence.status, 'COMPLETED');
+  assert.equal(evidence.evaluation, null);
+  assert.equal(evidence.decision, null);
+  assert.equal(evidence.decisionReason, null);
+});
+
+test('verification evidence fails closed for malformed response bodies and lists', () => {
+  assert.deepEqual(verificationResultEvidence(null, 502), {
+    httpStatus: 502,
+    status: null,
+    evaluation: null,
+    decision: null,
+    decisionReason: null,
+    errorCodes: [],
+    warnings: [],
+  });
+  assert.deepEqual(
+    verificationResultEvidence({ status: [], result: true, error_codes: ['valid', 7] }),
+    {
+      httpStatus: null,
+      status: null,
+      evaluation: null,
+      decision: null,
+      decisionReason: null,
+      errorCodes: [],
+      warnings: [],
+    },
+  );
 });
