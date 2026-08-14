@@ -1,5 +1,6 @@
 use crate::domain::{key_purposes, service_capabilities};
 use crate::kms::{self, ProviderRequest, SignRequest};
+use crate::validation::{self, ValidationRequest};
 use axum::{
     extract::State,
     http::HeaderMap,
@@ -22,7 +23,7 @@ struct HealthResponse {
 struct ServiceStatus {
     service_name: &'static str,
     phase: &'static str,
-    migrated_capabilities: [&'static str; 5],
+    migrated_capabilities: [&'static str; 6],
     pending_capabilities: [&'static str; 4],
 }
 
@@ -52,6 +53,7 @@ pub fn router_with_internal_api_key(internal_api_key: String) -> Router {
         .route("/internal/kms/sign", post(kms_sign))
         .route("/internal/kms/public-key", post(kms_public_key))
         .route("/internal/kms/verify", post(kms_verify))
+        .route("/internal/config/validate", post(validate_service))
         .layer(TraceLayer::new_for_http())
         .with_state(AppState {
             internal_api_key: Arc::from(internal_api_key),
@@ -83,6 +85,15 @@ async fn kms_verify(
 ) -> Result<Json<kms::CapabilityResult>, kms::KmsError> {
     authorize_internal(&state, &headers)?;
     Ok(Json(kms::verify(request).await?))
+}
+
+async fn validate_service(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ValidationRequest>,
+) -> Result<Json<validation::ValidationResult>, kms::KmsError> {
+    authorize_internal(&state, &headers)?;
+    Ok(Json(validation::validate(request).await))
 }
 
 fn authorize_internal(state: &AppState, headers: &HeaderMap) -> Result<(), kms::KmsError> {
@@ -122,13 +133,14 @@ async fn startup() -> Json<HealthResponse> {
 async fn service_status() -> Json<ServiceStatus> {
     Json(ServiceStatus {
         service_name: "signing-keys-service",
-        phase: "provider-integration",
+        phase: "provider-validation",
         migrated_capabilities: [
             "service-bootstrap",
             "health-surface",
             "integration-test-target",
             "kms-adapter-integration",
             "provider-key-normalization",
+            "service-registration-validation",
         ],
         pending_capabilities: [
             "registry-persistence",
