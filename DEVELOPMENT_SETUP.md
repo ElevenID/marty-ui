@@ -43,6 +43,11 @@ The local stack is defined by:
 - `docker-compose.profile.tunnel.yml` - optional Cloudflare tunnel routing
 - `docker-compose.profile.obs.yml` - optional observability overlays
 
+All host ports inherited from the base stack bind to `127.0.0.1`. This keeps
+the local documentation and debugging endpoints available on the developer
+machine without exposing infrastructure or internal service APIs to the LAN.
+Public access must use the configured gateway proxy or tunnel path.
+
 The legacy monolith Dockerfiles and demo-only compose entrypoints were retired and should not be referenced for new setup steps.
 
 ## Workspace layout
