@@ -14,6 +14,7 @@ const {
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
   credentialInventoryEvidence,
+  verificationResultEvidence,
 } = require('./beta-credential-contract');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -232,21 +233,17 @@ async function loginWithTestWallet(browser, walletPage, report) {
 async function pollFlowInstance(page, instanceId) {
   let last = null;
   for (let attempt = 0; attempt < 12; attempt += 1) {
-    last = await page.evaluate(async (id) => {
+    const response = await page.evaluate(async (id) => {
       const response = await fetch(`/v1/flows/instances/${encodeURIComponent(id)}/result`, {
         credentials: 'include',
       });
       const body = await response.json().catch(() => null);
-      const evaluation = body?.result?.evaluation_result || null;
-      const decision = body?.result?.decision || null;
       return {
         httpStatus: response.status,
-        status: String(body?.status || body?.state || '').toUpperCase() || null,
-        evaluation,
-        decision,
-        decisionReason: body?.result?.decision_reason || null,
+        body,
       };
     }, instanceId);
+    last = verificationResultEvidence(response.body, response.httpStatus);
     if (last.httpStatus === 200 && ['COMPLETED', 'PASSED', 'VERIFIED', 'FAILED', 'EXPIRED'].includes(last.status)) {
       return last;
     }

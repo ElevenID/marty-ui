@@ -32,6 +32,30 @@ function credentialConfigurationIdForWaltid(configId) {
   return `${id}#sd-jwt`;
 }
 
+function verificationResultEvidence(body, httpStatus = null) {
+  const isObject = body !== null && typeof body === 'object' && !Array.isArray(body);
+  const stringField = (name) => (
+    isObject && typeof body[name] === 'string' && body[name].trim()
+      ? body[name]
+      : null
+  );
+  const stringList = (name) => (
+    isObject && Array.isArray(body[name]) && body[name].every((value) => typeof value === 'string')
+      ? body[name]
+      : []
+  );
+
+  return {
+    httpStatus,
+    status: stringField('status')?.toUpperCase() || null,
+    evaluation: stringField('result'),
+    decision: stringField('decision'),
+    decisionReason: stringField('decision_reason'),
+    errorCodes: stringList('error_codes'),
+    warnings: stringList('warnings'),
+  };
+}
+
 module.exports = {
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LIFECYCLE_POLICY_ID,
@@ -40,4 +64,5 @@ module.exports = {
   DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
   credentialConfigurationIdForWaltid,
   credentialInventoryEvidence,
+  verificationResultEvidence,
 };
