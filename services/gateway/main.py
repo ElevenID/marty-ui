@@ -170,13 +170,59 @@ _WALLET_REGISTRY_RESOURCE_LOOKUP = (
     {"resolve"},
 )
 
-_CANVAS_PROVENANCE_ROUTE = (
-    "GET",
-    "/v1/issuance/delivery-records/canvas-credentials/provenance",
+_CANVAS_MIRROR_ROUTE_RULES = (
+    (
+        re.compile(
+            r"^/v1/issuance/delivery-records/"
+            r"canvas-credentials/provenance$"
+        ),
+        {"GET": "integration-connector:view"},
+        "integration-connector",
+    ),
+    (
+        re.compile(
+            r"^/v1/issuance/delivery-records/canvas-credentials/"
+            r"(?:process-pending|process-status-sync-failures|run-automation-cycle)$"
+        ),
+        {"POST": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(
+            r"^/v1/issuance/organizations/[^/]+/canvas-mirror-health$"
+        ),
+        {"GET": "integration-connector:view"},
+        "integration-connector",
+    ),
 )
-_CANVAS_PROVENANCE_PERMISSION = (
-    "integration-connector:view",
-    "integration-connector",
+_CANVAS_MIRROR_ROUTE_PROBES = {
+    (
+        "GET",
+        "/v1/issuance/delivery-records/canvas-credentials/provenance",
+    ): ("integration-connector:view", "integration-connector"),
+    (
+        "POST",
+        "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+    ): ("integration-connector:edit", "integration-connector"),
+    (
+        "POST",
+        "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+    ): ("integration-connector:edit", "integration-connector"),
+    (
+        "POST",
+        "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+    ): ("integration-connector:edit", "integration-connector"),
+    (
+        "GET",
+        "/v1/issuance/organizations/organization-example/canvas-mirror-health",
+    ): ("integration-connector:view", "integration-connector"),
+}
+_CANVAS_MIRROR_STATIC_ROUTES = (
+    "/v1/issuance/delivery-records/canvas-credentials/provenance",
+    "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+    "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+    "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+    "/v1/issuance/organizations/organization-example/canvas-mirror-health",
 )
 
 _NOTIFICATION_ROUTE_RULES = (
@@ -495,42 +541,54 @@ def _register_vc_api_cedar_routes() -> None:
         )
 
 
-def _register_canvas_provenance_cedar_route() -> None:
-    """Bind Canvas provenance lookup to tenant membership and connector RBAC."""
+def _register_canvas_mirror_cedar_routes() -> None:
+    """Bind Canvas mirror management to tenant membership and connector RBAC."""
     resolver = getattr(_cedar_actions, "resolve_action_and_resource", None)
+    lookup_resolver = getattr(_cedar_actions, "resolve_resource_lookup", None)
     rules = getattr(_cedar_actions, "SPECIAL_ROUTE_RULES", None)
-    if not callable(resolver) or not isinstance(rules, list):
+    if (
+        not callable(resolver)
+        or not callable(lookup_resolver)
+        or not isinstance(rules, list)
+    ):
         raise RuntimeError(
             "Unsupported marty-common Cedar route registry; "
-            "refusing to start without Canvas provenance RBAC."
+            "refusing to start without Canvas mirror RBAC."
         )
 
-    current = resolver(*_CANVAS_PROVENANCE_ROUTE)
-    if current == _CANVAS_PROVENANCE_PERMISSION:
-        return
-    if current is not None:
-        raise RuntimeError(
-            "Conflicting marty-common Canvas provenance Cedar mapping; "
-            "refusing to override it."
-        )
+    missing_probes: list[tuple[str, str]] = []
+    for probe, expected in _CANVAS_MIRROR_ROUTE_PROBES.items():
+        current = resolver(*probe)
+        if current == expected:
+            continue
+        if current is not None:
+            raise RuntimeError(
+                "Conflicting marty-common Canvas mirror Cedar mapping; "
+                "refusing to override it."
+            )
+        missing_probes.append(probe)
 
-    compatibility_rule = (
-        re.compile(
-            r"^/v1/issuance/delivery-records/"
-            r"canvas-credentials/provenance$"
-        ),
-        {"GET": _CANVAS_PROVENANCE_PERMISSION[0]},
-        _CANVAS_PROVENANCE_PERMISSION[1],
-    )
-    rules.insert(0, compatibility_rule)
+    inserted = [
+        rule
+        for rule in _CANVAS_MIRROR_ROUTE_RULES
+        if any(rule[0].match(path) for _, path in missing_probes)
+    ]
+    rules[0:0] = inserted
     try:
-        verified = resolver(*_CANVAS_PROVENANCE_ROUTE) == _CANVAS_PROVENANCE_PERMISSION
+        verified = all(
+            resolver(*probe) == expected
+            for probe, expected in _CANVAS_MIRROR_ROUTE_PROBES.items()
+        ) and all(
+            lookup_resolver(path) is None
+            for path in _CANVAS_MIRROR_STATIC_ROUTES
+        )
     except Exception:
         verified = False
     if not verified:
-        rules.remove(compatibility_rule)
+        for rule in inserted:
+            rules.remove(rule)
         raise RuntimeError(
-            "Canvas provenance Cedar compatibility mapping did not activate; "
+            "Canvas mirror Cedar compatibility mapping did not activate; "
             "refusing to start."
         )
 
@@ -968,7 +1026,7 @@ def create_app() -> FastAPI:
     _register_signing_key_cedar_routes()
     _register_wallet_registry_cedar_routes()
     _register_vc_api_cedar_routes()
-    _register_canvas_provenance_cedar_route()
+    _register_canvas_mirror_cedar_routes()
     _register_notification_cedar_routes()
     app = FastAPI(
         title="Marty API Gateway",

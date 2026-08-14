@@ -447,7 +447,10 @@ async def test_canvas_mirror_provenance_route_proxies_with_management_header(
     monkeypatch.setattr(issuance, "proxy_request", _proxy)
     monkeypatch.setattr(issuance, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
 
-    response = await issuance.get_canvas_mirror_provenance(_build_request())
+    response = await issuance.get_canvas_mirror_provenance(
+        _build_request(session_org_id="org-1"),
+        "org-1",
+    )
     body = json.loads(response.body)
 
     assert captured["service_url"] == "http://issuance-service"
@@ -1114,7 +1117,10 @@ async def test_canvas_mirror_automation_cycle_route_proxies_with_management_head
     monkeypatch.setattr(issuance, "proxy_request", _proxy)
     monkeypatch.setattr(issuance, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
 
-    response = await issuance.run_canvas_mirror_automation_cycle(_build_request())
+    response = await issuance.run_canvas_mirror_automation_cycle(
+        _build_request(session_org_id="org-1"),
+        "org-1",
+    )
     body = json.loads(response.body)
 
     assert captured["service_url"] == "http://issuance-service"
@@ -1146,8 +1152,14 @@ async def test_canvas_mirror_retry_routes_proxy_with_management_header(
     monkeypatch.setattr(issuance, "proxy_request", _proxy)
     monkeypatch.setattr(issuance, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
 
-    await issuance.process_pending_canvas_mirror_deliveries(_build_request())
-    await issuance.process_canvas_mirror_status_sync_failures(_build_request())
+    await issuance.process_pending_canvas_mirror_deliveries(
+        _build_request(session_org_id="org-1"),
+        "org-1",
+    )
+    await issuance.process_canvas_mirror_status_sync_failures(
+        _build_request(session_org_id="org-1"),
+        "org-1",
+    )
 
     assert [call["path"] for call in captured] == [
         "/v1/issuance/delivery-records/canvas-credentials/process-pending",
@@ -1177,13 +1189,53 @@ async def test_canvas_mirror_health_route_proxies_with_management_header(
     monkeypatch.setattr(issuance, "proxy_request", _proxy)
     monkeypatch.setattr(issuance, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
 
-    response = await issuance.get_canvas_mirror_health("org-1", _build_request())
+    response = await issuance.get_canvas_mirror_health(
+        "org-1",
+        _build_request(session_org_id="org-1"),
+    )
     body = json.loads(response.body)
 
     assert captured["service_url"] == "http://issuance-service"
     assert captured["path"] == "/v1/issuance/organizations/org-1/canvas-mirror-health"
     assert captured["inject_headers"] == {"X-API-Key": "secret"}
     assert body["pending_publish_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "route",
+    (
+        issuance.process_pending_canvas_mirror_deliveries,
+        issuance.process_canvas_mirror_status_sync_failures,
+        issuance.run_canvas_mirror_automation_cycle,
+    ),
+)
+@pytest.mark.asyncio
+async def test_canvas_mirror_batch_routes_reject_cedar_scope_from_other_selected_tenant(
+    route,
+) -> None:
+    request = _build_request(session_org_id="org-selected")
+    request.state.organization_id = "org-other"
+
+    with pytest.raises(HTTPException, match="organization_id does not match"):
+        await route(request, "org-other")
+
+
+@pytest.mark.asyncio
+async def test_canvas_mirror_health_rejects_other_selected_tenant() -> None:
+    request = _build_request(session_org_id="org-selected")
+    request.state.organization_id = "org-other"
+
+    with pytest.raises(HTTPException, match="organization_id does not match"):
+        await issuance.get_canvas_mirror_health("org-other", request)
+
+
+@pytest.mark.asyncio
+async def test_canvas_mirror_provenance_rejects_other_selected_tenant() -> None:
+    request = _build_request(session_org_id="org-selected")
+    request.state.organization_id = "org-other"
+
+    with pytest.raises(HTTPException, match="organization_id does not match"):
+        await issuance.get_canvas_mirror_provenance(request, "org-other")
 
 
 @pytest.mark.asyncio
