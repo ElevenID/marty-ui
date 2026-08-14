@@ -1,11 +1,11 @@
 {
   "schema": "marty.rust-ownership/v1",
   "roadmap": "docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md",
-  "updated": "2026-08-13",
+  "updated": "2026-08-14",
   "policy": {
     "canonical_rule": "Each deterministic protocol, policy, validation, cryptographic, or state-machine capability has one Rust implementation.",
     "fallback_rule": "Required native capabilities fail closed; runtime fallback to Python or Dart is prohibited.",
-    "removal_rule": "Delete superseded non-Rust kernels after beta parity and soak gates pass."
+    "removal_rule": "Delete superseded non-Rust kernels as soon as implementation-independent behavioral, failure, packaging, and regression gates pass."
   },
   "capabilities": [
     {
@@ -372,6 +372,177 @@
           "paths": ["src/marty_plugin/shared/vds_nc"],
           "language": "python",
           "disposition": "dto-visa-provider-adapter-only"
+        }
+      ]
+    },
+    {
+      "id": "signing-key-kms",
+      "phase": 9,
+      "status": "planned",
+      "canonical": {
+        "repository": "ElevenID/marty-core",
+        "paths": ["marty-crypto/src", "marty-verification/src/jwk"],
+        "binding_paths": ["marty-bindings/src/lib.rs"]
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-ui",
+          "paths": [
+            "services/gateway/routes/signing_keys.py",
+            "services/gateway/kms_adapters/__init__.py",
+            "services/signing_keys/main.py",
+            "services/run_all_migrations.py",
+            "scripts/export_canvas_lti_public_jwks.py"
+          ],
+          "language": "python",
+          "disposition": "replace-with-rust-service-and-delete-kernels"
+        }
+      ]
+    },
+    {
+      "id": "native-cli",
+      "phase": 9,
+      "status": "planned",
+      "canonical": {
+        "repository": "ElevenID/marty-cli",
+        "paths": ["crates"],
+        "binding_paths": []
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-cli",
+          "paths": ["bin", "src", "packages/api-core"],
+          "language": "javascript",
+          "disposition": "replace-executable-and-delete-node-runtime"
+        }
+      ]
+    },
+    {
+      "id": "notification-webhook-service",
+      "phase": 9,
+      "status": "planned",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/notification"],
+        "binding_paths": []
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-ui",
+          "paths": ["services/notification"],
+          "language": "python",
+          "disposition": "replace-with-rust-service-and-delete"
+        }
+      ]
+    },
+    {
+      "id": "credential-boundary-decisions",
+      "phase": 9,
+      "status": "planned",
+      "canonical": {
+        "repository": "ElevenID/marty-core",
+        "paths": ["marty-oid4vci/src", "marty-verification/src/vcdm.rs"],
+        "binding_paths": ["marty-bindings/src/lib.rs"]
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-credentials",
+          "paths": [
+            "services/issuance/application/key_attestation.py",
+            "services/issuance/application/evidence_policy.py",
+            "services/issuance/application/evidence_transition.py",
+            "services/issuance/application/evidence_reconciliation.py",
+            "services/verification/application/governance.py",
+            "services/issuance/domain/vcdm_validation.py"
+          ],
+          "language": "python",
+          "disposition": "retain-fetch-storage-orchestration-delete-decisions"
+        }
+      ]
+    },
+    {
+      "id": "passport-chip-eac-active-auth",
+      "phase": 9,
+      "status": "planned",
+      "canonical": {
+        "repository": "ElevenID/marty-core",
+        "paths": ["marty-verification/src/chip_io", "marty-crypto/src/iso9796.rs"],
+        "binding_paths": ["marty-verification/src/bindings/mod.rs"]
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/Marty",
+          "paths": [
+            "packages/marty-common/marty_common/security/eac_protocol.py",
+            "packages/marty-common/marty_common/security/active_authentication.py",
+            "packages/marty-common/marty_common/security/iso9796_verifier.py",
+            "packages/marty-common/marty_common/security/passport_crypto_validator.py",
+            "packages/marty-common/marty_common/crypto/hash_comparison.py",
+            "packages/marty-common/marty_common/security/passport_chip_session.py"
+          ],
+          "language": "python",
+          "disposition": "port-intended-contracts-then-delete-placeholders"
+        }
+      ]
+    },
+    {
+      "id": "subscription-api-key-lifecycle",
+      "phase": 9,
+      "status": "planned",
+      "canonical": {
+        "repository": "ElevenID/marty-subscriptions",
+        "paths": ["packages/api-key-lifecycle"],
+        "binding_paths": []
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-subscriptions",
+          "paths": ["services/platform_subscription/api_key_service.py"],
+          "language": "python",
+          "disposition": "retain-db-billing-orchestration-delete-decisions"
+        }
+      ]
+    },
+    {
+      "id": "trust-registry-synchronization",
+      "phase": 9,
+      "status": "planned",
+      "canonical": {
+        "repository": "ElevenID/marty-core",
+        "paths": ["marty-verification/src/trust_anchor", "marty-crypto/src/certificate.rs"],
+        "binding_paths": ["marty-verification/src/bindings/mod.rs"]
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-ui",
+          "paths": ["services/trust_profile/registry_sync.py"],
+          "language": "python",
+          "disposition": "retain-fetch-storage-scheduling-delete-kernel"
+        }
+      ]
+    },
+    {
+      "id": "wallet-status-and-liveness",
+      "phase": 9,
+      "status": "planned",
+      "canonical": {
+        "repository": "ElevenID/marty-core",
+        "paths": [
+          "marty-status/src",
+          "marty-verification/src/open_badges/status.rs",
+          "marty-biometrics/src/liveness.rs"
+        ],
+        "binding_paths": []
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-authenticator",
+          "paths": [
+            "lib/services/status_list_service.dart",
+            "lib/models/liveness_challenge.dart"
+          ],
+          "language": "dart",
+          "disposition": "retain-http-cache-ui-delete-decisions"
         }
       ]
     }
