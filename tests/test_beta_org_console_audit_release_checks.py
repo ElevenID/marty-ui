@@ -280,6 +280,11 @@ def _passing_inventory_report(organization_id: str) -> dict:
                 "organization_id": organization_id,
                 "inventory": [
                     {
+                        "resource_type": "verifier_issuer_identity",
+                        "id": "did:web:beta.example:orgs:audit",
+                        "status": "active",
+                    },
+                    {
                         "resource_type": "credential_template",
                         "id": "10000000-0000-0000-0000-000000000010",
                         "status": "ACTIVE",
@@ -310,12 +315,14 @@ def test_beta_audit_exports_verified_lifecycle_resources_for_later_steps(tmp_pat
         "BETA_AUDIT_ORG_ID": organization_id,
         "BETA_AUDIT_TEMPLATE_ID": "10000000-0000-0000-0000-000000000010",
         "BETA_AUDIT_POLICY_ID": "10000000-0000-0000-0000-000000000020",
+        "BETA_AUDIT_VERIFIER_DID": "did:web:beta.example:orgs:audit",
     }
     assert github_env.read_text(encoding="utf-8").splitlines() == [
         "EXISTING=value",
         f"BETA_AUDIT_ORG_ID={organization_id}",
         "BETA_AUDIT_TEMPLATE_ID=10000000-0000-0000-0000-000000000010",
         "BETA_AUDIT_POLICY_ID=10000000-0000-0000-0000-000000000020",
+        "BETA_AUDIT_VERIFIER_DID=did:web:beta.example:orgs:audit",
     ]
 
 
@@ -372,20 +379,28 @@ def test_beta_audit_refuses_unverified_organization_exports(
     "mutation, message",
     [
         (
-            lambda inventory: inventory.pop(0),
+            lambda inventory: inventory.pop(1),
             "exactly one active BETA_AUDIT_TEMPLATE_ID",
         ),
         (
-            lambda inventory: inventory.append(dict(inventory[0])),
+            lambda inventory: inventory.append(dict(inventory[1])),
             "exactly one active BETA_AUDIT_TEMPLATE_ID",
         ),
         (
-            lambda inventory: inventory[1].update(status="draft"),
+            lambda inventory: inventory[2].update(status="draft"),
             "exactly one active BETA_AUDIT_POLICY_ID",
         ),
         (
-            lambda inventory: inventory[1].update(id="not-a-uuid"),
+            lambda inventory: inventory[2].update(id="not-a-uuid"),
             "BETA_AUDIT_POLICY_ID must be a UUID",
+        ),
+        (
+            lambda inventory: inventory.pop(0),
+            "exactly one active BETA_AUDIT_VERIFIER_DID",
+        ),
+        (
+            lambda inventory: inventory[0].update(id="not-a-did"),
+            "BETA_AUDIT_VERIFIER_DID must be a DID",
         ),
     ],
 )

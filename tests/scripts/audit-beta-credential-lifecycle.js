@@ -16,6 +16,7 @@ const {
   DEFAULT_LIFECYCLE_POLICY_ID,
   DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
   verificationResultEvidence,
+  verificationSessionRequest,
 } = require('./beta-credential-contract');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -27,6 +28,7 @@ const TEST_WALLET_ORIGIN = process.env.MARTY_TEST_WALLET_ORIGIN || 'http://127.0
 const ORG_ID = process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID;
 const POLICY_ID = process.env.BETA_AUDIT_POLICY_ID || DEFAULT_LIFECYCLE_POLICY_ID;
 const SOURCE_TEMPLATE_ID = process.env.BETA_AUDIT_TEMPLATE_ID || DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID;
+const VERIFIER_DID = process.env.BETA_AUDIT_VERIFIER_DID || '';
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 
@@ -455,16 +457,18 @@ async function present(walletPage, requestUri) {
 }
 
 async function verify(page, walletPage, label) {
-  const session = await page.evaluate(async ({ organizationId, policyId, externalReference }) => {
+  const request = verificationSessionRequest({
+    organizationId: ORG_ID,
+    presentationPolicyId: POLICY_ID,
+    issuerDid: VERIFIER_DID,
+    externalReference: label,
+  });
+  const session = await page.evaluate(async (payload) => {
     const response = await fetch('/v1/flows/verify', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        organization_id: organizationId,
-        presentation_policy_id: policyId,
-        external_reference: externalReference,
-      }),
+      body: JSON.stringify(payload),
     });
     const body = await response.json().catch(() => null);
     return {
@@ -474,7 +478,7 @@ async function verify(page, walletPage, label) {
       requestUri: body?.request_uri || null,
       error: response.ok ? null : body?.detail || body?.message || 'Session creation failed',
     };
-  }, { organizationId: ORG_ID, policyId: POLICY_ID, externalReference: label });
+  }, request);
   if (!session.ok || !session.instanceId || !session.requestUri) return { session };
 
   const wallet = await present(walletPage, session.requestUri);
