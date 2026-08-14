@@ -409,36 +409,72 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def verified_audit_organization_id(report: dict[str, Any]) -> str:
-    """Return the one organization proven by a passing inventory audit."""
+def verified_audit_lifecycle_environment(report: dict[str, Any]) -> dict[str, str]:
+    """Return lifecycle IDs proven by one passing organization inventory audit."""
     if report.get("release_checks", {}).get("status") != "pass":
-        raise ValueError("cannot export an organization from a non-passing audit")
+        raise ValueError("cannot export lifecycle resources from a non-passing audit")
 
-    organization_ids = {
-        str(step.get("organization_id") or "").strip()
+    inventory_steps = [
+        step
         for step in report.get("steps", [])
         if step.get("label") == "resource-inventory-verified"
-    }
-    organization_ids.discard("")
-    if len(organization_ids) != 1:
-        raise ValueError(
-            "passing audit must contain exactly one verified organization ID"
-        )
+    ]
+    if len(inventory_steps) != 1:
+        raise ValueError("passing audit must contain exactly one verified inventory")
 
-    organization_id = organization_ids.pop()
-    try:
-        UUID(organization_id)
-    except ValueError as exc:
-        raise ValueError("verified organization ID must be a UUID") from exc
-    return organization_id
+    step = inventory_steps[0]
+    required = {
+        "BETA_AUDIT_ORG_ID": [str(step.get("organization_id") or "").strip()],
+        "BETA_AUDIT_TEMPLATE_ID": [
+            str(item.get("id") or "").strip()
+            for item in step.get("inventory", [])
+            if isinstance(item, dict)
+            and item.get("resource_type") == "credential_template"
+            and str(item.get("status") or "").lower() == "active"
+        ],
+        "BETA_AUDIT_POLICY_ID": [
+            str(item.get("id") or "").strip()
+            for item in step.get("inventory", [])
+            if isinstance(item, dict)
+            and item.get("resource_type") == "presentation_policy"
+            and str(item.get("status") or "").lower() == "active"
+        ],
+    }
+    environment: dict[str, str] = {}
+    for name, values in required.items():
+        nonempty_values = [value for value in values if value]
+        if len(nonempty_values) != 1:
+            raise ValueError(f"verified inventory must contain exactly one active {name}")
+        value = nonempty_values[0]
+        try:
+            UUID(value)
+        except ValueError as exc:
+            raise ValueError(f"verified {name} must be a UUID") from exc
+        environment[name] = value
+    return environment
+
+
+def verified_audit_organization_id(report: dict[str, Any]) -> str:
+    """Return the organization proven with the complete lifecycle inventory."""
+    return verified_audit_lifecycle_environment(report)["BETA_AUDIT_ORG_ID"]
+
+
+def export_audit_lifecycle_environment(
+    report: dict[str, Any], github_env: Path
+) -> dict[str, str]:
+    """Bind later GitHub Actions steps to one verified lifecycle inventory."""
+    environment = verified_audit_lifecycle_environment(report)
+    with github_env.open("a", encoding="utf-8", newline="\n") as env_file:
+        for name, value in environment.items():
+            env_file.write(f"{name}={value}\n")
+    return environment
 
 
 def export_audit_organization(report: dict[str, Any], github_env: Path) -> str:
-    """Bind later GitHub Actions steps to the organization this audit verified."""
-    organization_id = verified_audit_organization_id(report)
-    with github_env.open("a", encoding="utf-8", newline="\n") as env_file:
-        env_file.write(f"BETA_AUDIT_ORG_ID={organization_id}\n")
-    return organization_id
+    """Compatibility wrapper returning the verified organization ID."""
+    return export_audit_lifecycle_environment(report, github_env)[
+        "BETA_AUDIT_ORG_ID"
+    ]
 
 
 class Audit:
@@ -2233,8 +2269,13 @@ def main() -> int:
             print(f"[audit] report={report_path}")
 
     if args.github_env is not None and report["release_checks"]["status"] == "pass":
-        organization_id = export_audit_organization(report, args.github_env)
-        print(f"[audit] exported_organization_id={organization_id}")
+        environment = export_audit_lifecycle_environment(report, args.github_env)
+        print(
+            "[audit] exported_lifecycle_resources="
+            f"organization:{environment['BETA_AUDIT_ORG_ID']},"
+            f"template:{environment['BETA_AUDIT_TEMPLATE_ID']},"
+            f"policy:{environment['BETA_AUDIT_POLICY_ID']}"
+        )
 
     return 0 if report["release_checks"]["status"] == "pass" else 1
 
