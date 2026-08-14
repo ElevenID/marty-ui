@@ -4,7 +4,7 @@
 
 **Canonical binary:** `rust/services/event-stream`
 
-**Legacy server pending beta deletion:** `services/event_stream`
+**Legacy server:** Removed after the beta deletion gate.
 
 The Rust service preserves the current public and operational contract before
 the Python process is removed. Producer normalization remains in
@@ -38,6 +38,8 @@ gRPC client adapter and does not implement server fan-out decisions.
    health, disconnects, event lag, drops, memory, and latency.
 4. Roll back by restoring the prior beta image; no runtime Python fallback is
    permitted.
-5. After the seven-day beta evidence window, delete `services/event_stream`,
-   its server-only tests and packaging, then enforce the Rust owner in CI.
+5. The seven-day beta evidence window gates removal of `services/event_stream`,
+   its server-only tests and overlay. The shared service image now dispatches
+   `event-stream` directly to `/usr/local/bin/marty-event-stream`, and ownership
+   metadata prevents a Python server from returning.
 

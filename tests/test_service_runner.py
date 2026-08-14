@@ -1,11 +1,14 @@
 """Service containers must import each application module exactly once."""
 
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from services import service_runner
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_runner_imports_the_canonical_service_module(
@@ -48,9 +51,9 @@ def test_runner_normalizes_hyphenated_service_names(
 
     monkeypatch.setattr(service_runner.importlib, "import_module", import_module)
 
-    service_runner.load_service_module("event-stream")
+    service_runner.load_service_module("presentation-policy")
 
-    assert imported == ["event_stream.main"]
+    assert imported == ["presentation_policy.main"]
 
 
 @pytest.mark.parametrize("service_name", ["", "../flow", "flow.main", "Flow"])
@@ -66,3 +69,17 @@ def test_container_entrypoint_uses_the_canonical_import_runner() -> None:
 
     assert "exec python -m service_runner" in script
     assert "exec python -m ${MODULE_NAME}.main" not in script
+    assert 'if [ "$MODULE_NAME" = "event_stream" ]' in script
+    assert "exec /usr/local/bin/marty-event-stream" in script
+
+
+def test_event_stream_has_only_the_canonical_rust_server() -> None:
+    dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert not list((ROOT / "services" / "event_stream").glob("*.py"))
+    assert "cargo build --locked --release -p marty-event-stream" in dockerfile
+    assert (
+        "COPY --from=event-stream-builder "
+        "/build/rust/target/release/marty-event-stream "
+        "/usr/local/bin/marty-event-stream"
+    ) in dockerfile

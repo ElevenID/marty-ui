@@ -6,7 +6,7 @@
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-08-13
+**Last updated:** 2026-08-14
 
 ## Objective
 
@@ -16,7 +16,7 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Implementation status (2026-08-13)
+## Implementation status (2026-08-14)
 
 The selected deterministic protocol, cryptographic, policy, validation,
 state-machine, wallet, licensing, DTC, and VDS-NC kernels now have one
@@ -27,7 +27,7 @@ whole-service runtime cutovers below open.
 
 | Remaining gate | Current state | Completion evidence required |
 |---|---|---|
-| Event-stream whole-service removal | Rust binary and beta overlay are packaged; legacy Python service remains for non-beta stacks | One coordinated beta deployment, contract/operational evidence, required soak, then deletion of `services/event_stream` and Python image/package references |
+| Event-stream whole-service removal | Rust is active on beta v1.1.165; this gated change deletes `services/event_stream` and makes the shared service image dispatch the canonical Rust binary for every stack | Complete the seven-day beta window no earlier than 2026-08-21 04:10:23 UTC and obtain successful lifecycle/contract evidence before merging this removal |
 | Revocation-profile whole-service removal | Rust HTTP/gRPC/storage/runtime implementation and beta overlay are packaged; legacy Python orchestration remains | One coordinated beta deployment, status/revocation parity and operational evidence, required soak, then deletion of superseded Python service/kernel code and dependencies |
 | Phase 9 release and evidence | Source cutovers are merged or in the closing dependency-ordered release/caller change; beta remains pinned | Immutable Rust/UI releases, one beta-only update, seven-day service and fourteen-day security evidence windows, language/dependency measurements, and a production-promotion evidence package without promotion |
 
