@@ -1,9 +1,13 @@
 use crate::domain::{key_purposes, service_capabilities};
 use crate::kms::{self, ProviderRequest, SignRequest};
+use crate::registry::{
+    self, NormalizeRegistryRequest, NormalizeRegistryResponse, NormalizeServiceRequest,
+    NormalizeServiceResponse, RegistryStore, ResolveRequest, ResolveResponse, SaveRegistryRequest,
+};
 use crate::validation::{self, ValidationRequest};
 use axum::{
-    extract::State,
-    http::HeaderMap,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
     response::Html,
     routing::{get, post},
     Json, Router,
@@ -23,13 +27,14 @@ struct HealthResponse {
 struct ServiceStatus {
     service_name: &'static str,
     phase: &'static str,
-    migrated_capabilities: [&'static str; 6],
-    pending_capabilities: [&'static str; 4],
+    migrated_capabilities: [&'static str; 8],
+    pending_capabilities: [&'static str; 3],
 }
 
 #[derive(Clone)]
 struct AppState {
     internal_api_key: Arc<str>,
+    registry_store: Option<RegistryStore>,
 }
 
 pub fn router() -> Router {
@@ -37,6 +42,13 @@ pub fn router() -> Router {
 }
 
 pub fn router_with_internal_api_key(internal_api_key: String) -> Router {
+    router_with_dependencies(internal_api_key, None)
+}
+
+pub fn router_with_dependencies(
+    internal_api_key: String,
+    registry_store: Option<RegistryStore>,
+) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
@@ -54,9 +66,21 @@ pub fn router_with_internal_api_key(internal_api_key: String) -> Router {
         .route("/internal/kms/public-key", post(kms_public_key))
         .route("/internal/kms/verify", post(kms_verify))
         .route("/internal/config/validate", post(validate_service))
+        .route("/internal/registry/catalog", get(registry_catalog))
+        .route(
+            "/internal/registry/normalize-service",
+            post(normalize_registry_service),
+        )
+        .route("/internal/registry/normalize", post(normalize_registry))
+        .route("/internal/registry/resolve", post(resolve_registry))
+        .route(
+            "/internal/registry/{organization_id}",
+            get(load_registry).put(save_registry),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(AppState {
             internal_api_key: Arc::from(internal_api_key),
+            registry_store,
         })
 }
 
@@ -94,6 +118,112 @@ async fn validate_service(
 ) -> Result<Json<validation::ValidationResult>, kms::KmsError> {
     authorize_internal(&state, &headers)?;
     Ok(Json(validation::validate(request).await))
+}
+
+type RegistryHttpError = (StatusCode, Json<serde_json::Value>);
+
+async fn registry_catalog(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, RegistryHttpError> {
+    authorize_registry(&state, &headers)?;
+    Ok(Json(
+        serde_json::json!({"service_types": registry::service_catalog()}),
+    ))
+}
+
+async fn normalize_registry_service(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<NormalizeServiceRequest>,
+) -> Result<Json<NormalizeServiceResponse>, RegistryHttpError> {
+    authorize_registry(&state, &headers)?;
+    registry::normalize_service(request)
+        .map(Json)
+        .map_err(registry_error)
+}
+
+async fn normalize_registry(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<NormalizeRegistryRequest>,
+) -> Result<Json<NormalizeRegistryResponse>, RegistryHttpError> {
+    authorize_registry(&state, &headers)?;
+    registry::normalize_registry(request)
+        .map(Json)
+        .map_err(registry_error)
+}
+
+async fn resolve_registry(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ResolveRequest>,
+) -> Result<Json<ResolveResponse>, RegistryHttpError> {
+    authorize_registry(&state, &headers)?;
+    registry::resolve(request).map(Json).map_err(registry_error)
+}
+
+async fn load_registry(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, RegistryHttpError> {
+    authorize_registry(&state, &headers)?;
+    let store = state
+        .registry_store
+        .as_ref()
+        .ok_or_else(registry_unavailable)?;
+    store
+        .load(&organization_id)
+        .await
+        .map(Json)
+        .map_err(registry_error)
+}
+
+async fn save_registry(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<SaveRegistryRequest>,
+) -> Result<Json<serde_json::Value>, RegistryHttpError> {
+    authorize_registry(&state, &headers)?;
+    let store = state
+        .registry_store
+        .as_ref()
+        .ok_or_else(registry_unavailable)?;
+    store
+        .save(&organization_id, &request.registry)
+        .await
+        .map(Json)
+        .map_err(registry_error)
+}
+
+fn authorize_registry(state: &AppState, headers: &HeaderMap) -> Result<(), RegistryHttpError> {
+    authorize_internal(state, headers).map_err(|error| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"detail": error.to_string()})),
+        )
+    })
+}
+
+fn registry_error(error: registry::RegistryError) -> RegistryHttpError {
+    let status = match error {
+        registry::RegistryError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        registry::RegistryError::Storage(_) => StatusCode::SERVICE_UNAVAILABLE,
+        registry::RegistryError::Corrupt(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (
+        status,
+        Json(serde_json::json!({"detail": error.to_string()})),
+    )
+}
+
+fn registry_unavailable() -> RegistryHttpError {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({"detail": "signing registry storage is unavailable"})),
+    )
 }
 
 fn authorize_internal(state: &AppState, headers: &HeaderMap) -> Result<(), kms::KmsError> {
@@ -141,9 +271,10 @@ async fn service_status() -> Json<ServiceStatus> {
             "kms-adapter-integration",
             "provider-key-normalization",
             "service-registration-validation",
+            "registry-normalization-resolution",
+            "registry-persistence",
         ],
         pending_capabilities: [
-            "registry-persistence",
             "jwks-did-publication-persistence",
             "audit-event-storage",
             "compliance-summary-computation",
