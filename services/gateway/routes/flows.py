@@ -198,6 +198,18 @@ async def get_flow_capabilities(request: Request) -> Response:
     return await proxy_request(request, service_url, "/v1/flows/capabilities")
 
 
+@flow_router.post("/webhooks/application-approved", include_in_schema=False)
+async def reject_public_application_approval() -> None:
+    """Keep Applicant workload authority outside the public gateway boundary."""
+    raise HTTPException(
+        status_code=401,
+        detail={
+            "error": "application_event_auth_required",
+            "message": "Application approval events require internal workload authentication.",
+        },
+    )
+
+
 @flow_router.post(
     "/definitions",
     response_model=FlowDefinitionResponse,
