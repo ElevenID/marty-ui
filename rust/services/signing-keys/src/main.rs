@@ -23,9 +23,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         build_revision = %config.build_revision,
         "starting Rust signing-keys service"
     );
-    axum::serve(listener, http::router())
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        http::router_with_internal_api_key(config.internal_api_key),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 

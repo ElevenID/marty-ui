@@ -1,0 +1,209 @@
+{
+  "schema_version": 1,
+  "sign_cases": [
+    {
+      "name": "aws_kms_raw_message",
+      "service_config": { "service_type": "aws-kms", "endpoint": "$STUB", "region": "us-east-1", "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test", "algorithm": "ES256", "aws_signing_algorithm": "ECDSA_SHA_256" },
+      "payload_b64": "cGF5bG9hZA",
+      "expected_request": {
+        "method": "POST",
+        "path_query": "/",
+        "headers": { "x-amz-target": "TrentService.Sign" },
+        "json": { "KeyId": "arn:aws:kms:us-east-1:111122223333:key/test", "Message": "cGF5bG9hZA==", "MessageType": "RAW", "SigningAlgorithm": "ECDSA_SHA_256" }
+      },
+      "provider_response": { "Signature": "MAYCAQECAQI=" },
+      "expected_response": { "signature_b64": "MAYCAQECAQI", "signature_encoding": "der", "transcoded_signature_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAg" }
+    },
+    {
+      "name": "openbao_es256_prehashed",
+      "service_config": {
+        "service_type": "openbao-transit",
+        "endpoint": "$STUB",
+        "mount": "transit",
+        "key_reference": "issuer-key",
+        "auth_reference": "root",
+        "algorithm": "ES256"
+      },
+      "payload_b64": "aGVsbG8gd29ybGQ",
+      "expected_request": {
+        "method": "POST",
+        "path_query": "/v1/transit/sign/issuer-key",
+        "headers": { "x-vault-token": "root" },
+        "json": {
+          "input": "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=",
+          "prehashed": true
+        }
+      },
+      "provider_response": {
+        "data": { "signature": "vault:v1:MAYCAQECAQI=" }
+      },
+      "expected_response": {
+        "signature_b64": "MAYCAQECAQI",
+        "signature_encoding": "der",
+        "transcoded_signature_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAg"
+      }
+    },
+    {
+      "name": "openbao_eddsa_unhashed",
+      "service_config": {
+        "service_type": "hashicorp-vault-transit",
+        "endpoint": "$STUB",
+        "mount": "/transit/",
+        "key_reference": "eddsa-key",
+        "auth_reference": "root",
+        "algorithm": "EdDSA"
+      },
+      "payload_b64": "Y2Fub25pY2FsIHByb29mIGJ5dGVz",
+      "expected_request": {
+        "method": "POST",
+        "path_query": "/v1/transit/sign/eddsa-key",
+        "headers": { "x-vault-token": "root" },
+        "json": {
+          "input": "Y2Fub25pY2FsIHByb29mIGJ5dGVz",
+          "prehashed": false
+        }
+      },
+      "provider_response": {
+        "data": {
+          "signature": "vault:v1:QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQg=="
+        }
+      },
+      "expected_response": {
+        "signature_b64": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQg",
+        "signature_encoding": "raw"
+      }
+    },
+    {
+      "name": "azure_es256_digest",
+      "service_config": {
+        "service_type": "azure-key-vault",
+        "endpoint": "$STUB",
+        "key_reference": "issuer-key",
+        "key_version": "version-1",
+        "auth_reference": "azure-token",
+        "algorithm": "ES256",
+        "azure_signing_algorithm": "ES256"
+      },
+      "payload_b64": "cGF5bG9hZA",
+      "expected_request": {
+        "method": "POST",
+        "path_query": "/keys/issuer-key/version-1/sign?api-version=7.4",
+        "headers": { "authorization": "Bearer azure-token" },
+        "json": {
+          "alg": "ES256",
+          "value": "I59Z7VXnN8dxR89VrQwbAwttfudIp0JpUvm4UtWpNeU"
+        }
+      },
+      "provider_response": { "value": "MAYCAQECAQI" },
+      "expected_response": {
+        "signature_b64": "MAYCAQECAQI",
+        "signature_encoding": "der",
+        "transcoded_signature_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAg"
+      }
+    },
+    {
+      "name": "gcp_es256_digest",
+      "service_config": {
+        "service_type": "gcp-cloud-kms",
+        "endpoint": "$STUB",
+        "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
+        "auth_reference": "gcp-token",
+        "algorithm": "ES256"
+      },
+      "payload_b64": "cGF5bG9hZA",
+      "expected_request": {
+        "method": "POST",
+        "path_query": "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1:asymmetricSign",
+        "headers": { "authorization": "Bearer gcp-token" },
+        "json": {
+          "digest": { "sha256": "I59Z7VXnN8dxR89VrQwbAwttfudIp0JpUvm4UtWpNeU=" }
+        }
+      },
+      "provider_response": { "signature": "MAYCAQECAQI=" },
+      "expected_response": {
+        "signature_b64": "MAYCAQECAQI",
+        "signature_encoding": "der",
+        "transcoded_signature_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAg"
+      }
+    }
+  ],
+  "public_key_cases": [
+    {
+      "name": "aws_kms_spki_public_key",
+      "service_config": { "service_type": "aws-kms", "endpoint": "$STUB", "region": "us-east-1", "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test" },
+      "expected_request": { "method": "POST", "path_query": "/", "headers": { "x-amz-target": "TrentService.GetPublicKey" }, "json": { "KeyId": "arn:aws:kms:us-east-1:111122223333:key/test" } },
+      "provider_response": { "PublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==", "SigningAlgorithms": ["ECDSA_SHA_256"], "KeySpec": "ECC_NIST_P256", "KeyUsage": "SIGN_VERIFY" },
+      "expected_response": { "provider": "aws", "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test", "public_key_der_b64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==", "signing_algorithms": ["ECDSA_SHA_256"], "key_spec": "ECC_NIST_P256", "key_usage": "SIGN_VERIFY", "public_jwk": { "kty": "EC", "crv": "P-256", "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY", "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU", "kid": "arn:aws:kms:us-east-1:111122223333:key/test" } }
+    },
+    {
+      "name": "openbao_raw_ed25519",
+      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "mount": "transit", "key_reference": "eddsa-key", "auth_reference": "root" },
+      "expected_request": { "method": "GET", "path_query": "/v1/transit/keys/eddsa-key", "headers": { "x-vault-token": "root" } },
+      "provider_response": { "data": { "latest_version": 1, "type": "ed25519", "keys": { "1": { "name": "ed25519", "public_key": "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=" } } } },
+      "expected_response": { "kty": "OKP", "crv": "Ed25519", "x": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ", "kid": "eddsa-key" }
+    },
+    {
+      "name": "openbao_ed448_pem",
+      "service_config": { "service_type": "hashicorp-vault-transit", "endpoint": "$STUB", "key_reference": "ed448-key" },
+      "expected_request": { "method": "GET", "path_query": "/v1/transit/keys/ed448-key", "headers": { "x-vault-token": "" } },
+      "provider_response": { "data": { "latest_version": "1", "type": "ed448", "keys": { "1": { "name": "ed448", "public_key": "-----BEGIN PUBLIC KEY-----\nMEMwBQYDK2VxAzoA2pGLo+V/3KAyb0bH7IQ7qPyw1X+hXyWIpXuunfVYIQNR5+FV\ngbJEWcCnzeHoNVgtcXwGmepy6MkA\n-----END PUBLIC KEY-----\n" } } } },
+      "expected_response": { "kty": "OKP", "crv": "Ed448", "x": "2pGLo-V_3KAyb0bH7IQ7qPyw1X-hXyWIpXuunfVYIQNR5-FVgbJEWcCnzeHoNVgtcXwGmepy6MkA", "kid": "ed448-key" }
+    },
+    {
+      "name": "azure_embedded_public_jwk",
+      "service_config": { "service_type": "azure-key-vault", "endpoint": "$STUB", "key_reference": "issuer-key", "auth_reference": "azure-token" },
+      "expected_request": { "method": "GET", "path_query": "/keys/issuer-key?api-version=7.4", "headers": { "authorization": "Bearer azure-token" } },
+      "provider_response": { "key": { "kty": "EC", "crv": "P-256", "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY", "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU", "d": "must-not-cross-boundary" } },
+      "expected_response": { "provider": "azure", "key_reference": "issuer-key", "kty": "EC", "crv": "P-256", "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY", "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU", "kid": "issuer-key" }
+    },
+    {
+      "name": "gcp_pem_public_key",
+      "service_config": { "service_type": "gcp-cloud-kms", "endpoint": "$STUB", "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1", "auth_reference": "gcp-token" },
+      "expected_request": { "method": "GET", "path_query": "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1/publicKey", "headers": { "authorization": "Bearer gcp-token" } },
+      "provider_response": { "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n", "algorithm": "EC_SIGN_P256_SHA256", "protectionLevel": "HSM" },
+      "expected_response": { "provider": "gcp", "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1", "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n", "algorithm": "EC_SIGN_P256_SHA256", "protection_level": "HSM", "public_jwk": { "kty": "EC", "crv": "P-256", "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY", "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU", "kid": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1" } }
+    }
+  ],
+  "verify_cases": [
+    {
+      "name": "openbao_signing_key_reachable",
+      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "mount": "transit", "key_reference": "issuer-key", "auth_reference": "root" },
+      "expected_request": { "method": "GET", "path_query": "/v1/transit/keys/issuer-key", "headers": { "x-vault-token": "root" } },
+      "provider_status": 200,
+      "provider_response": { "data": { "supports_signing": true } },
+      "expected_response": { "ok": true, "checks": [{ "name": "Key exists", "status": "pass", "detail": "Key 'issuer-key' found; supports_signing=true.", "source": "adapter" }] }
+    },
+    {
+      "name": "openbao_authentication_rejected",
+      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "key_reference": "issuer-key", "auth_reference": "bad" },
+      "expected_request": { "method": "GET", "path_query": "/v1/transit/keys/issuer-key", "headers": { "x-vault-token": "bad" } },
+      "provider_status": 403,
+      "provider_response": { "errors": ["permission denied"] },
+      "expected_response": { "ok": false, "checks": [{ "name": "Authentication", "status": "fail", "detail": "Token is invalid or lacks read permissions.", "source": "adapter" }] }
+    },
+    {
+      "name": "azure_authentication_rejected",
+      "service_config": { "service_type": "azure-key-vault", "endpoint": "$STUB", "key_reference": "issuer-key", "auth_reference": "bad" },
+      "expected_request": { "method": "GET", "path_query": "/keys?api-version=7.4", "headers": { "authorization": "Bearer bad" } },
+      "provider_status": 401,
+      "provider_response": { "error": "unauthorized" },
+      "expected_response": { "ok": false, "checks": [{ "name": "Authentication", "status": "fail", "detail": "Azure token is invalid or unauthorized.", "source": "adapter" }] }
+    },
+    {
+      "name": "gcp_key_missing",
+      "service_config": { "service_type": "gcp-cloud-kms", "endpoint": "$STUB", "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k", "auth_reference": "token" },
+      "expected_request": { "method": "GET", "path_query": "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k", "headers": { "authorization": "Bearer token" } },
+      "provider_status": 404,
+      "provider_response": { "error": "not found" },
+      "expected_response": { "ok": false, "checks": [{ "name": "Key exists", "status": "fail", "detail": "Configured GCP key reference was not found.", "source": "adapter" }] }
+    },
+    {
+      "name": "gcp_key_reachable",
+      "service_config": { "service_type": "gcp-cloud-kms", "endpoint": "$STUB", "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k", "auth_reference": "token" },
+      "expected_request": { "method": "GET", "path_query": "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k", "headers": { "authorization": "Bearer token" } },
+      "provider_status": 200,
+      "provider_response": { "name": "projects/p/locations/l/keyRings/r/cryptoKeys/k" },
+      "expected_response": { "ok": true, "checks": [{ "name": "Key exists", "status": "pass", "detail": "GCP KMS key 'projects/p/locations/l/keyRings/r/cryptoKeys/k' is reachable.", "source": "adapter" }] }
+    }
+  ]
+}
