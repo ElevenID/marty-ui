@@ -2,6 +2,9 @@
 # ===========================
 # Single base compose file for infra + microservices.
 # Mode-specific behavior is layered via profile compose files.
+# Host publications are developer conveniences and must remain loopback-only.
+# Public deployments reach edge services over the Compose network through a
+# governed proxy/tunnel; internal service ports are never LAN/public listeners.
 
 x-marty-service-build-artifacts: &marty_service_build_artifacts
   MARTY_RS_URI: ${MARTY_RS_URI:?set MARTY_RS_URI to the immutable marty-rs wheel}
@@ -20,7 +23,7 @@ services:
   postgres:
     image: postgres:15-alpine
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
@@ -51,7 +54,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
     volumes:
       - redis_data:/data
@@ -79,7 +82,7 @@ services:
       - --features=organization
       - --import-realm
     ports:
-      - "8180:8080"
+      - "127.0.0.1:8180:8080"
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
@@ -167,8 +170,8 @@ services:
   mailpit:
     image: axllent/mailpit:v1.21
     ports:
-      - "9025:8025"
-      - "2025:1025"
+      - "127.0.0.1:9025:8025"
+      - "127.0.0.1:2025:1025"
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8025/livez"]
       interval: 5s
@@ -182,7 +185,7 @@ services:
     cap_add:
       - IPC_LOCK
     ports:
-      - "8200:8200"
+      - "127.0.0.1:8200:8200"
     environment:
       BAO_DEV_ROOT_TOKEN_ID: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
       BAO_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
@@ -358,7 +361,7 @@ services:
       HSM_PROVIDER: openbao
       SIGNING_KEY_SOURCE: openbao-transit
     ports:
-      - "${GATEWAY_HOST_PORT:-8000}:8000"
+      - "127.0.0.1:${GATEWAY_HOST_PORT:-8000}:8000"
     depends_on:
       auth:
         condition: service_healthy
@@ -448,8 +451,8 @@ services:
       ES_GRPC_TARGET: event-stream:9015
       AUTH_GRPC_PORT: "9001"
     ports:
-      - "8001:8001"
-      - "${AUTH_GRPC_HOST_PORT:-9001}:9001"
+      - "127.0.0.1:8001:8001"
+      - "127.0.0.1:${AUTH_GRPC_HOST_PORT:-9001}:9001"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -484,8 +487,8 @@ services:
       MARTY_ORG_REVIEWER_EMAIL: ${MARTY_ORG_REVIEWER_EMAIL:-reviewer@marty.demo}
       ES_GRPC_TARGET: event-stream:9015
     ports:
-      - "8002:8002"
-      - "9002:9002"
+      - "127.0.0.1:8002:8002"
+      - "127.0.0.1:9002:9002"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -516,8 +519,8 @@ services:
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       CT_GRPC_PORT: "9003"
     ports:
-      - "8003:8003"
-      - "9003:9003"
+      - "127.0.0.1:8003:8003"
+      - "127.0.0.1:9003:9003"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -548,7 +551,7 @@ services:
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
     ports:
-      - "8004:8004"
+      - "127.0.0.1:8004:8004"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -583,7 +586,7 @@ services:
       FLOW_GRPC_TARGET: flow:9011
       ES_GRPC_TARGET: event-stream:9015
     ports:
-      - "8006:8006"
+      - "127.0.0.1:8006:8006"
     volumes:
       - applicant_data:/app/data
     user: "0:0"
@@ -621,8 +624,8 @@ services:
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
     ports:
-      - "8007:8007"
-      - "9007:9007"
+      - "127.0.0.1:8007:8007"
+      - "127.0.0.1:9007:9007"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -649,7 +652,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
     ports:
-      - "8008:8008"
+      - "127.0.0.1:8008:8008"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -685,8 +688,8 @@ services:
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
     ports:
-      - "8009:8009"
-      - "9009:9009"
+      - "127.0.0.1:8009:8009"
+      - "127.0.0.1:9009:9009"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -711,7 +714,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
     ports:
-      - "8010:8010"
+      - "127.0.0.1:8010:8010"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -759,8 +762,8 @@ services:
       FLOW_CALLBACK_DESTINATIONS: ${FLOW_CALLBACK_DESTINATIONS:-${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}|http://auth:8001/internal/v1/auth/credential-verified?nonce=__MARTY_TOKEN__}
       FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:-dev-flow-application-event-hmac-key-change-before-production}
     ports:
-      - "8011:8011"
-      - "9011:9011"
+      - "127.0.0.1:8011:8011"
+      - "127.0.0.1:9011:9011"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -854,8 +857,8 @@ services:
       UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
       DIDCOMM_ALLOW_PRIVATE_ENDPOINTS: ${DIDCOMM_ALLOW_PRIVATE_ENDPOINTS:-false}
     ports:
-      - "8005:8005"
-      - "9005:9005"
+      - "127.0.0.1:8005:8005"
+      - "127.0.0.1:9005:9005"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -945,8 +948,8 @@ services:
       RP_GRPC_PORT: "9013"
       RUST_LOG: ${REVOCATION_PROFILE_RUST_LOG:-info}
     ports:
-      - "8013:8013"
-      - "9013:9013"
+      - "127.0.0.1:8013:8013"
+      - "127.0.0.1:9013:9013"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -975,7 +978,7 @@ services:
       REDIS_URL: redis://redis:6379/5
       ORG_GRPC_TARGET: organization:9002
     ports:
-      - "8014:8014"
+      - "127.0.0.1:8014:8014"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1005,8 +1008,8 @@ services:
       - RUST_LOG=${EVENT_STREAM_RUST_LOG:-info}
       - OTEL_EXPORTER_OTLP_ENDPOINT=jaeger:4317
     ports:
-      - "8015:8015"
-      - "9015:9015"
+      - "127.0.0.1:8015:8015"
+      - "127.0.0.1:9015:9015"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8015/health"]
       interval: 30s
@@ -1036,8 +1039,8 @@ services:
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
     ports:
-      - "8012:8012"
-      - "9017:9017"
+      - "127.0.0.1:8012:8012"
+      - "127.0.0.1:9017:9017"
     depends_on:
       presentation-policy:
         condition: service_healthy
@@ -1062,8 +1065,8 @@ services:
       - ./config/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
       - ./config/envoy/proto_descriptor.pb:/etc/envoy/proto_descriptor.pb:ro
     ports:
-      - "${ENVOY_HOST_PORT:-9000}:9000"    # gRPC / gRPC-web unified endpoint
-      - "${ENVOY_ADMIN_HOST_PORT:-9901}:9901"    # Envoy admin
+      - "127.0.0.1:${ENVOY_HOST_PORT:-9000}:9000"    # gRPC / gRPC-web unified endpoint
+      - "127.0.0.1:${ENVOY_ADMIN_HOST_PORT:-9901}:9901"    # Envoy admin
     depends_on:
       auth:
         condition: service_healthy
