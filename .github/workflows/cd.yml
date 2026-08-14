@@ -57,6 +57,24 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+      - name: Require annotated release tag on exact protected main
+        env:
+          RUN_REF: ${{ github.ref }}
+          RUN_SHA: ${{ github.sha }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$RUN_REF" = "refs/tags/$TAG"
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main
+          git fetch --force --no-tags origin \
+            "refs/tags/$TAG:refs/tags/$TAG"
+          test "$(git cat-file -t "refs/tags/$TAG")" = tag
+          tagged_commit="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          main_commit="$(git rev-parse refs/remotes/origin/main)"
+          test "$RUN_SHA" = "$tagged_commit"
+          test "$tagged_commit" = "$main_commit"
       - name: Reject any existing release
         env:
           GH_TOKEN: ${{ github.token }}
