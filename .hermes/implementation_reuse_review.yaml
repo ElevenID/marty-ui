@@ -6,49 +6,38 @@ search_scope:
   - bindings_adapters_ffi_and_api_layers
   - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
 search_queries:
-  - "Canvas mirror provenance Cedar compatibility route"
-  - "selected organization context issuance management"
-  - "Canvas process-pending process-status-sync-failures run-automation-cycle"
-  - "marty-common issuance reserved route resource lookup"
-  - "marty-credentials Canvas mirror management API key organization_id"
+  - "marty-ui release stack-lock release version"
+  - "release workflow immutable annotated tag"
+  - "test_stack_release_contract release version"
+  - "previous UI stack release metadata commit"
 candidate_implementations:
-  - path: services/gateway/main.py
+  - path: release/stack-lock.json
+    language: JSON
+    disposition: reuse_existing_release_manifest
+  - path: .github/workflows/cd.yml
+    language: YAML
+    disposition: reuse_existing_immutable_release_pipeline
+  - path: tests/test_stack_release_contract.py
     language: Python
-    disposition: extend_existing_cedar_compatibility_registry
-  - path: services/gateway/routes/issuance.py
-    language: Python
-    disposition: reuse_existing_selected_organization_guard
-  - path: services/gateway/tests/test_middleware.py
-    language: Python
-    disposition: extend_existing_two_tenant_adversarial_harness
-  - path: packages/marty-common/marty_common/cedar_actions.py
-    language: Python
-    disposition: reuse_released_static_route_owner_lookup_exclusions
-  - path: services/issuance/infrastructure/api/routes.py
-    language: Python
-    disposition: preserve_internal_management_api_contract
+    disposition: reuse_existing_release_contract_gate
+  - path: c565f695c8fea7fe0c840d006e60cea582430fd5
+    language: Git commit
+    disposition: reuse_previous_patch_release_pattern
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: services/gateway/main.py
-  language: Python
+  path: release/stack-lock.json
+  language: JSON
 rust_disposition: rust_not_applicable
 non_rust_rationale: >-
-  This change composes existing Python gateway authentication, Cedar RBAC,
-  tenant selection, and proxy routing. It adds no protocol parsing,
-  cryptography, credential validation, or other behavior for Rust to own.
+  This task advances existing immutable release metadata and invokes the
+  repository's established release pipeline. It adds no runtime, protocol,
+  validation, security, or cryptographic behavior for Rust to own.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
-  rationale: >-
-    The gateway already carries fail-closed compatibility mappings for routes
-    not yet published by marty-common. The registration accepts an identical
-    future upstream mapping and refuses any conflicting mapping.
-  divergence_owner: services/gateway/main.py
-  synchronization_or_compatibility_strategy: >-
-    Probe every route before insertion, add only missing exact mappings, and
-    verify both permission resolution and absence of static owner lookups.
-  retirement_or_convergence_plan: >-
-    Once the same mappings ship in the pinned marty-common release, the probe
-    path becomes a no-op and the compatibility rules can be removed separately.
-  architecture_decision_ref: prompt-history-context-seed.txt
-  human_approval: user-authorized architecture remediation goal
+  rationale: ""
+  divergence_owner: ""
+  synchronization_or_compatibility_strategy: ""
+  retirement_or_convergence_plan: ""
+  architecture_decision_ref: ""
+  human_approval: ""
