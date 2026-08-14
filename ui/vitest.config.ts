@@ -39,6 +39,9 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    // Worker threads avoid repeatedly booting Node and jsdom processes. The four
+    // historically heaviest files run over twice as fast with identical tests.
+    pool: 'threads',
     setupFiles: ['./src/test/i18nTestSetup.js', './src/test/setup.ts'],
     css: true,
     coverage: {
