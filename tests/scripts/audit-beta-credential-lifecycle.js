@@ -15,6 +15,7 @@ const {
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LIFECYCLE_POLICY_ID,
   DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
+  verificationResultEvidence,
 } = require('./beta-credential-contract');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -477,7 +478,7 @@ async function verify(page, walletPage, label) {
   if (!session.ok || !session.instanceId || !session.requestUri) return { session };
 
   const wallet = await present(walletPage, session.requestUri);
-    const result = await waitFor(() => page.evaluate(async (instanceId) => {
+  const rawResult = await waitFor(() => page.evaluate(async (instanceId) => {
     const response = await fetch(`/v1/flows/instances/${encodeURIComponent(instanceId)}/result`, {
       credentials: 'include',
     });
@@ -485,13 +486,11 @@ async function verify(page, walletPage, label) {
     if (!response.ok) return null;
     const terminal = ['COMPLETED', 'PASSED', 'VERIFIED', 'FAILED', 'EXPIRED', 'CANCELLED']
       .includes(String(body?.status || '').toUpperCase());
-    return terminal ? {
-      status: body.status,
-      evaluation: body?.result?.evaluation_result || null,
-      decision: body?.result?.decision || null,
-      decisionReason: body?.result?.decision_reason || null,
-    } : null;
+    return terminal ? { httpStatus: response.status, body } : null;
   }, session.instanceId));
+  const result = rawResult
+    ? verificationResultEvidence(rawResult.body, rawResult.httpStatus)
+    : null;
   return { session: { ...session, requestUri: '[present]' }, wallet, result };
 }
 
