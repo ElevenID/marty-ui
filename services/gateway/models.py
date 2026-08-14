@@ -1103,16 +1103,10 @@ class CredentialTemplateResponse(BaseModel):
     trust_profile_id: str | None = None
     revocation_profile_id: str | None = None
     validity_rules: dict
-    issuer_did: str | None = Field(None, pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
+    issuer_did: str = Field(pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
     credential_payload_format: str | None = None
     created_at: str
     updated_at: str | None = None
-
-    @model_validator(mode="after")
-    def require_managed_issuer_for_usable_template(self) -> "CredentialTemplateResponse":
-        if self.status.strip().upper() != "DEPRECATED" and not self.issuer_did:
-            raise ValueError("issuer_did is required for non-deprecated Credential Templates")
-        return self
 
 
 # =============================================================================

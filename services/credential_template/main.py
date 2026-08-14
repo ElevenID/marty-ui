@@ -1071,16 +1071,10 @@ class CredentialTemplateResponse(BaseModel):
     revocation_profile_id: str | None = None
     claims: list[dict]
     validity_rules: dict
-    issuer_did: str | None = Field(None, pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
+    issuer_did: str = Field(pattern=r"^did:[a-z0-9]+:.+", max_length=2048)
     privacy_posture: dict | None = None
     created_at: str
     updated_at: str
-
-    @model_validator(mode="after")
-    def require_managed_issuer_for_usable_template(self) -> "CredentialTemplateResponse":
-        if self.status.strip().upper() != TemplateStatus.DEPRECATED.value.upper() and not self.issuer_did:
-            raise ValueError("issuer_did is required for non-deprecated Credential Templates")
-        return self
 
 
 def _days_from_seconds(seconds: int) -> int:
@@ -1877,7 +1871,13 @@ async def list_credential_templates(
 
     status_filter = TemplateStatus(status) if status else None
     templates = await repo.list(organization_id, status_filter)
-    return [_template_to_response(t) for t in templates[offset:offset + limit]]
+    catalogue = [
+        template
+        for template in templates
+        if template.status != TemplateStatus.DEPRECATED
+        or _normalized_template_issuer_did(template) is not None
+    ]
+    return [_template_to_response(t) for t in catalogue[offset:offset + limit]]
 
 
 @router.get("/{template_id}", response_model=CredentialTemplateResponse, response_model_exclude_none=True)
@@ -2162,15 +2162,16 @@ async def add_claim(
     return _template_to_response(template)
 
 
-def _managed_template_issuer_did(
-    template: CredentialTemplate,
-    *,
-    allow_deprecated_legacy: bool = False,
-) -> str | None:
+def _normalized_template_issuer_did(template: CredentialTemplate) -> str | None:
     issuer_did = str(template.issuer_did or "").strip() or None
     if issuer_did is None or re.fullmatch(r"did:[a-z0-9]+:.+", issuer_did) is None:
-        if allow_deprecated_legacy and template.status == TemplateStatus.DEPRECATED:
-            return None
+        return None
+    return issuer_did
+
+
+def _managed_template_issuer_did(template: CredentialTemplate) -> str:
+    issuer_did = _normalized_template_issuer_did(template)
+    if issuer_did is None:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -2182,10 +2183,7 @@ def _managed_template_issuer_did(
 
 
 def _template_to_response(template: CredentialTemplate) -> CredentialTemplateResponse:
-    issuer_did = _managed_template_issuer_did(
-        template,
-        allow_deprecated_legacy=True,
-    )
+    issuer_did = _managed_template_issuer_did(template)
 
     canonical_payload_format = normalize_credential_payload_format(
         template.credential_payload_format,
