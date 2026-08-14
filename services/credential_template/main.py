@@ -1871,7 +1871,13 @@ async def list_credential_templates(
 
     status_filter = TemplateStatus(status) if status else None
     templates = await repo.list(organization_id, status_filter)
-    return [_template_to_response(t) for t in templates[offset:offset + limit]]
+    catalogue = [
+        template
+        for template in templates
+        if template.status != TemplateStatus.DEPRECATED
+        or _normalized_template_issuer_did(template) is not None
+    ]
+    return [_template_to_response(t) for t in catalogue[offset:offset + limit]]
 
 
 @router.get("/{template_id}", response_model=CredentialTemplateResponse, response_model_exclude_none=True)
@@ -2076,7 +2082,8 @@ async def create_new_version(
         user_id=user_id,
         organization_id=template.organization_id,
     )
-    
+
+    _managed_template_issuer_did(template)
     new_template = template.new_version()
     await repo.save(new_template)
     return _template_to_response(new_template)
@@ -2155,9 +2162,16 @@ async def add_claim(
     return _template_to_response(template)
 
 
-def _template_to_response(template: CredentialTemplate) -> CredentialTemplateResponse:
-    issuer_did = str(template.issuer_did or "").strip()
-    if re.fullmatch(r"did:[a-z0-9]+:.+", issuer_did) is None:
+def _normalized_template_issuer_did(template: CredentialTemplate) -> str | None:
+    issuer_did = str(template.issuer_did or "").strip() or None
+    if issuer_did is None or re.fullmatch(r"did:[a-z0-9]+:.+", issuer_did) is None:
+        return None
+    return issuer_did
+
+
+def _managed_template_issuer_did(template: CredentialTemplate) -> str:
+    issuer_did = _normalized_template_issuer_did(template)
+    if issuer_did is None:
         raise HTTPException(
             status_code=409,
             detail=(
@@ -2165,6 +2179,11 @@ def _template_to_response(template: CredentialTemplate) -> CredentialTemplateRes
                 "template to an active organization-owned issuer DID before use."
             ),
         )
+    return issuer_did
+
+
+def _template_to_response(template: CredentialTemplate) -> CredentialTemplateResponse:
+    issuer_did = _managed_template_issuer_did(template)
 
     canonical_payload_format = normalize_credential_payload_format(
         template.credential_payload_format,
