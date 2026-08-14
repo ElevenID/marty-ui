@@ -515,7 +515,21 @@ jobs:
         shell: bash
         run: |
           for file in stack-manifest.json marty-ui-sbom.cdx.json marty-ui-services-sbom.cdx.json marty-ui-migrations-sbom.cdx.json; do
-            cosign sign-blob --yes --bundle "${file}.sigstore.json" "$file"
+            signed=false
+            for attempt in 1 2 3 4; do
+              rm -f "${file}.sigstore.json"
+              if cosign sign-blob --yes --bundle "${file}.sigstore.json" "$file"; then
+                signed=true
+                break
+              fi
+              if [ "$attempt" -lt 4 ]; then
+                sleep "$((attempt * 5))"
+              fi
+            done
+            if [ "$signed" != true ]; then
+              echo "Failed to sign $file after 4 attempts"
+              exit 1
+            fi
           done
           sha256sum stack-manifest.json ./*.cdx.json ./*.sigstore.json > SHA256SUMS
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
