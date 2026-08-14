@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Implementation active — source cutovers landed; beta evidence and final removals pending
+**Status:** Technical migration complete — beta evidence accepted; production promotion requires separate approval
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
@@ -19,22 +19,23 @@ The immediate deployment boundary is beta. Production and persistent self-host e
 ## Implementation status (2026-08-14)
 
 The selected deterministic protocol, cryptographic, policy, validation,
-state-machine, wallet, licensing, DTC, and VDS-NC kernels now have one
-canonical Rust owner. The final Flow P-256 `did:jwk`/`did:key` caller cutover
-is included in the closing source-cleanup change. The machine-readable
-inventory records these workstreams as `native-active`. Event-stream has been
-deleted from Python and now runs as one Rust implementation in every deployment
-definition. This closing change does the same for revocation-profile, including
-its schema migrator.
+state-machine, wallet, licensing, DTC, and VDS-NC kernels have one canonical
+Rust owner. The machine-readable inventory records all 19 governed
+capabilities as `native-active`. Remaining Python and Dart files listed by the
+inventory are orchestration, transport, storage, provider, DTO, UI, platform,
+or deliberately thin native adapters; they do not contain a second maintained
+decision kernel.
 
-| Remaining gate | Current state | Completion evidence required |
+| Gate | Final state | Accepted evidence |
 |---|---|---|
-| Event-stream whole-service removal | Complete: `services/event_stream` is deleted and the shared image dispatches the canonical Rust executable in every stack | The executable-level public HTTP/gRPC behavior, tenant filtering, health, packaging, and regression contracts are retained in CI |
-| Revocation-profile whole-service removal | This change deletes the Python service, status-list kernel, and Alembic ownership and makes the shared image dispatch the canonical Rust executable in every stack | The public issuance/status/revocation/re-verification lifecycle plus failure, concurrency, storage, migration, packaging, and regression contracts pass against the exact candidate before merging |
-| Phase 9 release and evidence | Source cutovers are merged or in the closing dependency-ordered release/caller change; beta remains pinned | Immutable Rust/UI releases, one beta-only update after the deletion set lands, language/dependency measurements, and a production-promotion evidence package without promotion |
+| Event-stream whole-service removal | Complete: `services/event_stream` is deleted and the shared image dispatches the canonical Rust executable in every stack | Executable-level public HTTP/gRPC behavior, tenant filtering, health, packaging, and regression contracts pass in CI |
+| Revocation-profile whole-service removal | Complete: the Python service, status-list kernel, and Alembic ownership are deleted; the shared image dispatches the canonical Rust executable | Public issuance/status/revocation/re-verification behavior plus failure, concurrency, storage, migration, packaging, and regression contracts passed before merge |
+| Phase 9 release and evidence | Complete at the approved beta boundary | Immutable Rust/UI releases, a single beta update, commit-pinned composition evidence, fail-closed checks, and the protected public lifecycle run are recorded in the [final migration evidence](rust-migrations/final-migration-evidence-2026-08-14.md) |
 
-Until those gates pass, this roadmap is not complete. Production and
-persistent self-host configurations remain unchanged.
+All implementation, deletion, enforcement, packaging, and beta behavioral
+gates in this roadmap have passed. Production and persistent self-host
+configurations remain intentionally unchanged; promotion is a separate
+operational decision and is not remaining migration implementation.
 
 ## Non-negotiable outcomes
 
@@ -42,7 +43,7 @@ persistent self-host configurations remain unchanged.
 2. Python and Dart callers use that implementation through generated or deliberately thin bindings; they do not reproduce its decisions.
 3. Existing REST, gRPC, event, storage, and mobile-facing contracts retain feature parity unless a versioned change is explicitly approved.
 4. Required native code fails closed. Production-like environments never silently fall back to Python, Dart, permissive defaults, `None`, empty results, or mock validation.
-5. Superseded source, tests, dependencies, feature flags, and fallback branches are deleted after the beta cutover gate passes.
+5. Superseded source, tests, dependencies, feature flags, and fallback branches are deleted as soon as implementation-independent behavioral, failure, ownership, packaging, and regression gates pass.
 6. Rollback selects a previous deployable image or release. Runtime fallback to a second implementation is not an accepted rollback mechanism.
 
 ## Architecture and ownership
@@ -103,7 +104,7 @@ The investigation identified these high-value targets beyond the document-verifi
 8. License and entitlement evaluation.
 9. Conditional legacy DTC and VDS-NC migration or retirement.
 
-Current `main` already rejects unknown presentation constraints and verifies device challenge signatures. Those fail-closed behaviors are migration baselines and must not regress. The OIDC adapter still decodes JWT claims without signature verification and incorrectly treats PKCE as token validation; fixing that is a phase-zero security requirement. The Python revocation implementation also uses zlib compression for both token and bitstring lists while the existing Rust implementation distinguishes raw DEFLATE and GZIP. Golden-vector conformance must resolve that divergence before cutover.
+The initial investigation found that `main` already rejected unknown presentation constraints and verified device challenge signatures; those fail-closed behaviors became migration baselines. It also found unsigned OIDC claim decoding, PKCE incorrectly treated as token validation, and divergent Python/Rust status-list compression semantics. Phase 0 replaced those paths with complete native validation and authoritative standards-tested Rust behavior before their callers were cut over.
 
 ## Delivery roadmap
 
@@ -237,6 +238,11 @@ still follows the roadmap-wide beta evidence and removal enforcement gates.
 
 ### Phase 9 — Removal and enforcement
 
+**Status:** Complete at the beta deployment boundary. The final evidence
+package records the deleted-code inventory, immutable artifacts, source and
+dependency composition, protected behavioral lifecycle, and unchanged
+production/self-host boundary.
+
 - Delete all superseded Python/Dart implementation files and fallback flags.
 - Remove no-longer-used packages and native build exceptions from manifests and images.
 - Add dependency and source-boundary checks preventing canonical logic from returning to orchestration layers.
@@ -345,7 +351,7 @@ Rollback redeploys the last known-good beta artifact. Databases and events must 
 
 ## Measures of completion
 
-The roadmap is complete when:
+The roadmap met the following completion conditions on 2026-08-14:
 
 - all unconditional workstreams have passed their deletion gates;
 - every conditional DTC/VDS-NC service has been migrated or retired;
@@ -356,6 +362,10 @@ The roadmap is complete when:
 - language-composition reporting shows the corresponding Python/Dart source and runtime dependencies removed;
 - CI enforces the ownership model; and
 - a production promotion package exists, based on beta evidence, for separate approval.
+
+The evidence for these conditions is captured in
+[`final-migration-evidence-2026-08-14.md`](rust-migrations/final-migration-evidence-2026-08-14.md).
+Promoting the accepted artifacts beyond beta remains explicitly out of scope.
 
 ## Deliberate non-targets
 
@@ -383,9 +393,9 @@ They become candidates only when a measured correctness, security, reliability, 
 | Language reduction becomes vanity work | Target ranking is based on security, duplication, operational simplification, and whole-service removal. |
 | Beta changes leak into persistent environments | Beta-only deployment changes and separate production/self-host approval. |
 
-## Initial dependency order
+## Completed dependency order
 
-The first implementation queue is:
+The implementation landed in the following dependency order:
 
 1. Phase-zero ownership/CI/native diagnostics and OIDC verification correction.
 2. Canonical presentation-policy engine.
@@ -398,4 +408,5 @@ The first implementation queue is:
 9. DTC/VDS-NC retain-or-retire decisions.
 10. Cross-repository cleanup, dependency removal, and beta evidence package.
 
-This order may be adjusted when a dependency is discovered, but a change must preserve the single-owner rule and be recorded in the active implementation goal.
+Dependency adjustments were recorded in the implementation PR chain and
+preserved the single-owner rule.
