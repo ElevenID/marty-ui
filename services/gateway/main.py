@@ -100,7 +100,10 @@ from gateway.routes.trust import (
     trust_profile_router,
     trust_registry_router,
 )
-from gateway.routes.verification import presentation_policy_router
+from gateway.routes.verification import (
+    presentation_policy_router,
+    verification_session_router,
+)
 from gateway.routes.vc_api import router as vc_api_router
 
 logging.basicConfig(
@@ -1067,6 +1070,7 @@ Verification is handled through two complementary approaches:
     app.include_router(compliance_profile_router)
     app.include_router(device_router)
     app.include_router(presentation_policy_router)
+    app.include_router(verification_session_router)
     app.include_router(deployment_profile_router)
     app.include_router(flow_router)
     app.include_router(issued_credential_router)

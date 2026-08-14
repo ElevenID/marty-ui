@@ -27,6 +27,111 @@ from gateway.proxy import (
 presentation_policy_router = APIRouter(
     prefix="/v1/presentation-policies", tags=["Presentation Policies"]
 )
+verification_session_router = APIRouter(
+    prefix="/v1/verify", tags=["Verification Sessions"]
+)
+
+_API_KEY_VERIFICATION_SCOPES = frozenset(
+    {"credentials:read", "flows:execute", "admin:full"}
+)
+
+
+def _bind_verification_management_context(request: Request) -> None:
+    """Forward only an authenticated, scope-authorized management context."""
+
+    request.state.required_permission = "verification:execute"
+    if getattr(request.state, "auth_source", None) != "api_key":
+        return
+
+    organization_id = str(
+        getattr(request.state, "api_key_organization_id", "") or ""
+    ).strip()
+    scopes = {
+        str(scope).strip()
+        for scope in (getattr(request.state, "api_key_scopes", []) or [])
+        if str(scope).strip()
+    }
+    if not organization_id or not scopes.intersection(_API_KEY_VERIFICATION_SCOPES):
+        raise HTTPException(
+            status_code=403,
+            detail="API key is not authorized to execute verification",
+        )
+    request.state.organization_id = organization_id
+
+
+async def _proxy_verification(request: Request, path: str) -> Response:
+    service_url = get_registry().get_service_url("verification")
+    if not service_url:
+        raise HTTPException(
+            status_code=503,
+            detail="Verification service unavailable",
+        )
+    return await proxy_request(request, service_url, path)
+
+
+@verification_session_router.post("", summary="Start Verification Session")
+async def start_verification_session(request: Request) -> Response:
+    _bind_verification_management_context(request)
+    return await _proxy_verification(request, "/v1/verify")
+
+
+@verification_session_router.get("/sessions", summary="List Verification Sessions")
+async def list_verification_sessions(request: Request) -> Response:
+    _bind_verification_management_context(request)
+    return await _proxy_verification(request, "/v1/verify/sessions")
+
+
+@verification_session_router.post("/evaluate", summary="Evaluate Presentation")
+async def evaluate_verification_presentation(request: Request) -> Response:
+    _bind_verification_management_context(request)
+    return await _proxy_verification(request, "/v1/verify/evaluate")
+
+
+@verification_session_router.post("/zkp", summary="Evaluate ZKP Presentation")
+async def evaluate_verification_zkp(request: Request) -> Response:
+    _bind_verification_management_context(request)
+    return await _proxy_verification(request, "/v1/verify/zkp")
+
+
+@verification_session_router.get(
+    "/{session_id}/request",
+    summary="Get Wallet Presentation Request",
+)
+async def get_verification_wallet_request(
+    session_id: str,
+    request: Request,
+) -> Response:
+    return await _proxy_verification(request, f"/v1/verify/{session_id}/request")
+
+
+@verification_session_router.post(
+    "/{session_id}/submit",
+    summary="Submit Wallet Presentation",
+)
+async def submit_verification_wallet_presentation(
+    session_id: str,
+    request: Request,
+) -> Response:
+    return await _proxy_verification(request, f"/v1/verify/{session_id}/submit")
+
+
+@verification_session_router.get(
+    "/{session_id}/inspection",
+    summary="Get Verification Inspection Result",
+)
+async def get_verification_inspection_result(
+    session_id: str,
+    request: Request,
+) -> Response:
+    _bind_verification_management_context(request)
+    return await _proxy_verification(request, f"/v1/verify/{session_id}/inspection")
+
+
+@verification_session_router.get("/{session_id}", summary="Get Verification Session")
+async def get_verification_session(session_id: str, request: Request) -> Response:
+    _bind_verification_management_context(request)
+    return await _proxy_verification(request, f"/v1/verify/{session_id}")
+
 
 _PUBLIC_PRESENTATION_POLICY_FIELDS = frozenset(PresentationPolicyResponse.model_fields)
 
