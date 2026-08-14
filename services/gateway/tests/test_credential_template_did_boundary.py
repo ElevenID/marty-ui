@@ -146,6 +146,26 @@ def test_template_list_response_hides_internal_custody_metadata() -> None:
     assert response.headers["etag"] == '"template-list-v1"'
 
 
+def test_template_error_response_preserves_public_error_envelope() -> None:
+    response = credentials._sanitize_credential_template_response(
+        JSONResponse(
+            {
+                "error": "organization_conflict",
+                "error_description": "The organization state conflicts with this operation.",
+                "request_id": "request-1",
+            },
+            status_code=409,
+        )
+    )
+
+    assert response.status_code == 409
+    assert json.loads(response.body) == {
+        "error": "organization_conflict",
+        "error_description": "The organization state conflicts with this operation.",
+        "request_id": "request-1",
+    }
+
+
 def test_public_template_response_schema_has_no_custody_routing_fields() -> None:
     schema = CredentialTemplateCreate.model_json_schema()
     response_schema = credentials.CredentialTemplateResponse.model_json_schema()

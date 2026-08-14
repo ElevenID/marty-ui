@@ -95,7 +95,14 @@ def _claims_for_credential_template_service(claims) -> list[dict]:
 
 def _sanitize_credential_template_response(response: Response) -> Response:
     """Remove internal custody routing from proxied public template responses."""
-    if response.status_code == 204 or not response.body:
+    # ``proxy_request`` has already converted downstream failures into the
+    # public MIP error envelope.  Treating that envelope as a template strips
+    # every error field and turns useful failures into an opaque ``{}``.
+    if (
+        response.status_code >= 400
+        or response.status_code == 204
+        or not response.body
+    ):
         return response
     try:
         payload = json.loads(response.body)
