@@ -104,6 +104,10 @@ def test_stack_release_publishes_signed_evidence() -> None:
     assert "stack-manifest.json" in workflow
     assert "cosign sign --yes" in workflow
     assert "cosign sign-blob --yes" in workflow
+    assert "for attempt in 1 2 3 4" in workflow
+    assert 'rm -f "${file}.sigstore.json"' in workflow
+    assert 'if [ "$signed" != true ]' in workflow
+    assert "Failed to sign $file after 4 attempts" in workflow
     assert "actions/attest-build-provenance" in workflow
     assert "sbom: true" in workflow
     assert "SHA256SUMS" in workflow
