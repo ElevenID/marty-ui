@@ -359,10 +359,16 @@ services:
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
       AUTH_GRPC_PORT: "9001"
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/auth_workload_client_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       FLOW_WEBHOOK_SECRET_FILE: /run/secrets/flow_webhook_secret
     secrets:
       - marty_api_client_secret
       - grpc_service_token
+      - auth_workload_client_cert
+      - auth_workload_client_key
+      - workload_identity_ca_cert
       - flow_webhook_secret
     depends_on:
       db-migrate:
@@ -628,10 +634,16 @@ services:
       NOTIFICATION_APPLICANT_EVENT_TOKEN_FILE: /run/secrets/notification_applicant_event_token
       ORG_GRPC_TARGET: organization:9002
       FLOW_GRPC_TARGET: flow:9011
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/applicant_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/applicant_workload_client_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       FLOW_APPLICATION_EVENT_HMAC_KEY_FILE: /run/secrets/flow_application_event_hmac_key
     secrets:
       - marty_db_password
       - grpc_service_token
+      - applicant_workload_client_cert
+      - applicant_workload_client_key
+      - workload_identity_ca_cert
       - notification_applicant_event_token
       - flow_application_event_hmac_key
     volumes:
@@ -792,6 +804,8 @@ services:
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/flow_workload_client_cert
       GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/flow_workload_client_key
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/flow_workload_server_key
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       FLOW_SERVICE_PORT: "8011"
       DATABASE_URL_TEMPLATE: *database-url-template
@@ -813,6 +827,8 @@ services:
       - grpc_service_token
       - flow_workload_client_cert
       - flow_workload_client_key
+      - flow_workload_server_cert
+      - flow_workload_server_key
       - workload_identity_ca_cert
       - flow_webhook_secret
       - flow_application_event_hmac_key
@@ -1086,6 +1102,18 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_workload_client_cert
   flow_workload_client_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_workload_client_key
+  flow_workload_server_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_workload_server_cert
+  flow_workload_server_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_workload_server_key
+  auth_workload_client_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/auth_workload_client_cert
+  auth_workload_client_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/auth_workload_client_key
+  applicant_workload_client_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/applicant_workload_client_cert
+  applicant_workload_client_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/applicant_workload_client_key
   verification_workload_client_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/verification_workload_client_cert
   verification_workload_client_key:

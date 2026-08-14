@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
+import flow.main as flow_main
+from fastapi import HTTPException
 
 from flow.main import (
     FlowDefinition,
@@ -88,7 +91,15 @@ async def test_instance_response_adds_protocol_execution_fields() -> None:
             "completed_at": now.isoformat(),
         }
     }
-    assert response.context_data == {"issued_credential_id": "cred-123", "step_results": {"create_offer": {"result": "success", "completed_at": now.isoformat()}}, "protocol_flow_type": FlowType.OID4VCI_PRE_AUTHORIZED.value, "current_step_name": "token_exchange", "current_step_index": 1}
+    assert response.context_data == {
+        "issued_credential_id": "cred-123",
+        "step_results": {
+            "create_offer": {"result": "success", "completed_at": now.isoformat()}
+        },
+        "protocol_flow_type": FlowType.OID4VCI_PRE_AUTHORIZED.value,
+        "current_step_name": "token_exchange",
+        "current_step_index": 1,
+    }
     assert response.issued_credential_id == "cred-123"
     assert response.metadata["subject_type"] == "holder"
     assert response.metadata["runtime_status"] == FlowInstanceStatus.IN_PROGRESS.value
@@ -125,7 +136,9 @@ def test_special_verification_instances_map_to_protocol_flow_type() -> None:
     assert response.status == "AWAITING_WALLET"
     assert response.current_step == "create_request"
     assert response.current_step_index == 0
-    assert response.metadata["runtime_status"] == FlowInstanceStatus.AWAITING_WALLET.value
+    assert (
+        response.metadata["runtime_status"] == FlowInstanceStatus.AWAITING_WALLET.value
+    )
     assert response.metadata["flow_definition_reference"] == "__verification__"
 
 
@@ -154,13 +167,21 @@ def test_uuid_backed_ad_hoc_verification_instances_expose_protocol_flow_id() -> 
 
 
 def test_parse_flow_instance_status_accepts_canonical_protocol_values() -> None:
-    assert _parse_flow_instance_status("AWAITING_APPROVAL") is FlowInstanceStatus.AWAITING_APPROVAL
-    assert _parse_flow_instance_status("awaiting_wallet") is FlowInstanceStatus.AWAITING_WALLET
+    assert (
+        _parse_flow_instance_status("AWAITING_APPROVAL")
+        is FlowInstanceStatus.AWAITING_APPROVAL
+    )
+    assert (
+        _parse_flow_instance_status("awaiting_wallet")
+        is FlowInstanceStatus.AWAITING_WALLET
+    )
     assert _parse_flow_instance_status("cancelled") is FlowInstanceStatus.CANCELLED
 
 
 @pytest.mark.parametrize("removed_status", ["waiting", "waiting_approval", "canceled"])
-def test_parse_flow_instance_status_rejects_removed_aliases(removed_status: str) -> None:
+def test_parse_flow_instance_status_rejects_removed_aliases(
+    removed_status: str,
+) -> None:
     with pytest.raises(ValueError):
         _parse_flow_instance_status(removed_status)
 
@@ -176,7 +197,9 @@ def test_parse_flow_instance_status_rejects_removed_aliases(removed_status: str)
         FlowInstanceStatus.AWAITING_EVIDENCE,
     ],
 )
-def test_every_non_terminal_flow_state_can_be_cancelled(status: FlowInstanceStatus) -> None:
+def test_every_non_terminal_flow_state_can_be_cancelled(
+    status: FlowInstanceStatus,
+) -> None:
     instance = FlowInstance(status=status)
 
     instance.transition_to(FlowInstanceStatus.CANCELLED)
@@ -227,8 +250,22 @@ def test_definition_response_preserves_canonical_trigger() -> None:
 
 
 @pytest.mark.asyncio
-async def test_start_siop_flow_uses_uuid_backed_definition_id() -> None:
+async def test_start_siop_flow_uses_uuid_backed_definition_id(monkeypatch) -> None:
     repo = InMemoryFlowRepository()
+    membership = SimpleNamespace(
+        is_active=lambda: True,
+        has_permission=lambda resource, action: (
+            resource == "verification" and action == "execute"
+        ),
+    )
+    org_client = SimpleNamespace(
+        get_membership=lambda user_id, organization_id: _membership_result(
+            membership,
+            user_id,
+            organization_id,
+        )
+    )
+    monkeypatch.setattr(flow_main.app.state, "org_client", org_client, raising=False)
 
     response = await start_siop_flow(
         StartSiopFlowRequest(organization_id="org-1", expiry_minutes=5),
@@ -241,3 +278,40 @@ async def test_start_siop_flow_uses_uuid_backed_definition_id() -> None:
     assert instance is not None
     uuid.UUID(instance.flow_definition_id)
     assert instance.context["flow_definition_reference"] == "__siop_v2__"
+
+
+async def _membership_result(membership, _user_id, _organization_id):
+    return membership
+
+
+@pytest.mark.asyncio
+async def test_start_siop_flow_requires_an_explicit_organization() -> None:
+    with pytest.raises(HTTPException) as missing_org:
+        await start_siop_flow(
+            StartSiopFlowRequest(organization_id=None),
+            user_id="user-1",
+            repo=InMemoryFlowRepository(),
+        )
+
+    assert missing_org.value.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_start_siop_flow_rejects_cross_tenant_user(monkeypatch) -> None:
+    org_client = SimpleNamespace(
+        get_membership=lambda user_id, organization_id: _membership_result(
+            None,
+            user_id,
+            organization_id,
+        )
+    )
+    monkeypatch.setattr(flow_main.app.state, "org_client", org_client, raising=False)
+
+    with pytest.raises(HTTPException) as cross_tenant:
+        await start_siop_flow(
+            StartSiopFlowRequest(organization_id="org-b"),
+            user_id="user-from-org-a",
+            repo=InMemoryFlowRepository(),
+        )
+
+    assert cross_tenant.value.status_code == 403

@@ -36,15 +36,27 @@ class _ApplicationApprovedWebhook:
             raise ValueError("aggregate_type must be application")
         self.__dict__.update(values)
 
+
+class _VerificationStartPrincipal:
+    def __init__(self, workload_identity: str):
+        self.workload_identity = workload_identity
+
+    @classmethod
+    def workload(cls, identity: str):
+        return cls(identity)
+
+
 # Pre-inject a lightweight stub for flow.main so the deferred import inside
 # the gRPC adapter doesn't pull in the entire flow service (and its heavy
 # deps like jose, httpx, etc.).
 _flow_main_stub = SimpleNamespace(
+    AUTH_WORKLOAD_IDENTITY="spiffe://marty.internal/service/auth",
     StartVerificationFlowRequest=type(
         "StartVerificationFlowRequest",
         (),
         {"__init__": lambda self, **kw: self.__dict__.update(kw)},
     ),
+    VerificationStartPrincipal=_VerificationStartPrincipal,
     ApplicationApprovedWebhook=_ApplicationApprovedWebhook,
     _private_flow_context_path=lambda value: next(
         (str(key) for key in value if str(key).lower().startswith("_marty_")),
@@ -111,6 +123,9 @@ class TestStartVerification:
         forwarded = start_verification.call_args.kwargs["request"]
         assert forwarded.trust_profile_id == "trust-1"
         assert forwarded.request_transport == "url_query"
+        principal = start_verification.call_args.kwargs["principal"]
+        assert principal.workload_identity == "spiffe://marty.internal/service/auth"
+        assert "user_id" not in start_verification.call_args.kwargs
 
     async def test_internal_http_callback_is_allowed_for_grpc(self, ctx):
         result = SimpleNamespace(
@@ -138,7 +153,10 @@ class TestStartVerification:
         assert resp.instance_id == "inst-1"
         assert ctx.code is None
         forwarded = start_verification.call_args.kwargs["request"]
-        assert forwarded.callback_url == "http://auth:8001/internal/v1/auth/credential-verified?nonce=abc"
+        assert (
+            forwarded.callback_url
+            == "http://auth:8001/internal/v1/auth/credential-verified?nonce=abc"
+        )
 
     async def test_external_http_callback_is_rejected_for_grpc(self, ctx):
         start_verification = AsyncMock()

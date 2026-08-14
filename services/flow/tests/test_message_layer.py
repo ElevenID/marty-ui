@@ -26,6 +26,7 @@ from common.application_event_auth import (
 from marty_common.messages import MessageType
 from common.webhook_signatures import verify_event_signature
 from flow.main import (
+    AUTH_WORKLOAD_IDENTITY,
     ApplicationApprovedWebhook,
     AdvanceFlowRequest,
     _DC_API_PROTOCOL,
@@ -36,10 +37,12 @@ from flow.main import (
     FlowInstanceStatus,
     FlowType,
     StartVerificationFlowRequest,
+    VerificationStartPrincipal,
     StartFlowRequest,
     DigitalCredentialSubmissionRequest,
     InMemoryFlowRepository,
     _build_openid4vp_mdoc_session_transcript,
+    _authorize_verification_start,
     _openid4vp_mdoc_binding_digests,
     _build_presentation_definition,
     _create_oid4vci_artifact,
@@ -954,9 +957,7 @@ def _native_artifacts_fixture(builder):
             "credentials": [
                 {
                     "id": descriptor["id"],
-                    "format": next(
-                        iter(descriptor.get("format", {})), "jwt_vc_json"
-                    ),
+                    "format": next(iter(descriptor.get("format", {})), "jwt_vc_json"),
                 }
                 for descriptor in definition["input_descriptors"]
             ]
@@ -1114,6 +1115,99 @@ def _install_org_client(monkeypatch, *, permissions: set[str]):
         flow_main, "get_organization_client", _fake_get_organization_client
     )
     return org_client
+
+
+@pytest.mark.asyncio
+async def test_verification_start_principal_never_infers_service_from_id_shape(
+    monkeypatch,
+) -> None:
+    memberships = {
+        ("11111111-1111-1111-1111-111111111111", "org-a"): _FakeMembership(
+            {"verification:execute"}
+        ),
+    }
+
+    class TenantOrgClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        async def get_membership(self, user_id: str, organization_id: str):
+            self.calls.append((user_id, organization_id))
+            return memberships.get((user_id, organization_id))
+
+    org_client = TenantOrgClient()
+    monkeypatch.setattr(flow_main.app.state, "org_client", org_client, raising=False)
+    user_a = VerificationStartPrincipal.user("11111111-1111-1111-1111-111111111111")
+
+    await _authorize_verification_start(user_a, "org-a")
+
+    with pytest.raises(HTTPException) as cross_tenant:
+        await _authorize_verification_start(user_a, "org-b")
+    assert cross_tenant.value.status_code == 403
+
+    with pytest.raises(HTTPException) as forged_service:
+        await _authorize_verification_start(
+            VerificationStartPrincipal.user("auth-service"),
+            "org-b",
+        )
+    assert forged_service.value.status_code == 403
+    assert org_client.calls == [
+        ("11111111-1111-1111-1111-111111111111", "org-a"),
+        ("11111111-1111-1111-1111-111111111111", "org-b"),
+        ("auth-service", "org-b"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_only_exact_auth_workload_can_bypass_user_membership(monkeypatch) -> None:
+    org_client = _FakeOrgClient(_FakeMembership())
+    monkeypatch.setattr(flow_main.app.state, "org_client", org_client, raising=False)
+
+    await _authorize_verification_start(
+        VerificationStartPrincipal.workload(AUTH_WORKLOAD_IDENTITY),
+        "org-a",
+    )
+
+    with pytest.raises(HTTPException) as unauthorized:
+        await _authorize_verification_start(
+            VerificationStartPrincipal.workload(
+                "spiffe://marty.internal/service/applicant"
+            ),
+            "org-a",
+        )
+    assert unauthorized.value.status_code == 403
+    assert org_client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_http_verification_authorizes_tenant_before_policy_lookup(
+    monkeypatch,
+) -> None:
+    org_client = _FakeOrgClient(_FakeMembership())
+    monkeypatch.setattr(flow_main.app.state, "org_client", org_client, raising=False)
+
+    class PolicyStubMustNotBeCreated:
+        def __init__(self, _channel):
+            raise AssertionError("policy lookup occurred before tenant authorization")
+
+    monkeypatch.setattr(
+        "marty_proto.v1.presentation_policy_service_pb2_grpc.PresentationPolicyServiceStub",
+        PolicyStubMustNotBeCreated,
+    )
+
+    with pytest.raises(HTTPException) as denied:
+        await start_verification_flow(
+            StartVerificationFlowRequest(
+                presentation_policy_id="policy-from-org-b",
+                organization_id="org-b",
+                issuer_did="did:web:verifier.example:oid4vp",
+            ),
+            principal=VerificationStartPrincipal.user("auth-service"),
+            repo=InMemoryFlowRepository(),
+        )
+
+    assert denied.value.status_code == 403
+    assert org_client.calls == [("auth-service", "org-b")]
 
 
 def _encrypted_dc_api_response(payload: dict, public_jwk: dict) -> str:
@@ -1858,7 +1952,7 @@ async def test_start_verification_uri_binds_encoded_client_id_to_signed_request(
             organization_id="org-1",
             issuer_did="did:web:verifier.example:oid4vp",
         ),
-        user_id="auth-service",
+        principal=VerificationStartPrincipal.workload(AUTH_WORKLOAD_IDENTITY),
         repo=repo,
     )
     instance = await repo.get_instance(started.instance_id)
@@ -1937,7 +2031,7 @@ async def test_start_verification_request_object_carries_one_signed_jar_without_
             issuer_did="did:web:verifier.example:oid4vp",
             request_transport="request_object",
         ),
-        user_id="auth-service",
+        principal=VerificationStartPrincipal.workload(AUTH_WORKLOAD_IDENTITY),
         repo=repo,
     )
 
@@ -2015,7 +2109,7 @@ async def test_start_verification_url_query_uses_direct_unsigned_parameters(
             issuer_did="did:web:verifier.example:oid4vp",
             request_transport="url_query",
         ),
-        user_id="auth-service",
+        principal=VerificationStartPrincipal.workload(AUTH_WORKLOAD_IDENTITY),
         repo=repo,
     )
 
@@ -2132,7 +2226,7 @@ async def test_started_post_request_uri_transports_wallet_nonce_into_signed_requ
             issuer_did="did:web:verifier.example:oid4vp",
             request_uri_method="post",
         ),
-        user_id="auth-service",
+        principal=VerificationStartPrincipal.workload(AUTH_WORKLOAD_IDENTITY),
         repo=repo,
     )
     parameters = parse_qs(urlparse(started.request_uri).query)
@@ -3061,9 +3155,7 @@ async def test_build_presentation_definition_maps_policy_records_to_native_input
                 "input_descriptors": [{"id": "req-member-credential"}],
             },
             "dcql_query": {
-                "credentials": [
-                    {"id": "req-member-credential", "format": "dc+sd-jwt"}
-                ]
+                "credentials": [{"id": "req-member-credential", "format": "dc+sd-jwt"}]
             },
         }
 
@@ -3118,9 +3210,7 @@ async def test_oid4vp_query_uses_native_artifact_without_python_reconstruction(
                     "id": "req-marty-open-badge-login",
                     "format": "jwt_vc_json",
                     "meta": {
-                        "type_values": [
-                            ["VerifiableCredential", "OpenBadgeCredential"]
-                        ]
+                        "type_values": [["VerifiableCredential", "OpenBadgeCredential"]]
                     },
                 }
             ]
@@ -3142,9 +3232,10 @@ async def test_oid4vp_query_uses_native_artifact_without_python_reconstruction(
     assert await flow_main._oid4vp_credential_query(instance) == {
         "dcql_query": artifacts["dcql_query"]
     }
-    assert await flow_main._oid4vp_credential_query(
-        instance, lissi_compat=True
-    ) == {"presentation_definition": artifacts["presentation_definition"]}
+    assert await flow_main._oid4vp_credential_query(instance, lissi_compat=True) == {
+        "presentation_definition": artifacts["presentation_definition"]
+    }
+
 
 @pytest.mark.asyncio
 async def test_submit_verification_without_policy_does_not_claim_transaction():
