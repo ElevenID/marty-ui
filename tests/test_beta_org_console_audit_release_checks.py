@@ -383,3 +383,36 @@ def test_beta_audit_provisions_public_oid4vp_request_signing_identity() -> None:
     assert "'ES256'" in page.script
     assert "signing_service_id" not in page.script
     assert "signing_key_reference" not in page.script
+
+
+def test_beta_audit_waits_for_the_exact_verifier_identity_tuple(monkeypatch) -> None:
+    audit = _load_audit_module()
+    issuer_did = "did:web:beta.elevenidllc.com:orgs:audit-production-flow"
+    issuance_identity = {
+        "issuer_did": issuer_did,
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256",
+        "status": "active",
+    }
+    verifier_identity = {
+        "issuer_did": issuer_did,
+        "key_purpose": "oid4vp_request_signing",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256",
+        "status": "active",
+    }
+    probe = {"body": {"identities": [issuance_identity, verifier_identity]}}
+    monkeypatch.setattr(audit, "fetch_org_collection", lambda *_args: probe)
+
+    identity, observed_probe = audit.wait_for_issuer_identity(
+        object(),
+        "a60371ca-7250-4a51-9598-f8e972044f31",
+        issuer_did,
+        key_purpose="oid4vp_request_signing",
+        credential_format="SD_JWT_VC",
+        algorithm="ES256",
+    )
+
+    assert identity == verifier_identity
+    assert observed_probe == probe

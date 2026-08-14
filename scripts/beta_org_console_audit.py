@@ -1123,6 +1123,9 @@ def wait_for_issuer_identity(
     organization_id: str,
     issuer_did: str,
     *,
+    key_purpose: str = "vc_jwt_issuer",
+    credential_format: str = "SD_JWT_VC",
+    algorithm: str = "ES256",
     timeout: int = 60_000,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     deadline = time.monotonic() + (timeout / 1000)
@@ -1133,7 +1136,13 @@ def wait_for_issuer_identity(
             "/v1/signing-keys/issuer-identities",
             organization_id,
         )
-        identity = find_issuer_identity(last_probe, issuer_did)
+        identity = find_issuer_identity(
+            last_probe,
+            issuer_did,
+            key_purpose=key_purpose,
+            credential_format=credential_format,
+            algorithm=algorithm,
+        )
         if is_active(identity):
             return identity, last_probe
         page.wait_for_timeout(250)
