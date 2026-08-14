@@ -6,23 +6,27 @@ search_scope:
   - bindings_adapters_ffi_and_api_layers
   - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
 search_queries:
-  - "marty-ui release stack-lock release version"
-  - "release workflow immutable annotated tag"
-  - "test_stack_release_contract release version"
-  - "previous UI stack release metadata commit"
+  - "marty-ui stack lock credentials integration pins"
+  - "marty-credentials v0.1.62 immutable issuance digest"
+  - "marty-integration-tests v1.2.65 immutable source digest"
+  - "test_stack_release_contract dependency pin assertions"
+  - "previous coordinated UI stack pin release"
 candidate_implementations:
   - path: release/stack-lock.json
     language: JSON
     disposition: reuse_existing_release_manifest
-  - path: .github/workflows/cd.yml
-    language: YAML
-    disposition: reuse_existing_immutable_release_pipeline
   - path: tests/test_stack_release_contract.py
     language: Python
-    disposition: reuse_existing_release_contract_gate
-  - path: c565f695c8fea7fe0c840d006e60cea582430fd5
-    language: Git commit
-    disposition: reuse_previous_patch_release_pattern
+    disposition: reuse_existing_exact_pin_contract
+  - path: .github/workflows/cd.yml
+    language: YAML
+    disposition: reuse_existing_immutable_release_and_public_stack_gate
+  - path: work/credentials-v0.1.62-audit
+    language: Release evidence
+    disposition: reuse_accepted_immutable_credentials_evidence
+  - path: work/integration-v1.2.65-audit
+    language: Release evidence
+    disposition: reuse_accepted_immutable_integration_evidence
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
@@ -30,9 +34,9 @@ canonical_implementation:
   language: JSON
 rust_disposition: rust_not_applicable
 non_rust_rationale: >-
-  This task advances existing immutable release metadata and invokes the
-  repository's established release pipeline. It adds no runtime, protocol,
-  validation, security, or cryptographic behavior for Rust to own.
+  This task updates exact immutable release metadata and owned release-contract
+  assertions. It adds no runtime, protocol, validation, security, or
+  cryptographic behavior for Rust to own.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
