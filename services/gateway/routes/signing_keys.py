@@ -39,6 +39,8 @@ from fastapi.responses import JSONResponse
 
 from gateway.middleware import mip_error_response
 from gateway.models import (
+    DidcommKeyAgreementPublishRequest,
+    DidcommKeyAgreementPublishResponse,
     IssuerIdentityCertificateRequest,
     IssuerIdentityCreateRequest,
     IssuerIdentityCreateResponse,
@@ -893,6 +895,7 @@ def _retarget_did_document(did_doc: dict[str, Any], did_id: str) -> dict[str, An
     for relationship in (
         "authentication",
         "assertionMethod",
+        "keyAgreement",
         "capabilityInvocation",
         "capabilityDelegation",
     ):
@@ -4801,6 +4804,101 @@ async def create_public_issuer_identity(
     return IssuerIdentityCreateResponse(
         identity=_issuer_identity_projection(profile),
         created=bool(created_body.get("created")),
+    )
+
+
+@signing_key_router.put(
+    "/issuer-identities/didcomm-key-agreement",
+    summary="Publish Managed Issuer DIDComm Key Agreement",
+    response_model=DidcommKeyAgreementPublishResponse,
+)
+async def publish_public_issuer_didcomm_key_agreement(
+    request: Request,
+    body: DidcommKeyAgreementPublishRequest,
+) -> DidcommKeyAgreementPublishResponse:
+    """Publish only a public X25519 method for an exact active issuer tuple."""
+
+    organization_id = _require_public_issuer_identity_organization(
+        request, body.organization_id
+    )
+    matches = await _matching_issuer_identity_profiles(request, body)
+    if not matches:
+        raise HTTPException(
+            status_code=404,
+            detail="No active issuer identity matches the requested tuple.",
+        )
+    if len(matches) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Issuer DID resolution is ambiguous for the requested identity tuple.",
+        )
+
+    public_domain = _normalize_did_web_domain(
+        _domain_config(request).get("public_domain")
+    )
+    org_slug = (
+        _did_web_org_slug(body.issuer_did, public_domain=public_domain)
+        if public_domain
+        else None
+    )
+    if not public_domain or not org_slug:
+        raise HTTPException(
+            status_code=422,
+            detail="DIDComm key agreement publication requires a local managed did:web issuer.",
+        )
+
+    fragment = "didcomm-authcrypt-x25519"
+    expected_method_id = f"{body.issuer_did}#{fragment}"
+    try:
+        publication = await publish_native_signing_did(
+            organization_id,
+            "didcomm-authcrypt",
+            {
+                "jwk": body.public_jwk.model_dump(mode="json"),
+                "public_domain": public_domain,
+                "did_id": body.issuer_did,
+                "org_slug": org_slug,
+                "fragment": fragment,
+                "relationship": "keyAgreement",
+            },
+        )
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=exc.response.status_code,
+            detail=_httpx_error_detail(exc),
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="DID document registry is unavailable."
+        ) from exc
+
+    verification_method = publication.get("verification_method")
+    document = publication.get("document")
+    key_agreement = document.get("keyAgreement") if isinstance(document, dict) else None
+    verification_methods = (
+        document.get("verificationMethod") if isinstance(document, dict) else None
+    )
+    expected_public_jwk = body.public_jwk.model_dump(mode="json")
+    if (
+        not isinstance(verification_method, dict)
+        or verification_method.get("id") != expected_method_id
+        or verification_method.get("type") != "JsonWebKey2020"
+        or verification_method.get("controller") != body.issuer_did
+        or verification_method.get("publicKeyJwk") != expected_public_jwk
+        or not isinstance(document, dict)
+        or document.get("id") != body.issuer_did
+        or not isinstance(verification_methods, list)
+        or verification_method not in verification_methods
+        or not isinstance(key_agreement, list)
+        or expected_method_id not in key_agreement
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="DID document registry returned an invalid key agreement publication.",
+        )
+    return DidcommKeyAgreementPublishResponse(
+        issuer_did=body.issuer_did,
+        key_agreement_method_id=expected_method_id,
     )
 
 

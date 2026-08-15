@@ -1,0 +1,10 @@
+# Opt-in DIDComm authenticated-encryption policy for controlled deployments.
+#
+# The mounted directory belongs only to issuance. It may contain sender private
+# key material and must never be mounted into the gateway or another service.
+services:
+  issuance:
+    environment:
+      DIDCOMM_ENCRYPTION_POLICY_FILE: /run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json
+    volumes:
+      - ${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}:/run/secrets/didcomm-authcrypt:ro

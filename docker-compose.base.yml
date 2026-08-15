@@ -890,7 +890,10 @@ services:
       CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-false}
       # DIDComm resolver infrastructure is deployment-managed and never caller-selected.
       UNIVERSAL_RESOLVER_URL: ${UNIVERSAL_RESOLVER_URL:-}
-      DIDCOMM_ALLOW_PRIVATE_ENDPOINTS: ${DIDCOMM_ALLOW_PRIVATE_ENDPOINTS:-false}
+      DIDCOMM_ALLOW_PRIVATE_IPS: ${DIDCOMM_ALLOW_PRIVATE_IPS:-false}
+      # Managed path-scoped did:web issuer documents are resolved through the
+      # stack-owned gateway, never by caller-selected or public-network URLs.
+      DIDCOMM_DID_WEB_INTERNAL_BASE_URL: ${DIDCOMM_DID_WEB_INTERNAL_BASE_URL:-http://gateway:8000}
     ports:
       - "127.0.0.1:8005:8005"
       - "127.0.0.1:9005:9005"

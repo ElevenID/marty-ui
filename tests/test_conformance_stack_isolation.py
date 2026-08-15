@@ -309,6 +309,44 @@ def test_haip_overlay_is_explicit_and_isolation_is_last() -> None:
     )
 
 
+def test_didcomm_authcrypt_overlay_is_explicit_and_isolation_is_last() -> None:
+    default_command = stack.compose_command("marty-conformance-test1")
+    default_files = [
+        default_command[index + 1]
+        for index, value in enumerate(default_command)
+        if value == "--file"
+    ]
+    assert not any(
+        path.endswith(stack.DIDCOMM_AUTHCRYPT_FILE) for path in default_files
+    )
+
+    command = stack.compose_command(
+        "marty-conformance-test1",
+        include_didcomm_authcrypt=True,
+    )
+    files = [
+        command[index + 1] for index, value in enumerate(command) if value == "--file"
+    ]
+    assert files[-2].endswith(stack.DIDCOMM_AUTHCRYPT_FILE)
+    assert files[-1].endswith(stack.ISOLATION_FILE)
+
+
+def test_didcomm_authcrypt_policy_is_mounted_only_into_issuance() -> None:
+    overlay = yaml.safe_load(
+        (ROOT / stack.DIDCOMM_AUTHCRYPT_FILE).read_text(encoding="utf-8")
+    )
+    assert set(overlay["services"]) == {"issuance"}
+    issuance = overlay["services"]["issuance"]
+    assert issuance["environment"] == {
+        "DIDCOMM_ENCRYPTION_POLICY_FILE": (
+            "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json"
+        )
+    }
+    assert issuance["volumes"] == [
+        "${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}:/run/secrets/didcomm-authcrypt:ro"
+    ]
+
+
 def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
     isolation = (ROOT / stack.ISOLATION_FILE).read_text(encoding="utf-8")
     issuance = isolation.split("  issuance:\n", 1)[1].split(
@@ -331,9 +369,14 @@ def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
         assert "DIDCOMM_TLS_CA_FILE" not in (
             ROOT / production_file
         ).read_text(encoding="utf-8")
-        assert "DIDCOMM_ALLOW_PRIVATE_IPS" not in (
-            ROOT / production_file
-        ).read_text(encoding="utf-8")
+    base = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text(encoding="utf-8"))
+    issuance_environment = base["services"]["issuance"]["environment"]
+    assert issuance_environment["DIDCOMM_ALLOW_PRIVATE_IPS"] == (
+        "${DIDCOMM_ALLOW_PRIVATE_IPS:-false}"
+    )
+    assert issuance_environment["DIDCOMM_DID_WEB_INTERNAL_BASE_URL"] == (
+        "${DIDCOMM_DID_WEB_INTERNAL_BASE_URL:-http://gateway:8000}"
+    )
 
 
 def test_trust_registry_private_adapter_is_conformance_only() -> None:
