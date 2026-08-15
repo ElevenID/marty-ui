@@ -157,3 +157,53 @@ async fn internal_registry_routes_fail_closed_without_auth_or_storage() {
         .unwrap();
     assert_eq!(malformed.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+#[tokio::test]
+async fn internal_document_routes_require_auth_and_fail_closed_without_storage() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/document_vectors.json")).unwrap();
+    let inspect_body = serde_json::json!({
+        "cert_pem": fixture["certificate"]["cert_pem"]
+    })
+    .to_string();
+    let unauthorized = marty_signing_keys::http::router()
+        .oneshot(
+            Request::post("/internal/documents/certificate/inspect")
+                .header("content-type", "application/json")
+                .body(Body::from(inspect_body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let inspected = marty_signing_keys::http::router()
+        .oneshot(
+            Request::post("/internal/documents/certificate/inspect")
+                .header("content-type", "application/json")
+                .header("x-api-key", "dev-signing-keys-internal-api-key")
+                .body(Body::from(inspect_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(inspected.status(), StatusCode::OK);
+    let result: Value =
+        serde_json::from_slice(&to_bytes(inspected.into_body(), usize::MAX).await.unwrap())
+            .unwrap();
+    assert_eq!(
+        result["expires_at"],
+        fixture["certificate"]["expected_expiry"]
+    );
+
+    let unavailable = marty_signing_keys::http::router()
+        .oneshot(
+            Request::get("/internal/documents/org-a/jwks")
+                .header("x-api-key", "dev-signing-keys-internal-api-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+}

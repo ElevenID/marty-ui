@@ -1,3 +1,9 @@
+use crate::documents::{
+    self, CertificateAlertsRequest, CertificateAlertsResponse, DeleteJwkResponse, DocumentStore,
+    InspectCertificateRequest, InspectCertificateResponse, LoadDidRequest, LoadDidResponse,
+    PublishDidRequest, PublishDidResponse, PublishJwkRequest, PublishJwkResponse,
+    StoredCertificate, UpdateJwkRequest, UpdateJwkResponse,
+};
 use crate::domain::{key_purposes, service_capabilities};
 use crate::kms::{self, ProviderRequest, SignRequest};
 use crate::registry::{
@@ -27,14 +33,15 @@ struct HealthResponse {
 struct ServiceStatus {
     service_name: &'static str,
     phase: &'static str,
-    migrated_capabilities: [&'static str; 8],
-    pending_capabilities: [&'static str; 3],
+    migrated_capabilities: [&'static str; 10],
+    pending_capabilities: [&'static str; 2],
 }
 
 #[derive(Clone)]
 struct AppState {
     internal_api_key: Arc<str>,
     registry_store: Option<RegistryStore>,
+    document_store: Option<DocumentStore>,
 }
 
 pub fn router() -> Router {
@@ -42,12 +49,13 @@ pub fn router() -> Router {
 }
 
 pub fn router_with_internal_api_key(internal_api_key: String) -> Router {
-    router_with_dependencies(internal_api_key, None)
+    router_with_dependencies(internal_api_key, None, None)
 }
 
 pub fn router_with_dependencies(
     internal_api_key: String,
     registry_store: Option<RegistryStore>,
+    document_store: Option<DocumentStore>,
 ) -> Router {
     Router::new()
         .route("/health", get(health))
@@ -77,10 +85,43 @@ pub fn router_with_dependencies(
             "/internal/registry/{organization_id}",
             get(load_registry).put(save_registry),
         )
+        .route(
+            "/internal/documents/certificate/inspect",
+            post(inspect_certificate),
+        )
+        .route(
+            "/internal/documents/certificate-alerts",
+            post(certificate_alerts),
+        )
+        .route(
+            "/internal/documents/{organization_id}/certificates",
+            get(certificate_overrides),
+        )
+        .route(
+            "/internal/documents/{organization_id}/certificates/{service_id}",
+            axum::routing::put(store_certificate),
+        )
+        .route("/internal/documents/{organization_id}/jwks", get(load_jwks))
+        .route(
+            "/internal/documents/{organization_id}/jwks/{service_id}",
+            axum::routing::put(publish_jwk)
+                .patch(update_jwk)
+                .delete(delete_jwk),
+        )
+        .route(
+            "/internal/documents/{organization_id}/did/load",
+            post(load_did),
+        )
+        .route(
+            "/internal/documents/{organization_id}/did/{service_id}",
+            axum::routing::put(publish_did),
+        )
+        .route("/internal/documents/did-web/{slug}", get(resolve_did_slug))
         .layer(TraceLayer::new_for_http())
         .with_state(AppState {
             internal_api_key: Arc::from(internal_api_key),
             registry_store,
+            document_store,
         })
 }
 
@@ -226,6 +267,186 @@ fn registry_unavailable() -> RegistryHttpError {
     )
 }
 
+type DocumentHttpError = (StatusCode, Json<serde_json::Value>);
+
+async fn inspect_certificate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<InspectCertificateRequest>,
+) -> Result<Json<InspectCertificateResponse>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    documents::inspect_certificate(&request)
+        .map(Json)
+        .map_err(document_error)
+}
+
+async fn certificate_alerts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CertificateAlertsRequest>,
+) -> Result<Json<CertificateAlertsResponse>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    documents::certificate_alerts(request)
+        .map(Json)
+        .map_err(document_error)
+}
+
+async fn certificate_overrides(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    document_store(&state)?
+        .certificate_overrides(&organization_id)
+        .await
+        .map(Json)
+        .map_err(document_error)
+}
+
+async fn store_certificate(
+    State(state): State<AppState>,
+    Path((organization_id, service_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<InspectCertificateRequest>,
+) -> Result<Json<StoredCertificate>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    document_store(&state)?
+        .store_certificate(&organization_id, &service_id, request)
+        .await
+        .map(Json)
+        .map_err(document_error)
+}
+
+async fn load_jwks(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    document_store(&state)?
+        .jwks(&organization_id)
+        .await
+        .map(Json)
+        .map_err(document_error)
+}
+
+async fn publish_jwk(
+    State(state): State<AppState>,
+    Path((organization_id, service_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<PublishJwkRequest>,
+) -> Result<Json<PublishJwkResponse>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    document_store(&state)?
+        .publish_jwk(&organization_id, &service_id, request)
+        .await
+        .map(Json)
+        .map_err(document_error)
+}
+
+async fn update_jwk(
+    State(state): State<AppState>,
+    Path((organization_id, key_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateJwkRequest>,
+) -> Result<Json<UpdateJwkResponse>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    document_store(&state)?
+        .update_jwk(&organization_id, &key_id, request)
+        .await
+        .map(Json)
+        .map_err(document_error)
+}
+
+async fn delete_jwk(
+    State(state): State<AppState>,
+    Path((organization_id, key_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<DeleteJwkResponse>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    document_store(&state)?
+        .delete_jwk(&organization_id, &key_id)
+        .await
+        .map(Json)
+        .map_err(document_error)
+}
+
+async fn load_did(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<LoadDidRequest>,
+) -> Result<Json<LoadDidResponse>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    document_store(&state)?
+        .load_did(&organization_id, request)
+        .await
+        .map(Json)
+        .map_err(document_error)
+}
+
+async fn publish_did(
+    State(state): State<AppState>,
+    Path((organization_id, service_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<PublishDidRequest>,
+) -> Result<Json<PublishDidResponse>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    document_store(&state)?
+        .publish_did(&organization_id, &service_id, request)
+        .await
+        .map(Json)
+        .map_err(document_error)
+}
+
+async fn resolve_did_slug(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    let organization_id = document_store(&state)?
+        .resolve_slug(&slug)
+        .await
+        .map_err(document_error)?;
+    Ok(Json(
+        serde_json::json!({"organization_id": organization_id}),
+    ))
+}
+
+fn document_store(state: &AppState) -> Result<&DocumentStore, DocumentHttpError> {
+    state.document_store.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"detail": "signing document storage is unavailable"})),
+        )
+    })
+}
+
+fn authorize_documents(state: &AppState, headers: &HeaderMap) -> Result<(), DocumentHttpError> {
+    authorize_internal(state, headers).map_err(|error| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"detail": error.to_string()})),
+        )
+    })
+}
+
+fn document_error(error: documents::DocumentError) -> DocumentHttpError {
+    let status = match &error {
+        documents::DocumentError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        documents::DocumentError::Conflict(_) => StatusCode::CONFLICT,
+        documents::DocumentError::NotFound(_) => StatusCode::NOT_FOUND,
+        documents::DocumentError::Storage(_) => StatusCode::SERVICE_UNAVAILABLE,
+        documents::DocumentError::Corrupt(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (
+        status,
+        Json(serde_json::json!({"detail": error.to_string()})),
+    )
+}
+
 fn authorize_internal(state: &AppState, headers: &HeaderMap) -> Result<(), kms::KmsError> {
     let candidate = headers
         .get("x-api-key")
@@ -273,12 +494,10 @@ async fn service_status() -> Json<ServiceStatus> {
             "service-registration-validation",
             "registry-normalization-resolution",
             "registry-persistence",
-        ],
-        pending_capabilities: [
+            "certificate-document-persistence",
             "jwks-did-publication-persistence",
-            "audit-event-storage",
-            "compliance-summary-computation",
         ],
+        pending_capabilities: ["audit-event-storage", "compliance-summary-computation"],
     })
 }
 

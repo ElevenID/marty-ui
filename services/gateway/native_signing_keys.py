@@ -69,6 +69,48 @@ async def _post_native(path: str, payload: dict[str, Any]) -> Any:
     return response.json()
 
 
+async def _put_native(path: str, payload: dict[str, Any]) -> Any:
+    response = await get_http_client().put(
+        f"{_service_url()}{path}",
+        json=payload,
+        headers={"X-API-Key": _internal_api_key()},
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+async def _get_native(path: str) -> Any:
+    response = await get_http_client().get(
+        f"{_service_url()}{path}",
+        headers={"X-API-Key": _internal_api_key()},
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+async def _patch_native(path: str, payload: dict[str, Any]) -> Any:
+    response = await get_http_client().patch(
+        f"{_service_url()}{path}",
+        json=payload,
+        headers={"X-API-Key": _internal_api_key()},
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+async def _delete_native(path: str) -> Any:
+    response = await get_http_client().delete(
+        f"{_service_url()}{path}",
+        headers={"X-API-Key": _internal_api_key()},
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 async def normalize_native_signing_service(
     service: Any,
 ) -> dict[str, Any] | None:
@@ -176,6 +218,178 @@ async def save_native_signing_registry(
     if not isinstance(body, dict) or not isinstance(body.get("services"), list):
         raise RuntimeError("Rust signing-key service returned an invalid stored registry")
     return body
+
+
+async def inspect_native_signing_certificate(
+    cert_pem: str,
+    *,
+    cert_chain_pem: str | None = None,
+    expected_public_jwk: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    body = await _post_native(
+        "/internal/documents/certificate/inspect",
+        {
+            "cert_pem": cert_pem,
+            "cert_chain_pem": cert_chain_pem,
+            "expected_public_jwk": expected_public_jwk,
+        },
+    )
+    if (
+        not isinstance(body, dict)
+        or not isinstance(body.get("expires_at"), str)
+        or not isinstance(body.get("public_jwk"), dict)
+        or not isinstance(body.get("x5c"), list)
+    ):
+        raise RuntimeError("Rust signing-key service returned invalid certificate metadata")
+    return body
+
+
+async def calculate_native_certificate_alerts(
+    services: list[dict[str, Any]], days_until_expiry: int
+) -> dict[str, Any]:
+    body = await _post_native(
+        "/internal/documents/certificate-alerts",
+        {"services": services, "days_until_expiry": days_until_expiry},
+    )
+    if not isinstance(body, dict) or not isinstance(body.get("alerts"), list):
+        raise RuntimeError("Rust signing-key service returned invalid certificate alerts")
+    return body
+
+
+async def get_native_certificate_overrides(organization_id: str) -> dict[str, Any]:
+    body = await _get_native(
+        f"/internal/documents/{quote(organization_id, safe='')}/certificates"
+    )
+    if not isinstance(body, dict) or not isinstance(body.get("services"), dict):
+        raise RuntimeError("Rust signing-key service returned invalid certificate storage")
+    return body
+
+
+async def store_native_signing_certificate(
+    organization_id: str,
+    service_id: str,
+    *,
+    cert_pem: str,
+    cert_chain_pem: str | None = None,
+) -> dict[str, Any]:
+    body = await _put_native(
+        f"/internal/documents/{quote(organization_id, safe='')}/certificates/{quote(service_id, safe='')}",
+        {"cert_pem": cert_pem, "cert_chain_pem": cert_chain_pem},
+    )
+    if (
+        not isinstance(body, dict)
+        or not isinstance(body.get("cert_pem"), str)
+        or not isinstance(body.get("cert_expires_at"), str)
+    ):
+        raise RuntimeError("Rust signing-key service returned invalid certificate storage")
+    return body
+
+
+async def get_native_signing_jwks(organization_id: str) -> dict[str, Any]:
+    body = await _get_native(
+        f"/internal/documents/{quote(organization_id, safe='')}/jwks"
+    )
+    if not isinstance(body, dict) or not isinstance(body.get("keys"), list):
+        raise RuntimeError("Rust signing-key service returned an invalid JWKS document")
+    return body
+
+
+async def publish_native_signing_jwk(
+    organization_id: str,
+    service_id: str,
+    *,
+    jwk: dict[str, Any],
+    key_reference: str | None = None,
+    cert_pem: str | None = None,
+    cert_chain_pem: str | None = None,
+) -> dict[str, Any]:
+    body = await _put_native(
+        f"/internal/documents/{quote(organization_id, safe='')}/jwks/{quote(service_id, safe='')}",
+        {
+            "jwk": jwk,
+            "key_reference": key_reference,
+            "cert_pem": cert_pem,
+            "cert_chain_pem": cert_chain_pem,
+        },
+    )
+    if (
+        not isinstance(body, dict)
+        or not isinstance(body.get("jwk"), dict)
+        or not isinstance(body.get("document"), dict)
+        or not isinstance(body.get("key_count"), int)
+    ):
+        raise RuntimeError("Rust signing-key service returned invalid JWKS publication")
+    return body
+
+
+async def update_native_signing_jwk(
+    organization_id: str, key_id: str, updates: dict[str, Any]
+) -> list[str]:
+    body = await _patch_native(
+        f"/internal/documents/{quote(organization_id, safe='')}/jwks/{quote(key_id, safe='')}",
+        {"updates": updates},
+    )
+    if not isinstance(body, dict) or not isinstance(body.get("updated"), list):
+        raise RuntimeError("Rust signing-key service returned invalid JWKS metadata")
+    return body["updated"]
+
+
+async def delete_native_signing_jwk(organization_id: str, key_id: str) -> bool:
+    body = await _delete_native(
+        f"/internal/documents/{quote(organization_id, safe='')}/jwks/{quote(key_id, safe='')}"
+    )
+    if not isinstance(body, dict) or not isinstance(body.get("removed"), bool):
+        raise RuntimeError("Rust signing-key service returned invalid JWKS deletion")
+    return body["removed"]
+
+
+async def load_native_signing_did_document(
+    organization_id: str,
+    *,
+    did_id: str | None = None,
+    fallback_did: str | None = None,
+) -> tuple[dict[str, Any], bool]:
+    body = await _post_native(
+        f"/internal/documents/{quote(organization_id, safe='')}/did/load",
+        {"did_id": did_id, "fallback_did": fallback_did},
+    )
+    if (
+        not isinstance(body, dict)
+        or not isinstance(body.get("document"), dict)
+        or not isinstance(body.get("found"), bool)
+        or not isinstance(body["document"].get("id"), str)
+    ):
+        raise RuntimeError("Rust signing-key service returned an invalid DID document")
+    return body["document"], body["found"]
+
+
+async def publish_native_signing_did(
+    organization_id: str,
+    service_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    body = await _put_native(
+        f"/internal/documents/{quote(organization_id, safe='')}/did/{quote(service_id, safe='')}",
+        payload,
+    )
+    if (
+        not isinstance(body, dict)
+        or not isinstance(body.get("verification_method"), dict)
+        or not isinstance(body.get("document"), dict)
+        or not isinstance(body.get("did_id"), str)
+    ):
+        raise RuntimeError("Rust signing-key service returned invalid DID publication")
+    return body
+
+
+async def resolve_native_did_web_slug(slug: str) -> str | None:
+    body = await _get_native(f"/internal/documents/did-web/{quote(slug, safe='')}")
+    if not isinstance(body, dict) or set(body) != {"organization_id"}:
+        raise RuntimeError("Rust signing-key service returned an invalid DID slug result")
+    organization_id = body["organization_id"]
+    if organization_id is not None and not isinstance(organization_id, str):
+        raise RuntimeError("Rust signing-key service returned an invalid DID slug result")
+    return organization_id
 
 
 async def validate_native_signing_service(

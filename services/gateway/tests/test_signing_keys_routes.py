@@ -100,6 +100,87 @@ def _isolate_native_registry_boundary(monkeypatch: pytest.MonkeyPatch):
     async def save_registry(_organization_id, registry):
         return registry
 
+    async def certificate_overrides(_organization_id):
+        return {"services": {}}
+
+    async def store_certificate(
+        _organization_id,
+        _service_id,
+        *,
+        cert_pem,
+        cert_chain_pem=None,
+    ):
+        return {
+            "cert_pem": cert_pem,
+            "cert_chain_pem": cert_chain_pem,
+            "cert_expires_at": "2026-07-22T12:00:00Z",
+        }
+
+    async def certificate_alerts(_services, days_until_expiry):
+        return {
+            "alerts": [],
+            "alert_threshold_days": days_until_expiry,
+            "checked_at": "2026-07-22T12:00:00Z",
+        }
+
+    async def publish_jwk(
+        organization_id,
+        _service_id,
+        *,
+        jwk,
+        key_reference=None,
+        cert_pem=None,
+        cert_chain_pem=None,
+    ):
+        del cert_pem, cert_chain_pem
+        stored = dict(jwk)
+        if key_reference:
+            stored.setdefault("kid", key_reference)
+            stored["key_reference"] = key_reference
+        return {
+            "jwk": stored,
+            "document": {"organization_id": organization_id, "keys": [stored]},
+            "key_count": 1,
+        }
+
+    async def publish_did(_organization_id, _service_id, payload):
+        did_id = payload.get("did_id") or "did:web:example.invalid:orgs:test"
+        fragment = payload.get("fragment") or "key-1"
+        method = {
+            "id": f"{did_id}#{fragment}",
+            "type": "JsonWebKey",
+            "controller": did_id,
+            "publicKeyJwk": payload["jwk"],
+        }
+        document = {
+            "id": did_id,
+            "controller": did_id,
+            "verificationMethod": [method],
+            "assertionMethod": [method["id"]],
+        }
+        return {
+            "did_id": did_id,
+            "verification_method": method,
+            "document": document,
+        }
+
+    async def resolve_slug(_slug):
+        return None
+
+    async def load_did_document(
+        _organization_id, *, did_id=None, fallback_did=None
+    ):
+        identity = fallback_did or did_id or ""
+        return (
+            {
+                "id": identity,
+                "controller": identity,
+                "verificationMethod": [],
+                "assertionMethod": [],
+            },
+            False,
+        )
+
     async def resolve_registry(
         registry,
         *,
@@ -189,6 +270,21 @@ def _isolate_native_registry_boundary(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(signing_keys, "resolve_native_signing_registry", resolve_registry)
     monkeypatch.setattr(signing_keys, "load_native_signing_registry", load_registry)
     monkeypatch.setattr(signing_keys, "save_native_signing_registry", save_registry)
+    monkeypatch.setattr(
+        signing_keys, "get_native_certificate_overrides", certificate_overrides
+    )
+    monkeypatch.setattr(
+        signing_keys, "store_native_signing_certificate", store_certificate
+    )
+    monkeypatch.setattr(
+        signing_keys, "calculate_native_certificate_alerts", certificate_alerts
+    )
+    monkeypatch.setattr(signing_keys, "publish_native_signing_jwk", publish_jwk)
+    monkeypatch.setattr(signing_keys, "publish_native_signing_did", publish_did)
+    monkeypatch.setattr(signing_keys, "resolve_native_did_web_slug", resolve_slug)
+    monkeypatch.setattr(
+        signing_keys, "load_native_signing_did_document", load_did_document
+    )
 
 
 def _key_attestation_root_pem() -> str:
@@ -1138,51 +1234,6 @@ def test_lti_tool_signing_profile_is_did_resolvable_but_key_is_exclusive() -> No
 # ---------------------------------------------------------------------------
 
 
-def test_extract_cert_expiry_date_parses_valid_certificate():
-    """_extract_cert_expiry_date should extract and format expiry from PEM certificate."""
-    # Create a minimal valid certificate for testing
-    from cryptography import x509
-    from cryptography.hazmat.backends import default_backend
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.x509.oid import NameOID
-    from datetime import datetime, timezone, timedelta
-
-    # Generate a self-signed cert
-    from cryptography.hazmat.primitives.asymmetric import rsa
-
-    key = rsa.generate_private_key(
-        public_exponent=65537, key_size=2048, backend=default_backend()
-    )
-    subject = issuer = x509.Name(
-        [
-            x509.NameAttribute(NameOID.COMMON_NAME, "test.example.com"),
-        ]
-    )
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(subject)
-        .issuer_name(issuer)
-        .public_key(key.public_key())
-        .serial_number(1)
-        .not_valid_before(datetime.now(timezone.utc))
-        .not_valid_after(datetime.now(timezone.utc) + timedelta(days=365))
-        .sign(key, hashes.SHA256(), default_backend())
-    )
-
-    cert_pem = cert.public_bytes(serialization.Encoding.PEM).decode()
-    result = signing_keys._extract_cert_expiry_date(cert_pem)
-
-    assert result is not None
-    assert result.endswith("Z")
-    assert "T" in result  # ISO format check
-
-
-def test_extract_cert_expiry_date_returns_none_for_invalid_pem():
-    """_extract_cert_expiry_date should return None for invalid PEM."""
-    result = signing_keys._extract_cert_expiry_date("not a certificate")
-    assert result is None
-
-
 def test_same_public_jwk_ignores_only_jose_metadata():
     did_jwk = {
         "kty": "EC",
@@ -1249,18 +1300,17 @@ async def test_store_service_certificate_saves_and_extracts_expiry(
         assert org_id == "org_123"
         return {"services": [test_service], "default_service_id": None}
 
-    saved_registry = {}
-
-    async def fake_save_registry(request, org_id, registry):
-        assert org_id == "org_123"
-        saved_registry["data"] = registry
-
     monkeypatch.setattr(
         signing_keys, "_load_registered_service_registry", fake_load_registry
     )
-    monkeypatch.setattr(
-        signing_keys, "_save_registered_service_registry", fake_save_registry
+    native_store = AsyncMock(
+        return_value={
+            "cert_pem": cert_pem,
+            "cert_chain_pem": "chain",
+            "cert_expires_at": "2035-01-01T00:00:00Z",
+        }
     )
+    monkeypatch.setattr(signing_keys, "store_native_signing_certificate", native_store)
 
     request = _build_request("org_123")
     response = await signing_keys.store_service_certificate(
@@ -1276,10 +1326,12 @@ async def test_store_service_certificate_saves_and_extracts_expiry(
     assert data["cert_expires_at"] is not None
     assert "T" in data["cert_expires_at"]
 
-    # Check that registry was saved with updated certificate
-    assert saved_registry["data"]["services"][0]["cert_pem"] == cert_pem
-    assert saved_registry["data"]["services"][0]["cert_chain_pem"] == "chain"
-    assert saved_registry["data"]["services"][0]["cert_expires_at"] is not None
+    native_store.assert_awaited_once_with(
+        "org_123",
+        "svc-dsc-1",
+        cert_pem=cert_pem,
+        cert_chain_pem="chain",
+    )
 
 
 @pytest.mark.asyncio
@@ -1300,20 +1352,15 @@ async def test_store_managed_service_certificate_uses_sidecar_document(
         assert service_id == signing_keys.MANAGED_OPENBAO_SERVICE_ID
         return {"services": []}, normalized_service, normalized_service, False
 
-    stored_documents = {}
-
-    async def fake_load_document(request, storage_key, default):
-        return stored_documents.get(storage_key, dict(default))
-
-    async def fake_save_document(request, storage_key, document):
-        stored_documents[storage_key] = document
-
     monkeypatch.setattr(signing_keys, "_resolve_effective_service", fake_resolve)
-    monkeypatch.setattr(signing_keys, "_load_json_document", fake_load_document)
-    monkeypatch.setattr(signing_keys, "_save_json_document", fake_save_document)
-    monkeypatch.setattr(
-        signing_keys, "_extract_cert_expiry_date", lambda _: "2026-07-22T12:00:00Z"
+    native_store = AsyncMock(
+        return_value={
+            "cert_pem": "leaf",
+            "cert_chain_pem": "root",
+            "cert_expires_at": "2026-07-22T12:00:00Z",
+        }
     )
+    monkeypatch.setattr(signing_keys, "store_native_signing_certificate", native_store)
 
     response = await signing_keys.store_service_certificate(
         request=_build_request("org_123"),
@@ -1323,13 +1370,13 @@ async def test_store_managed_service_certificate_uses_sidecar_document(
     )
 
     assert response.status_code == 200
-    storage_key = signing_keys._service_certificates_storage_key("org_123")
-    attachment = stored_documents[storage_key]["services"][
-        signing_keys.MANAGED_OPENBAO_SERVICE_ID
-    ]
-    assert attachment["cert_pem"] == "leaf"
-    assert attachment["cert_chain_pem"] == "root"
-    assert attachment["cert_expires_at"] == "2026-07-22T12:00:00Z"
+    native_store.assert_awaited_once_with(
+        "org_123",
+        signing_keys.MANAGED_OPENBAO_SERVICE_ID,
+        cert_pem="leaf",
+        cert_chain_pem="root",
+    )
+    assert json.loads(response.body)["service"]["cert_pem"] == "leaf"
 
 
 @pytest.mark.asyncio
@@ -1487,6 +1534,24 @@ async def test_list_certificate_expiry_alerts_filters_by_threshold(
     monkeypatch.setattr(
         signing_keys, "_load_registered_service_registry", fake_load_registry
     )
+    native_alerts = AsyncMock(
+        return_value={
+            "alerts": [
+                {
+                    "service_id": "svc-expiring-soon",
+                    "service_name": "Expiring Soon",
+                    "cert_expires_at": expiring_soon,
+                    "days_until_expiry": 5,
+                    "status": "critical",
+                }
+            ],
+            "alert_threshold_days": 30,
+            "checked_at": _format_iso_datetime(now),
+        }
+    )
+    monkeypatch.setattr(
+        signing_keys, "calculate_native_certificate_alerts", native_alerts
+    )
 
     request = _build_request("org_123")
     response = await signing_keys.list_certificate_expiry_alerts(
@@ -1503,6 +1568,7 @@ async def test_list_certificate_expiry_alerts_filters_by_threshold(
     assert len(alerts) == 1
     assert alerts[0]["service_id"] == "svc-expiring-soon"
     assert alerts[0]["status"] == "critical"  # 5 days is critical (<=7)
+    assert native_alerts.await_args.args[1] == 30
 
 
 @pytest.mark.asyncio
@@ -1536,6 +1602,20 @@ async def test_list_certificate_expiry_alerts_marks_critical_status(
 
     monkeypatch.setattr(
         signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "calculate_native_certificate_alerts",
+        AsyncMock(
+            return_value={
+                "alerts": [
+                    {"service_id": "svc-critical", "status": "critical"},
+                    {"service_id": "svc-warning", "status": "warning"},
+                ],
+                "alert_threshold_days": 30,
+                "checked_at": _format_iso_datetime(now),
+            }
+        ),
     )
 
     request = _build_request("org_123")
@@ -1598,6 +1678,21 @@ async def test_list_certificate_expiry_alerts_sorted_by_urgency(
 
     monkeypatch.setattr(
         signing_keys, "_load_registered_service_registry", fake_load_registry
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "calculate_native_certificate_alerts",
+        AsyncMock(
+            return_value={
+                "alerts": [
+                    {"service_id": "svc-1"},
+                    {"service_id": "svc-2"},
+                    {"service_id": "svc-3"},
+                ],
+                "alert_threshold_days": 30,
+                "checked_at": _format_iso_datetime(now),
+            }
+        ),
     )
 
     request = _build_request("org_123")
@@ -3488,17 +3583,29 @@ async def test_resolve_did_web_by_slug_returns_did_document(
         ],
     }
 
-    redis_mock = AsyncMock()
-
-    async def fake_get(key):
-        if key == "did-web-slug:acme":
-            return "org_acme_123"
-        if key == "org:org_acme_123:signing-key-did-document":
-            return json.dumps(did_doc)
-        return None
-
-    redis_mock.get = AsyncMock(side_effect=fake_get)
-    request = _build_public_request(redis_client=redis_mock)
+    monkeypatch.setattr(
+        signing_keys,
+        "resolve_native_did_web_slug",
+        AsyncMock(return_value="org_acme_123"),
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "load_native_signing_did_document",
+        AsyncMock(
+            side_effect=[
+                (
+                    {
+                        "id": "did:web:beta.elevenidllc.com:orgs:acme",
+                        "verificationMethod": [],
+                        "assertionMethod": [],
+                    },
+                    False,
+                ),
+                (did_doc, True),
+            ]
+        ),
+    )
+    request = _build_public_request()
 
     response = await signing_keys.resolve_did_web_by_slug(
         request=request, org_slug="acme"
@@ -3528,39 +3635,28 @@ async def test_resolve_did_web_by_slug_prefers_exact_scoped_document(
     issuer_method = f"{issuer_did}#issuer-key"
     seeded_did = "did:web:beta.elevenidllc.com:orgs:marty"
     seeded_method = f"{seeded_did}#seeded-key"
-    documents = {
-        "did-web-slug:official-suite": "org_shared",
-        signing_keys._did_doc_storage_key("org_shared"): json.dumps(
+    scoped_document = {
+        "id": issuer_did,
+        "controller": issuer_did,
+        "verificationMethod": [
             {
-                "id": seeded_did,
-                "verificationMethod": [
-                    {
-                        "id": seeded_method,
-                        "controller": seeded_did,
-                        "publicKeyJwk": {"kty": "EC", "crv": "P-256"},
-                    }
-                ],
-                "assertionMethod": [seeded_method],
-            }
-        ),
-        signing_keys._did_doc_storage_key("org_shared", issuer_did): json.dumps(
-            {
-                "id": issuer_did,
+                "id": issuer_method,
                 "controller": issuer_did,
-                "verificationMethod": [
-                    {
-                        "id": issuer_method,
-                        "controller": issuer_did,
-                        "publicKeyJwk": {"kty": "EC", "crv": "P-256"},
-                    }
-                ],
-                "assertionMethod": [issuer_method],
+                "publicKeyJwk": {"kty": "EC", "crv": "P-256"},
             }
-        ),
+        ],
+        "assertionMethod": [issuer_method],
     }
-    redis_mock = AsyncMock()
-    redis_mock.get = AsyncMock(side_effect=lambda key: documents.get(key))
-    request = _build_public_request(redis_client=redis_mock)
+    monkeypatch.setattr(
+        signing_keys,
+        "resolve_native_did_web_slug",
+        AsyncMock(return_value="org_shared"),
+    )
+    native_load = AsyncMock(return_value=(scoped_document, True))
+    monkeypatch.setattr(
+        signing_keys, "load_native_signing_did_document", native_load
+    )
+    request = _build_public_request()
 
     response = await signing_keys.resolve_did_web_by_slug(
         request=request, org_slug="official-suite"
@@ -3573,6 +3669,7 @@ async def test_resolve_did_web_by_slug_prefers_exact_scoped_document(
     ]
     assert data["assertionMethod"] == [issuer_method]
     assert seeded_method not in json.dumps(data)
+    assert native_load.await_args.kwargs["did_id"] == issuer_did
 
 
 @pytest.mark.asyncio
@@ -3581,21 +3678,27 @@ async def test_resolve_did_web_by_slug_rejects_changed_scoped_identity(
 ):
     """A corrupted scoped record must not be retargeted into a trusted identity."""
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
-    requested_did = "did:web:beta.elevenidllc.com:orgs:acme"
     changed_did = "did:web:beta.elevenidllc.com:orgs:changed"
-    documents = {
-        "did-web-slug:acme": "org_acme",
-        signing_keys._did_doc_storage_key("org_acme", requested_did): json.dumps(
-            {
-                "id": changed_did,
-                "verificationMethod": [],
-                "assertionMethod": [],
-            }
+    monkeypatch.setattr(
+        signing_keys,
+        "resolve_native_did_web_slug",
+        AsyncMock(return_value="org_acme"),
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "load_native_signing_did_document",
+        AsyncMock(
+            return_value=(
+                {
+                    "id": changed_did,
+                    "verificationMethod": [],
+                    "assertionMethod": [],
+                },
+                True,
+            )
         ),
-    }
-    redis_mock = AsyncMock()
-    redis_mock.get = AsyncMock(side_effect=lambda key: documents.get(key))
-    request = _build_public_request(redis_client=redis_mock)
+    )
+    request = _build_public_request()
 
     with pytest.raises(signing_keys.HTTPException) as exc_info:
         await signing_keys.resolve_did_web_by_slug(request=request, org_slug="acme")
@@ -3605,10 +3708,15 @@ async def test_resolve_did_web_by_slug_rejects_changed_scoped_identity(
 
 
 @pytest.mark.asyncio
-async def test_identity_resolution_fails_closed_when_registry_is_unavailable():
-    redis_mock = AsyncMock()
-    redis_mock.get = AsyncMock(side_effect=RuntimeError("registry offline"))
-    request = _build_public_request(redis_client=redis_mock)
+async def test_identity_resolution_fails_closed_when_registry_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        signing_keys,
+        "load_native_signing_did_document",
+        AsyncMock(side_effect=RuntimeError("registry offline")),
+    )
+    request = _build_public_request()
 
     with pytest.raises(signing_keys.HTTPException) as exc_info:
         await signing_keys._load_did_document_for_identity(
@@ -3726,16 +3834,13 @@ async def test_resolve_did_web_root_retargets_org_scoped_document(
         ],
     }
 
-    redis_mock = AsyncMock()
-
-    async def fake_get(key):
-        if key == "org:org_root:signing-key-did-document":
-            return json.dumps(did_doc)
-        return None
-
-    redis_mock.get = AsyncMock(side_effect=fake_get)
+    monkeypatch.setattr(
+        signing_keys,
+        "load_native_signing_did_document",
+        AsyncMock(side_effect=[(did_doc, False), (did_doc, True)]),
+    )
     request = _build_public_request(
-        redis_client=redis_mock, path="/.well-known/did.json"
+        path="/.well-known/did.json"
     )
 
     response = await signing_keys.resolve_did_web_root(request=request)
@@ -3779,11 +3884,35 @@ async def test_publish_service_to_did_stores_slug_mapping(
 
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
 
-    redis_mock = AsyncMock()
-    redis_mock.get = AsyncMock(return_value=None)
-    redis_mock.set = AsyncMock(return_value=True)
+    did_id = "did:web:beta.elevenidllc.com%3A8443:orgs:acme-corp"
+    method_id = f"{did_id}#issuer-key"
+    native_publish = AsyncMock(
+        return_value={
+            "did_id": did_id,
+            "verification_method": {
+                "id": method_id,
+                "type": "JsonWebKey",
+                "controller": did_id,
+                "publicKeyJwk": {
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "x": "abc",
+                    "y": "def",
+                },
+            },
+            "document": {
+                "id": did_id,
+                "controller": did_id,
+                "verificationMethod": [{"id": method_id}],
+                "assertionMethod": [method_id],
+            },
+        }
+    )
+    monkeypatch.setattr(
+        signing_keys, "publish_native_signing_did", native_publish
+    )
 
-    request = _build_request("org_123", redis_client=redis_mock)
+    request = _build_request("org_123")
     response = await signing_keys.publish_service_to_did(
         request=request,
         service_id="svc-bao",
@@ -3802,24 +3931,10 @@ async def test_publish_service_to_did_stores_slug_mapping(
         "did:web:beta.elevenidllc.com%3A8443:orgs:acme-corp#"
     )
 
-    scoped_key = signing_keys._did_doc_storage_key(
-        "org_123", "did:web:beta.elevenidllc.com%3A8443:orgs:acme-corp"
-    )
-    scoped_writes = [
-        call
-        for call in redis_mock.set.await_args_list
-        if call.args and call.args[0] == scoped_key
-    ]
-    assert len(scoped_writes) == 1
-    scoped_document = json.loads(scoped_writes[0].args[1])
-    assert scoped_document["id"] == (
-        "did:web:beta.elevenidllc.com%3A8443:orgs:acme-corp"
-    )
-    assert [
-        method["id"] for method in scoped_document["verificationMethod"]
-    ] == [data["verification_method"]["id"]]
-
-    redis_mock.set.assert_any_await("did-web-slug:acme-corp", "org_123", nx=True)
+    payload = native_publish.await_args.args[2]
+    assert payload["did_id"] == did_id
+    assert payload["org_slug"] == "acme-corp"
+    assert payload["fragment"] == "issuer-key"
 
 
 @pytest.mark.asyncio
@@ -3850,25 +3965,16 @@ async def test_publish_service_to_did_rejects_changed_scoped_identity(
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
 
     requested_did = "did:web:beta.elevenidllc.com:orgs:acme"
-    changed_did = "did:web:beta.elevenidllc.com:orgs:changed"
-    scoped_key = signing_keys._did_doc_storage_key("org_123", requested_did)
-    redis_mock = AsyncMock()
-    redis_mock.get = AsyncMock(
-        side_effect=lambda key: (
-            json.dumps(
-                {
-                    "id": changed_did,
-                    "controller": changed_did,
-                    "verificationMethod": [],
-                    "assertionMethod": [],
-                }
+    monkeypatch.setattr(
+        signing_keys,
+        "publish_native_signing_did",
+        AsyncMock(
+            side_effect=_http_status_error(
+                503, {"error": "Scoped DID document identity does not match"}
             )
-            if key == scoped_key
-            else None
-        )
+        ),
     )
-    redis_mock.set = AsyncMock(return_value=True)
-    request = _build_request("org_123", redis_client=redis_mock)
+    request = _build_request("org_123")
 
     with pytest.raises(signing_keys.HTTPException) as exc_info:
         await signing_keys.publish_service_to_did(
@@ -3880,7 +3986,6 @@ async def test_publish_service_to_did_rejects_changed_scoped_identity(
 
     assert exc_info.value.status_code == 503
     assert "identity does not match" in str(exc_info.value.detail)
-    redis_mock.set.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -3909,6 +4014,11 @@ async def test_publish_service_to_did_requires_document_registry(
             return {"kty": "EC", "crv": "P-256", "x": "abc", "y": "def"}
 
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
+    monkeypatch.setattr(
+        signing_keys,
+        "publish_native_signing_did",
+        AsyncMock(side_effect=RuntimeError("registry offline")),
+    )
     request = _build_request("org_123")
 
     with pytest.raises(signing_keys.HTTPException) as exc_info:
@@ -3967,9 +4077,13 @@ async def test_publish_service_to_did_rejects_malformed_or_mismatched_local_iden
         signing_keys, "_resolve_effective_service", fake_resolve_effective_service
     )
     monkeypatch.setattr(signing_keys, "_get_adapter", lambda cfg: FakeAdapter())
+    monkeypatch.setattr(
+        signing_keys,
+        "publish_native_signing_did",
+        AsyncMock(side_effect=_http_status_error(422, {"error": "invalid DID"})),
+    )
 
-    redis_mock = AsyncMock()
-    request = _build_request("org_123", redis_client=redis_mock)
+    request = _build_request("org_123")
     with pytest.raises(signing_keys.HTTPException) as exc_info:
         await signing_keys.publish_service_to_did(
             request=request,
@@ -3979,7 +4093,6 @@ async def test_publish_service_to_did_rejects_malformed_or_mismatched_local_iden
         )
 
     assert exc_info.value.status_code == 422
-    redis_mock.set.assert_not_awaited()
 
 
 # =============================================================================
@@ -4241,93 +4354,6 @@ def test_did_web_org_slug_accepts_only_standard_path_scoped_identifiers():
         signing_keys._did_web_org_slug("did:web:issuer.example%3A70000:orgs:acme")
         is None
     )
-
-
-@pytest.mark.asyncio
-async def test_claim_did_web_slug_same_org_is_idempotent():
-    redis_mock = AsyncMock()
-    redis_mock.get = AsyncMock(return_value=b"org_123")
-    redis_mock.set = AsyncMock()
-
-    await signing_keys._claim_did_web_slug(
-        _build_request("org_123", redis_client=redis_mock),
-        "acme",
-        "org_123",
-    )
-
-    redis_mock.set.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_claim_did_web_slug_rejects_cross_org_collision_without_overwrite():
-    redis_mock = AsyncMock()
-    redis_mock.get = AsyncMock(return_value="org_other")
-    redis_mock.set = AsyncMock()
-
-    with pytest.raises(signing_keys.HTTPException) as exc_info:
-        await signing_keys._claim_did_web_slug(
-            _build_request("org_123", redis_client=redis_mock),
-            "acme",
-            "org_123",
-        )
-
-    assert exc_info.value.status_code == 409
-    redis_mock.set.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_claim_did_web_slug_set_nx_race_rechecks_owner():
-    redis_mock = AsyncMock()
-    redis_mock.get = AsyncMock(side_effect=[None, b"org_other"])
-    redis_mock.set = AsyncMock(return_value=False)
-
-    with pytest.raises(signing_keys.HTTPException) as exc_info:
-        await signing_keys._claim_did_web_slug(
-            _build_request("org_123", redis_client=redis_mock),
-            "acme",
-            "org_123",
-        )
-
-    assert exc_info.value.status_code == 409
-    redis_mock.set.assert_awaited_once_with("did-web-slug:acme", "org_123", nx=True)
-
-
-@pytest.mark.asyncio
-async def test_claim_did_web_slug_set_nx_race_accepts_same_org_winner():
-    redis_mock = AsyncMock()
-    redis_mock.get = AsyncMock(side_effect=[None, b"org_123"])
-    redis_mock.set = AsyncMock(return_value=False)
-
-    await signing_keys._claim_did_web_slug(
-        _build_request("org_123", redis_client=redis_mock),
-        "acme",
-        "org_123",
-    )
-
-    redis_mock.set.assert_awaited_once_with("did-web-slug:acme", "org_123", nx=True)
-
-
-@pytest.mark.asyncio
-async def test_claim_did_web_slug_unavailable_or_invalid_storage_fails_closed():
-    with pytest.raises(signing_keys.HTTPException) as unavailable:
-        await signing_keys._claim_did_web_slug(
-            _build_request("org_123", redis_client=None),
-            "acme",
-            "org_123",
-        )
-    assert unavailable.value.status_code == 503
-
-    redis_mock = AsyncMock()
-    redis_mock.get = AsyncMock(return_value=b"\xff")
-    redis_mock.set = AsyncMock()
-    with pytest.raises(signing_keys.HTTPException) as invalid:
-        await signing_keys._claim_did_web_slug(
-            _build_request("org_123", redis_client=redis_mock),
-            "acme",
-            "org_123",
-        )
-    assert invalid.value.status_code == 503
-    redis_mock.set.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -5277,6 +5303,13 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
     )
     monkeypatch.setattr(
         signing_keys,
+        "load_native_signing_did_document",
+        AsyncMock(
+            return_value=(docs["org:org_issuer:signing-key-did-document"], True)
+        ),
+    )
+    monkeypatch.setattr(
+        signing_keys,
         "_service_x5c_chain",
         lambda service: (
             ["issuer-leaf-x5c", "issuer-root-x5c"]
@@ -5427,6 +5460,13 @@ async def test_internal_resolve_issuer_did_rejects_ambiguous_active_profiles(
         signing_keys,
         "load_native_signing_registry",
         AsyncMock(return_value=docs["org:org_issuer:signing-key-services"]),
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "load_native_signing_did_document",
+        AsyncMock(
+            return_value=(docs["org:org_issuer:signing-key-did-document"], True)
+        ),
     )
 
     from fastapi import HTTPException as FastAPIHTTPException
