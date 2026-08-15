@@ -58,10 +58,10 @@ order work, not completion metrics and not permission to discard behavior.
 |---|---|---:|---|---|
 | 1 | Signing-key and KMS service | approximately 7,820 Python lines | Cutover in progress: the core primitives and all Rust service slices are implemented; the stacked merge train remains | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
 | 2 | Marty CLI and API client | 7,218 deleted handwritten JavaScript lines | Complete on `main`: native CLI and Rust/WASM browser client are compatibility-tested, packaged, and merged | native Rust workspace, executable, and browser/WASM client in `marty-cli` |
-| 3 | Notification and webhook service | 7,142 deleted Python/service lines | Native active: public REST/gRPC, storage, outbox, delivery, secret-envelope, migration, and packaging contracts pass; merge remains | Rust service in `marty-ui` using the established service foundation |
+| 3 | Notification and webhook service | 7,142 deleted Python/service lines | Complete on `main`: public REST/gRPC, storage, outbox, delivery, secret-envelope, migration, and packaging contracts passed before the Python service was deleted | Rust service in `marty-ui` using the established service foundation |
 | 4 | Credential attestation, evidence, governance, and VCDM decisions | 1,804 deleted Python lines in the current slices | Implemented in the core and credential PR pairs; consuming CI intentionally fails closed until the combined native artifact is published | `marty-oid4vci` and `marty-verification`, consumed by `marty-credentials` |
 | 5 | Passport-chip protocol and integrity kernels | more than 1,300 deleted Python lines in the current slices | BAC, PACE compatibility, EAC, active authentication, ISO 9796, APDU, and integrity decisions are implemented and tested in open core/Marty PRs; merge and native artifact publication remain | `marty-verification::chip_io`, `marty-verification::active_authentication`, and `marty-crypto::iso9796` |
-| 6 | Remaining eMRTD EF, DG15, and biometric-template parsing | approximately 1,300 Python lines | Queued: replace duplicate TLV/MRZ/SPKI/RSA/biometric parsing and quality decisions; retain chip transport orchestration | `marty-verification` eMRTD parser modules |
+| 6 | Remaining eMRTD EF, DG15, and biometric-template parsing | approximately 1,300 Python lines | Cutover implemented: one bounded Rust kernel, bindings, thin DTO/chip-I/O adapters, exact cross-language vectors, and deletion/ownership checks pass locally; prerequisite and consuming PR CI/merge remain | `marty-verification` eMRTD parser modules |
 | 7 | Subscription API-key lifecycle | approximately 539 Python lines | Planned | focused Rust package/service kernel in `marty-subscriptions` |
 | 8 | Trust-registry synchronization kernel | approximately 433 Python lines | Planned | `marty-verification` trust registry plus `marty-crypto` certificate validation |
 | 9 | Wallet status-list and liveness decisions | at least 378 Dart kernel lines | Planned | `marty-status`, `marty-verification`, and `marty-biometrics` through Flutter Rust Bridge |
@@ -152,7 +152,8 @@ not satisfy the parity gate.
 - [marty-ui PR 529](https://github.com/ElevenID/marty-ui/pull/529) implements
   the notification/webhook service as one Rust executable and deletes 7,142
   superseded Python/service lines after public HTTP/gRPC, provider, outbox,
-  persistence, migration, security, and image contracts passed.
+  persistence, migration, security, and image contracts passed. It merged as
+  `3dc00a96be73c2d122b9a167ead111912944f8bc`.
 - Credential policy/evidence and key-attestation work is implemented in
   [marty-core PRs 230](https://github.com/ElevenID/marty-core/pull/230) and
   [231](https://github.com/ElevenID/marty-core/pull/231), with fail-closed
@@ -162,8 +163,12 @@ not satisfy the parity gate.
 - Passport protocol/integrity work is implemented in
   [marty-core PR 232](https://github.com/ElevenID/marty-core/pull/232) and
   [Marty PR 51](https://github.com/ElevenID/Marty/pull/51). The remaining
-  eMRTD EF/DG15/biometric parsers are tracked separately so the protocol PR is
-  not incorrectly treated as deleting functionality it has not yet replaced.
+  eMRTD EF/DG15/biometric parsers are implemented separately in
+  [marty-core PR 235](https://github.com/ElevenID/marty-core/pull/235) and
+  [Marty PR 54](https://github.com/ElevenID/Marty/pull/54). The same
+  language-neutral fixture runs directly in Rust and through preserved Python
+  DTOs; malformed or unavailable native paths fail closed, and the Python
+  struct/ASN.1/hash implementations plus their `pyasn1` dependency are removed.
 - No wave-two slice updates beta independently. One commit-pinned aggregate
   beta deployment and evidence run occurs only after all workstreams land.
 
