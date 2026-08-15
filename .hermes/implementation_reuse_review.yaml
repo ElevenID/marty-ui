@@ -6,34 +6,32 @@ search_scope:
   - bindings_adapters_ffi_and_api_layers
   - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
 search_queries:
-  - "marty-ui immutable component pin"
-  - "marty-common v0.2.13 wheel digest"
-  - "issuance revocation-status Cedar classifier"
-  - "public tenant boundary run 31859157982"
-  - "marty-common release PR 53"
+  - "trust profile internal resource owner lookup"
+  - "issuer entity resource owner lookup"
+  - "marty-common issuer-entities RESOURCE_LOOKUP_MAP"
+  - "public tenant boundary run 31862708706"
 candidate_implementations:
-  - path: release/stack-lock.json
-    language: JSON
-    disposition: reuse_existing_release_manifest
-  - path: tests/test_stack_release_contract.py
+  - path: services/trust_profile/main.py
     language: Python
-    disposition: reuse_existing_release_contract_gate
-  - path: .github/workflows/cd.yml
-    language: YAML
-    disposition: reuse_existing_immutable_release_pipeline
-  - path: https://github.com/ElevenID/Marty/releases/tag/marty-common-v0.2.13
-    language: GitHub release evidence
-    disposition: pin_verified_immutable_dependency_release
+    disposition: reuse_existing_service_authenticated_owner_lookup_pattern
+  - path: services/trust_profile/tests/test_trust_profile_response.py
+    language: Python
+    disposition: extend_existing_minimal_owner_lookup_contract
+  - path: https://github.com/ElevenID/Marty/blob/6a9a585c6b72528a7eca1bb5b09d352acdb55630/marty-common/marty_common/cedar_actions.py
+    language: Python
+    disposition: satisfy_existing_canonical_issuer_entity_lookup_mapping
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: release/stack-lock.json
-  language: JSON
+  path: services/trust_profile/main.py
+  language: Python
 rust_disposition: rust_not_applicable
 non_rust_rationale: >-
-  This task advances existing immutable release metadata and invokes the
-  repository's established release pipeline. It adds no runtime, protocol,
-  validation, security, or cryptographic behavior for Rust to own.
+  The owner lookup is a minimal internal endpoint in the existing Python
+  trust-profile service and directly reuses that service's authenticated
+  trust-profile owner contract and repository abstraction. Moving this one
+  route to Rust would split a single authorization boundary across service
+  implementations without removing any Python runtime path.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
