@@ -7,14 +7,9 @@ search_scope:
   - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
 search_queries:
   - "marty-ui immutable component pin and stack release"
-  - "marty-credentials v0.1.64 issuance image digest"
-  - "marty-core v0.1.57 signing wheel digest"
-  - "consolidated Rust migration aggregate beta release"
-  - "DIDComm authcrypt deployment policy contract"
-  - "Rust-backed DID document publication and tenant-bound issuer identity routes"
-  - "DIDCOMM_ENCRYPTION_POLICY_FILE authcrypt active issuer"
-  - "PublishDidRequest keyAgreement did:web issuer identity"
-  - "compose_command optional profile isolation last"
+  - "marty-integration-tests v1.2.66 source digest"
+  - "canonical Rust signing service public stack overlay"
+  - "previous coordinated UI release PR 548"
 candidate_implementations:
   - path: release/stack-lock.json
     language: JSON
@@ -25,31 +20,22 @@ candidate_implementations:
   - path: .github/workflows/cd.yml
     language: YAML
     disposition: reuse_existing_immutable_release_pipeline
-  - path: https://github.com/ElevenID/marty-credentials/releases/tag/v0.1.64
+  - path: https://github.com/ElevenID/marty-integration-tests/releases/tag/v1.2.66
     language: GitHub release evidence
     disposition: pin_verified_immutable_dependency_release
-  - path: marty-credentials/CONFIGURATION.md
-    language: Markdown
-    disposition: preserve_optional_policy_contract_for_controlled_integration_adoption
-  - path: rust/services/signing-keys/src/documents.rs
-    language: Rust
-    disposition: extend_canonical_did_document_owner
-  - path: services/gateway/routes/signing_keys.py
-    language: Python
-    disposition: reuse_existing_tenant_bound_public_identity_facade
-  - path: scripts/conformance_stack.py
-    language: Python
-    disposition: reuse_existing_explicit_overlay_ordering
-  - path: docs/official-interoperability-docker.md
-    language: Markdown
-    disposition: extend_existing_operator_runbook
+  - path: https://github.com/ElevenID/marty-ui/pull/548
+    language: GitHub pull request
+    disposition: reuse_previous_coordinated_release_pattern
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: rust/services/signing-keys/src/documents.rs
-  language: Rust
-rust_disposition: extend_existing_rust_owner
-non_rust_rationale: ""
+  path: release/stack-lock.json
+  language: JSON
+rust_disposition: rust_not_applicable
+non_rust_rationale: >-
+  This task advances immutable release metadata to an independently verified
+  integration artifact. It adds no runtime, protocol, validation, security,
+  or cryptographic behavior for Rust to own.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
