@@ -1,5 +1,19 @@
 use serde::Serialize;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ServiceType {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub description: &'static str,
+    pub provider: &'static str,
+    pub protocol: &'static str,
+    pub category: &'static str,
+    pub auth_modes: &'static [&'static str],
+    pub connection_fields: &'static [&'static str],
+    pub key_reference_label: &'static str,
+    pub supports_inventory: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct KeyPurpose {
     pub id: &'static str,
@@ -32,6 +46,100 @@ const PROVIDER_ALL_ALGORITHMS: &[&str] = &["ES256", "ES384", "RS256", "EdDSA"];
 const EC_AND_EDDSA: &[&str] = &["ES256", "ES384", "EdDSA"];
 const ES256_AND_EDDSA: &[&str] = &["ES256", "EdDSA"];
 const CLOUD_RSA_EC: &[&str] = &["ES256", "ES384", "RS256"];
+
+const SERVICE_TYPES: &[ServiceType] = &[
+    ServiceType {
+        id: "openbao-transit",
+        label: "OpenBao Transit",
+        description: "Register an OpenBao transit service that exposes signing keys remotely.",
+        provider: "openbao",
+        protocol: "vault-transit",
+        category: "service-hsm",
+        auth_modes: &["service_token", "token", "approle", "mtls"],
+        connection_fields: &["endpoint", "mount", "namespace"],
+        key_reference_label: "Transit key name",
+        supports_inventory: true,
+    },
+    ServiceType {
+        id: "hashicorp-vault-transit",
+        label: "HashiCorp Vault Transit",
+        description: "Use Vault Transit as the signing backend for issuance keys.",
+        provider: "hashicorp-vault",
+        protocol: "vault-transit",
+        category: "service-hsm",
+        auth_modes: &["token", "approle", "mtls"],
+        connection_fields: &["endpoint", "mount", "namespace"],
+        key_reference_label: "Transit key name",
+        supports_inventory: true,
+    },
+    ServiceType {
+        id: "aws-kms",
+        label: "AWS KMS",
+        description: "Register a customer-managed AWS KMS key for remote signing.",
+        provider: "aws",
+        protocol: "aws-kms",
+        category: "cloud-kms",
+        auth_modes: &["iam_role", "access_key", "assume_role"],
+        connection_fields: &["region"],
+        key_reference_label: "Key ARN",
+        supports_inventory: false,
+    },
+    ServiceType {
+        id: "azure-key-vault",
+        label: "Azure Key Vault",
+        description: "Register an Azure Key Vault key as a signing source.",
+        provider: "azure",
+        protocol: "azure-key-vault",
+        category: "cloud-kms",
+        auth_modes: &["managed_identity", "client_secret", "certificate"],
+        connection_fields: &["endpoint"],
+        key_reference_label: "Key identifier",
+        supports_inventory: false,
+    },
+    ServiceType {
+        id: "gcp-cloud-kms",
+        label: "Google Cloud KMS",
+        description: "Register a Google Cloud KMS crypto key version.",
+        provider: "gcp",
+        protocol: "gcp-kms",
+        category: "cloud-kms",
+        auth_modes: &["workload_identity", "service_account"],
+        connection_fields: &["region"],
+        key_reference_label: "Crypto key resource",
+        supports_inventory: false,
+    },
+    ServiceType {
+        id: "custom-transit-compatible",
+        label: "Custom Transit-Compatible Service",
+        description:
+            "Any service that implements the transit-compatible signing protocol Marty supports.",
+        provider: "custom",
+        protocol: "vault-transit-compatible",
+        category: "custom",
+        auth_modes: &["token", "mtls", "api_key", "custom"],
+        connection_fields: &["endpoint", "mount", "namespace"],
+        key_reference_label: "Key reference",
+        supports_inventory: false,
+    },
+];
+
+pub fn service_types() -> &'static [ServiceType] {
+    SERVICE_TYPES
+}
+
+pub fn service_type(id: &str) -> ServiceType {
+    SERVICE_TYPES
+        .iter()
+        .copied()
+        .find(|service_type| service_type.id == id)
+        .unwrap_or_else(|| {
+            SERVICE_TYPES
+                .iter()
+                .copied()
+                .find(|service_type| service_type.id == "custom-transit-compatible")
+                .expect("custom service type")
+        })
+}
 
 pub fn key_purposes() -> Vec<KeyPurpose> {
     vec![

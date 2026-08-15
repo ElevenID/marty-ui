@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "normalize_service_cases": [
+    {
+      "name": "aws_mdoc_service_preserves_released_shape",
+      "input": {
+        "id": "svc-mdoc",
+        "name": "mdoc DSC",
+        "description": "primary",
+        "service_type": "aws-kms",
+        "provider": "aws",
+        "auth_mode": "iam_role",
+        "key_reference": "arn:aws:kms:us-east-1:000000000000:key/aaaa",
+        "key_aliases": ["a", "a", " b "],
+        "algorithms": ["ES256", "BAD", "ES256"],
+        "key_purposes": ["mdoc_dsc"],
+        "rotation_policy": {"rotation_interval_days": "30", "overlap_days": 2, "auto_publish": true},
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-02T00:00:00+00:00"
+      },
+      "expected": {
+        "id": "svc-mdoc",
+        "name": "mdoc DSC",
+        "description": "primary",
+        "service_type": "aws-kms",
+        "provider": "aws",
+        "provider_label": "AWS KMS",
+        "protocol": "aws-kms",
+        "category": "cloud-kms",
+        "endpoint": "",
+        "region": "",
+        "mount": "",
+        "namespace": "",
+        "auth_mode": "iam_role",
+        "auth_reference": "",
+        "key_reference": "arn:aws:kms:us-east-1:000000000000:key/aaaa",
+        "country_code": "",
+        "authority_name": "",
+        "key_aliases": ["a", "b"],
+        "algorithms": ["ES256"],
+        "status": "registered",
+        "managed": false,
+        "read_only": false,
+        "managed_by": null,
+        "key_count": 2,
+        "capabilities": {
+          "discover_keys": false,
+          "sign": true,
+          "rotate_keys": true,
+          "upload_public_keys": true,
+          "delete_keys": false,
+          "multiple_key_references": true,
+          "public_key_export": true,
+          "hardware_attestation": true,
+          "supported_algorithms": ["ES256", "ES384", "RS256"]
+        },
+        "signature_encoding": "der",
+        "key_purposes": ["mdoc_dsc"],
+        "credential_formats": ["mso_mdoc", "zk_mdoc"],
+        "rotation_policy": {"rotation_interval_days": 30, "overlap_days": 2, "auto_publish": true},
+        "rotation_state": {},
+        "created_at": "2026-01-01T00:00:00+00:00",
+        "updated_at": "2026-01-02T00:00:00+00:00",
+        "discovered_capabilities": {},
+        "cert_pem": null,
+        "cert_chain_pem": null,
+        "cert_expires_at": null
+      }
+    }
+  ],
+  "normalize_registry_cases": [
+    {
+      "name": "requested_registry_filters_and_normalizes_routing_maps",
+      "mode": "requested",
+      "input": {
+        "services": [{"id": "managed-openbao-transit", "managed": true}],
+        "default_service_id": "svc-mdoc",
+        "format_defaults": {"mso_mdoc": "svc-mdoc", "ignored": 3},
+        "type_defaults": {"mdoc_dsc": "svc-mdoc"},
+        "key_reference_purposes": {
+          " svc-mdoc ": {" key-a ": ["mdoc_dsc", "mdoc_dsc", "invalid"]}
+        }
+      },
+      "expected": {
+        "services": [],
+        "default_service_id": "svc-mdoc",
+        "format_defaults": {"mso_mdoc": "svc-mdoc"},
+        "type_defaults": {"mdoc_dsc": "svc-mdoc"},
+        "key_reference_purposes": {"svc-mdoc": {"key-a": ["mdoc_dsc"]}}
+      }
+    }
+  ],
+  "resolve_cases": [
+    {
+      "name": "purpose_default_beats_format_and_global_defaults",
+      "input": {
+        "registry": {
+          "services": [
+            {"id": "svc-global", "key_reference": "global"},
+            {"id": "svc-format", "key_reference": "format"},
+            {"id": "svc-purpose", "key_reference": "purpose"}
+          ],
+          "default_service_id": "svc-global",
+          "format_defaults": {"mso_mdoc": "svc-format"},
+          "type_defaults": {"mdoc_dsc": "svc-purpose"}
+        },
+        "credential_format": "mso_mdoc",
+        "key_purpose": "mdoc_dsc"
+      },
+      "expected": {"service": {"id": "svc-purpose", "key_reference": "purpose"}, "key_reference": "purpose"}
+    },
+    {
+      "name": "managed_inventory_resolves_unbound_protocol_key",
+      "input": {
+        "registry": {
+          "services": [{
+            "id": "managed-openbao-transit",
+            "key_reference": "cred-issuer-marty-es256",
+            "key_aliases": ["cred-issuer-marty-es256", "oid4vp-verifier-marty-es256"]
+          }],
+          "default_service_id": "managed-openbao-transit",
+          "key_reference_purposes": {
+            "managed-openbao-transit": {"cred-issuer-marty-es256": ["vc_jwt_issuer"]}
+          }
+        },
+        "keys": [
+          {"provider_key_name": "cred-issuer-marty-es256", "algorithm": "ES256"},
+          {"provider_key_name": "oid4vp-verifier-marty-es256", "algorithm": "ES256"}
+        ],
+        "key_purpose": "oid4vp_request_signing",
+        "algorithm": "ES256"
+      },
+      "expected": {
+        "service": {
+          "id": "managed-openbao-transit",
+          "key_reference": "cred-issuer-marty-es256",
+          "key_aliases": ["cred-issuer-marty-es256", "oid4vp-verifier-marty-es256"]
+        },
+        "key_reference": "oid4vp-verifier-marty-es256"
+      }
+    },
+    {
+      "name": "algorithm_selects_bound_key",
+      "input": {
+        "registry": {
+          "services": [{"id": "svc", "key_reference": "issuer-es256", "key_aliases": ["issuer-es256", "issuer-es384"]}],
+          "default_service_id": "svc",
+          "key_reference_purposes": {"svc": {"issuer-es256": ["vc_jwt_issuer"], "issuer-es384": ["vc_jwt_issuer"]}}
+        },
+        "keys": [
+          {"provider_key_name": "issuer-es256", "algorithm": "ES256"},
+          {"provider_key_name": "issuer-es384", "algorithm": "ES384"}
+        ],
+        "key_purpose": "vc_jwt_issuer",
+        "algorithm": "ES384"
+      },
+      "expected": {
+        "service": {"id": "svc", "key_reference": "issuer-es256", "key_aliases": ["issuer-es256", "issuer-es384"]},
+        "key_reference": "issuer-es384"
+      }
+    }
+  ],
+  "failure_cases": [
+    {
+      "name": "lti_protocol_key_reuse_is_rejected",
+      "input": {
+        "registry": {
+          "services": [],
+          "key_reference_purposes": {"shared-kms": {"lti-key": ["lti_tool_signing", "vc_jwt_issuer"]}}
+        },
+        "mode": "requested"
+      },
+      "error_contains": "cannot combine lti_tool_signing"
+    }
+  ]
+}

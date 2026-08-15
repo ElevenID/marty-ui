@@ -8,6 +8,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::domain::service_type;
 use crate::kms::{self, ProviderRequest};
 
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
@@ -52,55 +53,6 @@ pub struct ValidationResult {
     pub validated_at: String,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ServiceDefinition {
-    id: &'static str,
-    provider: &'static str,
-    protocol: &'static str,
-    connection_fields: &'static [&'static str],
-}
-
-fn service_definition(service_type: &str) -> ServiceDefinition {
-    match service_type {
-        "openbao-transit" => ServiceDefinition {
-            id: "openbao-transit",
-            provider: "openbao",
-            protocol: "vault-transit",
-            connection_fields: &["endpoint", "mount", "namespace"],
-        },
-        "hashicorp-vault-transit" => ServiceDefinition {
-            id: "hashicorp-vault-transit",
-            provider: "hashicorp-vault",
-            protocol: "vault-transit",
-            connection_fields: &["endpoint", "mount", "namespace"],
-        },
-        "aws-kms" => ServiceDefinition {
-            id: "aws-kms",
-            provider: "aws",
-            protocol: "aws-kms",
-            connection_fields: &["region"],
-        },
-        "azure-key-vault" => ServiceDefinition {
-            id: "azure-key-vault",
-            provider: "azure",
-            protocol: "azure-key-vault",
-            connection_fields: &["endpoint"],
-        },
-        "gcp-cloud-kms" => ServiceDefinition {
-            id: "gcp-cloud-kms",
-            provider: "gcp",
-            protocol: "gcp-kms",
-            connection_fields: &["region"],
-        },
-        _ => ServiceDefinition {
-            id: "custom-transit-compatible",
-            provider: "custom",
-            protocol: "vault-transit-compatible",
-            connection_fields: &["endpoint", "mount", "namespace"],
-        },
-    }
-}
-
 pub async fn validate(request: ValidationRequest) -> ValidationResult {
     let body = Value::Object(request.service_config);
     let payload = normalize_payload(&body);
@@ -127,7 +79,7 @@ pub async fn validate(request: ValidationRequest) -> ValidationResult {
 
 fn normalize_payload(body: &Value) -> Value {
     let requested_type = trimmed(body.get("service_type")).unwrap_or("custom-transit-compatible");
-    let definition = service_definition(requested_type);
+    let definition = service_type(requested_type);
     let algorithms = string_list(body.get("algorithms"))
         .into_iter()
         .filter(|value| SUPPORTED_ALGORITHMS.contains(&value.as_str()))

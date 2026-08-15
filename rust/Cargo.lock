@@ -2180,6 +2180,7 @@ dependencies = [
  "chrono",
  "http 1.5.0",
  "marty-crypto",
+ "redis",
  "regex",
  "reqwest",
  "serde",
@@ -2192,6 +2193,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

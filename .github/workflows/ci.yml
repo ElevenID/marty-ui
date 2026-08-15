@@ -325,9 +325,21 @@ jobs:
             exit 1
           fi
           contract_relative="${contract_executable#"$PWD/"}"
+          registry_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "registry_storage_contract")
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$registry_executable" || ! -x "$registry_executable" ]]; then
+            echo "Unable to locate the compiled signing registry contract executable." >&2
+            exit 1
+          fi
+          registry_relative="${registry_executable#"$PWD/"}"
           test -x target/debug/marty-revocation-profile
           tar -cf "$RUNNER_TEMP/rust-db-test-bundle.tar" \
             "$contract_relative" \
+            "$registry_relative" \
             target/debug/marty-revocation-profile
       - name: Publish reusable database contract executables
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -390,7 +402,7 @@ jobs:
       - name: Extract reusable database contract executables
         shell: bash
         run: tar -xf "$RUNNER_TEMP/rust-db-test-bundle/rust-db-test-bundle.tar" -C rust
-      - name: Test Rust revocation database and runtime contracts
+      - name: Test Rust database and runtime contracts
         working-directory: rust
         shell: bash
         run: |
@@ -401,6 +413,12 @@ jobs:
             exit 1
           fi
           "${contracts[0]}" --ignored --test-threads=1
+          mapfile -t registry_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'registry_storage_contract-*' -perm -u+x)
+          if (( ${#registry_contracts[@]} != 1 )); then
+            printf 'Expected one signing registry contract executable, found %s.\n' "${#registry_contracts[@]}" >&2
+            exit 1
+          fi
+          "${registry_contracts[0]}" --ignored --test-threads=1
 
   rust-lint-policy:
     name: Rust Lint and Packaging

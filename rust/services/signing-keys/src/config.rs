@@ -9,6 +9,7 @@ pub struct Config {
     pub release_version: String,
     pub build_revision: String,
     pub internal_api_key: String,
+    pub registry_redis_url: String,
 }
 
 impl Config {
@@ -43,6 +44,8 @@ impl Config {
             release_version,
             build_revision: value(values, "MARTY_UI_SHA").unwrap_or_else(|| "unknown".into()),
             internal_api_key,
+            registry_redis_url: value(values, "SIGNING_KEYS_REDIS_URL")
+                .unwrap_or_else(|| "redis://localhost:6379/2".into()),
         })
     }
 }
@@ -81,6 +84,7 @@ mod tests {
         assert_eq!(config.release_version, "development");
         assert_eq!(config.build_revision, "unknown");
         assert_eq!(config.internal_api_key, DEVELOPMENT_INTERNAL_API_KEY);
+        assert_eq!(config.registry_redis_url, "redis://localhost:6379/2");
     }
 
     #[test]

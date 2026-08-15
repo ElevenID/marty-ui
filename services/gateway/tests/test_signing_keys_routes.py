@@ -15,6 +15,182 @@ from starlette.responses import JSONResponse
 from gateway.routes import signing_keys
 
 
+@pytest.fixture(autouse=True)
+def _isolate_native_registry_boundary(monkeypatch: pytest.MonkeyPatch):
+    """Keep gateway route tests focused on orchestration around the Rust boundary.
+
+    Canonical normalization and routing semantics are exercised from the shared
+    language-neutral vectors by the Rust suite and by native adapter tests.
+    """
+
+    async def normalize_service(service):
+        if not isinstance(service, dict):
+            return None
+        normalized = dict(service)
+        service_defaults = {
+            "custom-transit-compatible": (
+                "custom",
+                "Custom Transit-Compatible Service",
+                "vault-transit-compatible",
+            ),
+            "aws-kms": ("aws", "AWS KMS", "aws-kms"),
+            "openbao-transit": ("openbao", "OpenBao Transit", "vault-transit"),
+        }
+        provider, label, protocol = service_defaults.get(
+            normalized.get("service_type"), service_defaults["custom-transit-compatible"]
+        )
+        normalized.setdefault("provider", provider)
+        normalized.setdefault("provider_label", label)
+        normalized.setdefault("protocol", protocol)
+        normalized.setdefault("managed", False)
+        normalized.setdefault("read_only", False)
+        normalized.setdefault("managed_by", None)
+        normalized.setdefault("key_aliases", [])
+        normalized.setdefault("algorithms", [])
+        normalized.setdefault("key_purposes", [])
+        normalized.setdefault("credential_formats", [])
+        normalized.setdefault("capabilities", {})
+        normalized.setdefault(
+            "rotation_policy",
+            {
+                "rotation_interval_days": 0,
+                "overlap_days": 0,
+                "auto_publish": False,
+            },
+        )
+        normalized.setdefault("rotation_state", {})
+        normalized.setdefault("discovered_capabilities", {})
+        normalized.setdefault("cert_pem", None)
+        normalized.setdefault("cert_chain_pem", None)
+        normalized.setdefault("cert_expires_at", None)
+        normalized.setdefault("country_code", "")
+        normalized.setdefault("authority_name", "")
+        return normalized
+
+    async def normalize_registry(registry, *, mode):
+        assert mode in {"requested", "stored"}
+        normalized = dict(registry) if isinstance(registry, dict) else {}
+        normalized.setdefault("services", [])
+        normalized.setdefault("default_service_id", None)
+        normalized.setdefault("format_defaults", {})
+        normalized.setdefault("type_defaults", {})
+        normalized.setdefault("key_reference_purposes", {})
+        if mode == "requested":
+            normalized["services"] = [
+                await normalize_service(service)
+                for service in normalized["services"]
+                if not service.get("managed")
+                and not service.get("read_only")
+                and service.get("id") != signing_keys.MANAGED_OPENBAO_SERVICE_ID
+            ]
+        return normalized
+
+    async def catalog():
+        return []
+
+    async def load_registry(_organization_id):
+        return {
+            "services": [],
+            "default_service_id": None,
+            "format_defaults": {},
+            "type_defaults": {},
+            "key_reference_purposes": {},
+        }
+
+    async def save_registry(_organization_id, registry):
+        return registry
+
+    async def resolve_registry(
+        registry,
+        *,
+        service=None,
+        keys=None,
+        credential_format=None,
+        key_purpose=None,
+        algorithm=None,
+    ):
+        services = registry.get("services") or []
+        if service is None:
+            by_id = {
+                candidate.get("id"): candidate
+                for candidate in services
+                if isinstance(candidate, dict) and candidate.get("id")
+            }
+            type_defaults = registry.get("type_defaults") or {}
+            format_defaults = registry.get("format_defaults") or {}
+            service = by_id.get(type_defaults.get(credential_format))
+            service = service or by_id.get(type_defaults.get(key_purpose))
+            service = service or by_id.get(format_defaults.get(credential_format))
+            service = service or by_id.get(registry.get("default_service_id"))
+            if service is None:
+                service = next(
+                    (
+                        candidate
+                        for candidate in services
+                        if (
+                            not credential_format
+                            or credential_format
+                            in (candidate.get("credential_formats") or [])
+                        )
+                        and (
+                            not key_purpose
+                            or key_purpose in (candidate.get("key_purposes") or [])
+                        )
+                        and (
+                            not algorithm
+                            or algorithm in (candidate.get("algorithms") or [])
+                        )
+                    ),
+                    None,
+                )
+        if service is None:
+            return None, None
+        key_reference = service.get("key_reference")
+        bindings = (registry.get("key_reference_purposes") or {}).get(
+            service.get("id"), {}
+        )
+        candidates = [
+            reference
+            for reference, purposes in bindings.items()
+            if key_purpose in purposes
+        ]
+        if key_purpose and not candidates and service.get("id") == signing_keys.MANAGED_OPENBAO_SERVICE_ID:
+            prefixes = {
+                "oid4vp_request_signing": "oid4vp-verifier-",
+                "lti_tool_signing": "lti-tool-",
+                "mdoc_dsc": "cred-dsc-",
+            }
+            prefix = prefixes.get(key_purpose)
+            if prefix:
+                candidates = [
+                    str(key.get("provider_key_name") or key.get("id"))
+                    for key in (keys or [])
+                    if str(key.get("provider_key_name") or key.get("id")).startswith(prefix)
+                ]
+        if algorithm and candidates:
+            algorithm_by_reference = {
+                str(key.get("provider_key_name") or key.get("id")): key.get("algorithm")
+                for key in (keys or [])
+            }
+            candidates = [
+                candidate
+                for candidate in candidates
+                if algorithm_by_reference.get(candidate) == algorithm
+            ]
+        if candidates:
+            key_reference = sorted(candidates)[0]
+        elif key_purpose and bindings:
+            key_reference = None
+        return service, key_reference
+
+    monkeypatch.setattr(signing_keys, "normalize_native_signing_service", normalize_service)
+    monkeypatch.setattr(signing_keys, "normalize_native_signing_registry", normalize_registry)
+    monkeypatch.setattr(signing_keys, "get_native_signing_service_catalog", catalog)
+    monkeypatch.setattr(signing_keys, "resolve_native_signing_registry", resolve_registry)
+    monkeypatch.setattr(signing_keys, "load_native_signing_registry", load_registry)
+    monkeypatch.setattr(signing_keys, "save_native_signing_registry", save_registry)
+
+
 def _key_attestation_root_pem() -> str:
     from datetime import timedelta
 
@@ -483,27 +659,29 @@ async def test_get_signing_key_config_returns_service_registry(
     monkeypatch: pytest.MonkeyPatch,
 ):
     redis_mock = AsyncMock()
-    redis_mock.get = AsyncMock(
-        return_value=json.dumps(
-            {
-                "default_service_id": "svc-aws",
-                "services": [
-                    {
-                        "id": "svc-aws",
-                        "name": "AWS signing key",
-                        "service_type": "aws-kms",
-                        "provider": "aws",
-                        "provider_label": "AWS KMS",
-                        "protocol": "aws-kms",
-                        "region": "us-west-2",
-                        "key_reference": "arn:aws:kms:example",
-                        "algorithms": ["ES256"],
-                    }
-                ],
-            }
-        )
-    )
+    redis_mock.get = AsyncMock(return_value=None)
     request = _build_request("org_fallback", redis_client=redis_mock)
+    native_load = AsyncMock(
+        return_value={
+            "default_service_id": "svc-aws",
+            "format_defaults": {},
+            "type_defaults": {},
+            "key_reference_purposes": {},
+            "services": [
+                {
+                    "id": "svc-aws",
+                    "name": "AWS signing key",
+                    "service_type": "aws-kms",
+                    "provider": "aws",
+                    "provider_label": "AWS KMS",
+                    "protocol": "aws-kms",
+                    "region": "us-west-2",
+                    "key_reference": "arn:aws:kms:example",
+                    "algorithms": ["ES256"],
+                }
+            ],
+        }
+    )
 
     async def fake_snapshot(resolved_org_id: str | None):
         assert resolved_org_id == "org_fallback"
@@ -533,6 +711,7 @@ async def test_get_signing_key_config_returns_service_registry(
         }
 
     monkeypatch.setattr(signing_keys, "_load_signing_key_snapshot", fake_snapshot)
+    monkeypatch.setattr(signing_keys, "load_native_signing_registry", native_load)
 
     response = await signing_keys.get_signing_key_config(
         request=request, organization_id=None
@@ -545,6 +724,7 @@ async def test_get_signing_key_config_returns_service_registry(
     assert b'"svc-aws"' in response.body
     assert b'"default_service_id":"svc-aws"' in response.body
     assert b'"supports_native_key_management":false' in response.body
+    native_load.assert_awaited_once_with("org_fallback")
 
 
 @pytest.mark.asyncio
@@ -553,8 +733,8 @@ async def test_update_signing_key_config_persists_registered_services(
 ):
     redis_mock = AsyncMock()
     redis_mock.get = AsyncMock(return_value=None)
-    redis_mock.set = AsyncMock()
     request = _build_request("org_fallback", redis_client=redis_mock)
+    native_save = AsyncMock(side_effect=lambda _organization_id, registry: registry)
 
     async def fake_snapshot(resolved_org_id: str | None):
         return {
@@ -583,6 +763,7 @@ async def test_update_signing_key_config_persists_registered_services(
         }
 
     monkeypatch.setattr(signing_keys, "_load_signing_key_snapshot", fake_snapshot)
+    monkeypatch.setattr(signing_keys, "save_native_signing_registry", native_save)
 
     response = await signing_keys.update_signing_key_config(
         request=request,
@@ -611,8 +792,9 @@ async def test_update_signing_key_config_persists_registered_services(
     )
 
     assert response.status_code == 200
-    redis_mock.set.assert_awaited_once()
-    saved_payload = json.loads(redis_mock.set.await_args.args[1])
+    native_save.assert_awaited_once()
+    assert native_save.await_args.args[0] == "org_fallback"
+    saved_payload = native_save.await_args.args[1]
     assert saved_payload["default_service_id"] == "svc-custom"
     assert len(saved_payload["services"]) == 1
     service = saved_payload["services"][0]
@@ -677,252 +859,6 @@ async def test_validate_signing_key_service_uses_rust_decision(
 # =============================================================================
 
 
-def test_normalize_registered_service_persists_key_purposes_and_formats():
-    """_normalize_registered_service should store key_purposes and derive credential_formats."""
-    result = signing_keys._normalize_registered_service(
-        {
-            "id": "svc-mdoc",
-            "name": "mdoc DSC",
-            "service_type": "aws-kms",
-            "provider": "aws",
-            "auth_mode": "iam_role",
-            "key_reference": "arn:aws:kms:us-east-1:000000000000:key/aaaa",
-            "algorithms": ["ES256"],
-            "key_purposes": ["mdoc_dsc"],
-        }
-    )
-    assert result is not None
-    assert result["key_purposes"] == ["mdoc_dsc"]
-    # credential_formats derived from mdoc_dsc purpose
-    assert "mso_mdoc" in result["credential_formats"]
-    assert "zk_mdoc" in result["credential_formats"]
-
-
-def test_normalize_registered_service_explicit_credential_formats():
-    """Explicit credential_formats should be stored as-is."""
-    result = signing_keys._normalize_registered_service(
-        {
-            "id": "svc-jwt",
-            "name": "JWT issuer",
-            "service_type": "openbao-transit",
-            "key_reference": "cred-issuer-jwt",
-            "algorithms": ["RS256"],
-            "key_purposes": ["vc_jwt_issuer"],
-            "credential_formats": ["jwt_vc_json"],
-        }
-    )
-    assert result is not None
-    assert result["credential_formats"] == ["jwt_vc_json"]
-
-
-def test_normalize_registered_service_aws_capabilities():
-    """AWS KMS service should have DER signature encoding and hardware_attestation=True."""
-    result = signing_keys._normalize_registered_service(
-        {
-            "id": "svc-aws",
-            "service_type": "aws-kms",
-            "provider": "aws",
-            "auth_mode": "iam_role",
-            "key_reference": "arn:aws:kms:us-east-1:000000000000:key/aaaa",
-            "algorithms": ["ES256"],
-        }
-    )
-    assert result is not None
-    assert result["signature_encoding"] == "der"
-    assert result["capabilities"]["hardware_attestation"] is True
-    assert result["capabilities"]["public_key_export"] is True
-    assert "ES256" in result["capabilities"]["supported_algorithms"]
-
-
-def test_normalize_registered_service_openbao_capabilities():
-    """OpenBao service should advertise DER ECDSA signatures and no hardware attestation."""
-    result = signing_keys._normalize_registered_service(
-        {
-            "id": "svc-bao",
-            "service_type": "openbao-transit",
-            "key_reference": "cred-issuer",
-            "algorithms": ["ES256"],
-        }
-    )
-    assert result is not None
-    assert result["signature_encoding"] == "der"
-    assert result["capabilities"]["hardware_attestation"] is False
-    assert result["capabilities"]["rotate_keys"] is True
-
-
-def test_resolve_service_returns_global_default(monkeypatch: pytest.MonkeyPatch):
-    """_resolve_service_for_format should fall back to global default when no other match."""
-    registry = {
-        "services": [
-            {
-                "id": "svc-default",
-                "name": "Default signer",
-                "service_type": "openbao-transit",
-                "key_reference": "key",
-                "algorithms": ["ES256"],
-                "key_purposes": [],
-                "credential_formats": [],
-            }
-        ],
-        "default_service_id": "svc-default",
-        "format_defaults": {},
-        "type_defaults": {},
-    }
-    # Re-run normalization so id/shape is consistent
-    registry["services"] = [
-        signing_keys._normalize_registered_service(svc) for svc in registry["services"]
-    ]
-
-    result = signing_keys._resolve_service_for_format(registry, "mso_mdoc", None, None)
-    assert result is not None
-    assert result["id"] == "svc-default"
-
-
-def test_resolve_service_format_defaults_win_over_global():
-    """format_defaults should take priority over global default_service_id."""
-    svc_global = signing_keys._normalize_registered_service(
-        {
-            "id": "svc-global",
-            "service_type": "openbao-transit",
-            "key_reference": "k",
-            "algorithms": ["ES256"],
-        }
-    )
-    svc_jwt = signing_keys._normalize_registered_service(
-        {
-            "id": "svc-jwt",
-            "service_type": "openbao-transit",
-            "key_reference": "k2",
-            "algorithms": ["RS256"],
-        }
-    )
-    registry = {
-        "services": [svc_global, svc_jwt],
-        "default_service_id": "svc-global",
-        "format_defaults": {"jwt_vc_json": "svc-jwt"},
-        "type_defaults": {},
-    }
-    result = signing_keys._resolve_service_for_format(
-        registry, "jwt_vc_json", None, None
-    )
-    assert result is not None
-    assert result["id"] == "svc-jwt"
-
-
-def test_resolve_service_type_defaults_beat_format_defaults():
-    """type_defaults should win over format_defaults."""
-    svc_a = signing_keys._normalize_registered_service(
-        {
-            "id": "svc-a",
-            "service_type": "openbao-transit",
-            "key_reference": "a",
-            "algorithms": ["ES256"],
-        }
-    )
-    svc_b = signing_keys._normalize_registered_service(
-        {
-            "id": "svc-b",
-            "service_type": "aws-kms",
-            "auth_mode": "iam_role",
-            "key_reference": "arn:aws:kms:us-east-1:000000000000:key/b",
-            "algorithms": ["ES256"],
-        }
-    )
-    registry = {
-        "services": [svc_a, svc_b],
-        "default_service_id": "svc-a",
-        "format_defaults": {"mso_mdoc": "svc-a"},
-        "type_defaults": {"mdoc_dsc": "svc-b"},
-    }
-    result = signing_keys._resolve_service_for_format(
-        registry, "mso_mdoc", "mdoc_dsc", None
-    )
-    assert result is not None
-    assert result["id"] == "svc-b"
-
-
-def test_resolve_service_returns_none_when_no_services():
-    result = signing_keys._resolve_service_for_format(
-        {
-            "services": [],
-            "default_service_id": None,
-            "format_defaults": {},
-            "type_defaults": {},
-        },
-        "jwt_vc_json",
-        None,
-        None,
-    )
-    assert result is None
-
-
-def test_resolve_key_reference_selects_mdoc_dsc_in_multi_key_service():
-    service = {
-        "id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
-        "key_reference": "cred-issuer-marty-es256",
-        "key_aliases": ["cred-issuer-marty-es256", "cred-dsc-marty-primary"],
-    }
-    registry = {
-        "key_reference_purposes": {
-            signing_keys.MANAGED_OPENBAO_SERVICE_ID: {
-                "cred-issuer-marty-es256": ["vc_jwt_issuer"],
-                "cred-dsc-marty-primary": ["mdoc_dsc", "vdsnc_signing"],
-            }
-        }
-    }
-    keys = [
-        {"id": "cred-issuer-marty-es256", "algorithm": "ES256"},
-        {"id": "cred-dsc-marty-primary", "algorithm": "ES256"},
-    ]
-
-    assert (
-        signing_keys._resolve_key_reference_for_purpose(
-            registry,
-            service,
-            keys,
-            key_purpose="mdoc_dsc",
-            algorithm="ES256",
-        )
-        == "cred-dsc-marty-primary"
-    )
-
-
-def test_managed_inventory_resolves_unbound_oid4vp_key_after_issuer_binding():
-    """A first tenant binding must not hide other managed KMS capabilities."""
-
-    service = {
-        "id": signing_keys.MANAGED_OPENBAO_SERVICE_ID,
-        "key_reference": "cred-issuer-marty-es256",
-        "key_aliases": [
-            "cred-issuer-marty-es256",
-            "oid4vp-verifier-marty-es256",
-        ],
-    }
-    registry = {
-        "key_reference_purposes": {
-            signing_keys.MANAGED_OPENBAO_SERVICE_ID: {
-                "cred-issuer-marty-es256": ["vc_jwt_issuer"],
-            }
-        }
-    }
-    keys = [
-        {"provider_key_name": "cred-issuer-marty-es256", "algorithm": "ES256"},
-        {
-            "provider_key_name": "oid4vp-verifier-marty-es256",
-            "algorithm": "ES256",
-        },
-    ]
-
-    assert (
-        signing_keys._resolve_key_reference_for_purpose(
-            registry,
-            service,
-            keys,
-            key_purpose="oid4vp_request_signing",
-            algorithm="ES256",
-        )
-        == "oid4vp-verifier-marty-es256"
-    )
 
 
 def test_managed_service_capabilities_come_from_inventory_and_tenant_bindings():
@@ -955,35 +891,6 @@ def test_managed_service_capabilities_come_from_inventory_and_tenant_bindings():
     assert "oid4vp_request_signing" in service["key_purposes"]
 
 
-def test_resolve_key_reference_honors_requested_algorithm():
-    service = {
-        "id": "svc",
-        "key_reference": "issuer-es256",
-        "key_aliases": ["issuer-es256", "issuer-es384"],
-    }
-    registry = {
-        "key_reference_purposes": {
-            "svc": {
-                "issuer-es256": ["vc_jwt_issuer"],
-                "issuer-es384": ["vc_jwt_issuer"],
-            }
-        }
-    }
-    keys = [
-        {"provider_key_name": "issuer-es256", "algorithm": "ES256"},
-        {"provider_key_name": "issuer-es384", "algorithm": "ES384"},
-    ]
-
-    assert (
-        signing_keys._resolve_key_reference_for_purpose(
-            registry,
-            service,
-            keys,
-            key_purpose="vc_jwt_issuer",
-            algorithm="ES384",
-        )
-        == "issuer-es384"
-    )
 
 
 @pytest.mark.asyncio
@@ -991,7 +898,7 @@ async def test_resolve_endpoint_returns_matching_service(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """POST /v1/signing-keys/config/resolve should return the resolved service."""
-    svc = signing_keys._normalize_registered_service(
+    svc = await signing_keys._normalize_registered_service(
         {
             "id": "svc-mdoc",
             "name": "mdoc DSC",
@@ -1224,22 +1131,6 @@ def test_lti_tool_signing_profile_is_did_resolvable_but_key_is_exclusive() -> No
         )
 
 
-def test_normalize_requested_registry_persists_format_and_type_defaults():
-    """format_defaults and type_defaults should be preserved through registry normalization."""
-    result = signing_keys._normalize_requested_registry(
-        {
-            "services": [],
-            "default_service_id": None,
-            "format_defaults": {"mso_mdoc": "svc-dsc", "jwt_vc_json": "svc-jwt"},
-            "type_defaults": {"mdoc_dsc": "svc-dsc"},
-        }
-    )
-    assert result is not None
-    assert result["format_defaults"] == {
-        "mso_mdoc": "svc-dsc",
-        "jwt_vc_json": "svc-jwt",
-    }
-    assert result["type_defaults"] == {"mdoc_dsc": "svc-dsc"}
 
 
 # ---------------------------------------------------------------------------
@@ -1313,37 +1204,6 @@ def test_same_public_jwk_ignores_only_jose_metadata():
     assert not signing_keys._same_public_jwk(certificate_jwk, did_jwk)
 
 
-def test_normalize_service_includes_certificate_fields():
-    """_normalize_registered_service should include cert_pem, cert_chain_pem, cert_expires_at."""
-    service = {
-        "service_type": "aws-kms",
-        "name": "AWS DSC",
-        "cert_pem": "-----BEGIN CERTIFICATE-----\nMIIC...",
-        "cert_chain_pem": "-----BEGIN CERTIFICATE-----\nMIIC...",
-        "cert_expires_at": "2025-12-31T23:59:59Z",
-    }
-
-    result = signing_keys._normalize_registered_service(service)
-
-    assert result is not None
-    assert result["cert_pem"] == "-----BEGIN CERTIFICATE-----\nMIIC..."
-    assert result["cert_chain_pem"] == "-----BEGIN CERTIFICATE-----\nMIIC..."
-    assert result["cert_expires_at"] == "2025-12-31T23:59:59Z"
-
-
-def test_normalize_service_certificate_fields_default_to_none():
-    """_normalize_registered_service should set cert fields to None if not provided."""
-    service = {
-        "service_type": "aws-kms",
-        "name": "AWS DSC",
-    }
-
-    result = signing_keys._normalize_registered_service(service)
-
-    assert result is not None
-    assert result["cert_pem"] is None
-    assert result["cert_chain_pem"] is None
-    assert result["cert_expires_at"] is None
 
 
 @pytest.mark.asyncio
@@ -4199,7 +4059,7 @@ async def test_managed_profile_rejects_key_from_another_protocol_namespace(
 
 @pytest.mark.asyncio
 async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPatch):
-    """create_issuer_profile should persist a new profile in Redis."""
+    """create_issuer_profile persists orchestration state and native bindings."""
     monkeypatch.setenv("PUBLIC_DOMAIN", "beta.elevenidllc.com")
     monkeypatch.setenv("ISSUER_BASE_URL", "https://beta.elevenidllc.com")
 
@@ -4211,6 +4071,7 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
         stored[key] = value
 
     redis_mock.set = AsyncMock(side_effect=fake_set)
+    native_save = AsyncMock(side_effect=lambda _organization_id, registry: registry)
 
     async def fake_resolve_effective_service(*args, **kwargs):
         return (
@@ -4239,6 +4100,7 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(
         signing_keys, "publish_service_to_did", fake_publish_service_to_did
     )
+    monkeypatch.setattr(signing_keys, "save_native_signing_registry", native_save)
 
     request = _build_request("org_issuer", redis_client=redis_mock)
     response = await signing_keys.create_issuer_profile(
@@ -4265,9 +4127,11 @@ async def test_create_issuer_profile_stores_profile(monkeypatch: pytest.MonkeyPa
     assert profile["algorithm"] == "ES256"
     assert profile["id"].startswith("ip-")
 
-    # Verify stored in Redis
+    # Python owns the profile document; Rust owns the signing-service registry.
     assert "org:org_issuer:issuer-profiles" in stored
-    registry = json.loads(stored["org:org_issuer:signing-key-services"])
+    native_save.assert_awaited_once()
+    assert native_save.await_args.args[0] == "org_issuer"
+    registry = native_save.await_args.args[1]
     assert registry["key_reference_purposes"] == {
         "svc-bao": {"cred-issuer-test-es256": ["vc_jwt_issuer"]}
     }
@@ -4985,6 +4849,11 @@ async def test_internal_resolve_issuer_context_resolves_exact_did(
     request = _build_request("org_issuer", redis_client=redis_mock)
     monkeypatch.setattr(
         signing_keys,
+        "load_native_signing_registry",
+        AsyncMock(return_value=docs["org:org_issuer:signing-key-services"]),
+    )
+    monkeypatch.setattr(
+        signing_keys,
         "_service_x5c_chain",
         lambda service: ["issuer-leaf-x5c", "issuer-intermediate-x5c"],
     )
@@ -5193,6 +5062,11 @@ async def test_internal_resolve_issuer_context_defaults_to_org_managed_mode(
 
     redis_mock.get = AsyncMock(side_effect=fake_get)
     request = _build_request("org_issuer", redis_client=redis_mock)
+    monkeypatch.setattr(
+        signing_keys,
+        "load_native_signing_registry",
+        AsyncMock(return_value=docs["org:org_issuer:signing-key-services"]),
+    )
 
     response = await signing_keys.internal_resolve_issuer_context(
         request=request,
@@ -5398,6 +5272,11 @@ async def test_internal_resolve_issuer_did_returns_org_scoped_public_key(
     request = _build_request("org_issuer", redis_client=redis_mock)
     monkeypatch.setattr(
         signing_keys,
+        "load_native_signing_registry",
+        AsyncMock(return_value=docs["org:org_issuer:signing-key-services"]),
+    )
+    monkeypatch.setattr(
+        signing_keys,
         "_service_x5c_chain",
         lambda service: (
             ["issuer-leaf-x5c", "issuer-root-x5c"]
@@ -5544,6 +5423,11 @@ async def test_internal_resolve_issuer_did_rejects_ambiguous_active_profiles(
 
     redis_mock.get = AsyncMock(side_effect=fake_get)
     request = _build_request("org_issuer", redis_client=redis_mock)
+    monkeypatch.setattr(
+        signing_keys,
+        "load_native_signing_registry",
+        AsyncMock(return_value=docs["org:org_issuer:signing-key-services"]),
+    )
 
     from fastapi import HTTPException as FastAPIHTTPException
 

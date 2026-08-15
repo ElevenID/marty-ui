@@ -51,7 +51,13 @@ from gateway.models import (
 )
 from gateway.proxy import get_registry, proxy_request
 from gateway.native_signing_keys import (
+    get_native_signing_service_catalog,
     get_native_kms_adapter,
+    load_native_signing_registry,
+    normalize_native_signing_registry,
+    normalize_native_signing_service,
+    resolve_native_signing_registry,
+    save_native_signing_registry,
     validate_native_signing_service,
 )
 
@@ -169,155 +175,6 @@ PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE: dict[str, str] = {
     "ICAO_EMRTD": "icao_emrtd",
 }
 
-#: Per-service-type static capability metadata (GAP-007-a).
-#: Signature encoding: "raw_ieee_p1363" = raw r||s bytes; "der" = ASN.1 DER.
-KEY_MANAGEMENT_SERVICE_CAPABILITIES: dict[str, dict[str, Any]] = {
-    "openbao-transit": {
-        "supported_algorithms": ["ES256", "ES384", "RS256", "EdDSA"],
-        "signature_encoding": "der",
-        "public_key_export": True,
-        "hardware_attestation": False,
-        "key_import": False,
-        "key_create": True,
-        "key_delete": True,
-        "key_list": True,
-        "rotation": True,
-    },
-    "hashicorp-vault-transit": {
-        "supported_algorithms": ["ES256", "ES384", "RS256", "EdDSA"],
-        "signature_encoding": "der",
-        "public_key_export": True,
-        "hardware_attestation": False,
-        "key_import": False,
-        "key_create": True,
-        "key_delete": True,
-        "key_list": True,
-        "rotation": True,
-    },
-    "aws-kms": {
-        "supported_algorithms": ["ES256", "ES384", "RS256"],
-        "signature_encoding": "der",
-        "public_key_export": True,
-        "hardware_attestation": True,  # HSM-backed by default
-        "key_import": True,
-        "key_create": True,
-        "key_delete": False,  # Requires scheduled deletion
-        "key_list": False,  # No native list in transit mode
-        "rotation": True,  # Auto-rotation supported
-    },
-    "azure-key-vault": {
-        "supported_algorithms": ["ES256", "ES384", "RS256", "EdDSA"],
-        "signature_encoding": "der",
-        "public_key_export": True,
-        "hardware_attestation": True,  # HSM SKU available
-        "key_import": True,
-        "key_create": True,
-        "key_delete": True,
-        "key_list": True,
-        "rotation": True,
-    },
-    "gcp-cloud-kms": {
-        "supported_algorithms": ["ES256", "ES384", "RS256", "EdDSA"],
-        "signature_encoding": "der",
-        "public_key_export": True,
-        "hardware_attestation": True,  # HSM protection level available
-        "key_import": True,
-        "key_create": True,
-        "key_delete": False,  # Soft-delete only, then destroy
-        "key_list": True,
-        "rotation": True,
-    },
-    "custom-transit-compatible": {
-        "supported_algorithms": ["ES256", "ES384", "RS256", "EdDSA"],
-        "signature_encoding": "raw_ieee_p1363",
-        "public_key_export": False,
-        "hardware_attestation": False,
-        "key_import": False,
-        "key_create": False,
-        "key_delete": False,
-        "key_list": False,
-        "rotation": False,
-    },
-}
-
-KEY_MANAGEMENT_SERVICE_TYPES: tuple[dict[str, Any], ...] = (
-    {
-        "id": "openbao-transit",
-        "label": "OpenBao Transit",
-        "description": "Register an OpenBao transit service that exposes signing keys remotely.",
-        "provider": "openbao",
-        "protocol": "vault-transit",
-        "category": "service-hsm",
-        "auth_modes": ["service_token", "token", "approle", "mtls"],
-        "connection_fields": ["endpoint", "mount", "namespace"],
-        "key_reference_label": "Transit key name",
-        "supports_inventory": True,
-    },
-    {
-        "id": "hashicorp-vault-transit",
-        "label": "HashiCorp Vault Transit",
-        "description": "Use Vault Transit as the signing backend for issuance keys.",
-        "provider": "hashicorp-vault",
-        "protocol": "vault-transit",
-        "category": "service-hsm",
-        "auth_modes": ["token", "approle", "mtls"],
-        "connection_fields": ["endpoint", "mount", "namespace"],
-        "key_reference_label": "Transit key name",
-        "supports_inventory": True,
-    },
-    {
-        "id": "aws-kms",
-        "label": "AWS KMS",
-        "description": "Register a customer-managed AWS KMS key for remote signing.",
-        "provider": "aws",
-        "protocol": "aws-kms",
-        "category": "cloud-kms",
-        "auth_modes": ["iam_role", "access_key", "assume_role"],
-        "connection_fields": ["region"],
-        "key_reference_label": "Key ARN",
-        "supports_inventory": False,
-    },
-    {
-        "id": "azure-key-vault",
-        "label": "Azure Key Vault",
-        "description": "Register an Azure Key Vault key as a signing source.",
-        "provider": "azure",
-        "protocol": "azure-key-vault",
-        "category": "cloud-kms",
-        "auth_modes": ["managed_identity", "client_secret", "certificate"],
-        "connection_fields": ["endpoint"],
-        "key_reference_label": "Key identifier",
-        "supports_inventory": False,
-    },
-    {
-        "id": "gcp-cloud-kms",
-        "label": "Google Cloud KMS",
-        "description": "Register a Google Cloud KMS crypto key version.",
-        "provider": "gcp",
-        "protocol": "gcp-kms",
-        "category": "cloud-kms",
-        "auth_modes": ["workload_identity", "service_account"],
-        "connection_fields": ["region"],
-        "key_reference_label": "Crypto key resource",
-        "supports_inventory": False,
-    },
-    {
-        "id": "custom-transit-compatible",
-        "label": "Custom Transit-Compatible Service",
-        "description": "Any service that implements the transit-compatible signing protocol Marty supports.",
-        "provider": "custom",
-        "protocol": "vault-transit-compatible",
-        "category": "custom",
-        "auth_modes": ["token", "mtls", "api_key", "custom"],
-        "connection_fields": ["endpoint", "mount", "namespace"],
-        "key_reference_label": "Key reference",
-        "supports_inventory": False,
-    },
-)
-
-KEY_MANAGEMENT_SERVICE_TYPE_BY_ID = {
-    service_type["id"]: service_type for service_type in KEY_MANAGEMENT_SERVICE_TYPES
-}
 
 
 def _resolve_org_id(request: Request, organization_id: str | None) -> str:
@@ -784,7 +641,7 @@ async def _load_service_discovered_keys(
     discovered_keys: list[dict[str, Any]] = []
 
     for service in services:
-        normalized = _normalize_registered_service(service)
+        normalized = await _normalize_registered_service(service)
         if normalized is None:
             continue
 
@@ -945,10 +802,6 @@ def _canonical_signing_algorithm(value: Any, *, default: str = "ES256") -> str:
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _storage_key(organization_id: str) -> str:
-    return f"org:{organization_id}:signing-key-services"
 
 
 def _jwks_storage_key(organization_id: str) -> str:
@@ -1598,255 +1451,37 @@ def _merge_discovered_capabilities(
     return merged
 
 
-def _service_type_definition(service_type_id: Any) -> dict[str, Any]:
-    if (
-        isinstance(service_type_id, str)
-        and service_type_id in KEY_MANAGEMENT_SERVICE_TYPE_BY_ID
-    ):
-        return KEY_MANAGEMENT_SERVICE_TYPE_BY_ID[service_type_id]
-    return KEY_MANAGEMENT_SERVICE_TYPE_BY_ID["custom-transit-compatible"]
-
-
 def _get_adapter(service_config: dict[str, Any]) -> Any:
     """Return the Rust-backed adapter for a registered service config."""
     return get_native_kms_adapter(service_config)
 
 
-def _normalize_service_definition_catalog() -> list[dict[str, Any]]:
-    return [dict(service_type) for service_type in KEY_MANAGEMENT_SERVICE_TYPES]
+async def _normalize_service_definition_catalog() -> list[dict[str, Any]]:
+    return await get_native_signing_service_catalog()
 
 
-def _normalize_registered_service(service: Any) -> dict[str, Any] | None:
-    if not isinstance(service, dict):
-        return None
-
-    service_type_id = service.get("service_type")
-    definition = _service_type_definition(service_type_id)
-    now = _utcnow_iso()
-    key_aliases = _dedupe_strings(service.get("key_aliases"))
-    algorithms = _normalize_algorithm_list(service.get("algorithms"))
-
-    if not algorithms and service.get("algorithm"):
-        algorithms = _normalize_algorithm_list([service.get("algorithm")])
-
-    auth_modes = definition.get("auth_modes") or []
-    incoming_auth_mode = service.get("auth_mode")
-    auth_mode = (
-        incoming_auth_mode
-        if isinstance(incoming_auth_mode, str) and incoming_auth_mode in auth_modes
-        else (auth_modes[0] if auth_modes else "custom")
-    )
-
-    provider = service.get("provider")
-    if not isinstance(provider, str) or not provider.strip():
-        provider = definition["provider"]
-
-    provider_label = service.get("provider_label")
-    if not isinstance(provider_label, str) or not provider_label.strip():
-        provider_label = definition["label"]
-
-    created_at = (
-        service.get("created_at") if isinstance(service.get("created_at"), str) else now
-    )
-    updated_at = (
-        service.get("updated_at") if isinstance(service.get("updated_at"), str) else now
-    )
-
-    # -- Key purposes and credential-format routing (GAP-002) -----------------
-    incoming_purposes = service.get("key_purposes")
-    if isinstance(incoming_purposes, list):
-        key_purposes = [p for p in incoming_purposes if p in KEY_PURPOSES]
-    else:
-        key_purposes = []
-
-    incoming_formats = service.get("credential_formats")
-    if isinstance(incoming_formats, list):
-        credential_formats = [f for f in incoming_formats if isinstance(f, str)]
-    else:
-        # Derive from key_purposes when not explicitly set
-        derived: list[str] = []
-        for purpose in key_purposes:
-            for fmt in KEY_PURPOSE_CREDENTIAL_FORMATS.get(purpose, ()):
-                if fmt not in derived:
-                    derived.append(fmt)
-        credential_formats = derived
-
-    # -- Provider capability metadata (GAP-007) --------------------------------
-    svc_type_id = definition["id"]
-    static_caps = KEY_MANAGEMENT_SERVICE_CAPABILITIES.get(
-        svc_type_id,
-        KEY_MANAGEMENT_SERVICE_CAPABILITIES["custom-transit-compatible"],
-    )
-    signature_encoding = static_caps.get("signature_encoding", "raw_ieee_p1363")
-
-    rotation_policy = (
-        service.get("rotation_policy")
-        if isinstance(service.get("rotation_policy"), dict)
-        else {}
-    )
-    discovered_capabilities = (
-        service.get("discovered_capabilities")
-        if isinstance(service.get("discovered_capabilities"), dict)
-        else {}
-    )
-
-    return {
-        "id": service.get("id")
-        if isinstance(service.get("id"), str) and service["id"].strip()
-        else f"svc-{uuid.uuid4().hex}",
-        "name": service.get("name")
-        if isinstance(service.get("name"), str) and service["name"].strip()
-        else definition["label"],
-        "description": service.get("description")
-        if isinstance(service.get("description"), str)
-        else "",
-        "service_type": definition["id"],
-        "provider": provider,
-        "provider_label": provider_label,
-        "protocol": service.get("protocol")
-        if isinstance(service.get("protocol"), str) and service["protocol"].strip()
-        else definition["protocol"],
-        "category": definition["category"],
-        "endpoint": service.get("endpoint")
-        if isinstance(service.get("endpoint"), str)
-        else "",
-        "region": service.get("region")
-        if isinstance(service.get("region"), str)
-        else "",
-        "mount": service.get("mount") if isinstance(service.get("mount"), str) else "",
-        "namespace": service.get("namespace")
-        if isinstance(service.get("namespace"), str)
-        else "",
-        "auth_mode": auth_mode,
-        "auth_reference": service.get("auth_reference")
-        if isinstance(service.get("auth_reference"), str)
-        else "",
-        "key_reference": service.get("key_reference")
-        if isinstance(service.get("key_reference"), str)
-        else "",
-        "country_code": service.get("country_code")
-        if isinstance(service.get("country_code"), str)
-        else "",
-        "authority_name": service.get("authority_name")
-        if isinstance(service.get("authority_name"), str)
-        else "",
-        "key_aliases": key_aliases,
-        "algorithms": algorithms,
-        "status": service.get("status")
-        if isinstance(service.get("status"), str)
-        else "registered",
-        "managed": False,
-        "read_only": False,
-        "managed_by": None,
-        "key_count": len(key_aliases)
-        if key_aliases
-        else (1 if service.get("key_reference") else 0),
-        "capabilities": {
-            "discover_keys": bool(definition.get("supports_inventory")),
-            "sign": True,
-            "rotate_keys": static_caps.get("rotation", False),
-            "upload_public_keys": static_caps.get("key_import", False),
-            "delete_keys": static_caps.get("key_delete", False),
-            "multiple_key_references": True,
-            "public_key_export": static_caps.get("public_key_export", False),
-            "hardware_attestation": static_caps.get("hardware_attestation", False),
-            "supported_algorithms": static_caps.get(
-                "supported_algorithms", list(SUPPORTED_SIGNING_ALGORITHMS)
-            ),
-        },
-        "signature_encoding": signature_encoding,
-        "key_purposes": key_purposes,
-        "credential_formats": credential_formats,
-        "rotation_policy": {
-            "rotation_interval_days": int(
-                rotation_policy.get("rotation_interval_days", 0) or 0
-            ),
-            "overlap_days": int(rotation_policy.get("overlap_days", 0) or 0),
-            "auto_publish": bool(rotation_policy.get("auto_publish", False)),
-        },
-        "rotation_state": service.get("rotation_state")
-        if isinstance(service.get("rotation_state"), dict)
-        else {},
-        "created_at": created_at,
-        "updated_at": updated_at,
-        "discovered_capabilities": discovered_capabilities,
-        "cert_pem": service.get("cert_pem")
-        if isinstance(service.get("cert_pem"), str)
-        else None,
-        "cert_chain_pem": service.get("cert_chain_pem")
-        if isinstance(service.get("cert_chain_pem"), str)
-        else None,
-        "cert_expires_at": service.get("cert_expires_at")
-        if isinstance(service.get("cert_expires_at"), str)
-        else None,
-    }
+async def _normalize_registered_service(service: Any) -> dict[str, Any] | None:
+    """Normalize one service through the canonical Rust registry kernel."""
+    return await normalize_native_signing_service(service)
 
 
-# ---------------------------------------------------------------------------
-# Format / purpose resolver (GAP-002-c)
-# ---------------------------------------------------------------------------
-
-
-def _resolve_service_for_format(
+async def _resolve_service_for_format(
     registry: dict[str, Any],
     credential_format: str | None,
     key_purpose: str | None,
     algorithm: str | None,
 ) -> dict[str, Any] | None:
-    """Return the best matching registered service for a given format/purpose/algorithm.
-
-    Resolution order (most specific first):
-      1. ``type_defaults`` map keyed by credential_format or key_purpose
-      2. ``format_defaults`` map keyed by credential_format
-      3. ``default_service_id``
-      4. First service that declares the requested format/purpose/algorithm
-    """
-    services_by_id: dict[str, dict[str, Any]] = {
-        svc["id"]: svc
-        for svc in (registry.get("services") or [])
-        if isinstance(svc, dict) and svc.get("id")
-    }
-
-    def _svc(service_id: Any) -> dict[str, Any] | None:
-        if isinstance(service_id, str) and service_id in services_by_id:
-            return services_by_id[service_id]
-        return None
-
-    # 1. type_defaults: prefer the most specific key available
-    type_defaults: dict[str, str] = registry.get("type_defaults") or {}
-    for lookup_key in filter(None, [credential_format, key_purpose]):
-        candidate = _svc(type_defaults.get(lookup_key))
-        if candidate:
-            return candidate
-
-    # 2. format_defaults
-    format_defaults: dict[str, str] = registry.get("format_defaults") or {}
-    if credential_format:
-        candidate = _svc(format_defaults.get(credential_format))
-        if candidate:
-            return candidate
-
-    # 3. global default
-    global_default = _svc(registry.get("default_service_id"))
-    if global_default:
-        return global_default
-
-    # 4. First service that matches all supplied filters
-    for svc in services_by_id.values():
-        if credential_format and credential_format not in (
-            svc.get("credential_formats") or []
-        ):
-            continue
-        if key_purpose and key_purpose not in (svc.get("key_purposes") or []):
-            continue
-        if algorithm and algorithm not in (svc.get("algorithms") or []):
-            continue
-        return svc
-
-    return None
+    """Resolve the best service through the canonical Rust registry kernel."""
+    service, _ = await resolve_native_signing_registry(
+        registry,
+        credential_format=credential_format,
+        key_purpose=key_purpose,
+        algorithm=algorithm,
+    )
+    return service
 
 
-def _resolve_key_reference_for_purpose(
+async def _resolve_key_reference_for_purpose(
     registry: dict[str, Any],
     service: dict[str, Any],
     keys: list[dict[str, Any]],
@@ -1854,148 +1489,30 @@ def _resolve_key_reference_for_purpose(
     key_purpose: str | None,
     algorithm: str | None,
 ) -> str | None:
-    """Select a purpose-bound key instead of a service's unrelated default.
-
-    A managed KMS service hosts several protocol keys. Service resolution alone
-    is therefore insufficient: mdoc must use its DSC key, and an ES384 request
-    must not silently receive the service's ES256 default.
-    """
-    current = service.get("key_reference")
-    current_reference = (
-        current.strip() if isinstance(current, str) and current.strip() else None
+    """Resolve the authorized provider key through the Rust registry kernel."""
+    _, key_reference = await resolve_native_signing_registry(
+        registry,
+        service=service,
+        keys=keys,
+        key_purpose=key_purpose,
+        algorithm=algorithm,
     )
-    if not key_purpose:
-        return current_reference
-
-    service_id = service.get("id")
-    if not isinstance(service_id, str):
-        return current_reference
-    bindings = _normalize_key_reference_purposes(registry.get("key_reference_purposes"))
-    service_bindings = bindings.get(service_id, {})
-    aliases = set(_dedupe_strings(service.get("key_aliases")))
-    if current_reference:
-        aliases.add(current_reference)
-    candidates = [
-        reference
-        for reference, purposes in service_bindings.items()
-        if key_purpose in purposes and (not aliases or reference in aliases)
-    ]
-    if not candidates and service_id == MANAGED_OPENBAO_SERVICE_ID:
-        # A new tenant has not authorized any KMS key yet.  Resolve the
-        # purpose-specific managed key from live inventory so profile creation
-        # can establish that tenant-local binding without borrowing another
-        # organization's registry.
-        candidates = [
-            str(key.get("provider_key_name") or key.get("id"))
-            for key in keys
-            if isinstance(key, dict)
-            and key_purpose
-            in _managed_key_purposes_for_reference(
-                key.get("provider_key_name") or key.get("id")
-            )
-            and (
-                not aliases
-                or str(key.get("provider_key_name") or key.get("id")) in aliases
-            )
-        ]
-    if not candidates:
-        return current_reference if not service_bindings else None
-    if algorithm:
-        algorithm_by_reference = {
-            str(key.get("provider_key_name") or key.get("id")): key.get("algorithm")
-            for key in keys
-            if isinstance(key, dict) and (key.get("provider_key_name") or key.get("id"))
-        }
-        candidates = [
-            reference
-            for reference in candidates
-            if algorithm_by_reference.get(reference) == algorithm
-        ]
-    if current_reference in candidates:
-        return current_reference
-    return sorted(candidates)[0] if candidates else None
+    return key_reference
 
 
 async def _load_registered_service_registry(
     request: Request, organization_id: str | None
 ) -> dict[str, Any]:
-    empty = {
-        "services": [],
-        "default_service_id": None,
-        "format_defaults": {},
-        "type_defaults": {},
-        "key_reference_purposes": {},
-    }
+    del request
     if not organization_id:
-        return dict(empty)
-
-    redis_client = getattr(request.app.state, "redis_client", None)
-    if redis_client is None:
-        return dict(empty)
-
-    try:
-        payload = await redis_client.get(_storage_key(organization_id))
-    except Exception:
-        return dict(empty)
-
-    if not payload:
-        return dict(empty)
-
-    try:
-        decoded = payload if isinstance(payload, str) else payload.decode()
-        parsed = json.loads(decoded)
-    except Exception:
-        return dict(empty)
-
-    raw_services = (
-        parsed.get("services")
-        if isinstance(parsed, dict) and isinstance(parsed.get("services"), list)
-        else []
-    )
-    services = [
-        normalized
-        for normalized in (
-            _normalize_registered_service(service) for service in raw_services
-        )
-        if normalized
-    ]
-    default_service_id = (
-        parsed.get("default_service_id") if isinstance(parsed, dict) else None
-    )
-    raw_format_defaults = (
-        parsed.get("format_defaults") if isinstance(parsed, dict) else {}
-    )
-    format_defaults = (
-        {
-            k: v
-            for k, v in raw_format_defaults.items()
-            if isinstance(k, str) and isinstance(v, str)
+        return {
+            "services": [],
+            "default_service_id": None,
+            "format_defaults": {},
+            "type_defaults": {},
+            "key_reference_purposes": {},
         }
-        if isinstance(raw_format_defaults, dict)
-        else {}
-    )
-    raw_type_defaults = parsed.get("type_defaults") if isinstance(parsed, dict) else {}
-    type_defaults = (
-        {
-            k: v
-            for k, v in raw_type_defaults.items()
-            if isinstance(k, str) and isinstance(v, str)
-        }
-        if isinstance(raw_type_defaults, dict)
-        else {}
-    )
-    key_reference_purposes = _normalize_key_reference_purposes(
-        parsed.get("key_reference_purposes") if isinstance(parsed, dict) else None
-    )
-    return {
-        "services": services,
-        "default_service_id": default_service_id
-        if isinstance(default_service_id, str)
-        else None,
-        "format_defaults": format_defaults,
-        "type_defaults": type_defaults,
-        "key_reference_purposes": key_reference_purposes,
-    }
+    return await load_native_signing_registry(organization_id)
 
 
 async def _save_registered_service_registry(
@@ -2003,23 +1520,9 @@ async def _save_registered_service_registry(
     organization_id: str | None,
     registry: dict[str, Any],
 ) -> None:
-    if not organization_id:
-        return
-
-    redis_client = getattr(request.app.state, "redis_client", None)
-    if redis_client is None:
-        return
-
-    payload = {
-        "default_service_id": registry.get("default_service_id"),
-        "format_defaults": registry.get("format_defaults") or {},
-        "type_defaults": registry.get("type_defaults") or {},
-        "key_reference_purposes": _normalize_key_reference_purposes(
-            registry.get("key_reference_purposes")
-        ),
-        "services": registry.get("services") or [],
-    }
-    await redis_client.set(_storage_key(organization_id), json.dumps(payload))
+    del request
+    if organization_id:
+        await save_native_signing_registry(organization_id, registry)
 
 
 def _managed_openbao_service(
@@ -2157,99 +1660,9 @@ def _provider_metadata_from_default_service(
     }
 
 
-def _registry_from_legacy_body(body: dict[str, Any]) -> dict[str, Any] | None:
-    if not isinstance(body, dict):
-        return None
-
-    if not body.get("hsm_enabled"):
-        return {"services": [], "default_service_id": None}
-
-    hsm_settings = body.get("hsm_settings")
-    if not isinstance(hsm_settings, dict):
-        return None
-
-    if hsm_settings.get("managed_by"):
-        return {"services": [], "default_service_id": MANAGED_OPENBAO_SERVICE_ID}
-
-    service = _normalize_registered_service(
-        {
-            "name": hsm_settings.get("provider_label")
-            or hsm_settings.get("provider")
-            or "Registered KMS/HSM",
-            "service_type": "custom-transit-compatible",
-            "provider": hsm_settings.get("provider") or "custom",
-            "protocol": "vault-transit-compatible",
-            "endpoint": hsm_settings.get("service_url"),
-            "mount": hsm_settings.get("mount"),
-            "namespace": hsm_settings.get("namespace"),
-            "region": hsm_settings.get("region"),
-            "auth_mode": hsm_settings.get("auth_mode"),
-            "key_reference": hsm_settings.get("key_reference"),
-            "key_aliases": hsm_settings.get("signing_key_names"),
-        }
-    )
-    if service is None:
-        return None
-    return {"services": [service], "default_service_id": service["id"]}
-
-
-def _normalize_requested_registry(body: dict[str, Any]) -> dict[str, Any] | None:
-    if not isinstance(body, dict):
-        return None
-
-    if isinstance(body.get("services"), list):
-        services = [
-            normalized
-            for normalized in (
-                _normalize_registered_service(service)
-                for service in body.get("services", [])
-                if isinstance(service, dict)
-                and not service.get("managed")
-                and not service.get("read_only")
-                and service.get("id") != MANAGED_OPENBAO_SERVICE_ID
-            )
-            if normalized
-        ]
-        default_service_id = (
-            body.get("default_service_id")
-            if isinstance(body.get("default_service_id"), str)
-            else None
-        )
-
-        # Persist per-format and per-type defaults (GAP-006)
-        raw_format_defaults = body.get("format_defaults")
-        format_defaults = (
-            {
-                k: v
-                for k, v in raw_format_defaults.items()
-                if isinstance(k, str) and isinstance(v, str)
-            }
-            if isinstance(raw_format_defaults, dict)
-            else {}
-        )
-
-        raw_type_defaults = body.get("type_defaults")
-        type_defaults = (
-            {
-                k: v
-                for k, v in raw_type_defaults.items()
-                if isinstance(k, str) and isinstance(v, str)
-            }
-            if isinstance(raw_type_defaults, dict)
-            else {}
-        )
-
-        return {
-            "services": services,
-            "default_service_id": default_service_id,
-            "format_defaults": format_defaults,
-            "type_defaults": type_defaults,
-            "key_reference_purposes": _normalize_key_reference_purposes(
-                body.get("key_reference_purposes")
-            ),
-        }
-
-    return _registry_from_legacy_body(body)
+async def _normalize_requested_registry(body: dict[str, Any]) -> dict[str, Any]:
+    """Normalize public registry updates through the canonical Rust kernel."""
+    return await normalize_native_signing_registry(body, mode="requested")
 
 
 async def _build_key_management_config(
@@ -2262,15 +1675,12 @@ async def _build_key_management_config(
         request, resolved_org_id
     )
     registered_services = registry.get("services") if isinstance(registry, dict) else []
-    writable_services = [
-        normalized
-        for normalized in (
-            _normalize_registered_service(service)
-            for service in registered_services
-            if isinstance(registered_services, list)
-        )
-        if normalized
-    ]
+    writable_services: list[dict[str, Any]] = []
+    if isinstance(registered_services, list):
+        for service in registered_services:
+            normalized = await _normalize_registered_service(service)
+            if normalized:
+                writable_services.append(normalized)
 
     key_reference_purposes = _normalize_key_reference_purposes(
         registry.get("key_reference_purposes") if isinstance(registry, dict) else None
@@ -2322,7 +1732,7 @@ async def _build_key_management_config(
         "default_service_id": default_service_id,
         "services": services,
         "key_reference_purposes": key_reference_purposes,
-        "service_type_catalog": _normalize_service_definition_catalog(),
+        "service_type_catalog": await _normalize_service_definition_catalog(),
     }
 
 
@@ -2393,7 +1803,7 @@ async def _resolve_effective_service(
             int(effective_service.get("key_count", 0) or 0), 1
         )
 
-    normalized = _normalize_registered_service(effective_service)
+    normalized = await _normalize_registered_service(effective_service)
     if normalized is None:
         raise HTTPException(status_code=400, detail="Service could not be normalized.")
 
@@ -2768,7 +2178,7 @@ async def update_signing_key_config(
     resolved_org_id = _resolve_org_id(request, organization_id)
 
     current_registry = await _load_registered_service_registry(request, resolved_org_id)
-    registry_override = _normalize_requested_registry(body) or {
+    registry_override = await _normalize_requested_registry(body) or {
         "services": [],
         "default_service_id": None,
     }
@@ -2890,7 +2300,7 @@ async def resolve_signing_service(
         body.get("algorithm") if isinstance(body.get("algorithm"), str) else None
     )
 
-    service = _resolve_service_for_format(
+    service = await _resolve_service_for_format(
         effective_registry, credential_format, key_purpose, algorithm
     )
     if service is None:
@@ -2903,7 +2313,7 @@ async def resolve_signing_service(
         )
 
     keys = [key for key in (snapshot.get("keys") or []) if isinstance(key, dict)]
-    resolved_key_reference = _resolve_key_reference_for_purpose(
+    resolved_key_reference = await _resolve_key_reference_for_purpose(
         effective_registry,
         service,
         keys,
@@ -3067,7 +2477,7 @@ async def generate_csr(
             status_code=404, detail=f"Service '{service_id}' not found."
         )
 
-    normalized = _normalize_registered_service(service)
+    normalized = await _normalize_registered_service(service)
     if normalized is None:
         raise HTTPException(status_code=400, detail="Service could not be normalized.")
 
@@ -3694,7 +3104,7 @@ async def get_mdoc_x5c_material(
             status_code=404, detail=f"Service '{service_id}' not found."
         )
 
-    normalized = _normalize_registered_service(service)
+    normalized = await _normalize_registered_service(service)
     if normalized is None:
         raise HTTPException(status_code=400, detail="Service could not be normalized.")
 
@@ -4108,7 +3518,7 @@ async def internal_resolve_issuer_context(
     # and mDoc COSE issuance consume this same public chain.
     issuer_x5c = _service_x5c_chain(normalized)
     if credential_format or requested_purpose or algorithm:
-        resolved = _resolve_service_for_format(
+        resolved = await _resolve_service_for_format(
             registry, credential_format, requested_purpose, algorithm
         )
         if resolved is not None and resolved.get("id") != service_id:
@@ -4826,7 +4236,7 @@ async def register_vdsnc_service(
 
     registry = await _load_registered_service_registry(request, resolved_org_id)
     services = registry.get("services") if isinstance(registry, dict) else []
-    new_service = _normalize_registered_service(
+    new_service = await _normalize_registered_service(
         {
             "id": f"svc-vdsnc-{country_code.lower()}-{uuid.uuid4().hex[:8]}",
             "name": f"VDS-NC {country_code} {authority_name}",
@@ -4902,7 +4312,7 @@ async def verify_service_public_key(
             status_code=404, detail=f"Service '{service_id}' not found."
         )
 
-    normalized = _normalize_registered_service(service)
+    normalized = await _normalize_registered_service(service)
     if normalized is None:
         raise HTTPException(status_code=400, detail="Service could not be normalized.")
 
@@ -5660,7 +5070,7 @@ async def _resolve_org_scoped_issuer_identity(
             continue
 
         if credential_format or key_purpose or algorithm:
-            resolved = _resolve_service_for_format(
+            resolved = await _resolve_service_for_format(
                 registry, credential_format, key_purpose, algorithm
             )
             if resolved is not None and resolved.get("id") != service_id:
@@ -6075,7 +5485,7 @@ async def _managed_custody_for_new_identity(
         "default_service_id": registry.get("default_service_id")
         or config.get("default_service_id"),
     }
-    service = _resolve_service_for_format(
+    service = await _resolve_service_for_format(
         effective_registry,
         wire_format,
         operation.key_purpose,
@@ -6127,7 +5537,7 @@ async def _managed_custody_for_new_identity(
     else:
         keys = [key for key in (snapshot.get("keys") or []) if isinstance(key, dict)]
         key_reference = str(
-            _resolve_key_reference_for_purpose(
+            await _resolve_key_reference_for_purpose(
                 effective_registry,
                 service,
                 keys,
