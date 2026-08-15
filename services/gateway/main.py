@@ -314,6 +314,11 @@ class GatewayCedarAuthMiddleware(MartyCedarAuthMiddleware):
     mapping; every other resource continues through the upstream middleware.
     """
 
+    SKIP_PATTERNS = [
+        *MartyCedarAuthMiddleware.SKIP_PATTERNS,
+        r"^/v1/(?:flows/instances|verify)/[^/]+/(?:request|submit)$",
+    ]
+
     @staticmethod
     def _api_key_allowed(required_permission: str, scopes: list[str]) -> bool:
         resource, separator, action = required_permission.partition(":")

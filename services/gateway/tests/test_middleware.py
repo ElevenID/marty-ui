@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -910,6 +911,30 @@ def test_static_flow_segments_do_not_trigger_resource_owner_lookup(segment: str)
         path += "/application-approved"
 
     assert cedar_actions.resolve_resource_lookup(path) is None
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/flows/instances/flow-1/request",
+        "/v1/flows/instances/flow-1/submit",
+        "/v1/verify/session-1/request",
+        "/v1/verify/session-1/submit",
+    ],
+)
+def test_wallet_capability_routes_skip_cedar_owner_lookup(path: str) -> None:
+    assert any(
+        re.match(pattern, path)
+        for pattern in gateway_main.GatewayCedarAuthMiddleware.SKIP_PATTERNS
+    )
+
+
+def test_wallet_cedar_skip_does_not_exempt_authenticated_result_polling() -> None:
+    path = "/v1/flows/instances/flow-1/result"
+    assert not any(
+        re.match(pattern, path)
+        for pattern in gateway_main.GatewayCedarAuthMiddleware.SKIP_PATTERNS
+    )
 
 
 def test_gateway_static_resource_routes_are_declared_in_common_classifier() -> None:
