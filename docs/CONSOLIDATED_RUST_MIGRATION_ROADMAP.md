@@ -81,7 +81,7 @@ order work, not completion metrics and not permission to discard behavior.
 
 | Order | Workstream | Baseline removable source | Status | Canonical destination |
 |---|---|---:|---|---|
-| 1 | Signing-key and KMS service | approximately 7,820 Python lines | Cutover in progress: the core primitives and all Rust service slices are implemented; the stacked merge train remains | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
+| 1 | Signing-key and KMS service | approximately 7,820 Python lines | Cutover in progress: the canonical Core signing/JWK primitives are merged and every Rust service slice is implemented; the coordinated Core 0.1.57 release and stacked consumer merge train remain | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
 | 2 | Marty CLI and API client | 7,218 deleted handwritten JavaScript lines | Complete on `main`: native CLI and Rust/WASM browser client are compatibility-tested, packaged, and merged | native Rust workspace, executable, and browser/WASM client in `marty-cli` |
 | 3 | Notification and webhook service | 7,142 deleted Python/service lines | Complete on `main`: public REST/gRPC, storage, outbox, delivery, secret-envelope, migration, and packaging contracts passed before the Python service was deleted | Rust service in `marty-ui` using the established service foundation |
 | 4 | Credential attestation, evidence, governance, and VCDM decisions | 1,804 deleted Python lines in the current slices | Core decision and attestation kernels are merged; the complete native-wheel, Python, Rust, WASM, PostgreSQL race, security, and packaging lanes pass for the primary consumer, with key attestation stacked behind it pending the coordinated Core release | `marty-oid4vci` and `marty-verification`, consumed by `marty-credentials` |
@@ -89,7 +89,7 @@ order work, not completion metrics and not permission to discard behavior.
 | 6 | Remaining eMRTD EF, DG15, and biometric-template parsing | approximately 1,300 deleted Python lines | Complete on `main`: bounded Rust parsers, bindings, DTO/chip-I/O adapters, exact cross-language vectors, deletion checks, and consuming CI passed | `marty-verification` eMRTD parser modules |
 | 7 | Subscription API-key lifecycle | approximately 539 Python lines plus duplicated plan/webhook kernels | Complete on `main`: canonical Rust policy/cryptography, fail-closed adapters, shared Rust/Python vectors, Redis/SQL orchestration tests, and deletion checks passed | `marty-subscriptions/packages/verifier_entitlements/marty-license` |
 | 8 | Trust-registry synchronization kernel | approximately 433 Python lines | Complete on `main`: canonical Rust policy/state/X.509 kernel, fail-closed adapter, startup diagnostics, exact shared vectors, service regression suite, and Python implementation deletion passed before both PRs merged | `marty-verification` trust registry plus `marty-crypto` certificate validation |
-| 9 | Wallet status-list and liveness decisions | at least 378 Dart kernel lines | Cutover in progress: bounded Core status decoding and the Rust bridge kernels, shared behavioral fixtures, fail-closed adapters, and Dart implementation deletion are implemented; generated bindings and the complete Flutter suite remain gates | `marty-status` and `marty-biometrics` through Flutter Rust Bridge |
+| 9 | Wallet status-list and liveness decisions | at least 378 Dart kernel lines | Cutover in progress: bounded Core status decoding, Rust bridge kernels, shared behavioral fixtures, fail-closed adapters, and Dart implementation deletion are implemented; generated bindings and the complete Flutter/build/coverage suites pass, with the coordinated Core release pin and merge remaining | `marty-status` and `marty-biometrics` through Flutter Rust Bridge |
 
 The ordering applies to starting each workstream. A prerequisite canonical
 crate PR may land before its consuming service PR, but a smaller workstream is
@@ -160,14 +160,18 @@ not satisfy the parity gate.
 ### Active wave-two evidence
 
 - Signing-key/KMS implementation is split across
-  [marty-core PR 229](https://github.com/ElevenID/marty-core/pull/229) and
+  [marty-core PRs 229](https://github.com/ElevenID/marty-core/pull/229) and
+  [233](https://github.com/ElevenID/marty-core/pull/233), plus
   [marty-ui PRs 515](https://github.com/ElevenID/marty-ui/pull/515),
   [518](https://github.com/ElevenID/marty-ui/pull/518),
   [520](https://github.com/ElevenID/marty-ui/pull/520),
   [522](https://github.com/ElevenID/marty-ui/pull/522),
   [524](https://github.com/ElevenID/marty-ui/pull/524), and
-  [527](https://github.com/ElevenID/marty-ui/pull/527). The stack remains
-  deployment-neutral until it lands as a whole.
+  [527](https://github.com/ElevenID/marty-ui/pull/527). The final shared
+  signing/JWK conversion and minimal-feature dependency correction merged as
+  `34cf79d77161feba79934cb78700f885edf07a75` after the complete protected
+  merge-group matrix passed. The service stack remains deployment-neutral
+  until the 0.1.57 artifacts are pinned and it lands as a whole.
 - [marty-cli PR 14](https://github.com/ElevenID/marty-cli/pull/14) replaces the
   Node executable and browser HTTP kernel with one Rust implementation. Its
   language-neutral command vectors, native HTTP tests, Rust/WASM compatibility
@@ -231,8 +235,12 @@ not satisfy the parity gate.
   challenge creation, signing, and verification into Rust. Dart retains only
   HTTP/cache, camera, gesture, and UI orchestration. The Dart Base64/GZIP/HMAC
   and random-ID kernels are deleted in the same PR, guarded against
-  reintroduction, and the complete generated-binding and Flutter lanes remain
-  merge gates.
+  reintroduction. Generated bindings are current; the Flutter unit, Android,
+  iOS configuration, build, and shared quality lanes pass. Maintained Dart
+  line coverage is 90.47% (655/724) after excluding seven generated files,
+  with production adapter, cache, compatibility, endpoint-failure, and
+  unsupported-purpose behavior exercised. The coordinated Core release pin
+  and protected merge remain.
 - No wave-two slice updates beta independently. One commit-pinned aggregate
   beta deployment and evidence run occurs only after all workstreams land.
 
