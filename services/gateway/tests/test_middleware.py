@@ -623,27 +623,34 @@ def test_notification_routes_have_exact_cedar_permissions(
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
-        (
-            "/v1/webhooks/webhook-1",
-            ("notifications", "/v1/webhooks/webhook-1"),
-        ),
-        (
-            "/v1/subscriptions/subscription-1",
-            ("notifications", "/v1/subscriptions/subscription-1"),
-        ),
-        (
-            "/v1/notifications/notification-1",
-            ("notifications", "/v1/notifications/notification-1"),
-        ),
+        ("/v1/webhooks/webhook-1", None),
+        ("/v1/subscriptions/subscription-1", None),
+        ("/v1/notifications/notification-1", None),
         ("/v1/notifications/events/push", None),
         ("/v1/notifications/send", None),
     ],
 )
-def test_notification_resource_lookups_resolve_real_tenant(
+def test_query_scoped_notification_resources_skip_unscoped_owner_lookup(
     path: str,
     expected: tuple[str, str] | None,
 ):
     assert cedar_actions.resolve_resource_lookup(path) == expected
+
+
+def test_notification_cedar_registration_is_idempotent_and_query_scoped() -> None:
+    gateway_main._register_notification_cedar_routes()
+    rules_before = list(cedar_actions.SPECIAL_ROUTE_RULES)
+    lookups_before = dict(cedar_actions.RESOURCE_LOOKUP_MAP)
+
+    gateway_main._register_notification_cedar_routes()
+
+    assert cedar_actions.SPECIAL_ROUTE_RULES == rules_before
+    assert cedar_actions.RESOURCE_LOOKUP_MAP == lookups_before
+    assert not {
+        "webhooks",
+        "subscriptions",
+        "notifications",
+    }.intersection(cedar_actions.RESOURCE_LOOKUP_MAP)
 
 
 @pytest.mark.parametrize(
@@ -728,16 +735,26 @@ async def test_webhook_list_rejects_cross_tenant_query_scope():
 
 
 @pytest.mark.asyncio
-async def test_webhook_resource_id_uses_owning_tenant_before_query_scope():
-    async def get_membership(_user_id: str, organization_id: str):
-        assert organization_id == "org-b"
-        return None
+async def test_webhook_resource_id_uses_authorized_query_without_unscoped_lookup():
+    class Membership:
+        status = "active"
+        is_owner = False
+        role_names = {"access-admin"}
+        permissions = {"webhook:view"}
 
-    resource_response = httpx.Response(
-        200,
-        json={"id": "webhook-b", "organization_id": "org-b"},
-    )
-    http_client = SimpleNamespace(get=AsyncMock(return_value=resource_response))
+        def is_active(self) -> bool:
+            return True
+
+        def has_permission(self, requested: str) -> bool:
+            return requested in self.permissions
+
+    membership_requests: list[tuple[str, str]] = []
+
+    async def get_membership(user_id: str, organization_id: str):
+        membership_requests.append((user_id, organization_id))
+        return Membership() if organization_id == "org-a" else None
+
+    http_client = SimpleNamespace(get=AsyncMock())
     app = FastAPI()
     app.state.org_client = SimpleNamespace(get_membership=get_membership)
     app.state.service_registry = SimpleNamespace(
@@ -748,8 +765,9 @@ async def test_webhook_resource_id_uses_owning_tenant_before_query_scope():
     app.state.http_client = http_client
 
     @app.get("/v1/webhooks/webhook-b")
-    async def protected_route():
-        return JSONResponse({"unexpected": True})
+    async def protected_route(request: Request):
+        assert request.state.organization_id == "org-a"
+        return JSONResponse({"detail": "Webhook not found"}, status_code=404)
 
     app.add_middleware(gateway_main.GatewayCedarAuthMiddleware)
 
@@ -764,14 +782,18 @@ async def test_webhook_resource_id_uses_owning_tenant_before_query_scope():
         transport=transport,
         base_url="http://test",
     ) as client:
-        response = await client.get("/v1/webhooks/webhook-b?organization_id=org-a")
+        scoped_not_found = await client.get(
+            "/v1/webhooks/webhook-b?organization_id=org-a"
+        )
+        foreign_scope = await client.get(
+            "/v1/webhooks/webhook-b?organization_id=org-b"
+        )
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Not a member of this organization"
-    http_client.get.assert_awaited_once()
-    assert http_client.get.await_args.args[0] == (
-        "http://notifications/v1/webhooks/webhook-b"
-    )
+    assert scoped_not_found.status_code == 404
+    assert foreign_scope.status_code == 403
+    assert foreign_scope.json()["detail"] == "Not a member of this organization"
+    assert membership_requests == [("user-a", "org-a"), ("user-a", "org-b")]
+    http_client.get.assert_not_awaited()
 
 
 @pytest.mark.asyncio

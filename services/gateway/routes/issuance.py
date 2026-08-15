@@ -305,14 +305,44 @@ issued_credential_router = APIRouter(
 
 
 def _require_selected_organization(request: Request, organization_id: str) -> None:
-    """Bind an issuance management request to the authenticated tenant."""
+    """Bind issuance to the tenant Cedar authorized for this request."""
+    _bind_organization_context(
+        request,
+        organization_id,
+        allow_cedar_selection=True,
+    )
+
+
+def _require_principal_organization(request: Request, organization_id: str) -> None:
+    """Bind privileged management to the principal's original tenant."""
+    _bind_organization_context(
+        request,
+        organization_id,
+        allow_cedar_selection=False,
+    )
+
+
+def _bind_organization_context(
+    request: Request,
+    organization_id: str,
+    *,
+    allow_cedar_selection: bool,
+) -> None:
     state = getattr(request, "state", None)
-    selected = str(
-        getattr(state, "session_organization_id", "")
-        or getattr(state, "api_key_organization_id", "")
-        or getattr(state, "organization_id", "")
-        or ""
-    ).strip()
+    if getattr(state, "auth_source", None) == "api_key":
+        selected = str(
+            getattr(state, "api_key_organization_id", "") or ""
+        ).strip()
+    elif allow_cedar_selection:
+        selected = str(
+            getattr(state, "organization_id", "")
+            or getattr(state, "session_organization_id", "")
+            or ""
+        ).strip()
+    else:
+        selected = str(
+            getattr(state, "session_organization_id", "") or ""
+        ).strip()
     if not selected:
         raise HTTPException(
             status_code=403,
@@ -939,7 +969,7 @@ async def get_canvas_mirror_provenance(
     organization_id: str = Query(..., min_length=1, max_length=255),
 ) -> Response:
     """Resolve a Canvas mirror record to its canonical ElevenID issuance context."""
-    _require_selected_organization(request, organization_id)
+    _require_principal_organization(request, organization_id)
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(
@@ -959,7 +989,7 @@ async def process_pending_canvas_mirror_deliveries(
     organization_id: str = Query(..., min_length=1, max_length=255),
 ) -> Response:
     """Process pending Canvas mirror delivery records through issuance."""
-    _require_selected_organization(request, organization_id)
+    _require_principal_organization(request, organization_id)
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(
@@ -979,7 +1009,7 @@ async def process_canvas_mirror_status_sync_failures(
     organization_id: str = Query(..., min_length=1, max_length=255),
 ) -> Response:
     """Retry failed Canvas mirror lifecycle status syncs through issuance."""
-    _require_selected_organization(request, organization_id)
+    _require_principal_organization(request, organization_id)
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(
@@ -999,7 +1029,7 @@ async def run_canvas_mirror_automation_cycle(
     organization_id: str = Query(..., min_length=1, max_length=255),
 ) -> Response:
     """Run one Canvas mirror automation cycle through issuance."""
-    _require_selected_organization(request, organization_id)
+    _require_principal_organization(request, organization_id)
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(
@@ -1016,7 +1046,7 @@ async def run_canvas_mirror_automation_cycle(
 )
 async def get_canvas_mirror_health(organization_id: str, request: Request) -> Response:
     """Return Canvas mirror publish and lifecycle sync health for an organization."""
-    _require_selected_organization(request, organization_id)
+    _require_principal_organization(request, organization_id)
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
     return await proxy_request(

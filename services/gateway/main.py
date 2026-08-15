@@ -277,7 +277,7 @@ _NOTIFICATION_ROUTE_RULES = (
     ),
 )
 
-_NOTIFICATION_RESOURCE_LOOKUPS = {
+_LEGACY_UNSCOPED_NOTIFICATION_RESOURCE_LOOKUPS = {
     "webhooks": (
         "notifications",
         "/v1/webhooks/{resource_id}",
@@ -594,7 +594,15 @@ def _register_canvas_mirror_cedar_routes() -> None:
 
 
 def _register_notification_cedar_routes() -> None:
-    """Protect notification resources until marty-common ships the same boundary."""
+    """Protect notification resources until marty-common ships the same boundary.
+
+    Notification ID routes require an explicit organization selector, the
+    gateway replaces that selector with the Cedar-authorized organization,
+    and the notification service checks the resource belongs to it.  An
+    unscoped pre-authorization GET cannot discover ownership through those
+    public endpoints and must not turn their required-query response into a
+    gateway 502.
+    """
     resolver = getattr(_cedar_actions, "resolve_action_and_resource", None)
     lookup_resolver = getattr(_cedar_actions, "resolve_resource_lookup", None)
     rules = getattr(_cedar_actions, "SPECIAL_ROUTE_RULES", None)
@@ -644,26 +652,25 @@ def _register_notification_cedar_routes() -> None:
         inserted_rules = list(_NOTIFICATION_ROUTE_RULES)
         rules[0:0] = inserted_rules
 
-    inserted_lookup_keys: list[str] = []
+    removed_legacy_lookups: dict[str, tuple] = {}
     try:
-        for resource, expected in _NOTIFICATION_RESOURCE_LOOKUPS.items():
+        for resource, legacy in _LEGACY_UNSCOPED_NOTIFICATION_RESOURCE_LOOKUPS.items():
             current_lookup = lookups.get(resource)
-            if current_lookup is not None and current_lookup != expected:
+            if current_lookup is not None and current_lookup != legacy:
                 raise RuntimeError(
                     f"Conflicting marty-common {resource} tenant lookup; "
-                    "refusing to override it."
+                    "refusing to bypass it."
                 )
-            if current_lookup is None:
-                lookups[resource] = expected
-                inserted_lookup_keys.append(resource)
+            if current_lookup == legacy:
+                removed_legacy_lookups[resource] = current_lookup
+                lookups.pop(resource)
 
         verified_routes = all(
             resolver(*probe) == expected for probe, expected in probes.items()
         )
         verified_lookups = all(
-            lookup_resolver(f"/v1/{resource}/example")
-            == (expected[0], expected[1].format(resource_id="example"))
-            for resource, expected in _NOTIFICATION_RESOURCE_LOOKUPS.items()
+            lookup_resolver(f"/v1/{resource}/example") is None
+            for resource in _LEGACY_UNSCOPED_NOTIFICATION_RESOURCE_LOOKUPS
         )
         if not verified_routes or not verified_lookups:
             raise RuntimeError(
@@ -674,8 +681,7 @@ def _register_notification_cedar_routes() -> None:
         for rule in inserted_rules:
             if rule in rules:
                 rules.remove(rule)
-        for resource in inserted_lookup_keys:
-            lookups.pop(resource, None)
+        lookups.update(removed_legacy_lookups)
         raise
 
 
