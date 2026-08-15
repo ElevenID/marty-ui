@@ -81,10 +81,6 @@ SERVICES = [
         "module": "flow.infrastructure.models",
     },
     {
-        "name": "notification",
-        "module": "notification.infrastructure.models",
-    },
-    {
         "name": "device_registration",
         "module": "device_registration.infrastructure.models",
     },
