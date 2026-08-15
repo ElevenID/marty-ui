@@ -6,6 +6,7 @@ All request/response schemas used by gateway route modules.
 
 from __future__ import annotations
 
+import base64
 from enum import Enum
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -591,6 +592,41 @@ class IssuerIdentityCreateRequest(IssuerIdentityOperationRequest):
     """Provider-neutral request to ensure a managed issuer identity."""
 
     key_attestation_policy: KeyAttestationPolicy | None = None
+
+
+class X25519PublicJwk(BaseModel):
+    """Strict public-only key material for DIDComm sender authentication."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kty: Literal["OKP"]
+    crv: Literal["X25519"]
+    x: str = Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")
+
+    @field_validator("x")
+    @classmethod
+    def validate_x25519_public_key(cls, value: str) -> str:
+        try:
+            decoded = base64.b64decode(value + "=", altchars=b"-_", validate=True)
+        except ValueError as exc:
+            raise ValueError("X25519 public key must use canonical base64url") from exc
+        canonical = base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii")
+        if len(decoded) != 32 or canonical != value:
+            raise ValueError("X25519 public key must encode exactly 32 bytes")
+        return value
+
+
+class DidcommKeyAgreementPublishRequest(IssuerIdentityOperationRequest):
+    """Publish public DIDComm key agreement for one active managed issuer."""
+
+    public_jwk: X25519PublicJwk
+
+
+class DidcommKeyAgreementPublishResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    issuer_did: str = Field(pattern=r"^did:", max_length=2048)
+    key_agreement_method_id: str = Field(pattern=r"^did:.+#", max_length=2304)
 
 
 class IssuerIdentityCertificateRequest(IssuerIdentityOperationRequest):

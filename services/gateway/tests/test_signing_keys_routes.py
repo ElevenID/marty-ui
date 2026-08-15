@@ -5864,6 +5864,9 @@ def test_public_router_exposes_identities_not_private_issuer_profiles() -> None:
     assert "/v1/signing-keys/issuer-identities" in public_paths
     assert "/v1/signing-keys/issuer-identities/resolve" in public_paths
     assert "/v1/signing-keys/issuer-identities/certificate" in public_paths
+    assert (
+        "/v1/signing-keys/issuer-identities/didcomm-key-agreement" in public_paths
+    )
     assert not any(
         path.startswith("/v1/signing-keys/issuer-profiles") for path in public_paths
     )
@@ -5890,6 +5893,181 @@ def test_public_identity_request_rejects_every_private_custody_selector() -> Non
             signing_keys.IssuerIdentityCreateRequest.model_validate(
                 {**request, field: "private"}
             )
+
+
+def test_didcomm_key_agreement_request_accepts_only_public_x25519() -> None:
+    public_x = base64.urlsafe_b64encode(bytes(range(32))).rstrip(b"=").decode()
+    request = {
+        "organization_id": "org-a",
+        "issuer_did": "did:web:issuer.example:orgs:a",
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256",
+        "public_jwk": {"kty": "OKP", "crv": "X25519", "x": public_x},
+    }
+
+    parsed = signing_keys.DidcommKeyAgreementPublishRequest.model_validate(request)
+    assert parsed.public_jwk.x == public_x
+    for invalid_jwk in (
+        {"kty": "OKP", "crv": "X25519", "x": public_x, "d": public_x},
+        {"kty": "OKP", "crv": "Ed25519", "x": public_x},
+        {"kty": "OKP", "crv": "X25519", "x": "AA=="},
+    ):
+        with pytest.raises(ValueError):
+            signing_keys.DidcommKeyAgreementPublishRequest.model_validate(
+                {**request, "public_jwk": invalid_jwk}
+            )
+
+
+@pytest.mark.asyncio
+async def test_didcomm_key_agreement_publication_is_tenant_and_did_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    issuer_did = "did:web:issuer.example:orgs:a"
+    public_x = base64.urlsafe_b64encode(bytes(range(32))).rstrip(b"=").decode()
+    operation = signing_keys.DidcommKeyAgreementPublishRequest(
+        organization_id="org-a",
+        issuer_did=issuer_did,
+        key_purpose="vc_jwt_issuer",
+        credential_format="SD_JWT_VC",
+        algorithm="ES256",
+        public_jwk={"kty": "OKP", "crv": "X25519", "x": public_x},
+    )
+    method_id = f"{issuer_did}#didcomm-authcrypt-x25519"
+    publish = AsyncMock(
+        return_value={
+            "verification_method": {
+                "id": method_id,
+                "type": "JsonWebKey2020",
+                "controller": issuer_did,
+                "publicKeyJwk": operation.public_jwk.model_dump(mode="json"),
+            },
+            "document": {
+                "id": issuer_did,
+                "verificationMethod": [
+                    {
+                        "id": method_id,
+                        "type": "JsonWebKey2020",
+                        "controller": issuer_did,
+                        "publicKeyJwk": operation.public_jwk.model_dump(mode="json"),
+                    }
+                ],
+                "assertionMethod": [],
+                "keyAgreement": [method_id],
+            },
+            "did_id": issuer_did,
+        }
+    )
+    monkeypatch.setenv("PUBLIC_DOMAIN", "issuer.example")
+    monkeypatch.setattr(
+        signing_keys,
+        "_matching_issuer_identity_profiles",
+        AsyncMock(return_value=[{"id": "private-profile", "issuer_did": issuer_did}]),
+    )
+    monkeypatch.setattr(signing_keys, "publish_native_signing_did", publish)
+
+    response = await signing_keys.publish_public_issuer_didcomm_key_agreement(
+        _build_request("org-a"), operation
+    )
+
+    assert response.model_dump() == {
+        "issuer_did": issuer_did,
+        "key_agreement_method_id": method_id,
+    }
+    publish.assert_awaited_once_with(
+        "org-a",
+        "didcomm-authcrypt",
+        {
+            "jwk": {"kty": "OKP", "crv": "X25519", "x": public_x},
+            "public_domain": "issuer.example",
+            "did_id": issuer_did,
+            "org_slug": "a",
+            "fragment": "didcomm-authcrypt-x25519",
+            "relationship": "keyAgreement",
+        },
+    )
+    assert "private-profile" not in json.dumps(response.model_dump())
+
+
+@pytest.mark.asyncio
+async def test_didcomm_key_agreement_rejects_mismatched_registry_public_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException as FastAPIHTTPException
+
+    issuer_did = "did:web:issuer.example:orgs:a"
+    public_x = base64.urlsafe_b64encode(bytes(range(32))).rstrip(b"=").decode()
+    wrong_x = base64.urlsafe_b64encode(bytes(reversed(range(32)))).rstrip(b"=").decode()
+    operation = signing_keys.DidcommKeyAgreementPublishRequest(
+        organization_id="org-a",
+        issuer_did=issuer_did,
+        key_purpose="vc_jwt_issuer",
+        credential_format="SD_JWT_VC",
+        algorithm="ES256",
+        public_jwk={"kty": "OKP", "crv": "X25519", "x": public_x},
+    )
+    method_id = f"{issuer_did}#didcomm-authcrypt-x25519"
+    wrong_method = {
+        "id": method_id,
+        "type": "JsonWebKey2020",
+        "controller": issuer_did,
+        "publicKeyJwk": {"kty": "OKP", "crv": "X25519", "x": wrong_x},
+    }
+    monkeypatch.setenv("PUBLIC_DOMAIN", "issuer.example")
+    monkeypatch.setattr(
+        signing_keys,
+        "_matching_issuer_identity_profiles",
+        AsyncMock(return_value=[{"id": "private-profile", "issuer_did": issuer_did}]),
+    )
+    monkeypatch.setattr(
+        signing_keys,
+        "publish_native_signing_did",
+        AsyncMock(
+            return_value={
+                "verification_method": wrong_method,
+                "document": {
+                    "id": issuer_did,
+                    "verificationMethod": [wrong_method],
+                    "keyAgreement": [method_id],
+                },
+            }
+        ),
+    )
+
+    with pytest.raises(FastAPIHTTPException) as exc_info:
+        await signing_keys.publish_public_issuer_didcomm_key_agreement(
+            _build_request("org-a"), operation
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "invalid key agreement publication" in str(exc_info.value.detail)
+
+
+def test_retargeted_did_document_preserves_key_agreement_authorization() -> None:
+    source = "did:web:issuer.example:orgs:source"
+    target = "did:web:issuer.example:orgs:target"
+    method = f"{source}#didcomm-authcrypt-x25519"
+
+    retargeted = signing_keys._retarget_did_document(
+        {
+            "id": source,
+            "verificationMethod": [
+                {
+                    "id": method,
+                    "controller": source,
+                    "publicKeyJwk": {"kty": "OKP", "crv": "X25519", "x": "x"},
+                }
+            ],
+            "keyAgreement": [method],
+        },
+        target,
+    )
+
+    assert retargeted["verificationMethod"][0]["id"] == (
+        f"{target}#didcomm-authcrypt-x25519"
+    )
+    assert retargeted["verificationMethod"][0]["controller"] == target
+    assert retargeted["keyAgreement"] == [f"{target}#didcomm-authcrypt-x25519"]
 
 
 @pytest.mark.asyncio

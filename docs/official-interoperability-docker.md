@@ -106,6 +106,19 @@ or verifier private key to Compose or the flow service. This selects the
 separate HAIP overlay, which enables
 HAIP only for that disposable deployment and uses `x509_hash` client IDs.
 
+For an owned DIDComm authenticated-encryption boundary run, create an exact
+deployment-only directory outside the checkout containing
+`didcomm-encryption-policy.json`, set `DIDCOMM_ENCRYPTION_POLICY_DIR` to that
+directory, and add `--didcomm-authcrypt` to every launcher command. The file
+uses the exhaustive per-issuer schema documented by `marty-credentials`; an
+issuer omitted from a configured policy fails delivery closed. Update the file
+atomically when a disposable issuer key is created. The opt-in overlay mounts
+the directory read-only into issuance only. Never mount it into the gateway,
+publish it as evidence, or place sender private key material in Compose
+environment variables. The issuer's matching public X25519 JWK is published
+through the tenant-bound issuer-identity API and appears in the managed DID
+document's `keyAgreement` relationship.
+
 Inspect and remove exactly that project with:
 
 ```bash

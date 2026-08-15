@@ -10,6 +10,11 @@ search_queries:
   - "marty-credentials v0.1.64 issuance image digest"
   - "marty-core v0.1.57 signing wheel digest"
   - "consolidated Rust migration aggregate beta release"
+  - "DIDComm authcrypt deployment policy contract"
+  - "Rust-backed DID document publication and tenant-bound issuer identity routes"
+  - "DIDCOMM_ENCRYPTION_POLICY_FILE authcrypt active issuer"
+  - "PublishDidRequest keyAgreement did:web issuer identity"
+  - "compose_command optional profile isolation last"
 candidate_implementations:
   - path: release/stack-lock.json
     language: JSON
@@ -23,16 +28,28 @@ candidate_implementations:
   - path: https://github.com/ElevenID/marty-credentials/releases/tag/v0.1.64
     language: GitHub release evidence
     disposition: pin_verified_immutable_dependency_release
+  - path: marty-credentials/CONFIGURATION.md
+    language: Markdown
+    disposition: preserve_optional_policy_contract_for_controlled_integration_adoption
+  - path: rust/services/signing-keys/src/documents.rs
+    language: Rust
+    disposition: extend_canonical_did_document_owner
+  - path: services/gateway/routes/signing_keys.py
+    language: Python
+    disposition: reuse_existing_tenant_bound_public_identity_facade
+  - path: scripts/conformance_stack.py
+    language: Python
+    disposition: reuse_existing_explicit_overlay_ordering
+  - path: docs/official-interoperability-docker.md
+    language: Markdown
+    disposition: extend_existing_operator_runbook
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: release/stack-lock.json
-  language: JSON
-rust_disposition: rust_not_applicable
-non_rust_rationale: >-
-  This task advances existing immutable release metadata and invokes the
-  repository's established release pipeline. It adds no runtime, protocol,
-  validation, security, or cryptographic behavior for Rust to own.
+  path: rust/services/signing-keys/src/documents.rs
+  language: Rust
+rust_disposition: extend_existing_rust_owner
+non_rust_rationale: ""
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
