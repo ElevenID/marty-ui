@@ -1511,9 +1511,12 @@ async def _verify_sd_jwt(
                 )
             subject = rust_result.get("sub") or rust_result.get("subject", "unknown")
             sd_internal = {"_sd", "_sd_alg", "cnf", "...", "valid", "errors"}
+            policy_claims = rust_result.get("credentialSubject")
+            if not isinstance(policy_claims, dict):
+                policy_claims = rust_result
             claims = {
                 key: value
-                for key, value in rust_result.items()
+                for key, value in policy_claims.items()
                 if key not in sd_internal and not str(key).startswith("_")
             }
         except (NativeBackendUnavailable, NativeOperationError):

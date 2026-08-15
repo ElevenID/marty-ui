@@ -2186,6 +2186,53 @@ async def test_verify_sd_jwt_exposes_only_rust_verified_claims(monkeypatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_verify_sd_jwt_extracts_verified_w3c_credential_subject(monkeypatch) -> None:
+    public_jwk = {"kty": "EC", "crv": "P-256", "x": "x-value", "y": "y-value"}
+    encoded = (
+        base64.urlsafe_b64encode(json.dumps(public_jwk).encode()).decode().rstrip("=")
+    )
+    did = f"did:jwk:{encoded}"
+    token = ".".join(
+        [
+            _jwt_segment({"alg": "ES256", "typ": "vc+sd-jwt", "kid": did}),
+            _jwt_segment({"iss": did, "sub": "did:example:holder"}),
+            "signature",
+        ]
+    )
+    monkeypatch.setattr(
+        pp,
+        "_load_marty_rs_binding",
+        lambda: SimpleNamespace(
+            verify_sd_jwt=lambda *_args: json.dumps(
+                {
+                    "iss": did,
+                    "sub": "did:example:holder",
+                    "type": ["VerifiableCredential", "EmployeeBadge"],
+                    "credentialSubject": {
+                        "employeeId": "EMP-123",
+                        "givenName": "Boundary",
+                        "familyName": "Holder",
+                        "department": "Engineering",
+                    },
+                }
+            )
+        ),
+    )
+
+    result = await pp._verify_sd_jwt(token, nonce=None, audience=None)
+
+    assert result["verified"] is True
+    assert result["claims"] == {
+        "employeeId": "EMP-123",
+        "givenName": "Boundary",
+        "familyName": "Holder",
+        "department": "Engineering",
+    }
+    assert "credentialSubject" not in result["claims"]
+    assert "iss" not in result["claims"]
+
+
+@pytest.mark.asyncio
 async def test_verify_sd_jwt_requires_native_capability(monkeypatch) -> None:
     token = ".".join(
         [
