@@ -1,0 +1,112 @@
+[
+  {
+    "name": "valid_aws_iam_role",
+    "input": {
+      "service_type": "aws-kms",
+      "auth_mode": "iam_role",
+      "key_reference": "arn:aws:kms:us-west-2:123456789012:key/abc123",
+      "algorithms": ["ES256"],
+      "live_probe": false
+    },
+    "expected_ok": true,
+    "expected_checks": [
+      {"name": "Authentication reference", "status": "pass", "detail": "Authentication mode and reference look ready.", "source": "baseline"},
+      {"name": "Key reference", "status": "pass", "detail": "Key reference was provided.", "source": "baseline"},
+      {"name": "Algorithm coverage", "status": "pass", "detail": "Selected algorithms: ES256", "source": "baseline"},
+      {"name": "Provider key format", "status": "pass", "detail": "AWS key reference looks like a valid KMS key ARN.", "source": "provider"},
+      {"name": "Provider auth policy", "status": "pass", "detail": "IAM role mode selected; ensure gateway runtime identity has kms:Sign permissions.", "source": "provider"},
+      {"name": "Provider algorithm fit", "status": "pass", "detail": "Selected algorithms are compatible with expected aws signer capabilities.", "source": "provider"}
+    ]
+  },
+  {
+    "name": "invalid_aws_reference",
+    "input": {
+      "service_type": "aws-kms",
+      "auth_mode": "iam_role",
+      "key_reference": "not-an-arn",
+      "algorithms": ["ES256"],
+      "live_probe": false
+    },
+    "expected_ok": false,
+    "expected_checks": [
+      {"name": "Authentication reference", "status": "pass", "detail": "Authentication mode and reference look ready.", "source": "baseline"},
+      {"name": "Key reference", "status": "pass", "detail": "Key reference was provided.", "source": "baseline"},
+      {"name": "Algorithm coverage", "status": "pass", "detail": "Selected algorithms: ES256", "source": "baseline"},
+      {"name": "Provider key format", "status": "fail", "detail": "AWS key reference should be a key ARN (arn:aws:kms:region:account:key/<id>).", "source": "provider"},
+      {"name": "Provider auth policy", "status": "pass", "detail": "IAM role mode selected; ensure gateway runtime identity has kms:Sign permissions.", "source": "provider"},
+      {"name": "Provider algorithm fit", "status": "pass", "detail": "Selected algorithms are compatible with expected aws signer capabilities.", "source": "provider"}
+    ]
+  },
+  {
+    "name": "missing_key_and_unsupported_algorithm",
+    "input": {
+      "service_type": "azure-key-vault",
+      "auth_mode": "client_secret",
+      "algorithms": ["HS256"],
+      "live_probe": false
+    },
+    "expected_ok": false,
+    "expected_checks": [
+      {"name": "Authentication reference", "status": "warning", "detail": "Provide a credential or secret reference for this auth mode.", "source": "baseline"},
+      {"name": "Key reference", "status": "fail", "detail": "Key reference is required.", "source": "baseline"},
+      {"name": "Algorithm coverage", "status": "fail", "detail": "Select at least one supported signing algorithm.", "source": "baseline"},
+      {"name": "Provider auth policy", "status": "warning", "detail": "Provide an auth reference for client_secret/certificate modes.", "source": "provider"}
+    ]
+  },
+  {
+    "name": "valid_gcp_workload_identity",
+    "input": {
+      "service_type": "gcp-cloud-kms",
+      "auth_mode": "workload_identity",
+      "key_reference": "projects/acme/locations/us/keyRings/issuance/cryptoKeys/signer/cryptoKeyVersions/7",
+      "algorithms": ["EdDSA", "ES256"],
+      "live_probe": false
+    },
+    "expected_ok": true,
+    "expected_checks": [
+      {"name": "Authentication reference", "status": "pass", "detail": "Authentication mode and reference look ready.", "source": "baseline"},
+      {"name": "Key reference", "status": "pass", "detail": "Key reference was provided.", "source": "baseline"},
+      {"name": "Algorithm coverage", "status": "pass", "detail": "Selected algorithms: EdDSA, ES256", "source": "baseline"},
+      {"name": "Provider key format", "status": "pass", "detail": "GCP key reference looks like a Cloud KMS resource path.", "source": "provider"},
+      {"name": "Provider auth policy", "status": "pass", "detail": "Workload identity selected; ensure cloudkms.cryptoKeyVersions.useToSign permission is granted.", "source": "provider"},
+      {"name": "Provider algorithm fit", "status": "pass", "detail": "Selected algorithms are compatible with expected gcp signer capabilities.", "source": "provider"}
+    ]
+  },
+  {
+    "name": "mdoc_rejects_rsa_algorithm",
+    "input": {
+      "service_type": "custom-transit-compatible",
+      "auth_mode": "token",
+      "auth_reference": "secret-reference",
+      "key_reference": "document-signer",
+      "algorithms": ["RS256"],
+      "key_purposes": ["mdoc_dsc"],
+      "live_probe": false
+    },
+    "expected_ok": true,
+    "expected_checks": [
+      {"name": "Authentication reference", "status": "pass", "detail": "Authentication mode and reference look ready.", "source": "baseline"},
+      {"name": "Key reference", "status": "pass", "detail": "Key reference was provided.", "source": "baseline"},
+      {"name": "Algorithm coverage", "status": "pass", "detail": "Selected algorithms: RS256", "source": "baseline"},
+      {"name": "Key purpose algorithm fit", "status": "warning", "detail": "Algorithm(s) RS256 may not be suitable for the declared key purpose(s) mdoc_dsc.", "source": "baseline"}
+    ]
+  },
+  {
+    "name": "lti_requires_rs256",
+    "input": {
+      "service_type": "custom-transit-compatible",
+      "auth_mode": "mtls",
+      "key_reference": "lti-tool",
+      "algorithms": ["ES256"],
+      "key_purposes": ["lti_tool_signing"],
+      "live_probe": false
+    },
+    "expected_ok": true,
+    "expected_checks": [
+      {"name": "Authentication reference", "status": "pass", "detail": "Authentication mode and reference look ready.", "source": "baseline"},
+      {"name": "Key reference", "status": "pass", "detail": "Key reference was provided.", "source": "baseline"},
+      {"name": "Algorithm coverage", "status": "pass", "detail": "Selected algorithms: ES256", "source": "baseline"},
+      {"name": "Key purpose algorithm fit", "status": "warning", "detail": "Algorithm(s) ES256 may not be suitable for the declared key purpose(s) lti_tool_signing.", "source": "baseline"}
+    ]
+  }
+]

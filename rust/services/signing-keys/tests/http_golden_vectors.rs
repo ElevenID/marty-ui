@@ -32,13 +32,18 @@ async fn health_and_extraction_status_preserve_the_service_contract() {
         serde_json::json!({"status": "healthy", "service": "signing-keys-service"})
     );
     let status = get_json("/v1/signing-keys/service-status").await;
-    assert_eq!(status["phase"], "provider-integration");
+    assert_eq!(status["phase"], "provider-validation");
     assert_eq!(status["service_name"], "signing-keys-service");
     assert!(status["migrated_capabilities"]
         .as_array()
         .unwrap()
         .iter()
         .any(|capability| capability == "kms-adapter-integration"));
+    assert!(status["migrated_capabilities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|capability| capability == "service-registration-validation"));
 }
 
 #[tokio::test]
@@ -69,4 +74,39 @@ async fn internal_kms_routes_require_the_service_api_key() {
         .await
         .unwrap();
     assert_eq!(authorized.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn internal_validation_requires_the_service_api_key() {
+    let body = serde_json::json!({
+        "service_type": "aws-kms",
+        "live_probe": false
+    })
+    .to_string();
+    let unauthorized = marty_signing_keys::http::router()
+        .oneshot(
+            Request::post("/internal/config/validate")
+                .header("content-type", "application/json")
+                .body(Body::from(body.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let authorized = marty_signing_keys::http::router()
+        .oneshot(
+            Request::post("/internal/config/validate")
+                .header("content-type", "application/json")
+                .header("x-api-key", "dev-signing-keys-internal-api-key")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(authorized.status(), StatusCode::OK);
+    let result: Value =
+        serde_json::from_slice(&to_bytes(authorized.into_body(), usize::MAX).await.unwrap())
+            .unwrap();
+    assert_eq!(result["ok"], false);
 }

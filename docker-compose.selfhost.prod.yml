@@ -793,6 +793,32 @@ services:
       retries: 3
     restart: unless-stopped
 
+  signing-keys:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: signing-keys
+    environment:
+      <<: *runtime-env
+      SIGNING_KEYS_SERVICE_PORT: "8017"
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
+      BAO_ADDR: ${BAO_ADDR:-}
+      BAO_TOKEN_FILE: /run/secrets/openbao_service_token
+      RUST_LOG: info
+    secrets:
+      - issuance_api_key
+      - openbao_service_token
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8017/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
   flow:
     build:
       context: .
