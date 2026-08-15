@@ -739,6 +739,7 @@ services:
         SERVICE_NAME: signing-keys
     environment:
       SIGNING_KEYS_SERVICE_PORT: "8017"
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
       MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
       RUST_LOG: info

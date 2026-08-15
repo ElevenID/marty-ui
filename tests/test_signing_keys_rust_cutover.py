@@ -18,9 +18,33 @@ def test_superseded_python_signing_keys_scaffold_is_deleted() -> None:
     assert not list((ROOT / "services" / "signing_keys").glob("*.py"))
 
 
+def test_superseded_python_kms_provider_kernel_is_deleted() -> None:
+    adapter_package = ROOT / "services" / "gateway" / "kms_adapters"
+    assert not list(adapter_package.glob("*.py"))
+    route = (ROOT / "services" / "gateway" / "routes" / "signing_keys.py").read_text(
+        encoding="utf-8"
+    )
+    assert "gateway.kms_adapters" not in route
+    assert "der_to_raw_ecdsa" not in route
+
+
+def test_gateway_calls_authenticated_rust_kms_endpoints() -> None:
+    adapter = (ROOT / "services" / "gateway" / "native_signing_keys.py").read_text(
+        encoding="utf-8"
+    )
+    for path in (
+        "/internal/kms/sign",
+        "/internal/kms/public-key",
+        "/internal/kms/verify",
+    ):
+        assert path in adapter
+    assert 'headers={"X-API-Key": _internal_api_key()}' in adapter
+
+
 def test_base_stack_wires_gateway_to_the_rust_signing_keys_service() -> None:
     compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
 
     assert "SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017" in compose
     assert 'SIGNING_KEYS_SERVICE_PORT: "8017"' in compose
+    assert "SIGNING_KEYS_INTERNAL_API_KEY:" in compose
     assert "SERVICE_NAME: signing-keys" in compose

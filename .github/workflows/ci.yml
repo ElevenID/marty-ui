@@ -345,6 +345,7 @@ jobs:
 
   test-rust-db-contracts:
     name: Rust Database Contracts
+    needs: test-rust-services
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -382,35 +383,13 @@ jobs:
         with:
           persist-credentials: false
       - name: Download reusable database contract executables
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: rust-db-test-bundle-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rust-db-test-bundle
+      - name: Extract reusable database contract executables
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          artifact_name="rust-db-test-bundle-${GITHUB_RUN_ATTEMPT}"
-          deadline=$((SECONDS + 300))
-          artifact_id=""
-          while (( SECONDS < deadline )); do
-            artifact_id="$(curl --fail --silent --show-error \
-              --header "Authorization: Bearer $GH_TOKEN" \
-              --header 'X-GitHub-Api-Version: 2022-11-28' \
-              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=$artifact_name" \
-              | jq -r --arg name "$artifact_name" '.artifacts[] | select(.name == $name and .expired == false) | .id' \
-              | head -n 1)"
-            [[ -n "$artifact_id" ]] && break
-            sleep 2
-          done
-          if [[ -z "$artifact_id" ]]; then
-            echo "Timed out waiting for $artifact_name from Rust Service Tests." >&2
-            exit 1
-          fi
-          curl --fail --location --silent --show-error \
-            --header "Authorization: Bearer $GH_TOKEN" \
-            --header 'X-GitHub-Api-Version: 2022-11-28' \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" \
-            --output "$RUNNER_TEMP/rust-db-test-bundle.zip"
-          unzip -q "$RUNNER_TEMP/rust-db-test-bundle.zip" -d "$RUNNER_TEMP/rust-db-test-bundle"
-          tar -xf "$RUNNER_TEMP/rust-db-test-bundle/rust-db-test-bundle.tar" -C rust
+        run: tar -xf "$RUNNER_TEMP/rust-db-test-bundle/rust-db-test-bundle.tar" -C rust
       - name: Test Rust revocation database and runtime contracts
         working-directory: rust
         shell: bash

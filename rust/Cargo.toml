@@ -11,13 +11,16 @@ rust-version = "1.95"
 [workspace.dependencies]
 axum = "0.8"
 async-trait = "0.1"
+aws-config = { version = "1.10.1", default-features = false, features = ["credentials-process", "default-https-client", "rt-tokio", "sso"] }
+aws-sdk-kms = { version = "1.114.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 futures-core = "0.3"
 hmac = "0.12"
 hex = "0.4"
 http = "1"
-marty-status = { version = "=0.1.50", git = "https://github.com/ElevenID/marty-core", rev = "edc80a0369b850ac0864b26208d57a23f475aca9" }
+marty-crypto = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false, features = ["ecdsa", "jwk"] }
+marty-status = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8" }
 prost = "0.14"
 protoc-bin-vendored = "3"
 rand = "0.9"
@@ -30,7 +33,7 @@ sha2 = "0.10"
 sqlx = { version = "0.9", default-features = false, features = ["chrono", "json", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
 subtle = "2"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["net", "sync"] }
 tonic = { version = "0.14", features = ["tls-ring"] }
 tonic-health = "0.14"
@@ -48,3 +51,6 @@ debug = "line-tables-only"
 
 [profile.test]
 debug = "line-tables-only"
+
+[patch.crates-io]
+isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "7a443cf6c37c8d7f11e9a767c1002684842ab5d0" }

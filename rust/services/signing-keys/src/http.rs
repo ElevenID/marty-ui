@@ -1,6 +1,15 @@
 use crate::domain::{key_purposes, service_capabilities};
-use axum::{response::Html, routing::get, Json, Router};
+use crate::kms::{self, ProviderRequest, SignRequest};
+use axum::{
+    extract::State,
+    http::HeaderMap,
+    response::Html,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::Serialize;
+use std::sync::Arc;
+use subtle::ConstantTimeEq;
 use tower_http::trace::TraceLayer;
 
 #[derive(Debug, Serialize)]
@@ -13,11 +22,20 @@ struct HealthResponse {
 struct ServiceStatus {
     service_name: &'static str,
     phase: &'static str,
-    migrated_capabilities: [&'static str; 3],
-    pending_capabilities: [&'static str; 5],
+    migrated_capabilities: [&'static str; 5],
+    pending_capabilities: [&'static str; 4],
+}
+
+#[derive(Clone)]
+struct AppState {
+    internal_api_key: Arc<str>,
 }
 
 pub fn router() -> Router {
+    router_with_internal_api_key("dev-signing-keys-internal-api-key".to_string())
+}
+
+pub fn router_with_internal_api_key(internal_api_key: String) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
@@ -31,7 +49,53 @@ pub fn router() -> Router {
             "/v1/signing-keys/config/service-capabilities",
             get(capabilities),
         )
+        .route("/internal/kms/sign", post(kms_sign))
+        .route("/internal/kms/public-key", post(kms_public_key))
+        .route("/internal/kms/verify", post(kms_verify))
         .layer(TraceLayer::new_for_http())
+        .with_state(AppState {
+            internal_api_key: Arc::from(internal_api_key),
+        })
+}
+
+async fn kms_sign(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SignRequest>,
+) -> Result<Json<kms::SignResponse>, kms::KmsError> {
+    authorize_internal(&state, &headers)?;
+    Ok(Json(kms::sign(request).await?))
+}
+
+async fn kms_public_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ProviderRequest>,
+) -> Result<Json<serde_json::Value>, kms::KmsError> {
+    authorize_internal(&state, &headers)?;
+    Ok(Json(kms::public_key(request).await?))
+}
+
+async fn kms_verify(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ProviderRequest>,
+) -> Result<Json<kms::CapabilityResult>, kms::KmsError> {
+    authorize_internal(&state, &headers)?;
+    Ok(Json(kms::verify(request).await?))
+}
+
+fn authorize_internal(state: &AppState, headers: &HeaderMap) -> Result<(), kms::KmsError> {
+    let candidate = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    let expected = state.internal_api_key.as_bytes();
+    let supplied = candidate.as_bytes();
+    if expected.len() != supplied.len() || expected.ct_eq(supplied).unwrap_u8() != 1 {
+        return Err(kms::KmsError::Unauthorized);
+    }
+    Ok(())
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -58,15 +122,16 @@ async fn startup() -> Json<HealthResponse> {
 async fn service_status() -> Json<ServiceStatus> {
     Json(ServiceStatus {
         service_name: "signing-keys-service",
-        phase: "bootstrap",
+        phase: "provider-integration",
         migrated_capabilities: [
             "service-bootstrap",
             "health-surface",
             "integration-test-target",
+            "kms-adapter-integration",
+            "provider-key-normalization",
         ],
         pending_capabilities: [
             "registry-persistence",
-            "kms-adapter-integration",
             "jwks-did-publication-persistence",
             "audit-event-storage",
             "compliance-summary-computation",

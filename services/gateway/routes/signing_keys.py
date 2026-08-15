@@ -50,6 +50,7 @@ from gateway.models import (
     IssuerIdentityResponse,
 )
 from gateway.proxy import get_registry, proxy_request
+from gateway.native_signing_keys import get_native_kms_adapter
 
 signing_key_router = APIRouter(prefix="/v1/signing-keys", tags=["Signing Keys"])
 internal_signing_key_router = APIRouter(
@@ -1619,10 +1620,8 @@ def _service_type_definition(service_type_id: Any) -> dict[str, Any]:
 
 
 def _get_adapter(service_config: dict[str, Any]) -> Any:
-    """Return the provider adapter for a registered service config, if available."""
-    from gateway.kms_adapters import get_adapter
-
-    return get_adapter(service_config)
+    """Return the Rust-backed adapter for a registered service config."""
+    return get_native_kms_adapter(service_config)
 
 
 def _normalize_service_definition_catalog() -> list[dict[str, Any]]:
@@ -4782,17 +4781,7 @@ async def sign_payload_with_service(
     # This is provided as an option in the response; callers can use it if needed
     signature_transcoded: bytes | None = None
     if signature_encoding == "der":
-        try:
-            # Infer key size from algorithm
-            key_size_bytes = (
-                32 if algorithm in {"ES256"} else (48 if algorithm in {"ES384"} else 32)
-            )
-            from gateway.kms_adapters import der_to_raw_ecdsa
-
-            signature_transcoded = der_to_raw_ecdsa(signature_bytes, key_size_bytes)
-        except Exception:  # noqa: BLE001
-            # If transcoding fails, just return DER; caller can handle it
-            pass
+        signature_transcoded = getattr(adapter, "transcoded_signature", None)
 
     # Return signature(s) in multiple encodings for flexibility
     response_data = {
