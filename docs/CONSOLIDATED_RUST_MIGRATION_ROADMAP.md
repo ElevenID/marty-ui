@@ -40,6 +40,14 @@ a ninth target: the remaining Python eMRTD elementary-file, DG15, and
 biometric-template parsers. Completed and active workstreams are recorded
 below. Production and persistent self-host configurations remain unchanged.
 
+The notification/webhook workstream is now `native-active`: the Rust service
+owns REST, gRPC, PostgreSQL migrations and persistence, Transit-bound secrets,
+SSRF-resistant delivery, and the durable outbox. Language-neutral HTTP, gRPC,
+HMAC, migration, concurrency, and PostgreSQL/OpenBao contracts passed before
+the superseded Python service, adapters, migrations, and implementation tests
+were deleted. This cutover is packaged but is not deployed separately; it
+remains part of the one aggregate wave-two beta update.
+
 ## Wave two — ordered by removable non-Rust implementation
 
 Wave two is delivered in descending order of the non-Rust implementation that
@@ -48,12 +56,12 @@ order work, not completion metrics and not permission to discard behavior.
 
 | Order | Workstream | Baseline removable source | Status | Canonical destination |
 |---|---|---:|---|---|
-| 1 | Signing-key and KMS service | approximately 7,820 Python lines | Cutover in progress: the core primitives and all Rust service slices are implemented; the provider slice is refreshed against main and the stacked merge train remains | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
+| 1 | Signing-key and KMS service | approximately 7,820 Python lines | Cutover in progress: the core primitives and all Rust service slices are implemented; the stacked merge train remains | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
 | 2 | Marty CLI and API client | 7,218 deleted handwritten JavaScript lines | Complete on `main`: native CLI and Rust/WASM browser client are compatibility-tested, packaged, and merged | native Rust workspace, executable, and browser/WASM client in `marty-cli` |
-| 3 | Notification and webhook service | 7,142 deleted Python/service lines | Implemented in PR 529: public REST/gRPC, storage, outbox, delivery, secret-envelope, migration, and packaging contracts pass; refresh and merge remain | Rust service in `marty-ui` using the established service foundation |
+| 3 | Notification and webhook service | 7,142 deleted Python/service lines | Native active: public REST/gRPC, storage, outbox, delivery, secret-envelope, migration, and packaging contracts pass; merge remains | Rust service in `marty-ui` using the established service foundation |
 | 4 | Credential attestation, evidence, governance, and VCDM decisions | 1,804 deleted Python lines in the current slices | Implemented in the core and credential PR pairs; consuming CI intentionally fails closed until the combined native artifact is published | `marty-oid4vci` and `marty-verification`, consumed by `marty-credentials` |
 | 5 | Passport-chip protocol and integrity kernels | more than 1,300 deleted Python lines in the current slices | BAC, PACE compatibility, EAC, active authentication, ISO 9796, APDU, and integrity decisions are implemented and tested in open core/Marty PRs; merge and native artifact publication remain | `marty-verification::chip_io`, `marty-verification::active_authentication`, and `marty-crypto::iso9796` |
-| 6 | Remaining eMRTD EF, DG15, and biometric-template parsing | approximately 1,300 Python lines | Newly queued: replace duplicate TLV/MRZ/SPKI/RSA/biometric parsing and quality decisions; retain chip transport orchestration | `marty-verification` eMRTD parser modules |
+| 6 | Remaining eMRTD EF, DG15, and biometric-template parsing | approximately 1,300 Python lines | Queued: replace duplicate TLV/MRZ/SPKI/RSA/biometric parsing and quality decisions; retain chip transport orchestration | `marty-verification` eMRTD parser modules |
 | 7 | Subscription API-key lifecycle | approximately 539 Python lines | Planned | focused Rust package/service kernel in `marty-subscriptions` |
 | 8 | Trust-registry synchronization kernel | approximately 433 Python lines | Planned | `marty-verification` trust registry plus `marty-crypto` certificate validation |
 | 9 | Wallet status-list and liveness decisions | at least 378 Dart kernel lines | Planned | `marty-status`, `marty-verification`, and `marty-biometrics` through Flutter Rust Bridge |

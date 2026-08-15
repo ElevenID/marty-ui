@@ -13,4 +13,5 @@ case "${admin_email}" in
 		;;
 esac
 
-exec python /app/services/run_all_migrations.py
+python /app/services/run_all_migrations.py
+exec /usr/local/bin/marty-notification --migrate
