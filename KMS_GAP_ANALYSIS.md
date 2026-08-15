@@ -75,7 +75,7 @@ Without purpose and format routing, the gateway cannot automatically select the 
 
 **Tasks:**
 - [x] `GAP-002-a` Add `key_purposes` and `credential_formats` fields to `_normalize_registered_service()`
-- [x] `GAP-002-b` Add `KEY_PURPOSE_ALGORITHM_CONSTRAINTS` — maps purpose to allowed algorithm sets
+- [x] `GAP-002-b` Add canonical Rust `validation::purpose_algorithms()` mapping from purpose to allowed algorithm sets
 - [x] `GAP-002-c` Add `_resolve_service_for_format(registry, credential_format, key_purpose)` resolver helper
 - [x] `GAP-002-d` Add `POST /v1/signing-keys/config/resolve` endpoint that accepts `credential_format` + `key_purpose` + `algorithm` and returns the matching service
 - [x] `GAP-002-e` Add algorithm compatibility check at registration time (warn on mismatch)

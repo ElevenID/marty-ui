@@ -635,191 +635,41 @@ async def test_update_signing_key_config_persists_registered_services(
 
 
 @pytest.mark.asyncio
-async def test_validate_signing_key_service_returns_gateway_checks(
+async def test_validate_signing_key_service_uses_rust_decision(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    async def fake_validate(body: dict):
-        assert body["service_type"] == "custom-transit-compatible"
-        assert body["endpoint"] == "https://signer.example.com"
-        return {
-            "ok": True,
+    native_validate = AsyncMock(
+        return_value={
+            "ok": False,
             "checks": [
                 {
-                    "name": "Provider connectivity",
-                    "status": "pass",
-                    "detail": "Connected to signer endpoint.",
-                    "source": "live",
+                    "name": "Key reference",
+                    "status": "fail",
+                    "detail": "Key reference is required.",
+                    "source": "baseline",
                 }
             ],
-            "validated_at": "2026-04-16T00:00:00+00:00",
+            "validated_at": "2026-08-14T00:00:00Z",
         }
-
-    monkeypatch.setattr(signing_keys, "_run_service_validation", fake_validate)
-    request = _build_request("org_123")
-
-    response = await signing_keys.validate_signing_key_service(
-        request=request,
-        body={
-            "service_type": "custom-transit-compatible",
-            "endpoint": "https://signer.example.com",
-            "mount": "transit",
-            "auth_mode": "token",
-            "auth_reference": "vault-token",
-            "key_reference": "cred-issuer-prod",
-            "algorithms": ["ES256"],
-        },
     )
-
-    assert response.status_code == 200
-    assert b'"ok":true' in response.body
-    assert b'"Provider connectivity"' in response.body
-    assert b'"source":"live"' in response.body
-
-
-@pytest.mark.asyncio
-async def test_validate_signing_key_service_marks_missing_key_reference_as_failure():
-    request = _build_request("org_123")
-    response = await signing_keys.validate_signing_key_service(
-        request=request,
-        body={
-            "service_type": "aws-kms",
-            "auth_mode": "iam_role",
-            "algorithms": ["ES256"],
-        },
-    )
-
-    assert response.status_code == 200
-    assert b'"ok":false' in response.body
-    assert b'"name":"Key reference"' in response.body
-    assert b'"status":"fail"' in response.body
-
-
-@pytest.mark.asyncio
-async def test_validate_signing_key_service_checks_provider_key_reference_format():
-    request = _build_request("org_123")
-    response = await signing_keys.validate_signing_key_service(
-        request=request,
-        body={
-            "service_type": "aws-kms",
-            "provider": "aws",
-            "auth_mode": "iam_role",
-            "key_reference": "not-an-arn",
-            "algorithms": ["ES256"],
-        },
-    )
-
-    assert response.status_code == 200
-    assert b'"ok":false' in response.body
-    assert b'"name":"Provider key format"' in response.body
-    assert b"AWS key reference should be a key ARN" in response.body
-
-
-@pytest.mark.asyncio
-async def test_validate_signing_key_service_uses_cloud_validator_bridge(
-    monkeypatch: pytest.MonkeyPatch,
-):
     monkeypatch.setattr(
-        signing_keys,
-        "_cloud_validator_url",
-        lambda provider: "http://validator" if provider == "aws" else "",
+        signing_keys, "validate_native_signing_service", native_validate
     )
     request = _build_request("org_123")
-
-    async def fake_probe(payload: dict, validator_url: str):
-        assert payload["provider"] == "aws"
-        assert (
-            payload["key_reference"] == "arn:aws:kms:us-west-2:123456789012:key/abc123"
-        )
-        assert validator_url == "http://validator"
-        return True, None
-
-    monkeypatch.setattr(signing_keys, "_run_cloud_validator_probe", fake_probe)
+    body = {
+        "service_type": "aws-kms",
+        "auth_mode": "iam_role",
+        "algorithms": ["ES256"],
+    }
 
     response = await signing_keys.validate_signing_key_service(
-        request=request,
-        body={
-            "service_type": "aws-kms",
-            "provider": "aws",
-            "auth_mode": "iam_role",
-            "key_reference": "arn:aws:kms:us-west-2:123456789012:key/abc123",
-            "algorithms": ["ES256"],
-        },
+        request=request, body=body
     )
 
+    native_validate.assert_awaited_once_with(body)
     assert response.status_code == 200
-    assert b'"ok":true' in response.body
-    assert b'"Connected to provider validator bridge."' in response.body
-    assert (
-        b'"Validator bridge completed a remote sign-capability probe."' in response.body
-    )
-
-
-@pytest.mark.asyncio
-async def test_validate_signing_key_service_uses_adapter_when_no_validator(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    class FakeAdapter:
-        async def verify_connection(self, payload: dict):
-            assert payload["service_type"] == "aws-kms"
-            return SimpleNamespace(
-                ok=True,
-                checks=[
-                    {
-                        "name": "Connectivity",
-                        "status": "pass",
-                        "detail": "Adapter reached AWS.",
-                        "source": "adapter",
-                    }
-                ],
-                error=None,
-            )
-
-    monkeypatch.setattr(signing_keys, "_cloud_validator_url", lambda provider: "")
-    monkeypatch.setattr(signing_keys, "_get_adapter", lambda payload: FakeAdapter())
-    request = _build_request("org_123")
-
-    response = await signing_keys.validate_signing_key_service(
-        request=request,
-        body={
-            "service_type": "aws-kms",
-            "provider": "aws",
-            "auth_mode": "iam_role",
-            "key_reference": "arn:aws:kms:us-west-2:123456789012:key/abc123",
-            "algorithms": ["ES256"],
-        },
-    )
-
-    assert response.status_code == 200
-    assert b'"ok":true' in response.body
-    assert b'"Adapter reached AWS."' in response.body
-    assert b'"source":"adapter"' in response.body
-
-
-@pytest.mark.asyncio
-async def test_validate_signing_key_service_falls_back_when_no_validator_or_adapter(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(signing_keys, "_cloud_validator_url", lambda provider: "")
-    monkeypatch.setattr(signing_keys, "_get_adapter", lambda payload: None)
-    request = _build_request("org_123")
-
-    response = await signing_keys.validate_signing_key_service(
-        request=request,
-        body={
-            "service_type": "aws-kms",
-            "provider": "aws",
-            "auth_mode": "iam_role",
-            "key_reference": "arn:aws:kms:us-west-2:123456789012:key/abc123",
-            "algorithms": ["ES256"],
-        },
-    )
-
-    assert response.status_code == 200
-    assert b'"No aws validator bridge is configured' in response.body
-    assert (
-        b'"Gateway could not run a live sign test for this provider type."'
-        in response.body
-    )
+    assert b'"ok":false' in response.body
+    assert b'"source":"baseline"' in response.body
 
 
 # =============================================================================
@@ -1320,52 +1170,8 @@ async def test_list_service_capabilities_proxies_to_signing_keys_service(
     )
 
 
-def test_baseline_validation_warns_on_purpose_algorithm_mismatch():
-    """RS256 is not allowed for mdoc_dsc — validation should produce a warning."""
-    checks: list[dict] = []
-    signing_keys._append_baseline_validation_checks(
-        {
-            "auth_mode": "iam_role",
-            "auth_reference": "",
-            "key_reference": "arn:aws:kms:us-east-1:000000000000:key/abc",
-            "algorithms": ["RS256"],
-            "key_purposes": ["mdoc_dsc"],
-        },
-        checks,
-    )
-    purpose_check = next(
-        (c for c in checks if c["name"] == "Key purpose algorithm fit"), None
-    )
-    assert purpose_check is not None
-    assert purpose_check["status"] == "warning"
-    assert "RS256" in purpose_check["detail"]
-
-
-def test_baseline_validation_passes_on_compatible_purpose_algorithm():
-    """ES256 is valid for mdoc_dsc — no warning expected."""
-    checks: list[dict] = []
-    signing_keys._append_baseline_validation_checks(
-        {
-            "auth_mode": "token",
-            "auth_reference": "mytoken",
-            "key_reference": "cred-dsc-key",
-            "algorithms": ["ES256"],
-            "key_purposes": ["mdoc_dsc"],
-        },
-        checks,
-    )
-    purpose_check = next(
-        (c for c in checks if c["name"] == "Key purpose algorithm fit"), None
-    )
-    assert purpose_check is not None
-    assert purpose_check["status"] == "pass"
-
-
 def test_lti_tool_signing_is_distinct_and_rs256_only():
     assert "lti_tool_signing" in signing_keys.KEY_PURPOSES
-    assert signing_keys.KEY_PURPOSE_ALGORITHM_CONSTRAINTS[
-        "lti_tool_signing"
-    ] == frozenset({"RS256"})
     assert signing_keys.KEY_PURPOSE_CREDENTIAL_FORMATS["lti_tool_signing"] == (
         "lti_tool_jwt",
     )

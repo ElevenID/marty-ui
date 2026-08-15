@@ -50,6 +50,32 @@ class NativeCapabilityResult:
     error: str | None = None
 
 
+async def validate_native_signing_service(
+    service_config: dict[str, Any],
+) -> dict[str, Any]:
+    """Run the canonical Rust registration-validation decision."""
+    service_url = get_registry().get_service_url("signing-keys")
+    if not service_url:
+        raise RuntimeError("Rust signing-key service is not configured")
+    response = await get_http_client().post(
+        f"{service_url}/internal/config/validate",
+        json=service_config,
+        headers={"X-API-Key": _internal_api_key()},
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    body = response.json()
+    if (
+        not isinstance(body, dict)
+        or not isinstance(body.get("ok"), bool)
+        or not isinstance(body.get("checks"), list)
+        or any(not isinstance(check, dict) for check in body["checks"])
+        or not isinstance(body.get("validated_at"), str)
+    ):
+        raise RuntimeError("Rust signing-key service returned an invalid validation result")
+    return body
+
+
 class NativeKmsAdapter:
     """Provider adapter whose implementation lives entirely in Rust."""
 
