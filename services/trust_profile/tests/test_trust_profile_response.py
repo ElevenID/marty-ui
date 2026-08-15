@@ -790,12 +790,48 @@ def test_resource_owner_lookup_is_minimal_and_service_authenticated(
     assert get_membership.await_count == 0
 
 
-def test_resource_owner_lookup_hides_missing_resources(monkeypatch) -> None:
+def test_issuer_entity_resource_owner_lookup_is_minimal_and_service_authenticated(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "gateway-service-key")
+    repo = trust_profile.InMemoryTrustProfileRepository()
+    issuer_entity = trust_profile.IssuerEntity(
+        organization_id="org-1",
+        issuer_id="did:example:tenant-issuer",
+        display_name="Tenant Issuer",
+    )
+    asyncio.run(repo.save_issuer_entity(issuer_entity))
+    client, get_membership = _build_client(repo)
+
+    path = f"/internal/v1/resource-owners/issuer-entities/{issuer_entity.id}"
+    unauthorized = client.get(path)
+    response = client.get(
+        path,
+        headers={"X-API-Key": "gateway-service-key"},
+    )
+
+    assert unauthorized.status_code == 401
+    assert response.status_code == 200
+    assert response.json() == {"organization_id": issuer_entity.organization_id}
+    assert get_membership.await_count == 0
+
+
+@pytest.mark.parametrize(
+    "resource_path",
+    [
+        "/internal/v1/resource-owners/trust-profiles/missing",
+        "/internal/v1/resource-owners/issuer-entities/missing",
+    ],
+)
+def test_resource_owner_lookup_hides_missing_resources(
+    monkeypatch,
+    resource_path: str,
+) -> None:
     monkeypatch.setenv("SIGNING_KEYS_INTERNAL_API_KEY", "gateway-service-key")
     client, _ = _build_client(trust_profile.InMemoryTrustProfileRepository())
 
     response = client.get(
-        "/internal/v1/resource-owners/trust-profiles/missing",
+        resource_path,
         headers={"X-API-Key": "gateway-service-key"},
     )
 
