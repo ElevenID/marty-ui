@@ -246,10 +246,10 @@ def test_revocation_deletion_release_uses_the_rust_candidate_overlay() -> None:
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.65"
-    assert integration["commit"] == "aec2ba741898f09697705a099c1804d8115f49ba"
+    assert integration["version"] == "1.2.66"
+    assert integration["commit"] == "63ee48d2f85a9915d2b08d49243897ad00022bef"
     assert integration["artifacts"][0]["digest"] == (
-        "sha256:2ec7a614f34ac7ab1578b85014ffaa66f2fdc0db1c945bdd67b23e046b357845"
+        "sha256:a8bbd0a20a17b2ab29e31ca7c9ef4b183a23ac4fedcc1ed18993ce9b74cf7869"
     )
 
     issuance = next(
