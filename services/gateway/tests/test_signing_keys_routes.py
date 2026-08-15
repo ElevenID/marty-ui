@@ -3477,6 +3477,26 @@ async def test_sign_payload_returns_400_when_no_adapter(
 # =============================================================================
 
 
+@pytest.mark.asyncio
+async def test_get_organization_did_document_encodes_public_domain_port(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("PUBLIC_DOMAIN", "issuer.example:8443")
+    native_load = AsyncMock(return_value=({"verificationMethod": []}, False))
+    monkeypatch.setattr(
+        signing_keys, "load_native_signing_did_document", native_load
+    )
+
+    response = await signing_keys.get_organization_did_document(
+        request=_build_request("org_123"), organization_id=None
+    )
+
+    assert response.body
+    assert native_load.await_args.kwargs["fallback_did"] == (
+        "did:web:issuer.example%3A8443:orgs:org_123"
+    )
+
+
 def _build_public_request(
     redis_client: AsyncMock | None = None,
     path: str = "/orgs/acme/did.json",
@@ -3602,6 +3622,45 @@ async def test_resolve_did_web_by_slug_returns_did_document(
     assert data["authentication"][0]["controller"] == public_did
     assert response.headers.get("content-type") == "application/did+json"
     assert "max-age=300" in response.headers.get("cache-control", "")
+
+
+@pytest.mark.asyncio
+async def test_resolve_did_web_by_slug_encodes_public_domain_port(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("PUBLIC_DOMAIN", "issuer.example:8443")
+    source_did = "did:web:internal.example:orgs:source"
+    source_method = f"{source_did}#key-1"
+    source_doc = {
+        "id": source_did,
+        "controller": source_did,
+        "verificationMethod": [
+            {"id": source_method, "controller": source_did, "type": "JsonWebKey"}
+        ],
+        "assertionMethod": [source_method],
+    }
+    monkeypatch.setattr(
+        signing_keys,
+        "resolve_native_did_web_slug",
+        AsyncMock(return_value="org_acme"),
+    )
+    identity_load = AsyncMock(return_value=source_doc)
+    monkeypatch.setattr(
+        signing_keys, "_load_did_document_for_identity", identity_load
+    )
+
+    response = await signing_keys.resolve_did_web_by_slug(
+        request=_build_public_request(), org_slug="acme"
+    )
+
+    public_did = "did:web:issuer.example%3A8443:orgs:acme"
+    data = json.loads(response.body)
+    assert data["id"] == public_did
+    assert data["controller"] == public_did
+    assert data["verificationMethod"][0]["id"] == f"{public_did}#key-1"
+    assert data["verificationMethod"][0]["controller"] == public_did
+    assert data["assertionMethod"] == [f"{public_did}#key-1"]
+    assert identity_load.await_args.args[2] == public_did
 
 
 @pytest.mark.asyncio
@@ -3782,6 +3841,40 @@ async def test_resolve_did_web_root_returns_document_when_configured(
     data = json.loads(response.body)
     assert data["id"] == "did:web:beta.elevenidllc.com"
     assert response.headers.get("content-type") == "application/did+json"
+
+
+@pytest.mark.asyncio
+async def test_resolve_did_web_root_encodes_public_domain_port(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("DEFAULT_ORG_ID", "org_root")
+    monkeypatch.setenv("PUBLIC_DOMAIN", "issuer.example:8443")
+    source_did = "did:web:internal.example"
+    source_method = f"{source_did}#key-1"
+    source_doc = {
+        "id": source_did,
+        "controller": source_did,
+        "verificationMethod": [
+            {"id": source_method, "controller": source_did, "type": "JsonWebKey"}
+        ],
+        "assertionMethod": [source_method],
+    }
+    identity_load = AsyncMock(return_value=source_doc)
+    monkeypatch.setattr(
+        signing_keys, "_load_did_document_for_identity", identity_load
+    )
+
+    response = await signing_keys.resolve_did_web_root(
+        request=_build_public_request(path="/.well-known/did.json")
+    )
+
+    public_did = "did:web:issuer.example%3A8443"
+    data = json.loads(response.body)
+    assert data["id"] == public_did
+    assert data["controller"] == public_did
+    assert data["verificationMethod"][0]["id"] == f"{public_did}#key-1"
+    assert data["assertionMethod"] == [f"{public_did}#key-1"]
+    assert identity_load.await_args.args[2] == public_did
 
 
 @pytest.mark.asyncio
@@ -4317,6 +4410,19 @@ def test_did_web_org_slug_accepts_only_standard_path_scoped_identifiers():
         signing_keys._did_web_org_slug("did:web:issuer.example%3A70000:orgs:acme")
         is None
     )
+
+
+def test_did_web_method_authority_encodes_only_a_valid_port_separator():
+    assert signing_keys._did_web_method_authority("Issuer.Example") == "issuer.example"
+    assert (
+        signing_keys._did_web_method_authority("Issuer.Example:8443")
+        == "issuer.example%3A8443"
+    )
+    assert (
+        signing_keys._did_web_method_authority("issuer.example%3A8443")
+        == "issuer.example%3A8443"
+    )
+    assert signing_keys._did_web_method_authority("https://issuer.example") is None
 
 
 @pytest.mark.asyncio

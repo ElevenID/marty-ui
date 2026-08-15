@@ -834,6 +834,25 @@ def _normalize_did_web_domain(value: Any) -> str | None:
     return f"{normalized}:{port}" if port else normalized
 
 
+def _did_web_method_authority(value: Any) -> str | None:
+    """Return a normalized did:web authority with a URI-encoded port separator."""
+    normalized = _normalize_did_web_domain(value)
+    if not normalized:
+        return None
+    host, separator, port = normalized.rpartition(":")
+    return f"{host}%3A{port}" if separator else normalized
+
+
+def _configured_did_web_authority(request: Request) -> str:
+    authority = _did_web_method_authority(_domain_config(request).get("public_domain"))
+    if authority:
+        return authority
+    raise HTTPException(
+        status_code=503,
+        detail="PUBLIC_DOMAIN is not a valid did:web authority.",
+    )
+
+
 def _did_web_domain(did_id: Any) -> str | None:
     if not isinstance(did_id, str) or not did_id.startswith("did:web:"):
         return None
@@ -2724,9 +2743,8 @@ async def get_organization_did_document(
     organization_id: str | None = Query(None),
 ):
     resolved_org_id = _resolve_org_id(request, organization_id)
-    domain_cfg = _domain_config(request)
-    public_domain = domain_cfg.get("public_domain", "")
-    fallback_did = f"did:web:{public_domain}:orgs:{resolved_org_id}"
+    public_authority = _configured_did_web_authority(request)
+    fallback_did = f"did:web:{public_authority}:orgs:{resolved_org_id}"
     did_doc, _ = await load_native_signing_did_document(
         resolved_org_id,
         fallback_did=fallback_did,
@@ -5510,9 +5528,8 @@ async def resolve_did_web_by_slug(request: Request, org_slug: str):
     if not org_id:
         raise HTTPException(status_code=404, detail="Organization DID not found.")
 
-    domain_cfg = _domain_config(request)
-    public_domain = domain_cfg.get("public_domain", "")
-    fallback_did = f"did:web:{public_domain}:orgs:{safe_slug}"
+    public_authority = _configured_did_web_authority(request)
+    fallback_did = f"did:web:{public_authority}:orgs:{safe_slug}"
 
     did_doc = await _load_did_document_for_identity(
         request,
@@ -5554,9 +5571,8 @@ async def resolve_did_web_root(request: Request):
     if not default_org_id:
         raise HTTPException(status_code=404, detail="Root DID document not configured.")
 
-    domain_cfg = _domain_config(request)
-    public_domain = domain_cfg.get("public_domain", "")
-    fallback_did = f"did:web:{public_domain}"
+    public_authority = _configured_did_web_authority(request)
+    fallback_did = f"did:web:{public_authority}"
 
     did_doc = await _load_did_document_for_identity(
         request,

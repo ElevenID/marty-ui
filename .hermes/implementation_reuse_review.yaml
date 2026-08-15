@@ -15,6 +15,7 @@ search_queries:
   - "DIDCOMM_ENCRYPTION_POLICY_FILE authcrypt active issuer"
   - "PublishDidRequest keyAgreement did:web issuer identity"
   - "compose_command optional profile isolation last"
+  - "did:web PUBLIC_DOMAIN port authority encoding and public document retargeting"
 candidate_implementations:
   - path: release/stack-lock.json
     language: JSON
@@ -37,6 +38,9 @@ candidate_implementations:
   - path: services/gateway/routes/signing_keys.py
     language: Python
     disposition: reuse_existing_tenant_bound_public_identity_facade
+  - path: services/gateway/routes/signing_keys.py::_normalize_did_web_domain
+    language: Python
+    disposition: extend_existing_domain_validation_for_canonical_method_authority
   - path: scripts/conformance_stack.py
     language: Python
     disposition: reuse_existing_explicit_overlay_ordering
