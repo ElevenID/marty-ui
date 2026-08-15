@@ -181,6 +181,7 @@ jobs:
     name: Service Tests
     runs-on: ubuntu-latest
     env:
+      MARTY_CORE_TRUST_REGISTRY_REF: f1c022cccbc1ca53846eb80ae68a7ebc9dfc166d
       DEVICE_CHALLENGE_TEST_REDIS_URL: redis://localhost:6379/14
       DEVICE_KEY_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/marty_atomic_test
       VERIFICATION_ATOMIC_TEST_REDIS_URL: redis://localhost:6379/15
@@ -210,9 +211,19 @@ jobs:
           --health-retries 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Checkout pinned native trust-registry backend
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ElevenID/marty-core
+          ref: ${{ env.MARTY_CORE_TRUST_REGISTRY_REF }}
+          path: marty-core
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: 1.95.0
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
         with:
           version: "0.11.3"
@@ -246,6 +257,23 @@ jobs:
           uv pip install --system -r requirements-services.txt
           uv pip install --system psycopg2-binary==2.9.10
           uv pip install --system "$marty_common_wheel" "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
+      - name: Build and install pinned native trust-registry backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/marty-core-wheels"
+          uv tool run maturin==1.9.4 build \
+            --release \
+            --manifest-path marty-core/marty-bindings/Cargo.toml \
+            --out "$RUNNER_TEMP/marty-core-wheels"
+          uv pip install --system --force-reinstall "$RUNNER_TEMP"/marty-core-wheels/marty_rs-*.whl
+          python - <<'PY'
+          import json
+          from marty_rs import _marty_rs
+
+          diagnostics = json.loads(_marty_rs.native_backend_diagnostics())
+          assert "trust_registry_sync" in diagnostics["capabilities"]
+          PY
       - name: Run tests
         working-directory: services
         run: python -m pytest -v --tb=short -x
