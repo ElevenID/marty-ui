@@ -19,7 +19,7 @@ futures-core = "0.3"
 hmac = "0.12"
 hex = "0.4"
 http = "1"
-marty-crypto = { version = "=0.1.56", git = "https://github.com/ElevenID/marty-core", rev = "37ef216728999af1aca1a64d505de20b644d6875" }
+marty-crypto = { version = "=0.1.56", git = "https://github.com/ElevenID/marty-core", rev = "ffbc4054df895b6ad466762ca073732633a3374b", default-features = false, features = ["ecdsa", "jwk"] }
 marty-status = { version = "=0.1.50", git = "https://github.com/ElevenID/marty-core", rev = "edc80a0369b850ac0864b26208d57a23f475aca9" }
 prost = "0.14"
 protoc-bin-vendored = "3"
