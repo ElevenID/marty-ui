@@ -1,10 +1,8 @@
-"""Fail-closed importer for the public Marty Trust Registry Sync v1 feed."""
+"""HTTP/storage adapters for the canonical Rust trust-registry sync kernel."""
 
 from __future__ import annotations
 
 import asyncio
-import ipaddress
-import json
 import os
 import socket
 import ssl
@@ -12,13 +10,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Literal
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from uuid import UUID
+from urllib.parse import urlsplit
 
 import httpx
-from cryptography import x509
-from cryptography.x509.oid import ExtensionOID
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+
+from common.native_backend import NativeOperationError
+from trust_profile import native
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_PAGES = 100
@@ -31,36 +28,34 @@ class RegistrySyncError(RuntimeError):
     """An external registry failed validation and changed no effective trust."""
 
 
-class RegistryEntry(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+@dataclass(frozen=True)
+class RegistryFeed:
+    sync_token: str
+    sequence: int
+    entries: list[dict[str, Any]]
+    has_more: bool
+    generated_at: datetime
+    raw: dict[str, Any] = field(repr=False, compare=False)
 
-    entry_id: UUID
-    anchor_type: Literal["CSCA", "DSC"]
-    operation: Literal["ADD", "REMOVE"]
-    country_code: str = Field(pattern=r"^[A-Z]{2,3}$")
-    certificate_pem: str | None = Field(default=None, max_length=64 * 1024)
-    subject_key_id: str | None = Field(default=None, max_length=512)
-    not_before: AwareDatetime | None = None
-    not_after: AwareDatetime | None = None
-    source: Literal["ICAO_PKD", "AAMVA", "EUDI_LOTL", "MANUAL"]
-
-    @model_validator(mode="after")
-    def validate_operation_material(self) -> "RegistryEntry":
-        if self.operation == "ADD" and self.certificate_pem is None:
-            raise ValueError("ADD registry entries require certificate_pem")
-        if self.operation == "REMOVE" and self.certificate_pem is not None:
-            raise ValueError("REMOVE registry entries must not include certificate_pem")
-        return self
-
-
-class RegistryFeed(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    sync_token: str = Field(min_length=1, max_length=2048)
-    sequence: int = Field(ge=0)
-    entries: list[RegistryEntry] = Field(default_factory=list, max_length=10_000)
-    has_more: bool = False
-    generated_at: AwareDatetime
+    @classmethod
+    def from_native(cls, value: dict[str, Any]) -> "RegistryFeed":
+        try:
+            generated_at = datetime.fromisoformat(str(value["generated_at"]))
+            entries = value.get("entries", [])
+            if generated_at.tzinfo is None or not isinstance(entries, list):
+                raise ValueError
+            return cls(
+                sync_token=str(value["sync_token"]),
+                sequence=int(value["sequence"]),
+                entries=entries,
+                has_more=bool(value.get("has_more", False)),
+                generated_at=generated_at,
+                raw=value,
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise RegistrySyncError(
+                "registry response violates the sync contract"
+            ) from error
 
 
 @dataclass(frozen=True)
@@ -117,44 +112,6 @@ class RegistryImportResult:
 DestinationValidator = Callable[[str], Awaitable[str | None]]
 
 
-def _private_registry_host_allowlist() -> frozenset[str]:
-    """Return exact operator-managed hostnames allowed on private networks.
-
-    This setting is process configuration, never a public request field.  It
-    supports private enterprise registries and the disposable conformance
-    topology without permitting a caller to opt out of SSRF protection.
-    """
-    configured: set[str] = set()
-    for raw_host in os.environ.get(PRIVATE_HOST_ALLOWLIST_ENV, "").split(","):
-        host = raw_host.strip().lower().rstrip(".")
-        if not host:
-            continue
-        try:
-            ipaddress.ip_address(host)
-        except ValueError:
-            pass
-        else:
-            raise RegistrySyncError(
-                f"{PRIVATE_HOST_ALLOWLIST_ENV} accepts exact DNS hostnames, not IP addresses"
-            )
-        if any(
-            not label
-            or len(label) > 63
-            or label[0] == "-"
-            or label[-1] == "-"
-            or not all(
-                character in "abcdefghijklmnopqrstuvwxyz0123456789-"
-                for character in label
-            )
-            for label in host.split(".")
-        ):
-            raise RegistrySyncError(
-                f"{PRIVATE_HOST_ALLOWLIST_ENV} contains an invalid DNS hostname"
-            )
-        configured.add(host)
-    return frozenset(configured)
-
-
 def registry_tls_context() -> ssl.SSLContext:
     """Build normal Web PKI trust plus an optional operator-owned CA bundle."""
     context = ssl.create_default_context()
@@ -163,40 +120,30 @@ def registry_tls_context() -> ssl.SSLContext:
         try:
             context.load_verify_locations(cafile=ca_file)
         except (OSError, ssl.SSLError) as exc:
-            raise RegistrySyncError(
-                f"{TLS_CA_FILE_ENV} could not be loaded"
-            ) from exc
+            raise RegistrySyncError(f"{TLS_CA_FILE_ENV} could not be loaded") from exc
     return context
 
 
 def validate_registry_url_structure(url: str) -> str:
-    """Validate the stable public URL shape before it is persisted."""
+    """Validate the stable public URL shape in the native policy kernel."""
     try:
-        parsed = urlsplit(url)
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError("registry URL is invalid") from exc
-    if parsed.scheme.lower() != "https":
-        raise ValueError("registry URL must use HTTPS")
-    if not parsed.hostname:
-        raise ValueError("registry URL must include a hostname")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError("registry URL must not contain credentials")
-    if port not in {None, 443}:
-        raise ValueError("registry URL must use the standard HTTPS port")
-    if parsed.query or parsed.fragment:
-        raise ValueError("registry URL must not contain a query or fragment")
-    return url
+        return native.validate_url(url)
+    except NativeOperationError as error:
+        raise ValueError(str(error)) from error
 
 
 async def require_public_registry_destination(url: str) -> str:
-    """Resolve one public address that the HTTPS request must use."""
-    parsed = urlsplit(validate_registry_url_structure(url))
-    assert parsed.hostname is not None
-    hostname = parsed.hostname.lower().rstrip(".")
-    private_allowlist = _private_registry_host_allowlist()
+    """Resolve a destination and let Rust enforce public/private address policy."""
+    validate_registry_url_structure(url)
+    private_host_allowlist = os.environ.get(PRIVATE_HOST_ALLOWLIST_ENV, "")
     try:
-        addresses = await asyncio.to_thread(
+        native.validate_private_host_allowlist(private_host_allowlist)
+    except NativeOperationError as error:
+        raise RegistrySyncError(str(error)) from error
+    parsed = urlsplit(url)
+    assert parsed.hostname is not None
+    try:
+        records = await asyncio.to_thread(
             socket.getaddrinfo,
             parsed.hostname,
             443,
@@ -204,50 +151,16 @@ async def require_public_registry_destination(url: str) -> str:
         )
     except OSError as exc:
         raise RegistrySyncError("registry hostname could not be resolved") from exc
-    if not addresses:
-        raise RegistrySyncError("registry hostname resolved to no addresses")
-    for address in addresses:
-        candidate = ipaddress.ip_address(address[4][0])
-        explicitly_allowed_private = (
-            hostname in private_allowlist
-            and candidate.is_private
-            and not candidate.is_loopback
-            and not candidate.is_link_local
-            and not candidate.is_multicast
-            and not candidate.is_unspecified
-            and not candidate.is_reserved
+    addresses = sorted({str(record[4][0]) for record in records})
+    try:
+        decision = native.destination_decision(
+            url,
+            addresses,
+            private_host_allowlist,
         )
-        if not candidate.is_global and not explicitly_allowed_private:
-            raise RegistrySyncError(
-                "registry hostname resolves to a non-public network address"
-            )
-    return sorted({address[4][0] for address in addresses})[0]
-
-
-def _with_sync_token(url: str, token: str | None) -> str:
-    if token is None:
-        return url
-    parsed = urlsplit(url)
-    query = parse_qsl(parsed.query, keep_blank_values=True)
-    query.append(("since", token))
-    return urlunsplit(
-        (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
-    )
-
-
-def _pin_request_destination(
-    url: str, address: str | None
-) -> tuple[str, dict[str, Any]]:
-    if address is None:
-        return url, {}
-    parsed = urlsplit(url)
-    ip = ipaddress.ip_address(address)
-    netloc = f"[{ip}]" if ip.version == 6 else str(ip)
-    pinned_url = urlunsplit(
-        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
-    )
-    assert parsed.hostname is not None
-    return pinned_url, {"sni_hostname": parsed.hostname.encode("idna").decode("ascii")}
+    except NativeOperationError as error:
+        raise RegistrySyncError(str(error)) from error
+    return str(decision["address"])
 
 
 async def _read_bounded_response(response: httpx.Response) -> bytes:
@@ -277,16 +190,20 @@ async def fetch_registry_page(
     validate_destination: DestinationValidator = require_public_registry_destination,
 ) -> RegistryFeed:
     resolved_address = await validate_destination(url)
-    original_request_url = _with_sync_token(url, token)
-    request_url, extensions = _pin_request_destination(
-        original_request_url, resolved_address
+    try:
+        request = native.request_plan(url, token, resolved_address)
+    except NativeOperationError as error:
+        raise RegistrySyncError(str(error)) from error
+    extensions = (
+        {"sni_hostname": request["sni_hostname"]}
+        if resolved_address is not None
+        else {}
     )
-    original_authority = urlsplit(url).netloc
     try:
         async with client.stream(
             "GET",
-            request_url,
-            headers={"Accept": "application/json", "Host": original_authority},
+            request["request_url"],
+            headers={"Accept": "application/json", "Host": request["host_header"]},
             extensions=extensions,
         ) as response:
             if 300 <= response.status_code < 400:
@@ -302,72 +219,54 @@ async def fetch_registry_page(
         raise RegistrySyncError("registry request failed") from exc
 
     try:
-        raw: object = json.loads(body)
-        return RegistryFeed.model_validate(raw)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise RegistrySyncError("registry response violates the sync contract") from exc
+        validated = native.validate_feed(body.decode("utf-8"))
+        return RegistryFeed.from_native(validated)
+    except UnicodeDecodeError as error:
+        raise RegistrySyncError(
+            "registry response violates the sync contract"
+        ) from error
+    except NativeOperationError as error:
+        raise RegistrySyncError(str(error)) from error
 
 
-def _certificate_time(certificate: x509.Certificate, name: str) -> datetime:
-    utc_name = f"{name}_utc"
-    value = getattr(certificate, utc_name, None)
-    if value is None:
-        value = getattr(certificate, name)
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+def _state_to_native(state: RegistryImportState) -> dict[str, Any]:
+    return {
+        "sync_token": state.sync_token,
+        "sequence": state.sequence,
+        "entries": {
+            entry_id: entry.to_storage() for entry_id, entry in state.entries.items()
+        },
+        "synchronized_at": (
+            state.synchronized_at.isoformat() if state.synchronized_at else None
+        ),
+    }
 
 
-def _validate_certificate(entry: RegistryEntry, now: datetime) -> ImportedRegistryEntry:
-    assert entry.certificate_pem is not None
+def _state_from_native(value: dict[str, Any]) -> RegistryImportState:
     try:
-        certificate = x509.load_pem_x509_certificate(entry.certificate_pem.encode())
-    except ValueError as exc:
-        raise RegistrySyncError(
-            "registry entry contains an invalid certificate"
-        ) from exc
-
-    not_before = _certificate_time(certificate, "not_valid_before")
-    not_after = _certificate_time(certificate, "not_valid_after")
-    if now < not_before or now >= not_after:
-        raise RegistrySyncError("registry entry certificate is not currently valid")
-    if entry.not_before and abs((entry.not_before - not_before).total_seconds()) > 1:
-        raise RegistrySyncError(
-            "registry entry not_before does not match its certificate"
+        synchronized_at_raw = value.get("synchronized_at")
+        synchronized_at = (
+            datetime.fromisoformat(str(synchronized_at_raw))
+            if synchronized_at_raw is not None
+            else None
         )
-    if entry.not_after and abs((entry.not_after - not_after).total_seconds()) > 1:
-        raise RegistrySyncError(
-            "registry entry not_after does not match its certificate"
+        if synchronized_at is not None and synchronized_at.tzinfo is None:
+            raise ValueError
+        raw_entries = value.get("entries", {})
+        if not isinstance(raw_entries, dict):
+            raise TypeError
+        entries = {
+            str(entry_id): ImportedRegistryEntry.from_storage(entry)
+            for entry_id, entry in raw_entries.items()
+        }
+        return RegistryImportState(
+            sync_token=value.get("sync_token"),
+            sequence=int(value.get("sequence", 0)),
+            entries=entries,
+            synchronized_at=synchronized_at,
         )
-
-    try:
-        basic_constraints = certificate.extensions.get_extension_for_oid(
-            ExtensionOID.BASIC_CONSTRAINTS
-        ).value
-        key_usage = certificate.extensions.get_extension_for_oid(
-            ExtensionOID.KEY_USAGE
-        ).value
-    except x509.ExtensionNotFound as exc:
-        raise RegistrySyncError(
-            "registry certificate lacks required X.509 constraints"
-        ) from exc
-
-    if entry.anchor_type == "CSCA":
-        if not basic_constraints.ca or not key_usage.key_cert_sign:
-            raise RegistrySyncError("CSCA entry is not a certificate-signing CA")
-    elif basic_constraints.ca or not key_usage.digital_signature:
-        raise RegistrySyncError("DSC entry is not a document-signing certificate")
-
-    return ImportedRegistryEntry(
-        entry_id=str(entry.entry_id),
-        anchor_type=entry.anchor_type,
-        country_code=entry.country_code,
-        certificate_pem=entry.certificate_pem,
-        source=entry.source,
-        subject_key_id=entry.subject_key_id,
-        not_before=not_before.isoformat(),
-        not_after=not_after.isoformat(),
-    )
+    except (KeyError, TypeError, ValueError) as error:
+        raise RegistrySyncError("stored registry state is invalid") from error
 
 
 def validate_current_registry_entries(
@@ -375,30 +274,17 @@ def validate_current_registry_entries(
     *,
     now: datetime | None = None,
 ) -> dict[str, ImportedRegistryEntry]:
-    """Revalidate persisted entries before they can influence trust."""
+    """Revalidate persisted entries natively before they influence trust."""
     effective_now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    validated: dict[str, ImportedRegistryEntry] = {}
-    for storage_id, imported in entries.items():
-        if storage_id != imported.entry_id:
-            raise RegistrySyncError("stored registry entry identity is inconsistent")
-        try:
-            candidate = RegistryEntry.model_validate(
-                {
-                    "entry_id": imported.entry_id,
-                    "anchor_type": imported.anchor_type,
-                    "operation": "ADD",
-                    "country_code": imported.country_code,
-                    "certificate_pem": imported.certificate_pem,
-                    "subject_key_id": imported.subject_key_id,
-                    "not_before": imported.not_before,
-                    "not_after": imported.not_after,
-                    "source": imported.source,
-                }
-            )
-        except ValueError as exc:
-            raise RegistrySyncError("stored registry entry is invalid") from exc
-        validated[storage_id] = _validate_certificate(candidate, effective_now)
-    return validated
+    state = RegistryImportState(entries=entries)
+    try:
+        validated = native.revalidate_state(
+            _state_to_native(state),
+            effective_now.isoformat(),
+        )
+    except NativeOperationError as error:
+        raise RegistrySyncError(str(error)) from error
+    return _state_from_native(validated).entries
 
 
 async def synchronize_registry(
@@ -409,64 +295,38 @@ async def synchronize_registry(
     validate_destination: DestinationValidator = require_public_registry_destination,
     now: datetime | None = None,
 ) -> RegistryImportResult:
-    """Fetch all pages and return an atomic replacement state."""
+    """Fetch pages while Rust evaluates one atomic replacement state."""
     validate_registry_url_structure(url)
     effective_now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    initial_sync = previous.sync_token is None
-    entries = {} if initial_sync else dict(previous.entries)
+    previous_native = _state_to_native(previous)
+    pages: list[dict[str, Any]] = []
     token = previous.sync_token
-    previous_page_token: str | None = None
-    current_sequence = previous.sequence
-    seen_in_sync: set[str] = set()
 
-    for page_number in range(1, MAX_PAGES + 1):
+    for _page_number in range(1, MAX_PAGES + 1):
         feed = await fetch_registry_page(
             url,
             token,
             client=client,
             validate_destination=validate_destination,
         )
-        if feed.sequence < current_sequence:
-            raise RegistrySyncError("registry sequence rollback was rejected")
-        if (
-            page_number == 1
-            and not initial_sync
-            and feed.entries
-            and feed.sequence == previous.sequence
-        ):
-            raise RegistrySyncError("registry changes did not advance the sequence")
-        if previous_page_token is not None and feed.sync_token == previous_page_token:
-            raise RegistrySyncError("registry repeated a pagination token")
-
-        for remote in feed.entries:
-            entry_id = str(remote.entry_id)
-            if entry_id in seen_in_sync:
-                raise RegistrySyncError("registry sync contains a duplicate entry")
-            seen_in_sync.add(entry_id)
-            if remote.operation == "REMOVE":
-                if initial_sync:
-                    raise RegistrySyncError("initial registry sync contains a removal")
-                if entry_id not in entries:
-                    raise RegistrySyncError("registry removed an unknown source entry")
-                del entries[entry_id]
-            else:
-                entries[entry_id] = _validate_certificate(remote, effective_now)
-
-        current_sequence = feed.sequence
-        previous_page_token = feed.sync_token
-        token = feed.sync_token
-        if not feed.has_more:
-            entries = validate_current_registry_entries(
-                entries,
-                now=effective_now,
+        pages.append(feed.raw)
+        try:
+            evaluation = native.evaluate_pages(
+                previous_native,
+                pages,
+                effective_now.isoformat(),
             )
-            synchronized = RegistryImportState(
-                sync_token=token,
-                sequence=current_sequence,
-                entries=entries,
-                synchronized_at=effective_now,
+        except NativeOperationError as error:
+            raise RegistrySyncError(str(error)) from error
+        if evaluation["complete"]:
+            state = evaluation.get("state")
+            if not isinstance(state, dict):
+                raise RegistrySyncError("Rust registry result omitted completed state")
+            return RegistryImportResult(
+                state=_state_from_native(state),
+                pages=int(evaluation["pages"]),
             )
-            return RegistryImportResult(state=synchronized, pages=page_number)
+        token = str(evaluation["next_token"])
 
     raise RegistrySyncError("registry pagination exceeded the page limit")
 
@@ -478,16 +338,13 @@ def state_from_storage(
     entries: dict[str, dict[str, Any]],
     synchronized_at: datetime | None,
 ) -> RegistryImportState:
+    candidate = {
+        "sync_token": sync_token,
+        "sequence": sequence,
+        "entries": entries,
+        "synchronized_at": synchronized_at.isoformat() if synchronized_at else None,
+    }
     try:
-        parsed = {
-            entry_id: ImportedRegistryEntry.from_storage(value)
-            for entry_id, value in entries.items()
-        }
-    except (KeyError, TypeError, ValueError) as exc:
-        raise RegistrySyncError("stored registry state is invalid") from exc
-    return RegistryImportState(
-        sync_token=sync_token,
-        sequence=sequence,
-        entries=parsed,
-        synchronized_at=synchronized_at,
-    )
+        return _state_from_native(native.validate_state(candidate))
+    except NativeOperationError as error:
+        raise RegistrySyncError(str(error)) from error

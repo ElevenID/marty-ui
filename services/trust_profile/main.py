@@ -29,6 +29,7 @@ from enum import Enum
 from typing import Annotated, Any, AsyncGenerator, Literal
 
 import httpx
+from common.native_backend import NativeOperationError
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from marty_common.dto import DeleteResponse
 from pydantic import (
@@ -59,6 +60,7 @@ from marty_common.system_urls import (
 )
 from trust_profile.infrastructure.adapters import PostgresTrustProfileRepository
 from trust_profile.infrastructure.models import mapper_registry
+from trust_profile import native as trust_registry_native
 from trust_profile.registry_sync import (
     RegistrySyncError,
     registry_tls_context,
@@ -2276,11 +2278,14 @@ async def internal_get_trust_profile(
 
 def _registry_source_is_due(source: TrustSource, now: datetime) -> bool:
     sync_config = _validated_registry_sync_config(source)
-    if source.registry_last_synced_at is None:
-        return True
-    refresh_seconds = sync_config.refresh_interval_hours * 60 * 60
-    return now >= source.registry_last_synced_at + timedelta(
-        seconds=refresh_seconds * 0.8
+    return trust_registry_native.sync_is_due(
+        sync_config.refresh_interval_hours,
+        now.isoformat(),
+        (
+            source.registry_last_synced_at.isoformat()
+            if source.registry_last_synced_at
+            else None
+        ),
     )
 
 
@@ -2926,18 +2931,6 @@ async def get_trust_framework(
     return _framework_to_response(framework)
 
 
-def _parse_sync_token(since: str | None) -> int | None:
-    if since is None:
-        return None
-    try:
-        value = int(since)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid sync token") from exc
-    if value < 0:
-        raise HTTPException(status_code=400, detail="Invalid sync token")
-    return value
-
-
 @registry_router.get(
     "/sync", response_model=TrustRegistrySyncResponse, response_model_exclude_none=True
 )
@@ -2949,18 +2942,26 @@ async def sync_trust_registry(
         get_repo
     ),
 ) -> TrustRegistrySyncResponse:
-    since_sequence = _parse_sync_token(since)
+    try:
+        query = trust_registry_native.public_sync_query(since)
+    except NativeOperationError as exc:
+        raise HTTPException(status_code=400, detail="Invalid sync token") from exc
+    since_sequence = query["since_sequence"]
     current_sequence = await repo.get_registry_sequence()
     entries = await repo.list_registry_entries(
-        current_only=since_sequence is None,
+        current_only=query["current_only"],
         since_sequence=since_sequence,
     )
+    metadata = trust_registry_native.public_sync_metadata(
+        current_sequence,
+        datetime.now(timezone.utc).isoformat(),
+    )
     return TrustRegistrySyncResponse(
-        sync_token=str(current_sequence),
-        sequence=current_sequence,
+        sync_token=metadata["sync_token"],
+        sequence=metadata["sequence"],
         entries=[_registry_entry_to_response(entry) for entry in entries],
-        has_more=False,
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        has_more=metadata["has_more"],
+        generated_at=metadata["generated_at"],
     )
 
 
@@ -3371,6 +3372,14 @@ def _registry_entry_to_response(
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     global _repo
     logger.info(f"Starting {SERVICE_NAME}...")
+    native_diagnostics = trust_registry_native.diagnostics()
+    app.state.native_backend_diagnostics = native_diagnostics
+    logger.info(
+        "Native trust-registry backend ready: backend=%s version=%s revision=%s",
+        native_diagnostics["backend"],
+        native_diagnostics["version"],
+        native_diagnostics.get("build_revision", "unknown"),
+    )
 
     # Initialize database
     from marty_common.database import DatabaseManager, DatabaseConfig
@@ -3404,7 +3413,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 def create_app() -> FastAPI:
-    return create_service_app(
+    created = create_service_app(
         title="Trust Profile Service",
         description="Manages Trust Profiles - who is trusted and how validation happens",
         service_name=SERVICE_NAME,
@@ -3419,6 +3428,18 @@ def create_app() -> FastAPI:
             issuer_router,
         ],
     )
+
+    @created.get("/health/native-backend")
+    async def native_backend_health() -> dict[str, Any]:
+        diagnostics = getattr(created.state, "native_backend_diagnostics", None)
+        if (
+            not isinstance(diagnostics, dict)
+            or diagnostics.get("available") is not True
+        ):
+            raise HTTPException(status_code=503, detail="Native backend is not ready")
+        return {"status": "ready", **diagnostics}
+
+    return created
 
 
 app = create_app()

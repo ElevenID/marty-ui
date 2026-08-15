@@ -505,10 +505,10 @@
     {
       "id": "trust-registry-synchronization",
       "phase": 9,
-      "status": "planned",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-core",
-        "paths": ["marty-verification/src/trust_anchor", "marty-crypto/src/certificate.rs"],
+        "paths": ["marty-verification/src/trust_sync.rs", "marty-verification/src/trust_anchor", "marty-crypto/src/certificate.rs"],
         "binding_paths": ["marty-verification/src/bindings/mod.rs"]
       },
       "legacy": [
@@ -566,8 +566,6 @@
       {"path": "services/run_all_migrations.py", "statement": "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey"},
       {"path": "services/run_all_migrations.py", "statement": "from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey"},
       {"path": "services/run_all_migrations.py", "statement": "from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_pem_public_key"},
-      {"path": "services/trust_profile/registry_sync.py", "statement": "from cryptography import x509"},
-      {"path": "services/trust_profile/registry_sync.py", "statement": "from cryptography.x509.oid import ExtensionOID"},
       {"path": "scripts/export_canvas_lti_public_jwks.py", "statement": "from cryptography.hazmat.primitives import serialization"},
       {"path": "scripts/export_canvas_lti_public_jwks.py", "statement": "from cryptography.hazmat.primitives.asymmetric import rsa"}
     ],
