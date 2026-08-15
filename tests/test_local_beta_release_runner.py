@@ -207,6 +207,15 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
     assert "EVENT_STREAM_SERVICE_PORT=8015" in base
     assert "revocation-profile-rust.yml" not in deploy
     assert "revocation-profile-rust.yml" not in restore
+    application_services = deploy.split("$script:ApplicationServices = @(", 1)[1].split(")", 1)[0]
+    for rust_service in (
+        "event-stream",
+        "notification",
+        "revocation-profile",
+        "signing-keys",
+    ):
+        assert f'"{rust_service}"' in application_services
+    assert "SERVICE_NAME: signing-keys" in base
     assert "ENVIRONMENT: beta" in beta
     assert "GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set" in beta
     assert beta.count("<<: *beta-grpc-service-auth") == 17

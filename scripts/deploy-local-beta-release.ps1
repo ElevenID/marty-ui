@@ -57,6 +57,7 @@ $script:ApplicationServices = @(
     "compliance-profile",
     "presentation-policy",
     "deployment-profile",
+    "signing-keys",
     "flow",
     "verification",
     "revocation-profile",
