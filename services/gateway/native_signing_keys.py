@@ -118,10 +118,14 @@ async def normalize_native_signing_service(
         "/internal/registry/normalize-service", {"service": service}
     )
     if not isinstance(body, dict) or set(body) != {"service"}:
-        raise RuntimeError("Rust signing-key service returned an invalid normalized service")
+        raise RuntimeError(
+            "Rust signing-key service returned an invalid normalized service"
+        )
     normalized = body["service"]
     if normalized is not None and not isinstance(normalized, dict):
-        raise RuntimeError("Rust signing-key service returned an invalid normalized service")
+        raise RuntimeError(
+            "Rust signing-key service returned an invalid normalized service"
+        )
     return normalized
 
 
@@ -167,7 +171,9 @@ async def resolve_native_signing_registry(
     service = body["service"]
     key_reference = body["key_reference"]
     if service is not None and not isinstance(service, dict):
-        raise RuntimeError("Rust signing-key service returned an invalid resolved service")
+        raise RuntimeError(
+            "Rust signing-key service returned an invalid resolved service"
+        )
     if key_reference is not None and not isinstance(key_reference, str):
         raise RuntimeError("Rust signing-key service returned an invalid key reference")
     return service, key_reference
@@ -187,7 +193,9 @@ async def get_native_signing_service_catalog() -> list[dict[str, Any]]:
         or not isinstance(body["service_types"], list)
         or any(not isinstance(item, dict) for item in body["service_types"])
     ):
-        raise RuntimeError("Rust signing-key service returned an invalid service catalog")
+        raise RuntimeError(
+            "Rust signing-key service returned an invalid service catalog"
+        )
     return body["service_types"]
 
 
@@ -200,7 +208,9 @@ async def load_native_signing_registry(organization_id: str) -> dict[str, Any]:
     response.raise_for_status()
     body = response.json()
     if not isinstance(body, dict) or not isinstance(body.get("services"), list):
-        raise RuntimeError("Rust signing-key service returned an invalid stored registry")
+        raise RuntimeError(
+            "Rust signing-key service returned an invalid stored registry"
+        )
     return body
 
 
@@ -216,7 +226,9 @@ async def save_native_signing_registry(
     response.raise_for_status()
     body = response.json()
     if not isinstance(body, dict) or not isinstance(body.get("services"), list):
-        raise RuntimeError("Rust signing-key service returned an invalid stored registry")
+        raise RuntimeError(
+            "Rust signing-key service returned an invalid stored registry"
+        )
     return body
 
 
@@ -240,7 +252,9 @@ async def inspect_native_signing_certificate(
         or not isinstance(body.get("public_jwk"), dict)
         or not isinstance(body.get("x5c"), list)
     ):
-        raise RuntimeError("Rust signing-key service returned invalid certificate metadata")
+        raise RuntimeError(
+            "Rust signing-key service returned invalid certificate metadata"
+        )
     return body
 
 
@@ -252,7 +266,9 @@ async def calculate_native_certificate_alerts(
         {"services": services, "days_until_expiry": days_until_expiry},
     )
     if not isinstance(body, dict) or not isinstance(body.get("alerts"), list):
-        raise RuntimeError("Rust signing-key service returned invalid certificate alerts")
+        raise RuntimeError(
+            "Rust signing-key service returned invalid certificate alerts"
+        )
     return body
 
 
@@ -261,7 +277,9 @@ async def get_native_certificate_overrides(organization_id: str) -> dict[str, An
         f"/internal/documents/{quote(organization_id, safe='')}/certificates"
     )
     if not isinstance(body, dict) or not isinstance(body.get("services"), dict):
-        raise RuntimeError("Rust signing-key service returned invalid certificate storage")
+        raise RuntimeError(
+            "Rust signing-key service returned invalid certificate storage"
+        )
     return body
 
 
@@ -281,7 +299,9 @@ async def store_native_signing_certificate(
         or not isinstance(body.get("cert_pem"), str)
         or not isinstance(body.get("cert_expires_at"), str)
     ):
-        raise RuntimeError("Rust signing-key service returned invalid certificate storage")
+        raise RuntimeError(
+            "Rust signing-key service returned invalid certificate storage"
+        )
     return body
 
 
@@ -385,11 +405,180 @@ async def publish_native_signing_did(
 async def resolve_native_did_web_slug(slug: str) -> str | None:
     body = await _get_native(f"/internal/documents/did-web/{quote(slug, safe='')}")
     if not isinstance(body, dict) or set(body) != {"organization_id"}:
-        raise RuntimeError("Rust signing-key service returned an invalid DID slug result")
+        raise RuntimeError(
+            "Rust signing-key service returned an invalid DID slug result"
+        )
     organization_id = body["organization_id"]
     if organization_id is not None and not isinstance(organization_id, str):
-        raise RuntimeError("Rust signing-key service returned an invalid DID slug result")
+        raise RuntimeError(
+            "Rust signing-key service returned an invalid DID slug result"
+        )
     return organization_id
+
+
+async def normalize_native_issuer_profile(
+    organization_id: str,
+    body: dict[str, Any],
+    *,
+    existing: dict[str, Any] | None = None,
+    profile_id: str | None = None,
+) -> dict[str, Any]:
+    response = await _post_native(
+        f"/internal/profiles/{quote(organization_id, safe='')}/normalize",
+        {"body": body, "existing": existing, "profile_id": profile_id},
+    )
+    if not isinstance(response, dict) or not isinstance(response.get("profile"), dict):
+        raise RuntimeError(
+            "Rust signing-key service returned an invalid issuer profile"
+        )
+    return response["profile"]
+
+
+async def validate_native_issuer_profile_binding(
+    organization_id: str,
+    *,
+    profile: dict[str, Any],
+    service: dict[str, Any],
+    registry: dict[str, Any],
+) -> None:
+    response = await _post_native(
+        f"/internal/profiles/{quote(organization_id, safe='')}/validate-binding",
+        {"profile": profile, "service": service, "registry": registry},
+    )
+    if response != {"ok": True}:
+        raise RuntimeError(
+            "Rust signing-key service returned invalid profile validation"
+        )
+
+
+async def resolve_native_profile_custody_format(
+    organization_id: str,
+    credential_format: str,
+    key_purpose: str,
+) -> str:
+    response = await _post_native(
+        f"/internal/profiles/{quote(organization_id, safe='')}/custody-format",
+        {"credential_format": credential_format, "key_purpose": key_purpose},
+    )
+    wire_format = response.get("wire_format") if isinstance(response, dict) else None
+    if not isinstance(wire_format, str) or not wire_format:
+        raise RuntimeError("Rust signing-key service returned invalid custody format")
+    return wire_format
+
+
+async def list_native_issuer_profiles(organization_id: str) -> list[dict[str, Any]]:
+    response = await _get_native(
+        f"/internal/profiles/{quote(organization_id, safe='')}"
+    )
+    if not isinstance(response, dict) or not isinstance(response.get("profiles"), list):
+        raise RuntimeError(
+            "Rust signing-key service returned invalid issuer profile storage"
+        )
+    if any(not isinstance(profile, dict) for profile in response["profiles"]):
+        raise RuntimeError(
+            "Rust signing-key service returned invalid issuer profile storage"
+        )
+    return response["profiles"]
+
+
+async def get_native_issuer_profile(
+    organization_id: str, profile_id: str
+) -> dict[str, Any]:
+    response = await _get_native(
+        f"/internal/profiles/{quote(organization_id, safe='')}/{quote(profile_id, safe='')}"
+    )
+    if not isinstance(response, dict) or not isinstance(response.get("profile"), dict):
+        raise RuntimeError(
+            "Rust signing-key service returned invalid issuer profile storage"
+        )
+    return response["profile"]
+
+
+async def save_native_issuer_profile(
+    organization_id: str, profile: dict[str, Any]
+) -> dict[str, Any]:
+    profile_id = profile.get("id")
+    if not isinstance(profile_id, str) or not profile_id:
+        raise RuntimeError("Issuer profile has no stable ID")
+    response = await _put_native(
+        f"/internal/profiles/{quote(organization_id, safe='')}/{quote(profile_id, safe='')}",
+        profile,
+    )
+    if not isinstance(response, dict) or not isinstance(response.get("profile"), dict):
+        raise RuntimeError(
+            "Rust signing-key service returned invalid issuer profile storage"
+        )
+    return response["profile"]
+
+
+async def delete_native_issuer_profile(organization_id: str, profile_id: str) -> str:
+    response = await _delete_native(
+        f"/internal/profiles/{quote(organization_id, safe='')}/{quote(profile_id, safe='')}"
+    )
+    if not isinstance(response, dict) or response.get("deleted") != profile_id:
+        raise RuntimeError(
+            "Rust signing-key service returned invalid issuer profile deletion"
+        )
+    return profile_id
+
+
+async def find_native_issuer_profiles(
+    organization_id: str, selectors: dict[str, Any]
+) -> list[dict[str, Any]]:
+    response = await _post_native(
+        f"/internal/profiles/{quote(organization_id, safe='')}/find", selectors
+    )
+    if not isinstance(response, dict) or not isinstance(response.get("profiles"), list):
+        raise RuntimeError(
+            "Rust signing-key service returned invalid issuer profile selection"
+        )
+    if any(not isinstance(profile, dict) for profile in response["profiles"]):
+        raise RuntimeError(
+            "Rust signing-key service returned invalid issuer profile selection"
+        )
+    return response["profiles"]
+
+
+async def find_native_duplicate_issuer_profile(
+    organization_id: str,
+    profile: dict[str, Any],
+    *,
+    service_key_reference: str | None = None,
+) -> tuple[dict[str, Any] | None, bool]:
+    response = await _post_native(
+        f"/internal/profiles/{quote(organization_id, safe='')}/find-duplicate",
+        {"profile": profile, "service_key_reference": service_key_reference},
+    )
+    if (
+        not isinstance(response, dict)
+        or not isinstance(response.get("found"), bool)
+        or (
+            response.get("profile") is not None
+            and not isinstance(response["profile"], dict)
+        )
+    ):
+        raise RuntimeError(
+            "Rust signing-key service returned invalid duplicate profile result"
+        )
+    return response.get("profile"), response["found"]
+
+
+async def bind_native_issuer_profile_registry(
+    organization_id: str, profile: dict[str, Any]
+) -> dict[str, Any]:
+    response = await _post_native(
+        f"/internal/registry/{quote(organization_id, safe='')}/bind-profile",
+        {"profile": profile},
+    )
+    if (
+        not isinstance(response, dict)
+        or not isinstance(response.get("services"), list)
+        or not isinstance(response.get("key_reference_purposes"), dict)
+    ):
+        raise RuntimeError(
+            "Rust signing-key service returned invalid profile registry binding"
+        )
+    return response
 
 
 async def validate_native_signing_service(
@@ -404,7 +593,9 @@ async def validate_native_signing_service(
         or any(not isinstance(check, dict) for check in body["checks"])
         or not isinstance(body.get("validated_at"), str)
     ):
-        raise RuntimeError("Rust signing-key service returned an invalid validation result")
+        raise RuntimeError(
+            "Rust signing-key service returned an invalid validation result"
+        )
     return body
 
 
@@ -468,7 +659,9 @@ class NativeKmsAdapter:
     ) -> dict[str, Any]:
         body = await self._post("/internal/kms/public-key", service_config)
         if not isinstance(body, dict):
-            raise RuntimeError("Rust signing-key service returned an invalid public key")
+            raise RuntimeError(
+                "Rust signing-key service returned an invalid public key"
+            )
         return body
 
     async def verify_connection(
