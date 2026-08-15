@@ -746,8 +746,6 @@ services:
       MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
       MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
       RUST_LOG: info
-    ports:
-      - "127.0.0.1:8017:8017"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
