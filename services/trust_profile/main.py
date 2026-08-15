@@ -2510,6 +2510,26 @@ async def get_trust_profile_owner(
     return {"organization_id": profile.organization_id}
 
 
+@resource_owner_router.get(
+    "/issuer-entities/{issuer_entity_id}",
+    response_model=dict[str, str],
+    dependencies=[Depends(_verify_internal_api_key)],
+    include_in_schema=False,
+)
+async def get_issuer_entity_owner(
+    issuer_entity_id: str,
+    repo: InMemoryTrustProfileRepository | PostgresTrustProfileRepository = Depends(
+        get_repo
+    ),
+) -> dict[str, str]:
+    """Return only the tenant owner needed for gateway authorization."""
+
+    issuer_entity = await repo.get_issuer_entity(issuer_entity_id)
+    if not issuer_entity or not issuer_entity.organization_id:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return {"organization_id": issuer_entity.organization_id}
+
+
 @router.patch(
     "/{profile_id}",
     response_model=TrustProfileResponse,
