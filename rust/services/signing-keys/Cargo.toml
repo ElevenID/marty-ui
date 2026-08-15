@@ -15,8 +15,16 @@ test = false
 
 [dependencies]
 axum.workspace = true
+aws-config.workspace = true
+aws-sdk-kms.workspace = true
+base64.workspace = true
+marty-crypto.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true

@@ -362,8 +362,8 @@ def test_service_images_install_every_required_native_backend() -> None:
         "marty-verification-python",
         "marty-iso18013-python",
     ):
-        assert components[name]["version"] == "0.1.56"
-        assert components[name]["commit"] == "36212c03ad9ea0479922707e1a6f24746e7f886d"
+        assert components[name]["version"] == "0.1.57"
+        assert components[name]["commit"] == "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8"
 
 
 def test_release_images_reject_commerce_markers() -> None:

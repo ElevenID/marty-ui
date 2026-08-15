@@ -3487,6 +3487,7 @@ async def test_sign_payload_returns_der_signature_from_aws_adapter(
     class FakeAwsAdapter:
         provider = "aws"
         signature_encoding = "der"
+        transcoded_signature = bytes.fromhex("aa" * 32 + "bb" * 32)
 
         async def sign(self, config: dict, payload: bytes):
             return der_signature
