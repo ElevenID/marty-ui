@@ -12,7 +12,7 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote
 
 try:
     from cryptography.hazmat.primitives.asymmetric.ec import (
@@ -50,23 +50,33 @@ from gateway.models import (
 )
 from gateway.proxy import get_registry, proxy_request
 from gateway.native_signing_keys import (
+    bind_native_issuer_profile_registry,
     calculate_native_certificate_alerts,
     delete_native_signing_jwk,
     get_native_certificate_overrides,
     get_native_signing_jwks,
     get_native_signing_service_catalog,
     get_native_kms_adapter,
+    get_native_issuer_profile,
+    list_native_issuer_profiles,
     load_native_signing_did_document,
     load_native_signing_registry,
+    normalize_native_issuer_profile,
     normalize_native_signing_registry,
     normalize_native_signing_service,
+    delete_native_issuer_profile,
+    find_native_duplicate_issuer_profile,
+    find_native_issuer_profiles,
     publish_native_signing_did,
     publish_native_signing_jwk,
     resolve_native_did_web_slug,
+    resolve_native_profile_custody_format,
     resolve_native_signing_registry,
     save_native_signing_registry,
+    save_native_issuer_profile,
     store_native_signing_certificate,
     update_native_signing_jwk,
+    validate_native_issuer_profile_binding,
     validate_native_signing_service,
 )
 
@@ -160,30 +170,6 @@ KEY_PURPOSES = (
     "jwks_signing",  # JWKS endpoint key
     "lti_tool_signing",  # Canvas LTI Advantage client assertions and Deep Links
 )
-
-#: The credential formats each key purpose maps to naturally.
-KEY_PURPOSE_CREDENTIAL_FORMATS: dict[str, tuple[str, ...]] = {
-    "vc_jwt_issuer": ("jwt_vc_json", "dc+sd-jwt", "ldp_vc"),
-    "mdoc_dsc": ("mso_mdoc", "zk_mdoc"),
-    "x509_doc_signer": ("mso_mdoc", "zk_mdoc"),
-    "holder_binding": ("mso_mdoc", "zk_mdoc", "dc+sd-jwt"),
-    "oid4vp_request_signing": ("oauth-authz-req+jwt",),
-    "presentation_signing": ("jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc"),
-    "vdsnc_signing": ("mso_mdoc",),
-    "csca": ("mso_mdoc", "zk_mdoc"),
-    "jwks_signing": ("jwt_vc_json", "dc+sd-jwt"),
-    "lti_tool_signing": ("lti_tool_jwt",),
-}
-
-PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE: dict[str, str] = {
-    "MDOC": "mso_mdoc",
-    "SD_JWT_VC": "dc+sd-jwt",
-    "VC_JWT": "jwt_vc_json",
-    "JSON_LD": "ldp_vc",
-    "ZK_MDOC": "zk_mdoc",
-    "ICAO_EMRTD": "icao_emrtd",
-}
-
 
 
 def _resolve_org_id(request: Request, organization_id: str | None) -> str:
@@ -871,11 +857,6 @@ def _did_web_org_slug(did_id: Any, *, public_domain: str | None = None) -> str |
     return slug if _SLUG_PATTERN.fullmatch(slug) else None
 
 
-def _issuer_profiles_storage_key(organization_id: str) -> str:
-    """Redis key storing the list of issuer profiles for an organization."""
-    return f"org:{organization_id}:issuer-profiles"
-
-
 def _retarget_did_document(did_doc: dict[str, Any], did_id: str) -> dict[str, Any]:
     """Return a DID document view with IDs rewritten for the requested DID."""
     source_did = did_doc.get("id") if isinstance(did_doc.get("id"), str) else did_id
@@ -1234,39 +1215,10 @@ async def _credential_issuer_key_references(
 ) -> set[str]:
     """Load issuer-key assignments without treating storage errors as empty."""
 
-    redis_client = getattr(request.app.state, "redis_client", None)
-    if redis_client is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Issuer profile registry is unavailable for key-isolation validation.",
-        )
     try:
-        payload = await redis_client.get(_issuer_profiles_storage_key(organization_id))
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="Issuer profile registry is unavailable for key-isolation validation.",
-        ) from exc
-    if payload is None:
-        return set()
-    try:
-        decoded = payload if isinstance(payload, str) else payload.decode()
-        profiles_document = json.loads(decoded)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="Issuer profile registry is invalid for key-isolation validation.",
-        ) from exc
-    profiles = (
-        profiles_document.get("profiles")
-        if isinstance(profiles_document, dict)
-        else None
-    )
-    if not isinstance(profiles, list):
-        raise HTTPException(
-            status_code=503,
-            detail="Issuer profile registry is invalid for key-isolation validation.",
-        )
+        profiles = await list_native_issuer_profiles(organization_id)
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
 
     references: set[str] = set()
     for profile in profiles:
@@ -3125,45 +3077,19 @@ async def internal_resolve_issuer_context(
     # unit calls retain the Query object. Only an actual non-empty string is a
     # DID selector.
     issuer_did = issuer_did.strip() if isinstance(issuer_did, str) else None
-    requested_issuer_mode = _normalize_issuer_mode(issuer_mode)
-
-    profiles_doc = await _load_json_document(
-        request,
-        _issuer_profiles_storage_key(organization_id),
-        {"profiles": []},
-    )
-    profiles = profiles_doc.get("profiles") if isinstance(profiles_doc, dict) else []
-    active_profiles = [
-        profile
-        for profile in (profiles or [])
-        if isinstance(profile, dict)
-        and profile.get("status") == "active"
-        and profile.get("organization_id") == organization_id
-        and profile.get("issuer_did")
-        and profile.get("signing_service_id")
-    ]
-
-    if issuer_did:
-        active_profiles = [
-            profile
-            for profile in active_profiles
-            if profile.get("issuer_did") == issuer_did
-        ]
-    else:
-        active_profiles = [
-            profile
-            for profile in active_profiles
-            if _normalize_issuer_mode(profile.get("issuer_mode"))
-            == requested_issuer_mode
-        ]
-
-    if key_purpose:
-        preferred = [
-            profile
-            for profile in active_profiles
-            if profile.get("key_purpose") == key_purpose
-        ]
-        active_profiles = preferred
+    requested_issuer_mode = str(issuer_mode or "org_managed").strip() or "org_managed"
+    selectors: dict[str, Any] = {
+        "active_only": True,
+        "require_signing_service": True,
+        "issuer_did": issuer_did,
+        "key_purpose": key_purpose,
+    }
+    if not issuer_did:
+        selectors["issuer_mode"] = requested_issuer_mode
+    try:
+        active_profiles = await find_native_issuer_profiles(organization_id, selectors)
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
 
     if not active_profiles:
         raise HTTPException(
@@ -3184,7 +3110,7 @@ async def internal_resolve_issuer_context(
         )
 
     profile = active_profiles[0]
-    profile_issuer_mode = _normalize_issuer_mode(profile.get("issuer_mode"))
+    profile_issuer_mode = str(profile.get("issuer_mode") or "org_managed")
     service_id = str(profile["signing_service_id"])
     key_reference = (
         profile.get("signing_key_reference")
@@ -3204,7 +3130,7 @@ async def internal_resolve_issuer_context(
         "signing_key_reference"
     ) or normalized.get("key_reference")
     effective_profile["key_purpose"] = requested_purpose or "vc_jwt_issuer"
-    _assert_issuer_profile_key_compatible(effective_profile, registry)
+    await _assert_issuer_profile_compatible(effective_profile, normalized, registry)
     # Certificate material belongs to the issuer profile identity. It is
     # resolved from the profile's custody binding inside the gateway and must
     # never be supplied by a wallet or credential request. Both SD-JWT JOSE
@@ -3320,23 +3246,17 @@ async def _resolve_exact_issuer_profile_identity(
     organization_id: str,
     issuer_profile_id: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    profiles_doc = await _load_json_document(
-        request,
-        _issuer_profiles_storage_key(organization_id),
-        {"profiles": []},
-    )
-    profiles = profiles_doc.get("profiles") if isinstance(profiles_doc, dict) else []
-    profile = next(
-        (
-            candidate
-            for candidate in (profiles or [])
-            if isinstance(candidate, dict)
-            and candidate.get("id") == issuer_profile_id
-            and candidate.get("status") == "active"
-        ),
-        None,
-    )
-    if profile is None:
+    try:
+        profile = await get_native_issuer_profile(organization_id, issuer_profile_id)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            raise HTTPException(
+                status_code=404, detail="Active issuer profile not found."
+            ) from exc
+        _raise_native_profile_error(exc)
+    except RuntimeError as exc:
+        _raise_native_profile_error(exc)
+    if str(profile.get("status") or "").lower() != "active":
         raise HTTPException(status_code=404, detail="Active issuer profile not found.")
 
     issuer_did = str(profile.get("issuer_did") or "")
@@ -4136,369 +4056,51 @@ async def get_keys_compliance_summary(
 # Issuer Profiles — bind a published DID to a KMS signing service
 # ---------------------------------------------------------------------------
 
-_ISSUER_PROFILE_STATUSES = {"draft", "active", "revoked"}
-_ISSUER_MODES = {"org_managed", "elevenid_managed", "elevenid_alias_for_org"}
-_KEY_ATTESTATION_MODES = {"disabled", "optional", "required"}
-_KEY_ATTESTATION_STATUS_POLICIES = {"disabled", "if_present", "required"}
 
-
-def _normalize_issuer_mode(value: Any) -> str:
-    mode = str(value or "org_managed").strip() or "org_managed"
-    if mode not in _ISSUER_MODES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid issuer_mode '{mode}'. Must be one of {sorted(_ISSUER_MODES)}.",
-        )
-    return mode
-
-
-def _normalize_key_attestation_policy(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {
-            "mode": "disabled",
-            "trusted_root_certificates_pem": [],
-            "allowed_algorithms": [],
-            "required_key_storage": [],
-            "required_user_authentication": [],
-            "max_age_seconds": 300,
-            "require_nonce": True,
-            "status_validation": "required",
-            "status_list_allowed_origins": [],
-            "status_list_trusted_root_certificates_pem": [],
-            "status_list_allowed_algorithms": [],
-            "status_list_max_age_seconds": 86400,
-            "status_list_allow_private_hosts": False,
-            "status_list_tls_ca_certificates_pem": [],
-        }
-    if not isinstance(value, dict):
-        raise HTTPException(
-            status_code=422, detail="key_attestation_policy must be an object."
-        )
-
-    mode = str(value.get("mode") or "disabled")
-    if mode not in _KEY_ATTESTATION_MODES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid key attestation mode '{mode}'. Must be one of {sorted(_KEY_ATTESTATION_MODES)}.",
-        )
-    status_validation = str(value.get("status_validation") or "required")
-    if status_validation not in _KEY_ATTESTATION_STATUS_POLICIES:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Invalid key attestation status_validation '{status_validation}'. "
-                f"Must be one of {sorted(_KEY_ATTESTATION_STATUS_POLICIES)}."
-            ),
-        )
-
-    def string_list(name: str) -> list[str]:
-        raw = value.get(name, [])
-        if not isinstance(raw, list) or any(
-            not isinstance(item, str) or not item.strip() for item in raw
-        ):
-            raise HTTPException(
-                status_code=422,
-                detail=f"key_attestation_policy.{name} must be an array of non-empty strings.",
-            )
-        return [item.strip() for item in raw]
-
-    roots = string_list("trusted_root_certificates_pem")
-    algorithms = string_list("allowed_algorithms")
-    unsupported_algorithms = sorted(set(algorithms) - set(SUPPORTED_SIGNING_ALGORITHMS))
-    if unsupported_algorithms:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unsupported key attestation algorithms: {unsupported_algorithms}.",
-        )
-    if mode != "disabled" and (not roots or not algorithms):
-        raise HTTPException(
-            status_code=422,
-            detail="Enabled key attestation policy requires trusted roots and allowed algorithms.",
-        )
-    status_roots = string_list("status_list_trusted_root_certificates_pem")
-    status_tls_roots = string_list("status_list_tls_ca_certificates_pem")
-    if roots or status_roots or status_tls_roots:
-        if not _CRYPTOGRAPHY_AVAILABLE:
-            raise HTTPException(
-                status_code=503,
-                detail="Certificate validation support is unavailable.",
-            )
-        from cryptography import x509
-
-        try:
-            for root in [*roots, *status_roots, *status_tls_roots]:
-                x509.load_pem_x509_certificate(root.encode("utf-8"))
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail="key_attestation_policy contains an invalid trusted root certificate.",
-            ) from exc
-
-    max_age_seconds = value.get("max_age_seconds", 300)
-    if (
-        isinstance(max_age_seconds, bool)
-        or not isinstance(max_age_seconds, int)
-        or not 1 <= max_age_seconds <= 86400
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="key_attestation_policy.max_age_seconds must be from 1 through 86400.",
-        )
-    require_nonce = value.get("require_nonce", True)
-    if not isinstance(require_nonce, bool):
-        raise HTTPException(
-            status_code=422,
-            detail="key_attestation_policy.require_nonce must be a boolean.",
-        )
-    status_list_allowed_algorithms = string_list("status_list_allowed_algorithms")
-    unsupported_status_algorithms = sorted(
-        set(status_list_allowed_algorithms) - set(SUPPORTED_SIGNING_ALGORITHMS)
-    )
-    if unsupported_status_algorithms:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unsupported status-list algorithms: {unsupported_status_algorithms}.",
-        )
-    status_list_max_age_seconds = value.get("status_list_max_age_seconds", 86400)
-    if (
-        isinstance(status_list_max_age_seconds, bool)
-        or not isinstance(status_list_max_age_seconds, int)
-        or not 1 <= status_list_max_age_seconds <= 604800
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "key_attestation_policy.status_list_max_age_seconds must be "
-                "from 1 through 604800."
-            ),
-        )
-    status_list_allow_private_hosts = value.get(
-        "status_list_allow_private_hosts", False
-    )
-    if not isinstance(status_list_allow_private_hosts, bool):
-        raise HTTPException(
-            status_code=422,
-            detail="key_attestation_policy.status_list_allow_private_hosts must be a boolean.",
-        )
-    status_list_allowed_origins: list[str] = []
-    for origin in string_list("status_list_allowed_origins"):
-        parsed = urlparse(origin)
-        if (
-            parsed.scheme.lower() != "https"
-            or not parsed.hostname
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.path not in {"", "/"}
-            or parsed.query
-            or parsed.fragment
-        ):
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "key_attestation_policy.status_list_allowed_origins must contain "
-                    "HTTPS origins without paths or credentials."
-                ),
-            )
-        try:
-            port = parsed.port
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail="key_attestation_policy contains a status-list origin with an invalid port.",
-            ) from exc
-        host = parsed.hostname.lower()
-        host_display = f"[{host}]" if ":" in host else host
-        status_list_allowed_origins.append(
-            f"https://{host_display}{f':{port}' if port and port != 443 else ''}"
-        )
-    if (
-        mode != "disabled"
-        and status_validation != "disabled"
-        and not status_list_allowed_origins
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Enabled key attestation status validation requires at least one "
-                "status-list allowed origin."
-            ),
-        )
-    return {
-        "mode": mode,
-        "trusted_root_certificates_pem": roots,
-        "allowed_algorithms": algorithms,
-        "required_key_storage": string_list("required_key_storage"),
-        "required_user_authentication": string_list("required_user_authentication"),
-        "max_age_seconds": max_age_seconds,
-        "require_nonce": require_nonce,
-        "status_validation": status_validation,
-        "status_list_allowed_origins": status_list_allowed_origins,
-        "status_list_trusted_root_certificates_pem": status_roots,
-        "status_list_allowed_algorithms": status_list_allowed_algorithms,
-        "status_list_max_age_seconds": status_list_max_age_seconds,
-        "status_list_allow_private_hosts": status_list_allow_private_hosts,
-        "status_list_tls_ca_certificates_pem": status_tls_roots,
-    }
-
-
-def _normalize_issuer_profile(
+async def _normalize_issuer_profile(
     body: dict[str, Any],
     *,
     existing: dict[str, Any] | None = None,
     org_id: str,
 ) -> dict[str, Any]:
-    """Validate and normalise an issuer profile dict.
-
-    When *existing* is supplied the caller is doing an update; missing fields
-    are carried forward from the previous version.
-    """
-    base = dict(existing) if existing else {}
-    profile_id = base.get("id") or f"ip-{uuid.uuid4().hex[:16]}"
-    now = _utcnow_iso()
-
-    status = body.get("status", base.get("status", "draft"))
-    if status not in _ISSUER_PROFILE_STATUSES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid status '{status}'. Must be one of {sorted(_ISSUER_PROFILE_STATUSES)}.",
+    try:
+        return await normalize_native_issuer_profile(
+            org_id,
+            body,
+            existing=existing,
+            profile_id=(existing or {}).get("id"),
         )
-
-    issuer_did = body.get("issuer_did", base.get("issuer_did", ""))
-    signing_service_id = body.get(
-        "signing_service_id", base.get("signing_service_id", "")
-    )
-    if not issuer_did:
-        raise HTTPException(status_code=422, detail="issuer_did is required.")
-    if not isinstance(issuer_did, str) or not issuer_did.startswith("did:"):
-        raise HTTPException(status_code=422, detail="issuer_did must be a DID string.")
-    if not signing_service_id:
-        raise HTTPException(status_code=422, detail="signing_service_id is required.")
-
-    key_purpose = body.get("key_purpose", base.get("key_purpose", "vc_jwt_issuer"))
-    if key_purpose not in KEY_PURPOSES:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid key_purpose '{key_purpose}'. Must be one of {list(KEY_PURPOSES)}.",
-        )
-    algorithm = body.get("algorithm", base.get("algorithm", ""))
-    if algorithm and algorithm not in SUPPORTED_SIGNING_ALGORITHMS:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid algorithm '{algorithm}'. Must be one of {list(SUPPORTED_SIGNING_ALGORITHMS)}.",
-        )
-    credential_format = body.get(
-        "credential_format", base.get("credential_format", "")
-    )
-    if credential_format and credential_format not in PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid protocol credential_format '{credential_format}'.",
-        )
-
-    issuer_mode = _normalize_issuer_mode(
-        body.get("issuer_mode", base.get("issuer_mode", "org_managed"))
-    )
-    key_attestation_policy = _normalize_key_attestation_policy(
-        body.get("key_attestation_policy", base.get("key_attestation_policy"))
-    )
-
-    return {
-        "id": profile_id,
-        "organization_id": org_id,
-        "name": body.get("name", base.get("name", "")),
-        "issuer_mode": issuer_mode,
-        "issuer_did": issuer_did,
-        "signing_service_id": signing_service_id,
-        "signing_key_reference": body.get(
-            "signing_key_reference", base.get("signing_key_reference", "")
-        ),
-        "verification_method_id": body.get(
-            "verification_method_id", base.get("verification_method_id", "")
-        ),
-        "key_purpose": key_purpose,
-        "credential_format": credential_format,
-        "algorithm": algorithm,
-        "key_attestation_policy": key_attestation_policy,
-        "status": status,
-        "created_at": base.get("created_at", now),
-        "updated_at": now,
-    }
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
 
 
-def _assert_issuer_profile_service_compatible(
-    profile: dict[str, Any], service: dict[str, Any]
-) -> None:
-    """Reject issuer profiles that point at an incompatible signing service."""
-    key_purpose = profile.get("key_purpose")
-    service_purposes = (
-        service.get("key_purposes")
-        if isinstance(service.get("key_purposes"), list)
-        else []
-    )
-    if key_purpose and service_purposes and key_purpose not in service_purposes:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Signing service '{service.get('id')}' is not configured for key_purpose '{key_purpose}'.",
-        )
-
-    algorithm = profile.get("algorithm")
-    service_algorithms = (
-        service.get("algorithms") if isinstance(service.get("algorithms"), list) else []
-    )
-    if algorithm and service_algorithms and algorithm not in service_algorithms:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Signing service '{service.get('id')}' does not support algorithm '{algorithm}'.",
-        )
-
-
-def _assert_issuer_profile_key_compatible(
+async def _assert_issuer_profile_compatible(
     profile: dict[str, Any],
+    service: dict[str, Any],
     registry: dict[str, Any],
 ) -> None:
-    """Reject issuer profiles that select a protocol-only key reference."""
+    organization_id = str(profile.get("organization_id") or "")
+    try:
+        await validate_native_issuer_profile_binding(
+            organization_id,
+            profile=profile,
+            service=service,
+            registry=registry,
+        )
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
 
-    service_id = str(profile.get("signing_service_id") or "").strip()
-    key_reference = str(profile.get("signing_key_reference") or "").strip()
-    key_purpose = str(profile.get("key_purpose") or "vc_jwt_issuer").strip()
-    if not service_id or not key_reference:
+
+def _raise_native_profile_error(exc: httpx.HTTPStatusError | RuntimeError) -> None:
+    if isinstance(exc, httpx.HTTPStatusError):
         raise HTTPException(
-            status_code=422,
-            detail="Issuer profiles require an explicit signing key reference.",
-        )
-    reference_purposes = _purposes_for_key_reference(
-        registry,
-        service_id=service_id,
-        key_reference=key_reference,
-    )
-    if "lti_tool_signing" in reference_purposes and key_purpose != "lti_tool_signing":
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Key reference '{key_reference}' is reserved for LTI tool signing "
-                "and cannot be assigned to an issuer profile."
-            ),
-        )
-    if (
-        key_purpose == "lti_tool_signing"
-        and reference_purposes
-        and reference_purposes != ["lti_tool_signing"]
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Key reference '{key_reference}' must be registered exclusively "
-                "for lti_tool_signing."
-            ),
-        )
-    if reference_purposes and key_purpose not in reference_purposes:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Key reference '{key_reference}' is not registered for issuer "
-                f"key_purpose '{key_purpose}'."
-            ),
-        )
+            status_code=exc.response.status_code,
+            detail=_httpx_error_detail(exc),
+        ) from exc
+    raise HTTPException(
+        status_code=503,
+        detail=f"Native issuer-profile backend is unavailable: {exc}",
+    ) from exc
 
 
 async def _complete_issuer_profile_algorithm(
@@ -4596,44 +4198,11 @@ async def _persist_issuer_profile_registry_binding(
     organization_id: str,
     profile: dict[str, Any],
 ) -> None:
-    """Authorize the selected KMS key for this tenant and profile purpose.
-
-    Clean organizations do not inherit another tenant's registry.  Creating an
-    issuer profile is the explicit administrative action that establishes the
-    organization-local purpose binding.  Only registry metadata is persisted;
-    key material and provider credentials remain in KMS/service configuration.
-    """
-
-    service_id = str(profile.get("signing_service_id") or "").strip()
-    key_reference = str(profile.get("signing_key_reference") or "").strip()
-    key_purpose = str(profile.get("key_purpose") or "").strip()
-    if not service_id or not key_reference or not key_purpose:
-        raise HTTPException(
-            status_code=422,
-            detail="Issuer profile has an incomplete KMS purpose binding.",
-        )
-
-    registry = await _load_registered_service_registry(request, organization_id)
-    bindings = _normalize_key_reference_purposes(registry.get("key_reference_purposes"))
-    service_bindings = dict(bindings.get(service_id, {}))
-    purposes = list(service_bindings.get(key_reference, []))
-    if key_purpose not in purposes:
-        purposes.append(key_purpose)
-    service_bindings[key_reference] = sorted(set(purposes))
-    bindings[service_id] = service_bindings
-    _validate_lti_key_reference_bindings(bindings)
-
-    type_defaults = dict(registry.get("type_defaults") or {})
-    type_defaults.setdefault(key_purpose, service_id)
-    format_defaults = dict(registry.get("format_defaults") or {})
-    for credential_format in KEY_PURPOSE_CREDENTIAL_FORMATS.get(key_purpose, ()):
-        format_defaults.setdefault(credential_format, service_id)
-
-    registry["key_reference_purposes"] = bindings
-    registry["type_defaults"] = type_defaults
-    registry["format_defaults"] = format_defaults
-    registry["default_service_id"] = registry.get("default_service_id") or service_id
-    await _save_registered_service_registry(request, organization_id, registry)
+    del request
+    try:
+        await bind_native_issuer_profile_registry(organization_id, profile)
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
 
 
 async def _resolve_org_scoped_issuer_identity(
@@ -4647,45 +4216,20 @@ async def _resolve_org_scoped_issuer_identity(
     algorithm: str | None = None,
 ) -> dict[str, Any]:
     """Resolve an issuer DID to the org-owned KMS-backed verification method."""
-    profiles_doc = await _load_json_document(
-        request,
-        _issuer_profiles_storage_key(organization_id),
-        {"profiles": []},
-    )
-    profiles = profiles_doc.get("profiles") if isinstance(profiles_doc, dict) else []
-    active_profiles = [
-        profile
-        for profile in (profiles or [])
-        if isinstance(profile, dict)
-        and profile.get("status") == "active"
-        and profile.get("organization_id") == organization_id
-        and profile.get("issuer_did") == issuer_did
-        and profile.get("signing_service_id")
-    ]
-
-    if key_purpose:
-        active_profiles = [
-            profile
-            for profile in active_profiles
-            if profile.get("key_purpose") == key_purpose
-        ]
+    selectors: dict[str, Any] = {
+        "active_only": True,
+        "issuer_did": issuer_did,
+        "key_purpose": key_purpose,
+        "wire_credential_format": credential_format,
+        "require_signing_service": True,
+    }
     if algorithm:
-        active_profiles = [
-            profile
-            for profile in active_profiles
-            if profile.get("algorithm") in {algorithm, None, ""}
-        ]
-    if credential_format:
-        active_profiles = [
-            profile
-            for profile in active_profiles
-            if profile.get("credential_format")
-            and _custody_wire_format(
-                str(profile["credential_format"]),
-                str(profile.get("key_purpose") or "vc_jwt_issuer"),
-            )
-            == credential_format
-        ]
+        selectors["algorithm"] = _canonical_signing_algorithm(algorithm)
+        selectors["allow_missing_algorithm"] = True
+    try:
+        active_profiles = await find_native_issuer_profiles(organization_id, selectors)
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
 
     if not active_profiles:
         raise HTTPException(
@@ -4731,7 +4275,9 @@ async def _resolve_org_scoped_issuer_identity(
         effective_profile["key_purpose"] = (
             key_purpose or profile.get("key_purpose") or "vc_jwt_issuer"
         )
-        _assert_issuer_profile_key_compatible(effective_profile, registry)
+        await _assert_issuer_profile_compatible(
+            effective_profile, normalized_service, registry
+        )
 
         service_formats = (
             normalized_service.get("credential_formats")
@@ -4866,7 +4412,7 @@ async def create_issuer_profile(
 ):
     """Create a new issuer profile linking a published DID to a KMS signing service."""
     resolved_org_id = _resolve_org_id(request, organization_id)
-    profile = _normalize_issuer_profile(body, org_id=resolved_org_id)
+    profile = await _normalize_issuer_profile(body, org_id=resolved_org_id)
     service_id = str(profile["signing_service_id"])
     key_reference = (
         profile.get("signing_key_reference")
@@ -4880,7 +4426,6 @@ async def create_issuer_profile(
         service_id,
         key_reference_override=key_reference,
     )
-    _assert_issuer_profile_service_compatible(profile, normalized_service)
     if not profile.get("signing_key_reference") and normalized_service.get(
         "key_reference"
     ):
@@ -4891,12 +4436,7 @@ async def create_issuer_profile(
         profile=profile,
         service=normalized_service,
     )
-    _assert_issuer_profile_service_compatible(profile, normalized_service)
-    _assert_issuer_profile_key_compatible(profile, registry)
-
-    storage_key = _issuer_profiles_storage_key(resolved_org_id)
-    doc = await _load_json_document(request, storage_key, {"profiles": []})
-    profiles: list = doc.get("profiles") or []
+    await _assert_issuer_profile_compatible(profile, normalized_service, registry)
 
     async def ensure_did_web_verification_method(
         target_profile: dict[str, Any],
@@ -4950,58 +4490,16 @@ async def create_issuer_profile(
             return next_profile
         return target_profile
 
-    existing_profile_index = next(
-        (
-            index
-            for index, candidate in enumerate(profiles)
-            if isinstance(candidate, dict)
-            and candidate.get("status") != "revoked"
-            and candidate.get("issuer_did") == profile.get("issuer_did")
-            and candidate.get("signing_service_id") == profile.get("signing_service_id")
-            and (
-                candidate.get("signing_key_reference")
-                or normalized_service.get("key_reference")
-                or ""
-            )
-            == (profile.get("signing_key_reference") or "")
-            and (candidate.get("key_purpose") or "vc_jwt_issuer")
-            == (profile.get("key_purpose") or "vc_jwt_issuer")
-            and (
-                not str(candidate.get("credential_format") or "").strip()
-                or candidate.get("credential_format")
-                == profile.get("credential_format")
-            )
-            and (
-                not str(candidate.get("algorithm") or "").strip()
-                or _canonical_signing_algorithm(candidate.get("algorithm"))
-                == _canonical_signing_algorithm(profile.get("algorithm"))
-            )
-        ),
-        None,
-    )
-    if existing_profile_index is not None:
-        existing_profile = profiles[existing_profile_index]
-        repaired_profile = dict(existing_profile)
-        if (
-            profile.get("status") == "active"
-            and repaired_profile.get("status") != "active"
-        ):
-            repaired_profile["status"] = "active"
-        if not repaired_profile.get("signing_key_reference") and profile.get(
-            "signing_key_reference"
-        ):
-            repaired_profile["signing_key_reference"] = profile["signing_key_reference"]
-        if not repaired_profile.get("key_purpose") and profile.get("key_purpose"):
-            repaired_profile["key_purpose"] = profile["key_purpose"]
-        if not repaired_profile.get("credential_format") and profile.get(
-            "credential_format"
-        ):
-            repaired_profile["credential_format"] = profile["credential_format"]
-        if not repaired_profile.get("algorithm") and profile.get("algorithm"):
-            repaired_profile["algorithm"] = profile["algorithm"]
-        if not repaired_profile.get("name") and profile.get("name"):
-            repaired_profile["name"] = profile["name"]
-
+    try:
+        repaired_profile, found = await find_native_duplicate_issuer_profile(
+            resolved_org_id,
+            profile,
+            service_key_reference=normalized_service.get("key_reference"),
+        )
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
+    if found and repaired_profile is not None:
+        existing_profile = dict(repaired_profile)
         repaired_profile = await ensure_did_web_verification_method(repaired_profile)
         await _persist_issuer_profile_registry_binding(
             request,
@@ -5010,9 +4508,12 @@ async def create_issuer_profile(
         )
         if repaired_profile != existing_profile:
             repaired_profile["updated_at"] = _utcnow_iso()
-            profiles[existing_profile_index] = repaired_profile
-            doc["profiles"] = profiles
-            await _save_json_document(request, storage_key, doc)
+        try:
+            repaired_profile = await save_native_issuer_profile(
+                resolved_org_id, repaired_profile
+            )
+        except (httpx.HTTPStatusError, RuntimeError) as exc:
+            _raise_native_profile_error(exc)
 
         return JSONResponse(
             content={"ok": True, "profile": repaired_profile, "created": False}
@@ -5030,9 +4531,10 @@ async def create_issuer_profile(
         profile=profile,
     )
 
-    profiles.append(profile)
-    doc["profiles"] = profiles
-    await _save_json_document(request, storage_key, doc)
+    try:
+        profile = await save_native_issuer_profile(resolved_org_id, profile)
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
 
     return JSONResponse(content={"ok": True, "profile": profile, "created": True})
 
@@ -5071,30 +4573,15 @@ def _issuer_identity_projection(profile: dict[str, Any]) -> IssuerIdentityRespon
     )
 
 
-def _wire_credential_format(protocol_format: str) -> str:
-    wire_format = PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE.get(protocol_format)
-    if not wire_format:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Unsupported credential_format '{protocol_format}'.",
-        )
-    return wire_format
-
-
-def _custody_wire_format(
-    credential_format: str, key_purpose: str
+async def _custody_wire_format(
+    organization_id: str, credential_format: str, key_purpose: str
 ) -> str:
-    """Map non-credential signing purposes to their internal wire capability."""
-    if key_purpose in {
-        "oid4vp_request_signing",
-        "lti_tool_signing",
-        "vdsnc_signing",
-        "csca",
-    }:
-        purpose_formats = KEY_PURPOSE_CREDENTIAL_FORMATS.get(key_purpose, ())
-        if purpose_formats:
-            return purpose_formats[0]
-    return _wire_credential_format(credential_format)
+    try:
+        return await resolve_native_profile_custody_format(
+            organization_id, credential_format, key_purpose
+        )
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
 
 
 async def _matching_issuer_identity_profiles(
@@ -5105,33 +4592,26 @@ async def _matching_issuer_identity_profiles(
     organization_id = _require_public_issuer_identity_organization(
         request, operation.organization_id
     )
-    wire_format = _custody_wire_format(
-        operation.credential_format, operation.key_purpose
+    wire_format = await _custody_wire_format(
+        organization_id, operation.credential_format, operation.key_purpose
     )
-    document = await _load_json_document(
-        request,
-        _issuer_profiles_storage_key(organization_id),
-        {"profiles": []},
-    )
+    try:
+        candidates = await find_native_issuer_profiles(
+            organization_id,
+            {
+                "active_only": True,
+                "issuer_did": operation.issuer_did,
+                "key_purpose": operation.key_purpose,
+                "credential_format": operation.credential_format,
+                "algorithm": operation.algorithm,
+                "require_signing_service": True,
+                "require_signing_key_reference": True,
+            },
+        )
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
     matches: list[dict[str, Any]] = []
-    for profile in document.get("profiles") or []:
-        if not isinstance(profile, dict):
-            continue
-        if profile.get("organization_id") != organization_id:
-            continue
-        if str(profile.get("status") or "").lower() != "active":
-            continue
-        if profile.get("issuer_did") != operation.issuer_did:
-            continue
-        if str(profile.get("key_purpose") or "vc_jwt_issuer") != operation.key_purpose:
-            continue
-        if (
-            _canonical_signing_algorithm(profile.get("algorithm"))
-            != operation.algorithm
-        ):
-            continue
-        if profile.get("credential_format") != operation.credential_format:
-            continue
+    for profile in candidates:
         service_id = str(profile.get("signing_service_id") or "").strip()
         key_reference = str(profile.get("signing_key_reference") or "").strip()
         if not service_id or not key_reference:
@@ -5153,7 +4633,7 @@ async def _matching_issuer_identity_profiles(
             continue
         effective_profile = dict(profile)
         effective_profile["signing_key_reference"] = key_reference
-        _assert_issuer_profile_key_compatible(effective_profile, registry)
+        await _assert_issuer_profile_compatible(effective_profile, service, registry)
         matches.append(profile)
     return matches
 
@@ -5164,8 +4644,8 @@ async def _managed_custody_for_new_identity(
 ) -> tuple[str, str]:
     """Select and, for managed OpenBao, provision custody without public selectors."""
     organization_id = operation.organization_id
-    wire_format = _custody_wire_format(
-        operation.credential_format, operation.key_purpose
+    wire_format = await _custody_wire_format(
+        organization_id, operation.credential_format, operation.key_purpose
     )
     registry = await _load_registered_service_registry(request, organization_id)
     snapshot = await _load_signing_key_snapshot(organization_id)
@@ -5191,16 +4671,24 @@ async def _managed_custody_for_new_identity(
         )
     service_id = str(service.get("id") or "").strip()
     if not service_id:
-        raise HTTPException(status_code=503, detail="Managed custody resolution failed.")
+        raise HTTPException(
+            status_code=503, detail="Managed custody resolution failed."
+        )
     service_formats = service.get("credential_formats") or []
     service_purposes = service.get("key_purposes") or []
     service_algorithms = service.get("algorithms") or []
     if service_formats and wire_format not in service_formats:
-        raise HTTPException(status_code=409, detail="Resolved custody is format-incompatible.")
+        raise HTTPException(
+            status_code=409, detail="Resolved custody is format-incompatible."
+        )
     if service_purposes and operation.key_purpose not in service_purposes:
-        raise HTTPException(status_code=409, detail="Resolved custody is purpose-incompatible.")
+        raise HTTPException(
+            status_code=409, detail="Resolved custody is purpose-incompatible."
+        )
     if service_algorithms and operation.algorithm not in service_algorithms:
-        raise HTTPException(status_code=409, detail="Resolved custody is algorithm-incompatible.")
+        raise HTTPException(
+            status_code=409, detail="Resolved custody is algorithm-incompatible."
+        )
 
     if service_id == MANAGED_OPENBAO_SERVICE_ID:
         identity_token = uuid.uuid5(
@@ -5307,7 +4795,9 @@ async def create_public_issuer_identity(
     created_body = json.loads(bytes(created.body))
     profile = created_body.get("profile")
     if not isinstance(profile, dict):
-        raise HTTPException(status_code=502, detail="Issuer identity provisioning failed.")
+        raise HTTPException(
+            status_code=502, detail="Issuer identity provisioning failed."
+        )
     return IssuerIdentityCreateResponse(
         identity=_issuer_identity_projection(profile),
         created=bool(created_body.get("created")),
@@ -5337,46 +4827,37 @@ async def list_public_issuer_identities(
     resolved_org_id = _require_public_issuer_identity_organization(
         request, organization_id if isinstance(organization_id, str) else None
     )
-    storage_key = _issuer_profiles_storage_key(resolved_org_id)
-    doc = await _load_json_document(request, storage_key, {"profiles": []})
     requested_purpose = str(key_purpose or "").strip()
     requested_algorithm = (
         _canonical_signing_algorithm(algorithm, default="") if algorithm else ""
     )
     requested_format = (
-        credential_format.strip().upper()
-        if isinstance(credential_format, str)
-        else ""
+        credential_format.strip().upper() if isinstance(credential_format, str) else ""
     )
     wire_format = (
-        _custody_wire_format(requested_format, requested_purpose)
+        await _custody_wire_format(resolved_org_id, requested_format, requested_purpose)
         if requested_format
         else ""
     )
+    selectors: dict[str, Any] = {
+        "active_only": True,
+        "require_public_identity": True,
+        "key_purpose": requested_purpose or None,
+        "credential_format": requested_format or None,
+        "algorithm": requested_algorithm or None,
+    }
+    try:
+        profiles = await find_native_issuer_profiles(resolved_org_id, selectors)
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
     matches: list[dict[str, Any]] = []
 
-    for profile in doc.get("profiles") or []:
-        if not isinstance(profile, dict):
-            continue
-        if str(profile.get("status") or "").strip().lower() != "active":
-            continue
+    for profile in profiles:
         issuer_did = str(profile.get("issuer_did") or "").strip()
         purpose = str(profile.get("key_purpose") or "vc_jwt_issuer").strip()
         profile_format = str(profile.get("credential_format") or "").strip().upper()
         profile_algorithm = _canonical_signing_algorithm(profile.get("algorithm"))
-        if not issuer_did.startswith("did:"):
-            continue
-        if profile_format not in PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE:
-            continue
-        if profile_algorithm not in SUPPORTED_SIGNING_ALGORITHMS:
-            continue
-        if requested_purpose and purpose != requested_purpose:
-            continue
-        if requested_algorithm and profile_algorithm != requested_algorithm:
-            continue
         if wire_format:
-            if profile_format != requested_format:
-                continue
             service_id = str(profile.get("signing_service_id") or "").strip()
             key_reference = str(profile.get("signing_key_reference") or "").strip()
             if not service_id or not key_reference:
@@ -5471,9 +4952,10 @@ async def list_issuer_profiles(
 ):
     """Return all issuer profiles for the resolved organization."""
     resolved_org_id = _resolve_org_id(request, organization_id)
-    storage_key = _issuer_profiles_storage_key(resolved_org_id)
-    doc = await _load_json_document(request, storage_key, {"profiles": []})
-    profiles: list = doc.get("profiles") or []
+    try:
+        profiles = await list_native_issuer_profiles(resolved_org_id)
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
     return JSONResponse(content={"profiles": profiles})
 
 
@@ -5484,12 +4966,10 @@ async def get_issuer_profile(
 ):
     """Return a single issuer profile by ID."""
     resolved_org_id = _resolve_org_id(request, organization_id)
-    storage_key = _issuer_profiles_storage_key(resolved_org_id)
-    doc = await _load_json_document(request, storage_key, {"profiles": []})
-    profiles: list = doc.get("profiles") or []
-    profile = next((p for p in profiles if p.get("id") == profile_id), None)
-    if profile is None:
-        raise HTTPException(status_code=404, detail="Issuer profile not found.")
+    try:
+        profile = await get_native_issuer_profile(resolved_org_id, profile_id)
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
     return JSONResponse(content={"profile": profile})
 
 
@@ -5604,18 +5084,13 @@ async def update_issuer_profile(
 ):
     """Update an existing issuer profile (partial update)."""
     resolved_org_id = _resolve_org_id(request, organization_id)
-    storage_key = _issuer_profiles_storage_key(resolved_org_id)
-    doc = await _load_json_document(request, storage_key, {"profiles": []})
-    profiles: list = doc.get("profiles") or []
-
-    idx = next((i for i, p in enumerate(profiles) if p.get("id") == profile_id), None)
-    if idx is None:
-        raise HTTPException(status_code=404, detail="Issuer profile not found.")
-
-    updated = _normalize_issuer_profile(
-        body, existing=profiles[idx], org_id=resolved_org_id
+    try:
+        existing = await get_native_issuer_profile(resolved_org_id, profile_id)
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
+    updated = await _normalize_issuer_profile(
+        body, existing=existing, org_id=resolved_org_id
     )
-    updated["id"] = profile_id  # preserve original ID
     service_id = str(updated["signing_service_id"])
     key_reference = (
         updated.get("signing_key_reference")
@@ -5628,15 +5103,21 @@ async def update_issuer_profile(
         service_id,
         key_reference_override=key_reference,
     )
-    _assert_issuer_profile_service_compatible(updated, normalized_service)
     if not updated.get("signing_key_reference") and normalized_service.get(
         "key_reference"
     ):
         updated["signing_key_reference"] = normalized_service["key_reference"]
-    _assert_issuer_profile_key_compatible(updated, registry)
-    profiles[idx] = updated
-    doc["profiles"] = profiles
-    await _save_json_document(request, storage_key, doc)
+    await _complete_issuer_profile_algorithm(
+        request,
+        organization_id=resolved_org_id,
+        profile=updated,
+        service=normalized_service,
+    )
+    await _assert_issuer_profile_compatible(updated, normalized_service, registry)
+    try:
+        updated = await save_native_issuer_profile(resolved_org_id, updated)
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
 
     return JSONResponse(content={"ok": True, "profile": updated})
 
@@ -5648,17 +5129,10 @@ async def delete_issuer_profile(
 ):
     """Delete an issuer profile by ID."""
     resolved_org_id = _resolve_org_id(request, organization_id)
-    storage_key = _issuer_profiles_storage_key(resolved_org_id)
-    doc = await _load_json_document(request, storage_key, {"profiles": []})
-    profiles: list = doc.get("profiles") or []
-
-    original_len = len(profiles)
-    profiles = [p for p in profiles if p.get("id") != profile_id]
-    if len(profiles) == original_len:
-        raise HTTPException(status_code=404, detail="Issuer profile not found.")
-
-    doc["profiles"] = profiles
-    await _save_json_document(request, storage_key, doc)
+    try:
+        await delete_native_issuer_profile(resolved_org_id, profile_id)
+    except (httpx.HTTPStatusError, RuntimeError) as exc:
+        _raise_native_profile_error(exc)
 
     return JSONResponse(content={"ok": True, "deleted": profile_id})
 

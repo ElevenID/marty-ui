@@ -129,6 +129,44 @@ def test_certificate_jwks_and_did_documents_have_one_rust_owner() -> None:
         assert owner in rust_documents
 
 
+def test_issuer_profile_policy_selection_and_storage_have_one_rust_owner() -> None:
+    route = (ROOT / "services" / "gateway" / "routes" / "signing_keys.py").read_text(
+        encoding="utf-8"
+    )
+    adapter = (ROOT / "services" / "gateway" / "native_signing_keys.py").read_text(
+        encoding="utf-8"
+    )
+    rust_profiles = (
+        ROOT / "rust" / "services" / "signing-keys" / "src" / "profiles.rs"
+    ).read_text(encoding="utf-8")
+
+    for path in (
+        "/internal/profiles/{quote(organization_id, safe='')}/normalize",
+        "/internal/profiles/{quote(organization_id, safe='')}/validate-binding",
+        "/internal/profiles/{quote(organization_id, safe='')}/find",
+        "/internal/profiles/{quote(organization_id, safe='')}/find-duplicate",
+    ):
+        assert path in adapter
+    for superseded_name in (
+        "_issuer_profiles_storage_key",
+        "_normalize_key_attestation_policy",
+        "_assert_issuer_profile_service_compatible",
+        "_assert_issuer_profile_key_compatible",
+        "KEY_PURPOSE_CREDENTIAL_FORMATS",
+        "PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE",
+    ):
+        assert superseded_name not in route
+    for owner in (
+        "pub struct ProfileStore",
+        "pub fn normalize_profile",
+        "pub fn validate_binding",
+        "pub fn duplicate_profile",
+        "pub fn find_profiles",
+    ):
+        assert owner in rust_profiles
+    assert 'format!("org:{organization_id}:issuer-profiles")' in rust_profiles
+
+
 def test_base_stack_wires_gateway_to_the_rust_signing_keys_service() -> None:
     compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
 
@@ -144,7 +182,9 @@ def test_selfhost_stack_runs_rust_signing_keys_with_secret_files() -> None:
     compose = (ROOT / "docker-compose.selfhost.prod.yml").read_text(encoding="utf-8")
 
     assert "  signing-keys:\n" in compose
-    assert "SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key" in compose
+    assert (
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key" in compose
+    )
     assert "BAO_TOKEN_FILE: /run/secrets/openbao_service_token" in compose
     assert "SIGNING_KEYS_REDIS_URL: redis://redis:6379/2" in compose
     assert 'test: ["CMD", "curl", "-f", "http://localhost:8017/health"]' in compose

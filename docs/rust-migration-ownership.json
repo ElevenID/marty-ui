@@ -400,6 +400,24 @@
       ]
     },
     {
+      "id": "signing-issuer-profiles",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/signing-keys/src/profiles.rs", "rust/services/signing-keys/src/registry.rs"],
+        "binding_paths": ["rust/services/signing-keys/src/http.rs", "services/gateway/native_signing_keys.py"]
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-ui",
+          "paths": ["services/gateway/routes/signing_keys.py"],
+          "language": "python",
+          "disposition": "authorization-kms-did-orchestration-only"
+        }
+      ]
+    },
+    {
       "id": "native-cli",
       "phase": 9,
       "status": "cutover-in-progress",
@@ -551,7 +569,7 @@
     "excluded_path_parts": ["tests", "migrations", "__pycache__"],
     "restricted_import_roots": ["Crypto", "OpenSSL", "cryptography", "jose", "jwcrypto", "jwt", "nacl"],
     "approved_imports": [
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography import x509", "count": 3},
+      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography import x509", "count": 2},
       {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.backends import default_backend"},
       {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.primitives import serialization"},
       {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey, SECP256R1, SECP384R1"},
@@ -706,6 +724,12 @@
         "id": "no-python-openid4vp-mdoc-handover-kernel",
         "glob": "services/**/*.py",
         "pattern": "def\\s+_(?:cbor_length|cbor_encode_handover_value|openid4vp_response_key_thumbprint|build_openid4vp_mdoc_session_transcript|openid4vp_mdoc_binding_digests)\\s*\\(",
+        "expected_matches": {}
+      },
+      {
+        "id": "no-python-issuer-profile-kernel",
+        "glob": "services/gateway/routes/signing_keys.py",
+        "pattern": "(?:_issuer_profiles_storage_key|_normalize_key_attestation_policy|_assert_issuer_profile_(?:service|key)_compatible|KEY_PURPOSE_CREDENTIAL_FORMATS|PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE)",
         "expected_matches": {}
       }
     ]
