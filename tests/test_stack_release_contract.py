@@ -257,10 +257,10 @@ def test_revocation_deletion_release_uses_the_rust_candidate_overlay() -> None:
         for component in lock["components"]
         if component["name"] == "marty-credentials-issuance"
     )
-    assert issuance["version"] == "0.1.62"
-    assert issuance["commit"] == "afd5bfc6f28766644f9ae4fc0e484e027b0f9224"
+    assert issuance["version"] == "0.1.64"
+    assert issuance["commit"] == "b57f9f43334ba85cbdfd8db660b5899a0cf2e9f3"
     assert issuance["artifacts"][0]["digest"] == (
-        "sha256:199d8e4db7d43f67c3ac9a993538301b13032db3fdcd06fd1cd3ee015607d612"
+        "sha256:0b78bc08b15d808d69ac74312980d5233461c5fb6733b1b2773275940632b942"
     )
 
 

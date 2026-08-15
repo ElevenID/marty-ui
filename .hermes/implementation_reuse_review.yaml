@@ -6,11 +6,10 @@ search_scope:
   - bindings_adapters_ffi_and_api_layers
   - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
 search_queries:
-  - "marty-ui immutable component pin"
-  - "marty-common v0.2.15 wheel digest"
-  - "gateway static route resource owner classifier inventory"
-  - "presentation policy inline evaluate static route"
-  - "marty-common release PR 58"
+  - "marty-ui immutable component pin and stack release"
+  - "marty-credentials v0.1.64 issuance image digest"
+  - "marty-core v0.1.57 signing wheel digest"
+  - "consolidated Rust migration aggregate beta release"
 candidate_implementations:
   - path: release/stack-lock.json
     language: JSON
@@ -21,10 +20,7 @@ candidate_implementations:
   - path: .github/workflows/cd.yml
     language: YAML
     disposition: reuse_existing_immutable_release_pipeline
-  - path: services/gateway/tests/test_middleware.py
-    language: Python
-    disposition: extend_existing_cross_repository_route_inventory_contract
-  - path: https://github.com/ElevenID/Marty/releases/tag/marty-common-v0.2.15
+  - path: https://github.com/ElevenID/marty-credentials/releases/tag/v0.1.64
     language: GitHub release evidence
     disposition: pin_verified_immutable_dependency_release
 no_match_statement: ""
