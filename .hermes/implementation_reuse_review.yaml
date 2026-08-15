@@ -6,10 +6,11 @@ search_scope:
   - bindings_adapters_ffi_and_api_layers
   - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
 search_queries:
-  - "marty-ui stack release marker"
-  - "immutable annotated UI release tag"
-  - "release contract stack lock version"
-  - "issuer entity Cedar owner lookup fix"
+  - "marty-ui immutable component pin"
+  - "marty-common v0.2.14 wheel digest"
+  - "static flow webhook Cedar classifier"
+  - "public tenant boundary run 31864705019"
+  - "marty-common release PR 56"
 candidate_implementations:
   - path: release/stack-lock.json
     language: JSON
@@ -20,9 +21,12 @@ candidate_implementations:
   - path: .github/workflows/cd.yml
     language: YAML
     disposition: reuse_existing_immutable_release_pipeline
-  - path: https://github.com/ElevenID/marty-ui/pull/542
-    language: GitHub pull request
-    disposition: release_exact_accepted_product_fix
+  - path: services/gateway/tests/test_middleware.py
+    language: Python
+    disposition: extend_existing_dependency_behavior_contract
+  - path: https://github.com/ElevenID/Marty/releases/tag/marty-common-v0.2.14
+    language: GitHub release evidence
+    disposition: pin_verified_immutable_dependency_release
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:

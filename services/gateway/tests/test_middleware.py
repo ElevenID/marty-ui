@@ -903,6 +903,15 @@ def test_gateway_cedar_delegates_other_api_scope_decisions_to_marty_common():
     )
 
 
+@pytest.mark.parametrize("segment", ["capabilities", "webhooks"])
+def test_static_flow_segments_do_not_trigger_resource_owner_lookup(segment: str) -> None:
+    path = f"/v1/flows/{segment}"
+    if segment == "webhooks":
+        path += "/application-approved"
+
+    assert cedar_actions.resolve_resource_lookup(path) is None
+
+
 @pytest.mark.parametrize(
     ("method", "path", "permission"),
     (
