@@ -97,6 +97,9 @@ services:
   deployment-profile:
     container_name: !reset null
     ports: !reset []
+  signing-keys:
+    container_name: !reset null
+    ports: !reset []
   flow:
     container_name: !reset null
     ports: !reset []
