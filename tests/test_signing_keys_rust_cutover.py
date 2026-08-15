@@ -178,6 +178,14 @@ def test_base_stack_wires_gateway_to_the_rust_signing_keys_service() -> None:
     assert "SIGNING_KEYS_REDIS_URL: redis://redis:6379/2" in compose
 
 
+def test_base_stack_keeps_signing_keys_on_the_internal_network() -> None:
+    compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+    signing_keys = compose.split("\n  signing-keys:\n", 1)[1].split("\n  flow:\n", 1)[0]
+
+    assert "\n    ports:" not in signing_keys
+    assert "\n    networks:\n      - marty-network" in signing_keys
+
+
 def test_selfhost_stack_runs_rust_signing_keys_with_secret_files() -> None:
     compose = (ROOT / "docker-compose.selfhost.prod.yml").read_text(encoding="utf-8")
 
