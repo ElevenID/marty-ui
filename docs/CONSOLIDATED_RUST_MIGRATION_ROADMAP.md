@@ -33,11 +33,12 @@ decision kernel.
 | Phase 9 release and evidence | Complete at the approved beta boundary | Immutable Rust/UI releases, a single beta update, commit-pinned composition evidence, fail-closed checks, and the protected public lifecycle run are recorded in the [final migration evidence](rust-migrations/final-migration-evidence-2026-08-14.md) |
 
 All first-wave implementation, deletion, enforcement, packaging, and beta
-behavioral gates have passed. A follow-up inventory found eight coherent
+behavioral gates have passed. A follow-up inventory found eight initial
 second-wave targets that still contain deterministic security decisions or
-whole-service behavior in Python, JavaScript, or Dart. Two workstreams are now
-`cutover-in-progress`; the remaining six are `planned`. Production and
-persistent self-host configurations remain intentionally unchanged.
+whole-service behavior in Python, JavaScript, or Dart. Implementation exposed
+a ninth target: the remaining Python eMRTD elementary-file, DG15, and
+biometric-template parsers. Completed and active workstreams are recorded
+below. Production and persistent self-host configurations remain unchanged.
 
 ## Wave two — ordered by removable non-Rust implementation
 
@@ -47,14 +48,15 @@ order work, not completion metrics and not permission to discard behavior.
 
 | Order | Workstream | Baseline removable source | Status | Canonical destination |
 |---|---|---:|---|---|
-| 1 | Signing-key and KMS service | approximately 7,820 Python lines | Cutover in progress: the Rust kernel, registry, persistence, provider adapters, public documents, and issuer-profile slices are implemented in the open PR stack | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
-| 2 | Marty CLI and API client | approximately 7,342 deleted handwritten JavaScript lines | Cutover in progress: native CLI and Rust/WASM browser client are implemented, compatibility-tested, and deleted; merge and release remain | native Rust workspace, executable, and browser/WASM client in `marty-cli` |
-| 3 | Notification and webhook service | approximately 3,976 Python lines | Planned | Rust service in `marty-ui` using the established service foundation |
-| 4 | Credential attestation, evidence, governance, and VCDM decisions | approximately 2,711 Python lines | Planned | `marty-oid4vci` and `marty-verification`, consumed by `marty-credentials` |
-| 5 | Passport-chip EAC and active authentication | approximately 2,283 Python lines | Planned | `marty-verification::chip_io` and `marty-crypto::iso9796` |
-| 6 | Subscription API-key lifecycle | approximately 539 Python lines | Planned | focused Rust package/service kernel in `marty-subscriptions` |
-| 7 | Trust-registry synchronization kernel | approximately 433 Python lines | Planned | `marty-verification` trust registry plus `marty-crypto` certificate validation |
-| 8 | Wallet status-list and liveness decisions | at least 378 Dart kernel lines | Planned | `marty-status`, `marty-verification`, and `marty-biometrics` through Flutter Rust Bridge |
+| 1 | Signing-key and KMS service | approximately 7,820 Python lines | Cutover in progress: the core primitives and all Rust service slices are implemented; the provider slice is refreshed against main and the stacked merge train remains | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
+| 2 | Marty CLI and API client | 7,218 deleted handwritten JavaScript lines | Complete on `main`: native CLI and Rust/WASM browser client are compatibility-tested, packaged, and merged | native Rust workspace, executable, and browser/WASM client in `marty-cli` |
+| 3 | Notification and webhook service | 7,142 deleted Python/service lines | Implemented in PR 529: public REST/gRPC, storage, outbox, delivery, secret-envelope, migration, and packaging contracts pass; refresh and merge remain | Rust service in `marty-ui` using the established service foundation |
+| 4 | Credential attestation, evidence, governance, and VCDM decisions | 1,804 deleted Python lines in the current slices | Implemented in the core and credential PR pairs; consuming CI intentionally fails closed until the combined native artifact is published | `marty-oid4vci` and `marty-verification`, consumed by `marty-credentials` |
+| 5 | Passport-chip protocol and integrity kernels | more than 1,300 deleted Python lines in the current slices | BAC, PACE compatibility, EAC, active authentication, ISO 9796, APDU, and integrity decisions are implemented and tested in open core/Marty PRs; merge and native artifact publication remain | `marty-verification::chip_io`, `marty-verification::active_authentication`, and `marty-crypto::iso9796` |
+| 6 | Remaining eMRTD EF, DG15, and biometric-template parsing | approximately 1,300 Python lines | Newly queued: replace duplicate TLV/MRZ/SPKI/RSA/biometric parsing and quality decisions; retain chip transport orchestration | `marty-verification` eMRTD parser modules |
+| 7 | Subscription API-key lifecycle | approximately 539 Python lines | Planned | focused Rust package/service kernel in `marty-subscriptions` |
+| 8 | Trust-registry synchronization kernel | approximately 433 Python lines | Planned | `marty-verification` trust registry plus `marty-crypto` certificate validation |
+| 9 | Wallet status-list and liveness decisions | at least 378 Dart kernel lines | Planned | `marty-status`, `marty-verification`, and `marty-biometrics` through Flutter Rust Bridge |
 
 The ordering applies to starting each workstream. A prerequisite canonical
 crate PR may land before its consuming service PR, but a smaller workstream is
@@ -95,16 +97,22 @@ corrections must retain the surrounding feature rather than remove its path.
    and APDU transcripts define the replacement. A feature may be retired only
    through an explicit public-caller and contract inventory proving it was not
    intended or exposed.
-6. **API keys:** preserve key formats, hashing, masking, scopes, CIDR rules,
+6. **eMRTD data parsing:** preserve bounded BER-TLV/DER handling, EF.COM data
+   group discovery, TD2/TD3 DG1 results, DG2 facial/fingerprint/iris metadata,
+   quality outcomes, DG15 SPKI algorithms, RSA parameters, fingerprints, and
+   existing typed Python models. Run malformed-length, truncation, oversized,
+   unsupported-algorithm, and valid standards vectors directly in Rust and
+   through the Python adapter before deleting the parser implementations.
+7. **API keys:** preserve key formats, hashing, masking, scopes, CIDR rules,
    expiry, rotation, plan quotas, storage, and audit behavior. Redis quota
    consumption becomes atomic and unavailable enforcement fails closed in
    production-like profiles.
-7. **Trust registry:** preserve bounded destination fetching, pagination,
+8. **Trust registry:** preserve bounded destination fetching, pagination,
    sequence and token handling, atomic delta application, removals, certificate
    profile checks, persistence, and synchronization scheduling. Rust owns feed,
    state-machine, and X.509 decisions; orchestration may retain HTTP and storage
    adapters.
-8. **Wallet status and liveness:** preserve supported status purposes, caching,
+9. **Wallet status and liveness:** preserve supported status purposes, caching,
    user-visible states, challenge steps, camera flow, and offline behavior.
    Rust owns signed status-list trust/freshness/bit decisions and canonical
    liveness challenge signing/validation. Status-check failure cannot silently
@@ -132,7 +140,22 @@ not satisfy the parity gate.
   language-neutral command vectors, native HTTP tests, Rust/WASM compatibility
   tests, release-shaped package check, unchanged UI service suite, and UI
   production bundle passed before the superseded handwritten JavaScript was
-  deleted.
+  deleted. It merged as `60e438802a83a201ebe8a7db5e31194a116dc161`.
+- [marty-ui PR 529](https://github.com/ElevenID/marty-ui/pull/529) implements
+  the notification/webhook service as one Rust executable and deletes 7,142
+  superseded Python/service lines after public HTTP/gRPC, provider, outbox,
+  persistence, migration, security, and image contracts passed.
+- Credential policy/evidence and key-attestation work is implemented in
+  [marty-core PRs 230](https://github.com/ElevenID/marty-core/pull/230) and
+  [231](https://github.com/ElevenID/marty-core/pull/231), with fail-closed
+  Python adapters in
+  [marty-credentials PRs 182](https://github.com/ElevenID/marty-credentials/pull/182)
+  and [183](https://github.com/ElevenID/marty-credentials/pull/183).
+- Passport protocol/integrity work is implemented in
+  [marty-core PR 232](https://github.com/ElevenID/marty-core/pull/232) and
+  [Marty PR 51](https://github.com/ElevenID/Marty/pull/51). The remaining
+  eMRTD EF/DG15/biometric parsers are tracked separately so the protocol PR is
+  not incorrectly treated as deleting functionality it has not yet replaced.
 - No wave-two slice updates beta independently. One commit-pinned aggregate
   beta deployment and evidence run occurs only after all workstreams land.
 
