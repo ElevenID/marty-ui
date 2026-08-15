@@ -110,3 +110,50 @@ async fn internal_validation_requires_the_service_api_key() {
             .unwrap();
     assert_eq!(result["ok"], false);
 }
+
+#[tokio::test]
+async fn internal_registry_routes_fail_closed_without_auth_or_storage() {
+    let unauthorized = marty_signing_keys::http::router()
+        .oneshot(
+            Request::get("/internal/registry/org-a")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+    let unavailable = marty_signing_keys::http::router()
+        .oneshot(
+            Request::get("/internal/registry/org-a")
+                .header("x-api-key", "dev-signing-keys-internal-api-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let malformed = marty_signing_keys::http::router()
+        .oneshot(
+            Request::post("/internal/registry/normalize")
+                .header("content-type", "application/json")
+                .header("x-api-key", "dev-signing-keys-internal-api-key")
+                .body(Body::from(
+                    serde_json::json!({
+                        "mode": "requested",
+                        "registry": {
+                            "services": [],
+                            "key_reference_purposes": {
+                                "svc": {"key": ["lti_tool_signing", "vc_jwt_issuer"]}
+                            }
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(malformed.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}

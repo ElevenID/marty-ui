@@ -9,7 +9,13 @@ import pytest
 
 from gateway import proxy
 from gateway.native_signing_keys import (
+    get_native_signing_service_catalog,
     get_native_kms_adapter,
+    load_native_signing_registry,
+    normalize_native_signing_registry,
+    normalize_native_signing_service,
+    resolve_native_signing_registry,
+    save_native_signing_registry,
     validate_native_signing_service,
 )
 from gateway.registry import ServiceRegistry
@@ -169,3 +175,80 @@ async def test_native_validation_forwards_language_neutral_vector(
     }
     assert result["ok"] is True
     assert result["checks"] == vector["expected_checks"]
+
+
+@pytest.mark.asyncio
+async def test_native_registry_wrappers_forward_language_neutral_vectors(
+    restore_proxy_globals,
+):
+    fixture_path = (
+        Path(__file__).parents[3]
+        / "rust"
+        / "services"
+        / "signing-keys"
+        / "tests"
+        / "fixtures"
+        / "registry_vectors.json"
+    )
+    vectors = json.loads(fixture_path.read_text(encoding="utf-8"))
+    normalize_service_case = vectors["normalize_service_cases"][0]
+    normalize_registry_case = vectors["normalize_registry_cases"][0]
+    resolve_case = vectors["resolve_cases"][0]
+    captured: list[tuple[str, dict | None, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content) if request.content else None
+        captured.append(
+            (request.url.path, payload, request.headers.get("x-api-key"))
+        )
+        responses = {
+            "/internal/registry/normalize-service": {
+                "service": normalize_service_case["expected"]
+            },
+            "/internal/registry/normalize": {
+                "registry": normalize_registry_case["expected"]
+            },
+            "/internal/registry/resolve": resolve_case["expected"],
+            "/internal/registry/catalog": {
+                "service_types": [{"id": "aws-kms", "label": "AWS KMS"}]
+            },
+            "/internal/registry/org/alpha": normalize_registry_case["expected"],
+        }
+        return httpx.Response(200, json=responses[request.url.path], request=request)
+
+    proxy._registry = ServiceRegistry()
+    proxy._registry._services["signing-keys"] = "http://rust-signing"
+    proxy._http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        service = await normalize_native_signing_service(normalize_service_case["input"])
+        registry = await normalize_native_signing_registry(
+            normalize_registry_case["input"], mode=normalize_registry_case["mode"]
+        )
+        resolved = await resolve_native_signing_registry(**resolve_case["input"])
+        catalog = await get_native_signing_service_catalog()
+        loaded = await load_native_signing_registry("org/alpha")
+        saved = await save_native_signing_registry(
+            "org/alpha", normalize_registry_case["input"]
+        )
+    finally:
+        await proxy._http_client.aclose()
+
+    assert service == normalize_service_case["expected"]
+    assert registry == normalize_registry_case["expected"]
+    assert resolved == (
+        resolve_case["expected"]["service"],
+        resolve_case["expected"]["key_reference"],
+    )
+    assert catalog == [{"id": "aws-kms", "label": "AWS KMS"}]
+    assert loaded == normalize_registry_case["expected"]
+    assert saved == normalize_registry_case["expected"]
+    assert [entry[0] for entry in captured] == [
+        "/internal/registry/normalize-service",
+        "/internal/registry/normalize",
+        "/internal/registry/resolve",
+        "/internal/registry/catalog",
+        "/internal/registry/org/alpha",
+        "/internal/registry/org/alpha",
+    ]
+    assert all(entry[2] == "test-internal-api-key" for entry in captured)
+    assert captured[-1][1] == {"registry": normalize_registry_case["input"]}

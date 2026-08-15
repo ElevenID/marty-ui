@@ -1,4 +1,4 @@
-use marty_signing_keys::{config::Config, http};
+use marty_signing_keys::{config::Config, http, registry::RegistryStore};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -16,6 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         error!(%error, "invalid signing-keys configuration");
         error
     })?;
+    let registry_store = RegistryStore::connect(&config.registry_redis_url).await?;
     let listener = TcpListener::bind(config.http_addr).await?;
     info!(
         address = %config.http_addr,
@@ -25,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     axum::serve(
         listener,
-        http::router_with_internal_api_key(config.internal_api_key),
+        http::router_with_dependencies(config.internal_api_key, Some(registry_store)),
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;

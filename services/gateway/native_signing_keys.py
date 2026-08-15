@@ -6,6 +6,7 @@ import base64
 import os
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 from gateway.proxy import get_http_client, get_registry
 
@@ -50,21 +51,138 @@ class NativeCapabilityResult:
     error: str | None = None
 
 
-async def validate_native_signing_service(
-    service_config: dict[str, Any],
-) -> dict[str, Any]:
-    """Run the canonical Rust registration-validation decision."""
+def _service_url() -> str:
     service_url = get_registry().get_service_url("signing-keys")
     if not service_url:
         raise RuntimeError("Rust signing-key service is not configured")
+    return service_url
+
+
+async def _post_native(path: str, payload: dict[str, Any]) -> Any:
     response = await get_http_client().post(
-        f"{service_url}/internal/config/validate",
-        json=service_config,
+        f"{_service_url()}{path}",
+        json=payload,
+        headers={"X-API-Key": _internal_api_key()},
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+async def normalize_native_signing_service(
+    service: Any,
+) -> dict[str, Any] | None:
+    body = await _post_native(
+        "/internal/registry/normalize-service", {"service": service}
+    )
+    if not isinstance(body, dict) or set(body) != {"service"}:
+        raise RuntimeError("Rust signing-key service returned an invalid normalized service")
+    normalized = body["service"]
+    if normalized is not None and not isinstance(normalized, dict):
+        raise RuntimeError("Rust signing-key service returned an invalid normalized service")
+    return normalized
+
+
+async def normalize_native_signing_registry(
+    registry: Any, *, mode: str
+) -> dict[str, Any]:
+    if mode not in {"requested", "stored"}:
+        raise ValueError("mode must be 'requested' or 'stored'")
+    body = await _post_native(
+        "/internal/registry/normalize", {"registry": registry, "mode": mode}
+    )
+    if (
+        not isinstance(body, dict)
+        or set(body) != {"registry"}
+        or not isinstance(body["registry"], dict)
+    ):
+        raise RuntimeError("Rust signing-key service returned an invalid registry")
+    return body["registry"]
+
+
+async def resolve_native_signing_registry(
+    registry: dict[str, Any],
+    *,
+    service: dict[str, Any] | None = None,
+    keys: list[dict[str, Any]] | None = None,
+    credential_format: str | None = None,
+    key_purpose: str | None = None,
+    algorithm: str | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    body = await _post_native(
+        "/internal/registry/resolve",
+        {
+            "registry": registry,
+            "service": service,
+            "keys": keys or [],
+            "credential_format": credential_format,
+            "key_purpose": key_purpose,
+            "algorithm": algorithm,
+        },
+    )
+    if not isinstance(body, dict) or set(body) != {"service", "key_reference"}:
+        raise RuntimeError("Rust signing-key service returned an invalid resolution")
+    service = body["service"]
+    key_reference = body["key_reference"]
+    if service is not None and not isinstance(service, dict):
+        raise RuntimeError("Rust signing-key service returned an invalid resolved service")
+    if key_reference is not None and not isinstance(key_reference, str):
+        raise RuntimeError("Rust signing-key service returned an invalid key reference")
+    return service, key_reference
+
+
+async def get_native_signing_service_catalog() -> list[dict[str, Any]]:
+    response = await get_http_client().get(
+        f"{_service_url()}/internal/registry/catalog",
         headers={"X-API-Key": _internal_api_key()},
         timeout=30.0,
     )
     response.raise_for_status()
     body = response.json()
+    if (
+        not isinstance(body, dict)
+        or set(body) != {"service_types"}
+        or not isinstance(body["service_types"], list)
+        or any(not isinstance(item, dict) for item in body["service_types"])
+    ):
+        raise RuntimeError("Rust signing-key service returned an invalid service catalog")
+    return body["service_types"]
+
+
+async def load_native_signing_registry(organization_id: str) -> dict[str, Any]:
+    response = await get_http_client().get(
+        f"{_service_url()}/internal/registry/{quote(organization_id, safe='')}",
+        headers={"X-API-Key": _internal_api_key()},
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    body = response.json()
+    if not isinstance(body, dict) or not isinstance(body.get("services"), list):
+        raise RuntimeError("Rust signing-key service returned an invalid stored registry")
+    return body
+
+
+async def save_native_signing_registry(
+    organization_id: str, registry: dict[str, Any]
+) -> dict[str, Any]:
+    response = await get_http_client().put(
+        f"{_service_url()}/internal/registry/{quote(organization_id, safe='')}",
+        json={"registry": registry},
+        headers={"X-API-Key": _internal_api_key()},
+        timeout=30.0,
+    )
+    response.raise_for_status()
+    body = response.json()
+    if not isinstance(body, dict) or not isinstance(body.get("services"), list):
+        raise RuntimeError("Rust signing-key service returned an invalid stored registry")
+    return body
+
+
+async def validate_native_signing_service(
+    service_config: dict[str, Any],
+) -> dict[str, Any]:
+    """Run the canonical Rust registration-validation decision."""
+    body = await _post_native("/internal/config/validate", service_config)
     if (
         not isinstance(body, dict)
         or not isinstance(body.get("ok"), bool)
