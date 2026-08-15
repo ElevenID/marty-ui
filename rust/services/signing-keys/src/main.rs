@@ -1,4 +1,4 @@
-use marty_signing_keys::{config::Config, http, registry::RegistryStore};
+use marty_signing_keys::{config::Config, documents::DocumentStore, http, registry::RegistryStore};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -17,6 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         error
     })?;
     let registry_store = RegistryStore::connect(&config.registry_redis_url).await?;
+    let document_store = DocumentStore::from_connection(registry_store.connection());
     let listener = TcpListener::bind(config.http_addr).await?;
     info!(
         address = %config.http_addr,
@@ -26,7 +27,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     axum::serve(
         listener,
-        http::router_with_dependencies(config.internal_api_key, Some(registry_store)),
+        http::router_with_dependencies(
+            config.internal_api_key,
+            Some(registry_store),
+            Some(document_store),
+        ),
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;

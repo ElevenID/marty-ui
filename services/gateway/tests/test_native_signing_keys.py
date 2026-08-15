@@ -9,13 +9,24 @@ import pytest
 
 from gateway import proxy
 from gateway.native_signing_keys import (
+    calculate_native_certificate_alerts,
+    delete_native_signing_jwk,
+    get_native_certificate_overrides,
+    get_native_signing_jwks,
     get_native_signing_service_catalog,
     get_native_kms_adapter,
+    inspect_native_signing_certificate,
+    load_native_signing_did_document,
     load_native_signing_registry,
     normalize_native_signing_registry,
     normalize_native_signing_service,
+    publish_native_signing_did,
+    publish_native_signing_jwk,
+    resolve_native_did_web_slug,
     resolve_native_signing_registry,
     save_native_signing_registry,
+    store_native_signing_certificate,
+    update_native_signing_jwk,
     validate_native_signing_service,
 )
 from gateway.registry import ServiceRegistry
@@ -252,3 +263,128 @@ async def test_native_registry_wrappers_forward_language_neutral_vectors(
     ]
     assert all(entry[2] == "test-internal-api-key" for entry in captured)
     assert captured[-1][1] == {"registry": normalize_registry_case["input"]}
+
+
+@pytest.mark.asyncio
+async def test_native_document_wrappers_forward_language_neutral_vectors(
+    restore_proxy_globals,
+):
+    fixture_path = (
+        Path(__file__).parents[3]
+        / "rust"
+        / "services"
+        / "signing-keys"
+        / "tests"
+        / "fixtures"
+        / "document_vectors.json"
+    )
+    vectors = json.loads(fixture_path.read_text(encoding="utf-8"))
+    certificate = vectors["certificate"]
+    captured: list[tuple[str, str, dict | None, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content) if request.content else None
+        captured.append(
+            (
+                request.method,
+                request.url.path,
+                payload,
+                request.headers.get("x-api-key"),
+            )
+        )
+        path = request.url.path
+        if path == "/internal/documents/certificate/inspect":
+            response = {
+                "expires_at": certificate["expected_expiry"],
+                "public_jwk": certificate["expected_jwk"],
+                "x5c": [certificate["expected_x5c"]],
+            }
+        elif path == "/internal/documents/certificate-alerts":
+            response = {"alerts": vectors["certificate_alerts"]["expected"]}
+        elif path == "/internal/documents/org/alpha/certificates":
+            response = {"services": {}}
+        elif path.endswith("/certificates/svc/a"):
+            response = {
+                "cert_pem": certificate["cert_pem"],
+                "cert_chain_pem": "",
+                "cert_expires_at": certificate["expected_expiry"],
+            }
+        elif path == "/internal/documents/org/alpha/jwks":
+            response = {"organization_id": "org/alpha", "keys": []}
+        elif path.endswith("/jwks/svc/a") and request.method == "PUT":
+            response = {
+                "jwk": vectors["jwks"]["expected_jwk"],
+                "document": {"keys": [vectors["jwks"]["expected_jwk"]]},
+                "key_count": 1,
+            }
+        elif path.endswith("/jwks/key/a") and request.method == "PATCH":
+            response = {"updated": ["name"]}
+        elif path.endswith("/jwks/key/a") and request.method == "DELETE":
+            response = {"removed": True}
+        elif path.endswith("/did/load"):
+            response = {
+                "document": {"id": vectors["did"]["expected_did"]},
+                "found": True,
+            }
+        elif path.endswith("/did/svc/a"):
+            response = {
+                "did_id": vectors["did"]["expected_did"],
+                "verification_method": {
+                    "id": vectors["did"]["expected_method_id"]
+                },
+                "document": {"id": vectors["did"]["expected_did"]},
+            }
+        elif path == "/internal/documents/did-web/acme":
+            response = {"organization_id": "org/alpha"}
+        else:  # pragma: no cover - makes an unexpected native route explicit
+            raise AssertionError(f"unexpected request: {request.method} {path}")
+        return httpx.Response(200, json=response, request=request)
+
+    proxy._registry = ServiceRegistry()
+    proxy._registry._services["signing-keys"] = "http://rust-signing"
+    proxy._http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        await inspect_native_signing_certificate(certificate["cert_pem"])
+        await calculate_native_certificate_alerts(
+            vectors["certificate_alerts"]["input"]["services"], 30
+        )
+        await get_native_certificate_overrides("org/alpha")
+        await store_native_signing_certificate(
+            "org/alpha", "svc/a", cert_pem=certificate["cert_pem"]
+        )
+        await get_native_signing_jwks("org/alpha")
+        await publish_native_signing_jwk(
+            "org/alpha",
+            "svc/a",
+            jwk=vectors["jwks"]["request"]["jwk"],
+            key_reference="key-a",
+        )
+        assert await update_native_signing_jwk(
+            "org/alpha", "key/a", {"name": "Issuer key"}
+        ) == ["name"]
+        assert await delete_native_signing_jwk("org/alpha", "key/a") is True
+        document, found = await load_native_signing_did_document(
+            "org/alpha", did_id=vectors["did"]["expected_did"]
+        )
+        assert found and document["id"] == vectors["did"]["expected_did"]
+        await publish_native_signing_did(
+            "org/alpha", "svc/a", vectors["did"]["request"]
+        )
+        assert await resolve_native_did_web_slug("acme") == "org/alpha"
+    finally:
+        await proxy._http_client.aclose()
+
+    assert all(entry[3] == "test-internal-api-key" for entry in captured)
+    assert [entry[:2] for entry in captured] == [
+        ("POST", "/internal/documents/certificate/inspect"),
+        ("POST", "/internal/documents/certificate-alerts"),
+        ("GET", "/internal/documents/org/alpha/certificates"),
+        ("PUT", "/internal/documents/org/alpha/certificates/svc/a"),
+        ("GET", "/internal/documents/org/alpha/jwks"),
+        ("PUT", "/internal/documents/org/alpha/jwks/svc/a"),
+        ("PATCH", "/internal/documents/org/alpha/jwks/key/a"),
+        ("DELETE", "/internal/documents/org/alpha/jwks/key/a"),
+        ("POST", "/internal/documents/org/alpha/did/load"),
+        ("PUT", "/internal/documents/org/alpha/did/svc/a"),
+        ("GET", "/internal/documents/did-web/acme"),
+    ]

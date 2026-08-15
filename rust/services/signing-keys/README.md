@@ -9,8 +9,10 @@ validation, provider-reference policy, validator bridges, and live capability
 probes. It is also the single owner of signing-service type metadata, registry
 normalization and routing, key-purpose binding validation, and the durable
 organization registry stored in the existing Redis keyspace. Later slices move
-certificate/JWKS/DID publication, issuer profiles, audit, and compliance
-behavior behind the same public routes.
+issuer profiles, audit, and compliance behavior behind the same public routes.
+Certificate inspection and expiry decisions, certificate sidecars, public-only
+JWKS mutation, DID document publication, and atomic did:web slug ownership are
+already canonical here and use the existing Redis keyspace.
 
 Behavioral contracts live in `tests/fixtures` and are exercised through the
 Axum router. The gateway may proxy requests and apply user authorization, but
