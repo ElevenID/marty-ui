@@ -6,32 +6,33 @@ search_scope:
   - bindings_adapters_ffi_and_api_layers
   - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
 search_queries:
-  - "trust profile internal resource owner lookup"
-  - "issuer entity resource owner lookup"
-  - "marty-common issuer-entities RESOURCE_LOOKUP_MAP"
-  - "public tenant boundary run 31862708706"
+  - "marty-ui stack release marker"
+  - "immutable annotated UI release tag"
+  - "release contract stack lock version"
+  - "issuer entity Cedar owner lookup fix"
 candidate_implementations:
-  - path: services/trust_profile/main.py
+  - path: release/stack-lock.json
+    language: JSON
+    disposition: reuse_existing_release_manifest
+  - path: tests/test_stack_release_contract.py
     language: Python
-    disposition: reuse_existing_service_authenticated_owner_lookup_pattern
-  - path: services/trust_profile/tests/test_trust_profile_response.py
-    language: Python
-    disposition: extend_existing_minimal_owner_lookup_contract
-  - path: https://github.com/ElevenID/Marty/blob/6a9a585c6b72528a7eca1bb5b09d352acdb55630/marty-common/marty_common/cedar_actions.py
-    language: Python
-    disposition: satisfy_existing_canonical_issuer_entity_lookup_mapping
+    disposition: reuse_existing_release_contract_gate
+  - path: .github/workflows/cd.yml
+    language: YAML
+    disposition: reuse_existing_immutable_release_pipeline
+  - path: https://github.com/ElevenID/marty-ui/pull/542
+    language: GitHub pull request
+    disposition: release_exact_accepted_product_fix
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: services/trust_profile/main.py
-  language: Python
+  path: release/stack-lock.json
+  language: JSON
 rust_disposition: rust_not_applicable
 non_rust_rationale: >-
-  The owner lookup is a minimal internal endpoint in the existing Python
-  trust-profile service and directly reuses that service's authenticated
-  trust-profile owner contract and repository abstraction. Moving this one
-  route to Rust would split a single authorization boundary across service
-  implementations without removing any Python runtime path.
+  This task advances existing immutable release metadata and invokes the
+  repository's established release pipeline. It adds no runtime, protocol,
+  validation, security, or cryptographic behavior for Rust to own.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
