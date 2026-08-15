@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 from gateway import main as gateway_main
 from gateway.middleware import (
@@ -910,6 +910,44 @@ def test_static_flow_segments_do_not_trigger_resource_owner_lookup(segment: str)
         path += "/application-approved"
 
     assert cedar_actions.resolve_resource_lookup(path) is None
+
+
+def test_gateway_static_resource_routes_are_declared_in_common_classifier() -> None:
+    route_paths = {
+        getattr(route, "path", "")
+        for route in gateway_main.app.routes
+    }
+    route_paths.update(
+        getattr(route, "path", "")
+        for value in vars(gateway_main).values()
+        if isinstance(value, APIRouter)
+        for route in value.routes
+    )
+    observed: set[tuple[str, str]] = set()
+
+    for path in route_paths:
+        parts = path.split("/")
+        if len(parts) < 4 or parts[1] != "v1":
+            continue
+        resource_segment, first_child = parts[2:4]
+        if (
+            resource_segment in cedar_actions.RESOURCE_LOOKUP_MAP
+            and first_child
+            and not first_child.startswith("{")
+        ):
+            observed.add((resource_segment, first_child))
+
+    declared = {
+        (resource_segment, child)
+        for resource_segment, (_, _, reserved) in cedar_actions.RESOURCE_LOOKUP_MAP.items()
+        for child in reserved
+    }
+
+    assert ("presentation-policies", "evaluate") in observed
+    assert observed <= declared, (
+        "Static gateway routes require an explicit marty-common classification: "
+        f"{sorted(observed - declared)}"
+    )
 
 
 @pytest.mark.parametrize(

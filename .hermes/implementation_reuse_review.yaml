@@ -7,10 +7,10 @@ search_scope:
   - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
 search_queries:
   - "marty-ui immutable component pin"
-  - "marty-common v0.2.14 wheel digest"
-  - "static flow webhook Cedar classifier"
-  - "public tenant boundary run 31864705019"
-  - "marty-common release PR 56"
+  - "marty-common v0.2.15 wheel digest"
+  - "gateway static route resource owner classifier inventory"
+  - "presentation policy inline evaluate static route"
+  - "marty-common release PR 58"
 candidate_implementations:
   - path: release/stack-lock.json
     language: JSON
@@ -23,8 +23,8 @@ candidate_implementations:
     disposition: reuse_existing_immutable_release_pipeline
   - path: services/gateway/tests/test_middleware.py
     language: Python
-    disposition: extend_existing_dependency_behavior_contract
-  - path: https://github.com/ElevenID/Marty/releases/tag/marty-common-v0.2.14
+    disposition: extend_existing_cross_repository_route_inventory_contract
+  - path: https://github.com/ElevenID/Marty/releases/tag/marty-common-v0.2.15
     language: GitHub release evidence
     disposition: pin_verified_immutable_dependency_release
 no_match_statement: ""
