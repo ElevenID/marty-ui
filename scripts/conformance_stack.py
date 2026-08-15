@@ -25,6 +25,7 @@ GHCR_FILE = "docker-compose.profile.ghcr.yml"
 LOCAL_BUILD_FILE = "docker-compose.profile.local-build.yml"
 IMMUTABLE_INFRA_FILE = "docker-compose.profile.conformance-images.yml"
 HAIP_FILE = "docker-compose.profile.oidf-haip.yml"
+DIDCOMM_AUTHCRYPT_FILE = "docker-compose.profile.didcomm-authcrypt.yml"
 ISOLATION_FILE = "docker-compose.profile.conformance.yml"
 PUBLIC_PORT_SERVICES = {"oidf-tls-proxy"}
 ONE_SHOT_SERVICES = {
@@ -64,6 +65,7 @@ def compose_command(
     project: str,
     *,
     include_haip: bool = False,
+    include_didcomm_authcrypt: bool = False,
     use_ghcr: bool = True,
 ) -> list[str]:
     command = ["docker", "compose", "--project-name", validate_project(project)]
@@ -80,6 +82,8 @@ def compose_command(
         files.insert(1, LOCAL_BUILD_FILE)
     if include_haip:
         files.append(HAIP_FILE)
+    if include_didcomm_authcrypt:
+        files.append(DIDCOMM_AUTHCRYPT_FILE)
     files.append(ISOLATION_FILE)
     for compose_file in files:
         command.extend(["--file", os.fspath(ROOT / compose_file)])
@@ -91,6 +95,7 @@ def rendered_config(
     project: str,
     *,
     include_haip: bool = False,
+    include_didcomm_authcrypt: bool = False,
     use_ghcr: bool = True,
 ) -> dict[str, Any]:
     completed = subprocess.run(
@@ -98,6 +103,7 @@ def rendered_config(
             *compose_command(
                 project,
                 include_haip=include_haip,
+                include_didcomm_authcrypt=include_didcomm_authcrypt,
                 use_ghcr=use_ghcr,
             ),
             "config",
@@ -451,6 +457,11 @@ def main() -> int:
         help="enable the isolated HAIP verifier profile; requires a certificate for the configured KMS-backed issuer profile",
     )
     parser.add_argument(
+        "--didcomm-authcrypt",
+        action="store_true",
+        help="mount the exact deployment-owned DIDComm authcrypt policy directory into issuance only",
+    )
+    parser.add_argument(
         "--local-build",
         action="store_true",
         help="build the checked-out source; never certification-grade evidence",
@@ -480,6 +491,7 @@ def main() -> int:
     command = compose_command(
         project,
         include_haip=args.haip,
+        include_didcomm_authcrypt=args.didcomm_authcrypt,
         use_ghcr=not args.local_build,
     )
 
@@ -494,6 +506,7 @@ def main() -> int:
     config = rendered_config(
         project,
         include_haip=args.haip,
+        include_didcomm_authcrypt=args.didcomm_authcrypt,
         use_ghcr=not args.local_build,
     )
     ports = validate_isolation(config, project)

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use base64::engine::general_purpose::STANDARD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use marty_crypto::certificate::{get_certificate_info, load_certificate_pem};
@@ -179,6 +179,7 @@ impl DocumentStore {
                 "controller": did,
                 "verificationMethod": [],
                 "assertionMethod": [],
+                "keyAgreement": [],
                 "updated_at": now_iso(),
             })
         });
@@ -391,6 +392,16 @@ pub struct PublishDidRequest {
     pub cert_pem: Option<String>,
     #[serde(default)]
     pub cert_chain_pem: Option<String>,
+    #[serde(default)]
+    pub relationship: DidVerificationRelationship,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DidVerificationRelationship {
+    #[default]
+    AssertionMethod,
+    KeyAgreement,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -407,6 +418,7 @@ struct PreparedDidPublication {
     did_id: String,
     org_slug: Option<String>,
     verification_method: Value,
+    relationship: DidVerificationRelationship,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -687,6 +699,41 @@ fn prepare_did_publication(
             format!("did:web:{}:orgs:{slug}", public_domain.replace(':', "%3A"))
         }
     };
+    if request.relationship == DidVerificationRelationship::KeyAgreement {
+        if request.key_reference.is_some()
+            || request.cert_pem.is_some()
+            || request.cert_chain_pem.is_some()
+        {
+            return Err(DocumentError::Invalid(
+                "keyAgreement publication accepts only public X25519 key material".to_string(),
+            ));
+        }
+        let fields = request
+            .jwk
+            .as_object()
+            .ok_or_else(|| DocumentError::Invalid("JWK must be an object".to_string()))?;
+        if fields.len() != 3
+            || fields.get("kty").and_then(Value::as_str) != Some("OKP")
+            || fields.get("crv").and_then(Value::as_str) != Some("X25519")
+        {
+            return Err(DocumentError::Invalid(
+                "keyAgreement publication requires an exact public X25519 JWK".to_string(),
+            ));
+        }
+        let encoded = fields.get("x").and_then(Value::as_str).ok_or_else(|| {
+            DocumentError::Invalid(
+                "keyAgreement publication requires an exact public X25519 JWK".to_string(),
+            )
+        })?;
+        let decoded = URL_SAFE_NO_PAD.decode(encoded).map_err(|_| {
+            DocumentError::Invalid("X25519 public key must use canonical base64url".to_string())
+        })?;
+        if decoded.len() != 32 || URL_SAFE_NO_PAD.encode(&decoded) != encoded {
+            return Err(DocumentError::Invalid(
+                "X25519 public key must encode exactly 32 bytes".to_string(),
+            ));
+        }
+    }
     let jwk = sanitize_public_jwk(&request.jwk, request.key_reference.as_deref())?;
     let fragment = request
         .fragment
@@ -697,9 +744,13 @@ fn prepare_did_publication(
             "fragment must contain only letters, numbers, '.', '_' or '-'.".to_string(),
         ));
     }
+    let verification_method_type = match request.relationship {
+        DidVerificationRelationship::AssertionMethod => "JsonWebKey",
+        DidVerificationRelationship::KeyAgreement => "JsonWebKey2020",
+    };
     let mut verification_method = json!({
         "id": format!("{did_id}#{fragment}"),
-        "type": "JsonWebKey",
+        "type": verification_method_type,
         "controller": did_id,
         "publicKeyJwk": jwk,
     });
@@ -714,6 +765,7 @@ fn prepare_did_publication(
         did_id,
         org_slug,
         verification_method,
+        relationship: request.relationship,
     })
 }
 
@@ -727,6 +779,7 @@ fn upsert_did_document(
             "controller": prepared.did_id,
             "verificationMethod": [],
             "assertionMethod": [],
+            "keyAgreement": [],
             "updated_at": now_iso(),
         })
     });
@@ -748,14 +801,22 @@ fn upsert_did_document(
     methods.retain(|method| method.get("id").and_then(Value::as_str) != Some(&method_id));
     methods.push(prepared.verification_method.clone());
     document["verificationMethod"] = Value::Array(methods);
-    let mut assertions = document
-        .get("assertionMethod")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    assertions.retain(|entry| entry.as_str() != Some(&method_id));
-    assertions.push(Value::String(method_id));
-    document["assertionMethod"] = Value::Array(assertions);
+    for relationship in ["assertionMethod", "keyAgreement"] {
+        let mut entries = document
+            .get(relationship)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        entries.retain(|entry| entry.as_str() != Some(&method_id));
+        if (relationship == "assertionMethod"
+            && prepared.relationship == DidVerificationRelationship::AssertionMethod)
+            || (relationship == "keyAgreement"
+                && prepared.relationship == DidVerificationRelationship::KeyAgreement)
+        {
+            entries.push(Value::String(method_id.clone()));
+        }
+        document[relationship] = Value::Array(entries);
+    }
     document["updated_at"] = Value::String(now_iso());
     Ok(document)
 }
@@ -940,5 +1001,64 @@ mod tests {
         .unwrap();
         assert_eq!(sanitized["kid"], "key-1");
         assert!(sanitized.get("d").is_none());
+    }
+
+    #[test]
+    fn x25519_publication_is_authorized_only_for_key_agreement() {
+        let did = "did:web:issuer.example:orgs:acme";
+        let result = build_did_document(
+            None,
+            "didcomm-authcrypt",
+            PublishDidRequest {
+                jwk: json!({
+                    "kty": "OKP",
+                    "crv": "X25519",
+                    "x": URL_SAFE_NO_PAD.encode([7_u8; 32]),
+                }),
+                public_domain: "issuer.example".to_string(),
+                did_id: Some(did.to_string()),
+                org_slug: Some("acme".to_string()),
+                fragment: Some("didcomm-authcrypt-x25519".to_string()),
+                key_reference: None,
+                cert_pem: None,
+                cert_chain_pem: None,
+                relationship: DidVerificationRelationship::KeyAgreement,
+            },
+        )
+        .unwrap();
+        let method_id = format!("{did}#didcomm-authcrypt-x25519");
+        assert_eq!(result.verification_method["type"], json!("JsonWebKey2020"));
+        assert_eq!(result.document["keyAgreement"], json!([method_id]));
+        assert_eq!(result.document["assertionMethod"], json!([]));
+    }
+
+    #[test]
+    fn key_agreement_rejects_noncanonical_or_private_jwks() {
+        for jwk in [
+            json!({"kty": "OKP", "crv": "X25519", "x": "AA=="}),
+            json!({
+                "kty": "OKP",
+                "crv": "X25519",
+                "x": URL_SAFE_NO_PAD.encode([7_u8; 32]),
+                "d": URL_SAFE_NO_PAD.encode([8_u8; 32]),
+            }),
+        ] {
+            assert!(build_did_document(
+                None,
+                "didcomm-authcrypt",
+                PublishDidRequest {
+                    jwk,
+                    public_domain: "issuer.example".to_string(),
+                    did_id: Some("did:web:issuer.example:orgs:acme".to_string()),
+                    org_slug: Some("acme".to_string()),
+                    fragment: Some("didcomm-authcrypt-x25519".to_string()),
+                    key_reference: None,
+                    cert_pem: None,
+                    cert_chain_pem: None,
+                    relationship: DidVerificationRelationship::KeyAgreement,
+                },
+            )
+            .is_err());
+        }
     }
 }

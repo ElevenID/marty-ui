@@ -100,6 +100,7 @@ async fn redis_round_trip_preserves_certificate_jwks_did_and_slug_behavior() {
                 key_reference: Some("key-a".to_string()),
                 cert_pem: None,
                 cert_chain_pem: None,
+                relationship: Default::default(),
             },
         )
         .await
@@ -137,6 +138,7 @@ async fn redis_round_trip_preserves_certificate_jwks_did_and_slug_behavior() {
                 key_reference: None,
                 cert_pem: None,
                 cert_chain_pem: None,
+                relationship: Default::default(),
             },
         )
         .await
