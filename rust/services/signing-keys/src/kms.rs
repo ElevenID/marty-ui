@@ -11,7 +11,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
-use marty_verification::jwk::{public_key_der_to_jwk, public_key_pem_to_jwk, Jwk};
+use marty_crypto::jwk::{public_key_der_to_jwk, public_key_pem_to_jwk, PublicJwk};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -152,7 +152,7 @@ pub async fn sign(request: SignRequest) -> Result<SignResponse, KmsError> {
         Provider::Gcp => sign_gcp(&request.service_config, &payload).await?,
     };
     let transcoded_signature_b64 = match algorithm {
-        "ES256" | "ES384" => marty_oid4vci::jose::normalize_ecdsa_signature(&signature, algorithm)
+        "ES256" | "ES384" => marty_crypto::ecdsa::normalize_signature(&signature, algorithm)
             .ok()
             .map(|bytes| URL_SAFE_NO_PAD.encode(bytes)),
         _ => None,
@@ -304,11 +304,11 @@ async fn public_key_openbao(config: &Value) -> Result<Value, KmsError> {
                 "OpenBao key '{key_reference}' returned an invalid public key"
             )));
         }
-        Jwk {
+        PublicJwk {
             kty: "OKP".to_string(),
             crv: Some("Ed25519".to_string()),
             x: Some(URL_SAFE_NO_PAD.encode(raw)),
-            ..Jwk::default()
+            ..PublicJwk::default()
         }
     } else {
         public_key_pem_to_jwk(material).map_err(|_| {
@@ -782,10 +782,10 @@ fn canonical_provider_jwk(
     object
         .entry("kid".to_string())
         .or_insert_with(|| Value::String(key_reference.to_string()));
-    let jwk: Jwk = serde_json::from_value(Value::Object(object)).map_err(|error| {
+    let jwk: PublicJwk = serde_json::from_value(Value::Object(object)).map_err(|error| {
         KmsError::InvalidResponse(format!("Provider returned an invalid JWK: {error}"))
     })?;
-    if jwk.kty.is_empty() || !jwk.is_public() {
+    if jwk.kty.is_empty() {
         return Err(KmsError::InvalidResponse(
             "Provider returned a non-public or incomplete JWK".to_string(),
         ));
@@ -794,7 +794,7 @@ fn canonical_provider_jwk(
         .map_err(|error| KmsError::InvalidResponse(format!("JWK serialization failed: {error}")))
 }
 
-fn jwk_value(mut jwk: Jwk, key_reference: &str) -> Result<Value, KmsError> {
+fn jwk_value(mut jwk: PublicJwk, key_reference: &str) -> Result<Value, KmsError> {
     jwk.kid = Some(key_reference.to_string());
     serde_json::to_value(jwk)
         .map_err(|error| KmsError::InvalidResponse(format!("JWK serialization failed: {error}")))
