@@ -69,6 +69,9 @@ streaming, DTO, repository, and task orchestration. The unused hard-coded
 Python catalog and superseded Python state-machine, IP, URL, Pydantic, and
 X.509 decision implementations were deleted after the embedded
 language-neutral fixture and the existing service behavior suite passed.
+The canonical and consuming PRs merged as
+`780ea7c45164b6c314ac62e4a7704c030ad7c45b` and
+`ed43849c4eae11be9e896bbe417b8209ed1afb11`, respectively.
 
 ## Wave two — ordered by removable non-Rust implementation
 
@@ -81,11 +84,11 @@ order work, not completion metrics and not permission to discard behavior.
 | 1 | Signing-key and KMS service | approximately 7,820 Python lines | Cutover in progress: the core primitives and all Rust service slices are implemented; the stacked merge train remains | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
 | 2 | Marty CLI and API client | 7,218 deleted handwritten JavaScript lines | Complete on `main`: native CLI and Rust/WASM browser client are compatibility-tested, packaged, and merged | native Rust workspace, executable, and browser/WASM client in `marty-cli` |
 | 3 | Notification and webhook service | 7,142 deleted Python/service lines | Complete on `main`: public REST/gRPC, storage, outbox, delivery, secret-envelope, migration, and packaging contracts passed before the Python service was deleted | Rust service in `marty-ui` using the established service foundation |
-| 4 | Credential attestation, evidence, governance, and VCDM decisions | 1,804 deleted Python lines in the current slices | Implemented in the core and credential PR pairs; consuming CI intentionally fails closed until the combined native artifact is published | `marty-oid4vci` and `marty-verification`, consumed by `marty-credentials` |
-| 5 | Passport-chip protocol and integrity kernels | more than 1,300 deleted Python lines in the current slices | BAC, PACE compatibility, EAC, active authentication, ISO 9796, APDU, and integrity decisions are implemented and tested in open core/Marty PRs; merge and native artifact publication remain | `marty-verification::chip_io`, `marty-verification::active_authentication`, and `marty-crypto::iso9796` |
+| 4 | Credential attestation, evidence, governance, and VCDM decisions | 1,804 deleted Python lines in the current slices | Core decision and attestation kernels are merged; consuming artifact and PostgreSQL lanes are being aligned to the complete fail-closed native wheel before the credential PRs land | `marty-oid4vci` and `marty-verification`, consumed by `marty-credentials` |
+| 5 | Passport-chip protocol and integrity kernels | more than 1,300 deleted Python lines in the current slices | Core BAC, PACE compatibility, EAC, active-authentication, ISO 9796, APDU, and integrity kernels are merged; the fully green Marty compatibility/deletion PR is in the merge queue | `marty-verification::chip_io`, `marty-verification::active_authentication`, and `marty-crypto::iso9796` |
 | 6 | Remaining eMRTD EF, DG15, and biometric-template parsing | approximately 1,300 deleted Python lines | Complete on `main`: bounded Rust parsers, bindings, DTO/chip-I/O adapters, exact cross-language vectors, deletion checks, and consuming CI passed | `marty-verification` eMRTD parser modules |
 | 7 | Subscription API-key lifecycle | approximately 539 Python lines plus duplicated plan/webhook kernels | Complete on `main`: canonical Rust policy/cryptography, fail-closed adapters, shared Rust/Python vectors, Redis/SQL orchestration tests, and deletion checks passed | `marty-subscriptions/packages/verifier_entitlements/marty-license` |
-| 8 | Trust-registry synchronization kernel | approximately 433 Python lines | Cutover implemented: canonical Rust policy/state/X.509 kernel, fail-closed adapter, startup diagnostics, exact shared vectors, 84 trust-profile tests, and Python implementation deletion pass locally; core and consuming PR merge remain | `marty-verification` trust registry plus `marty-crypto` certificate validation |
+| 8 | Trust-registry synchronization kernel | approximately 433 Python lines | Complete on `main`: canonical Rust policy/state/X.509 kernel, fail-closed adapter, startup diagnostics, exact shared vectors, service regression suite, and Python implementation deletion passed before both PRs merged | `marty-verification` trust registry plus `marty-crypto` certificate validation |
 | 9 | Wallet status-list and liveness decisions | at least 378 Dart kernel lines | Planned | `marty-status`, `marty-verification`, and `marty-biometrics` through Flutter Rust Bridge |
 
 The ordering applies to starting each workstream. A prerequisite canonical
@@ -182,9 +185,15 @@ not satisfy the parity gate.
   Python adapters in
   [marty-credentials PRs 182](https://github.com/ElevenID/marty-credentials/pull/182)
   and [183](https://github.com/ElevenID/marty-credentials/pull/183).
+  The Core PRs merged as `918ad5e167ba4424a8fa5d8b045bf073bd640cb4`
+  and `2d7419847fc01641bbe726627397280df258b5e6`; the consuming
+  PRs remain deployment-neutral until their complete native artifact and
+  language-neutral behavior lanes pass.
 - Passport protocol/integrity work is implemented in
   [marty-core PR 232](https://github.com/ElevenID/marty-core/pull/232) and
-  [Marty PR 51](https://github.com/ElevenID/Marty/pull/51). The remaining
+  [Marty PR 51](https://github.com/ElevenID/Marty/pull/51). The Core PR merged
+  as `eb28f3dbfe48bb5c40d883466e512ea3d8f35a2c`; the fully green
+  consumer is in the merge queue. The remaining
   eMRTD EF/DG15/biometric parsers are implemented separately in
   [marty-core PR 235](https://github.com/ElevenID/marty-core/pull/235) and
   [Marty PR 54](https://github.com/ElevenID/Marty/pull/54). The same
@@ -208,6 +217,9 @@ not satisfy the parity gate.
   fixture executes directly in Rust and through the installed `_marty_rs`
   wheel; the unchanged registry route/sync tests prove transport, TLS, SSRF,
   storage, and response compatibility before the Python kernels are removed.
+  The Core and consuming PRs merged as
+  `780ea7c45164b6c314ac62e4a7704c030ad7c45b` and
+  `ed43849c4eae11be9e896bbe417b8209ed1afb11`.
 - No wave-two slice updates beta independently. One commit-pinned aggregate
   beta deployment and evidence run occurs only after all workstreams land.
 
