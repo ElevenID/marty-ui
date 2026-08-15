@@ -105,16 +105,22 @@ corrections must retain the surrounding feature rather than remove its path.
    and APDU transcripts define the replacement. A feature may be retired only
    through an explicit public-caller and contract inventory proving it was not
    intended or exposed.
-6. **API keys:** preserve key formats, hashing, masking, scopes, CIDR rules,
+6. **eMRTD data parsing:** preserve bounded BER-TLV/DER handling, EF.COM data
+   group discovery, TD2/TD3 DG1 results, DG2 facial/fingerprint/iris metadata,
+   quality outcomes, DG15 SPKI algorithms, RSA parameters, fingerprints, and
+   existing typed Python models. Run malformed-length, truncation, oversized,
+   unsupported-algorithm, and valid standards vectors directly in Rust and
+   through the Python adapter before deleting the parser implementations.
+7. **API keys:** preserve key formats, hashing, masking, scopes, CIDR rules,
    expiry, rotation, plan quotas, storage, and audit behavior. Redis quota
    consumption becomes atomic and unavailable enforcement fails closed in
    production-like profiles.
-7. **Trust registry:** preserve bounded destination fetching, pagination,
+8. **Trust registry:** preserve bounded destination fetching, pagination,
    sequence and token handling, atomic delta application, removals, certificate
    profile checks, persistence, and synchronization scheduling. Rust owns feed,
    state-machine, and X.509 decisions; orchestration may retain HTTP and storage
    adapters.
-8. **Wallet status and liveness:** preserve supported status purposes, caching,
+9. **Wallet status and liveness:** preserve supported status purposes, caching,
    user-visible states, challenge steps, camera flow, and offline behavior.
    Rust owns signed status-list trust/freshness/bit decisions and canonical
    liveness challenge signing/validation. Status-check failure cannot silently
@@ -142,7 +148,22 @@ not satisfy the parity gate.
   language-neutral command vectors, native HTTP tests, Rust/WASM compatibility
   tests, release-shaped package check, unchanged UI service suite, and UI
   production bundle passed before the superseded handwritten JavaScript was
-  deleted.
+  deleted. It merged as `60e438802a83a201ebe8a7db5e31194a116dc161`.
+- [marty-ui PR 529](https://github.com/ElevenID/marty-ui/pull/529) implements
+  the notification/webhook service as one Rust executable and deletes 7,142
+  superseded Python/service lines after public HTTP/gRPC, provider, outbox,
+  persistence, migration, security, and image contracts passed.
+- Credential policy/evidence and key-attestation work is implemented in
+  [marty-core PRs 230](https://github.com/ElevenID/marty-core/pull/230) and
+  [231](https://github.com/ElevenID/marty-core/pull/231), with fail-closed
+  Python adapters in
+  [marty-credentials PRs 182](https://github.com/ElevenID/marty-credentials/pull/182)
+  and [183](https://github.com/ElevenID/marty-credentials/pull/183).
+- Passport protocol/integrity work is implemented in
+  [marty-core PR 232](https://github.com/ElevenID/marty-core/pull/232) and
+  [Marty PR 51](https://github.com/ElevenID/Marty/pull/51). The remaining
+  eMRTD EF/DG15/biometric parsers are tracked separately so the protocol PR is
+  not incorrectly treated as deleting functionality it has not yet replaced.
 - No wave-two slice updates beta independently. One commit-pinned aggregate
   beta deployment and evidence run occurs only after all workstreams land.
 
