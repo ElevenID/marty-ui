@@ -1,12 +1,12 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Wave one complete at beta; wave two implementation active; production promotion requires separate approval
+**Status:** Wave one complete at beta; wave two implementation complete; final aggregate beta release active; production promotion requires separate approval
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-08-14
+**Last updated:** 2026-08-15
 
 ## Objective
 
@@ -16,7 +16,7 @@ This is not a line-for-line translation project. Rust owns deterministic protoco
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
 
-## Implementation status (2026-08-14)
+## Implementation status (2026-08-15)
 
 The first-wave deterministic protocol, cryptographic, policy, validation,
 state-machine, wallet, licensing, DTC, and VDS-NC kernels have one canonical
@@ -48,6 +48,31 @@ the superseded Python service, adapters, migrations, and implementation tests
 were deleted. This cutover is packaged but is not deployed separately; it
 remains part of the one aggregate wave-two beta update.
 
+The subscription API-key workstream is implemented in
+[`marty-subscriptions` PR 31](https://github.com/ElevenID/marty-subscriptions/pull/31).
+The private `marty-license` crate now owns key material, format and hash
+validation, scope and CIDR decisions, expiry, plan quotas, consumption costs,
+minute-rate decisions, webhook secrets and signatures, and Square webhook
+verification. Python retains database, Redis, HTTP, and DTO orchestration only;
+the previous Python cryptographic and policy kernels were deleted after the
+same language-neutral fixture passed in Rust and through the installed wheel.
+The PR merged as `4c8d7f553c5c9cfe8acdbbe5d85b4278829f6cf1`.
+
+The trust-registry synchronization workstream is implemented in
+[`marty-core` PR 236](https://github.com/ElevenID/marty-core/pull/236) and
+[`marty-ui` PR 546](https://github.com/ElevenID/marty-ui/pull/546). Rust now
+owns the registry catalog, URL and resolved-destination policy, request plans,
+strict feed and persisted-state schemas, public and remote sync tokens,
+pagination, sequence checks, scheduling, atomic deltas, removals, certificate
+validity, and CSCA/DSC profiles. Python retains DNS, TLS, bounded HTTP
+streaming, DTO, repository, and task orchestration. The unused hard-coded
+Python catalog and superseded Python state-machine, IP, URL, Pydantic, and
+X.509 decision implementations were deleted after the embedded
+language-neutral fixture and the existing service behavior suite passed.
+The canonical and consuming PRs merged as
+`780ea7c45164b6c314ac62e4a7704c030ad7c45b` and
+`ed43849c4eae11be9e896bbe417b8209ed1afb11`, respectively.
+
 ## Wave two — ordered by removable non-Rust implementation
 
 Wave two is delivered in descending order of the non-Rust implementation that
@@ -56,15 +81,15 @@ order work, not completion metrics and not permission to discard behavior.
 
 | Order | Workstream | Baseline removable source | Status | Canonical destination |
 |---|---|---:|---|---|
-| 1 | Signing-key and KMS service | approximately 7,820 Python lines | Cutover in progress: the core primitives and all Rust service slices are implemented; the stacked merge train remains | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
+| 1 | Signing-key and KMS service | approximately 7,820 deleted Python lines | Complete on `main`: Core 0.1.57 is published and the complete Rust signing/KMS service stack, exact wheel pins, behavioral contracts, and deletion checks passed through protected merge trains | shared key/JWK/certificate decisions in `marty-core`; Rust service in `marty-ui` |
 | 2 | Marty CLI and API client | 7,218 deleted handwritten JavaScript lines | Complete on `main`: native CLI and Rust/WASM browser client are compatibility-tested, packaged, and merged | native Rust workspace, executable, and browser/WASM client in `marty-cli` |
-| 3 | Notification and webhook service | 7,142 deleted Python/service lines | Native active: public REST/gRPC, storage, outbox, delivery, secret-envelope, migration, and packaging contracts pass; merge remains | Rust service in `marty-ui` using the established service foundation |
-| 4 | Credential attestation, evidence, governance, and VCDM decisions | 1,804 deleted Python lines in the current slices | Implemented in the core and credential PR pairs; consuming CI intentionally fails closed until the combined native artifact is published | `marty-oid4vci` and `marty-verification`, consumed by `marty-credentials` |
-| 5 | Passport-chip protocol and integrity kernels | more than 1,300 deleted Python lines in the current slices | BAC, PACE compatibility, EAC, active authentication, ISO 9796, APDU, and integrity decisions are implemented and tested in open core/Marty PRs; merge and native artifact publication remain | `marty-verification::chip_io`, `marty-verification::active_authentication`, and `marty-crypto::iso9796` |
-| 6 | Remaining eMRTD EF, DG15, and biometric-template parsing | approximately 1,300 Python lines | Queued: replace duplicate TLV/MRZ/SPKI/RSA/biometric parsing and quality decisions; retain chip transport orchestration | `marty-verification` eMRTD parser modules |
-| 7 | Subscription API-key lifecycle | approximately 539 Python lines | Planned | focused Rust package/service kernel in `marty-subscriptions` |
-| 8 | Trust-registry synchronization kernel | approximately 433 Python lines | Planned | `marty-verification` trust registry plus `marty-crypto` certificate validation |
-| 9 | Wallet status-list and liveness decisions | at least 378 Dart kernel lines | Planned | `marty-status`, `marty-verification`, and `marty-biometrics` through Flutter Rust Bridge |
+| 3 | Notification and webhook service | 7,142 deleted Python/service lines | Complete on `main`: public REST/gRPC, storage, outbox, delivery, secret-envelope, migration, and packaging contracts passed before the Python service was deleted | Rust service in `marty-ui` using the established service foundation |
+| 4 | Credential attestation, evidence, governance, and VCDM decisions | 1,804 deleted Python lines in the current slices | Complete on `main`: Core decision and attestation kernels, fail-closed adapters, shared behavioral fixtures, Python implementation deletion, and complete cross-platform native-wheel, Python, Rust, WASM, PostgreSQL race, security, and packaging matrices passed | `marty-oid4vci` and `marty-verification`, consumed by `marty-credentials` |
+| 5 | Passport-chip protocol and integrity kernels | more than 1,300 deleted Python lines in the current slices | Complete on `main`: Core BAC, PACE compatibility, EAC, active-authentication, ISO 9796, APDU, and integrity kernels plus Marty compatibility adapters and Python implementation deletion passed | `marty-verification::chip_io`, `marty-verification::active_authentication`, and `marty-crypto::iso9796` |
+| 6 | Remaining eMRTD EF, DG15, and biometric-template parsing | approximately 1,300 deleted Python lines | Complete on `main`: bounded Rust parsers, bindings, DTO/chip-I/O adapters, exact cross-language vectors, deletion checks, and consuming CI passed | `marty-verification` eMRTD parser modules |
+| 7 | Subscription API-key lifecycle | approximately 539 Python lines plus duplicated plan/webhook kernels | Complete on `main`: canonical Rust policy/cryptography, fail-closed adapters, shared Rust/Python vectors, Redis/SQL orchestration tests, and deletion checks passed | `marty-subscriptions/packages/verifier_entitlements/marty-license` |
+| 8 | Trust-registry synchronization kernel | approximately 433 Python lines | Complete on `main`: canonical Rust policy/state/X.509 kernel, fail-closed adapter, startup diagnostics, exact shared vectors, service regression suite, and Python implementation deletion passed before both PRs merged | `marty-verification` trust registry plus `marty-crypto` certificate validation |
+| 9 | Wallet status-list and liveness decisions | at least 378 deleted Dart kernel lines | Complete on `main`: bounded Core status decoding, Rust bridge kernels, shared behavioral fixtures, fail-closed adapters, and Dart implementation deletion passed the complete Flutter, Android, iOS configuration, generated-binding, coverage, and policy suites | `marty-status` and `marty-biometrics` through Flutter Rust Bridge |
 
 The ordering applies to starting each workstream. A prerequisite canonical
 crate PR may land before its consuming service PR, but a smaller workstream is
@@ -135,14 +160,28 @@ not satisfy the parity gate.
 ### Active wave-two evidence
 
 - Signing-key/KMS implementation is split across
-  [marty-core PR 229](https://github.com/ElevenID/marty-core/pull/229) and
+  [marty-core PRs 229](https://github.com/ElevenID/marty-core/pull/229) and
+  [233](https://github.com/ElevenID/marty-core/pull/233), plus
   [marty-ui PRs 515](https://github.com/ElevenID/marty-ui/pull/515),
   [518](https://github.com/ElevenID/marty-ui/pull/518),
   [520](https://github.com/ElevenID/marty-ui/pull/520),
   [522](https://github.com/ElevenID/marty-ui/pull/522),
   [524](https://github.com/ElevenID/marty-ui/pull/524), and
-  [527](https://github.com/ElevenID/marty-ui/pull/527). The stack remains
-  deployment-neutral until it lands as a whole.
+  [527](https://github.com/ElevenID/marty-ui/pull/527). The final shared
+  signing/JWK conversion and minimal-feature dependency correction merged as
+  `34cf79d77161feba79934cb78700f885edf07a75` after the complete protected
+  merge-group matrix passed. [Core 0.1.57](https://github.com/ElevenID/marty-core/releases/tag/v0.1.57)
+  was published from `54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8` and pinned by exact
+  release-wheel hashes. The service foundation and five deletion slices
+  merged as `4dc470150fe5816a74bf9a09c291d725a5316b02`,
+  `ac15bfd9886a56babfa5e847f6481c02ab07718a`,
+  `56bcaaddd0ff12c0b616bacf0891b94d9d18d54e`,
+  `c0c7f53d5f8daa05f58dc4bb5e67829f766b2720`,
+  `91f60663026cb1411fbc5ce362ff5863cc0a9c6c`, and
+  `5b62726c380766d324a0a5417875e89b74c3e1e7`. The top-stack Rust suite
+  executed 42 tests successfully, with three Redis integration tests
+  intentionally ignored when no test Redis URL was configured; all 19
+  release contracts and every protected PR and merge-group matrix passed.
 - [marty-cli PR 14](https://github.com/ElevenID/marty-cli/pull/14) replaces the
   Node executable and browser HTTP kernel with one Rust implementation. Its
   language-neutral command vectors, native HTTP tests, Rust/WASM compatibility
@@ -152,18 +191,74 @@ not satisfy the parity gate.
 - [marty-ui PR 529](https://github.com/ElevenID/marty-ui/pull/529) implements
   the notification/webhook service as one Rust executable and deletes 7,142
   superseded Python/service lines after public HTTP/gRPC, provider, outbox,
-  persistence, migration, security, and image contracts passed.
+  persistence, migration, security, and image contracts passed. It merged as
+  `3dc00a96be73c2d122b9a167ead111912944f8bc`.
 - Credential policy/evidence and key-attestation work is implemented in
   [marty-core PRs 230](https://github.com/ElevenID/marty-core/pull/230) and
   [231](https://github.com/ElevenID/marty-core/pull/231), with fail-closed
   Python adapters in
   [marty-credentials PRs 182](https://github.com/ElevenID/marty-credentials/pull/182)
   and [183](https://github.com/ElevenID/marty-credentials/pull/183).
+  The Core PRs merged as `918ad5e167ba4424a8fa5d8b045bf073bd640cb4`
+  and `2d7419847fc01641bbe726627397280df258b5e6`. The consuming PRs
+  merged as `b9e305da4c7b84471a5f0de7ee849cb36817248c` and
+  `dc942c8f4a72e640579b75a2ba0c8b2cb7cf3695` after both PR matrices
+  and both protected merge-group matrices passed the complete native-wheel,
+  Python, Rust, WASM, PostgreSQL race, security, packaging, and
+  language-neutral behavior lanes. The immutable 0.1.64 consumer release is
+  prepared in [marty-credentials PR 187](https://github.com/ElevenID/marty-credentials/pull/187)
+  for the final aggregate stack pin; no migration slice was deployed
+  independently.
 - Passport protocol/integrity work is implemented in
   [marty-core PR 232](https://github.com/ElevenID/marty-core/pull/232) and
-  [Marty PR 51](https://github.com/ElevenID/Marty/pull/51). The remaining
-  eMRTD EF/DG15/biometric parsers are tracked separately so the protocol PR is
-  not incorrectly treated as deleting functionality it has not yet replaced.
+  [Marty PR 51](https://github.com/ElevenID/Marty/pull/51). The Core PR merged
+  as `eb28f3dbfe48bb5c40d883466e512ea3d8f35a2c`; the fully green
+  consumer merged as `8467c7a4d82ee5f0e1bb39675bccb4dbff414cb6`.
+  The remaining
+  eMRTD EF/DG15/biometric parsers are implemented separately in
+  [marty-core PR 235](https://github.com/ElevenID/marty-core/pull/235) and
+  [Marty PR 54](https://github.com/ElevenID/Marty/pull/54). The same
+  language-neutral fixture runs directly in Rust and through preserved Python
+  DTOs; malformed or unavailable native paths fail closed, and the Python
+  struct/ASN.1/hash implementations plus their `pyasn1` dependency are removed.
+  The consuming PR merged as
+  `97a0c9cba664639f162ed40a3e4eaf61803bd582`.
+- [marty-subscriptions PR 31](https://github.com/ElevenID/marty-subscriptions/pull/31)
+  moves the API-key lifecycle and adjacent subscription webhook cryptography
+  into `marty-license`. One JSON fixture executes directly against Rust and
+  through the installed PyO3 wheel; Redis cost/expiry behavior, exact quota
+  boundaries, plan compatibility views, missing-native failures, and missing
+  Redis enforcement are covered before the Python `hashlib`, `hmac`,
+  `ipaddress`, `secrets`, and literal plan-policy implementations are removed.
+- [marty-core PR 236](https://github.com/ElevenID/marty-core/pull/236) and
+  [marty-ui PR 546](https://github.com/ElevenID/marty-ui/pull/546) move the
+  trust-registry catalog, destination policy, request construction, feed/state
+  schemas, public and remote tokens, pagination, sequences, scheduling, atomic
+  deltas, removals, and certificate profiles into Rust. One embedded JSON
+  fixture executes directly in Rust and through the installed `_marty_rs`
+  wheel; the unchanged registry route/sync tests prove transport, TLS, SSRF,
+  storage, and response compatibility before the Python kernels are removed.
+  The Core and consuming PRs merged as
+  `780ea7c45164b6c314ac62e4a7704c030ad7c45b` and
+  `ed43849c4eae11be9e896bbe417b8209ed1afb11`.
+- [marty-core PR 238](https://github.com/ElevenID/marty-core/pull/238)
+  adds bounded W3C status-list decoding over the existing language-neutral
+  recommendation vector, and
+  [marty-authenticator PR 35](https://github.com/ElevenID/marty-authenticator/pull/35)
+  moves status entry/list parsing and final bit decisions plus liveness
+  challenge creation, signing, and verification into Rust. Dart retains only
+  HTTP/cache, camera, gesture, and UI orchestration. The Dart Base64/GZIP/HMAC
+  and random-ID kernels are deleted in the same PR, guarded against
+  reintroduction. Generated bindings are current; the Flutter unit, Android,
+  iOS configuration, build, and shared quality lanes pass. Maintained Dart
+  line coverage is 90.47% (655/724) after excluding seven generated files,
+  with production adapter, cache, compatibility, endpoint-failure, and
+  unsupported-purpose behavior exercised. The consumer merged as
+  `8bc37873484cacf7a0424214bb01443d4ce97ee7`. Its unrelated OID4VCI
+  dependency remains on the previously validated revision because updating
+  that crate would remove format-only issuance behavior; this preserves the
+  public feature while keeping status-list and liveness ownership canonical
+  in Rust.
 - No wave-two slice updates beta independently. One commit-pinned aggregate
   beta deployment and evidence run occurs only after all workstreams land.
 
