@@ -6,37 +6,34 @@ search_scope:
   - bindings_adapters_ffi_and_api_layers
   - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
 search_queries:
-  - "marty-ui stack lock credentials integration pins"
-  - "marty-credentials v0.1.62 immutable issuance digest"
-  - "marty-integration-tests v1.2.65 immutable source digest"
-  - "test_stack_release_contract dependency pin assertions"
-  - "previous coordinated UI stack pin release"
+  - "conformance stack isolation published backend ports"
+  - "docker compose conformance overlay reset ports"
+  - "signing-keys conformance service publication"
+  - "test_conformance_stack_isolation global resources"
+  - "public tenant boundary signing-keys unexpectedly publishes"
 candidate_implementations:
-  - path: release/stack-lock.json
-    language: JSON
-    disposition: reuse_existing_release_manifest
-  - path: tests/test_stack_release_contract.py
-    language: Python
-    disposition: reuse_existing_exact_pin_contract
-  - path: .github/workflows/cd.yml
+  - path: docker-compose.profile.conformance.yml
     language: YAML
-    disposition: reuse_existing_immutable_release_and_public_stack_gate
-  - path: work/credentials-v0.1.62-audit
-    language: Release evidence
-    disposition: reuse_accepted_immutable_credentials_evidence
-  - path: work/integration-v1.2.65-audit
-    language: Release evidence
-    disposition: reuse_accepted_immutable_integration_evidence
+    disposition: extend_existing_isolation_overlay
+  - path: scripts/conformance_stack.py
+    language: Python
+    disposition: preserve_existing_fail_closed_validator
+  - path: tests/test_conformance_stack_isolation.py
+    language: Python
+    disposition: extend_owned_generic_overlay_contract
+  - path: https://github.com/ElevenID/marty-integration-tests/actions/runs/31852443152
+    language: GitHub Actions evidence
+    disposition: reproduce_released_topology_failure
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: release/stack-lock.json
-  language: JSON
+  path: docker-compose.profile.conformance.yml
+  language: YAML
 rust_disposition: rust_not_applicable
 non_rust_rationale: >-
-  This task updates exact immutable release metadata and owned release-contract
-  assertions. It adds no runtime, protocol, validation, security, or
-  cryptographic behavior for Rust to own.
+  This task corrects Docker Compose isolation metadata and an owned deployment
+  contract. It adds no protocol, validation, cryptographic, or runtime service
+  behavior for Rust to own.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
