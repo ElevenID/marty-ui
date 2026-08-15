@@ -46,6 +46,30 @@ def _build_request(
     return request
 
 
+def test_issuance_uses_cedar_authorized_multi_org_selection() -> None:
+    request = _build_request(session_org_id="org-home")
+    request.state.organization_id = "org-selected"
+
+    issuance._require_selected_organization(request, "org-selected")
+
+    assert request.state.organization_id == "org-selected"
+    with pytest.raises(HTTPException, match="organization_id does not match"):
+        issuance._require_selected_organization(request, "org-foreign")
+
+
+def test_issuance_api_key_cannot_be_overridden_by_selected_state() -> None:
+    request = _build_request(session_org_id="org-foreign")
+    request.state.auth_source = "api_key"
+    request.state.api_key_organization_id = "org-key"
+    request.state.organization_id = "org-foreign"
+
+    issuance._require_selected_organization(request, "org-key")
+
+    assert request.state.organization_id == "org-key"
+    with pytest.raises(HTTPException, match="organization_id does not match"):
+        issuance._require_selected_organization(request, "org-foreign")
+
+
 class _Registry:
     def __init__(self, url: str = "http://issuance-service") -> None:
         self.url = url
