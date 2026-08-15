@@ -6,35 +6,34 @@ search_scope:
   - bindings_adapters_ffi_and_api_layers
   - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
 search_queries:
-  - "issuance selected organization Cedar authorized context"
-  - "flow selected organization request state"
-  - "notification query scoped resource tenant boundary"
-  - "notification service webhook ID organization ownership"
-  - "released two-organization public boundary run 31854844117"
+  - "marty-ui stack release marker"
+  - "immutable annotated UI release tag"
+  - "release contract stack lock version"
+  - "multi-organization issuance boundary fix"
+  - "notification owner lookup boundary fix"
 candidate_implementations:
-  - path: services/gateway/routes/flows.py
+  - path: release/stack-lock.json
+    language: JSON
+    disposition: reuse_existing_release_manifest
+  - path: tests/test_stack_release_contract.py
     language: Python
-    disposition: reuse_cedar_authorized_request_state_pattern
-  - path: services/gateway/routes/notifications.py
-    language: Python
-    disposition: reuse_authorized_selector_injection
-  - path: services/notification/tests/test_tenant_boundaries.py
-    language: Python
-    disposition: reuse_service_owned_id_and_organization_boundary
-  - path: https://github.com/ElevenID/marty-integration-tests/actions/runs/31854844117
-    language: GitHub Actions evidence
-    disposition: reproduce_released_stack_regressions
+    disposition: reuse_existing_release_contract_gate
+  - path: .github/workflows/cd.yml
+    language: YAML
+    disposition: reuse_existing_immutable_release_pipeline
+  - path: https://github.com/ElevenID/marty-ui/pull/537
+    language: GitHub pull request
+    disposition: release_exact_accepted_product_fix
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
-  path: services/gateway/routes/notifications.py
-  language: Python
+  path: release/stack-lock.json
+  language: JSON
 rust_disposition: rust_not_applicable
 non_rust_rationale: >-
-  This task corrects Python gateway orchestration between Cedar-authorized
-  request state and Python notification-service ownership checks. It changes
-  neither protocol nor cryptographic primitives, so moving it to Rust would
-  cross service ownership boundaries without reducing security risk.
+  This task advances existing immutable release metadata and invokes the
+  repository's established release pipeline. It adds no runtime, protocol,
+  validation, security, or cryptographic behavior for Rust to own.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
