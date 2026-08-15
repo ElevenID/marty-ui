@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from yaml.nodes import MappingNode, ScalarNode
+from yaml.nodes import MappingNode, ScalarNode, SequenceNode
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +45,15 @@ def _assert_unique_yaml_keys(node: yaml.Node, path: Path, location: str = "root"
                 _assert_unique_yaml_keys(child, path, location)
 
 
+def _mapping_value(node: yaml.Node, key: str) -> yaml.Node:
+    if not isinstance(node, MappingNode):
+        raise AssertionError(f"expected YAML mapping while resolving {key!r}")
+    for key_node, value_node in node.value:
+        if isinstance(key_node, ScalarNode) and key_node.value == key:
+            return value_node
+    raise AssertionError(f"missing YAML mapping key {key!r}")
+
+
 def test_compose_files_have_no_duplicate_mapping_keys() -> None:
     for path in sorted(ROOT.glob("docker-compose*.yml")):
         document = yaml.compose(path.read_text(encoding="utf-8"))
@@ -67,6 +76,35 @@ def test_base_stack_host_publications_are_loopback_only() -> None:
         assert all(port.startswith("127.0.0.1:") for port in ports), (
             f"{service} publishes a non-loopback host port: {ports}"
         )
+
+
+def test_conformance_overlay_resets_every_base_global_resource() -> None:
+    base = yaml.safe_load(
+        (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+    )
+    overlay = yaml.compose(
+        (ROOT / "docker-compose.profile.conformance.yml").read_text(encoding="utf-8")
+    )
+    assert overlay is not None
+    overlay_services = _mapping_value(overlay, "services")
+
+    for service_name, definition in base["services"].items():
+        fields = []
+        if definition.get("container_name") is not None:
+            fields.append("container_name")
+        if definition.get("ports"):
+            fields.append("ports")
+        if not fields:
+            continue
+
+        service = _mapping_value(overlay_services, service_name)
+        for field in fields:
+            reset = _mapping_value(service, field)
+            assert reset.tag == "!reset", (
+                f"conformance overlay must reset {service_name}.{field}"
+            )
+            if field == "ports":
+                assert isinstance(reset, SequenceNode) and not reset.value
 
 
 def test_issuer_did_identity_returns_only_public_did_material(
