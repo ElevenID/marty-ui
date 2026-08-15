@@ -21,6 +21,7 @@ from gateway.middleware import (
     SessionCache,
     mip_error_response,
 )
+from gateway.routes import issuance
 from marty_common import cedar_actions
 from marty_common.middleware import IdempotencyMiddleware
 
@@ -622,27 +623,34 @@ def test_notification_routes_have_exact_cedar_permissions(
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
-        (
-            "/v1/webhooks/webhook-1",
-            ("notifications", "/v1/webhooks/webhook-1"),
-        ),
-        (
-            "/v1/subscriptions/subscription-1",
-            ("notifications", "/v1/subscriptions/subscription-1"),
-        ),
-        (
-            "/v1/notifications/notification-1",
-            ("notifications", "/v1/notifications/notification-1"),
-        ),
+        ("/v1/webhooks/webhook-1", None),
+        ("/v1/subscriptions/subscription-1", None),
+        ("/v1/notifications/notification-1", None),
         ("/v1/notifications/events/push", None),
         ("/v1/notifications/send", None),
     ],
 )
-def test_notification_resource_lookups_resolve_real_tenant(
+def test_query_scoped_notification_resources_skip_unscoped_owner_lookup(
     path: str,
     expected: tuple[str, str] | None,
 ):
     assert cedar_actions.resolve_resource_lookup(path) == expected
+
+
+def test_notification_cedar_registration_is_idempotent_and_query_scoped() -> None:
+    gateway_main._register_notification_cedar_routes()
+    rules_before = list(cedar_actions.SPECIAL_ROUTE_RULES)
+    lookups_before = dict(cedar_actions.RESOURCE_LOOKUP_MAP)
+
+    gateway_main._register_notification_cedar_routes()
+
+    assert cedar_actions.SPECIAL_ROUTE_RULES == rules_before
+    assert cedar_actions.RESOURCE_LOOKUP_MAP == lookups_before
+    assert not {
+        "webhooks",
+        "subscriptions",
+        "notifications",
+    }.intersection(cedar_actions.RESOURCE_LOOKUP_MAP)
 
 
 @pytest.mark.parametrize(
@@ -727,16 +735,26 @@ async def test_webhook_list_rejects_cross_tenant_query_scope():
 
 
 @pytest.mark.asyncio
-async def test_webhook_resource_id_uses_owning_tenant_before_query_scope():
-    async def get_membership(_user_id: str, organization_id: str):
-        assert organization_id == "org-b"
-        return None
+async def test_webhook_resource_id_uses_authorized_query_without_unscoped_lookup():
+    class Membership:
+        status = "active"
+        is_owner = False
+        role_names = {"access-admin"}
+        permissions = {"webhook:view"}
 
-    resource_response = httpx.Response(
-        200,
-        json={"id": "webhook-b", "organization_id": "org-b"},
-    )
-    http_client = SimpleNamespace(get=AsyncMock(return_value=resource_response))
+        def is_active(self) -> bool:
+            return True
+
+        def has_permission(self, requested: str) -> bool:
+            return requested in self.permissions
+
+    membership_requests: list[tuple[str, str]] = []
+
+    async def get_membership(user_id: str, organization_id: str):
+        membership_requests.append((user_id, organization_id))
+        return Membership() if organization_id == "org-a" else None
+
+    http_client = SimpleNamespace(get=AsyncMock())
     app = FastAPI()
     app.state.org_client = SimpleNamespace(get_membership=get_membership)
     app.state.service_registry = SimpleNamespace(
@@ -747,8 +765,9 @@ async def test_webhook_resource_id_uses_owning_tenant_before_query_scope():
     app.state.http_client = http_client
 
     @app.get("/v1/webhooks/webhook-b")
-    async def protected_route():
-        return JSONResponse({"unexpected": True})
+    async def protected_route(request: Request):
+        assert request.state.organization_id == "org-a"
+        return JSONResponse({"detail": "Webhook not found"}, status_code=404)
 
     app.add_middleware(gateway_main.GatewayCedarAuthMiddleware)
 
@@ -763,14 +782,18 @@ async def test_webhook_resource_id_uses_owning_tenant_before_query_scope():
         transport=transport,
         base_url="http://test",
     ) as client:
-        response = await client.get("/v1/webhooks/webhook-b?organization_id=org-a")
+        scoped_not_found = await client.get(
+            "/v1/webhooks/webhook-b?organization_id=org-a"
+        )
+        foreign_scope = await client.get(
+            "/v1/webhooks/webhook-b?organization_id=org-b"
+        )
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Not a member of this organization"
-    http_client.get.assert_awaited_once()
-    assert http_client.get.await_args.args[0] == (
-        "http://notifications/v1/webhooks/webhook-b"
-    )
+    assert scoped_not_found.status_code == 404
+    assert foreign_scope.status_code == 403
+    assert foreign_scope.json()["detail"] == "Not a member of this organization"
+    assert membership_requests == [("user-a", "org-a"), ("user-a", "org-b")]
+    http_client.get.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -880,18 +903,99 @@ def test_gateway_cedar_delegates_other_api_scope_decisions_to_marty_common():
     )
 
 
-def test_canvas_provenance_is_tenant_scoped_by_connector_view_permission():
-    gateway_main._register_canvas_provenance_cedar_route()
+@pytest.mark.parametrize(
+    ("method", "path", "permission"),
+    (
+        (
+            "GET",
+            "/v1/issuance/delivery-records/canvas-credentials/provenance",
+            "integration-connector:view",
+        ),
+        (
+            "POST",
+            "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+            "integration-connector:edit",
+        ),
+        (
+            "POST",
+            "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+            "integration-connector:edit",
+        ),
+        (
+            "POST",
+            "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+            "integration-connector:edit",
+        ),
+        (
+            "GET",
+            "/v1/issuance/organizations/org-1/canvas-mirror-health",
+            "integration-connector:view",
+        ),
+    ),
+)
+def test_canvas_mirror_management_is_tenant_scoped_by_connector_permission(
+    method: str,
+    path: str,
+    permission: str,
+) -> None:
+    gateway_main._register_canvas_mirror_cedar_routes()
 
-    assert cedar_actions.resolve_action_and_resource(
-        "GET",
-        "/v1/issuance/delivery-records/canvas-credentials/provenance",
-    ) == ("integration-connector:view", "integration-connector")
+    assert cedar_actions.resolve_action_and_resource(method, path) == (
+        permission,
+        "integration-connector",
+    )
+    assert cedar_actions.resolve_resource_lookup(path) is None
+
+
+def test_canvas_mirror_cedar_registration_is_idempotent() -> None:
+    gateway_main._register_canvas_mirror_cedar_routes()
+    before = list(cedar_actions.SPECIAL_ROUTE_RULES)
+
+    gateway_main._register_canvas_mirror_cedar_routes()
+
+    assert cedar_actions.SPECIAL_ROUTE_RULES == before
+
+
+def test_canvas_mirror_cedar_registration_rejects_static_owner_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway_main._register_canvas_mirror_cedar_routes()
+    monkeypatch.setattr(
+        gateway_main._cedar_actions,
+        "resolve_resource_lookup",
+        lambda _path: ("issuance", "/v1/issuance/transactions/not-a-transaction"),
+    )
+
+    with pytest.raises(RuntimeError, match="did not activate"):
+        gateway_main._register_canvas_mirror_cedar_routes()
+
+
+@pytest.mark.parametrize(
+    ("permission", "scopes", "allowed"),
+    (
+        ("integration-connector:view", ["integrations:read"], True),
+        ("integration-connector:view", ["integrations:write"], True),
+        ("integration-connector:edit", ["integrations:write"], True),
+        ("integration-connector:edit", ["integrations:read"], False),
+    ),
+)
+def test_canvas_mirror_api_keys_use_connector_scopes(
+    permission: str,
+    scopes: list[str],
+    allowed: bool,
+) -> None:
+    assert (
+        gateway_main.GatewayCedarAuthMiddleware._api_key_allowed(
+            permission,
+            scopes,
+        )
+        is allowed
+    )
 
 
 @pytest.mark.asyncio
 async def test_canvas_provenance_rejects_cross_tenant_identifier_scope():
-    gateway_main._register_canvas_provenance_cedar_route()
+    gateway_main._register_canvas_mirror_cedar_routes()
 
     class Membership:
         status = "active"
@@ -950,6 +1054,124 @@ async def test_canvas_provenance_rejects_cross_tenant_identifier_scope():
         ("user-1", "org-other"),
         ("user-1", "org-session"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_canvas_mirror_management_rejects_second_tenant_and_unscoped_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway_main._register_canvas_mirror_cedar_routes()
+
+    class Membership:
+        status = "active"
+        is_owner = False
+        role_names = {"integration-manager"}
+        permissions = {
+            "integration-connector:view",
+            "integration-connector:edit",
+        }
+
+        def is_active(self) -> bool:
+            return True
+
+        def has_permission(self, requested: str) -> bool:
+            return requested in self.permissions
+
+    membership_requests: list[tuple[str, str]] = []
+
+    async def get_membership(user_id: str, organization_id: str):
+        membership_requests.append((user_id, organization_id))
+        return Membership()
+
+    proxied: list[tuple[str, str | None]] = []
+
+    async def proxy_request(request, _service_url, path, inject_headers=None):
+        proxied.append((path, request.query_params.get("organization_id")))
+        return JSONResponse({"ok": True})
+
+    monkeypatch.setattr(
+        issuance,
+        "get_registry",
+        lambda: SimpleNamespace(
+            get_service_url=lambda service: (
+                "http://issuance" if service == "issuance" else None
+            )
+        ),
+    )
+    monkeypatch.setattr(issuance, "proxy_request", proxy_request)
+    monkeypatch.setattr(issuance, "_ISSUANCE_HEADERS", {"X-API-Key": "secret"})
+
+    app = FastAPI()
+    app.state.org_client = SimpleNamespace(get_membership=get_membership)
+    app.include_router(issuance.issuance_router)
+    app.add_middleware(gateway_main.GatewayCedarAuthMiddleware)
+
+    @app.middleware("http")
+    async def authenticated_session(request: Request, call_next):
+        request.state.user_id = "user-both-tenants"
+        request.state.session_organization_id = "org-selected"
+        return await call_next(request)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        denied_batch = await client.post(
+            "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+            params={"organization_id": "org-other"},
+        )
+        allowed_batch = await client.post(
+            "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+            params={"organization_id": "org-selected"},
+        )
+        unscoped_batch = await client.post(
+            "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle"
+        )
+        denied_provenance = await client.get(
+            "/v1/issuance/delivery-records/canvas-credentials/provenance",
+            params={
+                "organization_id": "org-other",
+                "delivery_record_id": "record-other",
+            },
+        )
+        allowed_provenance = await client.get(
+            "/v1/issuance/delivery-records/canvas-credentials/provenance",
+            params={
+                "organization_id": "org-selected",
+                "delivery_record_id": "record-selected",
+            },
+        )
+        denied_health = await client.get(
+            "/v1/issuance/organizations/org-other/canvas-mirror-health"
+        )
+        allowed_health = await client.get(
+            "/v1/issuance/organizations/org-selected/canvas-mirror-health"
+        )
+
+    assert denied_batch.status_code == 403
+    assert "authorized organization context" in denied_batch.json()["detail"]
+    assert allowed_batch.status_code == 200
+    assert unscoped_batch.status_code == 422
+    assert denied_provenance.status_code == 403
+    assert "authorized organization context" in denied_provenance.json()["detail"]
+    assert allowed_provenance.status_code == 200
+    assert denied_health.status_code == 403
+    assert "authorized organization context" in denied_health.json()["detail"]
+    assert allowed_health.status_code == 200
+    assert proxied == [
+        (
+            "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+            "org-selected",
+        ),
+        (
+            "/v1/issuance/delivery-records/canvas-credentials/provenance",
+            "org-selected",
+        ),
+        (
+            "/v1/issuance/organizations/org-selected/canvas-mirror-health",
+            None,
+        ),
+    ]
+    assert ("user-both-tenants", "org-other") in membership_requests
+    assert ("user-both-tenants", "org-selected") in membership_requests
 
 
 @pytest.mark.asyncio

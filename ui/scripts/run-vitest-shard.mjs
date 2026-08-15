@@ -90,7 +90,11 @@ console.log(
 )
 
 const vitestBin = join(uiRoot, 'node_modules', 'vitest', 'vitest.mjs')
-const result = spawnSync(process.execPath, [vitestBin, 'run', ...shard.files], {
+const timingOutput = process.env.VITEST_TIMING_OUTPUT
+const reporterArguments = timingOutput
+  ? ['--reporter=default', '--reporter=json', `--outputFile.json=${timingOutput}`]
+  : []
+const result = spawnSync(process.execPath, [vitestBin, 'run', ...shard.files, ...reporterArguments], {
   cwd: uiRoot,
   env: process.env,
   stdio: 'inherit',

@@ -170,13 +170,59 @@ _WALLET_REGISTRY_RESOURCE_LOOKUP = (
     {"resolve"},
 )
 
-_CANVAS_PROVENANCE_ROUTE = (
-    "GET",
-    "/v1/issuance/delivery-records/canvas-credentials/provenance",
+_CANVAS_MIRROR_ROUTE_RULES = (
+    (
+        re.compile(
+            r"^/v1/issuance/delivery-records/"
+            r"canvas-credentials/provenance$"
+        ),
+        {"GET": "integration-connector:view"},
+        "integration-connector",
+    ),
+    (
+        re.compile(
+            r"^/v1/issuance/delivery-records/canvas-credentials/"
+            r"(?:process-pending|process-status-sync-failures|run-automation-cycle)$"
+        ),
+        {"POST": "integration-connector:edit"},
+        "integration-connector",
+    ),
+    (
+        re.compile(
+            r"^/v1/issuance/organizations/[^/]+/canvas-mirror-health$"
+        ),
+        {"GET": "integration-connector:view"},
+        "integration-connector",
+    ),
 )
-_CANVAS_PROVENANCE_PERMISSION = (
-    "integration-connector:view",
-    "integration-connector",
+_CANVAS_MIRROR_ROUTE_PROBES = {
+    (
+        "GET",
+        "/v1/issuance/delivery-records/canvas-credentials/provenance",
+    ): ("integration-connector:view", "integration-connector"),
+    (
+        "POST",
+        "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+    ): ("integration-connector:edit", "integration-connector"),
+    (
+        "POST",
+        "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+    ): ("integration-connector:edit", "integration-connector"),
+    (
+        "POST",
+        "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+    ): ("integration-connector:edit", "integration-connector"),
+    (
+        "GET",
+        "/v1/issuance/organizations/organization-example/canvas-mirror-health",
+    ): ("integration-connector:view", "integration-connector"),
+}
+_CANVAS_MIRROR_STATIC_ROUTES = (
+    "/v1/issuance/delivery-records/canvas-credentials/provenance",
+    "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+    "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+    "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+    "/v1/issuance/organizations/organization-example/canvas-mirror-health",
 )
 
 _NOTIFICATION_ROUTE_RULES = (
@@ -231,7 +277,7 @@ _NOTIFICATION_ROUTE_RULES = (
     ),
 )
 
-_NOTIFICATION_RESOURCE_LOOKUPS = {
+_LEGACY_UNSCOPED_NOTIFICATION_RESOURCE_LOOKUPS = {
     "webhooks": (
         "notifications",
         "/v1/webhooks/{resource_id}",
@@ -495,48 +541,68 @@ def _register_vc_api_cedar_routes() -> None:
         )
 
 
-def _register_canvas_provenance_cedar_route() -> None:
-    """Bind Canvas provenance lookup to tenant membership and connector RBAC."""
+def _register_canvas_mirror_cedar_routes() -> None:
+    """Bind Canvas mirror management to tenant membership and connector RBAC."""
     resolver = getattr(_cedar_actions, "resolve_action_and_resource", None)
+    lookup_resolver = getattr(_cedar_actions, "resolve_resource_lookup", None)
     rules = getattr(_cedar_actions, "SPECIAL_ROUTE_RULES", None)
-    if not callable(resolver) or not isinstance(rules, list):
+    if (
+        not callable(resolver)
+        or not callable(lookup_resolver)
+        or not isinstance(rules, list)
+    ):
         raise RuntimeError(
             "Unsupported marty-common Cedar route registry; "
-            "refusing to start without Canvas provenance RBAC."
+            "refusing to start without Canvas mirror RBAC."
         )
 
-    current = resolver(*_CANVAS_PROVENANCE_ROUTE)
-    if current == _CANVAS_PROVENANCE_PERMISSION:
-        return
-    if current is not None:
-        raise RuntimeError(
-            "Conflicting marty-common Canvas provenance Cedar mapping; "
-            "refusing to override it."
-        )
+    missing_probes: list[tuple[str, str]] = []
+    for probe, expected in _CANVAS_MIRROR_ROUTE_PROBES.items():
+        current = resolver(*probe)
+        if current == expected:
+            continue
+        if current is not None:
+            raise RuntimeError(
+                "Conflicting marty-common Canvas mirror Cedar mapping; "
+                "refusing to override it."
+            )
+        missing_probes.append(probe)
 
-    compatibility_rule = (
-        re.compile(
-            r"^/v1/issuance/delivery-records/"
-            r"canvas-credentials/provenance$"
-        ),
-        {"GET": _CANVAS_PROVENANCE_PERMISSION[0]},
-        _CANVAS_PROVENANCE_PERMISSION[1],
-    )
-    rules.insert(0, compatibility_rule)
+    inserted = [
+        rule
+        for rule in _CANVAS_MIRROR_ROUTE_RULES
+        if any(rule[0].match(path) for _, path in missing_probes)
+    ]
+    rules[0:0] = inserted
     try:
-        verified = resolver(*_CANVAS_PROVENANCE_ROUTE) == _CANVAS_PROVENANCE_PERMISSION
+        verified = all(
+            resolver(*probe) == expected
+            for probe, expected in _CANVAS_MIRROR_ROUTE_PROBES.items()
+        ) and all(
+            lookup_resolver(path) is None
+            for path in _CANVAS_MIRROR_STATIC_ROUTES
+        )
     except Exception:
         verified = False
     if not verified:
-        rules.remove(compatibility_rule)
+        for rule in inserted:
+            rules.remove(rule)
         raise RuntimeError(
-            "Canvas provenance Cedar compatibility mapping did not activate; "
+            "Canvas mirror Cedar compatibility mapping did not activate; "
             "refusing to start."
         )
 
 
 def _register_notification_cedar_routes() -> None:
-    """Protect notification resources until marty-common ships the same boundary."""
+    """Protect notification resources until marty-common ships the same boundary.
+
+    Notification ID routes require an explicit organization selector, the
+    gateway replaces that selector with the Cedar-authorized organization,
+    and the notification service checks the resource belongs to it.  An
+    unscoped pre-authorization GET cannot discover ownership through those
+    public endpoints and must not turn their required-query response into a
+    gateway 502.
+    """
     resolver = getattr(_cedar_actions, "resolve_action_and_resource", None)
     lookup_resolver = getattr(_cedar_actions, "resolve_resource_lookup", None)
     rules = getattr(_cedar_actions, "SPECIAL_ROUTE_RULES", None)
@@ -586,26 +652,25 @@ def _register_notification_cedar_routes() -> None:
         inserted_rules = list(_NOTIFICATION_ROUTE_RULES)
         rules[0:0] = inserted_rules
 
-    inserted_lookup_keys: list[str] = []
+    removed_legacy_lookups: dict[str, tuple] = {}
     try:
-        for resource, expected in _NOTIFICATION_RESOURCE_LOOKUPS.items():
+        for resource, legacy in _LEGACY_UNSCOPED_NOTIFICATION_RESOURCE_LOOKUPS.items():
             current_lookup = lookups.get(resource)
-            if current_lookup is not None and current_lookup != expected:
+            if current_lookup is not None and current_lookup != legacy:
                 raise RuntimeError(
                     f"Conflicting marty-common {resource} tenant lookup; "
-                    "refusing to override it."
+                    "refusing to bypass it."
                 )
-            if current_lookup is None:
-                lookups[resource] = expected
-                inserted_lookup_keys.append(resource)
+            if current_lookup == legacy:
+                removed_legacy_lookups[resource] = current_lookup
+                lookups.pop(resource)
 
         verified_routes = all(
             resolver(*probe) == expected for probe, expected in probes.items()
         )
         verified_lookups = all(
-            lookup_resolver(f"/v1/{resource}/example")
-            == (expected[0], expected[1].format(resource_id="example"))
-            for resource, expected in _NOTIFICATION_RESOURCE_LOOKUPS.items()
+            lookup_resolver(f"/v1/{resource}/example") is None
+            for resource in _LEGACY_UNSCOPED_NOTIFICATION_RESOURCE_LOOKUPS
         )
         if not verified_routes or not verified_lookups:
             raise RuntimeError(
@@ -616,8 +681,7 @@ def _register_notification_cedar_routes() -> None:
         for rule in inserted_rules:
             if rule in rules:
                 rules.remove(rule)
-        for resource in inserted_lookup_keys:
-            lookups.pop(resource, None)
+        lookups.update(removed_legacy_lookups)
         raise
 
 
@@ -968,7 +1032,7 @@ def create_app() -> FastAPI:
     _register_signing_key_cedar_routes()
     _register_wallet_registry_cedar_routes()
     _register_vc_api_cedar_routes()
-    _register_canvas_provenance_cedar_route()
+    _register_canvas_mirror_cedar_routes()
     _register_notification_cedar_routes()
     app = FastAPI(
         title="Marty API Gateway",

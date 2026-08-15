@@ -79,8 +79,8 @@ def test_ci_and_stack_lock_pin_the_same_marty_common_release() -> None:
     )
     artifact = next(item for item in common["artifacts"] if item["type"] == "python")
 
-    assert common["version"] == "0.2.8"
-    assert common["commit"] == "cac6dd5222e9b8d65c79df0f8964751cf1b88300"
+    assert common["version"] == "0.2.12"
+    assert common["commit"] == "79a370b0629cdf69a8ad77dfa4c6461a3838bede"
     assert workflow["env"]["MARTY_COMMON_URI"] == artifact["uri"]
     assert workflow["env"]["MARTY_COMMON_DIGEST"] == artifact["digest"]
     assert 'marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"' in workflow_text
@@ -246,10 +246,10 @@ def test_revocation_deletion_release_uses_the_rust_candidate_overlay() -> None:
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.63"
-    assert integration["commit"] == "0a67f1d68bd196ee66394d80785fb1dfbbd910fd"
+    assert integration["version"] == "1.2.65"
+    assert integration["commit"] == "aec2ba741898f09697705a099c1804d8115f49ba"
     assert integration["artifacts"][0]["digest"] == (
-        "sha256:d7a74bef5bca63fa312275180f73b7bb23efafa57d89fa27347f7e4cfd6fd935"
+        "sha256:2ec7a614f34ac7ab1578b85014ffaa66f2fdc0db1c945bdd67b23e046b357845"
     )
 
     issuance = next(
@@ -257,10 +257,10 @@ def test_revocation_deletion_release_uses_the_rust_candidate_overlay() -> None:
         for component in lock["components"]
         if component["name"] == "marty-credentials-issuance"
     )
-    assert issuance["version"] == "0.1.61"
-    assert issuance["commit"] == "939cb492749ec86caf824da71249dc8bfb0e80b9"
+    assert issuance["version"] == "0.1.62"
+    assert issuance["commit"] == "afd5bfc6f28766644f9ae4fc0e484e027b0f9224"
     assert issuance["artifacts"][0]["digest"] == (
-        "sha256:249a6ff5ee3e2cbc5e532cf4c0cbb284e635e41a9aaaf3f0249bd57f18ff0521"
+        "sha256:199d8e4db7d43f67c3ac9a993538301b13032db3fdcd06fd1cd3ee015607d612"
     )
 
 
