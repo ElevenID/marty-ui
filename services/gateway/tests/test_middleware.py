@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 from gateway import main as gateway_main
 from gateway.middleware import (
@@ -913,11 +913,19 @@ def test_static_flow_segments_do_not_trigger_resource_owner_lookup(segment: str)
 
 
 def test_gateway_static_resource_routes_are_declared_in_common_classifier() -> None:
-    app = gateway_main.create_app()
+    route_paths = {
+        getattr(route, "path", "")
+        for route in gateway_main.app.routes
+    }
+    route_paths.update(
+        getattr(route, "path", "")
+        for value in vars(gateway_main).values()
+        if isinstance(value, APIRouter)
+        for route in value.routes
+    )
     observed: set[tuple[str, str]] = set()
 
-    for route in app.routes:
-        path = getattr(route, "path", "")
+    for path in route_paths:
         parts = path.split("/")
         if len(parts) < 4 or parts[1] != "v1":
             continue
