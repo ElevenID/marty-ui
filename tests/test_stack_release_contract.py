@@ -257,10 +257,10 @@ def test_revocation_deletion_release_uses_the_rust_candidate_overlay() -> None:
         for component in lock["components"]
         if component["name"] == "marty-credentials-issuance"
     )
-    assert issuance["version"] == "0.1.65"
-    assert issuance["commit"] == "41a26237179d8950216aaeb1e19fdfcf8a2ea100"
+    assert issuance["version"] == "0.1.66"
+    assert issuance["commit"] == "22d8e782e6ef86a5ad9ecefdfce55e43f658d21c"
     assert issuance["artifacts"][0]["digest"] == (
-        "sha256:b4ff6a1c407a258876856e77ec6101e42824943846822849377d0365ebf8f179"
+        "sha256:afecd04128157c63f208589c77c89d03bfe98b2e91fcc798c05074692d5051cf"
     )
 
 
@@ -362,8 +362,8 @@ def test_service_images_install_every_required_native_backend() -> None:
         "marty-verification-python",
         "marty-iso18013-python",
     ):
-        assert components[name]["version"] == "0.1.57"
-        assert components[name]["commit"] == "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8"
+        assert components[name]["version"] == "0.1.58"
+        assert components[name]["commit"] == "9f706477c725f92d18ee8b989ce84431178d1b01"
 
 
 def test_release_images_reject_commerce_markers() -> None:
