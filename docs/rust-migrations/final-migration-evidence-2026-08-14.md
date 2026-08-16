@@ -1,5 +1,9 @@
 # Consolidated Rust migration final evidence
 
+> This document closes wave one. The later nine-workstream aggregate and its
+> accepted v1.1.194 beta lifecycle are recorded in
+> [Rust migration wave-two final evidence](wave-two-final-evidence-2026-08-15.md).
+
 ## Outcome
 
 The technical work in the [Consolidated Rust Migration Roadmap](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md) is complete at the approved beta boundary. Security-sensitive protocol, cryptographic, policy, verification, status, state-machine, wallet, licensing, DTC, and VDS-NC decisions have one canonical Rust owner. Superseded Python and Dart decision kernels were deleted once implementation-independent behavioral, failure, ownership, packaging, and regression gates passed.

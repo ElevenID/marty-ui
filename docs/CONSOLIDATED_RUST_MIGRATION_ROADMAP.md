@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Wave one complete at beta; wave two implementation complete; final aggregate beta release active; production promotion requires separate approval
+**Status:** Waves one and two complete and behaviorally accepted at beta; production promotion requires separate approval
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
@@ -31,6 +31,7 @@ decision kernel.
 | Event-stream whole-service removal | Complete: `services/event_stream` is deleted and the shared image dispatches the canonical Rust executable in every stack | Executable-level public HTTP/gRPC behavior, tenant filtering, health, packaging, and regression contracts pass in CI |
 | Revocation-profile whole-service removal | Complete: the Python service, status-list kernel, and Alembic ownership are deleted; the shared image dispatches the canonical Rust executable | Public issuance/status/revocation/re-verification behavior plus failure, concurrency, storage, migration, packaging, and regression contracts passed before merge |
 | Phase 9 release and evidence | Complete at the approved beta boundary | Immutable Rust/UI releases, a single beta update, commit-pinned composition evidence, fail-closed checks, and the protected public lifecycle run are recorded in the [final migration evidence](rust-migrations/final-migration-evidence-2026-08-14.md) |
+| Wave-two port, deletion, and aggregate acceptance | Complete at the approved beta boundary | All nine ordered workstreams, release artifacts, fail-closed rollout findings, final v1.1.194 beta deployment, and protected lifecycle acceptance are recorded in the [wave-two final evidence](rust-migrations/wave-two-final-evidence-2026-08-15.md) |
 
 All first-wave implementation, deletion, enforcement, packaging, and beta
 behavioral gates have passed. A follow-up inventory found eight initial
@@ -45,8 +46,8 @@ owns REST, gRPC, PostgreSQL migrations and persistence, Transit-bound secrets,
 SSRF-resistant delivery, and the durable outbox. Language-neutral HTTP, gRPC,
 HMAC, migration, concurrency, and PostgreSQL/OpenBao contracts passed before
 the superseded Python service, adapters, migrations, and implementation tests
-were deleted. This cutover is packaged but is not deployed separately; it
-remains part of the one aggregate wave-two beta update.
+were deleted. The cutover was not deployed separately; it is active as part of
+the accepted v1.1.194 aggregate beta update.
 
 The subscription API-key workstream is implemented in
 [`marty-subscriptions` PR 31](https://github.com/ElevenID/marty-subscriptions/pull/31).
@@ -259,8 +260,12 @@ not satisfy the parity gate.
   that crate would remove format-only issuance behavior; this preserves the
   public feature while keeping status-list and liveness ownership canonical
   in Rust.
-- No wave-two slice updates beta independently. One commit-pinned aggregate
-  beta deployment and evidence run occurs only after all workstreams land.
+- No wave-two slice updated beta independently. The commit-pinned v1.1.194
+  aggregate was deployed after all workstreams landed, and protected lifecycle
+  run 31916804935 accepted its real issuance, presentation, verification,
+  renewal, suspension, reinstatement, revocation, and authorization behavior.
+  Exact artifacts and the fail-closed rollout history are recorded in the
+  [wave-two final evidence](rust-migrations/wave-two-final-evidence-2026-08-15.md).
 
 ## Non-negotiable outcomes
 
@@ -595,7 +600,9 @@ and the final aggregate beta evidence is accepted:
 - a production promotion package exists, based on beta evidence, for separate approval.
 
 The wave-one evidence for these conditions is captured in
-[`final-migration-evidence-2026-08-14.md`](rust-migrations/final-migration-evidence-2026-08-14.md).
+[`final-migration-evidence-2026-08-14.md`](rust-migrations/final-migration-evidence-2026-08-14.md),
+and the accepted wave-two aggregate is captured in
+[`wave-two-final-evidence-2026-08-15.md`](rust-migrations/wave-two-final-evidence-2026-08-15.md).
 Promoting the accepted artifacts beyond beta remains explicitly out of scope.
 
 ## Deliberate non-targets
@@ -642,6 +649,6 @@ The implementation landed in the following dependency order:
 Dependency adjustments were recorded in the implementation PR chain and
 preserved the single-owner rule.
 
-Wave two follows the removable-source order above. Its dependency chain and
-exact deleted-source inventory are recorded as PRs land, and completion is not
-declared until the final aggregate beta evidence is commit-pinned.
+Wave two followed the removable-source order above. Its dependency chain,
+deleted-source inventory, immutable aggregate, fail-closed rollout findings,
+and protected beta lifecycle are commit-pinned in the wave-two final evidence.
