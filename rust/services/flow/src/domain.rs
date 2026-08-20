@@ -113,7 +113,7 @@ pub struct FlowDefinition {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct StateHistoryEntry {
-    pub prior_state: FlowInstanceStatus,
+    pub prior_state: Option<FlowInstanceStatus>,
     pub new_state: FlowInstanceStatus,
     pub timestamp_ms: u64,
     pub actor: Option<String>,
@@ -399,7 +399,7 @@ impl FlowInstance {
         }
         self.status = decision.new_state;
         self.state_history.push(StateHistoryEntry {
-            prior_state: decision.prior_state,
+            prior_state: Some(decision.prior_state),
             new_state: decision.new_state,
             timestamp_ms: now_ms,
             actor: decision.actor,

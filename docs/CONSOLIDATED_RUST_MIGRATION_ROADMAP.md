@@ -520,6 +520,21 @@ HTTP suites plus strict Clippy pass. The remaining HTTP surface is instance
 start/advance, QR generation, OID4VP/SIOP submissions, verifier DID publication,
 application-approved webhooks and protocol-specific verification starts.
 
+The provider-independent instance execution kernel is also complete under
+`contracts/flow-instance-execution-behavior.json`. Active-definition and exact
+tenant binding, initial status/history, definition-driven expiry, protocol
+context, recursive private-state rejection, canonical next-step selection,
+wallet-resume transitions, terminal success/failure and step-result history now
+execute in Rust. Initial history preserves the released nullable prior state,
+while every subsequent transition remains a typed canonical state. Direct
+starts fail closed on application-approval, unknown or malformed preconditions;
+only separately supplied server-authenticated evidence can satisfy the
+application-approved control. Three execution vectors, persistence and atomic
+repository regressions, and strict Clippy pass. The public start/advance routes
+remain gated until their physical-document and OID4VCI issuance side effects,
+artifact writes and PostgreSQL compare-and-set behavior are composed around
+this kernel; the kernel is not advertised as a partial route.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

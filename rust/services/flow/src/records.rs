@@ -337,7 +337,11 @@ fn protocol_step(
 fn parse_state_history(value: &Value, index: usize) -> Result<StateHistoryEntry, FlowRecordError> {
     let field = format!("instance.state_history[{index}]");
     let object = object(value, &field)?;
-    let prior_state = parse_enum(object.get("prior_state"), &format!("{field}.prior_state"))?;
+    let prior_state = object
+        .get("prior_state")
+        .filter(|value| !value.is_null())
+        .map(|value| parse_enum(Some(value), &format!("{field}.prior_state")))
+        .transpose()?;
     let new_state = parse_enum(object.get("new_state"), &format!("{field}.new_state"))?;
     let timestamp_ms = if let Some(value) = object.get("timestamp_ms").and_then(Value::as_u64) {
         value
