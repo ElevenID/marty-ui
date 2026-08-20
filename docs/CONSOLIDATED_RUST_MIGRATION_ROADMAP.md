@@ -406,6 +406,17 @@ runtime tests and strict Clippy pass. Actual dependency connection, seed
 ownership and HTTP/gRPC application listener composition remain before the
 runtime may call `activate`.
 
+The startup boundary also preserves the released container contract instead
+of requiring a flag-day configuration rewrite. It accepts the existing
+`ORG_GRPC_TARGET`, `FLOW_SERVICE_PORT`, `FLOW_GRPC_PORT`, `ISSUANCE_API_KEY`
+and AsyncPG-tagged PostgreSQL URL forms, normalizes them to the canonical Rust
+types, and loads all four mandatory credentials from the existing `_FILE`
+secret convention. Direct values take precedence; unreadable or empty secret
+files fail startup, and configuration diagnostics redact database, Redis and
+all secret values. Six startup/unit vectors and strict Clippy pass. The final
+beta compose cutover still needs to add Flow's currently omitted signing-key
+endpoint/API-key settings before the Rust process can become ready.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

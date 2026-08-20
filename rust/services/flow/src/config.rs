@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, net::SocketAddr};
+use std::{collections::BTreeMap, fmt, fs, net::SocketAddr};
 
 use thiserror::Error;
 use url::Url;
@@ -22,7 +22,7 @@ impl Environment {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct FlowServiceConfig {
     pub environment: Environment,
     pub http_addr: SocketAddr,
@@ -53,11 +53,59 @@ pub enum FlowConfigError {
     Invalid { name: &'static str },
     #[error("FLOW.CONFIGURATION: {name} must contain at least {minimum} bytes")]
     SecretTooShort { name: &'static str, minimum: usize },
+    #[error("FLOW.CONFIGURATION: {name}_FILE could not be read")]
+    SecretFile { name: &'static str },
+}
+
+impl fmt::Debug for FlowServiceConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FlowServiceConfig")
+            .field("environment", &self.environment)
+            .field("http_addr", &self.http_addr)
+            .field("grpc_addr", &self.grpc_addr)
+            .field("database_url", &"[REDACTED]")
+            .field("database_max_connections", &self.database_max_connections)
+            .field("redis_url", &"[REDACTED]")
+            .field("redis_database", &self.redis_database)
+            .field("organization_grpc_target", &self.organization_grpc_target)
+            .field(
+                "credential_template_grpc_target",
+                &self.credential_template_grpc_target,
+            )
+            .field(
+                "presentation_policy_grpc_target",
+                &self.presentation_policy_grpc_target,
+            )
+            .field("issuance_grpc_target", &self.issuance_grpc_target)
+            .field("signing_keys_url", &self.signing_keys_url)
+            .field(
+                "signing_keys_api_key",
+                &redacted(&self.signing_keys_api_key),
+            )
+            .field("issuance_url", &self.issuance_url)
+            .field("issuance_api_key", &redacted(&self.issuance_api_key))
+            .field("service_token", &redacted(&self.service_token))
+            .field("webhook_secret", &redacted(&self.webhook_secret))
+            .field("release_version", &self.release_version)
+            .field("build_revision", &self.build_revision)
+            .finish()
+    }
 }
 
 impl FlowServiceConfig {
     pub fn from_env() -> Result<Self, FlowConfigError> {
-        Self::from_values(std::env::vars())
+        let mut values = std::env::vars().collect::<BTreeMap<_, _>>();
+        load_secret_files(
+            &mut values,
+            &[
+                "GRPC_SERVICE_TOKEN",
+                "FLOW_WEBHOOK_SECRET",
+                "SIGNING_KEYS_INTERNAL_API_KEY",
+                "ISSUANCE_API_KEY",
+            ],
+        )?;
+        Self::from_values(values)
     }
 
     pub fn from_values(
@@ -65,19 +113,27 @@ impl FlowServiceConfig {
     ) -> Result<Self, FlowConfigError> {
         let values = values.into_iter().collect::<BTreeMap<_, _>>();
         let environment = parse_environment(value(&values, "ENVIRONMENT").unwrap_or("production"))?;
-        let http_addr = parse_address(
-            value(&values, "FLOW_HTTP_ADDR").unwrap_or(DEFAULT_HTTP_ADDR),
+        let http_addr = listener_address(
+            &values,
             "FLOW_HTTP_ADDR",
+            "FLOW_SERVICE_PORT",
+            DEFAULT_HTTP_ADDR,
         )?;
-        let grpc_addr = parse_address(
-            value(&values, "FLOW_GRPC_ADDR").unwrap_or(DEFAULT_GRPC_ADDR),
+        let grpc_addr = listener_address(
+            &values,
             "FLOW_GRPC_ADDR",
+            "FLOW_GRPC_PORT",
+            DEFAULT_GRPC_ADDR,
         )?;
         if http_addr == grpc_addr {
             return Err(invalid("FLOW_GRPC_ADDR"));
         }
 
-        let database_url = required(&values, "DATABASE_URL")?;
+        let database_url = required(&values, "DATABASE_URL")?.replacen(
+            "postgresql+asyncpg://",
+            "postgresql://",
+            1,
+        );
         validate_url(&database_url, "DATABASE_URL", &["postgres", "postgresql"])?;
         let database_max_connections = parse_bounded(
             value(&values, "FLOW_DATABASE_MAX_CONNECTIONS").unwrap_or("15"),
@@ -95,9 +151,10 @@ impl FlowServiceConfig {
         )?)
         .map_err(|_| invalid("REDIS_DB_FLOW"))?;
 
-        let organization_grpc_target = grpc_target(
+        let organization_grpc_target = grpc_target_alias(
             &values,
             "ORGANIZATION_GRPC_TARGET",
+            "ORG_GRPC_TARGET",
             Some("organization:9002"),
             environment,
         )?;
@@ -136,7 +193,7 @@ impl FlowServiceConfig {
         let webhook_secret = optional_secret(&values, "FLOW_WEBHOOK_SECRET", environment)?;
         let signing_keys_api_key =
             optional_secret(&values, "SIGNING_KEYS_INTERNAL_API_KEY", environment)?;
-        let issuance_api_key = optional_secret(&values, "ISSUANCE_INTERNAL_API_KEY", environment)?;
+        let issuance_api_key = optional_secret(&values, "ISSUANCE_API_KEY", environment)?;
 
         Ok(Self {
             environment,
@@ -196,6 +253,22 @@ fn parse_address(value: &str, name: &'static str) -> Result<SocketAddr, FlowConf
     value.parse().map_err(|_| invalid(name))
 }
 
+fn listener_address(
+    values: &BTreeMap<String, String>,
+    address_name: &'static str,
+    port_name: &'static str,
+    default: &'static str,
+) -> Result<SocketAddr, FlowConfigError> {
+    if let Some(address) = value(values, address_name) {
+        return parse_address(address, address_name);
+    }
+    if let Some(port) = value(values, port_name) {
+        let port = parse_bounded(port, port_name, 1, u32::from(u16::MAX))?;
+        return parse_address(&format!("0.0.0.0:{port}"), port_name);
+    }
+    parse_address(default, address_name)
+}
+
 fn parse_bounded(
     value: &str,
     name: &'static str,
@@ -233,6 +306,22 @@ fn grpc_target(
     };
     validate_origin(&target, name)?;
     Ok(target)
+}
+
+fn grpc_target_alias(
+    values: &BTreeMap<String, String>,
+    name: &'static str,
+    alias: &'static str,
+    default: Option<&str>,
+    environment: Environment,
+) -> Result<String, FlowConfigError> {
+    let mut aliased = values.clone();
+    if !aliased.contains_key(name) {
+        if let Some(value) = value(values, alias) {
+            aliased.insert(name.into(), value.into());
+        }
+    }
+    grpc_target(&aliased, name, default, environment)
 }
 
 fn service_url(
@@ -280,4 +369,63 @@ fn optional_secret(
 
 const fn invalid(name: &'static str) -> FlowConfigError {
     FlowConfigError::Invalid { name }
+}
+
+fn load_secret_files(
+    values: &mut BTreeMap<String, String>,
+    names: &[&'static str],
+) -> Result<(), FlowConfigError> {
+    for &name in names {
+        if value(values, name).is_some() {
+            continue;
+        }
+        let file_name = format!("{name}_FILE");
+        let Some(path) = value(values, &file_name) else {
+            continue;
+        };
+        let secret = fs::read_to_string(path).map_err(|_| FlowConfigError::SecretFile { name })?;
+        let secret = secret.trim();
+        if secret.is_empty() {
+            return Err(FlowConfigError::SecretFile { name });
+        }
+        values.insert(name.into(), secret.into());
+    }
+    Ok(())
+}
+
+fn redacted(value: &Option<String>) -> &'static str {
+    if value.is_some() {
+        "[REDACTED]"
+    } else {
+        "[NONE]"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn secret_files_are_trimmed_and_unreadable_files_fail_closed() {
+        let path = std::env::temp_dir().join(format!("marty-flow-secret-{}", uuid::Uuid::new_v4()));
+        fs::write(&path, format!("{}\n", "s".repeat(32))).expect("write secret");
+        let mut values = BTreeMap::from([(
+            "GRPC_SERVICE_TOKEN_FILE".into(),
+            path.to_string_lossy().into_owned(),
+        )]);
+        load_secret_files(&mut values, &["GRPC_SERVICE_TOKEN"]).expect("load secret");
+        assert_eq!(values["GRPC_SERVICE_TOKEN"], "s".repeat(32));
+        fs::remove_file(&path).expect("remove secret");
+
+        let mut missing = BTreeMap::from([(
+            "FLOW_WEBHOOK_SECRET_FILE".into(),
+            path.to_string_lossy().into_owned(),
+        )]);
+        assert_eq!(
+            load_secret_files(&mut missing, &["FLOW_WEBHOOK_SECRET"]),
+            Err(FlowConfigError::SecretFile {
+                name: "FLOW_WEBHOOK_SECRET"
+            })
+        );
+    }
 }

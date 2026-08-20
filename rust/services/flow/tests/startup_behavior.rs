@@ -10,6 +10,9 @@ struct Contract {
     required_always: Vec<String>,
     required_when_deployed: Vec<String>,
     minimum_secret_bytes: usize,
+    secret_file_suffix: String,
+    listener_port_aliases: Vec<String>,
+    database_driver_alias: String,
     database_schemes: Vec<String>,
     redis_schemes: Vec<String>,
     dependency_schemes: Vec<String>,
@@ -23,10 +26,7 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
         ("ENVIRONMENT".into(), environment.into()),
         ("DATABASE_URL".into(), "postgresql://db/flow".into()),
         ("REDIS_URL".into(), "redis://redis:6379".into()),
-        (
-            "ORGANIZATION_GRPC_TARGET".into(),
-            "organization:9002".into(),
-        ),
+        ("ORG_GRPC_TARGET".into(), "organization:9002".into()),
         ("CT_GRPC_TARGET".into(), "credential-template:9003".into()),
         ("PP_GRPC_TARGET".into(), "presentation-policy:9009".into()),
         ("ISSUANCE_GRPC_TARGET".into(), "issuance:9006".into()),
@@ -38,7 +38,7 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
         ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
         ("FLOW_WEBHOOK_SECRET".into(), "w".repeat(32)),
         ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "k".repeat(32)),
-        ("ISSUANCE_INTERNAL_API_KEY".into(), "i".repeat(32)),
+        ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
     ])
 }
 
@@ -53,6 +53,12 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.required_always, ["DATABASE_URL", "REDIS_URL"]);
     assert_eq!(contract.required_when_deployed.len(), 10);
     assert_eq!(contract.minimum_secret_bytes, 32);
+    assert_eq!(contract.secret_file_suffix, "_FILE");
+    assert_eq!(
+        contract.listener_port_aliases,
+        ["FLOW_SERVICE_PORT", "FLOW_GRPC_PORT"]
+    );
+    assert_eq!(contract.database_driver_alias, "postgresql+asyncpg");
     assert_eq!(contract.database_schemes, ["postgres", "postgresql"]);
     assert_eq!(contract.redis_schemes, ["redis", "rediss"]);
     assert_eq!(contract.dependency_schemes, ["http", "https"]);
@@ -75,7 +81,7 @@ fn deployed_configuration_fails_closed() {
     for required in [
         "DATABASE_URL",
         "REDIS_URL",
-        "ORGANIZATION_GRPC_TARGET",
+        "ORG_GRPC_TARGET",
         "CT_GRPC_TARGET",
         "PP_GRPC_TARGET",
         "ISSUANCE_GRPC_TARGET",
@@ -84,13 +90,19 @@ fn deployed_configuration_fails_closed() {
         "GRPC_SERVICE_TOKEN",
         "FLOW_WEBHOOK_SECRET",
         "SIGNING_KEYS_INTERNAL_API_KEY",
-        "ISSUANCE_INTERNAL_API_KEY",
+        "ISSUANCE_API_KEY",
     ] {
         let mut values = baseline("production");
         values.remove(required);
         assert_eq!(
             FlowServiceConfig::from_values(values),
-            Err(FlowConfigError::Missing { name: required })
+            Err(FlowConfigError::Missing {
+                name: if required == "ORG_GRPC_TARGET" {
+                    "ORGANIZATION_GRPC_TARGET"
+                } else {
+                    required
+                }
+            })
         );
     }
 
@@ -147,4 +159,25 @@ fn local_mode_allows_only_non_secret_dependency_defaults() {
     assert_eq!(config.issuance_grpc_target, "http://issuance:9006");
     assert!(config.service_token.is_none());
     assert!(config.webhook_secret.is_none());
+}
+
+#[test]
+fn deployed_aliases_preserve_existing_container_configuration() {
+    let mut values = baseline("production");
+    values.insert(
+        "DATABASE_URL".into(),
+        "postgresql+asyncpg://marty:secret@postgres:5432/marty".into(),
+    );
+    values.insert("FLOW_SERVICE_PORT".into(), "8111".into());
+    values.insert("FLOW_GRPC_PORT".into(), "9111".into());
+    let config = FlowServiceConfig::from_values(values).expect("container aliases");
+    assert_eq!(
+        config.database_url,
+        "postgresql://marty:secret@postgres:5432/marty"
+    );
+    assert_eq!(config.http_addr.to_string(), "0.0.0.0:8111");
+    assert_eq!(config.grpc_addr.to_string(), "0.0.0.0:9111");
+    let debug = format!("{config:?}");
+    assert!(!debug.contains("marty:secret"));
+    assert!(debug.contains("[REDACTED]"));
 }

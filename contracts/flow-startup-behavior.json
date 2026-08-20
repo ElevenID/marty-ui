@@ -3,7 +3,7 @@
   "deployed_environments": ["beta", "production"],
   "required_always": ["DATABASE_URL", "REDIS_URL"],
   "required_when_deployed": [
-    "ORGANIZATION_GRPC_TARGET",
+    "ORGANIZATION_GRPC_TARGET|ORG_GRPC_TARGET",
     "CT_GRPC_TARGET",
     "PP_GRPC_TARGET",
     "ISSUANCE_GRPC_TARGET",
@@ -12,8 +12,11 @@
     "GRPC_SERVICE_TOKEN",
     "FLOW_WEBHOOK_SECRET",
     "SIGNING_KEYS_INTERNAL_API_KEY",
-    "ISSUANCE_INTERNAL_API_KEY"
+    "ISSUANCE_API_KEY"
   ],
+  "secret_file_suffix": "_FILE",
+  "listener_port_aliases": ["FLOW_SERVICE_PORT", "FLOW_GRPC_PORT"],
+  "database_driver_alias": "postgresql+asyncpg",
   "minimum_secret_bytes": 32,
   "database_schemes": ["postgres", "postgresql"],
   "redis_schemes": ["redis", "rediss"],
