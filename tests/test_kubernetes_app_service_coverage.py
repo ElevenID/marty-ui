@@ -47,6 +47,20 @@ def test_every_request_serving_app_has_a_kubernetes_service() -> None:
     assert request_serving_apps <= _resource_names("Service")
 
 
+def test_revocation_profile_uses_zero_downtime_rolling_updates() -> None:
+    deployment = next(
+        document
+        for document in _manifest_resources()
+        if document.get("kind") == "Deployment"
+        and document["metadata"]["name"] == "revocation-profile"
+    )
+
+    assert deployment["spec"]["strategy"] == {
+        "type": "RollingUpdate",
+        "rollingUpdate": {"maxUnavailable": 0, "maxSurge": 1},
+    }
+
+
 def test_new_internal_services_have_expected_ports_and_shared_state() -> None:
     deployments = {
         document["metadata"]["name"]: document
