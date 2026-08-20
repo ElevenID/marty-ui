@@ -463,6 +463,21 @@ security tests, the language-neutral contract test and strict Clippy pass. The
 next executable slice must attach the complete HTTP/gRPC operation surface and
 activate only after both listeners are serving.
 
+The first executable HTTP operation slice is complete under
+`contracts/flow-http-read-behavior.json`. Axum now serves the public MIP 0.4.1
+capability document plus tenant-authorized definition, instance, terminal
+verification-result and artifact reads directly from Rust-owned PostgreSQL
+records. Pagination is bounded to 500, removed lifecycle aliases stay rejected,
+nonterminal result polling returns conflict, tenant permissions are checked
+through the shared MMF membership policy, and every projection recursively
+removes private context. Malformed stored records and missing providers fail
+closed without returning storage diagnostics. Physical-document support is now
+derived from the mandatory healthy downstream provider instead of duplicating
+its private configuration in Flow. Three focused handler tests, the shared
+behavior-vector test and strict Clippy pass. Definition and instance mutation,
+verification submission, SIOP, webhook, QR and DID routes remain before the
+HTTP listener can be advertised as complete.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

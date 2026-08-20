@@ -14,7 +14,7 @@ use crate::{
 pub struct FlowBackendConnections {
     pub repository: PostgresFlowRepository,
     pub nonce_store: ConnectionManager,
-    pub providers: FlowProviderRegistry,
+    pub providers: Arc<FlowProviderRegistry>,
 }
 
 #[derive(Debug, Error)]
@@ -47,7 +47,7 @@ impl FlowBackendConnections {
         Ok(Self {
             repository: PostgresFlowRepository::new(pool),
             nonce_store,
-            providers,
+            providers: Arc::new(providers),
         })
     }
 }

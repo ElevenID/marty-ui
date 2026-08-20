@@ -322,7 +322,7 @@ pub trait PhysicalDocumentProvider: Send + Sync {
     ) -> Result<PhysicalDocumentResult, FlowProviderError>;
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct FlowProviderRegistry {
     pub tenant_membership: Option<Arc<dyn TenantMembershipProvider>>,
     pub credential_template: Option<Arc<dyn CredentialTemplateProvider>>,

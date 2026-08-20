@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "routes": [
+    ["GET", "/v1/flows/capabilities", "public"],
+    ["GET", "/v1/flows/definitions", "flow-definition:view"],
+    ["GET", "/v1/flows/definitions/{flow_id}", "flow-definition:view"],
+    ["GET", "/v1/flows/instances", "flow-instance:view"],
+    ["GET", "/v1/flows/instances/{instance_id}", "flow-instance:view"],
+    ["GET", "/v1/flows/instances/{instance_id}/result", "flow-instance:view"],
+    ["GET", "/v1/flows/instances/{instance_id}/artifacts", "flow-instance:view"],
+    ["GET", "/v1/flows/instances/{instance_id}/artifacts/{artifact_id}", "flow-instance:view"]
+  ],
+  "principal_header": "x-user-id",
+  "pagination": {
+    "default_limit": 100,
+    "maximum_limit": 500,
+    "offset_minimum": 0
+  },
+  "status_filter": "canonical_case_insensitive",
+  "removed_statuses": ["waiting", "waiting_approval", "canceled"],
+  "result_terminal_statuses": ["completed", "failed"],
+  "pending_result_status": 409,
+  "stored_private_context": "recursively_redacted",
+  "malformed_stored_state": "fail_closed",
+  "capabilities": {
+    "protocol_version": "0.4.1",
+    "flow_type_count": 12,
+    "standard_flow_type_count": 11,
+    "trigger_count": 4,
+    "extensible_flow_type_count": 3,
+    "physical_document_source": "required_healthy_provider"
+  }
+}
