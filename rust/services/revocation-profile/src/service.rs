@@ -2,12 +2,13 @@ use crate::{
     domain::{
         CredentialStatus, NewProfile, ProcessRevocation, RevocationProfile, RevocationProfileStatus,
     },
-    repository::{ProfileRepository, RepositoryError},
+    repository::{ProfileRepository, RepositoryError, StatusIndexReservation},
     status::{StatusError, StatusListFormat, StatusListRecord, StatusRepository},
 };
 use marty_status::{MAX_STATUS_LIST_ENTRIES, W3C_MIN_STATUS_LIST_BITS};
 use std::sync::Arc;
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ServiceError {
@@ -159,6 +160,31 @@ impl RevocationProfileService {
         organization_id: &str,
         credential_format: &str,
     ) -> Result<StatusOperationResult, ServiceError> {
+        // Keep the released identity-less transport contract during the staged
+        // rollout, but route it through the same PostgreSQL allocator as the
+        // credential-aware endpoint. A fresh synthetic owner preserves legacy
+        // one-index-per-call behavior without allowing cross-authority races.
+        self.reserve_index(
+            profile_id,
+            organization_id,
+            credential_format,
+            &format!("urn:marty:legacy-status-allocation:{}", Uuid::new_v4()),
+        )
+        .await
+    }
+
+    pub async fn reserve_index(
+        &self,
+        profile_id: &str,
+        organization_id: &str,
+        credential_format: &str,
+        credential_id: &str,
+    ) -> Result<StatusOperationResult, ServiceError> {
+        if credential_id.trim().is_empty() || credential_id.len() > 2_048 {
+            return Err(ServiceError::InvalidArgument(
+                "credential_id must contain between 1 and 2048 characters".into(),
+            ));
+        }
         let profile = self.authorized_profile(profile_id, organization_id).await?;
         if !profile.automation_config.auto_allocate_indices {
             return Err(ServiceError::FailedPrecondition(
@@ -166,13 +192,28 @@ impl RevocationProfileService {
             ));
         }
         let format = status_format(credential_format);
+        let scope = status_scope(&profile);
+        self.statuses
+            .get_or_create(&scope, format, profile.issuer_config.status_list_size)
+            .await?;
+        let legacy_floor = self.statuses.allocation_floor(&scope, format).await?;
         let index = self
-            .statuses
-            .allocate_index(
-                &status_scope(&profile),
+            .profiles
+            .reserve_status_index(StatusIndexReservation {
+                credential_id: credential_id.to_string(),
+                organization_id: profile.organization_id.clone(),
+                profile_id: profile.id.clone(),
                 format,
-                profile.issuer_config.status_list_size,
-            )
+                size: profile.issuer_config.status_list_size,
+                legacy_floor,
+            })
+            .await
+            .map_err(status_allocation_error)?;
+        // Preserve the released Redis counter as a rollout compatibility floor.
+        // If this cache write fails, the durable reservation remains retryable
+        // and the request fails closed until a retry synchronizes the floor.
+        self.statuses
+            .advance_allocation_floor(&scope, format, index + 1)
             .await?;
         Ok(StatusOperationResult {
             organization_id: profile.organization_id.clone(),
@@ -320,6 +361,16 @@ impl RevocationProfileService {
     }
 }
 
+fn status_allocation_error(error: RepositoryError) -> ServiceError {
+    match error {
+        RepositoryError::AllocationScopeConflict { .. } => {
+            ServiceError::FailedPrecondition(error.to_string())
+        }
+        RepositoryError::AllocationFull(_) => ServiceError::FailedPrecondition(error.to_string()),
+        RepositoryError::Operation(_) => ServiceError::Storage(error.to_string()),
+    }
+}
+
 pub fn status_scope(profile: &RevocationProfile) -> String {
     format!("{}:{}", profile.organization_id, profile.id)
 }
@@ -367,10 +418,139 @@ mod tests {
         let service = service();
         let profile = active_profile(&service).await;
         let error = service
-            .allocate_index(&profile.id, "org-b", "sd_jwt_vc")
+            .reserve_index(&profile.id, "org-b", "sd_jwt_vc", "credential-a")
             .await
             .unwrap_err();
         assert_eq!(error, ServiceError::PermissionDenied);
+    }
+
+    #[tokio::test]
+    async fn concurrent_retries_return_one_scope_bound_allocation() {
+        let service = Arc::new(service());
+        let profile = active_profile(&service).await;
+        let mut retries = Vec::new();
+        for _ in 0..64 {
+            let service = service.clone();
+            let profile_id = profile.id.clone();
+            retries.push(tokio::spawn(async move {
+                service
+                    .reserve_index(&profile_id, "org-a", "sd_jwt_vc", "credential-retry")
+                    .await
+                    .unwrap()
+                    .index
+            }));
+        }
+        for retry in retries {
+            assert_eq!(retry.await.unwrap(), 0);
+        }
+        assert_eq!(
+            service
+                .reserve_index(&profile.id, "org-a", "sd_jwt_vc", "credential-next")
+                .await
+                .unwrap()
+                .index,
+            1
+        );
+
+        let other_profile = service
+            .create(NewProfile {
+                organization_id: "org-b".into(),
+                name: "other".into(),
+                description: None,
+                issuer_config: None,
+                verifier_config: None,
+                automation_config: None,
+                supported_formats: None,
+            })
+            .await
+            .unwrap();
+        let other_profile = service.activate(&other_profile.id).await.unwrap();
+        let error = service
+            .reserve_index(&other_profile.id, "org-b", "sd_jwt_vc", "credential-retry")
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ServiceError::FailedPrecondition(_)));
+
+        service.delete(&profile.id).await.unwrap();
+        let error_after_profile_deletion = service
+            .reserve_index(&other_profile.id, "org-b", "sd_jwt_vc", "credential-retry")
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error_after_profile_deletion,
+            ServiceError::FailedPrecondition(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn durable_allocator_starts_after_the_legacy_counter_floor() {
+        let profiles = Arc::new(InMemoryProfileRepository::default());
+        let statuses = Arc::new(InMemoryStatusRepository::default());
+        let service = RevocationProfileService::new(
+            profiles,
+            statuses.clone(),
+            "https://status.example.test",
+        )
+        .unwrap();
+        let profile = active_profile(&service).await;
+        for expected in 0..3 {
+            assert_eq!(
+                statuses
+                    .allocate_index(
+                        &status_scope(&profile),
+                        StatusListFormat::Bitstring,
+                        profile.issuer_config.status_list_size,
+                    )
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            service
+                .reserve_index(&profile.id, "org-a", "sd_jwt_vc", "credential-after-floor")
+                .await
+                .unwrap()
+                .index,
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_and_credential_aware_requests_share_one_atomic_counter() {
+        let service = Arc::new(service());
+        let profile = active_profile(&service).await;
+        let mut allocations = Vec::new();
+        for ordinal in 0..64 {
+            let service = service.clone();
+            let profile_id = profile.id.clone();
+            allocations.push(tokio::spawn(async move {
+                if ordinal % 2 == 0 {
+                    service
+                        .allocate_index(&profile_id, "org-a", "sd_jwt_vc")
+                        .await
+                        .unwrap()
+                        .index
+                } else {
+                    service
+                        .reserve_index(
+                            &profile_id,
+                            "org-a",
+                            "sd_jwt_vc",
+                            &format!("credential-{ordinal}"),
+                        )
+                        .await
+                        .unwrap()
+                        .index
+                }
+            }));
+        }
+        let mut indices = std::collections::HashSet::new();
+        for allocation in allocations {
+            assert!(indices.insert(allocation.await.unwrap()));
+        }
+        assert_eq!(indices.len(), 64);
+        assert_eq!(*indices.iter().max().unwrap(), 63);
     }
 
     #[tokio::test]
@@ -378,7 +558,7 @@ mod tests {
         let service = service();
         let profile = active_profile(&service).await;
         let allocation = service
-            .allocate_index(&profile.id, "org-a", "mdoc")
+            .reserve_index(&profile.id, "org-a", "mdoc", "credential-a")
             .await
             .unwrap();
         assert_eq!(allocation.index, 0);
