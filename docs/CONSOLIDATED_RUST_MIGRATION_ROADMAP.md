@@ -548,9 +548,13 @@ Provider operation, flow and tenant identities are checked before state is
 accepted. PostgreSQL inserts each new instance and optional artifact in one
 transaction; advancement compares both source status and `updated_at`, so a
 concurrent stale transition cannot win. Three side-effect vectors, startup,
-HTTP, persistence and PostgreSQL contract suites, plus strict Clippy pass. The
-remaining Flow gate is the protocol-specific route set and actual HTTP/gRPC
-listener composition; no partial executable is activated or deployed.
+HTTP, persistence and PostgreSQL contract suites, plus strict Clippy pass.
+Manual OID4VCI QR/offer regeneration is also native: each retry has a
+flow-and-attempt-bound idempotency key and one transaction expires prior active
+artifacts, inserts the replacement and updates instance offer context. The
+remaining Flow gate is the protocol-specific verification route set and actual
+HTTP/gRPC listener composition; no partial executable is activated or
+deployed.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

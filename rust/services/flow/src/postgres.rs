@@ -325,6 +325,82 @@ impl PostgresFlowRepository {
         Ok(result.rows_affected() == 1)
     }
 
+    /// Expires active offer artifacts, inserts a replacement, and updates the
+    /// instance's offer context using one snapshot-bound transaction.
+    pub async fn replace_active_artifacts(
+        &self,
+        instance: &FlowInstanceRecord,
+        artifact: &FlowArtifactRecord,
+        expected_updated_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<bool, RepositoryError> {
+        validate_instance_record(instance)?;
+        validate_artifact_record(artifact)?;
+        if artifact.flow_instance_id != instance.id || instance.updated_at <= expected_updated_at {
+            return Err(record("artifact replacement binding"));
+        }
+        let mut transaction = self.pool.begin().await.map_err(storage)?;
+        let updated = sqlx::query(
+            "UPDATE flow_service.flow_instances SET context=$1, updated_at=$2 \
+             WHERE id=$3 AND updated_at=$4",
+        )
+        .bind(&instance.context)
+        .bind(instance.updated_at)
+        .bind(&instance.id)
+        .bind(expected_updated_at)
+        .execute(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        if updated.rows_affected() != 1 {
+            transaction.rollback().await.map_err(storage)?;
+            return Ok(false);
+        }
+        sqlx::query(
+            "UPDATE flow_service.flow_instance_artifacts SET status='expired', updated_at=$2 \
+             WHERE flow_instance_id=$1 AND status='active'",
+        )
+        .bind(&instance.id)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        let inserted = sqlx::query(
+            "INSERT INTO flow_service.flow_instance_artifacts \
+             (id, flow_instance_id, issuance_transaction_id, credential_offer_uri, \
+              credential_offer_uris, credential_offer_labels, pre_authorized_code, \
+              issuance_status, qr_payload, expires_at, scanned_at, status, state, \
+              wallet_metadata, attempt_number, created_at, updated_at) VALUES \
+             ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(&artifact.id)
+        .bind(&artifact.flow_instance_id)
+        .bind(&artifact.issuance_transaction_id)
+        .bind(&artifact.credential_offer_uri)
+        .bind(json(&artifact.credential_offer_uris)?)
+        .bind(json(&artifact.credential_offer_labels)?)
+        .bind(&artifact.pre_authorized_code)
+        .bind(&artifact.issuance_status)
+        .bind(&artifact.qr_payload)
+        .bind(artifact.expires_at)
+        .bind(artifact.scanned_at)
+        .bind(enum_string(artifact.status)?)
+        .bind(&artifact.state)
+        .bind(&artifact.wallet_metadata)
+        .bind(i32::try_from(artifact.attempt_number).map_err(number_storage)?)
+        .bind(artifact.created_at)
+        .bind(artifact.updated_at)
+        .execute(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        if inserted.rows_affected() != 1 {
+            transaction.rollback().await.map_err(storage)?;
+            return Ok(false);
+        }
+        transaction.commit().await.map_err(storage)?;
+        Ok(true)
+    }
+
     pub async fn instance(&self, id: &str) -> Result<Option<FlowInstanceRecord>, RepositoryError> {
         sqlx::query(INSTANCE_SELECT)
             .bind(id)

@@ -4,11 +4,12 @@ use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
 use marty_flow::{
     apply_physical_advance_side_effect, create_definition_record, parse_request,
-    prepare_instance_start, start_instance_record, CreateFlowDefinitionRequest,
-    CredentialTemplateProvider, CredentialTemplateReference, DefinitionStatus, FlowProviderError,
-    FlowProviderRegistry, IssuanceInitiationRequest, IssuanceInitiationResult, IssuanceProvider,
-    PhysicalDocumentOperation, PhysicalDocumentProvider, PhysicalDocumentRequest,
-    PhysicalDocumentResult, StartFlowRequest, WalletConfiguration,
+    prepare_instance_start, prepare_oid4vci_retry, start_instance_record,
+    CreateFlowDefinitionRequest, CredentialTemplateProvider, CredentialTemplateReference,
+    DefinitionStatus, FlowProviderError, FlowProviderRegistry, IssuanceInitiationRequest,
+    IssuanceInitiationResult, IssuanceProvider, PhysicalDocumentOperation,
+    PhysicalDocumentProvider, PhysicalDocumentRequest, PhysicalDocumentResult, StartFlowRequest,
+    WalletConfiguration,
 };
 use marty_verification::flow::TransitionOutcome;
 use serde::Deserialize;
@@ -24,6 +25,8 @@ struct Contract {
     mip_offer_message_type: String,
     mip_offer_version: String,
     artifact_instance_persistence: String,
+    artifact_retry_idempotency: String,
+    artifact_retry_persistence: String,
     physical_initial_context: String,
     physical_operations: Vec<String>,
     physical_success_side_effects: String,
@@ -177,6 +180,14 @@ async fn language_neutral_contract_drives_oid4vci_and_mip_behavior() {
     assert_eq!(contract.mip_offer_message_type, "CredentialOffer");
     assert_eq!(contract.mip_offer_version, "0.3.1");
     assert_eq!(contract.artifact_instance_persistence, "atomic");
+    assert_eq!(
+        contract.artifact_retry_idempotency,
+        "flow_and_attempt_bound"
+    );
+    assert_eq!(
+        contract.artifact_retry_persistence,
+        "expire_old_insert_new_and_update_instance_atomic"
+    );
     assert_eq!(contract.physical_initial_context, "consumed_not_persisted");
     assert_eq!(contract.physical_operations.len(), 7);
     assert_eq!(
@@ -232,11 +243,32 @@ async fn language_neutral_contract_drives_oid4vci_and_mip_behavior() {
             ["pre-authorized_code"],
         "pre-auth-1"
     );
+    let retry = prepare_oid4vci_retry(
+        &FlowProviderRegistry {
+            credential_template: Some(Arc::new(Templates {
+                organization_id: "org-1",
+            })),
+            issuance: Some(Arc::new(issuance.clone())),
+            ..Default::default()
+        },
+        &definition,
+        prepared.instance.clone(),
+        "https://issuer.example",
+        now(),
+        2,
+    )
+    .await
+    .unwrap();
+    assert_eq!(retry.artifact.unwrap().attempt_number, 2);
     let requests = issuance.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[0].idempotency_key.as_deref(),
         Some(format!("flow-instance-offer-v1:{}", prepared.instance.id).as_str())
+    );
+    assert_eq!(
+        requests[1].idempotency_key.as_deref(),
+        Some(format!("flow-instance-offer-v1:{}:2", prepared.instance.id).as_str())
     );
 }
 

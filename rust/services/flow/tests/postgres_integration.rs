@@ -416,6 +416,33 @@ async fn run_crud_contract(
         "winner"
     );
 
+    let replacement_expected_at = atomic_instance.updated_at;
+    atomic_instance.updated_at += Duration::seconds(1);
+    atomic_instance.context["oid4vci_artifact_id"] = json!("90000000-0000-0000-0000-000000000026");
+    let mut replacement = atomic_artifact.clone();
+    replacement.id = "90000000-0000-0000-0000-000000000026".into();
+    replacement.issuance_transaction_id = Some("90000000-0000-0000-0000-000000000027".into());
+    replacement.pre_authorized_code = Some("code-replacement".into());
+    replacement.attempt_number = 2;
+    replacement.created_at = atomic_instance.updated_at;
+    replacement.updated_at = atomic_instance.updated_at;
+    assert!(
+        repository
+            .replace_active_artifacts(
+                &atomic_instance,
+                &replacement,
+                replacement_expected_at,
+                atomic_instance.updated_at
+            )
+            .await?
+    );
+    let offers = repository
+        .artifacts_for_instance(&atomic_instance.id)
+        .await?;
+    assert_eq!(offers.len(), 2);
+    assert_eq!(offers[0].status, ArtifactStatus::Expired);
+    assert_eq!(offers[1].status, ArtifactStatus::Active);
+
     let cancelled = repository
         .cancel_instance(&instance.id, "user-1", now + Duration::seconds(1))
         .await?

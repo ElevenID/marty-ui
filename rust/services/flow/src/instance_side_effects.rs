@@ -58,9 +58,15 @@ pub async fn prepare_instance_start(
             })
         }
         FlowType::Oid4vciPreAuthorized => {
-            let artifact =
-                initialize_oid4vci(providers, definition, &mut instance, public_base_url, now)
-                    .await?;
+            let artifact = initialize_oid4vci(
+                providers,
+                definition,
+                &mut instance,
+                public_base_url,
+                now,
+                1,
+            )
+            .await?;
             Ok(PreparedInstanceStart {
                 instance,
                 artifact: Some(artifact),
@@ -71,6 +77,34 @@ pub async fn prepare_instance_start(
             artifact: None,
         }),
     }
+}
+
+pub async fn prepare_oid4vci_retry(
+    providers: &FlowProviderRegistry,
+    definition: &FlowDefinitionRecord,
+    mut instance: FlowInstanceRecord,
+    public_base_url: &str,
+    now: DateTime<Utc>,
+    attempt_number: u32,
+) -> Result<PreparedInstanceStart, FlowInstanceSideEffectError> {
+    if effective_flow_type(definition) != FlowType::Oid4vciPreAuthorized || attempt_number < 2 {
+        return Err(FlowInstanceSideEffectError::InvalidContext(
+            "OID4VCI retry requires an issuance flow and later attempt",
+        ));
+    }
+    let artifact = initialize_oid4vci(
+        providers,
+        definition,
+        &mut instance,
+        public_base_url,
+        now,
+        attempt_number,
+    )
+    .await?;
+    Ok(PreparedInstanceStart {
+        instance,
+        artifact: Some(artifact),
+    })
 }
 
 pub async fn apply_physical_advance_side_effect(
@@ -230,6 +264,7 @@ async fn initialize_oid4vci(
     instance: &mut FlowInstanceRecord,
     public_base_url: &str,
     now: DateTime<Utc>,
+    attempt_number: u32,
 ) -> Result<FlowArtifactRecord, FlowInstanceSideEffectError> {
     let template_id = definition
         .credential_template_id
@@ -265,8 +300,20 @@ async fn initialize_oid4vci(
         .as_ref()
         .filter(|_| application_id.is_some())
         .map_or_else(
-            || format!("flow-instance-offer-v1:{}", instance.id),
-            |digest| format!("application-flow-offer-v1:{digest}"),
+            || {
+                if attempt_number == 1 {
+                    format!("flow-instance-offer-v1:{}", instance.id)
+                } else {
+                    format!("flow-instance-offer-v1:{}:{attempt_number}", instance.id)
+                }
+            },
+            |digest| {
+                if attempt_number == 1 {
+                    format!("application-flow-offer-v1:{digest}")
+                } else {
+                    format!("application-flow-offer-v1:{digest}:{attempt_number}")
+                }
+            },
         );
     let issuance = providers
         .issuance
@@ -330,7 +377,7 @@ async fn initialize_oid4vci(
         status: ArtifactStatus::Active,
         state: Some(issuance.transaction_id.clone()),
         wallet_metadata: json!({}),
-        attempt_number: 1,
+        attempt_number,
         created_at: now,
         updated_at: now,
     };

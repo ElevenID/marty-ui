@@ -10,6 +10,8 @@
   "mip_offer_message_type": "CredentialOffer",
   "mip_offer_version": "0.3.1",
   "artifact_instance_persistence": "atomic",
+  "artifact_retry_idempotency": "flow_and_attempt_bound",
+  "artifact_retry_persistence": "expire_old_insert_new_and_update_instance_atomic",
   "physical_initial_context": "consumed_not_persisted",
   "physical_operations": [
     "initialize",

@@ -73,7 +73,7 @@ async fn rust_read_surface_matches_the_language_neutral_contract() {
     ))
     .expect("read contract");
     assert_eq!(contract.schema_version, 1);
-    assert_eq!(contract.routes.len(), 17);
+    assert_eq!(contract.routes.len(), 18);
     assert_eq!(
         contract
             .routes

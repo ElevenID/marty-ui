@@ -17,7 +17,8 @@
     ["POST", "/v1/flows/instances/{instance_id}/cancel", "flow-instance:cancel"],
     ["GET", "/v1/flows/instances/{instance_id}/result", "flow-instance:view"],
     ["GET", "/v1/flows/instances/{instance_id}/artifacts", "flow-instance:view"],
-    ["GET", "/v1/flows/instances/{instance_id}/artifacts/{artifact_id}", "flow-instance:view"]
+    ["GET", "/v1/flows/instances/{instance_id}/artifacts/{artifact_id}", "flow-instance:view"],
+    ["POST", "/v1/flows/instances/{instance_id}/generate-qr", "flow-instance:advance"]
   ],
   "principal_header": "x-user-id",
   "pagination": {

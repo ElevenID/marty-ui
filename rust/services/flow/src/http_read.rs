@@ -13,9 +13,9 @@ use serde_json::{json, Value};
 
 use crate::{
     advance_instance_record, apply_physical_advance_side_effect, create_definition_record,
-    definition_references, parse_request, prepare_instance_start, start_instance_record,
-    update_definition_record, validate_definition_record, AdvanceFlowRequest,
-    CreateFlowDefinitionRequest, DefinitionStatus, FlowDefinitionMutationError,
+    definition_references, parse_request, prepare_instance_start, prepare_oid4vci_retry,
+    start_instance_record, update_definition_record, validate_definition_record,
+    AdvanceFlowRequest, CreateFlowDefinitionRequest, DefinitionStatus, FlowDefinitionMutationError,
     FlowInstanceExecutionError, FlowInstanceSideEffectError, FlowProviderError,
     FlowProviderRegistry, FlowRecordError, FlowType, PostgresFlowRepository, RepositoryError,
     StartFlowRequest, UpdateFlowDefinitionRequest,
@@ -78,6 +78,10 @@ pub fn flow_read_router(state: FlowHttpState) -> Router {
         .route(
             "/v1/flows/instances/{instance_id}/artifacts/{artifact_id}",
             get(get_artifact),
+        )
+        .route(
+            "/v1/flows/instances/{instance_id}/generate-qr",
+            post(generate_qr),
         )
         .with_state(state)
 }
@@ -698,6 +702,73 @@ async fn get_artifact(
         "flow-instance:view",
     )
     .await?;
+    Ok(Json(json!(artifact.projection()?)))
+}
+
+async fn generate_qr(
+    State(state): State<FlowHttpState>,
+    headers: HeaderMap,
+    Path(instance_id): Path<String>,
+) -> Result<Json<Value>, FlowHttpError> {
+    let current = required_instance(&state, &instance_id).await?;
+    authorize(
+        &state,
+        &headers,
+        &current.organization_id,
+        "flow-instance:advance",
+    )
+    .await?;
+    let definition = state
+        .repository
+        .definition(&current.flow_definition_id)
+        .await?
+        .ok_or_else(|| not_found("Flow Definition not found"))?;
+    let existing = state
+        .repository
+        .artifacts_for_instance(&instance_id)
+        .await?;
+    let attempt_number = existing
+        .iter()
+        .map(|artifact| artifact.attempt_number)
+        .max()
+        .unwrap_or(1)
+        .checked_add(1)
+        .ok_or_else(|| {
+            FlowHttpError::new(
+                StatusCode::CONFLICT,
+                "flow_artifact_attempt_limit",
+                "Flow artifact attempt counter is exhausted",
+            )
+        })?;
+    let expected_updated_at = current.updated_at;
+    let now = chrono::Utc::now().max(expected_updated_at + chrono::Duration::microseconds(1));
+    let prepared = prepare_oid4vci_retry(
+        &state.providers,
+        &definition,
+        current,
+        &state.public_base_url,
+        now,
+        attempt_number,
+    )
+    .await?;
+    let artifact = prepared.artifact.ok_or_else(|| {
+        FlowHttpError::new(
+            StatusCode::BAD_GATEWAY,
+            "flow_artifact_generation_failed",
+            "OID4VCI artifact was not generated",
+        )
+    })?;
+    if !state
+        .repository
+        .replace_active_artifacts(&prepared.instance, &artifact, expected_updated_at, now)
+        .await?
+    {
+        return Err(FlowHttpError::new(
+            StatusCode::CONFLICT,
+            "flow_artifact_generation_conflict",
+            "Flow instance changed before the replacement artifact could be committed",
+        ));
+    }
     Ok(Json(json!(artifact.projection()?)))
 }
 
