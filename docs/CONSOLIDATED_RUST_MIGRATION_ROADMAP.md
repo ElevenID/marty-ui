@@ -317,6 +317,21 @@ parity oracle until deletion. That Python test compiles locally but its runtime
 execution is deferred to service CI because the available local environment is
 missing `grpc_health`; CI installs the full locked service dependency set.
 
+Provider ownership is now explicit and fail-closed. A shared tenant-membership
+port and authorization decision live in `mmf-security` at local commit
+`1a2bf0a`, with nine language-neutral allow/deny vectors; this removes the need
+for Flow to create another membership model and gives the gateway a later DRY
+consolidation target. `marty-flow` declares typed ports for all seven required
+runtime capabilities: tenant membership, credential templates, presentation
+policies/evaluation, issuance, signing identity, flow-key envelopes and
+physical-document operations. Startup composition reports every absent port
+instead of enabling a partial runtime. Signing identities and signatures are
+bound to the exact organization, public DID, verification method, purpose,
+credential format and algorithm; private JWK members, mismatched curves and
+mismatched signer responses are rejected. Three provider behavior tests pass
+against `contracts/flow-provider-behavior.json`. Live gRPC/HTTP adapters and
+their timeout/mTLS/readiness gates remain in the active provider step.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

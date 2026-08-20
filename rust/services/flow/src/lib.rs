@@ -11,6 +11,7 @@ mod callback;
 mod contract;
 mod domain;
 mod postgres;
+mod providers;
 mod repository;
 
 pub use api::*;
@@ -18,4 +19,5 @@ pub use callback::*;
 pub use contract::*;
 pub use domain::*;
 pub use postgres::*;
+pub use providers::*;
 pub use repository::*;

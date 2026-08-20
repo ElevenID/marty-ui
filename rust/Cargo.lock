@@ -3859,10 +3859,12 @@ dependencies = [
 name = "marty-flow"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "marty-verification",
  "mmf-messaging",
  "mmf-push",
+ "mmf-security",
  "mmf-workflow",
  "serde",
  "serde_json",

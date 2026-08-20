@@ -9,10 +9,12 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+async-trait.workspace = true
 chrono.workspace = true
 marty-verification.workspace = true
 mmf-messaging.workspace = true
 mmf-push.workspace = true
+mmf-security.workspace = true
 mmf-workflow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
