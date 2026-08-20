@@ -1,0 +1,2620 @@
+{
+  "middleware": {
+    "execution_order": [
+      "MIPVersionMiddleware",
+      "RateLimitMiddleware",
+      "AuthMiddleware",
+      "ContentTypeEnforcementMiddleware",
+      "ETagMiddleware",
+      "GatewayCedarAuthMiddleware",
+      "IdempotencyMiddleware",
+      "CORSMiddleware"
+    ],
+    "registration_order": [
+      "CORSMiddleware",
+      "IdempotencyMiddleware",
+      "GatewayCedarAuthMiddleware",
+      "ETagMiddleware",
+      "ContentTypeEnforcementMiddleware",
+      "AuthMiddleware",
+      "RateLimitMiddleware",
+      "MIPVersionMiddleware"
+    ]
+  },
+  "route_count": 432,
+  "routes": [
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known//openid-credential-issuer",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/did.json",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/jwks.json",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/marty-release",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/mip-configuration",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/oauth-authorization-server",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/oauth-authorization-server/org/{org_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/oauth-authorization-server/org/{org_id}/apple-wallet",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/oauth-authorization-server/org/{org_id}/credential-manager",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/oauth-authorization-server/org/{org_id}/waltid",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/openid-configuration",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/openid-credential-issuer",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/openid-credential-issuer/org/{org_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/openid-credential-issuer/org/{org_id}/apple-wallet",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/openid-credential-issuer/org/{org_id}/credential-manager",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/openid-credential-issuer/org/{org_id}/waltid",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/vct/credentials/canvas-interoperability-foundations-badge",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/.well-known/vct/credentials/marty-verified-member-badge",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/credentials/canvas-interoperability-foundations-badge",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/credentials/canvas-interoperability-foundations-badge/criteria",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/credentials/canvas-interoperability-foundations-badge/image.svg",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/credentials/marty-verified-member-badge",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/credentials/marty-verified-member-badge/image.svg",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/credentials/{credential_type:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/health",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/health/services",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/internal/signing-keys/flow-key-envelopes/unwrap",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/internal/signing-keys/flow-key-envelopes/wrap",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/internal/signing-keys/issuer-context",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/internal/signing-keys/issuer-dids/sign",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": false,
+      "method": "GET",
+      "path": "/internal/signing-keys/issuer-profiles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": false,
+      "method": "POST",
+      "path": "/internal/signing-keys/issuer-profiles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/internal/signing-keys/issuer-profiles/{issuer_profile_id}/identity",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": false,
+      "method": "DELETE",
+      "path": "/internal/signing-keys/issuer-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": false,
+      "method": "GET",
+      "path": "/internal/signing-keys/issuer-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": false,
+      "method": "PATCH",
+      "path": "/internal/signing-keys/issuer-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": false,
+      "method": "PUT",
+      "path": "/internal/signing-keys/issuer-profiles/{profile_id}/certificate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": false,
+      "method": "GET",
+      "path": "/internal/signing-keys/issuer-profiles/{profile_id}/public-identity",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/internal/signing-keys/resolve-issuer-did",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/internal/signing-keys/services/{service_id}/sign",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/org/{org_id}/.well-known/oauth-authorization-server",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/org/{org_id}/.well-known/openid-credential-issuer",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/org/{org_id}/apple-wallet/.well-known/oauth-authorization-server",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/org/{org_id}/apple-wallet/.well-known/openid-credential-issuer",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/org/{org_id}/credential-manager/.well-known/oauth-authorization-server",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/org/{org_id}/credential-manager/.well-known/openid-credential-issuer",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/org/{org_id}/waltid/.well-known/oauth-authorization-server",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/org/{org_id}/waltid/.well-known/openid-credential-issuer",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/orgs/{org_slug}/did.json",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/api-keys",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/api-keys",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/api-keys/{key_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/application-templates",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/application-templates",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/application-templates/{template_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/application-templates/{template_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/application-templates/{template_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/application-templates/{template_id}/activate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/application-templates/{template_id}/deprecate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/application-templates/{template_id}/validate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/auth/{path:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/auth/{path:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/auth/{path:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/auth/{path:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/auth/{path:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/cascade-revocations",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/cascade-revocations",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/cascade-revocations/{operation_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/cascade-revocations/{operation_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/cascade-revocations/{operation_id}/confirm",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/cascade-revocations/{operation_id}/rollback",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/compliance-profiles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/compliance-profiles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/compliance-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/compliance-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/compliance-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/compliance-profiles/{profile_id}/activate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/credential-templates",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/credential-templates",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/credential-templates/{template_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/credential-templates/{template_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/credential-templates/{template_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/credential-templates/{template_id}/activate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/credential-templates/{template_id}/application-template",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/credential-templates/{template_id}/deprecate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/credential-templates/{template_id}/new-version",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/credential-templates/{template_id}/validate-artifacts",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/credential-templates/{template_id}/wallet-compatibility",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/delivery-destinations",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/delivery-destinations",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/delivery-destinations/{destination_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/delivery-destinations/{destination_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/delivery-destinations/{destination_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/deployment-profiles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/deployment-profiles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/deployment-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/deployment-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/deployment-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/deployment-profiles/{profile_id}/activate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/deployment-profiles/{profile_id}/generate-api-key",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/deployment-profiles/{profile_id}/lanes",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/deployment-profiles/{profile_id}/lanes",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/deployment-profiles/{profile_id}/lanes/{lane_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/deployment-profiles/{profile_id}/lanes/{lane_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/deployment-profiles/{profile_id}/lanes/{lane_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/deployment-profiles/{profile_id}/lanes/{lane_id}/devices",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/devices",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/devices",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/devices/challenge",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/devices/{registration_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/devices/{registration_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/devices/{registration_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/flows/capabilities",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/flows/definitions",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/flows/definitions",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/flows/definitions/{flow_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/flows/definitions/{flow_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/flows/definitions/{flow_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/flows/definitions/{flow_id}/activate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/flows/definitions/{flow_id}/test",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/flows/definitions/{flow_id}/validate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/flows/instances",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/flows/instances",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/flows/instances/{instance_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/flows/instances/{instance_id}/advance",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/flows/instances/{instance_id}/cancel",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/flows/instances/{instance_id}/request",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/flows/instances/{instance_id}/request",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/flows/instances/{instance_id}/result",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/flows/instances/{instance_id}/submit",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/flows/siop",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/flows/siop/submit",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/flows/verify",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": false,
+      "method": "POST",
+      "path": "/v1/flows/webhooks/application-approved",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/ags/score-events",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/applications/{application_id}/approve",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/applications/{application_id}/canvas-sync",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-award-candidates",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/canvas-credentials/validate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/{job_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/{job_id}/resolve",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/canvas-sync-jobs/{job_id}/retry",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-events",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/evidence-events/{canvas_account_id}/{provider_event_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/evidence-policy-reviews/{review_id}/resolve",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/integration-secrets",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/integration-secrets",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/integrations/canvas/integration-secrets/{secret_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/integrations/canvas/integration-secrets/{secret_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/lti/config/{registration_token}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/current",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/current/bootstrap",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/current/deep-linking-response",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/current/evidence-status",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/current/evidence-sync",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/exchange",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/{state}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/{state}/bootstrap",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/{state}/deep-linking-response",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/{state}/evidence-sync",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/lti/jwks",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/experience",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/experience-login",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/launch",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/platforms/{platform_id}/login",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/nrps/membership-events",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/oauth/callback",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/platforms",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/platforms",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/catalog",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/jwks-refresh",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/lti-installation",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth/authorizations",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/oauth/start",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/program-bindings",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/readiness",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/registration-config",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/sandbox-probe",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/platforms/{platform_id}/scope-discovery",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/program-bindings",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/integrations/canvas/program-bindings/{binding_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/program-bindings/{binding_id}/activate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/program-bindings/{binding_id}/deactivate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/integrations/canvas/program-bindings/{binding_id}/validate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/issuance",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issuance",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/issuance/authorize",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issuance/credential",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issuance/deferred-credential",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issuance/delivery-records/canvas-credentials/process-pending",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issuance/delivery-records/canvas-credentials/process-status-sync-failures",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/issuance/delivery-records/canvas-credentials/provenance",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issuance/didcomm/deliver",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issuance/nonce",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issuance/notification",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/issuance/offers/{tx_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/issuance/organizations/{organization_id}/canvas-mirror-health",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issuance/par",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issuance/token",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/issuance/{issuance_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/issuance/{issuance_id}/revocation-status",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issuance/{issuance_id}/revoke",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/issued-credentials",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/issued-credentials/mine",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/issued-credentials/{credential_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issued-credentials/{credential_id}/reinstate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issued-credentials/{credential_id}/renew",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issued-credentials/{credential_id}/revoke",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issued-credentials/{credential_id}/suspend",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/issuer-entities",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/issuer-entities",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/issuer-entities/{issuer_entity_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/issuer-entities/{issuer_entity_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/issuer-entities/{issuer_entity_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/me/applicant-profile",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/me/applicant-profile",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/me/applicant-profile/biometrics",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/me/applications",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/me/applications",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/me/applications/{application_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/me/applications/{application_id}/claim",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/me/applications/{application_id}/evidence",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/me/applications/{application_id}/evidence",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/me/applications/{application_id}/evidence/{evidence_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/me/applications/{application_id}/evidence/{evidence_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/me/applications/{application_id}/evidence/{evidence_id}/content",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/me/applications/{application_id}/submit",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/me/applications/{application_id}/withdraw",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/me/preferences",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/me/preferences",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/notifications",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/notifications",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/notifications",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/notifications",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/notifications",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/notifications/events/push",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/notifications/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/notifications/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/notifications/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/notifications/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/notifications/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/discover",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/invitations/accept",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/invitations/validate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/join/code",
+      "status_code": 201
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/join/code/validate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/mine",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/organizations/{org_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/audit-events",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/audit-events/export",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/audit-events/{event_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/dashboard/applicant-stats",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/environment",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/organizations/{org_id}/environment",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/integration-info",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/invites",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{org_id}/invites",
+      "status_code": 201
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/organizations/{org_id}/invites/{invite_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{org_id}/invites/{invite_id}/resend",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{org_id}/join",
+      "status_code": 201
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/lifecycle",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{org_id}/lifecycle/purge",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/members",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{org_id}/members",
+      "status_code": 201
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/members/me/permissions",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/organizations/{org_id}/members/{member_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/organizations/{org_id}/members/{member_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/organizations/{org_id}/members/{member_id}/roles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/organizations/{org_id}/members/{member_id}/roles/{role_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{org_id}/members/{member_id}/roles/{role_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/permissions",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/roles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{org_id}/roles",
+      "status_code": 201
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/organizations/{org_id}/roles/{role_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/roles/{role_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/organizations/{org_id}/roles/{role_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/runtime/status",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/organizations/{org_id}/scim/v2/{scim_path:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/scim/v2/{scim_path:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/organizations/{org_id}/scim/v2/{scim_path:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{org_id}/scim/v2/{scim_path:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/organizations/{org_id}/scim/v2/{scim_path:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{org_id}/team/snapshot",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{org_id}/transfer-ownership",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/applicants",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/approve",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/checks",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/checks/{check_id}/complete",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/checks/{check_id}/start",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/evidence",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/evidence-facts",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/evidence-summary",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/evidence/api-checks/{check_id}/run",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/evidence/{evidence_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/evidence/{evidence_id}/content",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/evidence/{evidence_id}/revoke",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/issue",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/lock",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/lock",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/lock",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/reject",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/request-information",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{organization_id}/applicants/{application_id}/withdraw",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/revocation-profiles/{profile_id}/status-lists/{mechanism}/{purpose}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/trust-profiles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{organization_id}/trust-profiles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/trust-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/organizations/{organization_id}/trust-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/passport/applications",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/passport/applications/{application_id}/activate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/passport/applications/{application_id}/generate-data-groups",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/passport/applications/{application_id}/generate-sod",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/passport/applications/{application_id}/production-status",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/passport/applications/{application_id}/quality-verify",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/passport/applications/{application_id}/submit-personalization",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/passport/capabilities",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/policy-sets",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/policy-sets",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/policy-sets/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/policy-sets/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/policy-sets/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/policy-sets/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/presentation-policies",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/presentation-policies",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/presentation-policies/evaluate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/presentation-policies/{policy_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/presentation-policies/{policy_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/presentation-policies/{policy_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/presentation-policies/{policy_id}/activate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/presentation-policies/{policy_id}/evaluate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/revocation-profiles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/revocation-profiles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/revocation-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/revocation-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/revocation-profiles/{profile_id}/activate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/compliance/keys-summary",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/config",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/signing-keys/config",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/config/certificate-expiry-alerts",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/config/purposes",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/config/resolve",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/config/service-capabilities",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/config/validate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/did-document",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/holder-keys",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/holder-keys",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/signing-keys/issuer-identities",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/issuer-identities",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/issuer-identities",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/signing-keys/issuer-identities/certificate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/signing-keys/issuer-identities/didcomm-key-agreement",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/issuer-identities/resolve",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/jwks",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/services/vdsnc/register",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/services/{service_id}/audit-log",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/services/{service_id}/certificate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/signing-keys/services/{service_id}/certificate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/services/{service_id}/certificate-csr",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/services/{service_id}/mdoc-x5c",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/services/{service_id}/publish-did-vm",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/services/{service_id}/publish-jwks",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/services/{service_id}/rotate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/signing-keys/services/{service_id}/sign",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/services/{service_id}/verify-current",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/signing-keys/{key_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/signing-keys/{key_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/signing-keys/{key_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/subscriptions",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/subscriptions",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/subscriptions/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/subscriptions/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/subscriptions/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/subscriptions/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/trust-frameworks",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/trust-frameworks/{framework_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/trust-profiles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/trust-profiles",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/trust-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/trust-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/trust-profiles/{profile_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/trust-profiles/{profile_id}/activate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/trust-profiles/{profile_id}/issuers",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/trust-profiles/{profile_id}/issuers",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/trust-profiles/{profile_id}/issuers/{issuer_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/trust-profiles/{profile_id}/issuers/{issuer_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/trust-profiles/{profile_id}/issuers/{issuer_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/trust-profiles/{profile_id}/registry-sync",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/trust-registry/csca",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/trust-registry/csca/{country_code}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/trust-registry/dsc",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/trust-registry/status",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/trust-registry/sync",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/vc-api/credentials/issue",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/vc-api/credentials/verify",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/vc-api/presentations/verify",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/verify",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/verify/evaluate",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/verify/sessions",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/verify/zkp",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/verify/{session_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/verify/{session_id}/inspection",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/verify/{session_id}/request",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/verify/{session_id}/submit",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/wallet-registry",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/wallet-registry",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/wallet-registry/resolve/profile",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/wallet-registry/{wallet_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/wallet-registry/{wallet_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/wallet-registry/{wallet_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/wallet-registry/{wallet_id}/open-link",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/webhooks",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/webhooks",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "DELETE",
+      "path": "/v1/webhooks/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/webhooks/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
+      "path": "/v1/webhooks/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/webhooks/{subpath:path}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PUT",
+      "path": "/v1/webhooks/{subpath:path}",
+      "status_code": 200
+    }
+  ],
+  "schema_version": 1
+}
