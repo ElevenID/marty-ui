@@ -28,6 +28,15 @@
     "public_key_curve",
     "private_key"
   ],
+  "physical_document_operations": {
+    "initialize": ["POST", "v1/passport/applications"],
+    "generate_data_groups": ["POST", "v1/passport/applications/application-1/generate-data-groups"],
+    "sign_sod": ["POST", "v1/passport/applications/application-1/generate-sod"],
+    "submit_to_personalization": ["POST", "v1/passport/applications/application-1/submit-personalization"],
+    "track_production": ["GET", "v1/passport/applications/application-1/production-status"],
+    "quality_verify": ["POST", "v1/passport/applications/application-1/quality-verify"],
+    "activate_credential": ["POST", "v1/passport/applications/application-1/activate"]
+  },
   "authorization": [
     {"principal_id": "user-1", "organization_id": "org-1", "permission": "flow-definition:view", "result": "allow"},
     {"principal_id": "user-1", "organization_id": "org-2", "permission": "flow-definition:view", "result": "reject"},

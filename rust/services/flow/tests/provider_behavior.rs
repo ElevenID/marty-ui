@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, collections::BTreeSet, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use marty_flow::{FlowProviderRegistry, SigningIdentity, REQUIRED_FLOW_PROVIDERS};
@@ -12,7 +12,32 @@ struct Contract {
     required_providers: Vec<String>,
     signing_identity: SigningIdentity,
     invalid_identity_mutations: Vec<String>,
+    physical_document_operations: BTreeMap<String, [String; 2]>,
     authorization: Vec<AuthorizationCase>,
+}
+
+#[test]
+fn physical_document_contract_covers_the_complete_operation_surface() {
+    let operations = contract().physical_document_operations;
+    assert_eq!(operations.len(), 7);
+    assert_eq!(
+        operations
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "activate_credential",
+            "generate_data_groups",
+            "initialize",
+            "quality_verify",
+            "sign_sod",
+            "submit_to_personalization",
+            "track_production",
+        ])
+    );
+    assert!(operations.values().all(|route| {
+        matches!(route[0].as_str(), "GET" | "POST") && route[1].starts_with("v1/passport/")
+    }));
 }
 
 #[derive(Deserialize)]

@@ -141,6 +141,7 @@ pub struct SigningIdentity {
     pub verification_method_id: String,
     pub public_jwk: BTreeMap<String, Value>,
     pub key_purpose: String,
+    #[serde(default)]
     pub credential_format: String,
     pub algorithm: String,
 }
@@ -234,6 +235,7 @@ pub struct FlowKeyEnvelope {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PhysicalDocumentOperation {
+    Initialize,
     GenerateDataGroups,
     SignSod,
     SubmitToPersonalization,

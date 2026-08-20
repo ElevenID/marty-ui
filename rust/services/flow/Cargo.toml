@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 async-trait.workspace = true
+base64.workspace = true
 chrono.workspace = true
 marty-verification.workspace = true
 mmf-messaging.workspace = true
@@ -17,6 +18,7 @@ mmf-push.workspace = true
 mmf-security.workspace = true
 mmf-workflow.workspace = true
 prost.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

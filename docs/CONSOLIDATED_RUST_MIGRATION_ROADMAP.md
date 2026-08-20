@@ -328,9 +328,11 @@ physical-document operations. Startup composition reports every absent port
 instead of enabling a partial runtime. Signing identities and signatures are
 bound to the exact organization, public DID, verification method, purpose,
 credential format and algorithm; private JWK members, mismatched curves and
-mismatched signer responses are rejected. Three provider behavior tests pass
-against `contracts/flow-provider-behavior.json`. Live gRPC/HTTP adapters and
-their timeout/mTLS/readiness gates remain in the active provider step.
+mismatched signer responses are rejected. The provider behavior contract now
+also freezes all seven physical-document operations and exact downstream
+method/path pairs. Live gRPC and bounded HTTP adapters consume these contracts;
+common mTLS/channel composition and executable readiness remain in the active
+provider step.
 
 The released protobuf contracts now generate Rust clients and the future Flow
 server directly at build time. Live typed gRPC adapters cover organization
@@ -339,9 +341,14 @@ and issuance initiation. They propagate the internal service token, bound JSON
 responses to one MiB, preserve nested issuance claims through the canonical
 JSON field, normalize gRPC failure classes, and reject mismatched tenant,
 resource, policy/nonce, template and issuance identities. The crate compiles,
-all 19 non-container behavior tests pass, and strict Clippy is clean. Signing,
-flow-key-envelope and physical-document HTTP adapters plus common TLS/channel
-composition are the remaining provider work.
+all 23 non-container behavior tests pass, and strict Clippy is clean. The HTTP
+adapters now cover signing-identity resolution/signing, tenant-bound flow-key
+wrap/unwrap and every physical-document lifecycle operation. They preserve
+gateway path prefixes, disable redirects, bound response bodies to one MiB,
+apply operation timeouts, reject malformed or incomplete responses, and accept
+the generic signature field only when its declared encoding is raw IEEE P1363.
+Shared MMF mTLS/channel construction, response projection DTOs and executable
+composition are the remaining Flow provider/runtime work.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
