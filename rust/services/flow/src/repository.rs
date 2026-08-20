@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::{FlowDefinition, FlowInstance};
+use crate::{FlowDefinition, FlowInstance, FlowRecordError};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct FlowArtifact {
@@ -46,6 +46,8 @@ pub enum RepositoryError {
     InvalidReplayDigest,
     #[error("FLOW.ARTIFACT_CONFLICT: {0}")]
     ArtifactConflict(String),
+    #[error(transparent)]
+    InvalidStoredState(#[from] FlowRecordError),
 }
 
 #[derive(Default)]

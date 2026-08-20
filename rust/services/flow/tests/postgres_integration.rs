@@ -1,7 +1,11 @@
 use std::{env, error::Error, str::FromStr};
 
 use chrono::{Duration, Utc};
-use marty_flow::{CallbackEvent, FlowInstance, PostgresFlowRepository};
+use marty_flow::{
+    migrate_flow_schema, ApprovalStrategy, ArtifactStatus, CallbackEvent, DefinitionStatus,
+    FlowArtifactRecord, FlowDefinitionRecord, FlowInstance, FlowInstanceRecord,
+    PostgresFlowRepository,
+};
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_push::WebhookDestinationRegistry;
 use serde_json::{json, Value};
@@ -44,8 +48,10 @@ async fn postgres_finalization_and_callback_leases_are_atomic() -> TestResult {
 
 async fn run_contract(pool: &PgPool) -> TestResult {
     let repository = PostgresFlowRepository::new(pool.clone());
-    let now = Utc::now();
+    let now = chrono::DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
+        .expect("current timestamp");
     let now_ms = u64::try_from(now.timestamp_millis())?;
+    run_crud_contract(&repository, now).await?;
     insert_live_instance(pool, FIRST_INSTANCE_ID, now, None).await?;
 
     let candidate_a = terminal_instance(FIRST_INSTANCE_ID, now_ms, "allow-a");
@@ -195,6 +201,141 @@ async fn run_contract(pool: &PgPool) -> TestResult {
     Ok(())
 }
 
+async fn run_crud_contract(
+    repository: &PostgresFlowRepository,
+    now: chrono::DateTime<Utc>,
+) -> TestResult {
+    let definition = FlowDefinitionRecord {
+        id: "90000000-0000-0000-0000-000000000010".into(),
+        organization_id: "org-1".into(),
+        name: "Contract flow".into(),
+        description: Some("lossless".into()),
+        status: DefinitionStatus::Active,
+        flow_type: marty_flow::FlowType::Oid4vciPreAuthorized,
+        steps: vec![
+            json!({"id":"step-1","name":"create_offer","config":{"protocol_step":"create_offer"}}),
+            json!({"id":"step-2","name":"token_exchange","config":{"protocol_step":"token_exchange"}}),
+        ],
+        transitions: vec![
+            json!({"id":"transition-1","from_step_id":"step-1","to_step_id":"step-2","condition":"success"}),
+        ],
+        start_step_id: Some("step-1".into()),
+        credential_template_id: Some("template-1".into()),
+        application_template_id: None,
+        presentation_policy_id: None,
+        delivery_destination_profile_id: None,
+        deployment_profile_id: Some("deployment-1".into()),
+        deployment_profile_ids: vec!["deployment-1".into()],
+        trust_profile_id: Some("trust-1".into()),
+        approval_strategy: ApprovalStrategy::Auto,
+        hooks: Default::default(),
+        trigger: None,
+        extension: None,
+        preconditions: vec!["approved".into()],
+        default_timeout_seconds: 600,
+        max_retries: 3,
+        retry_cooldown_minutes: 7,
+        enable_resume: true,
+        version: 2,
+        created_at: now,
+        updated_at: now,
+    };
+    repository.save_definition(&definition).await?;
+    let stored = repository
+        .definition(&definition.id)
+        .await?
+        .expect("stored definition");
+    assert_eq!(stored, definition);
+    assert_eq!(repository.definitions_for_tenant("org-1").await?.len(), 1);
+
+    let instance = FlowInstanceRecord {
+        id: "90000000-0000-0000-0000-000000000011".into(),
+        flow_definition_id: definition.id.clone(),
+        organization_id: "org-1".into(),
+        status: FlowInstanceStatus::InProgress,
+        current_step_id: Some("step-1".into()),
+        context: json!({"current_step_name":"create_offer"}),
+        step_history: vec![json!({"step_id":"step-0"})],
+        state_history: vec![
+            json!({"prior_state":"pending","new_state":"in_progress","timestamp":now.to_rfc3339(),"actor":"user-1","event":"advance"}),
+        ],
+        subject_id: Some("subject-1".into()),
+        subject_type: "applicant".into(),
+        external_reference: Some("external-1".into()),
+        application_flow_key_hash: Some("c".repeat(64)),
+        started_at: Some(now),
+        completed_at: None,
+        expires_at: Some(now + Duration::minutes(10)),
+        result: None,
+        error: None,
+        created_at: now,
+        updated_at: now,
+    };
+    assert!(repository.save_instance(&instance).await?);
+    assert_eq!(
+        repository.instance(&instance.id).await?.expect("instance"),
+        instance
+    );
+    assert_eq!(
+        repository
+            .instances_for_tenant(
+                "org-1",
+                Some(&definition.id),
+                Some(FlowInstanceStatus::InProgress)
+            )
+            .await?
+            .len(),
+        1
+    );
+
+    let artifact = FlowArtifactRecord {
+        id: "90000000-0000-0000-0000-000000000012".into(),
+        flow_instance_id: instance.id.clone(),
+        issuance_transaction_id: Some("90000000-0000-0000-0000-000000000013".into()),
+        credential_offer_uri: Some("openid-credential-offer://first".into()),
+        credential_offer_uris: Default::default(),
+        credential_offer_labels: Default::default(),
+        pre_authorized_code: Some("code-1".into()),
+        issuance_status: Some("offer_created".into()),
+        qr_payload: Some("qr".into()),
+        expires_at: Some(now + Duration::minutes(10)),
+        scanned_at: None,
+        status: ArtifactStatus::Active,
+        state: Some("state-1".into()),
+        wallet_metadata: json!({"wallet":"example"}),
+        attempt_number: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    let saved = repository
+        .save_artifact_record(&artifact)
+        .await?
+        .expect("artifact insert");
+    assert_eq!(saved, artifact);
+    let mut replay = artifact.clone();
+    replay.id = "90000000-0000-0000-0000-000000000014".into();
+    replay.issuance_status = Some("issued".into());
+    let replayed = repository
+        .save_artifact_record(&replay)
+        .await?
+        .expect("artifact replay");
+    assert_eq!(replayed.id, artifact.id);
+    assert_eq!(replayed.issuance_status.as_deref(), Some("issued"));
+    assert_eq!(
+        repository.artifacts_for_instance(&instance.id).await?.len(),
+        1
+    );
+    assert_eq!(
+        repository
+            .artifact_by_pre_authorized_code("code-1")
+            .await?
+            .expect("artifact by code")
+            .id,
+        artifact.id
+    );
+    Ok(())
+}
+
 fn terminal_instance(id: &str, now_ms: u64, decision: &str) -> FlowInstance {
     FlowInstance {
         id: id.into(),
@@ -258,39 +399,6 @@ async fn reset_schema(pool: &PgPool) -> TestResult {
     sqlx::query("DROP SCHEMA IF EXISTS flow_service CASCADE")
         .execute(pool)
         .await?;
-    sqlx::query("CREATE SCHEMA flow_service")
-        .execute(pool)
-        .await?;
-    sqlx::query(
-        "CREATE TABLE flow_service.flow_instances ( \
-           id VARCHAR(36) PRIMARY KEY, flow_definition_id VARCHAR(36) NOT NULL, \
-           organization_id VARCHAR(255) NOT NULL, status VARCHAR(50) NOT NULL, \
-           current_step_id VARCHAR(36), context JSON NOT NULL, step_history JSON NOT NULL, \
-           subject_type VARCHAR(50) NOT NULL, application_flow_key_hash VARCHAR(64), \
-           completed_at TIMESTAMPTZ, expires_at TIMESTAMPTZ, result JSON, error TEXT, \
-           created_at TIMESTAMPTZ NOT NULL, updated_at TIMESTAMPTZ NOT NULL)",
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query(
-        "CREATE TABLE flow_service.flow_nonce_consumptions ( \
-           nonce_digest VARCHAR(64) PRIMARY KEY, flow_instance_id VARCHAR(36) NOT NULL UNIQUE, \
-           consumed_at TIMESTAMPTZ NOT NULL, expires_at TIMESTAMPTZ NOT NULL)",
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query(
-        "CREATE TABLE flow_service.flow_callback_outbox ( \
-           event_id VARCHAR(36) PRIMARY KEY, flow_instance_id VARCHAR(36) NOT NULL UNIQUE \
-             REFERENCES flow_service.flow_instances(id) ON DELETE CASCADE, \
-           organization_id VARCHAR(255) NOT NULL, destination_url TEXT NOT NULL, \
-           audience VARCHAR(255) NOT NULL, event_type VARCHAR(128) NOT NULL, payload JSON NOT NULL, \
-           status VARCHAR(32) NOT NULL DEFAULT 'pending', attempt_count INTEGER NOT NULL DEFAULT 0, \
-           next_attempt_at TIMESTAMPTZ NOT NULL, lease_token VARCHAR(36), \
-           lease_expires_at TIMESTAMPTZ, last_error_code VARCHAR(128), \
-           created_at TIMESTAMPTZ NOT NULL, delivered_at TIMESTAMPTZ, expires_at TIMESTAMPTZ NOT NULL)",
-    )
-    .execute(pool)
-    .await?;
+    migrate_flow_schema(pool).await?;
     Ok(())
 }

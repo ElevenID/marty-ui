@@ -375,8 +375,8 @@ slice must connect these dependencies into MMF lifecycle/readiness and must
 expand the Rust persistence records to preserve every released definition,
 instance and artifact field before any application operation is advertised as
 ready. That record boundary is now implemented under
-`contracts/flow-persistence-behavior.json`: 29 definition fields, 20 instance
-fields and 18 artifact fields round-trip losslessly, then feed the smaller
+`contracts/flow-persistence-behavior.json`: 28 definition fields, 20 instance
+fields and 17 artifact fields round-trip losslessly, then feed the smaller
 canonical protocol kernels and privacy-safe public projections through
 explicit fail-closed conversion. This preserves legacy step details,
 preconditions, retry/resume settings, all linked profiles, localized offers,
@@ -384,9 +384,18 @@ issuance lifecycle data and timestamps instead of narrowing storage to the
 security kernel. Three behavioral tests and strict Clippy pass. The contract
 also requires a dedicated `state_history` JSON column during Rust migration;
 the Python object previously accumulated this history in memory but its
-PostgreSQL adapter never stored it. Full SQLx CRUD and that additive schema
-repair are the next persistence sub-gate before MMF lifecycle/readiness and
-the HTTP/gRPC listeners are enabled.
+PostgreSQL adapter never stored it. Rust now also owns the complete install and
+upgrade schema under an advisory lock, adding dedicated `state_history` and
+`retry_cooldown_minutes` columns without replacing Alembic's legacy version
+record. SQLx CRUD covers definition create/update/get/list/delete, immutable
+terminal instance create/update/get/filtered-list, and transaction-idempotent
+artifact create/update/get/list/code lookup. The existing atomic nonce,
+terminal result and callback transaction now persists state history as well.
+Two migration contract tests, three record tests, the PostgreSQL integration
+binary (which runs the real migration/CRUD/atomicity vectors when its isolated
+CI database is configured), and strict Clippy pass. Seed ownership and MMF
+lifecycle/readiness are the next sub-gates before the HTTP/gRPC listeners are
+enabled.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
