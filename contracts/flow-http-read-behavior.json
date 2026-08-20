@@ -11,7 +11,9 @@
     ["POST", "/v1/flows/definitions/{flow_id}/activate", "flow-definition:activate"],
     ["DELETE", "/v1/flows/definitions/{flow_id}", "flow-definition:delete"],
     ["GET", "/v1/flows/instances", "flow-instance:view"],
+    ["POST", "/v1/flows/instances", "flow-instance:start"],
     ["GET", "/v1/flows/instances/{instance_id}", "flow-instance:view"],
+    ["POST", "/v1/flows/instances/{instance_id}/advance", "flow-instance:advance"],
     ["POST", "/v1/flows/instances/{instance_id}/cancel", "flow-instance:cancel"],
     ["GET", "/v1/flows/instances/{instance_id}/result", "flow-instance:view"],
     ["GET", "/v1/flows/instances/{instance_id}/artifacts", "flow-instance:view"],
@@ -34,6 +36,8 @@
     "definition_validation": "side_effect_free",
     "definition_activation": "all_references_active",
     "definition_delete_status": "draft_only",
+    "instance_start": "instance_and_optional_artifact_atomic",
+    "instance_advance": "status_and_updated_at_compare_and_set",
     "instance_cancel": "atomic_nonterminal_to_cancelled",
     "instance_cancel_replay_status": 409,
     "state_history_event": "flow_cancelled"

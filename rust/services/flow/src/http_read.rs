@@ -7,15 +7,18 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use marty_verification::flow::FlowInstanceStatus;
+use marty_verification::flow::{FlowInstanceStatus, TransitionOutcome};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
-    create_definition_record, definition_references, parse_request, update_definition_record,
-    validate_definition_record, CreateFlowDefinitionRequest, DefinitionStatus,
-    FlowDefinitionMutationError, FlowProviderError, FlowProviderRegistry, FlowRecordError,
-    FlowType, PostgresFlowRepository, RepositoryError, UpdateFlowDefinitionRequest,
+    advance_instance_record, apply_physical_advance_side_effect, create_definition_record,
+    definition_references, parse_request, prepare_instance_start, start_instance_record,
+    update_definition_record, validate_definition_record, AdvanceFlowRequest,
+    CreateFlowDefinitionRequest, DefinitionStatus, FlowDefinitionMutationError,
+    FlowInstanceExecutionError, FlowInstanceSideEffectError, FlowProviderError,
+    FlowProviderRegistry, FlowRecordError, FlowType, PostgresFlowRepository, RepositoryError,
+    StartFlowRequest, UpdateFlowDefinitionRequest,
 };
 
 const MIP_VERSION: &str = "0.4.1";
@@ -26,6 +29,7 @@ const MAXIMUM_PAGE_SIZE: usize = 500;
 pub struct FlowHttpState {
     pub repository: PostgresFlowRepository,
     pub providers: Arc<FlowProviderRegistry>,
+    pub public_base_url: String,
 }
 
 pub fn flow_read_router(state: FlowHttpState) -> Router {
@@ -53,8 +57,15 @@ pub fn flow_read_router(state: FlowHttpState) -> Router {
             "/v1/flows/definitions/{flow_id}/activate",
             post(activate_definition),
         )
-        .route("/v1/flows/instances", get(list_instances))
+        .route(
+            "/v1/flows/instances",
+            get(list_instances).post(start_instance),
+        )
         .route("/v1/flows/instances/{instance_id}", get(get_instance))
+        .route(
+            "/v1/flows/instances/{instance_id}/advance",
+            post(advance_instance),
+        )
         .route(
             "/v1/flows/instances/{instance_id}/cancel",
             post(cancel_instance),
@@ -443,6 +454,49 @@ async fn list_instances(
     Ok(Json(json!(instances)))
 }
 
+async fn start_instance(
+    State(state): State<FlowHttpState>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, FlowHttpError> {
+    let request: StartFlowRequest = parse_request(payload)?;
+    let definition = state
+        .repository
+        .definition(&request.flow_definition_id)
+        .await?
+        .filter(|definition| definition.organization_id == request.organization_id)
+        .ok_or_else(|| not_found("Flow Definition not found"))?;
+    let principal = authorize(
+        &state,
+        &headers,
+        &definition.organization_id,
+        "flow-instance:start",
+    )
+    .await?;
+    let now = chrono::Utc::now();
+    let instance = start_instance_record(&definition, request, &principal, now)?;
+    let prepared = prepare_instance_start(
+        &state.providers,
+        &definition,
+        instance,
+        &state.public_base_url,
+        now,
+    )
+    .await?;
+    if !state
+        .repository
+        .save_started_instance(&prepared.instance, prepared.artifact.as_ref())
+        .await?
+    {
+        return Err(FlowHttpError::new(
+            StatusCode::CONFLICT,
+            "flow_instance_start_conflict",
+            "Flow instance or protocol artifact already exists",
+        ));
+    }
+    Ok(Json(json!(prepared.instance.projection()?)))
+}
+
 async fn get_instance(
     State(state): State<FlowHttpState>,
     headers: HeaderMap,
@@ -457,6 +511,62 @@ async fn get_instance(
     )
     .await?;
     Ok(Json(json!(instance.projection()?)))
+}
+
+async fn advance_instance(
+    State(state): State<FlowHttpState>,
+    headers: HeaderMap,
+    Path(instance_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, FlowHttpError> {
+    let current = required_instance(&state, &instance_id).await?;
+    let principal = authorize(
+        &state,
+        &headers,
+        &current.organization_id,
+        "flow-instance:advance",
+    )
+    .await?;
+    let definition = state
+        .repository
+        .definition(&current.flow_definition_id)
+        .await?
+        .ok_or_else(|| not_found("Flow Definition not found"))?;
+    let request: AdvanceFlowRequest = parse_request(payload)?;
+    let outcome: TransitionOutcome = serde_json::from_value(Value::String(
+        request.step_result.trim().to_ascii_lowercase(),
+    ))
+    .map_err(|_| {
+        FlowHttpError::new(
+            StatusCode::BAD_REQUEST,
+            "flow_invalid_step_result",
+            "step_result is not a supported transition outcome",
+        )
+    })?;
+    let expected_status = current.status;
+    let expected_updated_at = current.updated_at;
+    let side_effected = apply_physical_advance_side_effect(
+        &state.providers,
+        &definition,
+        current,
+        outcome,
+        &request.data,
+    )
+    .await?;
+    let now = chrono::Utc::now();
+    let advanced = advance_instance_record(&definition, &side_effected, request, &principal, now)?;
+    if !state
+        .repository
+        .compare_and_swap_instance(&advanced, expected_status, expected_updated_at)
+        .await?
+    {
+        return Err(FlowHttpError::new(
+            StatusCode::CONFLICT,
+            "flow_instance_advance_conflict",
+            "Flow instance changed before this advancement could be committed",
+        ));
+    }
+    Ok(Json(json!(advanced.projection()?)))
 }
 
 async fn cancel_instance(
@@ -746,6 +856,52 @@ impl From<FlowDefinitionMutationError> for FlowHttpError {
     }
 }
 
+impl From<FlowInstanceExecutionError> for FlowHttpError {
+    fn from(error: FlowInstanceExecutionError) -> Self {
+        match error {
+            FlowInstanceExecutionError::Api(error) => error.into(),
+            FlowInstanceExecutionError::Record(_) => Self::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_stored_flow_state",
+                "Stored Flow state is invalid",
+            ),
+            FlowInstanceExecutionError::DefinitionTenantMismatch => {
+                not_found("Flow Definition not found")
+            }
+            FlowInstanceExecutionError::NotAdvanceable(_) => Self::new(
+                StatusCode::CONFLICT,
+                "flow_instance_not_advanceable",
+                error.to_string(),
+            ),
+            _ => Self::new(
+                StatusCode::BAD_REQUEST,
+                "flow_instance_operation_invalid",
+                error.to_string(),
+            ),
+        }
+    }
+}
+
+impl From<FlowInstanceSideEffectError> for FlowHttpError {
+    fn from(error: FlowInstanceSideEffectError) -> Self {
+        match error {
+            FlowInstanceSideEffectError::Provider(error) => error.into(),
+            FlowInstanceSideEffectError::InvalidContext(_) => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "flow_instance_context_invalid",
+                error.to_string(),
+            ),
+            FlowInstanceSideEffectError::InvalidResponse(_)
+            | FlowInstanceSideEffectError::Protocol(_)
+            | FlowInstanceSideEffectError::InvalidClock => Self::new(
+                StatusCode::BAD_GATEWAY,
+                "flow_instance_side_effect_failed",
+                error.to_string(),
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use axum::{body::Body, http::Request};
@@ -761,6 +917,7 @@ mod tests {
         flow_read_router(FlowHttpState {
             repository: PostgresFlowRepository::new(pool),
             providers: Arc::new(FlowProviderRegistry::default()),
+            public_base_url: "http://localhost:8000".into(),
         })
     }
 

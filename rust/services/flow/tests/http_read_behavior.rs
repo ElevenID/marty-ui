@@ -48,6 +48,8 @@ struct Mutations {
     definition_validation: String,
     definition_activation: String,
     definition_delete_status: String,
+    instance_start: String,
+    instance_advance: String,
     instance_cancel: String,
     instance_cancel_replay_status: u16,
     state_history_event: String,
@@ -60,6 +62,7 @@ fn router() -> axum::Router {
     flow_read_router(FlowHttpState {
         repository: PostgresFlowRepository::new(pool),
         providers: Arc::new(FlowProviderRegistry::default()),
+        public_base_url: "http://localhost:8000".into(),
     })
 }
 
@@ -70,7 +73,7 @@ async fn rust_read_surface_matches_the_language_neutral_contract() {
     ))
     .expect("read contract");
     assert_eq!(contract.schema_version, 1);
-    assert_eq!(contract.routes.len(), 15);
+    assert_eq!(contract.routes.len(), 17);
     assert_eq!(
         contract
             .routes
@@ -102,6 +105,14 @@ async fn rust_read_surface_matches_the_language_neutral_contract() {
         "all_references_active"
     );
     assert_eq!(contract.mutations.definition_delete_status, "draft_only");
+    assert_eq!(
+        contract.mutations.instance_start,
+        "instance_and_optional_artifact_atomic"
+    );
+    assert_eq!(
+        contract.mutations.instance_advance,
+        "status_and_updated_at_compare_and_set"
+    );
     assert_eq!(
         contract.mutations.instance_cancel,
         "atomic_nonterminal_to_cancelled"

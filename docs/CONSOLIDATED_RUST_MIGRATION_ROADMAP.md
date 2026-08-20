@@ -297,11 +297,13 @@ and retention-scrubbing vectors against PostgreSQL. Compilation and all
 non-container tests pass locally; the real PostgreSQL execution remains a CI
 landing gate because the local Docker daemon is unavailable.
 
-The next Flow gates are complete DTO and provider parity, HTTP/gRPC executable
-parity, provider failure behavior, and container startup/readiness. Only after
-those pass will the Python Flow runtime and its service dependencies be
-deleted. No deployment occurs during these slices; beta receives one aggregate
-update only after all wave-three work lands.
+The next Flow gates are the remaining protocol-specific HTTP/gRPC operations,
+executable listener and container startup/readiness parity. Provider, DTO,
+definition mutation, generic instance execution and start-side-effect parity
+are complete. Only after the remaining executable gates pass will the Python
+Flow runtime and its service dependencies be deleted. No deployment occurs
+during these slices; beta receives one aggregate update only after all
+wave-three work lands.
 
 The public request boundary is now also represented in Rust. Strict DTOs cover
 definition create/PATCH (including unset-versus-explicit-null semantics),
@@ -516,8 +518,8 @@ public signing key. System-owned delivery destinations are the sole tenant
 exception. `contracts/flow-reference-validation-behavior.json` and the expanded
 HTTP contract execute these rules, including one-resolution-per-template
 caching and side-effect-free dry runs. The focused definition, reference and
-HTTP suites plus strict Clippy pass. The remaining HTTP surface is instance
-start/advance, QR generation, OID4VP/SIOP submissions, verifier DID publication,
+HTTP suites plus strict Clippy pass. The remaining HTTP surface is QR
+generation, OID4VP/SIOP submissions, verifier DID publication,
 application-approved webhooks and protocol-specific verification starts.
 
 The provider-independent instance execution kernel is also complete under
@@ -530,10 +532,25 @@ while every subsequent transition remains a typed canonical state. Direct
 starts fail closed on application-approval, unknown or malformed preconditions;
 only separately supplied server-authenticated evidence can satisfy the
 application-approved control. Three execution vectors, persistence and atomic
-repository regressions, and strict Clippy pass. The public start/advance routes
-remain gated until their physical-document and OID4VCI issuance side effects,
-artifact writes and PostgreSQL compare-and-set behavior are composed around
-this kernel; the kernel is not advertised as a partial route.
+repository regressions, and strict Clippy pass.
+
+Public instance start and advance are now composed around that kernel under
+`contracts/flow-instance-side-effects-behavior.json`. OID4VCI starts use only
+the typed issuance provider, bind idempotency to the Flow instance (or the
+existing application-flow digest), reconstruct missing per-wallet offers with
+the pinned `marty-oid4vci` implementation and the complete template wallet
+configuration, persist the released MIP 0.3.1 `CredentialOffer` envelope and
+preserve every artifact/context field. Deployed public origins are explicit,
+origin-only HTTPS configuration and fail closed. Physical-document starts
+consume rather than persist raw applicant/MRZ/data-group input, then call the
+typed provider for initialization and all six subsequent lifecycle operations.
+Provider operation, flow and tenant identities are checked before state is
+accepted. PostgreSQL inserts each new instance and optional artifact in one
+transaction; advancement compares both source status and `updated_at`, so a
+concurrent stale transition cannot win. Three side-effect vectors, startup,
+HTTP, persistence and PostgreSQL contract suites, plus strict Clippy pass. The
+remaining Flow gate is the protocol-specific route set and actual HTTP/gRPC
+listener composition; no partial executable is activated or deployed.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
