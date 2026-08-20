@@ -1,42 +1,45 @@
 status: complete
 search_scope:
-  - revocation-profile HTTP router, request handlers, and owned route tests
-  - revocation-profile service and gRPC allocation contracts
-  - production Kubernetes deployment strategy and owned manifest tests
-  - immutable Marty UI v1.1.197 stack and Credentials v0.1.67 release evidence
+  - current immutable Marty UI stack release manifest
+  - merged revocation-profile HTTP cutover and owned route tests
+  - merged zero-downtime Kubernetes rollout policy and owned manifest tests
+  - released Credentials v0.1.67 and Integration v1.2.69 artifact evidence
+  - existing stack release contract and immutable CD workflow
 search_queries:
-  - "allocate-index reserve-index revocation profile HTTP"
-  - "AllocateIndexRequest AllocateIndexResponse allocate_index handler"
-  - "gRPC AllocateIndex service allocate_index"
-  - "revocation-profile Recreate RollingUpdate maxUnavailable maxSurge"
-  - "marty-ui v1.1.197 marty-credentials v0.1.67 artifact-only integration"
+  - "marty-ui immutable stack release identity v1.1.198"
+  - "retired allocate-index HTTP endpoint reserve-index caller cutover"
+  - "revocation-profile RollingUpdate maxUnavailable zero maxSurge one"
+  - "marty-credentials v0.1.67 issuance digest SBOM provenance"
+  - "marty-integration-tests v1.2.69 released topology"
+  - "release contract exact tag stack lock public stack smoke"
 candidate_implementations:
+  - path: release/stack-lock.json
+    language: JSON
+    disposition: reuse_existing_release_manifest_and_advance_release_identity
+  - path: tests/test_stack_release_contract.py
+    language: Python
+    disposition: reuse_existing_owned_release_contract_without_modification
+  - path: .github/workflows/cd.yml
+    language: YAML
+    disposition: reuse_existing_immutable_release_and_public_stack_smoke_pipeline
   - path: rust/services/revocation-profile/src/http.rs
     language: Rust
-    disposition: remove_only_the_retired_http_adapter_surface
-  - path: rust/services/revocation-profile/src/service.rs
-    language: Rust
-    disposition: retain_shared_service_contract_for_non_http_consumers
-  - path: rust/services/revocation-profile/src/grpc.rs
-    language: Rust
-    disposition: retain_existing_grpc_contract_unchanged
+    disposition: release_already_merged_retired_http_surface
   - path: k8s/oracle/07-microservices.yaml
     language: Kubernetes_YAML
-    disposition: restore_zero_downtime_rolling_update
-  - path: tests/test_kubernetes_app_service_coverage.py
-    language: Python
-    disposition: extend_marty_owned_manifest_regression_gate
+    disposition: release_already_merged_rolling_update_policy
 no_match_statement: ""
-decision: extend_existing
+decision: reuse_existing
 canonical_implementation:
-  path: rust/services/revocation-profile/src/http.rs
-  language: Rust
-rust_disposition: extend_existing_rust_owner
+  path: release/stack-lock.json
+  language: JSON
+rust_disposition: reuse_existing_rust_owner
 non_rust_rationale: >-
-  The only non-Rust production change is deployment policy: the released
-  Credentials caller now uses stable credential-aware reservations, allowing
-  zero-downtime overlap. The Python change is a Marty-owned manifest assertion,
-  not an implementation or imported compliance test.
+  This release-only change advances the immutable stack identity after the
+  reviewed Rust HTTP cutover and Kubernetes rollout policy merged with the full
+  queue suite green. It changes no implementation or tests; the existing CD
+  workflow will verify the released stack against pinned Marty integration
+  artifacts before publishing the manifest.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
