@@ -47,7 +47,7 @@ async fn rust_migrations_bootstrap_and_upgrade_the_released_schema() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(migration_count, 3);
+    assert_eq!(migration_count, 4);
 
     let profile = sqlx::query_as::<_, (String, String, String, serde_json::Value)>(
         r#"
@@ -93,6 +93,8 @@ async fn rust_migrations_bootstrap_and_upgrade_the_released_schema() {
         .unwrap();
     sqlx::raw_sql(
         r#"
+        DROP SCHEMA IF EXISTS issuance_service CASCADE;
+        CREATE SCHEMA issuance_service;
         CREATE SCHEMA revocation_profile_service;
         CREATE TABLE revocation_profile_service.revocation_profiles (
             id TEXT PRIMARY KEY,
@@ -116,6 +118,22 @@ async fn rust_migrations_bootstrap_and_upgrade_the_released_schema() {
             'active',
             '{"status_list_base_url":"https://legacy.test/lists"}',
             '{}', '{}', '[]', NOW(), NOW()
+        );
+        CREATE TABLE issuance_service.issued_credentials (
+            id TEXT PRIMARY KEY,
+            organization_id TEXT NOT NULL,
+            revocation_profile_id TEXT,
+            status_list_entries JSON NOT NULL DEFAULT '[]',
+            issued_at TIMESTAMPTZ
+        );
+        INSERT INTO issuance_service.issued_credentials (
+            id, organization_id, revocation_profile_id, status_list_entries, issued_at
+        ) VALUES (
+            'credential-before-rust-allocation',
+            '00000000-0000-0000-0000-000000000001',
+            '70000000-0000-0000-0000-000000000001',
+            '[{"type":"BitstringStatusListEntry","index":7,"status_purpose":"revocation"}]',
+            NOW()
         );
         "#,
     )
@@ -142,7 +160,36 @@ async fn rust_migrations_bootstrap_and_upgrade_the_released_schema() {
         upgraded.1["status_list_base_url"],
         "https://legacy.test/v1/organizations/00000000-0000-0000-0000-000000000001/revocation-profiles/70000000-0000-0000-0000-000000000001/status-lists/{mechanism}/{purpose}"
     );
-    for table in ["cascade_revocation_operations", "revocation_batches"] {
+    let backfilled = sqlx::query_as::<_, (String, i64)>(
+        r#"
+        SELECT credential_id, status_list_index
+        FROM revocation_profile_service.status_list_allocations
+        WHERE credential_id = 'credential-before-rust-allocation'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(backfilled, ("credential-before-rust-allocation".into(), 7));
+    let next_index = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT next_index
+        FROM revocation_profile_service.status_list_allocation_counters
+        WHERE organization_id = '00000000-0000-0000-0000-000000000001'
+          AND profile_id = '70000000-0000-0000-0000-000000000001'
+          AND status_list_format = 'bitstring'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(next_index, 8);
+    for table in [
+        "cascade_revocation_operations",
+        "revocation_batches",
+        "status_list_allocations",
+        "status_list_allocation_counters",
+    ] {
         let present = sqlx::query_scalar::<_, bool>(
             "SELECT to_regclass('revocation_profile_service.' || $1) IS NOT NULL",
         )

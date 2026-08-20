@@ -1,7 +1,8 @@
 use marty_revocation_profile::{
-    CascadeOperationType, CascadeRevocationOperation, CascadeStatus, CredentialFormat, NewProfile,
-    PgProfileRepository, PgRevocationOperationRepository, ProfileRepository, RedisStatusRepository,
-    RevocationBatch, RevocationOperationRepository, RevocationProfile, RevocationProfileService,
+    migrate_and_seed, CascadeOperationType, CascadeRevocationOperation, CascadeStatus,
+    CredentialFormat, InMemoryStatusRepository, NewProfile, PgProfileRepository,
+    PgRevocationOperationRepository, ProfileRepository, RedisStatusRepository, RevocationBatch,
+    RevocationOperationRepository, RevocationProfile, RevocationProfileService, ServiceError,
     StatusListFormat, StatusRepository, TriggerEntityType,
 };
 use sqlx::PgPool;
@@ -60,6 +61,163 @@ async fn postgres_preserves_the_released_profile_schema() {
 }
 
 #[tokio::test]
+#[ignore = "requires MARTY_TEST_POSTGRES_URL"]
+async fn postgres_status_allocations_are_idempotent_race_safe_and_restart_safe() {
+    let database_url = std::env::var("MARTY_TEST_POSTGRES_URL").expect("test PostgreSQL URL");
+    let pool = PgPool::connect(&database_url).await.unwrap();
+    let organization_id = format!("org-allocation-{}", Uuid::new_v4());
+    migrate_and_seed(&pool, &organization_id, "https://status.example.test")
+        .await
+        .unwrap();
+    let repository = PgProfileRepository::from_pool(pool.clone());
+    let profile = RevocationProfile::new(
+        organization_id.clone(),
+        "idempotent allocation".into(),
+        None,
+    );
+    repository.save(profile.clone()).await.unwrap();
+    let service = Arc::new(
+        RevocationProfileService::new(
+            Arc::new(repository.clone()),
+            Arc::new(InMemoryStatusRepository::default()),
+            "https://status.example.test",
+        )
+        .unwrap(),
+    );
+
+    let mut retries = Vec::new();
+    for _ in 0..64 {
+        let service = service.clone();
+        let profile_id = profile.id.clone();
+        let organization_id = organization_id.clone();
+        retries.push(tokio::spawn(async move {
+            service
+                .reserve_index(
+                    &profile_id,
+                    &organization_id,
+                    "sd_jwt_vc",
+                    "credential-postgres-retry",
+                )
+                .await
+                .unwrap()
+                .index
+        }));
+    }
+    for retry in retries {
+        assert_eq!(retry.await.unwrap(), 0);
+    }
+
+    let mut distinct = Vec::new();
+    for ordinal in 0..32 {
+        let service = service.clone();
+        let profile_id = profile.id.clone();
+        let organization_id = organization_id.clone();
+        distinct.push(tokio::spawn(async move {
+            service
+                .reserve_index(
+                    &profile_id,
+                    &organization_id,
+                    "sd_jwt_vc",
+                    &format!("credential-postgres-{ordinal}"),
+                )
+                .await
+                .unwrap()
+                .index
+        }));
+    }
+    let mut indices = Vec::new();
+    for allocation in distinct {
+        indices.push(allocation.await.unwrap());
+    }
+    indices.sort_unstable();
+    assert_eq!(indices, (1..=32).collect::<Vec<_>>());
+
+    // A fresh service process has no in-memory allocation knowledge. The
+    // PostgreSQL reservation must still recover the exact original index.
+    let restarted = RevocationProfileService::new(
+        Arc::new(repository.clone()),
+        Arc::new(InMemoryStatusRepository::default()),
+        "https://status.example.test",
+    )
+    .unwrap();
+    assert_eq!(
+        restarted
+            .reserve_index(
+                &profile.id,
+                &organization_id,
+                "sd_jwt_vc",
+                "credential-postgres-retry",
+            )
+            .await
+            .unwrap()
+            .index,
+        0
+    );
+
+    let other_organization_id = format!("org-allocation-other-{}", Uuid::new_v4());
+    let other_profile = RevocationProfile::new(
+        other_organization_id.clone(),
+        "other allocation scope".into(),
+        None,
+    );
+    repository.save(other_profile.clone()).await.unwrap();
+    let error = restarted
+        .reserve_index(
+            &other_profile.id,
+            &other_organization_id,
+            "sd_jwt_vc",
+            "credential-postgres-retry",
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ServiceError::FailedPrecondition(_)));
+
+    repository.delete(&profile.id).await.unwrap();
+    let error_after_profile_deletion = restarted
+        .reserve_index(
+            &other_profile.id,
+            &other_organization_id,
+            "sd_jwt_vc",
+            "credential-postgres-retry",
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error_after_profile_deletion,
+        ServiceError::FailedPrecondition(_)
+    ));
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT COUNT(*)
+            FROM revocation_profile_service.status_list_allocations
+            WHERE credential_id = 'credential-postgres-retry'
+            "#,
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        1
+    );
+    repository.save(profile.clone()).await.unwrap();
+    assert_eq!(
+        restarted
+            .reserve_index(
+                &profile.id,
+                &organization_id,
+                "sd_jwt_vc",
+                "credential-after-profile-restore",
+            )
+            .await
+            .unwrap()
+            .index,
+        33
+    );
+    repository.delete(&profile.id).await.unwrap();
+    repository.delete(&other_profile.id).await.unwrap();
+}
+
+#[tokio::test]
 #[ignore = "requires MARTY_TEST_REDIS_URL"]
 async fn redis_allocations_and_mutations_are_atomic_and_python_compatible() {
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("test Redis URL");
@@ -87,6 +245,24 @@ async fn redis_allocations_and_mutations_are_atomic_and_python_compatible() {
     }
     indices.sort_unstable();
     assert_eq!(indices, (0..64).collect::<Vec<_>>());
+    assert_eq!(
+        repository
+            .allocation_floor(scope, StatusListFormat::Bitstring)
+            .await
+            .unwrap(),
+        64
+    );
+    repository
+        .advance_allocation_floor(scope, StatusListFormat::Bitstring, 80)
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .allocate_index(scope, StatusListFormat::Bitstring, size)
+            .await
+            .unwrap(),
+        80
+    );
 
     for index in 0..16 {
         repository

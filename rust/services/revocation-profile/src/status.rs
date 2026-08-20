@@ -188,6 +188,19 @@ pub trait StatusRepository: Send + Sync {
         size: usize,
     ) -> Result<usize, StatusError>;
 
+    async fn allocation_floor(
+        &self,
+        scope: &str,
+        format: StatusListFormat,
+    ) -> Result<usize, StatusError>;
+
+    async fn advance_allocation_floor(
+        &self,
+        scope: &str,
+        format: StatusListFormat,
+        next_index: usize,
+    ) -> Result<(), StatusError>;
+
     async fn set_status(
         &self,
         scope: &str,
@@ -261,6 +274,35 @@ impl StatusRepository for InMemoryStatusRepository {
         let allocated = *next;
         *next += 1;
         Ok(allocated)
+    }
+
+    async fn allocation_floor(
+        &self,
+        scope: &str,
+        format: StatusListFormat,
+    ) -> Result<usize, StatusError> {
+        Ok(*self
+            .state
+            .lock()
+            .await
+            .next_indices
+            .get(&(scope.to_string(), format))
+            .unwrap_or(&0))
+    }
+
+    async fn advance_allocation_floor(
+        &self,
+        scope: &str,
+        format: StatusListFormat,
+        next_index: usize,
+    ) -> Result<(), StatusError> {
+        let mut state = self.state.lock().await;
+        let current = state
+            .next_indices
+            .entry((scope.to_string(), format))
+            .or_default();
+        *current = (*current).max(next_index);
+        Ok(())
     }
 
     async fn set_status(
