@@ -8,9 +8,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    build_flow_presentation_request, build_standard_request_object, build_unsigned_url_query,
-    FlowApiError, FlowInstanceRecord, FlowPresentationRequestError, FlowProviderError,
-    FlowProviderRegistry, FlowRequestObjectError, RequestTransport, RequestUriMethod,
+    build_flow_presentation_request, build_profiled_request_object, build_unsigned_url_query,
+    request_object::resolve_oid4vp_client_identity, FlowApiError, FlowInstanceRecord,
+    FlowPresentationRequestError, FlowProviderError, FlowProviderRegistry, FlowRequestObjectError,
+    Oid4vpProfile, RequestObjectOptions, RequestTransport, RequestUriMethod,
     StartVerificationFlowRequest, VerificationRequestResponse, VerificationResponseType,
     REQUEST_ALGORITHM, REQUEST_FORMAT, REQUEST_PURPOSE,
 };
@@ -19,6 +20,25 @@ use crate::{
 pub struct PreparedVerificationStart {
     pub instance: FlowInstanceRecord,
     pub response: VerificationRequestResponse,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VerificationStartOptions {
+    pub request_object: RequestObjectOptions,
+    pub haip_enabled: bool,
+    pub request_object_maximum_length: usize,
+    pub url_query_maximum_length: usize,
+}
+
+impl Default for VerificationStartOptions {
+    fn default() -> Self {
+        Self {
+            request_object: RequestObjectOptions::default(),
+            haip_enabled: false,
+            request_object_maximum_length: 8_192,
+            url_query_maximum_length: 8_192,
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -37,6 +57,8 @@ pub enum FlowVerificationStartError {
     InvalidPolicy,
     #[error("FLOW.VERIFICATION_INVALID_CLOCK")]
     InvalidClock,
+    #[error("FLOW.VERIFICATION_HAIP_DISABLED")]
+    HaipDisabled,
     #[error("FLOW.VERIFICATION_SERIALIZATION")]
     Serialization,
 }
@@ -53,7 +75,37 @@ pub async fn prepare_verification_start(
     verifier_client_id: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<PreparedVerificationStart, FlowVerificationStartError> {
+    let mut options = VerificationStartOptions {
+        request_object_maximum_length,
+        url_query_maximum_length,
+        ..VerificationStartOptions::default()
+    };
+    options.request_object.verifier_client_id = verifier_client_id.map(str::to_owned);
+    prepare_profiled_verification_start(
+        providers,
+        callback_destinations,
+        request,
+        public_base_url,
+        allow_http_loopback,
+        &options,
+        now,
+    )
+    .await
+}
+
+pub async fn prepare_profiled_verification_start(
+    providers: &FlowProviderRegistry,
+    callback_destinations: &WebhookDestinationRegistry,
+    request: StartVerificationFlowRequest,
+    public_base_url: &str,
+    allow_http_loopback: bool,
+    options: &VerificationStartOptions,
+    now: DateTime<Utc>,
+) -> Result<PreparedVerificationStart, FlowVerificationStartError> {
     request.validate_for_environment(allow_http_loopback)?;
+    if request.oid4vp_profile == Oid4vpProfile::Haip && !options.haip_enabled {
+        return Err(FlowVerificationStartError::HaipDisabled);
+    }
     if let Some(callback_url) = request.callback_url.as_deref() {
         callback_destinations
             .require(&request.organization_id, callback_url)
@@ -203,7 +255,10 @@ pub async fn prepare_verification_start(
     };
 
     let auth_request = if is_siop {
-        let client_id = verifier_client_id
+        let client_id = options
+            .request_object
+            .verifier_client_id
+            .as_deref()
             .filter(|value| !value.trim().is_empty())
             .map_or_else(|| format!("{base}/verifier"), str::to_owned);
         instance.context["siop_client_id"] = json!(client_id);
@@ -218,7 +273,11 @@ pub async fn prepare_verification_start(
             .ok_or(FlowVerificationStartError::InvalidPolicy)?;
         match request.request_transport {
             RequestTransport::RequestUri => {
-                let client_id = format!("decentralized_identifier:{}", identity.issuer_did);
+                let (client_id, _, _) = resolve_oid4vp_client_identity(
+                    &identity,
+                    &format!("{base}/v1/flows/instances/{instance_id}/submit"),
+                    &options.request_object,
+                )?;
                 instance.context["oid4vp_client_id"] = json!(client_id);
                 let mut parameters = vec![
                     ("client_id", client_id.as_str()),
@@ -233,13 +292,12 @@ pub async fn prepare_verification_start(
                 let artifacts =
                     build_flow_presentation_request(providers, policy_id, &request.organization_id)
                         .await?;
-                let built = build_standard_request_object(
+                let built = build_profiled_request_object(
                     providers,
                     instance,
                     Some(&artifacts),
                     base,
-                    None,
-                    None,
+                    &options.request_object,
                     now,
                 )
                 .await?;
@@ -250,8 +308,8 @@ pub async fn prepare_verification_start(
                         ("request", built.compact_jwt.as_str()),
                     ],
                 );
-                if request_object_maximum_length < 1_024
-                    || uri.len() > request_object_maximum_length
+                if options.request_object_maximum_length < 1_024
+                    || uri.len() > options.request_object_maximum_length
                 {
                     return Err(FlowRequestObjectError::TooLarge.into());
                 }
@@ -266,7 +324,7 @@ pub async fn prepare_verification_start(
                     instance,
                     &artifacts,
                     base,
-                    url_query_maximum_length,
+                    options.url_query_maximum_length,
                     now,
                 )?;
                 instance = built.instance;

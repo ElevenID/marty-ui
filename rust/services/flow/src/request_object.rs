@@ -31,6 +31,58 @@ pub struct UnsignedAuthorizationRequest {
     pub response_uri: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VerifierDidMethod {
+    #[default]
+    Web,
+    Jwk,
+    Key,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Oid4vpClientIdScheme {
+    RedirectUri,
+    #[default]
+    DecentralizedIdentifier,
+    X509Hash,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RequestObjectCompatibility {
+    #[default]
+    Standard,
+    Lissi,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RequestObjectOptions {
+    pub verifier_client_id: Option<String>,
+    pub wallet_nonce: Option<String>,
+    pub verifier_did_method: VerifierDidMethod,
+    pub client_id_scheme: Oid4vpClientIdScheme,
+    pub x509_certificate_bundle: Option<String>,
+    pub compatibility: RequestObjectCompatibility,
+    pub strict_client_metadata: bool,
+    pub verifier_display_name: String,
+    pub verifier_logo_uri: Option<String>,
+}
+
+impl Default for RequestObjectOptions {
+    fn default() -> Self {
+        Self {
+            verifier_client_id: None,
+            wallet_nonce: None,
+            verifier_did_method: VerifierDidMethod::Web,
+            client_id_scheme: Oid4vpClientIdScheme::DecentralizedIdentifier,
+            x509_certificate_bundle: None,
+            compatibility: RequestObjectCompatibility::Standard,
+            strict_client_metadata: false,
+            verifier_display_name: "ElevenID LLC".into(),
+            verifier_logo_uri: None,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum FlowRequestObjectError {
     #[error(transparent)]
@@ -45,6 +97,8 @@ pub enum FlowRequestObjectError {
     InvalidClock,
     #[error("FLOW.REQUEST_OBJECT_TOO_LARGE")]
     TooLarge,
+    #[error("FLOW.REQUEST_OBJECT_INVALID_IDENTITY: {0}")]
+    InvalidIdentity(String),
 }
 
 pub fn build_unsigned_url_query(
@@ -145,11 +199,34 @@ pub fn build_unsigned_url_query(
 
 pub async fn build_standard_request_object(
     providers: &FlowProviderRegistry,
-    mut instance: FlowInstanceRecord,
+    instance: FlowInstanceRecord,
     artifacts: Option<&PresentationRequestArtifacts>,
     public_base_url: &str,
     verifier_client_id: Option<&str>,
     wallet_nonce: Option<&str>,
+    now: DateTime<Utc>,
+) -> Result<SignedRequestObject, FlowRequestObjectError> {
+    build_profiled_request_object(
+        providers,
+        instance,
+        artifacts,
+        public_base_url,
+        &RequestObjectOptions {
+            verifier_client_id: verifier_client_id.map(str::to_owned),
+            wallet_nonce: wallet_nonce.map(str::to_owned),
+            ..RequestObjectOptions::default()
+        },
+        now,
+    )
+    .await
+}
+
+pub async fn build_profiled_request_object(
+    providers: &FlowProviderRegistry,
+    mut instance: FlowInstanceRecord,
+    artifacts: Option<&PresentationRequestArtifacts>,
+    public_base_url: &str,
+    options: &RequestObjectOptions,
     now: DateTime<Utc>,
 ) -> Result<SignedRequestObject, FlowRequestObjectError> {
     let context = instance
@@ -202,13 +279,31 @@ pub async fn build_standard_request_object(
     } else {
         format!("{base}/v1/flows/instances/{}/submit", instance.id)
     };
-    let client_id = if is_siop {
-        verifier_client_id
-            .filter(|value| !value.trim().is_empty())
-            .map_or_else(|| format!("{base}/verifier"), str::to_owned)
+    let (client_id, verifier_did, request_x5c) = if is_siop {
+        (
+            options
+                .verifier_client_id
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map_or_else(|| format!("{base}/verifier"), str::to_owned),
+            None,
+            None,
+        )
     } else {
-        format!("decentralized_identifier:{}", identity.issuer_did)
+        let (client_id, verifier_did, request_x5c) =
+            resolve_oid4vp_client_identity(&identity, &response_uri, options)?;
+        (client_id, Some(verifier_did), request_x5c)
     };
+    if !is_siop {
+        validate_existing_client_identity(
+            context.get("oid4vp_client_id").and_then(Value::as_str),
+            &client_id,
+            verifier_did
+                .as_deref()
+                .ok_or(FlowRequestObjectError::Serialization)?,
+            options.compatibility,
+        )?;
+    }
     let nonce = context
         .get("nonce")
         .and_then(Value::as_str)
@@ -242,11 +337,9 @@ pub async fn build_standard_request_object(
         let artifacts = artifacts.ok_or(FlowRequestObjectError::InvalidInstance(
             "OID4VP query artifacts are required",
         ))?;
-        json!({
+        let mut payload = json!({
             "aud": "https://self-issued.me/v2",
             "client_id": client_id,
-            "client_metadata": standard_client_metadata(base),
-            "dcql_query": artifacts.dcql_query,
             "exp": expires_at.timestamp(),
             "iat": now.timestamp(),
             "iss": client_id,
@@ -255,20 +348,46 @@ pub async fn build_standard_request_object(
             "response_type": "vp_token",
             "response_uri": response_uri,
             "state": instance.id
-        })
+        });
+        match options.compatibility {
+            RequestObjectCompatibility::Standard => {
+                payload["client_metadata"] = client_metadata(base, options);
+                payload["dcql_query"] = artifacts.dcql_query.clone();
+            }
+            RequestObjectCompatibility::Lissi => {
+                if haip {
+                    return Err(FlowRequestObjectError::UnsupportedProfile(
+                        "HAIP is incompatible with LISSI",
+                    ));
+                }
+                payload["client_id_scheme"] = json!("did");
+                payload["presentation_definition"] = artifacts.presentation_definition.clone();
+            }
+        }
+        payload
     };
     if let Some((public_jwk, _)) = &response_encryption {
         payload["response_mode"] = json!("direct_post.jwt");
         payload["client_metadata"]["encrypted_response_enc_values_supported"] = json!(["A256GCM"]);
         payload["client_metadata"]["jwks"] = json!({"keys": [public_jwk]});
     }
-    if let Some(wallet_nonce) = wallet_nonce.filter(|value| !value.trim().is_empty()) {
+    if let Some(wallet_nonce) = options
+        .wallet_nonce
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         payload
             .as_object_mut()
             .ok_or(FlowRequestObjectError::Serialization)?
             .insert("wallet_nonce".into(), json!(wallet_nonce));
     }
-    let compact_jwt = sign_payload(identity_provider.as_ref(), &identity, &payload).await?;
+    let compact_jwt = sign_payload(
+        identity_provider.as_ref(),
+        &identity,
+        &payload,
+        request_x5c.as_deref(),
+    )
+    .await?;
     let instance_id = instance.id.clone();
     let context =
         instance
@@ -394,16 +513,112 @@ async fn response_encryption_key(
     Ok((public, envelope))
 }
 
+fn verifier_did(
+    identity: &SigningIdentity,
+    method: VerifierDidMethod,
+) -> Result<String, FlowRequestObjectError> {
+    match method {
+        VerifierDidMethod::Web => Ok(identity.issuer_did.clone()),
+        VerifierDidMethod::Jwk | VerifierDidMethod::Key => {
+            let public_jwk = serde_json::to_string(&identity.public_jwk)
+                .map_err(|_| FlowRequestObjectError::Serialization)?;
+            marty_didcomm::derive_p256_did_identifier(
+                &public_jwk,
+                if method == VerifierDidMethod::Jwk {
+                    "did:jwk"
+                } else {
+                    "did:key"
+                },
+            )
+            .map_err(|error| FlowRequestObjectError::InvalidIdentity(error.to_string()))
+        }
+    }
+}
+
+pub(crate) fn resolve_oid4vp_client_identity(
+    identity: &SigningIdentity,
+    response_uri: &str,
+    options: &RequestObjectOptions,
+) -> Result<(String, String, Option<Vec<String>>), FlowRequestObjectError> {
+    let verifier_did = verifier_did(identity, options.verifier_did_method)?;
+    match options.compatibility {
+        RequestObjectCompatibility::Lissi => Ok((verifier_did.clone(), verifier_did, None)),
+        RequestObjectCompatibility::Standard => match options.client_id_scheme {
+            Oid4vpClientIdScheme::RedirectUri => Ok((response_uri.to_owned(), verifier_did, None)),
+            Oid4vpClientIdScheme::DecentralizedIdentifier => Ok((
+                format!("decentralized_identifier:{verifier_did}"),
+                verifier_did,
+                None,
+            )),
+            Oid4vpClientIdScheme::X509Hash => {
+                let certificate_bundle = options
+                    .x509_certificate_bundle
+                    .as_deref()
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        FlowRequestObjectError::InvalidIdentity(
+                            "x509_hash requires a verifier certificate bundle".into(),
+                        )
+                    })?;
+                let jwk = serde_json::from_value(
+                    serde_json::to_value(&identity.public_jwk)
+                        .map_err(|_| FlowRequestObjectError::Serialization)?,
+                )
+                .map_err(|error| FlowRequestObjectError::InvalidIdentity(error.to_string()))?;
+                let x509 =
+                    marty_verification::oid4vp::x509_hash_client_identity(certificate_bundle, &jwk)
+                        .map_err(|error| {
+                            FlowRequestObjectError::InvalidIdentity(error.to_string())
+                        })?;
+                Ok((x509.client_id, verifier_did, Some(x509.x5c)))
+            }
+        },
+    }
+}
+
+fn validate_existing_client_identity(
+    existing: Option<&str>,
+    client_id: &str,
+    verifier_did: &str,
+    compatibility: RequestObjectCompatibility,
+) -> Result<(), FlowRequestObjectError> {
+    let Some(existing) = existing.filter(|value| !value.trim().is_empty()) else {
+        return Ok(());
+    };
+    let valid = match compatibility {
+        RequestObjectCompatibility::Standard => existing == client_id,
+        RequestObjectCompatibility::Lissi => {
+            existing == verifier_did
+                || existing == format!("decentralized_identifier:{verifier_did}")
+        }
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(FlowRequestObjectError::InvalidIdentity(
+            "verifier identity changed after the flow was created".into(),
+        ))
+    }
+}
+
 async fn sign_payload(
     provider: &dyn crate::SigningIdentityProvider,
     identity: &SigningIdentity,
     payload: &Value,
+    x5c: Option<&[String]>,
 ) -> Result<String, FlowRequestObjectError> {
-    let header = json!({
+    let mut header = json!({
         "alg": REQUEST_ALGORITHM,
         "kid": identity.verification_method_id,
         "typ": REQUEST_FORMAT
     });
+    if let Some(x5c) = x5c.filter(|values| !values.is_empty()) {
+        header
+            .as_object_mut()
+            .ok_or(FlowRequestObjectError::Serialization)?
+            .remove("kid");
+        header["x5c"] = json!(x5c);
+    }
     let protected = URL_SAFE_NO_PAD
         .encode(serde_json::to_vec(&header).map_err(|_| FlowRequestObjectError::Serialization)?);
     let payload = URL_SAFE_NO_PAD
@@ -424,9 +639,11 @@ async fn sign_payload(
 }
 
 fn standard_client_metadata(base_url: &str) -> Value {
-    json!({
-        "client_name": "ElevenID LLC",
-        "logo_uri": format!("{base_url}/favicon.svg"),
+    client_metadata(base_url, &RequestObjectOptions::default())
+}
+
+fn client_metadata(base_url: &str, options: &RequestObjectOptions) -> Value {
+    let mut metadata = json!({
         "vp_formats_supported": {
             "dc+sd-jwt": {
                 "kb-jwt_alg_values": ["ES256", "EdDSA"],
@@ -441,7 +658,15 @@ fn standard_client_metadata(base_url: &str) -> Value {
                 "sd-jwt_alg_values": ["ES256", "EdDSA"]
             }
         }
-    })
+    });
+    if !options.strict_client_metadata {
+        metadata["client_name"] = json!(options.verifier_display_name);
+        metadata["logo_uri"] = json!(options
+            .verifier_logo_uri
+            .clone()
+            .unwrap_or_else(|| format!("{base_url}/favicon.svg")));
+    }
+    metadata
 }
 
 fn record_presentation_message(

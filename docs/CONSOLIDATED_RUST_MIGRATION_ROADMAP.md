@@ -604,9 +604,26 @@ The deployed startup contract now requires a nonempty, well-formed
 `FLOW_CALLBACK_DESTINATIONS`; missing, empty, malformed, credentialed, or
 unsupported destinations fail before service activation. Two focused start
 vectors, startup regressions and strict Clippy pass. The HTTP start route stays
-unadvertised until configured X.509/LISSI identity modes, request retrieval
-expiry/CAS behavior, and submission/finalization are all native, preventing a
-partial Rust cutover from dropping an existing verifier profile.
+unadvertised until request retrieval expiry/CAS behavior, DC API transport and
+submission/finalization are all native, preventing a partial Rust cutover from
+dropping an existing verifier profile.
+
+The configured verifier identity matrix is now native as well. Flow accepts
+the released redirect-URI, decentralized-identifier and `x509_hash` client-ID
+schemes plus `did:web`, canonical `did:jwk` and canonical P-256 `did:key`
+derivation. DID derivation delegates to pinned `marty-didcomm`; `x509_hash`,
+leaf-key matching, certificate thumbprinting and leaf-first `x5c` shaping
+delegate to `marty-verification`. X.509 Request Objects omit `kid` and carry
+only the validated chain. The LISSI compatibility profile retains raw DID
+client identity, `client_id_scheme=did`, Presentation Exchange rather than
+DCQL, no standard client metadata and an explicit HAIP incompatibility. Strict
+client metadata, branding, HAIP enablement, both request-size limits and PEM or
+file-backed verifier certificates are typed startup configuration; unsupported
+values, missing X.509 material, insecure deployed logo URLs and out-of-range
+limits fail closed. The focused request-object suite now has five vectors, the
+startup suite has six vectors, and strict Clippy passes. Route exposure is now
+gated on atomic retrieval/expiry, DC API transport/origin parity and complete
+submission/finalization rather than verifier identity support.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

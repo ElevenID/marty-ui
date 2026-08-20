@@ -4,6 +4,10 @@ use mmf_push::WebhookDestinationRegistry;
 use thiserror::Error;
 use url::Url;
 
+use crate::{
+    Oid4vpClientIdScheme, RequestObjectOptions, VerificationStartOptions, VerifierDidMethod,
+};
+
 const DEFAULT_HTTP_ADDR: &str = "0.0.0.0:8011";
 const DEFAULT_GRPC_ADDR: &str = "0.0.0.0:9011";
 const MINIMUM_SECRET_BYTES: usize = 32;
@@ -30,6 +34,16 @@ pub struct FlowServiceConfig {
     pub grpc_addr: SocketAddr,
     pub public_base_url: String,
     pub callback_destinations: WebhookDestinationRegistry,
+    pub oid4vp_client_id_scheme: Oid4vpClientIdScheme,
+    pub verifier_did_method: VerifierDidMethod,
+    pub verifier_x509_certificate_bundle: Option<String>,
+    pub oid4vp_haip_enabled: bool,
+    pub oid4vp_request_object_maximum_length: usize,
+    pub oid4vp_url_query_maximum_length: usize,
+    pub oid4vp_strict_client_metadata: bool,
+    pub verifier_client_id: Option<String>,
+    pub verifier_display_name: String,
+    pub verifier_logo_uri: Option<String>,
     pub database_url: String,
     pub database_max_connections: u32,
     pub redis_url: String,
@@ -78,6 +92,8 @@ pub enum FlowConfigError {
     SecretTooShort { name: &'static str, minimum: usize },
     #[error("FLOW.CONFIGURATION: {name}_FILE could not be read")]
     SecretFile { name: &'static str },
+    #[error("FLOW.CONFIGURATION: {name} could not be read")]
+    File { name: &'static str },
 }
 
 impl fmt::Debug for FlowServiceConfig {
@@ -96,6 +112,32 @@ impl fmt::Debug for FlowServiceConfig {
                     "[CONFIGURED]"
                 },
             )
+            .field("oid4vp_client_id_scheme", &self.oid4vp_client_id_scheme)
+            .field("verifier_did_method", &self.verifier_did_method)
+            .field(
+                "verifier_x509_certificate_bundle",
+                &if self.verifier_x509_certificate_bundle.is_some() {
+                    "[CONFIGURED]"
+                } else {
+                    "[NONE]"
+                },
+            )
+            .field("oid4vp_haip_enabled", &self.oid4vp_haip_enabled)
+            .field(
+                "oid4vp_request_object_maximum_length",
+                &self.oid4vp_request_object_maximum_length,
+            )
+            .field(
+                "oid4vp_url_query_maximum_length",
+                &self.oid4vp_url_query_maximum_length,
+            )
+            .field(
+                "oid4vp_strict_client_metadata",
+                &self.oid4vp_strict_client_metadata,
+            )
+            .field("verifier_client_id", &self.verifier_client_id)
+            .field("verifier_display_name", &self.verifier_display_name)
+            .field("verifier_logo_uri", &self.verifier_logo_uri)
             .field("database_url", &"[REDACTED]")
             .field("database_max_connections", &self.database_max_connections)
             .field("redis_url", &"[REDACTED]")
@@ -149,6 +191,11 @@ impl FlowServiceConfig {
                 "ISSUANCE_API_KEY",
             ],
         )?;
+        load_text_file(
+            &mut values,
+            "VERIFIER_X509_CERT_PEM",
+            "VERIFIER_X509_CERT_FILE",
+        )?;
         Self::from_values(values)
     }
 
@@ -197,6 +244,56 @@ impl FlowServiceConfig {
             }
             None => WebhookDestinationRegistry::default(),
         };
+        let oid4vp_client_id_scheme = parse_client_id_scheme(
+            value(&values, "OID4VP_CLIENT_ID_PREFIX").unwrap_or("decentralized_identifier"),
+        )?;
+        let verifier_did_method =
+            parse_verifier_did_method(value(&values, "VERIFIER_DID_METHOD").unwrap_or("did:web"))?;
+        let verifier_x509_certificate_bundle =
+            value(&values, "VERIFIER_X509_CERT_PEM").map(str::to_owned);
+        if oid4vp_client_id_scheme == Oid4vpClientIdScheme::X509Hash
+            && verifier_x509_certificate_bundle.is_none()
+        {
+            return Err(FlowConfigError::Missing {
+                name: "VERIFIER_X509_CERT_PEM",
+            });
+        }
+        let oid4vp_haip_enabled = parse_boolean(
+            value(&values, "OID4VP_HAIP_ENABLED").unwrap_or("false"),
+            "OID4VP_HAIP_ENABLED",
+        )?;
+        let oid4vp_request_object_maximum_length = usize::try_from(parse_bounded(
+            value(&values, "OID4VP_REQUEST_OBJECT_MAX_LENGTH").unwrap_or("8192"),
+            "OID4VP_REQUEST_OBJECT_MAX_LENGTH",
+            1_024,
+            1_048_576,
+        )?)
+        .map_err(|_| invalid("OID4VP_REQUEST_OBJECT_MAX_LENGTH"))?;
+        let oid4vp_url_query_maximum_length = usize::try_from(parse_bounded(
+            value(&values, "OID4VP_URL_QUERY_MAX_LENGTH").unwrap_or("8192"),
+            "OID4VP_URL_QUERY_MAX_LENGTH",
+            1_024,
+            1_048_576,
+        )?)
+        .map_err(|_| invalid("OID4VP_URL_QUERY_MAX_LENGTH"))?;
+        let oid4vp_strict_client_metadata = parse_boolean(
+            value(&values, "OID4VP_STRICT_CLIENT_METADATA").unwrap_or("false"),
+            "OID4VP_STRICT_CLIENT_METADATA",
+        )?;
+        let verifier_client_id = value(&values, "VERIFIER_CLIENT_ID").map(str::to_owned);
+        let verifier_display_name = value(&values, "VERIFIER_DISPLAY_NAME")
+            .unwrap_or("ElevenID LLC")
+            .to_owned();
+        if verifier_display_name.chars().count() > 255 {
+            return Err(invalid("VERIFIER_DISPLAY_NAME"));
+        }
+        let verifier_logo_uri = value(&values, "VERIFIER_LOGO_URI").map(str::to_owned);
+        if let Some(logo) = &verifier_logo_uri {
+            validate_url(logo, "VERIFIER_LOGO_URI", &["http", "https"])?;
+            if environment.is_deployed() && !logo.starts_with("https://") {
+                return Err(invalid("VERIFIER_LOGO_URI"));
+            }
+        }
 
         let database_url = required(&values, "DATABASE_URL")?.replacen(
             "postgresql+asyncpg://",
@@ -306,6 +403,16 @@ impl FlowServiceConfig {
             grpc_addr,
             public_base_url,
             callback_destinations,
+            oid4vp_client_id_scheme,
+            verifier_did_method,
+            verifier_x509_certificate_bundle,
+            oid4vp_haip_enabled,
+            oid4vp_request_object_maximum_length,
+            oid4vp_url_query_maximum_length,
+            oid4vp_strict_client_metadata,
+            verifier_client_id,
+            verifier_display_name,
+            verifier_logo_uri,
             database_url,
             database_max_connections,
             redis_url,
@@ -333,6 +440,48 @@ impl FlowServiceConfig {
                 .unwrap_or("unknown")
                 .to_owned(),
         })
+    }
+
+    #[must_use]
+    pub fn request_object_options(&self) -> RequestObjectOptions {
+        RequestObjectOptions {
+            verifier_client_id: self.verifier_client_id.clone(),
+            verifier_did_method: self.verifier_did_method,
+            client_id_scheme: self.oid4vp_client_id_scheme,
+            x509_certificate_bundle: self.verifier_x509_certificate_bundle.clone(),
+            strict_client_metadata: self.oid4vp_strict_client_metadata,
+            verifier_display_name: self.verifier_display_name.clone(),
+            verifier_logo_uri: self.verifier_logo_uri.clone(),
+            ..RequestObjectOptions::default()
+        }
+    }
+
+    #[must_use]
+    pub fn verification_start_options(&self) -> VerificationStartOptions {
+        VerificationStartOptions {
+            request_object: self.request_object_options(),
+            haip_enabled: self.oid4vp_haip_enabled,
+            request_object_maximum_length: self.oid4vp_request_object_maximum_length,
+            url_query_maximum_length: self.oid4vp_url_query_maximum_length,
+        }
+    }
+}
+
+fn parse_client_id_scheme(value: &str) -> Result<Oid4vpClientIdScheme, FlowConfigError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "redirect_uri" => Ok(Oid4vpClientIdScheme::RedirectUri),
+        "decentralized_identifier" => Ok(Oid4vpClientIdScheme::DecentralizedIdentifier),
+        "x509_hash" => Ok(Oid4vpClientIdScheme::X509Hash),
+        _ => Err(invalid("OID4VP_CLIENT_ID_PREFIX")),
+    }
+}
+
+fn parse_verifier_did_method(value: &str) -> Result<VerifierDidMethod, FlowConfigError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "web" | "did:web" => Ok(VerifierDidMethod::Web),
+        "jwk" | "did:jwk" => Ok(VerifierDidMethod::Jwk),
+        "key" | "did:key" => Ok(VerifierDidMethod::Key),
+        _ => Err(invalid("VERIFIER_DID_METHOD")),
     }
 }
 
@@ -589,6 +738,26 @@ fn load_secret_files(
     Ok(())
 }
 
+fn load_text_file(
+    values: &mut BTreeMap<String, String>,
+    value_name: &'static str,
+    file_name: &'static str,
+) -> Result<(), FlowConfigError> {
+    if value(values, value_name).is_some() {
+        return Ok(());
+    }
+    let Some(path) = value(values, file_name) else {
+        return Ok(());
+    };
+    let contents =
+        fs::read_to_string(path).map_err(|_| FlowConfigError::File { name: file_name })?;
+    if contents.trim().is_empty() {
+        return Err(FlowConfigError::File { name: file_name });
+    }
+    values.insert(value_name.into(), contents);
+    Ok(())
+}
+
 fn redacted(value: &Option<String>) -> &'static str {
     if value.is_some() {
         "[REDACTED]"
@@ -622,6 +791,47 @@ mod tests {
             Err(FlowConfigError::SecretFile {
                 name: "FLOW_WEBHOOK_SECRET"
             })
+        );
+    }
+
+    #[test]
+    fn verifier_certificate_file_preserves_pem_and_fails_closed() {
+        let path = std::env::temp_dir().join(format!(
+            "marty-flow-verifier-certificate-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::write(
+            &path,
+            "-----BEGIN CERTIFICATE-----\nbody\n-----END CERTIFICATE-----\n",
+        )
+        .expect("write certificate");
+        let mut values = BTreeMap::from([(
+            "VERIFIER_X509_CERT_FILE".into(),
+            path.to_string_lossy().into_owned(),
+        )]);
+        load_text_file(
+            &mut values,
+            "VERIFIER_X509_CERT_PEM",
+            "VERIFIER_X509_CERT_FILE",
+        )
+        .expect("load certificate");
+        assert!(values["VERIFIER_X509_CERT_PEM"].ends_with('\n'));
+        fs::remove_file(&path).expect("remove certificate");
+
+        let error = load_text_file(
+            &mut BTreeMap::from([(
+                "VERIFIER_X509_CERT_FILE".into(),
+                path.to_string_lossy().into_owned(),
+            )]),
+            "VERIFIER_X509_CERT_PEM",
+            "VERIFIER_X509_CERT_FILE",
+        )
+        .expect_err("missing certificate must fail");
+        assert_eq!(
+            error,
+            FlowConfigError::File {
+                name: "VERIFIER_X509_CERT_FILE"
+            }
         );
     }
 }

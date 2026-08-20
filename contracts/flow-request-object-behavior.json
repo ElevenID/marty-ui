@@ -21,5 +21,11 @@
   "haip_response_mode": "direct_post.jwt",
   "haip_jwe": {"alg": "ECDH-ES", "enc": "A256GCM"},
   "haip_private_key_storage": "tenant_and_flow_bound_envelope_only",
-  "identity_change": "fail_closed"
+  "identity_change": "fail_closed",
+  "client_id_schemes": ["redirect_uri", "decentralized_identifier", "x509_hash"],
+  "verifier_did_methods": ["did:web", "did:jwk", "did:key"],
+  "x509_header": "validated_leaf_first_x5c_without_kid",
+  "lissi_query": "presentation_definition",
+  "lissi_client_id_scheme": "did",
+  "lissi_haip": "rejected"
 }

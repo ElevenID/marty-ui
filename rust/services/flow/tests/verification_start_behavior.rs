@@ -4,12 +4,14 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{TimeZone, Utc};
 use marty_flow::{
-    prepare_verification_start, CredentialClaimReference, CredentialTemplateProvider,
-    CredentialTemplateReference, FlowKeyEnvelope, FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest,
-    FlowProviderError, FlowProviderRegistry, Oid4vpProfile, PresentationEvaluationRequest,
+    prepare_profiled_verification_start, prepare_verification_start, CredentialClaimReference,
+    CredentialTemplateProvider, CredentialTemplateReference, FlowKeyEnvelope,
+    FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest, FlowProviderError, FlowProviderRegistry,
+    Oid4vpClientIdScheme, Oid4vpProfile, PresentationEvaluationRequest,
     PresentationEvaluationResult, PresentationPolicyProvider, PresentationPolicyReference,
     RequestTransport, RequestUriMethod, SigningIdentity, SigningIdentityProvider, SigningRequest,
     SigningResult, StartVerificationFlowRequest, VerificationResponseType,
+    VerificationStartOptions,
 };
 use mmf_push::WebhookDestinationRegistry;
 use serde::Deserialize;
@@ -321,4 +323,44 @@ async fn rejected_callback_or_cross_tenant_policy_produces_no_prepared_instance(
     .await
     .unwrap_err();
     assert!(policy_error.to_string().contains("INVALID_POLICY"));
+}
+
+#[tokio::test]
+async fn configured_identity_and_haip_gates_apply_before_persistence() {
+    let mut options = VerificationStartOptions::default();
+    options.request_object.client_id_scheme = Oid4vpClientIdScheme::RedirectUri;
+    let prepared = prepare_profiled_verification_start(
+        &providers("org-1"),
+        &callbacks(),
+        request(RequestTransport::RequestUri),
+        "https://verifier.example",
+        false,
+        &options,
+        now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        prepared.instance.context["oid4vp_client_id"],
+        format!(
+            "https://verifier.example/v1/flows/instances/{}/submit",
+            prepared.instance.id
+        )
+    );
+
+    let mut haip = request(RequestTransport::RequestUri);
+    haip.oid4vp_profile = Oid4vpProfile::Haip;
+    assert!(prepare_profiled_verification_start(
+        &providers("org-1"),
+        &callbacks(),
+        haip,
+        "https://verifier.example",
+        false,
+        &options,
+        now(),
+    )
+    .await
+    .unwrap_err()
+    .to_string()
+    .contains("HAIP_DISABLED"));
 }

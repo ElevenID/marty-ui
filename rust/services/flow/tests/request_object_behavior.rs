@@ -7,9 +7,11 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{Duration, TimeZone, Utc};
 use marty_flow::{
-    build_standard_request_object, build_unsigned_url_query, FlowInstanceRecord, FlowKeyEnvelope,
-    FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest, FlowProviderError, FlowProviderRegistry,
-    SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult,
+    build_profiled_request_object, build_standard_request_object, build_unsigned_url_query,
+    FlowInstanceRecord, FlowKeyEnvelope, FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest,
+    FlowProviderError, FlowProviderRegistry, Oid4vpClientIdScheme, RequestObjectCompatibility,
+    RequestObjectOptions, SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult,
+    VerifierDidMethod,
 };
 use marty_oid4vci::presentation_request::PresentationRequestArtifacts;
 use marty_verification::flow::FlowInstanceStatus;
@@ -35,6 +37,12 @@ struct Contract {
     haip_jwe: BTreeMap<String, String>,
     haip_private_key_storage: String,
     identity_change: String,
+    client_id_schemes: Vec<String>,
+    verifier_did_methods: Vec<String>,
+    x509_header: String,
+    lissi_query: String,
+    lissi_client_id_scheme: String,
+    lissi_haip: String,
 }
 
 #[derive(Clone, Default)]
@@ -66,6 +74,7 @@ impl FlowKeyEnvelopeProvider for Envelopes {
 struct Signing {
     requests: Arc<Mutex<Vec<SigningRequest>>>,
     wrong_did: bool,
+    public_jwk: Option<BTreeMap<String, Value>>,
 }
 
 #[async_trait]
@@ -87,12 +96,14 @@ impl SigningIdentityProvider for Signing {
             organization_id: organization_id.into(),
             issuer_did: issuer_did.into(),
             verification_method_id: format!("{issuer_did}#key-1"),
-            public_jwk: BTreeMap::from([
-                ("kty".into(), json!("EC")),
-                ("crv".into(), json!("P-256")),
-                ("x".into(), json!("x")),
-                ("y".into(), json!("y")),
-            ]),
+            public_jwk: self.public_jwk.clone().unwrap_or_else(|| {
+                BTreeMap::from([
+                    ("kty".into(), json!("EC")),
+                    ("crv".into(), json!("P-256")),
+                    ("x".into(), json!("x")),
+                    ("y".into(), json!("y")),
+                ])
+            }),
             key_purpose: key_purpose.into(),
             credential_format: credential_format.into(),
             algorithm: "ES256".into(),
@@ -182,6 +193,18 @@ async fn language_neutral_contract_builds_oid4vp_and_siop_request_objects() {
         "tenant_and_flow_bound_envelope_only"
     );
     assert_eq!(contract.identity_change, "fail_closed");
+    assert_eq!(
+        contract.client_id_schemes,
+        ["redirect_uri", "decentralized_identifier", "x509_hash"]
+    );
+    assert_eq!(
+        contract.verifier_did_methods,
+        ["did:web", "did:jwk", "did:key"]
+    );
+    assert_eq!(contract.x509_header, "validated_leaf_first_x5c_without_kid");
+    assert_eq!(contract.lissi_query, "presentation_definition");
+    assert_eq!(contract.lissi_client_id_scheme, "did");
+    assert_eq!(contract.lissi_haip, "rejected");
 
     let signing = Signing::default();
     let providers = FlowProviderRegistry {
@@ -357,4 +380,82 @@ async fn unsupported_transport_and_changed_identity_fail_closed() {
     )
     .await
     .is_err());
+}
+
+#[tokio::test]
+async fn profiled_requests_preserve_lissi_and_x509_identity_modes() {
+    let artifacts = PresentationRequestArtifacts {
+        presentation_definition: json!({"id": "pd-1", "input_descriptors": []}),
+        dcql_query: json!({"credentials": [{"id": "member"}]}),
+    };
+    let providers = FlowProviderRegistry {
+        signing_identity: Some(Arc::new(Signing::default())),
+        ..Default::default()
+    };
+    let mut lissi_instance = instance("verification");
+    lissi_instance.context["oid4vp_client_id"] =
+        json!("decentralized_identifier:did:web:verifier.example");
+    let lissi = build_profiled_request_object(
+        &providers,
+        lissi_instance,
+        Some(&artifacts),
+        "https://verifier.example",
+        &RequestObjectOptions {
+            compatibility: RequestObjectCompatibility::Lissi,
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+    let lissi_payload = payload(&lissi.compact_jwt);
+    assert_eq!(lissi.client_id, "did:web:verifier.example");
+    assert_eq!(lissi_payload["client_id_scheme"], "did");
+    assert_eq!(
+        lissi_payload["presentation_definition"],
+        artifacts.presentation_definition
+    );
+    assert!(lissi_payload.get("dcql_query").is_none());
+    assert!(lissi_payload.get("client_metadata").is_none());
+
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../signing-keys/tests/fixtures/document_vectors.json"
+    ))
+    .unwrap();
+    let public_jwk =
+        serde_json::from_value(fixture["certificate"]["expected_jwk"].clone()).unwrap();
+    let x509_signing = Signing {
+        public_jwk: Some(public_jwk),
+        ..Default::default()
+    };
+    let x509_providers = FlowProviderRegistry {
+        signing_identity: Some(Arc::new(x509_signing)),
+        ..Default::default()
+    };
+    let x509 = build_profiled_request_object(
+        &x509_providers,
+        instance("verification"),
+        Some(&artifacts),
+        "https://verifier.example",
+        &RequestObjectOptions {
+            client_id_scheme: Oid4vpClientIdScheme::X509Hash,
+            x509_certificate_bundle: Some(
+                fixture["certificate"]["cert_pem"].as_str().unwrap().into(),
+            ),
+            verifier_did_method: VerifierDidMethod::Web,
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+    let protected: Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(x509.compact_jwt.split('.').next().unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(x509.client_id.starts_with("x509_hash:"));
+    assert!(protected.get("kid").is_none());
+    assert_eq!(protected["x5c"][0], fixture["certificate"]["expected_x5c"]);
 }

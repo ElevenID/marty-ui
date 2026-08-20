@@ -36,6 +36,14 @@
   "partial_tls_behavior": "fail_closed",
   "database_connection_bounds": [1, 100],
   "redis_database_bounds": [0, 255],
+  "verifier_profiles": {
+    "client_id_schemes": ["redirect_uri", "decentralized_identifier", "x509_hash"],
+    "did_methods": ["did:web", "did:jwk", "did:key"],
+    "request_length_bounds": [1024, 1048576],
+    "x509_certificate_sources": ["VERIFIER_X509_CERT_PEM", "VERIFIER_X509_CERT_FILE"],
+    "haip_default": false,
+    "strict_metadata_default": false
+  },
   "fail_closed_cases": [
     "missing_database",
     "missing_redis",
@@ -49,6 +57,11 @@
     "implicit_deployed_plaintext",
     "insecure_public_origin",
     "empty_callback_registry",
-    "malformed_callback_registry"
+    "malformed_callback_registry",
+    "unsupported_client_id_scheme",
+    "unsupported_verifier_did_method",
+    "missing_x509_certificate",
+    "invalid_request_length_bound",
+    "insecure_deployed_logo_uri"
   ]
 }
