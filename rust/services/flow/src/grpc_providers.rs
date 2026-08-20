@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
+use mmf_platform::{GrpcChannelFactory, PlatformError};
 use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
 use serde::de::DeserializeOwned;
 use tonic::{metadata::AsciiMetadataValue, transport::Channel, Code, Request, Status};
@@ -27,6 +28,90 @@ use crate::{
 
 const MAXIMUM_PROVIDER_JSON_BYTES: usize = 1024 * 1024;
 const SERVICE_TOKEN_HEADER: &str = "x-service-token";
+
+#[derive(Clone)]
+pub struct FlowGrpcChannelFactories {
+    pub organization: GrpcChannelFactory,
+    pub credential_template: GrpcChannelFactory,
+    pub presentation_policy: GrpcChannelFactory,
+    pub issuance: GrpcChannelFactory,
+}
+
+impl FlowGrpcChannelFactories {
+    pub fn connect_lazy(&self) -> Result<FlowGrpcClients, PlatformError> {
+        Ok(FlowGrpcClients::new(
+            self.organization.connect_lazy()?,
+            self.credential_template.connect_lazy()?,
+            self.presentation_policy.connect_lazy()?,
+            self.issuance.connect_lazy()?,
+        ))
+    }
+
+    pub async fn connect(&self) -> Result<FlowGrpcClients, PlatformError> {
+        let (organization, credential_template, presentation_policy, issuance) = tokio::try_join!(
+            self.organization.connect(),
+            self.credential_template.connect(),
+            self.presentation_policy.connect(),
+            self.issuance.connect(),
+        )?;
+        Ok(FlowGrpcClients::new(
+            organization,
+            credential_template,
+            presentation_policy,
+            issuance,
+        ))
+    }
+}
+
+#[derive(Clone)]
+pub struct FlowGrpcClients {
+    pub organization: OrganizationServiceClient<Channel>,
+    pub credential_template: CredentialTemplateServiceClient<Channel>,
+    pub presentation_policy: PresentationPolicyServiceClient<Channel>,
+    pub issuance: IssuanceServiceClient<Channel>,
+}
+
+impl FlowGrpcClients {
+    #[must_use]
+    pub fn new(
+        organization: Channel,
+        credential_template: Channel,
+        presentation_policy: Channel,
+        issuance: Channel,
+    ) -> Self {
+        Self {
+            organization: OrganizationServiceClient::new(organization),
+            credential_template: CredentialTemplateServiceClient::new(credential_template),
+            presentation_policy: PresentationPolicyServiceClient::new(presentation_policy),
+            issuance: IssuanceServiceClient::new(issuance),
+        }
+    }
+
+    pub fn providers(
+        self,
+        service_token: Option<&str>,
+    ) -> Result<FlowGrpcProviders, FlowProviderError> {
+        Ok(FlowGrpcProviders {
+            tenant_membership: GrpcTenantMembershipProvider::new(self.organization, service_token)?,
+            credential_template: GrpcCredentialTemplateProvider::new(
+                self.credential_template,
+                service_token,
+            )?,
+            presentation_policy: GrpcPresentationPolicyProvider::new(
+                self.presentation_policy,
+                service_token,
+            )?,
+            issuance: GrpcIssuanceProvider::new(self.issuance, service_token)?,
+        })
+    }
+}
+
+pub struct FlowGrpcProviders {
+    pub tenant_membership: GrpcTenantMembershipProvider,
+    pub credential_template: GrpcCredentialTemplateProvider,
+    pub presentation_policy: GrpcPresentationPolicyProvider,
+    pub issuance: GrpcIssuanceProvider,
+}
 
 #[derive(Clone, Default)]
 struct GrpcAuthentication {

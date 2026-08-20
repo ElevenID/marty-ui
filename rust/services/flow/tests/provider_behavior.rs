@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, collections::BTreeSet, path::PathBuf, sync::Arc
 
 use async_trait::async_trait;
 use marty_flow::{FlowProviderRegistry, SigningIdentity, REQUIRED_FLOW_PROVIDERS};
+use mmf_platform::{GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial};
 use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -159,4 +160,28 @@ async fn flow_authorization_consumes_the_shared_mmf_membership_decision() {
             json!(case.permission)
         );
     }
+}
+
+#[tokio::test]
+async fn flow_grpc_clients_consume_only_the_shared_mmf_channel_factory() {
+    fn factory(target: &str) -> GrpcChannelFactory {
+        GrpcChannelFactory::new(
+            GrpcChannelConfig {
+                target: target.into(),
+                ..GrpcChannelConfig::default()
+            },
+            GrpcTlsMaterial::default(),
+        )
+        .unwrap()
+    }
+
+    let clients = marty_flow::FlowGrpcChannelFactories {
+        organization: factory("http://organization:50051"),
+        credential_template: factory("http://credential-template:50052"),
+        presentation_policy: factory("http://presentation-policy:50053"),
+        issuance: factory("http://issuance:50054"),
+    }
+    .connect_lazy()
+    .unwrap();
+    assert!(clients.providers(Some(&"s".repeat(32))).is_ok());
 }

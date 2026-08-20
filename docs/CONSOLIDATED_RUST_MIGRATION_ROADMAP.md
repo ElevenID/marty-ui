@@ -356,9 +356,14 @@ persisted timestamps, custom extensions, context types and protocol fields fail
 closed. The same golden vectors compile into the Python parity suite; all 25
 Rust non-container tests pass individually and strict Clippy is clean. The
 Windows host cannot link every test binary concurrently because of its PDB
-limit, so the aggregate suite remains a Linux CI landing gate. Shared MMF
-mTLS/channel construction and executable composition are the remaining Flow
-provider/runtime work.
+limit, so the aggregate suite remains a Linux CI landing gate. Flow now
+consumes the canonical `mmf-platform` channel factories for all organization,
+credential-template, presentation-policy and issuance clients. Both eager
+startup/readiness and lazy development composition inherit the shared bounded
+plaintext, TLS and mutual-TLS policy; no Flow-local endpoint or certificate
+constructor remains. The focused five-test provider suite, all 26 current Rust
+tests in their applicable groups, and strict Clippy pass. HTTP/gRPC executable
+composition is now the next Flow runtime gate.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

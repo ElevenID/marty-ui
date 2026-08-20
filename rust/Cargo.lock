@@ -3864,6 +3864,7 @@ dependencies = [
  "chrono",
  "marty-verification",
  "mmf-messaging",
+ "mmf-platform",
  "mmf-push",
  "mmf-security",
  "mmf-workflow",
@@ -4261,6 +4262,8 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
+ "tonic",
+ "url",
  "uuid",
 ]
 
@@ -7481,6 +7484,7 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project",
+ "rustls-native-certs",
  "socket2",
  "sync_wrapper",
  "tokio",

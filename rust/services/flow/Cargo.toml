@@ -14,6 +14,7 @@ base64.workspace = true
 chrono.workspace = true
 marty-verification.workspace = true
 mmf-messaging.workspace = true
+mmf-platform.workspace = true
 mmf-push.workspace = true
 mmf-security.workspace = true
 mmf-workflow.workspace = true
@@ -23,13 +24,11 @@ serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 tonic.workspace = true
 tonic-prost.workspace = true
 url.workspace = true
 uuid.workspace = true
-
-[dev-dependencies]
-tokio.workspace = true
 
 [build-dependencies]
 protoc-bin-vendored.workspace = true
