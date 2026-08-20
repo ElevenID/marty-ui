@@ -303,6 +303,20 @@ those pass will the Python Flow runtime and its service dependencies be
 deleted. No deployment occurs during these slices; beta receives one aggregate
 update only after all wave-three work lands.
 
+The public request boundary is now also represented in Rust. Strict DTOs cover
+definition create/PATCH (including unset-versus-explicit-null semantics),
+custom extension graphs, hooks and triggers, instance start/advance, OID4VP and
+SIOP starts/submissions, Digital Credentials API responses, and authenticated
+application-approved events. Unknown fields, missing type-specific references,
+private context injection, invalid graph topology, unsupported OID4VP transport
+combinations, oversized fields and unsafe callback destinations fail with
+normalized codes. `contracts/flow-api-behavior.json` supplies 12 accepted and
+13 rejected transport-neutral vectors. Four Rust tests pass, and a Python
+conformance test consumes the same vectors so the legacy boundary remains the
+parity oracle until deletion. That Python test compiles locally but its runtime
+execution is deferred to service CI because the available local environment is
+missing `grpc_health`; CI installs the full locked service dependency set.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

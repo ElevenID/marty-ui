@@ -6,12 +6,14 @@
 
 #![forbid(unsafe_code)]
 
+mod api;
 mod callback;
 mod contract;
 mod domain;
 mod postgres;
 mod repository;
 
+pub use api::*;
 pub use callback::*;
 pub use contract::*;
 pub use domain::*;
