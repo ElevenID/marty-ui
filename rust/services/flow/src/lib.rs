@@ -13,6 +13,7 @@ mod domain;
 mod grpc_providers;
 mod http_providers;
 mod postgres;
+mod projection;
 mod providers;
 mod repository;
 
@@ -39,5 +40,6 @@ pub use domain::*;
 pub use grpc_providers::*;
 pub use http_providers::*;
 pub use postgres::*;
+pub use projection::*;
 pub use providers::*;
 pub use repository::*;

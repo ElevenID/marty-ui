@@ -347,8 +347,18 @@ wrap/unwrap and every physical-document lifecycle operation. They preserve
 gateway path prefixes, disable redirects, bound response bodies to one MiB,
 apply operation timeouts, reject malformed or incomplete responses, and accept
 the generic signature field only when its declared encoding is raw IEEE P1363.
-Shared MMF mTLS/channel construction, response projection DTOs and executable
-composition are the remaining Flow provider/runtime work.
+The public definition, instance, verification-result and artifact projections
+now also execute in Rust against `contracts/flow-response-behavior.json`.
+These DTOs preserve protocol status, resolved steps, tenant/subject metadata,
+timestamps, references, hooks, trigger, verification details and artifact
+lifecycle fields while recursively removing private service state. Malformed
+persisted timestamps, custom extensions, context types and protocol fields fail
+closed. The same golden vectors compile into the Python parity suite; all 25
+Rust non-container tests pass individually and strict Clippy is clean. The
+Windows host cannot link every test binary concurrently because of its PDB
+limit, so the aggregate suite remains a Linux CI landing gate. Shared MMF
+mTLS/channel construction and executable composition are the remaining Flow
+provider/runtime work.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

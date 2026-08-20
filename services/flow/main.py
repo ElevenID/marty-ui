@@ -2703,7 +2703,7 @@ def _artifact_to_response(
         scanned_at=artifact.scanned_at.isoformat() if artifact.scanned_at else None,
         status=artifact.status.value,
         state=artifact.state,
-        wallet_metadata=artifact.wallet_metadata,
+        wallet_metadata=_public_flow_value(artifact.wallet_metadata),
         attempt_number=artifact.attempt_number,
         created_at=artifact.created_at.isoformat(),
         updated_at=artifact.updated_at.isoformat(),
