@@ -6,61 +6,42 @@ search_scope:
   - bindings_adapters_ffi_and_api_layers
   - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
 search_queries:
-  - "marty-ui immutable component pin and stack release"
-  - "marty-credentials v0.1.66 issuance image digest"
-  - "marty-core v0.1.58 Python wheel digests"
-  - "consolidated Rust migration aggregate beta release"
-  - "DIDComm authcrypt deployment policy contract"
-  - "Rust-backed DID document publication and tenant-bound issuer identity routes"
-  - "DIDCOMM_ENCRYPTION_POLICY_FILE authcrypt active issuer"
-  - "PublishDidRequest keyAgreement did:web issuer identity"
-  - "compose_command optional profile isolation last"
-  - "did:web PUBLIC_DOMAIN port authority encoding and public document retargeting"
-  - "W3C SD-JWT credentialSubject extraction for presentation policy claims"
+  - "allocate-index AllocateIndex next_index status list allocation"
+  - "Redis Lua allocation counter and status-list persistence"
+  - "PostgreSQL advisory lock idempotency reservation counter"
+  - "issuance reserved_credential_id claim_transaction_for_signing"
+  - "issued_credentials status_list_entries revocation_profile_id"
+  - "DIDComm credential identity retry delivery failure"
+  - "RUSTSEC-2026-0258 h2 0.4.16"
 candidate_implementations:
-  - path: release/stack-lock.json
-    language: JSON
-    disposition: reuse_existing_release_manifest
-  - path: tests/test_stack_release_contract.py
-    language: Python
-    disposition: reuse_existing_release_contract_gate
-  - path: .github/workflows/cd.yml
-    language: YAML
-    disposition: reuse_existing_immutable_release_pipeline
-  - path: https://github.com/ElevenID/marty-credentials/releases/tag/v0.1.66
-    language: GitHub release evidence
-    disposition: pin_verified_immutable_dependency_release
-  - path: https://github.com/ElevenID/marty-core/releases/tag/v0.1.58
-    language: GitHub release evidence
-    disposition: pin_verified_immutable_dependency_release
-  - path: marty-credentials/CONFIGURATION.md
-    language: Markdown
-    disposition: preserve_optional_policy_contract_for_controlled_integration_adoption
-  - path: rust/services/signing-keys/src/documents.rs
+  - path: rust/services/revocation-profile/src/status.rs
     language: Rust
-    disposition: extend_canonical_did_document_owner
-  - path: services/gateway/routes/signing_keys.py
+    disposition: reuse_existing_canonical_status_list_owner
+  - path: rust/services/revocation-profile/src/redis_status.rs
+    language: Rust
+    disposition: extend_existing_redis_counter_as_upgrade_floor
+  - path: rust/services/revocation-profile/src/postgres.rs
+    language: Rust
+    disposition: extend_existing_durable_profile_repository
+  - path: rust/services/revocation-profile/src/migration.rs
+    language: Rust_SQL
+    disposition: extend_existing_advisory_locked_migration_graph
+  - path: services/revocation_profile/status_list_manager.py
     language: Python
-    disposition: reuse_existing_tenant_bound_public_identity_facade
-  - path: services/gateway/routes/signing_keys.py::_normalize_did_web_domain
+    disposition: reject_deleted_legacy_implementation_from_non_authoritative_checkout
+  - path: ../marty-credentials/services/issuance/infrastructure/api/routes.py
     language: Python
-    disposition: extend_existing_domain_validation_for_canonical_method_authority
-  - path: services/presentation_policy/main.py::_verify_w3c_vc
-    language: Python
-    disposition: reuse_existing_verified_credential_subject_policy_claim_shape
-  - path: scripts/conformance_stack.py
-    language: Python
-    disposition: reuse_existing_explicit_overlay_ordering
-  - path: docs/official-interoperability-docker.md
-    language: Markdown
-    disposition: extend_existing_operator_runbook
-no_match_statement: ""
-decision: reuse_existing
+    disposition: extend_thin_http_adapter_with_stable_credential_identity
+  - path: rust/Cargo.lock
+    language: Cargo_lockfile
+    disposition: resolve_transitive_h2_to_patched_0_4_16
+no_match_statement: "No existing durable idempotent status-index reservation implementation was found."
+decision: extend_existing
 canonical_implementation:
-  path: rust/services/signing-keys/src/documents.rs
-  language: Rust
+  path: rust/services/revocation-profile/src/postgres.rs
+  language: Rust_SQL
 rust_disposition: extend_existing_rust_owner
-non_rust_rationale: ""
+non_rust_rationale: "The sibling Credentials change is limited to transaction-state and HTTP adapter wiring; allocation policy and concurrency remain in Rust."
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""

@@ -135,6 +135,10 @@ impl RevocationProfileHttp {
                 post(allocate_index),
             )
             .route(
+                "/internal/revocation-profiles/{profile_id}/reserve-index",
+                post(reserve_index),
+            )
+            .route(
                 "/internal/revocation-profiles/{profile_id}/process-revocation",
                 post(process_revocation),
             )
@@ -312,6 +316,14 @@ struct ListQuery {
 struct AllocateIndexRequest {
     organization_id: String,
     credential_format: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReserveIndexRequest {
+    organization_id: String,
+    credential_format: String,
+    credential_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -746,6 +758,29 @@ async fn allocate_index(
             &profile_id,
             &request.organization_id,
             &request.credential_format,
+        )
+        .await?;
+    Ok(Json(AllocateIndexResponse {
+        organization_id: result.organization_id,
+        index: result.index,
+        status_list_url: result.status_list_url,
+    }))
+}
+
+async fn reserve_index(
+    State(state): State<RevocationProfileHttp>,
+    Path(profile_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<ReserveIndexRequest>,
+) -> Result<Json<AllocateIndexResponse>, ApiError> {
+    state.internal_auth.authorize(&headers)?;
+    let result = state
+        .service
+        .reserve_index(
+            &profile_id,
+            &request.organization_id,
+            &request.credential_format,
+            &request.credential_id,
         )
         .await?;
     Ok(Json(AllocateIndexResponse {
@@ -1591,12 +1626,63 @@ mod tests {
             .uri(&allocate_uri)
             .header("content-type", "application/json")
             .header(SERVICE_TOKEN_HEADER, &token)
-            .body(Body::from(allocation_body))
+            .body(Body::from(allocation_body.clone()))
             .unwrap();
         let response = app.clone().oneshot(allocate).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let allocation = json_response(response).await;
         assert_eq!(allocation["index"], 0);
+
+        let reserve_uri = format!("/internal/revocation-profiles/{profile_id}/reserve-index");
+        let reservation_body = json!({
+            "organization_id": "org-1",
+            "credential_format": "sd_jwt_vc",
+            "credential_id": "credential-1"
+        })
+        .to_string();
+        let reserve = Request::builder()
+            .method("POST")
+            .uri(&reserve_uri)
+            .header("content-type", "application/json")
+            .header(SERVICE_TOKEN_HEADER, &token)
+            .body(Body::from(reservation_body.clone()))
+            .unwrap();
+        let response = app.clone().oneshot(reserve).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_response(response).await["index"], 1);
+
+        let retry = Request::builder()
+            .method("POST")
+            .uri(&reserve_uri)
+            .header("content-type", "application/json")
+            .header(SERVICE_TOKEN_HEADER, &token)
+            .body(Body::from(reservation_body))
+            .unwrap();
+        let response = app.clone().oneshot(retry).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_response(response).await["index"], 1);
+
+        let missing_credential_id = Request::builder()
+            .method("POST")
+            .uri(&reserve_uri)
+            .header("content-type", "application/json")
+            .header(SERVICE_TOKEN_HEADER, &token)
+            .body(Body::from(
+                json!({
+                    "organization_id": "org-1",
+                    "credential_format": "sd_jwt_vc"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(missing_credential_id)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
 
         let process_uri = format!("/internal/revocation-profiles/{profile_id}/process-revocation");
         let process_body = json!({

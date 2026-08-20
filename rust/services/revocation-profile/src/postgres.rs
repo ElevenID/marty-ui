@@ -1,6 +1,7 @@
 use crate::{
     domain::{RevocationProfile, RevocationProfileStatus},
-    repository::{ProfileRepository, RepositoryError},
+    repository::{ProfileRepository, RepositoryError, StatusIndexReservation},
+    status::StatusListFormat,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -119,6 +120,156 @@ impl ProfileRepository for PgProfileRepository {
                 .await
                 .map_err(repository_error)?;
         Ok(result.rows_affected() == 1)
+    }
+
+    async fn reserve_status_index(
+        &self,
+        reservation: StatusIndexReservation,
+    ) -> Result<usize, RepositoryError> {
+        let format = persisted_status_format(reservation.format);
+        let size = i64::try_from(reservation.size).map_err(repository_error)?;
+        let legacy_floor = i64::try_from(reservation.legacy_floor).map_err(repository_error)?;
+        let mut transaction = self.pool.begin().await.map_err(repository_error)?;
+
+        // The credential lock prevents the same globally stable credential ID
+        // from racing across different tenant/profile scopes. The profile row
+        // lock serializes distinct credentials within one status-list scope.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(&reservation.credential_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(repository_error)?;
+
+        if let Some(row) = sqlx::query(
+            r#"
+            SELECT organization_id, profile_id, status_list_format, status_list_index
+            FROM revocation_profile_service.status_list_allocations
+            WHERE credential_id = $1
+            "#,
+        )
+        .bind(&reservation.credential_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(repository_error)?
+        {
+            let organization_id: String =
+                row.try_get("organization_id").map_err(repository_error)?;
+            let profile_id: String = row.try_get("profile_id").map_err(repository_error)?;
+            let persisted_format: String = row
+                .try_get("status_list_format")
+                .map_err(repository_error)?;
+            if organization_id != reservation.organization_id
+                || profile_id != reservation.profile_id
+                || persisted_format != format
+            {
+                return Err(RepositoryError::AllocationScopeConflict {
+                    credential_id: reservation.credential_id,
+                });
+            }
+            let index: i64 = row.try_get("status_list_index").map_err(repository_error)?;
+            transaction.commit().await.map_err(repository_error)?;
+            return usize::try_from(index).map_err(repository_error);
+        }
+
+        let profile_exists = sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT id
+            FROM revocation_profile_service.revocation_profiles
+            WHERE id = $1 AND organization_id = $2
+            FOR UPDATE
+            "#,
+        )
+        .bind(&reservation.profile_id)
+        .bind(&reservation.organization_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(repository_error)?;
+        if profile_exists.is_none() {
+            return Err(RepositoryError::AllocationScopeConflict {
+                credential_id: reservation.credential_id,
+            });
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO revocation_profile_service.status_list_allocation_counters (
+                organization_id, profile_id, status_list_format, next_index
+            ) VALUES ($1, $2, $3, $4)
+            ON CONFLICT (organization_id, profile_id, status_list_format)
+            DO UPDATE SET next_index = GREATEST(
+                revocation_profile_service.status_list_allocation_counters.next_index,
+                EXCLUDED.next_index
+            )
+            "#,
+        )
+        .bind(&reservation.organization_id)
+        .bind(&reservation.profile_id)
+        .bind(format)
+        .bind(legacy_floor)
+        .execute(&mut *transaction)
+        .await
+        .map_err(repository_error)?;
+
+        let index = sqlx::query_scalar::<_, i64>(
+            r#"
+            SELECT next_index
+            FROM revocation_profile_service.status_list_allocation_counters
+            WHERE organization_id = $1 AND profile_id = $2 AND status_list_format = $3
+            FOR UPDATE
+            "#,
+        )
+        .bind(&reservation.organization_id)
+        .bind(&reservation.profile_id)
+        .bind(format)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(repository_error)?;
+        if index >= size {
+            return Err(RepositoryError::AllocationFull(format!(
+                "{}:{}",
+                reservation.organization_id, reservation.profile_id
+            )));
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO revocation_profile_service.status_list_allocations (
+                credential_id, organization_id, profile_id, status_list_format,
+                status_list_index, created_at
+            ) VALUES ($1, $2, $3, $4, $5, NOW())
+            "#,
+        )
+        .bind(&reservation.credential_id)
+        .bind(&reservation.organization_id)
+        .bind(&reservation.profile_id)
+        .bind(format)
+        .bind(index)
+        .execute(&mut *transaction)
+        .await
+        .map_err(repository_error)?;
+        sqlx::query(
+            r#"
+            UPDATE revocation_profile_service.status_list_allocation_counters
+            SET next_index = $4
+            WHERE organization_id = $1 AND profile_id = $2 AND status_list_format = $3
+            "#,
+        )
+        .bind(&reservation.organization_id)
+        .bind(&reservation.profile_id)
+        .bind(format)
+        .bind(index + 1)
+        .execute(&mut *transaction)
+        .await
+        .map_err(repository_error)?;
+        transaction.commit().await.map_err(repository_error)?;
+        usize::try_from(index).map_err(repository_error)
+    }
+}
+
+fn persisted_status_format(format: StatusListFormat) -> &'static str {
+    match format {
+        StatusListFormat::Bitstring => "bitstring",
+        StatusListFormat::TokenStatusList => "token_status_list",
     }
 }
 

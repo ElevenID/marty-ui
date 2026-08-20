@@ -23,6 +23,15 @@ redis.call('SET', KEYS[1], current + 1)
 return current
 "#;
 
+const ADVANCE_ALLOCATION_FLOOR_SCRIPT: &str = r#"
+local current = redis.call('GET', KEYS[1])
+local requested = tonumber(ARGV[1])
+if not current or tonumber(current) < requested then
+  redis.call('SET', KEYS[1], requested)
+end
+return 1
+"#;
+
 const COMPARE_AND_SWAP_SCRIPT: &str = r#"
 local current = redis.call('GET', KEYS[1])
 if current == ARGV[1] then
@@ -149,6 +158,39 @@ impl StatusRepository for RedisStatusRepository {
         }
         usize::try_from(allocated)
             .map_err(|_| StatusError::Repository("allocated index is invalid".into()))
+    }
+
+    async fn allocation_floor(
+        &self,
+        scope: &str,
+        format: StatusListFormat,
+    ) -> Result<usize, StatusError> {
+        let mut connection = self.connection.clone();
+        let value: Option<i64> = connection
+            .get(self.next_index_key(scope, format))
+            .await
+            .map_err(redis_error)?;
+        match value {
+            Some(value) => usize::try_from(value)
+                .map_err(|_| StatusError::Repository("allocation floor is invalid".into())),
+            None => Ok(0),
+        }
+    }
+
+    async fn advance_allocation_floor(
+        &self,
+        scope: &str,
+        format: StatusListFormat,
+        next_index: usize,
+    ) -> Result<(), StatusError> {
+        let mut connection = self.connection.clone();
+        Script::new(ADVANCE_ALLOCATION_FLOOR_SCRIPT)
+            .key(self.next_index_key(scope, format))
+            .arg(next_index)
+            .invoke_async::<i64>(&mut connection)
+            .await
+            .map_err(redis_error)?;
+        Ok(())
     }
 
     async fn set_status(
