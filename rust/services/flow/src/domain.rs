@@ -131,9 +131,15 @@ pub struct FlowInstance {
     #[serde(default)]
     pub context: Value,
     #[serde(default)]
+    pub step_history: Vec<Value>,
+    #[serde(default)]
     pub state_history: Vec<StateHistoryEntry>,
     pub expires_at_ms: Option<u64>,
     pub completed_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]

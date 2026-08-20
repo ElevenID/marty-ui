@@ -9,9 +9,11 @@
 mod callback;
 mod contract;
 mod domain;
+mod postgres;
 mod repository;
 
 pub use callback::*;
 pub use contract::*;
 pub use domain::*;
+pub use postgres::*;
 pub use repository::*;

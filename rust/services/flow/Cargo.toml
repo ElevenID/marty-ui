@@ -9,12 +9,14 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+chrono.workspace = true
 marty-verification.workspace = true
 mmf-messaging.workspace = true
 mmf-push.workspace = true
 mmf-workflow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 thiserror.workspace = true
 url.workspace = true
 uuid.workspace = true

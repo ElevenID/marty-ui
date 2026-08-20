@@ -274,7 +274,7 @@ destination templates at `a1806b9` and the canonical header-and-payload-bound
 event HMAC at `6d4462f`, eliminating two more Flow-only Python utilities.
 
 The first `marty-flow` crate slice now executes the checked-in
-`contracts/flow-service-behavior.json`. Eleven Rust tests freeze all 26 HTTP and
+`contracts/flow-service-behavior.json`. Twelve Rust tests freeze all 26 HTTP and
 16 gRPC operations, every built-in type/reference/sequence, public status and
 private-context behavior, callback defaults, and atomicity obligations. The
 domain delegates transitions and graph validation directly to
@@ -284,12 +284,24 @@ prove concurrent finalization commits one nonce/result/callback exactly once,
 terminal decisions are immutable, application event plans are replay-safe and
 payload-conflict-safe, and issuance artifacts are transaction-idempotent.
 
-The next Flow gates are PostgreSQL atomicity, complete DTO and provider parity,
-HTTP/gRPC executable parity,
-provider failure behavior, and container startup/readiness. Only after those
-pass will the Python Flow runtime and its service dependencies be deleted. No
-deployment occurs during these slices; beta receives one aggregate update only
-after all wave-three work lands.
+The PostgreSQL repository now implements the same fenced finalization and
+callback lifecycle over the released `flow_service` tables. It uses database
+clock time and one SQLx transaction for expired-nonce cleanup, nonce insertion,
+live-state compare-and-swap, terminal result persistence and callback enqueue.
+Callback claims use `FOR UPDATE SKIP LOCKED` and per-attempt UUID leases;
+completion, retry and dead-letter updates reject stale workers and successful
+delivery scrubs the destination and payload. The Rust-service CI job now
+provisions the isolated `marty_atomic_test` database. Its behavioral test runs
+the concurrent-winner, expiry rollback, retry/reclaim, stale-lease rejection
+and retention-scrubbing vectors against PostgreSQL. Compilation and all
+non-container tests pass locally; the real PostgreSQL execution remains a CI
+landing gate because the local Docker daemon is unavailable.
+
+The next Flow gates are complete DTO and provider parity, HTTP/gRPC executable
+parity, provider failure behavior, and container startup/readiness. Only after
+those pass will the Python Flow runtime and its service dependencies be
+deleted. No deployment occurs during these slices; beta receives one aggregate
+update only after all wave-three work lands.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

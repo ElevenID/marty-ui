@@ -284,6 +284,19 @@ jobs:
     permissions:
       contents: read
     services:
+      postgres:
+        image: postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c
+        env:
+          POSTGRES_DB: marty_atomic_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d marty_atomic_test"
+          --health-interval 1s
+          --health-timeout 2s
+          --health-retries 30
       redis:
         image: redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
         ports:
@@ -295,6 +308,7 @@ jobs:
           --health-retries 20
     env:
       CARGO_INCREMENTAL: 0
+      FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@localhost:5432/marty_atomic_test
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}

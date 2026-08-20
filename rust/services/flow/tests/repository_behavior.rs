@@ -15,9 +15,12 @@ fn instance(id: &str, status: FlowInstanceStatus) -> FlowInstance {
         current_step_id: Some("verify".into()),
         application_flow_key_hash: None,
         context: json!({}),
+        step_history: Vec::new(),
         state_history: Vec::new(),
         expires_at_ms: Some(10_000),
         completed_at_ms: None,
+        result: None,
+        error: None,
     }
 }
 
