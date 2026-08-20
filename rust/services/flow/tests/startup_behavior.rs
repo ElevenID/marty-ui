@@ -16,6 +16,8 @@ struct Contract {
     database_schemes: Vec<String>,
     redis_schemes: Vec<String>,
     dependency_schemes: Vec<String>,
+    workload_transport: String,
+    partial_tls_behavior: String,
     database_connection_bounds: Vec<u32>,
     redis_database_bounds: Vec<u32>,
     fail_closed_cases: Vec<String>,
@@ -39,6 +41,27 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
         ("FLOW_WEBHOOK_SECRET".into(), "w".repeat(32)),
         ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "k".repeat(32)),
         ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
+        ("GRPC_INSECURE_ALLOWED".into(), "true".into()),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_CERT".into(),
+            "/run/secrets/flow-client-cert".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KEY".into(),
+            "/run/secrets/flow-client-key".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_CERT".into(),
+            "/run/secrets/flow-server-cert".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KEY".into(),
+            "/run/secrets/flow-server-key".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CA_CERT".into(),
+            "/run/secrets/workload-ca".into(),
+        ),
     ])
 }
 
@@ -51,7 +74,7 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.schema_version, 1);
     assert_eq!(contract.deployed_environments, ["beta", "production"]);
     assert_eq!(contract.required_always, ["DATABASE_URL", "REDIS_URL"]);
-    assert_eq!(contract.required_when_deployed.len(), 10);
+    assert_eq!(contract.required_when_deployed.len(), 16);
     assert_eq!(contract.minimum_secret_bytes, 32);
     assert_eq!(contract.secret_file_suffix, "_FILE");
     assert_eq!(
@@ -62,9 +85,11 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.database_schemes, ["postgres", "postgresql"]);
     assert_eq!(contract.redis_schemes, ["redis", "rediss"]);
     assert_eq!(contract.dependency_schemes, ["http", "https"]);
+    assert_eq!(contract.workload_transport, "mutual_tls");
+    assert_eq!(contract.partial_tls_behavior, "fail_closed");
     assert_eq!(contract.database_connection_bounds, [1, 100]);
     assert_eq!(contract.redis_database_bounds, [0, 255]);
-    assert_eq!(contract.fail_closed_cases.len(), 7);
+    assert_eq!(contract.fail_closed_cases.len(), 10);
 }
 
 #[test]
@@ -74,6 +99,8 @@ fn deployed_configuration_is_complete_and_normalized() {
     assert_eq!(config.http_addr.to_string(), "0.0.0.0:8011");
     assert_eq!(config.grpc_addr.to_string(), "0.0.0.0:9011");
     assert_eq!(config.organization_grpc_target, "http://organization:9002");
+    assert!(config.workload_client_tls.is_some());
+    assert!(config.workload_server_tls.is_some());
 }
 
 #[test]
@@ -91,19 +118,28 @@ fn deployed_configuration_fails_closed() {
         "FLOW_WEBHOOK_SECRET",
         "SIGNING_KEYS_INTERNAL_API_KEY",
         "ISSUANCE_API_KEY",
+        "GRPC_WORKLOAD_TLS_CLIENT_CERT",
+        "GRPC_WORKLOAD_TLS_CLIENT_KEY",
+        "GRPC_WORKLOAD_TLS_SERVER_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KEY",
+        "GRPC_WORKLOAD_TLS_CA_CERT",
     ] {
         let mut values = baseline("production");
         values.remove(required);
-        assert_eq!(
-            FlowServiceConfig::from_values(values),
-            Err(FlowConfigError::Missing {
-                name: if required == "ORG_GRPC_TARGET" {
-                    "ORGANIZATION_GRPC_TARGET"
-                } else {
-                    required
-                }
-            })
-        );
+        let error_name = match required {
+            "ORG_GRPC_TARGET" => "ORGANIZATION_GRPC_TARGET",
+            "GRPC_WORKLOAD_TLS_CLIENT_KEY" | "GRPC_WORKLOAD_TLS_CA_CERT" => {
+                "GRPC_WORKLOAD_TLS_CLIENT_CERT"
+            }
+            "GRPC_WORKLOAD_TLS_SERVER_KEY" => "GRPC_WORKLOAD_TLS_SERVER_CERT",
+            _ => required,
+        };
+        let expected = if required.starts_with("GRPC_WORKLOAD_TLS_") {
+            FlowConfigError::Invalid { name: error_name }
+        } else {
+            FlowConfigError::Missing { name: error_name }
+        };
+        assert_eq!(FlowServiceConfig::from_values(values), Err(expected));
     }
 
     let mut short_secret = baseline("beta");
@@ -143,6 +179,15 @@ fn deployed_configuration_fails_closed() {
         FlowServiceConfig::from_values(shared),
         Err(FlowConfigError::Invalid {
             name: "FLOW_GRPC_ADDR"
+        })
+    );
+
+    let mut insecure = baseline("production");
+    insecure.insert("GRPC_INSECURE_ALLOWED".into(), "false".into());
+    assert_eq!(
+        FlowServiceConfig::from_values(insecure),
+        Err(FlowConfigError::Invalid {
+            name: "GRPC_INSECURE_ALLOWED"
         })
     );
 }

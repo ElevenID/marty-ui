@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
 
 use async_trait::async_trait;
-use mmf_platform::{GrpcChannelFactory, PlatformError};
+use mmf_platform::{
+    GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
+    PlatformError,
+};
 use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
 use serde::de::DeserializeOwned;
 use tonic::{metadata::AsciiMetadataValue, transport::Channel, Code, Request, Status};
@@ -20,7 +23,7 @@ use crate::{
         presentation_policy_service_client::PresentationPolicyServiceClient,
         EvaluatePresentationRequest, GetPolicyRequest,
     },
-    CredentialTemplateProvider, CredentialTemplateReference, FlowProviderError,
+    CredentialTemplateProvider, CredentialTemplateReference, FlowProviderError, FlowServiceConfig,
     IssuanceInitiationRequest, IssuanceInitiationResult, IssuanceProvider,
     PresentationEvaluationRequest, PresentationEvaluationResult, PresentationPolicyProvider,
     PresentationPolicyReference,
@@ -38,6 +41,18 @@ pub struct FlowGrpcChannelFactories {
 }
 
 impl FlowGrpcChannelFactories {
+    pub fn from_config(config: &FlowServiceConfig) -> Result<Self, PlatformError> {
+        Ok(Self {
+            organization: ordinary_factory(&config.organization_grpc_target)?,
+            credential_template: ordinary_factory(&config.credential_template_grpc_target)?,
+            presentation_policy: workload_factory(
+                &config.presentation_policy_grpc_target,
+                config.workload_client_tls.as_ref(),
+            )?,
+            issuance: ordinary_factory(&config.issuance_grpc_target)?,
+        })
+    }
+
     pub fn connect_lazy(&self) -> Result<FlowGrpcClients, PlatformError> {
         Ok(FlowGrpcClients::new(
             self.organization.connect_lazy()?,
@@ -61,6 +76,50 @@ impl FlowGrpcChannelFactories {
             issuance,
         ))
     }
+}
+
+fn ordinary_factory(target: &str) -> Result<GrpcChannelFactory, PlatformError> {
+    let security = if target.starts_with("https://") {
+        GrpcTransportSecurity::ServerTls
+    } else {
+        GrpcTransportSecurity::Plaintext
+    };
+    GrpcChannelFactory::new(
+        GrpcChannelConfig {
+            target: target.into(),
+            security,
+            ..GrpcChannelConfig::default()
+        },
+        GrpcTlsMaterial::default(),
+    )
+}
+
+fn workload_factory(
+    target: &str,
+    files: Option<&crate::WorkloadClientTlsFiles>,
+) -> Result<GrpcChannelFactory, PlatformError> {
+    let Some(files) = files else {
+        return ordinary_factory(target);
+    };
+    let target = if let Some(authority) = target.strip_prefix("http://") {
+        format!("https://{authority}")
+    } else {
+        target.into()
+    };
+    let material = GrpcTlsMaterial::from_pem_files(
+        Some(&files.ca_certificate),
+        Some(&files.certificate),
+        Some(&files.private_key),
+    )?;
+    GrpcChannelFactory::new(
+        GrpcChannelConfig {
+            target,
+            security: GrpcTransportSecurity::MutualTls,
+            trust: GrpcTrustMode::CustomCa,
+            ..GrpcChannelConfig::default()
+        },
+        material,
+    )
 }
 
 #[derive(Clone)]

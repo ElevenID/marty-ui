@@ -429,6 +429,20 @@ through the fail-closed Rust kernel and public projection. Three migration
 contract tests and strict Clippy pass; live SQL execution remains in the
 configured CI database gate.
 
+The gRPC connection plan now preserves Flow's asymmetric released trust
+boundary. Typed configuration requires complete inbound and outbound workload
+certificate/key/CA groups in beta and production, rejects partial groups, and
+requires an explicit deployed plaintext decision for the three legacy token-
+authenticated channels. The presentation-policy channel alone upgrades its
+existing target to mutual TLS with private-CA trust, while organization,
+credential-template and issuance continue through the shared bounded MMF
+factory under the explicit compatibility flag. No service-local endpoint,
+certificate loader or channel constructor is reintroduced. Six provider tests,
+five startup tests, the secret-file unit vector and strict Clippy pass. The
+remaining executable connection step must load the inbound mTLS identity,
+eagerly connect all four channels, probe both HTTP providers, PostgreSQL and
+Redis, then activate readiness.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

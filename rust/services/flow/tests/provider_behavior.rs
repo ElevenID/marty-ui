@@ -1,8 +1,13 @@
 use std::{collections::BTreeMap, collections::BTreeSet, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
-use marty_flow::{FlowProviderRegistry, SigningIdentity, REQUIRED_FLOW_PROVIDERS};
-use mmf_platform::{GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial};
+use marty_flow::{
+    FlowGrpcChannelFactories, FlowProviderRegistry, FlowServiceConfig, SigningIdentity,
+    REQUIRED_FLOW_PROVIDERS,
+};
+use mmf_platform::{
+    GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
+};
 use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -184,4 +189,101 @@ async fn flow_grpc_clients_consume_only_the_shared_mmf_channel_factory() {
     .connect_lazy()
     .unwrap();
     assert!(clients.providers(Some(&"s".repeat(32))).is_ok());
+}
+
+#[test]
+fn configured_factories_apply_workload_mtls_only_to_the_policy_provider() {
+    let directory = std::env::temp_dir().join(format!("flow-grpc-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&directory).unwrap();
+    let ca = directory.join("ca.pem");
+    let certificate = directory.join("client.pem");
+    let key = directory.join("client-key.pem");
+    let server_certificate = directory.join("server.pem");
+    let server_key = directory.join("server-key.pem");
+    std::fs::write(
+        &ca,
+        "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &certificate,
+        "-----BEGIN CERTIFICATE-----\nCLIENT\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &key,
+        "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &server_certificate,
+        "-----BEGIN CERTIFICATE-----\nSERVER\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &server_key,
+        "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n",
+    )
+    .unwrap();
+    let config = FlowServiceConfig::from_values([
+        ("ENVIRONMENT".into(), "beta".into()),
+        ("DATABASE_URL".into(), "postgresql://db/flow".into()),
+        ("REDIS_URL".into(), "redis://redis".into()),
+        ("ORG_GRPC_TARGET".into(), "organization:9002".into()),
+        ("CT_GRPC_TARGET".into(), "credential-template:9003".into()),
+        ("PP_GRPC_TARGET".into(), "presentation-policy:9009".into()),
+        ("ISSUANCE_GRPC_TARGET".into(), "issuance:9005".into()),
+        (
+            "SIGNING_KEYS_INTERNAL_URL".into(),
+            "http://gateway:8000".into(),
+        ),
+        ("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into()),
+        ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
+        ("FLOW_WEBHOOK_SECRET".into(), "w".repeat(32)),
+        ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "k".repeat(32)),
+        ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
+        ("GRPC_INSECURE_ALLOWED".into(), "true".into()),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_CERT".into(),
+            certificate.to_string_lossy().into_owned(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KEY".into(),
+            key.to_string_lossy().into_owned(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_CERT".into(),
+            server_certificate.to_string_lossy().into_owned(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KEY".into(),
+            server_key.to_string_lossy().into_owned(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CA_CERT".into(),
+            ca.to_string_lossy().into_owned(),
+        ),
+    ])
+    .unwrap();
+    let factories = FlowGrpcChannelFactories::from_config(&config).unwrap();
+    assert_eq!(
+        factories.presentation_policy.config().security,
+        GrpcTransportSecurity::MutualTls
+    );
+    assert_eq!(
+        factories.presentation_policy.config().trust,
+        GrpcTrustMode::CustomCa
+    );
+    assert_eq!(
+        factories.presentation_policy.config().target,
+        "https://presentation-policy:9009"
+    );
+    for factory in [
+        &factories.organization,
+        &factories.credential_template,
+        &factories.issuance,
+    ] {
+        assert_eq!(factory.config().security, GrpcTransportSecurity::Plaintext);
+    }
+    std::fs::remove_dir_all(directory).unwrap();
 }

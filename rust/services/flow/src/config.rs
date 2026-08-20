@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt, fs, net::SocketAddr};
+use std::{collections::BTreeMap, fmt, fs, net::SocketAddr, path::PathBuf};
 
 use thiserror::Error;
 use url::Url;
@@ -41,8 +41,25 @@ pub struct FlowServiceConfig {
     pub issuance_api_key: Option<String>,
     pub service_token: Option<String>,
     pub webhook_secret: Option<String>,
+    pub allow_plaintext_grpc: bool,
+    pub workload_client_tls: Option<WorkloadClientTlsFiles>,
+    pub workload_server_tls: Option<WorkloadServerTlsFiles>,
     pub release_version: String,
     pub build_revision: String,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct WorkloadClientTlsFiles {
+    pub certificate: PathBuf,
+    pub private_key: PathBuf,
+    pub ca_certificate: PathBuf,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct WorkloadServerTlsFiles {
+    pub certificate: PathBuf,
+    pub private_key: PathBuf,
+    pub ca_certificate: PathBuf,
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -87,6 +104,15 @@ impl fmt::Debug for FlowServiceConfig {
             .field("issuance_api_key", &redacted(&self.issuance_api_key))
             .field("service_token", &redacted(&self.service_token))
             .field("webhook_secret", &redacted(&self.webhook_secret))
+            .field("allow_plaintext_grpc", &self.allow_plaintext_grpc)
+            .field(
+                "workload_client_tls",
+                &self.workload_client_tls.as_ref().map(|_| "[CONFIGURED]"),
+            )
+            .field(
+                "workload_server_tls",
+                &self.workload_server_tls.as_ref().map(|_| "[CONFIGURED]"),
+            )
             .field("release_version", &self.release_version)
             .field("build_revision", &self.build_revision)
             .finish()
@@ -194,6 +220,24 @@ impl FlowServiceConfig {
         let signing_keys_api_key =
             optional_secret(&values, "SIGNING_KEYS_INTERNAL_API_KEY", environment)?;
         let issuance_api_key = optional_secret(&values, "ISSUANCE_API_KEY", environment)?;
+        let allow_plaintext_grpc = parse_boolean(
+            value(&values, "GRPC_INSECURE_ALLOWED").unwrap_or("false"),
+            "GRPC_INSECURE_ALLOWED",
+        )?;
+        let workload_client_tls = workload_client_tls(&values, environment)?;
+        let workload_server_tls = workload_server_tls(&values, environment)?;
+        if environment.is_deployed()
+            && !allow_plaintext_grpc
+            && [
+                &organization_grpc_target,
+                &credential_template_grpc_target,
+                &issuance_grpc_target,
+            ]
+            .into_iter()
+            .any(|target| target.starts_with("http://"))
+        {
+            return Err(invalid("GRPC_INSECURE_ALLOWED"));
+        }
 
         Ok(Self {
             environment,
@@ -213,6 +257,9 @@ impl FlowServiceConfig {
             issuance_api_key,
             service_token,
             webhook_secret,
+            allow_plaintext_grpc,
+            workload_client_tls,
+            workload_server_tls,
             release_version: value(&values, "RELEASE_VERSION")
                 .unwrap_or(env!("CARGO_PKG_VERSION"))
                 .to_owned(),
@@ -280,6 +327,14 @@ fn parse_bounded(
         .ok()
         .filter(|value| (minimum..=maximum).contains(value))
         .ok_or_else(|| invalid(name))
+}
+
+fn parse_boolean(value: &str, name: &'static str) -> Result<bool, FlowConfigError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" => Ok(true),
+        "false" | "0" | "no" => Ok(false),
+        _ => Err(invalid(name)),
+    }
 }
 
 fn validate_url(value: &str, name: &'static str, schemes: &[&str]) -> Result<(), FlowConfigError> {
@@ -365,6 +420,81 @@ fn optional_secret(
         None if environment.is_deployed() => Err(FlowConfigError::Missing { name }),
         None => Ok(None),
     }
+}
+
+fn workload_client_tls(
+    values: &BTreeMap<String, String>,
+    environment: Environment,
+) -> Result<Option<WorkloadClientTlsFiles>, FlowConfigError> {
+    let paths = complete_path_group(
+        values,
+        &[
+            "GRPC_WORKLOAD_TLS_CLIENT_CERT",
+            "GRPC_WORKLOAD_TLS_CLIENT_KEY",
+            "GRPC_WORKLOAD_TLS_CA_CERT",
+        ],
+        environment,
+        "GRPC_WORKLOAD_TLS_CLIENT_CERT",
+    )?;
+    Ok(paths.map(|paths| WorkloadClientTlsFiles {
+        certificate: paths[0].clone(),
+        private_key: paths[1].clone(),
+        ca_certificate: paths[2].clone(),
+    }))
+}
+
+fn workload_server_tls(
+    values: &BTreeMap<String, String>,
+    environment: Environment,
+) -> Result<Option<WorkloadServerTlsFiles>, FlowConfigError> {
+    let paths = complete_path_group(
+        values,
+        &[
+            "GRPC_WORKLOAD_TLS_SERVER_CERT",
+            "GRPC_WORKLOAD_TLS_SERVER_KEY",
+            "GRPC_WORKLOAD_TLS_CA_CERT",
+        ],
+        environment,
+        "GRPC_WORKLOAD_TLS_SERVER_CERT",
+    )?;
+    Ok(paths.map(|paths| WorkloadServerTlsFiles {
+        certificate: paths[0].clone(),
+        private_key: paths[1].clone(),
+        ca_certificate: paths[2].clone(),
+    }))
+}
+
+fn complete_path_group<const N: usize>(
+    values: &BTreeMap<String, String>,
+    names: &[&'static str; N],
+    environment: Environment,
+    error_name: &'static str,
+) -> Result<Option<[PathBuf; N]>, FlowConfigError> {
+    let configured = names
+        .iter()
+        .filter(|name| value(values, name).is_some())
+        .count();
+    if configured == 0 && !environment.is_deployed() {
+        return Ok(None);
+    }
+    if configured != N {
+        return Err(if configured == 0 {
+            FlowConfigError::Missing { name: error_name }
+        } else {
+            invalid(error_name)
+        });
+    }
+    names
+        .iter()
+        .map(|name| {
+            value(values, name)
+                .map(PathBuf::from)
+                .ok_or(FlowConfigError::Missing { name: error_name })
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .try_into()
+        .map(Some)
+        .map_err(|_| invalid(error_name))
 }
 
 const fn invalid(name: &'static str) -> FlowConfigError {
