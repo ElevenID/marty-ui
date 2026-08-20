@@ -326,7 +326,7 @@ pub async fn prepare_verification_submission(
             FlowInstanceStatus::InProgress,
             "wallet_submission_received",
             now,
-        )?;
+        );
     }
     transition(
         &mut instance,
@@ -341,7 +341,7 @@ pub async fn prepare_verification_submission(
             "verification_failed"
         },
         now,
-    )?;
+    );
     instance.result = Some(json!({
         "evaluation_result": evaluation.result,
         "decision": evaluation.decision,
@@ -461,14 +461,13 @@ fn retryable_result(
     })
 }
 
-fn transition(
+pub(crate) fn transition(
     instance: &mut FlowInstanceRecord,
     status: FlowInstanceStatus,
     event: &str,
     now: DateTime<Utc>,
-) -> Result<(), FlowVerificationSubmissionError> {
-    let prior = serde_json::to_value(instance.status)
-        .map_err(|_| FlowVerificationSubmissionError::Serialization)?;
+) {
+    let prior = instance.status;
     instance.status = status;
     instance.updated_at = now;
     if status.is_terminal() {
@@ -476,12 +475,11 @@ fn transition(
     }
     instance.state_history.push(json!({
         "prior_state": prior,
-        "new_state": serde_json::to_value(status).map_err(|_| FlowVerificationSubmissionError::Serialization)?,
+        "new_state": status,
         "timestamp": now.to_rfc3339(),
         "actor": "wallet_submission",
         "event": event
     }));
-    Ok(())
 }
 
 fn expire_submission(
@@ -489,7 +487,7 @@ fn expire_submission(
     now: DateTime<Utc>,
     event: &str,
 ) -> Result<(), FlowVerificationSubmissionError> {
-    transition(instance, FlowInstanceStatus::Expired, event, now)?;
+    transition(instance, FlowInstanceStatus::Expired, event, now);
     instance.error = Some(event.into());
     instance.kernel()?;
     Ok(())
@@ -683,11 +681,11 @@ fn merged_warnings(top_level: &[String], credentials: &[Value]) -> Vec<String> {
         .collect()
 }
 
-fn sha256_hex(value: &[u8]) -> String {
+pub(crate) fn sha256_hex(value: &[u8]) -> String {
     let digest = Sha256::digest(value);
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn constant_time_equal(left: &str, right: &str) -> bool {
+pub(crate) fn constant_time_equal(left: &str, right: &str) -> bool {
     left.len() == right.len() && bool::from(left.as_bytes().ct_eq(right.as_bytes()))
 }

@@ -301,8 +301,8 @@ non-container tests pass locally; the real PostgreSQL execution remains a CI
 landing gate because the local Docker daemon is unavailable.
 
 The next Flow gates are HTTP compare-and-set adapters for native verification
-retrieval/submission, SIOPv2 submission, the remaining protocol-specific
-HTTP/gRPC operations, executable listener and container startup/readiness
+retrieval/submission, the remaining protocol-specific HTTP/gRPC operations,
+executable listener and container startup/readiness
 parity. Provider, DTO, definition mutation, generic instance execution,
 start-side-effect and OID4VP submission-kernel parity are complete. Only after
 the remaining executable gates pass will the Python Flow runtime and its
@@ -483,8 +483,8 @@ closed without returning storage diagnostics. Physical-document support is now
 derived from the mandatory healthy downstream provider instead of duplicating
 its private configuration in Flow. Three focused handler tests, the shared
 behavior-vector test and strict Clippy pass. Definition and instance mutation
-are subsequently complete; verification HTTP adapters, SIOP, webhook, QR and
-DID routes remain before the HTTP listener can be advertised as complete.
+are subsequently complete; verification HTTP adapters, webhook, QR and DID
+routes remain before the HTTP listener can be advertised as complete.
 
 The same HTTP surface now includes the first two complete mutation paths:
 tenant-authorized draft-definition deletion and instance cancellation.
@@ -523,7 +523,7 @@ exception. `contracts/flow-reference-validation-behavior.json` and the expanded
 HTTP contract execute these rules, including one-resolution-per-template
 caching and side-effect-free dry runs. The focused definition, reference and
 HTTP suites plus strict Clippy pass. The remaining HTTP surface is QR
-generation, OID4VP/SIOP submissions, verifier DID publication,
+generation, native verification adapters, verifier DID publication,
 application-approved webhooks and protocol-specific verification starts.
 
 The provider-independent instance execution kernel is also complete under
@@ -663,10 +663,26 @@ the complete `FlowInstanceRecord` and atomically preserves subject, external
 reference, histories, context, result and timestamps while consuming the nonce
 and enqueuing the callback; organization and definition identity are immutable
 CAS fences. Six language-neutral submission vectors, including the shared
-HAIP interoperability JWE, the PostgreSQL contract
-binary and strict all-target Clippy pass. Remaining route work is SIOPv2
-submission plus the HTTP adapters that commit retrieval, expiry and terminal
-records through their corresponding compare-and-set transactions.
+HAIP interoperability JWE, the PostgreSQL contract binary and strict all-target
+Clippy pass.
+
+SIOPv2 submission is now native under
+`contracts/flow-siop-submission-behavior.json` and reuses the same terminal
+finalization unit rather than creating another transaction implementation. The
+pinned `marty-oid4vci` verifier exclusively owns JOSE parsing, ES256/EdDSA
+policy, public `sub_jwk` signature validation and RFC 7638 thumbprint binding.
+Flow then enforces `iss == sub`, exact string-or-array audience membership,
+constant-time nonce equality, numeric `iat`/`exp`, the released 60-second clock
+skew and the rule that a token cannot predate its transaction. Success stores
+only the self-attested subject, subject syntax, signing algorithm and canonical
+submission digest; the raw ID token is discarded. Subject identity, both
+history transitions, terminal result and nonce consumption commit through the
+full-record PostgreSQL compare-and-set, with no callback for this protocol.
+Same-token replay returns the stable terminal response and a different token
+conflicts. Four focused behavior groups, the OID4VP regressions, PostgreSQL
+contract binary and strict all-target Clippy pass. Remaining route work is the
+HTTP adapters that commit retrieval, expiry and both terminal protocols through
+their corresponding compare-and-set transactions.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
