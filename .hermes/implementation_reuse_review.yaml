@@ -12,6 +12,7 @@ search_queries:
   - "issuance reserved_credential_id claim_transaction_for_signing"
   - "issued_credentials status_list_entries revocation_profile_id"
   - "DIDComm credential identity retry delivery failure"
+  - "RUSTSEC-2026-0258 h2 0.4.16"
 candidate_implementations:
   - path: rust/services/revocation-profile/src/status.rs
     language: Rust
@@ -31,6 +32,9 @@ candidate_implementations:
   - path: ../marty-credentials/services/issuance/infrastructure/api/routes.py
     language: Python
     disposition: extend_thin_http_adapter_with_stable_credential_identity
+  - path: rust/Cargo.lock
+    language: Cargo_lockfile
+    disposition: resolve_transitive_h2_to_patched_0_4_16
 no_match_statement: "No existing durable idempotent status-index reservation implementation was found."
 decision: extend_existing
 canonical_implementation:
