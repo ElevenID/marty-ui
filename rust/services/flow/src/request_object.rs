@@ -23,6 +23,14 @@ pub struct SignedRequestObject {
     pub response_uri: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct UnsignedAuthorizationRequest {
+    pub instance: FlowInstanceRecord,
+    pub authorization_request: String,
+    pub client_id: String,
+    pub response_uri: String,
+}
+
 #[derive(Debug, Error)]
 pub enum FlowRequestObjectError {
     #[error(transparent)]
@@ -35,6 +43,104 @@ pub enum FlowRequestObjectError {
     Serialization,
     #[error("FLOW.REQUEST_OBJECT_INVALID_CLOCK")]
     InvalidClock,
+    #[error("FLOW.REQUEST_OBJECT_TOO_LARGE")]
+    TooLarge,
+}
+
+pub fn build_unsigned_url_query(
+    mut instance: FlowInstanceRecord,
+    artifacts: &PresentationRequestArtifacts,
+    public_base_url: &str,
+    maximum_length: usize,
+    now: DateTime<Utc>,
+) -> Result<UnsignedAuthorizationRequest, FlowRequestObjectError> {
+    if maximum_length < 1_024 {
+        return Err(FlowRequestObjectError::InvalidInstance(
+            "URL-query maximum must be at least 1024 bytes",
+        ));
+    }
+    let context = instance
+        .context
+        .as_object()
+        .ok_or(FlowRequestObjectError::InvalidInstance(
+            "context must be an object",
+        ))?;
+    if context.get("request_transport").and_then(Value::as_str) != Some("url_query")
+        || context.get("oid4vp_profile").and_then(Value::as_str) == Some("haip")
+        || context.get("flow_type").and_then(Value::as_str) == Some("siop_v2")
+    {
+        return Err(FlowRequestObjectError::UnsupportedProfile(
+            "unsigned URL-query requires a standard OID4VP flow",
+        ));
+    }
+    let nonce = context
+        .get("nonce")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(FlowRequestObjectError::InvalidInstance("nonce is required"))?
+        .to_owned();
+    let base = public_base_url.trim_end_matches('/');
+    let response_uri = format!("{base}/v1/flows/instances/{}/submit", instance.id);
+    let client_id = format!("redirect_uri:{response_uri}");
+    let metadata = standard_client_metadata(base);
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    for (name, value) in [
+        ("response_type", "vp_token".to_owned()),
+        ("client_id", client_id.clone()),
+        ("nonce", nonce.clone()),
+        ("response_mode", "direct_post".to_owned()),
+        ("response_uri", response_uri.clone()),
+        ("state", instance.id.clone()),
+        (
+            "client_metadata",
+            serde_json::to_string(&metadata).map_err(|_| FlowRequestObjectError::Serialization)?,
+        ),
+        (
+            "dcql_query",
+            serde_json::to_string(&artifacts.dcql_query)
+                .map_err(|_| FlowRequestObjectError::Serialization)?,
+        ),
+    ] {
+        serializer.append_pair(name, &value);
+    }
+    let authorization_request = format!("openid4vp://authorize?{}", serializer.finish());
+    if authorization_request.len() > maximum_length {
+        return Err(FlowRequestObjectError::TooLarge);
+    }
+    let instance_id = instance.id.clone();
+    let context =
+        instance
+            .context
+            .as_object_mut()
+            .ok_or(FlowRequestObjectError::InvalidInstance(
+                "context must be an object",
+            ))?;
+    context.insert("oid4vp_client_id".into(), json!(client_id));
+    context.insert("oid4vp_response_uri".into(), json!(response_uri));
+    context.insert("oid4vp_response_encryption_jwk".into(), Value::Null);
+    context.insert("oid4vp_expected_state".into(), json!(instance_id));
+    context.insert("verification_audience".into(), json!(client_id));
+    context.insert("oid4vp_verifier_context".into(), json!(true));
+    let request = json!({
+        "dcql_query": artifacts.dcql_query,
+        "response_mode": "direct_post"
+    });
+    record_presentation_message(
+        context,
+        &instance_id,
+        &client_id,
+        &nonce,
+        &response_uri,
+        &request,
+        now,
+    )?;
+    instance.updated_at = now;
+    Ok(UnsignedAuthorizationRequest {
+        instance,
+        authorization_request,
+        client_id,
+        response_uri,
+    })
 }
 
 pub async fn build_standard_request_object(

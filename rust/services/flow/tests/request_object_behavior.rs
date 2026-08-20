@@ -7,9 +7,9 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{Duration, TimeZone, Utc};
 use marty_flow::{
-    build_standard_request_object, FlowInstanceRecord, FlowKeyEnvelope, FlowKeyEnvelopeProvider,
-    FlowKeyEnvelopeRequest, FlowProviderError, FlowProviderRegistry, SigningIdentity,
-    SigningIdentityProvider, SigningRequest, SigningResult,
+    build_standard_request_object, build_unsigned_url_query, FlowInstanceRecord, FlowKeyEnvelope,
+    FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest, FlowProviderError, FlowProviderRegistry,
+    SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult,
 };
 use marty_oid4vci::presentation_request::PresentationRequestArtifacts;
 use marty_verification::flow::FlowInstanceStatus;
@@ -28,7 +28,9 @@ struct Contract {
     siop_scope: String,
     request_content_type: String,
     mip_message_type: String,
-    url_query_request_object: String,
+    url_query: String,
+    url_query_minimum_limit: usize,
+    url_query_oversize: String,
     haip_response_mode: String,
     haip_jwe: BTreeMap<String, String>,
     haip_private_key_storage: String,
@@ -169,7 +171,9 @@ async fn language_neutral_contract_builds_oid4vp_and_siop_request_objects() {
         "application/oauth-authz-req+jwt"
     );
     assert_eq!(contract.mip_message_type, "PresentationRequest");
-    assert_eq!(contract.url_query_request_object, "rejected");
+    assert_eq!(contract.url_query, "unsigned_direct_post_dcql");
+    assert_eq!(contract.url_query_minimum_limit, 1_024);
+    assert_eq!(contract.url_query_oversize, "fail_closed");
     assert_eq!(contract.haip_response_mode, "direct_post.jwt");
     assert_eq!(contract.haip_jwe["alg"], "ECDH-ES");
     assert_eq!(contract.haip_jwe["enc"], "A256GCM");
@@ -228,6 +232,46 @@ async fn language_neutral_contract_builds_oid4vp_and_siop_request_objects() {
         "https://verifier.example/v1/flows/siop/submit"
     );
     assert_eq!(signing.requests.lock().unwrap().len(), 2);
+}
+
+#[test]
+fn unsigned_url_query_is_bounded_and_records_the_same_dcql_request() {
+    let mut flow = instance("verification");
+    flow.context["request_transport"] = json!("url_query");
+    let artifacts = PresentationRequestArtifacts {
+        presentation_definition: json!({"id": "pd-1"}),
+        dcql_query: json!({"credentials": [{"id": "member", "format": "dc+sd-jwt"}]}),
+    };
+    let request = build_unsigned_url_query(
+        flow.clone(),
+        &artifacts,
+        "https://verifier.example",
+        8_192,
+        now(),
+    )
+    .unwrap();
+    assert!(request
+        .authorization_request
+        .starts_with("openid4vp://authorize?"));
+    let parsed = url::Url::parse(&request.authorization_request).unwrap();
+    let parameters = parsed
+        .query_pairs()
+        .into_owned()
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(parameters["response_type"], "vp_token");
+    assert_eq!(parameters["response_mode"], "direct_post");
+    assert_eq!(
+        serde_json::from_str::<Value>(&parameters["dcql_query"]).unwrap(),
+        artifacts.dcql_query
+    );
+    assert_eq!(
+        request.instance.context["mip_messages"]["presentation_request"]["payload"]["dcql_query"],
+        artifacts.dcql_query
+    );
+    assert!(
+        build_unsigned_url_query(flow, &artifacts, "https://verifier.example", 1_024, now())
+            .is_err()
+    );
 }
 
 #[tokio::test]

@@ -583,9 +583,13 @@ flow, advertises only its public JWK and `direct_post.jwt`/ECDH-ES/A256GCM
 metadata, and persists the private JWK only through the organization- and
 flow-bound signing-service envelope provider. Re-fetch reuses the bound
 envelope and never serializes the private key into Flow context. Three
-request-object vectors and strict Clippy pass. URL-query remains fail-closed
-until its dedicated unsigned composition lands; the route remains private to
-the Rust crate until that profile, persistence and expiry transitions are
+request-object vectors and strict Clippy pass. The unsigned URL-query profile
+now composes the same native DCQL artifact with redirect-URI client identity,
+direct-post state/audience binding, canonical client metadata and the same MIP
+message, then enforces the released minimum/configured maximum URI bounds. It
+rejects HAIP and SIOP combinations and never invokes the signing provider.
+Four request-transport vectors and strict Clippy pass. The route remains
+private to the Rust crate until persistence and expiry transitions are
 complete.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
