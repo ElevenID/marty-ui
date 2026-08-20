@@ -363,7 +363,18 @@ startup/readiness and lazy development composition inherit the shared bounded
 plaintext, TLS and mutual-TLS policy; no Flow-local endpoint or certificate
 constructor remains. The focused five-test provider suite, all 26 current Rust
 tests in their applicable groups, and strict Clippy pass. HTTP/gRPC executable
-composition is now the next Flow runtime gate.
+composition is now the next Flow runtime gate. Its first prerequisite is now
+frozen in `contracts/flow-startup-behavior.json` and implemented by the Rust
+configuration boundary. Beta and production must explicitly configure
+PostgreSQL, Redis, all six downstream endpoints and all four service/webhook
+credentials; every secret is at least 32 bytes, endpoint origins are
+credential-free, listener addresses cannot collide, and connection/database
+bounds fail closed. Local development may default only non-secret service
+locations. Four behavioral tests and strict Clippy pass. The next executable
+slice must connect these dependencies into MMF lifecycle/readiness and must
+expand the Rust persistence records to preserve every released definition,
+instance and artifact field before any application operation is advertised as
+ready.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

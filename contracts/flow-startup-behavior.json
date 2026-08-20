@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "deployed_environments": ["beta", "production"],
+  "required_always": ["DATABASE_URL", "REDIS_URL"],
+  "required_when_deployed": [
+    "ORGANIZATION_GRPC_TARGET",
+    "CT_GRPC_TARGET",
+    "PP_GRPC_TARGET",
+    "ISSUANCE_GRPC_TARGET",
+    "SIGNING_KEYS_INTERNAL_URL",
+    "ISSUANCE_SERVICE_URL",
+    "GRPC_SERVICE_TOKEN",
+    "FLOW_WEBHOOK_SECRET",
+    "SIGNING_KEYS_INTERNAL_API_KEY",
+    "ISSUANCE_INTERNAL_API_KEY"
+  ],
+  "minimum_secret_bytes": 32,
+  "database_schemes": ["postgres", "postgresql"],
+  "redis_schemes": ["redis", "rediss"],
+  "dependency_schemes": ["http", "https"],
+  "database_connection_bounds": [1, 100],
+  "redis_database_bounds": [0, 255],
+  "fail_closed_cases": [
+    "missing_database",
+    "missing_redis",
+    "deployed_dependency_default",
+    "short_secret",
+    "credentialed_url",
+    "dependency_url_with_path",
+    "shared_listener_address"
+  ]
+}
