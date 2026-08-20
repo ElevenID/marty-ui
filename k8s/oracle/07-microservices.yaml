@@ -1717,12 +1717,13 @@ metadata:
     app.kubernetes.io/part-of: marty-platform
 spec:
   replicas: 1
-  # This compatibility release changes the allocation authority from Redis to
-  # PostgreSQL. Prevent old and new allocator binaries from overlapping during
-  # the rolling transition; the follow-up legacy-endpoint retirement restores
-  # RollingUpdate after every caller uses credential-aware reservations.
+  # Released callers use credential-aware, idempotent reservations, so old and
+  # new revocation-profile pods can overlap without competing allocations.
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: revocation-profile
