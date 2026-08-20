@@ -438,10 +438,21 @@ existing target to mutual TLS with private-CA trust, while organization,
 credential-template and issuance continue through the shared bounded MMF
 factory under the explicit compatibility flag. No service-local endpoint,
 certificate loader or channel constructor is reintroduced. Six provider tests,
-five startup tests, the secret-file unit vector and strict Clippy pass. The
-remaining executable connection step must load the inbound mTLS identity,
-eagerly connect all four channels, probe both HTTP providers, PostgreSQL and
-Redis, then activate readiness.
+five startup tests, the secret-file unit vector and strict Clippy pass.
+
+The executable dependency connection step is now implemented under
+`contracts/flow-connection-behavior.json`. Startup opens a bounded PostgreSQL
+pool, runs the Rust-owned schema and seed migrations under their advisory lock,
+executes a live query, canonicalizes and connects the configured Redis nonce
+database, requires `PING`/`PONG`, eagerly connects all four typed gRPC clients
+through the shared MMF transport factory, probes both bounded HTTP providers,
+and rejects an incomplete provider registry. Each required component becomes
+healthy only after its own probe succeeds; any database, migration, Redis,
+transport, HTTP, credential or registry error aborts startup before lifecycle
+activation. The language-neutral connection contract test, Redis database
+selection test and strict Clippy pass. The next executable slice must load and
+authorize the inbound mTLS identity, attach the complete HTTP/gRPC operation
+surface, and activate only after both listeners are serving.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

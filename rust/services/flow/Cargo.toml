@@ -23,6 +23,7 @@ mmf-workflow.workspace = true
 mmf-runtime.workspace = true
 prost.workspace = true
 reqwest.workspace = true
+redis.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

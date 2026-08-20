@@ -129,6 +129,11 @@ impl HttpSigningProvider {
             )?,
         })
     }
+
+    pub async fn health_check(&self) -> Result<(), FlowProviderError> {
+        let _: Value = self.signing.json(Method::GET, "/health", &[], None).await?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -273,6 +278,11 @@ impl HttpPhysicalDocumentProvider {
                 Duration::from_secs(30),
             )?,
         })
+    }
+
+    pub async fn health_check(&self) -> Result<(), FlowProviderError> {
+        let _: Value = self.http.json(Method::GET, "/health", &[], None).await?;
+        Ok(())
     }
 }
 

@@ -3874,6 +3874,7 @@ dependencies = [
  "mmf-workflow",
  "prost",
  "protoc-bin-vendored",
+ "redis",
  "reqwest",
  "serde",
  "serde_json",

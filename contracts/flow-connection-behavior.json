@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "required_probes": [
+    "database",
+    "nonce_store",
+    "organization_grpc",
+    "credential_template_grpc",
+    "presentation_policy_grpc",
+    "issuance_grpc",
+    "signing_keys_http",
+    "physical_issuance_http"
+  ],
+  "database": {
+    "migration_before_healthy": true,
+    "probe": "SELECT 1"
+  },
+  "nonce_store": {
+    "configured_database_wins": true,
+    "probe": "PING",
+    "required_response": "PONG"
+  },
+  "grpc": {
+    "connection_mode": "eager",
+    "shared_mmf_transport_only": true,
+    "required_clients": 4
+  },
+  "http": {
+    "probe_path": "/health",
+    "redirects": "disabled",
+    "required_providers": 2
+  },
+  "provider_registry_must_be_complete": true,
+  "activate_only_after_all_probes": true,
+  "failure_behavior": "fail_closed"
+}

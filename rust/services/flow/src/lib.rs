@@ -9,6 +9,7 @@
 mod api;
 mod callback;
 mod config;
+mod connections;
 mod contract;
 mod domain;
 mod grpc_providers;
@@ -40,6 +41,7 @@ pub mod presentation_policy_proto {
 pub use api::*;
 pub use callback::*;
 pub use config::*;
+pub use connections::*;
 pub use contract::*;
 pub use domain::*;
 pub use grpc_providers::*;
