@@ -21,6 +21,7 @@ mod postgres;
 mod projection;
 mod providers;
 mod records;
+mod reference_validation;
 mod repository;
 mod runtime;
 
@@ -55,5 +56,6 @@ pub use postgres::*;
 pub use projection::*;
 pub use providers::*;
 pub use records::*;
+pub use reference_validation::*;
 pub use repository::*;
 pub use runtime::*;

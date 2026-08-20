@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "draft_status_behavior": "existence_and_tenant_binding_required",
+  "activation_status_behavior": "all_references_active",
+  "identity_behavior": "exact_id_kind_and_tenant",
+  "delivery_destination_tenant_exception": "system_owned_only",
+  "presentation_policy_behavior": "validate_each_direct_credential_template_requirement",
+  "template_issuer_behavior": "public_did_format_purpose_algorithm_and_key_bound",
+  "template_cache_behavior": "resolve_each_template_once_per_validation",
+  "catalog_active_statuses": ["active", "enabled"],
+  "credential_active_statuses": ["active"],
+  "issuer_format_aliases": {
+    "sd_jwt_vc": "dc+sd-jwt",
+    "ietf_sd_jwt": "dc+sd-jwt",
+    "w3c_vcdm_v2_sd_jwt": "dc+sd-jwt",
+    "vc+sd-jwt": "dc+sd-jwt",
+    "jwt_vc": "jwt_vc_json",
+    "vc_jwt": "jwt_vc_json",
+    "w3c_vcdm_v2_jwt_vc": "jwt_vc_json",
+    "json_ld": "ldp_vc",
+    "json-ld": "ldp_vc",
+    "mdoc": "mso_mdoc"
+  },
+  "failure_behavior": "fail_closed"
+}
