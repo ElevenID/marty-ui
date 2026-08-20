@@ -100,7 +100,18 @@ pub struct IssuanceInitiationRequest {
     pub flow_instance_id: String,
     pub credential_template_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applicant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorized_client_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub application_id: Option<String>,
+    pub issuer_did: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(default)]

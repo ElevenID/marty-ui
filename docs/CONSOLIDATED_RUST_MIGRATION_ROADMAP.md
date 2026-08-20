@@ -332,6 +332,17 @@ mismatched signer responses are rejected. Three provider behavior tests pass
 against `contracts/flow-provider-behavior.json`. Live gRPC/HTTP adapters and
 their timeout/mTLS/readiness gates remain in the active provider step.
 
+The released protobuf contracts now generate Rust clients and the future Flow
+server directly at build time. Live typed gRPC adapters cover organization
+membership, credential-template lookup, presentation-policy lookup/evaluation
+and issuance initiation. They propagate the internal service token, bound JSON
+responses to one MiB, preserve nested issuance claims through the canonical
+JSON field, normalize gRPC failure classes, and reject mismatched tenant,
+resource, policy/nonce, template and issuance identities. The crate compiles,
+all 19 non-container behavior tests pass, and strict Clippy is clean. Signing,
+flow-key-envelope and physical-document HTTP adapters plus common TLS/channel
+composition are the remaining provider work.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
