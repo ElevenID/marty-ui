@@ -25,6 +25,8 @@ marty-oid4vci = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-
 marty-verification = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false }
 marty-status = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8" }
 mmf-platform = { path = "../../mmf-rust-gateway-wave25/crates/mmf-platform" }
+mmf-core = { path = "../../mmf-rust-gateway-wave25/crates/mmf-core" }
+mmf-runtime = { path = "../../mmf-rust-gateway-wave25/crates/mmf-runtime" }
 mmf-security = { path = "../../mmf-rust-gateway-wave25/crates/mmf-security" }
 mmf-messaging = { path = "../../mmf-rust-gateway-wave25/crates/mmf-messaging" }
 mmf-push = { path = "../../mmf-rust-gateway-wave25/crates/mmf-push" }

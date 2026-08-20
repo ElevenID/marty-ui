@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "required_components": [
+    "database",
+    "nonce_store",
+    "organization_grpc",
+    "credential_template_grpc",
+    "presentation_policy_grpc",
+    "issuance_grpc",
+    "signing_keys_http",
+    "physical_issuance_http"
+  ],
+  "native_backend": "marty-flow-rust",
+  "native_capabilities": [
+    "flow_graph",
+    "flow_transition",
+    "oid4vp_request",
+    "oid4vp_evaluation",
+    "mdoc_handover",
+    "haip_jwe",
+    "siopv2_verification"
+  ],
+  "ready_before_all_healthy": false,
+  "ready_after_all_healthy": true,
+  "ready_after_required_failure": false
+}

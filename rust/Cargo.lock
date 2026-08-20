@@ -3860,12 +3860,16 @@ name = "marty-flow"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "base64 0.22.1",
  "chrono",
+ "http 1.5.0",
  "marty-verification",
+ "mmf-core",
  "mmf-messaging",
  "mmf-platform",
  "mmf-push",
+ "mmf-runtime",
  "mmf-security",
  "mmf-workflow",
  "prost",
@@ -3879,6 +3883,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-prost-build",
+ "tower",
  "url",
  "uuid",
 ]
@@ -4295,6 +4300,16 @@ dependencies = [
  "serde",
  "thiserror 2.0.20",
  "tokio",
+]
+
+[[package]]
+name = "mmf-runtime"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "mmf-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

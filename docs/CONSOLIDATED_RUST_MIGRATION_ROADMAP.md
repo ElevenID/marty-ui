@@ -395,7 +395,16 @@ Two migration contract tests, three record tests, the PostgreSQL integration
 binary (which runs the real migration/CRUD/atomicity vectors when its isolated
 CI database is configured), and strict Clippy pass. Seed ownership and MMF
 lifecycle/readiness are the next sub-gates before the HTTP/gRPC listeners are
-enabled.
+enabled. The reusable lifecycle portion is now complete at local MMF commit
+`06a52ac`: required components block activation unless healthy and immediately
+remove live readiness when they degrade. Flow consumes that primitive under
+`contracts/flow-runtime-behavior.json`, registers PostgreSQL, Redis nonce
+storage, four typed gRPC dependencies and both HTTP provider families as
+mandatory, and exposes the shared `/health`, `/ready`, `/version` routes plus
+native backend/version/capability diagnostics. Two Flow runtime tests, five MMF
+runtime tests and strict Clippy pass. Actual dependency connection, seed
+ownership and HTTP/gRPC application listener composition remain before the
+runtime may call `activate`.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

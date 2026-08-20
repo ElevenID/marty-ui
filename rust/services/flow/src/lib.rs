@@ -19,6 +19,7 @@ mod projection;
 mod providers;
 mod records;
 mod repository;
+mod runtime;
 
 pub mod credential_template_proto {
     tonic::include_proto!("marty.ui.credential_template.v1");
@@ -49,3 +50,4 @@ pub use projection::*;
 pub use providers::*;
 pub use records::*;
 pub use repository::*;
+pub use runtime::*;
