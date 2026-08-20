@@ -248,6 +248,49 @@ responses bypass ETag body buffering so an unbounded SSE body cannot deadlock
 the middleware chain. Shared Python/Rust vectors, backend-failure tests and a
 live disconnect/drop test pass.
 
+### Flow port status
+
+The Flow migration inventory is frozen before implementation. The removable
+surface is 9,154 lines of production Python excluding tests, migrations and the
+migration runner. It contains 26 explicit HTTP operations, 16 gRPC operations,
+12 built-in flow types, custom extension graphs, PostgreSQL persistence,
+atomic nonce consumption and terminal-result finalization, application-event
+idempotency, leased callback delivery, expiry, and protocol-provider calls.
+The port must preserve all of these behaviors; the Python package remains the
+parity oracle until the complete executable and persistence gates pass.
+
+Protocol ownership is already consolidated: the pinned `marty-core` revision
+owns lifecycle transitions, graph validation and next-step selection, OID4VP
+request construction/evaluation, mDoc handover binding, HAIP response-key and
+JWE operations, verifier DID/X.509 identity, and SIOPv2 token verification.
+The Rust Flow binary will call those crates directly and will not reproduce
+their decisions. Generic durable workflow, messaging, retry and callback
+delivery behavior belongs to MMF. The MMF messaging crate now has
+language-neutral fenced-lease behavior at local commit `05d858a`, including
+expired-lease recovery, stale-worker rejection, retry/dead-letter transitions,
+and bounded-retention payload scrubbing. This framework primitive will be
+shared by Flow and later service ports. MMF Push also owns tenant-bound callback
+destination templates at `a1806b9` and the canonical header-and-payload-bound
+event HMAC at `6d4462f`, eliminating two more Flow-only Python utilities.
+
+The first `marty-flow` crate slice now executes the checked-in
+`contracts/flow-service-behavior.json`. Eleven Rust tests freeze all 26 HTTP and
+16 gRPC operations, every built-in type/reference/sequence, public status and
+private-context behavior, callback defaults, and atomicity obligations. The
+domain delegates transitions and graph validation directly to
+`marty-verification`; callback retries use `mmf-workflow`, delivery composition
+uses `mmf-push`, and fenced storage uses `mmf-messaging`. Its repository tests
+prove concurrent finalization commits one nonce/result/callback exactly once,
+terminal decisions are immutable, application event plans are replay-safe and
+payload-conflict-safe, and issuance artifacts are transaction-idempotent.
+
+The next Flow gates are PostgreSQL atomicity, complete DTO and provider parity,
+HTTP/gRPC executable parity,
+provider failure behavior, and container startup/readiness. Only after those
+pass will the Python Flow runtime and its service dependencies be deleted. No
+deployment occurs during these slices; beta receives one aggregate update only
+after all wave-three work lands.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

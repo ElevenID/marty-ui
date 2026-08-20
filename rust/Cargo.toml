@@ -1,5 +1,5 @@
 [workspace]
-members = ["services/event-stream", "services/gateway", "services/notification", "services/revocation-profile", "services/signing-keys"]
+members = ["services/event-stream", "services/flow", "services/gateway", "services/notification", "services/revocation-profile", "services/signing-keys"]
 resolver = "2"
 
 [workspace.package]
@@ -22,9 +22,13 @@ hex = "0.4"
 http = "1"
 marty-crypto = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false, features = ["ecdsa", "jwk", "x509-parsing"] }
 marty-oid4vci = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false }
+marty-verification = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false }
 marty-status = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8" }
 mmf-platform = { path = "../../mmf-rust-gateway-wave25/crates/mmf-platform" }
 mmf-security = { path = "../../mmf-rust-gateway-wave25/crates/mmf-security" }
+mmf-messaging = { path = "../../mmf-rust-gateway-wave25/crates/mmf-messaging" }
+mmf-push = { path = "../../mmf-rust-gateway-wave25/crates/mmf-push" }
+mmf-workflow = { path = "../../mmf-rust-gateway-wave25/crates/mmf-workflow" }
 prost = "0.14"
 protoc-bin-vendored = "3"
 rand = "0.9"
