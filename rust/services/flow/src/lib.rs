@@ -16,6 +16,7 @@ mod http_providers;
 mod postgres;
 mod projection;
 mod providers;
+mod records;
 mod repository;
 
 pub mod credential_template_proto {
@@ -44,4 +45,5 @@ pub use http_providers::*;
 pub use postgres::*;
 pub use projection::*;
 pub use providers::*;
+pub use records::*;
 pub use repository::*;
