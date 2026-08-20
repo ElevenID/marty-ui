@@ -1,12 +1,12 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one and two complete and behaviorally accepted at beta; production promotion requires separate approval
+**Status:** Waves one and two complete and behaviorally accepted at beta; wave three active; production promotion requires separate approval
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-08-15
+**Last updated:** 2026-08-20
 
 ## Objective
 
@@ -15,6 +15,72 @@ Reduce the amount of Python and other non-Rust protocol code in the Marty stack 
 This is not a line-for-line translation project. Rust owns deterministic protocol, policy, validation, cryptographic, and state-machine behavior. Python remains only where it is useful for API composition, persistence adapters, scheduling, OCR, and third-party integrations until a whole service is deliberately replaced. Flutter/Dart remains responsible for application UI and platform integrations.
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
+
+## Wave three — Rust service plane and complete MMF replacement
+
+Wave three replaces the remaining deployed Python service plane with Rust and
+replaces the Python Marty Microservices Framework with a complete, reusable,
+DRY Rust platform. Removing MMF must not remove either currently consumed or
+intended framework features. The authoritative feature inventory and crate
+architecture live in `marty-microservices-framework` at
+`docs/RUST_PLATFORM_MIGRATION_ROADMAP.md`.
+
+The MMF work is a replacement, not a retirement shortcut. Its Rust workspace
+must preserve REST/gRPC/hybrid runtime behavior; configuration and secret
+providers; SQL, MongoDB and Redis infrastructure; migrations; Kafka, outbox,
+DLQ and replay; workflows, saga, CQRS and event sourcing; security and identity;
+observability; resilience; discovery, gateway and service mesh; plugins; push;
+ML; documentation and contract tooling; deployment support; built-in services;
+testing; and the developer CLI.
+
+### DRY ownership rule
+
+Generic service behavior lives once in feature-oriented MMF crates and is
+consumed by every Rust service. `marty-ui` service binaries may contain only
+their domain routes, use cases, repositories and provider adapters. They may
+not copy service lifecycle, health/readiness, configuration, secret loading,
+migrations, event envelopes, outbox, retry/circuit-breaker, telemetry,
+authorization-context, discovery or error-normalization implementations.
+`marty-core` remains the sole owner of protocol, policy, verification and
+cryptographic kernels.
+
+### Ordered `marty-ui` ports
+
+Work proceeds in descending removable Python size after the MMF foundation is
+available. Counts are current physical source estimates excluding tests,
+migrations, generated protobufs and caches.
+
+| Order | Service | Approximate removable Python | Required preservation |
+|---|---|---:|---|
+| 1 | Gateway | 16,961 | Every public/internal route, proxy behavior, auth context, tenancy, signing/KMS orchestration, provider routing, limits, errors and observability |
+| 2 | Flow | 9,154 | OID4VCI/OID4VP/SIOP/mDoc/DIDComm transaction orchestration, persistence, callbacks, outbox, idempotency and expiry |
+| 3 | Organization | 7,952 | Organization, membership, RBAC, SCIM, invitations, tenant boundaries, events and storage |
+| 4 | Auth | 6,498 | OIDC, Keycloak administration, provisioning, sessions, claims, tenancy, errors and audit behavior |
+| 5 | Presentation policy | 5,673 | CRUD/versioning, trust resolution, credential-format dispatch, status lookup, native evaluation adaptation and exact decision responses |
+| 6 | Trust profile | 4,685 | CRUD/versioning, registry synchronization orchestration, trust material, scheduling, storage and authorization |
+| 7 | Credential template | 4,085 | CRUD/versioning, issuance context, wallet metadata, custody routing, validation, seeds and storage |
+| 8 | Applicant | 3,692 | Applicant/application state transitions, vetting, evidence, biometrics, reviewer locks, issuance orchestration and storage |
+| 9 | Verification | 1,867 | Session APIs, OID4VP construction, provider/service integration, persistence and canonical results |
+| 10 | Device registration | 1,845 | Registration lifecycle, challenge consumption, key rotation, preferences, organization checks and storage |
+| 11 | Deployment profile | 1,558 | CRUD, validation, versioning, authorization and storage |
+| 12 | Compliance profile | 857 | CRUD, policy metadata, authorization and storage |
+
+### Delivery and deletion rules
+
+1. Capture language-neutral HTTP, gRPC, event, storage, configuration,
+   observability and provider fixtures before implementation.
+2. Implement shared behavior in MMF crates first and domain behavior in the
+   owning Rust service.
+3. Run the same fixtures against Python and Rust until parity, including
+   malformed input, unavailable dependencies, concurrency, timeout, retry and
+   disconnect cases.
+4. Switch packaging and deployment dispatch to Rust, verify startup and public
+   behavior, then delete the Python service and implementation-specific tests
+   in the same slice.
+5. Guard against reintroduction of Python services and duplicated MMF behavior.
+6. Land and test all wave-three slices without repeatedly updating beta. After
+   every slice and cross-repository release has landed, perform one aggregate
+   beta deployment and soak. Production remains unchanged.
 
 ## Implementation status (2026-08-15)
 
