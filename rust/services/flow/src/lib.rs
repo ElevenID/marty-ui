@@ -27,6 +27,7 @@ mod providers;
 mod records;
 mod reference_validation;
 mod repository;
+mod request_object;
 mod runtime;
 
 pub mod credential_template_proto {
@@ -66,4 +67,5 @@ pub use providers::*;
 pub use records::*;
 pub use reference_validation::*;
 pub use repository::*;
+pub use request_object::*;
 pub use runtime::*;

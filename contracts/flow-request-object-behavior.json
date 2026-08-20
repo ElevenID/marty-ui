@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "identity_binding": [
+    "organization_id",
+    "issuer_did",
+    "oid4vp_request_signing",
+    "oauth-authz-req+jwt",
+    "ES256"
+  ],
+  "private_key_access": "signing_provider_only",
+  "signing_input": "base64url(protected).base64url(payload)",
+  "oid4vp_response_mode": "direct_post",
+  "oid4vp_query": "dcql_query",
+  "siop_response_type": "id_token",
+  "siop_scope": "openid",
+  "request_content_type": "application/oauth-authz-req+jwt",
+  "mip_message_type": "PresentationRequest",
+  "url_query_request_object": "rejected",
+  "haip_before_encryption_composition": "rejected",
+  "identity_change": "fail_closed"
+}

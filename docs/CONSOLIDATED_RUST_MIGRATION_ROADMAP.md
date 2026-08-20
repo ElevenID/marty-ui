@@ -570,6 +570,19 @@ regressions and strict Clippy pass. Request-object signing, URL-query/message
 composition, submission evaluation and terminal callback persistence remain in
 the active verification-route slice.
 
+Standard DID-bound OID4VP and SIOPv2 Request Object construction is now native
+under `contracts/flow-request-object-behavior.json`. Each fetch re-resolves the
+exact organization + issuer DID + `oid4vp_request_signing` +
+`oauth-authz-req+jwt` + ES256 identity, builds the canonical OAuth/OID4VP or
+SIOPv2 claims, delegates only the base64url signing input to the typed signing
+provider and validates the returned identity before assembling compact JWS.
+Flow never receives private key material. The request records exact state,
+audience, response URI and the released MIP `PresentationRequest` envelope;
+URL-query and HAIP paths remain fail-closed until their dedicated unsigned and
+response-encryption composition lands. Two request-object vectors and strict
+Clippy pass. The route remains private to the Rust crate until those remaining
+profiles, persistence and expiry transitions are complete.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
