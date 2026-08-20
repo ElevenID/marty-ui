@@ -246,10 +246,10 @@ def test_revocation_deletion_release_uses_the_rust_candidate_overlay() -> None:
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.67"
-    assert integration["commit"] == "285aa62cccd736edec33eae99a54d0026d5c5e04"
+    assert integration["version"] == "1.2.69"
+    assert integration["commit"] == "5a1e666b2e43140ab1dc8da5a9a3f709e9c9bfcd"
     assert integration["artifacts"][0]["digest"] == (
-        "sha256:979ad07e5f417c1f2c1db2d97c6cdbae66aacd998437abe3d0aa192dcf03a64f"
+        "sha256:e58da96a39d6c940835bf771d536d1a00c7c5d39c3826907592c4d4e0d1f70cc"
     )
 
     issuance = next(
@@ -257,10 +257,10 @@ def test_revocation_deletion_release_uses_the_rust_candidate_overlay() -> None:
         for component in lock["components"]
         if component["name"] == "marty-credentials-issuance"
     )
-    assert issuance["version"] == "0.1.66"
-    assert issuance["commit"] == "22d8e782e6ef86a5ad9ecefdfce55e43f658d21c"
+    assert issuance["version"] == "0.1.67"
+    assert issuance["commit"] == "e875419ff75a0947cf4ce66a7ec688a675cd8024"
     assert issuance["artifacts"][0]["digest"] == (
-        "sha256:afecd04128157c63f208589c77c89d03bfe98b2e91fcc798c05074692d5051cf"
+        "sha256:72a1d4a076cf6b07b45d9518183f243a5816f14faca1d400c17272656b117f54"
     )
 
 

@@ -1,35 +1,45 @@
 status: complete
 search_scope:
-  - current_module_or_crate
-  - current_repository
-  - workspace_crates_packages_and_services
-  - bindings_adapters_ffi_and_api_layers
-  - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
+  - current immutable Marty UI stack release manifest
+  - released Credentials source, image digest, SBOM, and provenance
+  - released Marty integration topology source, SBOM, and provenance
+  - revocation-profile HTTP compatibility endpoints
+  - revocation-profile Kubernetes rollout strategy
+  - existing stack release contract and immutable CD workflow
 search_queries:
-  - "marty-ui immutable stack release identity v1.1.196"
+  - "marty-ui immutable stack release identity v1.1.197"
+  - "marty-credentials v0.1.67 issuance digest SBOM provenance"
+  - "marty-integration-tests v1.2.69 authcrypt released topology"
+  - "allocate-index reserve-index transitional compatibility"
+  - "revocation-profile Recreate RollingUpdate caller cutover"
   - "release contract exact tag and stack lock validation"
-  - "merged durable revocation status reservation source commit"
-  - "current immutable component pins and artifact digests"
 candidate_implementations:
   - path: release/stack-lock.json
     language: JSON
-    disposition: reuse_existing_release_manifest
+    disposition: reuse_existing_release_manifest_and_pin_released_credentials
   - path: tests/test_stack_release_contract.py
     language: Python
-    disposition: reuse_existing_release_contract_gate
+    disposition: update_owned_release_contract_expectation
   - path: .github/workflows/cd.yml
     language: YAML
     disposition: reuse_existing_immutable_release_pipeline
-  - path: rust/services/revocation-profile/src/postgres.rs
-    language: Rust_SQL
-    disposition: release_merged_canonical_implementation_unchanged
+  - path: rust/services/revocation-profile/src/http.rs
+    language: Rust
+    disposition: retain_dual_endpoint_compatibility_for_transition_release
+  - path: k8s/oracle/07-microservices.yaml
+    language: Kubernetes_YAML
+    disposition: retain_recreate_until_released_callers_are_verified
 no_match_statement: ""
 decision: reuse_existing
 canonical_implementation:
   path: release/stack-lock.json
   language: JSON
 rust_disposition: reuse_existing_rust_owner
-non_rust_rationale: "This release-only task changes no implementation; it reuses the reviewed Rust owner and immutable release pipeline."
+non_rust_rationale: >-
+  This transitional release changes no implementation. It pins the immutable
+  Credentials release containing the reviewed retry-safe caller while retaining
+  the UI-owned Rust compatibility endpoint and Recreate rollout strategy until
+  the released stack has passed integration testing.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
