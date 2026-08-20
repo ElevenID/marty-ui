@@ -450,9 +450,18 @@ and rejects an incomplete provider registry. Each required component becomes
 healthy only after its own probe succeeds; any database, migration, Redis,
 transport, HTTP, credential or registry error aborts startup before lifecycle
 activation. The language-neutral connection contract test, Redis database
-selection test and strict Clippy pass. The next executable slice must load and
-authorize the inbound mTLS identity, attach the complete HTTP/gRPC operation
-surface, and activate only after both listeners are serving.
+selection test and strict Clippy pass. Inbound gRPC security now consumes MMF's
+shared workload server-TLS and exact method-authorization primitives under
+`contracts/flow-grpc-security-behavior.json`. Every RPC requires the configured
+service token using constant-time comparison; sensitive verification start and
+application-approved calls additionally derive identity only from the verified
+client certificate URI SAN parsed by `marty-crypto`, then require the exact
+Auth or Applicant SPIFFE identity. A bearer value cannot replace certificate
+identity, partial server credentials fail startup, and missing versus wrong
+identities map to unauthenticated versus permission-denied status. Two focused
+security tests, the language-neutral contract test and strict Clippy pass. The
+next executable slice must attach the complete HTTP/gRPC operation surface and
+activate only after both listeners are serving.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
