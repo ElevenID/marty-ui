@@ -30,6 +30,7 @@ struct VerifierProfiles {
     did_methods: Vec<String>,
     request_length_bounds: Vec<u32>,
     x509_certificate_sources: Vec<String>,
+    dc_api_expected_origins: String,
     haip_default: bool,
     strict_metadata_default: bool,
 }
@@ -129,7 +130,11 @@ fn language_neutral_startup_contract_is_frozen() {
     );
     assert!(!contract.verifier_profiles.haip_default);
     assert!(!contract.verifier_profiles.strict_metadata_default);
-    assert_eq!(contract.fail_closed_cases.len(), 18);
+    assert_eq!(
+        contract.verifier_profiles.dc_api_expected_origins,
+        "configured_origins_or_public_origin"
+    );
+    assert_eq!(contract.fail_closed_cases.len(), 19);
 }
 
 #[test]
@@ -151,6 +156,7 @@ fn deployed_configuration_is_complete_and_normalized() {
     assert!(!config.oid4vp_haip_enabled);
     assert_eq!(config.oid4vp_request_object_maximum_length, 8_192);
     assert_eq!(config.oid4vp_url_query_maximum_length, 8_192);
+    assert_eq!(config.verifier_expected_origins, ["https://issuer.example"]);
     assert_eq!(config.organization_grpc_target, "http://organization:9002");
     assert!(config.workload_client_tls.is_some());
     assert!(config.workload_server_tls.is_some());
@@ -307,6 +313,18 @@ fn deployed_configuration_fails_closed() {
             name: "VERIFIER_LOGO_URI"
         })
     );
+
+    let mut invalid_origin = baseline("production");
+    invalid_origin.insert(
+        "VERIFIER_EXPECTED_ORIGINS".into(),
+        "https://verifier.example/path".into(),
+    );
+    assert_eq!(
+        FlowServiceConfig::from_values(invalid_origin),
+        Err(FlowConfigError::Invalid {
+            name: "VERIFIER_EXPECTED_ORIGINS"
+        })
+    );
 }
 
 #[test]
@@ -325,6 +343,10 @@ fn configured_verifier_profiles_are_preserved() {
         (
             "VERIFIER_LOGO_URI".into(),
             "https://verifier.example/logo.svg".into(),
+        ),
+        (
+            "VERIFIER_EXPECTED_ORIGINS".into(),
+            "https://one.example/, https://two.example, https://one.example".into(),
         ),
     ]);
     let config = FlowServiceConfig::from_values(values).expect("profile configuration");
@@ -354,6 +376,10 @@ fn configured_verifier_profiles_are_preserved() {
     assert!(start_options.haip_enabled);
     assert_eq!(start_options.request_object_maximum_length, 16_384);
     assert_eq!(start_options.url_query_maximum_length, 12_288);
+    assert_eq!(
+        start_options.request_object.expected_origins,
+        ["https://one.example", "https://two.example"]
+    );
 }
 
 #[test]

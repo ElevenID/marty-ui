@@ -10,8 +10,8 @@ use marty_flow::{
     build_profiled_request_object, build_standard_request_object, build_unsigned_url_query,
     FlowInstanceRecord, FlowKeyEnvelope, FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest,
     FlowProviderError, FlowProviderRegistry, Oid4vpClientIdScheme, RequestObjectCompatibility,
-    RequestObjectOptions, SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult,
-    VerifierDidMethod,
+    RequestObjectOptions, RequestObjectTransport, SigningIdentity, SigningIdentityProvider,
+    SigningRequest, SigningResult, VerifierDidMethod,
 };
 use marty_oid4vci::presentation_request::PresentationRequestArtifacts;
 use marty_verification::flow::FlowInstanceStatus;
@@ -43,6 +43,16 @@ struct Contract {
     lissi_query: String,
     lissi_client_id_scheme: String,
     lissi_haip: String,
+    dc_api: DcApi,
+}
+
+#[derive(Deserialize)]
+struct DcApi {
+    protocol: String,
+    response_mode: String,
+    origin_binding: String,
+    response_encryption: BTreeMap<String, String>,
+    redirect_fields: String,
 }
 
 #[derive(Clone, Default)]
@@ -205,6 +215,12 @@ async fn language_neutral_contract_builds_oid4vp_and_siop_request_objects() {
     assert_eq!(contract.lissi_query, "presentation_definition");
     assert_eq!(contract.lissi_client_id_scheme, "did");
     assert_eq!(contract.lissi_haip, "rejected");
+    assert_eq!(contract.dc_api.protocol, "openid4vp-v1-signed");
+    assert_eq!(contract.dc_api.response_mode, "dc_api.jwt");
+    assert_eq!(contract.dc_api.origin_binding, "exact_configured_origins");
+    assert_eq!(contract.dc_api.response_encryption["alg"], "ECDH-ES");
+    assert_eq!(contract.dc_api.response_encryption["enc"], "A256GCM");
+    assert_eq!(contract.dc_api.redirect_fields, "omitted");
 
     let signing = Signing::default();
     let providers = FlowProviderRegistry {
@@ -458,4 +474,55 @@ async fn profiled_requests_preserve_lissi_and_x509_identity_modes() {
     assert!(x509.client_id.starts_with("x509_hash:"));
     assert!(protected.get("kid").is_none());
     assert_eq!(protected["x5c"][0], fixture["certificate"]["expected_x5c"]);
+}
+
+#[tokio::test]
+async fn digital_credentials_api_request_is_origin_bound_and_encrypted() {
+    let envelopes = Envelopes::default();
+    let providers = FlowProviderRegistry {
+        signing_identity: Some(Arc::new(Signing::default())),
+        flow_key_envelope: Some(Arc::new(envelopes.clone())),
+        ..Default::default()
+    };
+    let artifacts = PresentationRequestArtifacts {
+        presentation_definition: json!({"id": "pd-1"}),
+        dcql_query: json!({"credentials": [{"id": "member"}]}),
+    };
+    let built = build_profiled_request_object(
+        &providers,
+        instance("verification"),
+        Some(&artifacts),
+        "https://verifier.example",
+        &RequestObjectOptions {
+            transport: RequestObjectTransport::DigitalCredentialsApi,
+            expected_origins: vec!["https://verifier.example".into()],
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+    let claims = payload(&built.compact_jwt);
+    assert_eq!(claims["response_mode"], "dc_api.jwt");
+    assert_eq!(
+        claims["expected_origins"],
+        json!(["https://verifier.example"])
+    );
+    assert!(claims.get("response_uri").is_none());
+    assert!(claims.get("state").is_none());
+    assert_eq!(
+        claims["client_metadata"]["encrypted_response_enc_values_supported"],
+        json!(["A128GCM", "A256GCM"])
+    );
+    assert_eq!(
+        built.instance.context["dc_api_protocol"],
+        "openid4vp-v1-signed"
+    );
+    assert_eq!(built.instance.context["dc_api_response_mode"], "dc_api.jwt");
+    assert!(built.instance.context["oid4vp_response_uri"].is_null());
+    assert!(
+        built.instance.context["mip_messages"]["presentation_request"]["payload"]["response_uri"]
+            .is_null()
+    );
+    assert_eq!(envelopes.requests.lock().unwrap().len(), 1);
 }

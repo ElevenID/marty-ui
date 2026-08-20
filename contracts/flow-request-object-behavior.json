@@ -27,5 +27,12 @@
   "x509_header": "validated_leaf_first_x5c_without_kid",
   "lissi_query": "presentation_definition",
   "lissi_client_id_scheme": "did",
-  "lissi_haip": "rejected"
+  "lissi_haip": "rejected",
+  "dc_api": {
+    "protocol": "openid4vp-v1-signed",
+    "response_mode": "dc_api.jwt",
+    "origin_binding": "exact_configured_origins",
+    "response_encryption": {"alg": "ECDH-ES", "enc": "A256GCM"},
+    "redirect_fields": "omitted"
+  }
 }

@@ -41,6 +41,7 @@
     "did_methods": ["did:web", "did:jwk", "did:key"],
     "request_length_bounds": [1024, 1048576],
     "x509_certificate_sources": ["VERIFIER_X509_CERT_PEM", "VERIFIER_X509_CERT_FILE"],
+    "dc_api_expected_origins": "configured_origins_or_public_origin",
     "haip_default": false,
     "strict_metadata_default": false
   },
@@ -62,6 +63,7 @@
     "unsupported_verifier_did_method",
     "missing_x509_certificate",
     "invalid_request_length_bound",
-    "insecure_deployed_logo_uri"
+    "insecure_deployed_logo_uri",
+    "invalid_dc_api_expected_origin"
   ]
 }

@@ -54,6 +54,13 @@ pub enum RequestObjectCompatibility {
     Lissi,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RequestObjectTransport {
+    #[default]
+    RequestUri,
+    DigitalCredentialsApi,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RequestObjectOptions {
     pub verifier_client_id: Option<String>,
@@ -62,6 +69,8 @@ pub struct RequestObjectOptions {
     pub client_id_scheme: Oid4vpClientIdScheme,
     pub x509_certificate_bundle: Option<String>,
     pub compatibility: RequestObjectCompatibility,
+    pub transport: RequestObjectTransport,
+    pub expected_origins: Vec<String>,
     pub strict_client_metadata: bool,
     pub verifier_display_name: String,
     pub verifier_logo_uri: Option<String>,
@@ -76,6 +85,8 @@ impl Default for RequestObjectOptions {
             client_id_scheme: Oid4vpClientIdScheme::DecentralizedIdentifier,
             x509_certificate_bundle: None,
             compatibility: RequestObjectCompatibility::Standard,
+            transport: RequestObjectTransport::RequestUri,
+            expected_origins: Vec::new(),
             strict_client_metadata: false,
             verifier_display_name: "ElevenID LLC".into(),
             verifier_logo_uri: None,
@@ -184,7 +195,7 @@ pub fn build_unsigned_url_query(
         &instance_id,
         &client_id,
         &nonce,
-        &response_uri,
+        Some(response_uri.as_str()),
         &request,
         now,
     )?;
@@ -314,7 +325,20 @@ pub async fn build_profiled_request_object(
         .expires_at
         .or_else(|| now.checked_add_signed(Duration::minutes(15)))
         .ok_or(FlowRequestObjectError::InvalidClock)?;
-    let response_encryption = if haip && !is_siop {
+    let dc_api = options.transport == RequestObjectTransport::DigitalCredentialsApi;
+    if dc_api && is_siop {
+        return Err(FlowRequestObjectError::UnsupportedProfile(
+            "Digital Credentials API does not support SIOP",
+        ));
+    }
+    if dc_api && options.expected_origins.is_empty() {
+        return Err(FlowRequestObjectError::InvalidInstance(
+            "Digital Credentials API requires expected origins",
+        ));
+    }
+    let response_encryption = if !is_siop
+        && (haip || (dc_api && options.compatibility == RequestObjectCompatibility::Standard))
+    {
         Some(response_encryption_key(providers, &instance).await?)
     } else {
         None
@@ -364,11 +388,28 @@ pub async fn build_profiled_request_object(
                 payload["presentation_definition"] = artifacts.presentation_definition.clone();
             }
         }
+        if dc_api {
+            payload["response_mode"] = json!("dc_api.jwt");
+            payload["expected_origins"] = json!(options.expected_origins);
+            let object = payload
+                .as_object_mut()
+                .ok_or(FlowRequestObjectError::Serialization)?;
+            object.remove("response_uri");
+            object.remove("state");
+        }
         payload
     };
     if let Some((public_jwk, _)) = &response_encryption {
-        payload["response_mode"] = json!("direct_post.jwt");
-        payload["client_metadata"]["encrypted_response_enc_values_supported"] = json!(["A256GCM"]);
+        payload["response_mode"] = json!(if dc_api {
+            "dc_api.jwt"
+        } else {
+            "direct_post.jwt"
+        });
+        payload["client_metadata"]["encrypted_response_enc_values_supported"] = if dc_api {
+            json!(["A128GCM", "A256GCM"])
+        } else {
+            json!(["A256GCM"])
+        };
         payload["client_metadata"]["jwks"] = json!({"keys": [public_jwk]});
     }
     if let Some(wallet_nonce) = options
@@ -400,9 +441,18 @@ pub async fn build_profiled_request_object(
         context.insert("siop_client_id".into(), json!(client_id));
     } else {
         context.insert("oid4vp_client_id".into(), json!(client_id));
-        context.insert("oid4vp_response_uri".into(), json!(response_uri));
-        context.insert("oid4vp_expected_state".into(), json!(instance_id));
-        context.insert("verification_audience".into(), json!(client_id));
+        context.insert(
+            "oid4vp_response_uri".into(),
+            if dc_api {
+                Value::Null
+            } else {
+                json!(response_uri)
+            },
+        );
+        if !dc_api {
+            context.insert("oid4vp_expected_state".into(), json!(instance_id));
+            context.insert("verification_audience".into(), json!(client_id));
+        }
         context.insert("oid4vp_verifier_context".into(), json!(true));
         if let Some((public_jwk, envelope)) = response_encryption {
             context.insert(
@@ -414,9 +464,20 @@ pub async fn build_profiled_request_object(
                 json!(envelope.envelope),
             );
             context.insert("oid4vp_response_encryption_jwk".into(), public_jwk);
-            context.insert("haip_response_mode".into(), json!("direct_post.jwt"));
-            context.insert("haip_jwe_alg".into(), json!("ECDH-ES"));
-            context.insert("haip_jwe_enc".into(), json!("A256GCM"));
+            if dc_api {
+                context.insert(
+                    "dc_api_expected_origins".into(),
+                    json!(options.expected_origins),
+                );
+                context.insert("dc_api_protocol".into(), json!("openid4vp-v1-signed"));
+                context.insert("dc_api_response_mode".into(), json!("dc_api.jwt"));
+                context.insert("dc_api_jwe_alg".into(), json!("ECDH-ES"));
+                context.insert("dc_api_jwe_enc".into(), json!("A256GCM"));
+            } else {
+                context.insert("haip_response_mode".into(), json!("direct_post.jwt"));
+                context.insert("haip_jwe_alg".into(), json!("ECDH-ES"));
+                context.insert("haip_jwe_enc".into(), json!("A256GCM"));
+            }
         } else {
             context.insert("oid4vp_response_encryption_jwk".into(), Value::Null);
         }
@@ -425,7 +486,7 @@ pub async fn build_profiled_request_object(
             &instance_id,
             &client_id,
             &nonce,
-            &response_uri,
+            (!dc_api).then_some(response_uri.as_str()),
             &payload,
             now,
         )?;
@@ -674,7 +735,7 @@ fn record_presentation_message(
     instance_id: &str,
     client_id: &str,
     nonce: &str,
-    response_uri: &str,
+    response_uri: Option<&str>,
     request: &Value,
     now: DateTime<Utc>,
 ) -> Result<(), FlowRequestObjectError> {

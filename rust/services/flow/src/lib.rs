@@ -29,6 +29,7 @@ mod reference_validation;
 mod repository;
 mod request_object;
 mod runtime;
+mod verification_request;
 mod verification_start;
 
 pub mod credential_template_proto {
@@ -70,4 +71,5 @@ pub use reference_validation::*;
 pub use repository::*;
 pub use request_object::*;
 pub use runtime::*;
+pub use verification_request::*;
 pub use verification_start::*;

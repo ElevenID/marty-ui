@@ -625,6 +625,24 @@ startup suite has six vectors, and strict Clippy passes. Route exposure is now
 gated on atomic retrieval/expiry, DC API transport/origin parity and complete
 submission/finalization rather than verifier identity support.
 
+Wallet Request Object retrieval is now a native, persistence-neutral kernel
+under `contracts/flow-verification-request-behavior.json`. It accepts only
+`awaiting_wallet` or `in_progress` snapshots, returns an explicit expired
+record carrying the `request_expired` terminal history for repository CAS,
+rejects URL-query flows, enforces POST-only retrieval and a nonempty
+`wallet_nonce` when configured, and re-resolves the signing identity on every
+fetch. Standard and LISSI retrieval share the same profiled builder. Digital
+Credentials API retrieval now emits `openid4vp-v1-signed` / `dc_api.jwt`, binds
+the exact configured HTTPS origins, omits redirect/state fields, creates the
+native per-flow encrypted-response key, stores only its tenant/flow-bound
+envelope and advertises ECDH-ES with A128GCM/A256GCM receiver support. The
+public origin is the default exact DC API origin; configured comma-separated
+origins are normalized, deduplicated and rejected if they are not deployed
+HTTPS origins. Three retrieval vectors, six Request Object vectors, startup
+regressions and strict Clippy pass. The HTTP adapter must persist either the
+ready context or expiry transition with status-and-`updated_at` CAS and return
+the released no-store response headers before this endpoint is advertised.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

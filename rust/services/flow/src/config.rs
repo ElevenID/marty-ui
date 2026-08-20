@@ -44,6 +44,7 @@ pub struct FlowServiceConfig {
     pub verifier_client_id: Option<String>,
     pub verifier_display_name: String,
     pub verifier_logo_uri: Option<String>,
+    pub verifier_expected_origins: Vec<String>,
     pub database_url: String,
     pub database_max_connections: u32,
     pub redis_url: String,
@@ -138,6 +139,7 @@ impl fmt::Debug for FlowServiceConfig {
             .field("verifier_client_id", &self.verifier_client_id)
             .field("verifier_display_name", &self.verifier_display_name)
             .field("verifier_logo_uri", &self.verifier_logo_uri)
+            .field("verifier_expected_origins", &self.verifier_expected_origins)
             .field("database_url", &"[REDACTED]")
             .field("database_max_connections", &self.database_max_connections)
             .field("redis_url", &"[REDACTED]")
@@ -294,6 +296,11 @@ impl FlowServiceConfig {
                 return Err(invalid("VERIFIER_LOGO_URI"));
             }
         }
+        let verifier_expected_origins = parse_expected_origins(
+            value(&values, "VERIFIER_EXPECTED_ORIGINS"),
+            &public_base_url,
+            environment,
+        )?;
 
         let database_url = required(&values, "DATABASE_URL")?.replacen(
             "postgresql+asyncpg://",
@@ -413,6 +420,7 @@ impl FlowServiceConfig {
             verifier_client_id,
             verifier_display_name,
             verifier_logo_uri,
+            verifier_expected_origins,
             database_url,
             database_max_connections,
             redis_url,
@@ -452,6 +460,7 @@ impl FlowServiceConfig {
             strict_client_metadata: self.oid4vp_strict_client_metadata,
             verifier_display_name: self.verifier_display_name.clone(),
             verifier_logo_uri: self.verifier_logo_uri.clone(),
+            expected_origins: self.verifier_expected_origins.clone(),
             ..RequestObjectOptions::default()
         }
     }
@@ -483,6 +492,39 @@ fn parse_verifier_did_method(value: &str) -> Result<VerifierDidMethod, FlowConfi
         "key" | "did:key" => Ok(VerifierDidMethod::Key),
         _ => Err(invalid("VERIFIER_DID_METHOD")),
     }
+}
+
+fn parse_expected_origins(
+    configured: Option<&str>,
+    public_base_url: &str,
+    environment: Environment,
+) -> Result<Vec<String>, FlowConfigError> {
+    let values = configured.map_or_else(
+        || vec![public_base_url.to_owned()],
+        |configured| {
+            configured
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect()
+        },
+    );
+    if values.is_empty() {
+        return Err(invalid("VERIFIER_EXPECTED_ORIGINS"));
+    }
+    let mut origins = Vec::with_capacity(values.len());
+    for origin in values {
+        validate_origin(&origin, "VERIFIER_EXPECTED_ORIGINS")?;
+        if environment.is_deployed() && !origin.starts_with("https://") {
+            return Err(invalid("VERIFIER_EXPECTED_ORIGINS"));
+        }
+        let normalized = origin.trim_end_matches('/').to_owned();
+        if !origins.contains(&normalized) {
+            origins.push(normalized);
+        }
+    }
+    Ok(origins)
 }
 
 fn parse_environment(value: &str) -> Result<Environment, FlowConfigError> {
