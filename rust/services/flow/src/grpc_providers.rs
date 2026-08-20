@@ -298,8 +298,13 @@ impl CredentialTemplateProvider for GrpcCredentialTemplateProvider {
             id: response.id,
             organization_id: response.organization_id,
             status: response.status,
+            credential_type: response.credential_type,
             issuer_did: response.issuer_did,
             credential_format: response.credential_payload_format,
+            wallet_configurations: bounded_json(
+                &response.wallet_configs_json,
+                "credential_template",
+            )?,
             issuer_algorithm: nonempty(response.issuer_algorithm),
         })
     }

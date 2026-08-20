@@ -3865,6 +3865,7 @@ dependencies = [
  "chrono",
  "http 1.5.0",
  "marty-crypto",
+ "marty-oid4vci",
  "marty-verification",
  "mmf-core",
  "mmf-messaging",

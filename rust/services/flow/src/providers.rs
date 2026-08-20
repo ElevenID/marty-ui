@@ -53,10 +53,28 @@ pub struct CredentialTemplateReference {
     pub id: String,
     pub organization_id: String,
     pub status: String,
+    pub credential_type: String,
     pub issuer_did: String,
     pub credential_format: String,
+    #[serde(default)]
+    pub wallet_configurations: Vec<WalletConfiguration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuer_algorithm: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WalletConfiguration {
+    pub wallet_id: String,
+    #[serde(default = "default_wallet_scheme")]
+    pub deep_link_scheme: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format_variant: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+fn default_wallet_scheme() -> String {
+    "openid-credential-offer://".into()
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

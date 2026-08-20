@@ -51,8 +51,10 @@ impl CredentialTemplateProvider for Templates {
             id: template_id.into(),
             organization_id: "org-1".into(),
             status: self.status.into(),
+            credential_type: "ExampleCredential".into(),
             issuer_did: "did:web:issuer.example".into(),
             credential_format: "jwt_vc".into(),
+            wallet_configurations: Vec::new(),
             issuer_algorithm: Some("ES256".into()),
         })
     }
