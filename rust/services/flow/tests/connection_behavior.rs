@@ -65,7 +65,7 @@ fn flow_connection_contract_freezes_fail_closed_startup_composition() {
     assert_eq!(contract.grpc.required_clients, 4);
     assert_eq!(contract.http.probe_path, "/health");
     assert_eq!(contract.http.redirects, "disabled");
-    assert_eq!(contract.http.required_providers, 2);
+    assert_eq!(contract.http.required_providers, 3);
     assert!(contract.provider_registry_must_be_complete);
     assert!(contract.activate_only_after_all_probes);
     assert_eq!(contract.failure_behavior, "fail_closed");

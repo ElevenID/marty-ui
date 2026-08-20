@@ -9,9 +9,9 @@ use url::Url;
 
 use crate::{
     FlowKeyEnvelope, FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest, FlowProviderError,
-    PhysicalDocumentOperation, PhysicalDocumentProvider, PhysicalDocumentRequest,
-    PhysicalDocumentResult, SigningIdentity, SigningIdentityProvider, SigningRequest,
-    SigningResult,
+    FlowReference, FlowReferenceKind, FlowReferenceProvider, PhysicalDocumentOperation,
+    PhysicalDocumentProvider, PhysicalDocumentRequest, PhysicalDocumentResult, SigningIdentity,
+    SigningIdentityProvider, SigningRequest, SigningResult,
 };
 
 const MAXIMUM_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -20,7 +20,7 @@ const MAXIMUM_RESPONSE_BYTES: usize = 1024 * 1024;
 struct BoundedHttpClient {
     client: Client,
     base_url: Url,
-    api_key: String,
+    api_key: Option<String>,
     provider: &'static str,
 }
 
@@ -31,6 +31,23 @@ impl BoundedHttpClient {
         provider: &'static str,
         timeout: Duration,
     ) -> Result<Self, FlowProviderError> {
+        Self::build(base_url, Some(api_key), provider, timeout)
+    }
+
+    fn delegated(
+        base_url: &str,
+        provider: &'static str,
+        timeout: Duration,
+    ) -> Result<Self, FlowProviderError> {
+        Self::build(base_url, None, provider, timeout)
+    }
+
+    fn build(
+        base_url: &str,
+        api_key: Option<&str>,
+        provider: &'static str,
+        timeout: Duration,
+    ) -> Result<Self, FlowProviderError> {
         let mut base_url = Url::parse(base_url).map_err(|_| invalid_config(provider))?;
         if !matches!(base_url.scheme(), "http" | "https")
             || base_url.host().is_none()
@@ -38,7 +55,7 @@ impl BoundedHttpClient {
             || base_url.password().is_some()
             || base_url.query().is_some()
             || base_url.fragment().is_some()
-            || api_key.trim().len() < 16
+            || api_key.is_some_and(|value| value.trim().len() < 16)
         {
             return Err(invalid_config(provider));
         }
@@ -55,7 +72,7 @@ impl BoundedHttpClient {
         Ok(Self {
             client,
             base_url,
-            api_key: api_key.into(),
+            api_key: api_key.map(str::to_owned),
             provider,
         })
     }
@@ -67,15 +84,28 @@ impl BoundedHttpClient {
         query: &[(&str, &str)],
         body: Option<Value>,
     ) -> Result<T, FlowProviderError> {
+        self.json_as(method, path, query, body, None).await
+    }
+
+    async fn json_as<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, &str)],
+        body: Option<Value>,
+        principal_id: Option<&str>,
+    ) -> Result<T, FlowProviderError> {
         let url = self
             .base_url
             .join(path)
             .map_err(|_| invalid_config(self.provider))?;
-        let mut request = self
-            .client
-            .request(method, url)
-            .query(query)
-            .header("X-API-Key", &self.api_key);
+        let mut request = self.client.request(method, url).query(query);
+        if let Some(api_key) = &self.api_key {
+            request = request.header("X-API-Key", api_key);
+        }
+        if let Some(principal_id) = principal_id {
+            request = request.header("X-User-ID", principal_id);
+        }
         if let Some(body) = body {
             request = request.json(&body);
         }
@@ -103,6 +133,162 @@ impl BoundedHttpClient {
             bytes.extend_from_slice(&chunk);
         }
         serde_json::from_slice(&bytes).map_err(|_| invalid_response(self.provider))
+    }
+}
+
+#[derive(Clone)]
+pub struct HttpFlowReferenceProvider {
+    application_templates: BoundedHttpClient,
+    delivery_destinations: BoundedHttpClient,
+    trust_profiles: BoundedHttpClient,
+    deployment_profiles: BoundedHttpClient,
+}
+
+impl HttpFlowReferenceProvider {
+    pub fn new(
+        issuance_url: &str,
+        issuance_api_key: &str,
+        credential_template_url: &str,
+        trust_profile_url: &str,
+        deployment_profile_url: &str,
+    ) -> Result<Self, FlowProviderError> {
+        Ok(Self {
+            application_templates: BoundedHttpClient::new(
+                issuance_url,
+                issuance_api_key,
+                "application_template",
+                Duration::from_secs(10),
+            )?,
+            delivery_destinations: BoundedHttpClient::delegated(
+                credential_template_url,
+                "delivery_destination",
+                Duration::from_secs(10),
+            )?,
+            trust_profiles: BoundedHttpClient::delegated(
+                trust_profile_url,
+                "trust_profile",
+                Duration::from_secs(10),
+            )?,
+            deployment_profiles: BoundedHttpClient::delegated(
+                deployment_profile_url,
+                "deployment_profile",
+                Duration::from_secs(10),
+            )?,
+        })
+    }
+
+    pub async fn health_check(&self) -> Result<(), FlowProviderError> {
+        let (application, delivery, trust, deployment) = tokio::join!(
+            self.application_templates
+                .json::<Value>(Method::GET, "/health", &[], None),
+            self.delivery_destinations
+                .json::<Value>(Method::GET, "/health", &[], None),
+            self.trust_profiles
+                .json::<Value>(Method::GET, "/health", &[], None),
+            self.deployment_profiles
+                .json::<Value>(Method::GET, "/health", &[], None),
+        );
+        application?;
+        delivery?;
+        trust?;
+        deployment?;
+        Ok(())
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ReferenceResponse {
+    id: String,
+    #[serde(default)]
+    organization_id: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    is_system: bool,
+    #[serde(default)]
+    is_enabled: Option<bool>,
+}
+
+#[async_trait]
+impl FlowReferenceProvider for HttpFlowReferenceProvider {
+    async fn resolve(
+        &self,
+        kind: FlowReferenceKind,
+        reference_id: &str,
+        principal_id: &str,
+    ) -> Result<FlowReference, FlowProviderError> {
+        if reference_id.trim().is_empty()
+            || reference_id.len() > 255
+            || principal_id.trim().is_empty()
+        {
+            return Err(invalid_config("reference_catalog"));
+        }
+        let encoded =
+            url::form_urlencoded::byte_serialize(reference_id.as_bytes()).collect::<String>();
+        let response: ReferenceResponse = match kind {
+            FlowReferenceKind::ApplicationTemplate => {
+                self.application_templates
+                    .json(
+                        Method::GET,
+                        &format!("v1/application-templates/{encoded}"),
+                        &[],
+                        None,
+                    )
+                    .await?
+            }
+            FlowReferenceKind::DeliveryDestination => {
+                self.delivery_destinations
+                    .json_as(
+                        Method::GET,
+                        &format!("v1/delivery-destinations/{encoded}"),
+                        &[],
+                        None,
+                        Some(principal_id),
+                    )
+                    .await?
+            }
+            FlowReferenceKind::TrustProfile => {
+                self.trust_profiles
+                    .json_as(
+                        Method::GET,
+                        &format!("v1/trust-profiles/{encoded}"),
+                        &[],
+                        None,
+                        Some(principal_id),
+                    )
+                    .await?
+            }
+            FlowReferenceKind::DeploymentProfile => {
+                self.deployment_profiles
+                    .json_as(
+                        Method::GET,
+                        &format!("v1/deployment-profiles/{encoded}"),
+                        &[],
+                        None,
+                        Some(principal_id),
+                    )
+                    .await?
+            }
+        };
+        if response.id != reference_id {
+            return Err(invalid_response("reference_catalog"));
+        }
+        let status = response
+            .status
+            .or_else(|| {
+                response
+                    .is_enabled
+                    .map(|enabled| if enabled { "enabled" } else { "disabled" }.into())
+            })
+            .filter(|status| !status.trim().is_empty())
+            .ok_or_else(|| invalid_response("reference_catalog"))?;
+        Ok(FlowReference {
+            kind,
+            id: response.id,
+            organization_id: response.organization_id,
+            status,
+            system_owned: response.is_system,
+        })
     }
 }
 
@@ -459,6 +645,38 @@ mod tests {
             client.base_url.join("resolve-issuer-did").unwrap().as_str(),
             "https://example.com/internal/signing-keys/resolve-issuer-did"
         );
+        let references = HttpFlowReferenceProvider::new(
+            "https://issuance.example",
+            &"a".repeat(32),
+            "https://credential-template.example",
+            "https://trust-profile.example",
+            "https://deployment-profile.example",
+        )
+        .unwrap();
+        assert!(references.delivery_destinations.api_key.is_none());
+        assert!(references.trust_profiles.api_key.is_none());
+        assert!(references.deployment_profiles.api_key.is_none());
+        assert!(references.application_templates.api_key.is_some());
+    }
+
+    #[tokio::test]
+    async fn reference_catalog_rejects_unbound_inputs_before_network_io() {
+        let references = HttpFlowReferenceProvider::new(
+            "https://issuance.example",
+            &"a".repeat(32),
+            "https://credential-template.example",
+            "https://trust-profile.example",
+            "https://deployment-profile.example",
+        )
+        .unwrap();
+        assert!(references
+            .resolve(FlowReferenceKind::TrustProfile, "", "user-1")
+            .await
+            .is_err());
+        assert!(references
+            .resolve(FlowReferenceKind::TrustProfile, "trust-1", "")
+            .await
+            .is_err());
     }
 
     #[test]

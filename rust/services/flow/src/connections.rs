@@ -8,7 +8,8 @@ use url::Url;
 use crate::{
     migrate_flow_schema, FlowDependency, FlowGrpcChannelFactories, FlowMigrationError,
     FlowProviderError, FlowProviderRegistry, FlowRuntime, FlowServiceConfig,
-    HttpPhysicalDocumentProvider, HttpSigningProvider, PostgresFlowRepository,
+    HttpFlowReferenceProvider, HttpPhysicalDocumentProvider, HttpSigningProvider,
+    PostgresFlowRepository,
 };
 
 pub struct FlowBackendConnections {
@@ -113,6 +114,16 @@ async fn connect_providers(
     physical.health_check().await?;
     runtime.mark_healthy(FlowDependency::PhysicalIssuance)?;
 
+    let references = Arc::new(HttpFlowReferenceProvider::new(
+        &config.issuance_url,
+        required_secret(&config.issuance_api_key, "issuance API key")?,
+        &config.credential_template_url,
+        &config.trust_profile_url,
+        &config.deployment_profile_url,
+    )?);
+    references.health_check().await?;
+    runtime.mark_healthy(FlowDependency::ReferenceCatalog)?;
+
     Ok(FlowProviderRegistry {
         tenant_membership: Some(Arc::new(grpc.tenant_membership)),
         credential_template: Some(Arc::new(grpc.credential_template)),
@@ -121,6 +132,7 @@ async fn connect_providers(
         signing_identity: Some(signing.clone()),
         flow_key_envelope: Some(signing),
         physical_document: Some(physical),
+        reference_catalog: Some(references),
     })
 }
 

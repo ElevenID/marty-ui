@@ -366,7 +366,7 @@ tests in their applicable groups, and strict Clippy pass. HTTP/gRPC executable
 composition is now the next Flow runtime gate. Its first prerequisite is now
 frozen in `contracts/flow-startup-behavior.json` and implemented by the Rust
 configuration boundary. Beta and production must explicitly configure
-PostgreSQL, Redis, all six downstream endpoints and all four service/webhook
+PostgreSQL, Redis, all nine downstream endpoint origins and all four service/webhook
 credentials; every secret is at least 32 bytes, endpoint origins are
 credential-free, listener addresses cannot collide, and connection/database
 bounds fail closed. Local development may default only non-secret service
@@ -399,7 +399,7 @@ enabled. The reusable lifecycle portion is now complete at local MMF commit
 `06a52ac`: required components block activation unless healthy and immediately
 remove live readiness when they degrade. Flow consumes that primitive under
 `contracts/flow-runtime-behavior.json`, registers PostgreSQL, Redis nonce
-storage, four typed gRPC dependencies and both HTTP provider families as
+storage, four typed gRPC dependencies and three HTTP provider adapters as
 mandatory, and exposes the shared `/health`, `/ready`, `/version` routes plus
 native backend/version/capability diagnostics. Two Flow runtime tests, five MMF
 runtime tests and strict Clippy pass. Actual dependency connection, seed
@@ -413,9 +413,10 @@ and AsyncPG-tagged PostgreSQL URL forms, normalizes them to the canonical Rust
 types, and loads all four mandatory credentials from the existing `_FILE`
 secret convention. Direct values take precedence; unreadable or empty secret
 files fail startup, and configuration diagnostics redact database, Redis and
-all secret values. Six startup/unit vectors and strict Clippy pass. The final
-beta compose cutover still needs to add Flow's currently omitted signing-key
-endpoint/API-key settings before the Rust process can become ready.
+all secret values. Six startup/unit vectors and strict Clippy pass. The
+checked-in base and self-host manifests now carry Flow's explicit
+reference-owner endpoints; these source changes are not a deployment. Beta
+remains queued for one aggregate cutover after every wave-three slice lands.
 
 Rust migration ownership now also includes the complete built-in Flow seed
 surface. `contracts/flow-seed-behavior.json` freezes the Open Badge login flow,
@@ -445,7 +446,8 @@ The executable dependency connection step is now implemented under
 pool, runs the Rust-owned schema and seed migrations under their advisory lock,
 executes a live query, canonicalizes and connects the configured Redis nonce
 database, requires `PING`/`PONG`, eagerly connects all four typed gRPC clients
-through the shared MMF transport factory, probes both bounded HTTP providers,
+through the shared MMF transport factory, probes all three bounded HTTP
+provider adapters and all four reference-owner services,
 and rejects an incomplete provider registry. Each required component becomes
 healthy only after its own probe succeeds; any database, migration, Redis,
 transport, HTTP, credential or registry error aborts startup before lifecycle
@@ -486,9 +488,20 @@ instance to `cancelled`, persist its completion time and append the
 `flow_cancelled` history event. Concurrent or replayed cancellation returns
 conflict and cannot overwrite a terminal result. The isolated PostgreSQL
 behavior suite now exercises the persisted transition and replay rejection.
-Create, patch and activate remain gated on completing the Application Template
-and delivery-profile provider ports; they are not exposed with weakened
-reference validation.
+The authoritative reference catalog port is now complete. Application
+Templates resolve from issuance with the internal API key; delivery
+destinations, trust profiles and deployment profiles resolve from their owning
+services with the authenticated user identity. Exact returned IDs, bounded
+responses, redirects, malformed bodies, unavailable owners and non-success
+statuses all fail closed. The catalog is one mandatory readiness component and
+all four owners must pass health probes before activation. Beta and production
+must explicitly configure the credential-template, trust-profile and
+deployment-profile origins; local development alone may use defaults.
+`contracts/flow-provider-behavior.json` freezes the four method/path/auth
+triples, and the focused startup, provider and HTTP-adapter suites plus strict
+Clippy pass. Create, patch, validate and activate remain unadvertised until
+these resolved references are consumed with exact tenant, system-owner and
+active-status rules; no weakened mutation path is exposed in the interim.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

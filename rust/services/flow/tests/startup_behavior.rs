@@ -36,6 +36,18 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
             "SIGNING_KEYS_INTERNAL_URL".into(),
             "http://signing-keys:8017".into(),
         ),
+        (
+            "CREDENTIAL_TEMPLATE_SERVICE_URL".into(),
+            "http://credential-template:8003".into(),
+        ),
+        (
+            "TRUST_PROFILE_SERVICE_URL".into(),
+            "http://trust-profile:8004".into(),
+        ),
+        (
+            "DEPLOYMENT_PROFILE_SERVICE_URL".into(),
+            "http://deployment-profile:8010".into(),
+        ),
         ("ISSUANCE_SERVICE_URL".into(), "http://issuance:8006".into()),
         ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
         ("FLOW_WEBHOOK_SECRET".into(), "w".repeat(32)),
@@ -74,7 +86,7 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.schema_version, 1);
     assert_eq!(contract.deployed_environments, ["beta", "production"]);
     assert_eq!(contract.required_always, ["DATABASE_URL", "REDIS_URL"]);
-    assert_eq!(contract.required_when_deployed.len(), 16);
+    assert_eq!(contract.required_when_deployed.len(), 19);
     assert_eq!(contract.minimum_secret_bytes, 32);
     assert_eq!(contract.secret_file_suffix, "_FILE");
     assert_eq!(
@@ -113,6 +125,9 @@ fn deployed_configuration_fails_closed() {
         "PP_GRPC_TARGET",
         "ISSUANCE_GRPC_TARGET",
         "SIGNING_KEYS_INTERNAL_URL",
+        "CREDENTIAL_TEMPLATE_SERVICE_URL",
+        "TRUST_PROFILE_SERVICE_URL",
+        "DEPLOYMENT_PROFILE_SERVICE_URL",
         "ISSUANCE_SERVICE_URL",
         "GRPC_SERVICE_TOKEN",
         "FLOW_WEBHOOK_SECRET",

@@ -36,6 +36,9 @@ pub struct FlowServiceConfig {
     pub presentation_policy_grpc_target: String,
     pub issuance_grpc_target: String,
     pub signing_keys_url: String,
+    pub credential_template_url: String,
+    pub trust_profile_url: String,
+    pub deployment_profile_url: String,
     pub signing_keys_api_key: Option<String>,
     pub issuance_url: String,
     pub issuance_api_key: Option<String>,
@@ -96,6 +99,9 @@ impl fmt::Debug for FlowServiceConfig {
             )
             .field("issuance_grpc_target", &self.issuance_grpc_target)
             .field("signing_keys_url", &self.signing_keys_url)
+            .field("credential_template_url", &self.credential_template_url)
+            .field("trust_profile_url", &self.trust_profile_url)
+            .field("deployment_profile_url", &self.deployment_profile_url)
             .field(
                 "signing_keys_api_key",
                 &redacted(&self.signing_keys_api_key),
@@ -208,6 +214,24 @@ impl FlowServiceConfig {
             Some("http://signing-keys:8017"),
             environment,
         )?;
+        let credential_template_url = service_url(
+            &values,
+            "CREDENTIAL_TEMPLATE_SERVICE_URL",
+            Some("http://credential-template:8003"),
+            environment,
+        )?;
+        let trust_profile_url = service_url(
+            &values,
+            "TRUST_PROFILE_SERVICE_URL",
+            Some("http://trust-profile:8004"),
+            environment,
+        )?;
+        let deployment_profile_url = service_url(
+            &values,
+            "DEPLOYMENT_PROFILE_SERVICE_URL",
+            Some("http://deployment-profile:8010"),
+            environment,
+        )?;
         let issuance_url = service_url(
             &values,
             "ISSUANCE_SERVICE_URL",
@@ -252,6 +276,9 @@ impl FlowServiceConfig {
             presentation_policy_grpc_target,
             issuance_grpc_target,
             signing_keys_url,
+            credential_template_url,
+            trust_profile_url,
+            deployment_profile_url,
             signing_keys_api_key,
             issuance_url,
             issuance_api_key,

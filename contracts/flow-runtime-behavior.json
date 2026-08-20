@@ -8,7 +8,8 @@
     "presentation_policy_grpc",
     "issuance_grpc",
     "signing_keys_http",
-    "physical_issuance_http"
+    "physical_issuance_http",
+    "reference_catalog_http"
   ],
   "native_backend": "marty-flow-rust",
   "native_capabilities": [

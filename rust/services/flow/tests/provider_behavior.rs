@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 struct Contract {
     schema_version: u32,
     required_providers: Vec<String>,
+    reference_catalog: BTreeMap<String, [String; 3]>,
     signing_identity: SigningIdentity,
     invalid_identity_mutations: Vec<String>,
     physical_document_operations: BTreeMap<String, [String; 2]>,
@@ -68,6 +69,28 @@ fn provider_composition_fails_closed_until_every_feature_port_is_present() {
     let registry = FlowProviderRegistry::default();
     assert_eq!(registry.missing(), REQUIRED_FLOW_PROVIDERS);
     assert!(registry.require_complete().is_err());
+}
+
+#[test]
+fn reference_catalog_preserves_authoritative_routes_and_authentication() {
+    let operations = contract().reference_catalog;
+    assert_eq!(operations.len(), 4);
+    assert_eq!(
+        operations["application_template"],
+        ["GET", "v1/application-templates/{id}", "x-api-key"]
+    );
+    assert_eq!(
+        operations["delivery_destination"],
+        ["GET", "v1/delivery-destinations/{id}", "x-user-id"]
+    );
+    assert_eq!(
+        operations["trust_profile"],
+        ["GET", "v1/trust-profiles/{id}", "x-user-id"]
+    );
+    assert_eq!(
+        operations["deployment_profile"],
+        ["GET", "v1/deployment-profiles/{id}", "x-user-id"]
+    );
 }
 
 #[test]
@@ -236,6 +259,18 @@ fn configured_factories_apply_workload_mtls_only_to_the_policy_provider() {
         (
             "SIGNING_KEYS_INTERNAL_URL".into(),
             "http://gateway:8000".into(),
+        ),
+        (
+            "CREDENTIAL_TEMPLATE_SERVICE_URL".into(),
+            "http://credential-template:8003".into(),
+        ),
+        (
+            "TRUST_PROFILE_SERVICE_URL".into(),
+            "http://trust-profile:8004".into(),
+        ),
+        (
+            "DEPLOYMENT_PROFILE_SERVICE_URL".into(),
+            "http://deployment-profile:8010".into(),
         ),
         ("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into()),
         ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),

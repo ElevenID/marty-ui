@@ -17,6 +17,7 @@ pub const REQUIRED_FLOW_PROVIDERS: &[&str] = &[
     "signing_identity",
     "flow_key_envelope",
     "physical_document",
+    "reference_catalog",
 ];
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -261,6 +262,34 @@ pub struct PhysicalDocumentResult {
     pub data: BTreeMap<String, Value>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowReferenceKind {
+    ApplicationTemplate,
+    DeliveryDestination,
+    TrustProfile,
+    DeploymentProfile,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FlowReference {
+    pub kind: FlowReferenceKind,
+    pub id: String,
+    pub organization_id: Option<String>,
+    pub status: String,
+    pub system_owned: bool,
+}
+
+impl FlowReference {
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        matches!(
+            self.status.to_ascii_lowercase().as_str(),
+            "active" | "enabled"
+        )
+    }
+}
+
 #[async_trait]
 pub trait CredentialTemplateProvider: Send + Sync {
     async fn get_template(
@@ -322,6 +351,16 @@ pub trait PhysicalDocumentProvider: Send + Sync {
     ) -> Result<PhysicalDocumentResult, FlowProviderError>;
 }
 
+#[async_trait]
+pub trait FlowReferenceProvider: Send + Sync {
+    async fn resolve(
+        &self,
+        kind: FlowReferenceKind,
+        reference_id: &str,
+        principal_id: &str,
+    ) -> Result<FlowReference, FlowProviderError>;
+}
+
 #[derive(Clone, Default)]
 pub struct FlowProviderRegistry {
     pub tenant_membership: Option<Arc<dyn TenantMembershipProvider>>,
@@ -331,6 +370,7 @@ pub struct FlowProviderRegistry {
     pub signing_identity: Option<Arc<dyn SigningIdentityProvider>>,
     pub flow_key_envelope: Option<Arc<dyn FlowKeyEnvelopeProvider>>,
     pub physical_document: Option<Arc<dyn PhysicalDocumentProvider>>,
+    pub reference_catalog: Option<Arc<dyn FlowReferenceProvider>>,
 }
 
 impl FlowProviderRegistry {
@@ -344,6 +384,7 @@ impl FlowProviderRegistry {
             ("signing_identity", self.signing_identity.is_none()),
             ("flow_key_envelope", self.flow_key_envelope.is_none()),
             ("physical_document", self.physical_document.is_none()),
+            ("reference_catalog", self.reference_catalog.is_none()),
         ]
         .into_iter()
         .filter_map(|(name, missing)| missing.then_some(name))

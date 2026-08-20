@@ -8,7 +8,8 @@
     "presentation_policy_grpc",
     "issuance_grpc",
     "signing_keys_http",
-    "physical_issuance_http"
+    "physical_issuance_http",
+    "reference_catalog_http"
   ],
   "database": {
     "migration_before_healthy": true,
@@ -27,7 +28,7 @@
   "http": {
     "probe_path": "/health",
     "redirects": "disabled",
-    "required_providers": 2
+    "required_providers": 3
   },
   "provider_registry_must_be_complete": true,
   "activate_only_after_all_probes": true,

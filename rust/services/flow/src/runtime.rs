@@ -15,6 +15,7 @@ pub enum FlowDependency {
     IssuanceGrpc,
     SigningKeys,
     PhysicalIssuance,
+    ReferenceCatalog,
 }
 
 impl FlowDependency {
@@ -29,6 +30,7 @@ impl FlowDependency {
             Self::IssuanceGrpc => "issuance_grpc",
             Self::SigningKeys => "signing_keys_http",
             Self::PhysicalIssuance => "physical_issuance_http",
+            Self::ReferenceCatalog => "reference_catalog_http",
         }
     }
 
@@ -42,6 +44,7 @@ impl FlowDependency {
             Self::IssuanceGrpc,
             Self::SigningKeys,
             Self::PhysicalIssuance,
+            Self::ReferenceCatalog,
         ]
         .into_iter()
     }

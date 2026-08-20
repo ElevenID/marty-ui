@@ -845,6 +845,9 @@ services:
       CT_GRPC_TARGET: credential-template:9003
       ISSUANCE_GRPC_TARGET: issuance:9005
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
+      DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
       REDIS_URL: redis://redis:6379
       REDIS_DB_FLOW: "3"
       FLOW_GRPC_PORT: "9011"

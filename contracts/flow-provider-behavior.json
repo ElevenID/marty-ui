@@ -7,8 +7,15 @@
     "issuance",
     "signing_identity",
     "flow_key_envelope",
-    "physical_document"
+    "physical_document",
+    "reference_catalog"
   ],
+  "reference_catalog": {
+    "application_template": ["GET", "v1/application-templates/{id}", "x-api-key"],
+    "delivery_destination": ["GET", "v1/delivery-destinations/{id}", "x-user-id"],
+    "trust_profile": ["GET", "v1/trust-profiles/{id}", "x-user-id"],
+    "deployment_profile": ["GET", "v1/deployment-profiles/{id}", "x-user-id"]
+  },
   "signing_identity": {
     "organization_id": "org-1",
     "issuer_did": "did:web:issuer.example",
