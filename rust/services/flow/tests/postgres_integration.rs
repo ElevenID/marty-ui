@@ -345,6 +345,77 @@ async fn run_crud_contract(
             .id,
         artifact.id
     );
+
+    let mut atomic_instance = instance.clone();
+    atomic_instance.id = "90000000-0000-0000-0000-000000000021".into();
+    atomic_instance.application_flow_key_hash = Some("d".repeat(64));
+    let mut atomic_artifact = artifact.clone();
+    atomic_artifact.id = "90000000-0000-0000-0000-000000000022".into();
+    atomic_artifact
+        .flow_instance_id
+        .clone_from(&atomic_instance.id);
+    atomic_artifact.issuance_transaction_id = Some("90000000-0000-0000-0000-000000000023".into());
+    atomic_artifact.pre_authorized_code = Some("code-atomic".into());
+    assert!(
+        repository
+            .save_started_instance(&atomic_instance, Some(&atomic_artifact))
+            .await?
+    );
+    assert!(repository.instance(&atomic_instance.id).await?.is_some());
+    assert_eq!(
+        repository
+            .artifacts_for_instance(&atomic_instance.id)
+            .await?
+            .len(),
+        1
+    );
+
+    let mut conflicting_instance = atomic_instance.clone();
+    conflicting_instance.id = "90000000-0000-0000-0000-000000000024".into();
+    let mut conflicting_artifact = atomic_artifact.clone();
+    conflicting_artifact.id = "90000000-0000-0000-0000-000000000025".into();
+    conflicting_artifact
+        .flow_instance_id
+        .clone_from(&conflicting_instance.id);
+    assert!(
+        !repository
+            .save_started_instance(&conflicting_instance, Some(&conflicting_artifact))
+            .await?
+    );
+    assert!(repository
+        .instance(&conflicting_instance.id)
+        .await?
+        .is_none());
+
+    let expected_updated_at = atomic_instance.updated_at;
+    atomic_instance.context["advance"] = json!("winner");
+    atomic_instance.updated_at = expected_updated_at + Duration::seconds(1);
+    assert!(
+        repository
+            .compare_and_swap_instance(
+                &atomic_instance,
+                FlowInstanceStatus::InProgress,
+                expected_updated_at
+            )
+            .await?
+    );
+    let mut stale = atomic_instance.clone();
+    stale.context["advance"] = json!("stale");
+    stale.updated_at += Duration::seconds(1);
+    assert!(
+        !repository
+            .compare_and_swap_instance(&stale, FlowInstanceStatus::InProgress, expected_updated_at)
+            .await?
+    );
+    assert_eq!(
+        repository
+            .instance(&atomic_instance.id)
+            .await?
+            .unwrap()
+            .context["advance"],
+        "winner"
+    );
+
     let cancelled = repository
         .cancel_instance(&instance.id, "user-1", now + Duration::seconds(1))
         .await?

@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "oid4vci_provider": "typed_issuance_only",
+  "issuance_idempotency": "flow_instance_bound",
+  "wallet_offer_fallback": "rust_oid4vci_from_template_wallet_configurations",
+  "wallet_offer_configuration_suffixes": {
+    "mso_mdoc": "mdoc",
+    "default": "sd-jwt"
+  },
+  "mip_offer_message_type": "CredentialOffer",
+  "mip_offer_version": "0.3.1",
+  "artifact_instance_persistence": "atomic",
+  "physical_initial_context": "consumed_not_persisted",
+  "physical_operations": [
+    "initialize",
+    "generate_data_groups",
+    "sign_sod",
+    "submit_to_personalization",
+    "track_production",
+    "quality_verify",
+    "activate_credential"
+  ],
+  "physical_success_side_effects": "before_state_transition",
+  "provider_identity_mismatch": "fail_closed",
+  "missing_offer_uri": "fail_closed"
+}

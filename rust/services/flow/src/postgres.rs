@@ -186,6 +186,145 @@ impl PostgresFlowRepository {
         Ok(result.rows_affected() == 1)
     }
 
+    /// Inserts a newly started instance and its optional protocol artifact as
+    /// one database unit. Conflicts fail without leaving either partial row.
+    pub async fn save_started_instance(
+        &self,
+        instance: &FlowInstanceRecord,
+        artifact: Option<&FlowArtifactRecord>,
+    ) -> Result<bool, RepositoryError> {
+        validate_instance_record(instance)?;
+        if let Some(artifact) = artifact {
+            validate_artifact_record(artifact)?;
+            if artifact.flow_instance_id != instance.id {
+                return Err(record("artifact.flow_instance_id"));
+            }
+        }
+        let mut transaction = self.pool.begin().await.map_err(storage)?;
+        let inserted = sqlx::query(
+            "INSERT INTO flow_service.flow_instances (id, flow_definition_id, organization_id, \
+             status, current_step_id, context, step_history, state_history, subject_id, subject_type, \
+             external_reference, application_flow_key_hash, started_at, completed_at, expires_at, \
+             result, error, created_at, updated_at) VALUES \
+             ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) \
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(&instance.id)
+        .bind(&instance.flow_definition_id)
+        .bind(&instance.organization_id)
+        .bind(instance.status.to_string())
+        .bind(&instance.current_step_id)
+        .bind(&instance.context)
+        .bind(json(&instance.step_history)?)
+        .bind(json(&instance.state_history)?)
+        .bind(&instance.subject_id)
+        .bind(&instance.subject_type)
+        .bind(&instance.external_reference)
+        .bind(&instance.application_flow_key_hash)
+        .bind(instance.started_at)
+        .bind(instance.completed_at)
+        .bind(instance.expires_at)
+        .bind(&instance.result)
+        .bind(&instance.error)
+        .bind(instance.created_at)
+        .bind(instance.updated_at)
+        .execute(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        if inserted.rows_affected() != 1 {
+            transaction.rollback().await.map_err(storage)?;
+            return Ok(false);
+        }
+        if let Some(artifact) = artifact {
+            let inserted = sqlx::query(
+                "INSERT INTO flow_service.flow_instance_artifacts \
+                 (id, flow_instance_id, issuance_transaction_id, credential_offer_uri, \
+                  credential_offer_uris, credential_offer_labels, pre_authorized_code, \
+                  issuance_status, qr_payload, expires_at, scanned_at, status, state, \
+                  wallet_metadata, attempt_number, created_at, updated_at) VALUES \
+                 ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) \
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(&artifact.id)
+            .bind(&artifact.flow_instance_id)
+            .bind(&artifact.issuance_transaction_id)
+            .bind(&artifact.credential_offer_uri)
+            .bind(json(&artifact.credential_offer_uris)?)
+            .bind(json(&artifact.credential_offer_labels)?)
+            .bind(&artifact.pre_authorized_code)
+            .bind(&artifact.issuance_status)
+            .bind(&artifact.qr_payload)
+            .bind(artifact.expires_at)
+            .bind(artifact.scanned_at)
+            .bind(enum_string(artifact.status)?)
+            .bind(&artifact.state)
+            .bind(&artifact.wallet_metadata)
+            .bind(i32::try_from(artifact.attempt_number).map_err(number_storage)?)
+            .bind(artifact.created_at)
+            .bind(artifact.updated_at)
+            .execute(&mut *transaction)
+            .await
+            .map_err(storage)?;
+            if inserted.rows_affected() != 1 {
+                transaction.rollback().await.map_err(storage)?;
+                return Ok(false);
+            }
+        }
+        transaction.commit().await.map_err(storage)?;
+        Ok(true)
+    }
+
+    /// Persists one advancement only when the caller's source snapshot still
+    /// matches the live status and timestamp.
+    pub async fn compare_and_swap_instance(
+        &self,
+        instance: &FlowInstanceRecord,
+        expected_status: FlowInstanceStatus,
+        expected_updated_at: DateTime<Utc>,
+    ) -> Result<bool, RepositoryError> {
+        validate_instance_record(instance)?;
+        if !matches!(
+            expected_status,
+            FlowInstanceStatus::InProgress | FlowInstanceStatus::AwaitingWallet
+        ) || instance.updated_at <= expected_updated_at
+        {
+            return Ok(false);
+        }
+        let result = sqlx::query(
+            "UPDATE flow_service.flow_instances SET flow_definition_id=$1, \
+             organization_id=$2, status=$3, current_step_id=$4, context=$5, \
+             step_history=$6, state_history=$7, subject_id=$8, subject_type=$9, \
+             external_reference=$10, application_flow_key_hash=$11, started_at=$12, \
+             completed_at=$13, expires_at=$14, result=$15, error=$16, updated_at=$17 \
+             WHERE id=$18 AND status=$19 AND updated_at=$20 \
+             AND status NOT IN ('completed','failed','cancelled','expired')",
+        )
+        .bind(&instance.flow_definition_id)
+        .bind(&instance.organization_id)
+        .bind(instance.status.to_string())
+        .bind(&instance.current_step_id)
+        .bind(&instance.context)
+        .bind(json(&instance.step_history)?)
+        .bind(json(&instance.state_history)?)
+        .bind(&instance.subject_id)
+        .bind(&instance.subject_type)
+        .bind(&instance.external_reference)
+        .bind(&instance.application_flow_key_hash)
+        .bind(instance.started_at)
+        .bind(instance.completed_at)
+        .bind(instance.expires_at)
+        .bind(&instance.result)
+        .bind(&instance.error)
+        .bind(instance.updated_at)
+        .bind(&instance.id)
+        .bind(expected_status.to_string())
+        .bind(expected_updated_at)
+        .execute(&self.pool)
+        .await
+        .map_err(storage)?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub async fn instance(&self, id: &str) -> Result<Option<FlowInstanceRecord>, RepositoryError> {
         sqlx::query(INSTANCE_SELECT)
             .bind(id)

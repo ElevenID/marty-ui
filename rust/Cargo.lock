@@ -3874,6 +3874,7 @@ dependencies = [
  "mmf-runtime",
  "mmf-security",
  "mmf-workflow",
+ "percent-encoding",
  "prost",
  "protoc-bin-vendored",
  "redis",

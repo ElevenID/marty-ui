@@ -371,7 +371,8 @@ fn application_approved_trigger(definition: &FlowDefinitionRecord) -> bool {
             })
 }
 
-fn effective_flow_type(definition: &FlowDefinitionRecord) -> FlowType {
+#[must_use]
+pub fn effective_flow_type(definition: &FlowDefinitionRecord) -> FlowType {
     if definition.flow_type != FlowType::Custom {
         return definition.flow_type;
     }
@@ -456,6 +457,18 @@ fn step_type<'a>(definition: &'a FlowDefinitionRecord, step_id: &str) -> Option<
         .find(|step| step["id"] == step_id)
         .and_then(|step| step.get("step_type"))
         .and_then(Value::as_str)
+}
+
+#[must_use]
+pub fn definition_protocol_step<'a>(
+    definition: &'a FlowDefinitionRecord,
+    step_id: &str,
+) -> Option<&'a str> {
+    definition
+        .steps
+        .iter()
+        .find(|step| step["id"] == step_id)
+        .and_then(protocol_step)
 }
 
 fn merge_context(
