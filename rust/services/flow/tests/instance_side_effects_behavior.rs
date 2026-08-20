@@ -50,6 +50,10 @@ impl CredentialTemplateProvider for Templates {
             organization_id: self.organization_id.into(),
             status: "ACTIVE".into(),
             credential_type: "UniversityCredential".into(),
+            vct: "urn:example:university".into(),
+            doctype: String::new(),
+            supported_formats: vec!["vc+sd-jwt".into(), "mso_mdoc".into()],
+            claims: Vec::new(),
             issuer_did: "did:web:issuer.example".into(),
             credential_format: "vc+sd-jwt".into(),
             wallet_configurations: vec![

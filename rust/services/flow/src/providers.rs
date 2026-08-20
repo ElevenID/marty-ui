@@ -54,12 +54,35 @@ pub struct CredentialTemplateReference {
     pub organization_id: String,
     pub status: String,
     pub credential_type: String,
+    #[serde(default)]
+    pub vct: String,
+    #[serde(default)]
+    pub doctype: String,
+    #[serde(default)]
+    pub supported_formats: Vec<String>,
+    #[serde(default)]
+    pub claims: Vec<CredentialClaimReference>,
     pub issuer_did: String,
     pub credential_format: String,
     #[serde(default)]
     pub wallet_configurations: Vec<WalletConfiguration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuer_algorithm: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CredentialClaimReference {
+    pub name: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub mdoc_namespace: String,
+    #[serde(default)]
+    pub mdoc_element_identifier: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -314,6 +337,12 @@ pub trait CredentialTemplateProvider: Send + Sync {
         &self,
         template_id: &str,
     ) -> Result<CredentialTemplateReference, FlowProviderError>;
+
+    async fn wallet_formats(&self) -> Result<Vec<String>, FlowProviderError> {
+        Err(FlowProviderError::Unavailable {
+            provider: "credential_template",
+        })
+    }
 }
 
 #[async_trait]

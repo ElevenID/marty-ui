@@ -556,6 +556,20 @@ remaining Flow gate is the protocol-specific verification route set and actual
 HTTP/gRPC listener composition; no partial executable is activated or
 deployed.
 
+OID4VP presentation-query construction is now composed in Rust before route
+signing and transport work. The typed credential-template provider preserves
+VCT, mDoc doctype, supported formats and claim namespace/element mappings, and
+reads active wallet formats from the owning service's wallet registry rather
+than copying its catalog into Flow. Exact active policy/template tenant
+bindings and requirement shapes are checked before the pinned
+`marty-oid4vci::presentation_request` builder produces the equivalent
+Presentation Exchange and DCQL artifacts. Missing templates, malformed claims,
+empty wallet format catalogs and provider failures have no fallback. The
+language-neutral composition contract, two focused vectors, provider
+regressions and strict Clippy pass. Request-object signing, URL-query/message
+composition, submission evaluation and terminal callback persistence remain in
+the active verification-route slice.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

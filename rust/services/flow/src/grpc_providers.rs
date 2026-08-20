@@ -12,6 +12,7 @@ use tonic::{metadata::AsciiMetadataValue, transport::Channel, Code, Request, Sta
 use crate::{
     credential_template_proto::{
         credential_template_service_client::CredentialTemplateServiceClient, GetTemplateRequest,
+        ListWalletsRequest,
     },
     issuance_proto::{
         issuance_service_client::IssuanceServiceClient, InitiateIssuanceRequest as ProtoIssuance,
@@ -23,10 +24,10 @@ use crate::{
         presentation_policy_service_client::PresentationPolicyServiceClient,
         EvaluatePresentationRequest, GetPolicyRequest,
     },
-    CredentialTemplateProvider, CredentialTemplateReference, FlowProviderError, FlowServiceConfig,
-    IssuanceInitiationRequest, IssuanceInitiationResult, IssuanceProvider,
-    PresentationEvaluationRequest, PresentationEvaluationResult, PresentationPolicyProvider,
-    PresentationPolicyReference,
+    CredentialClaimReference, CredentialTemplateProvider, CredentialTemplateReference,
+    FlowProviderError, FlowServiceConfig, IssuanceInitiationRequest, IssuanceInitiationResult,
+    IssuanceProvider, PresentationEvaluationRequest, PresentationEvaluationResult,
+    PresentationPolicyProvider, PresentationPolicyReference,
 };
 
 const MAXIMUM_PROVIDER_JSON_BYTES: usize = 1024 * 1024;
@@ -299,6 +300,21 @@ impl CredentialTemplateProvider for GrpcCredentialTemplateProvider {
             organization_id: response.organization_id,
             status: response.status,
             credential_type: response.credential_type,
+            vct: response.vct,
+            doctype: response.doctype,
+            supported_formats: response.supported_formats,
+            claims: response
+                .claims
+                .into_iter()
+                .map(|claim| CredentialClaimReference {
+                    name: claim.name,
+                    display_name: claim.display_name,
+                    description: claim.description,
+                    required: claim.required,
+                    mdoc_namespace: claim.mdoc_namespace,
+                    mdoc_element_identifier: claim.mdoc_element_identifier,
+                })
+                .collect(),
             issuer_did: response.issuer_did,
             credential_format: response.credential_payload_format,
             wallet_configurations: bounded_json(
@@ -307,6 +323,31 @@ impl CredentialTemplateProvider for GrpcCredentialTemplateProvider {
             )?,
             issuer_algorithm: nonempty(response.issuer_algorithm),
         })
+    }
+
+    async fn wallet_formats(&self) -> Result<Vec<String>, FlowProviderError> {
+        let mut client = self.client.clone();
+        let response = client
+            .list_wallets(self.auth.request(ListWalletsRequest { active_only: true }))
+            .await
+            .map_err(|status| provider_status("credential_template", "wallets", status))?
+            .into_inner();
+        let formats = response
+            .wallets
+            .into_iter()
+            .filter(|wallet| wallet.is_active)
+            .flat_map(|wallet| wallet.supported_formats)
+            .filter(|format| !format.trim().is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if formats.is_empty() {
+            return Err(invalid_response(
+                "credential_template",
+                "wallet registry has no active formats",
+            ));
+        }
+        Ok(formats)
     }
 }
 
