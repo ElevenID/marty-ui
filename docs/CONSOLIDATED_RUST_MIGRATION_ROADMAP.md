@@ -417,6 +417,18 @@ all secret values. Six startup/unit vectors and strict Clippy pass. The final
 beta compose cutover still needs to add Flow's currently omitted signing-key
 endpoint/API-key settings before the Rust process can become ready.
 
+Rust migration ownership now also includes the complete built-in Flow seed
+surface. `contracts/flow-seed-behavior.json` freezes the Open Badge login flow,
+both legacy-member and verified-badge issuance flows, the bootstrap instance,
+the Marty deployment-profile link, effective protocol types, template IDs and
+structured trigger events. The seed SQL stores the post-MIP custom extension
+graphs directly, inserts missing records without overwriting administrator
+changes, and only touches the cross-service deployment-profile table when it
+exists. The isolated PostgreSQL CI vector loads every seeded definition back
+through the fail-closed Rust kernel and public projection. Three migration
+contract tests and strict Clippy pass; live SQL execution remains in the
+configured CI database gate.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

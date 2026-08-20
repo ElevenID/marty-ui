@@ -35,3 +35,43 @@ fn final_schema_preserves_atomicity_and_idempotency_indexes() {
     assert!(sql.contains("flow_instance_id varchar(36) not null unique"));
     assert!(sql.contains("on delete cascade"));
 }
+
+#[test]
+fn built_in_seed_contract_preserves_every_intended_flow() {
+    let sql = include_str!("../migrations/0002_builtin_flows.sql").to_ascii_lowercase();
+    let contract: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/flow-seed-behavior.json"
+    ))
+    .expect("seed contract");
+    assert_eq!(contract["schema_version"], 1);
+    assert_eq!(contract["conflict_behavior"], "preserve_existing");
+    for definition in contract["definitions"].as_array().expect("definitions") {
+        for field in [
+            "id",
+            "effective_type",
+            "trigger_type",
+            "event_type",
+            "template_id",
+        ] {
+            let value = definition[field]
+                .as_str()
+                .expect("field")
+                .to_ascii_lowercase();
+            assert!(sql.contains(&value), "seed SQL is missing {field}={value}");
+        }
+    }
+    for field in [
+        "organization_id",
+        "bootstrap_instance_id",
+        "deployment_profile_id",
+    ] {
+        let value = contract[field]
+            .as_str()
+            .expect("field")
+            .to_ascii_lowercase();
+        assert!(sql.contains(&value), "seed SQL is missing {field}");
+    }
+    assert!(sql.contains("on conflict (id) do nothing"));
+    assert!(sql.contains("to_regclass('deployment_profile_service.deployment_profiles')"));
+    assert_eq!(sql.matches("rust_flow_seed_0001").count(), 1);
+}

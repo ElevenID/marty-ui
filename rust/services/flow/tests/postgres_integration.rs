@@ -205,6 +205,15 @@ async fn run_crud_contract(
     repository: &PostgresFlowRepository,
     now: chrono::DateTime<Utc>,
 ) -> TestResult {
+    for id in [
+        "71000000-0000-0000-0000-000000000001",
+        "72000000-0000-0000-0000-000000000010",
+        "72000000-0000-0000-0000-000000000040",
+    ] {
+        let seeded = repository.definition(id).await?.expect("seeded definition");
+        seeded.kernel()?;
+        seeded.projection()?;
+    }
     let definition = FlowDefinitionRecord {
         id: "90000000-0000-0000-0000-000000000010".into(),
         organization_id: "org-1".into(),
@@ -246,7 +255,10 @@ async fn run_crud_contract(
         .await?
         .expect("stored definition");
     assert_eq!(stored, definition);
-    assert_eq!(repository.definitions_for_tenant("org-1").await?.len(), 1);
+    let definitions = repository.definitions_for_tenant("org-1").await?;
+    assert!(definitions
+        .iter()
+        .any(|candidate| candidate.id == definition.id));
 
     let instance = FlowInstanceRecord {
         id: "90000000-0000-0000-0000-000000000011".into(),

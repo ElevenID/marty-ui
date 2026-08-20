@@ -21,6 +21,9 @@ pub async fn migrate_flow_schema(pool: &PgPool) -> Result<(), FlowMigrationError
     sqlx::raw_sql(include_str!("../migrations/0001_flow_schema.sql"))
         .execute(&mut *transaction)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/0002_builtin_flows.sql"))
+        .execute(&mut *transaction)
+        .await?;
     validate_connection(&mut transaction).await?;
     transaction.commit().await?;
     Ok(())
@@ -42,6 +45,15 @@ async fn validate_connection(
     .await?;
     if version.as_deref() != Some(MIGRATION_VERSION) {
         return Err(incompatible("Rust migration head is missing"));
+    }
+    let seed: Option<String> = sqlx::query_scalar(
+        "SELECT version FROM flow_service.rust_seed_versions \
+         WHERE version='rust_flow_seed_0001'",
+    )
+    .fetch_optional(&mut *connection)
+    .await?;
+    if seed.as_deref() != Some("rust_flow_seed_0001") {
+        return Err(incompatible("Rust seed head is missing"));
     }
 
     let expected = [
