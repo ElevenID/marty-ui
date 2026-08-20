@@ -4,6 +4,7 @@
   "required_always": ["DATABASE_URL", "REDIS_URL"],
   "required_when_deployed": [
     "PUBLIC_BASE_URL",
+    "FLOW_CALLBACK_DESTINATIONS",
     "ORGANIZATION_GRPC_TARGET|ORG_GRPC_TARGET",
     "CT_GRPC_TARGET",
     "PP_GRPC_TARGET",
@@ -46,6 +47,8 @@
     "unreadable_secret_file",
     "partial_workload_tls",
     "implicit_deployed_plaintext",
-    "insecure_public_origin"
+    "insecure_public_origin",
+    "empty_callback_registry",
+    "malformed_callback_registry"
   ]
 }

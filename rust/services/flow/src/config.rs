@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, fmt, fs, net::SocketAddr, path::PathBuf};
 
+use mmf_push::WebhookDestinationRegistry;
 use thiserror::Error;
 use url::Url;
 
@@ -28,6 +29,7 @@ pub struct FlowServiceConfig {
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
     pub public_base_url: String,
+    pub callback_destinations: WebhookDestinationRegistry,
     pub database_url: String,
     pub database_max_connections: u32,
     pub redis_url: String,
@@ -86,6 +88,14 @@ impl fmt::Debug for FlowServiceConfig {
             .field("http_addr", &self.http_addr)
             .field("grpc_addr", &self.grpc_addr)
             .field("public_base_url", &self.public_base_url)
+            .field(
+                "callback_destinations",
+                &if self.callback_destinations.is_empty() {
+                    "[NONE]"
+                } else {
+                    "[CONFIGURED]"
+                },
+            )
             .field("database_url", &"[REDACTED]")
             .field("database_max_connections", &self.database_max_connections)
             .field("redis_url", &"[REDACTED]")
@@ -171,6 +181,22 @@ impl FlowServiceConfig {
         if environment.is_deployed() && !public_base_url.starts_with("https://") {
             return Err(invalid("PUBLIC_BASE_URL"));
         }
+        let callback_destinations = match value(&values, "FLOW_CALLBACK_DESTINATIONS") {
+            Some(configuration) => {
+                let registry = WebhookDestinationRegistry::parse(configuration)
+                    .map_err(|_| invalid("FLOW_CALLBACK_DESTINATIONS"))?;
+                if registry.is_empty() {
+                    return Err(invalid("FLOW_CALLBACK_DESTINATIONS"));
+                }
+                registry
+            }
+            None if environment.is_deployed() => {
+                return Err(FlowConfigError::Missing {
+                    name: "FLOW_CALLBACK_DESTINATIONS",
+                });
+            }
+            None => WebhookDestinationRegistry::default(),
+        };
 
         let database_url = required(&values, "DATABASE_URL")?.replacen(
             "postgresql+asyncpg://",
@@ -279,6 +305,7 @@ impl FlowServiceConfig {
             http_addr,
             grpc_addr,
             public_base_url,
+            callback_destinations,
             database_url,
             database_max_connections,
             redis_url,

@@ -27,6 +27,10 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
     BTreeMap::from([
         ("ENVIRONMENT".into(), environment.into()),
         ("PUBLIC_BASE_URL".into(), "https://issuer.example".into()),
+        (
+            "FLOW_CALLBACK_DESTINATIONS".into(),
+            "org-1|https://callback.example/result?nonce=__MARTY_TOKEN__".into(),
+        ),
         ("DATABASE_URL".into(), "postgresql://db/flow".into()),
         ("REDIS_URL".into(), "redis://redis:6379".into()),
         ("ORG_GRPC_TARGET".into(), "organization:9002".into()),
@@ -87,7 +91,7 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.schema_version, 1);
     assert_eq!(contract.deployed_environments, ["beta", "production"]);
     assert_eq!(contract.required_always, ["DATABASE_URL", "REDIS_URL"]);
-    assert_eq!(contract.required_when_deployed.len(), 20);
+    assert_eq!(contract.required_when_deployed.len(), 21);
     assert_eq!(contract.minimum_secret_bytes, 32);
     assert_eq!(contract.secret_file_suffix, "_FILE");
     assert_eq!(
@@ -102,7 +106,7 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.partial_tls_behavior, "fail_closed");
     assert_eq!(contract.database_connection_bounds, [1, 100]);
     assert_eq!(contract.redis_database_bounds, [0, 255]);
-    assert_eq!(contract.fail_closed_cases.len(), 11);
+    assert_eq!(contract.fail_closed_cases.len(), 13);
 }
 
 #[test]
@@ -112,6 +116,7 @@ fn deployed_configuration_is_complete_and_normalized() {
     assert_eq!(config.http_addr.to_string(), "0.0.0.0:8011");
     assert_eq!(config.grpc_addr.to_string(), "0.0.0.0:9011");
     assert_eq!(config.public_base_url, "https://issuer.example");
+    assert!(!config.callback_destinations.is_empty());
     assert_eq!(config.organization_grpc_target, "http://organization:9002");
     assert!(config.workload_client_tls.is_some());
     assert!(config.workload_server_tls.is_some());
@@ -123,6 +128,7 @@ fn deployed_configuration_fails_closed() {
         "DATABASE_URL",
         "REDIS_URL",
         "PUBLIC_BASE_URL",
+        "FLOW_CALLBACK_DESTINATIONS",
         "ORG_GRPC_TARGET",
         "CT_GRPC_TARGET",
         "PP_GRPC_TARGET",
@@ -217,6 +223,21 @@ fn deployed_configuration_fails_closed() {
             name: "PUBLIC_BASE_URL"
         })
     );
+
+    for malformed in [
+        "; ;",
+        "org-1|https://user:password@callback.example/result",
+        "org-1|file:///tmp/result",
+    ] {
+        let mut values = baseline("production");
+        values.insert("FLOW_CALLBACK_DESTINATIONS".into(), malformed.into());
+        assert_eq!(
+            FlowServiceConfig::from_values(values),
+            Err(FlowConfigError::Invalid {
+                name: "FLOW_CALLBACK_DESTINATIONS"
+            })
+        );
+    }
 }
 
 #[test]
@@ -232,6 +253,7 @@ fn local_mode_allows_only_non_secret_dependency_defaults() {
     assert_eq!(config.public_base_url, "http://localhost:8000");
     assert!(config.service_token.is_none());
     assert!(config.webhook_secret.is_none());
+    assert!(config.callback_destinations.is_empty());
 }
 
 #[test]
