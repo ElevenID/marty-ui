@@ -8,11 +8,12 @@ use std::{
 
 use async_trait::async_trait;
 use marty_flow::{
-    validate_definition_references, CredentialTemplateProvider, CredentialTemplateReference,
-    FlowDefinitionReferenceSet, FlowProviderError, FlowProviderRegistry, FlowReference,
-    FlowReferenceKind, FlowReferenceProvider, PresentationEvaluationRequest,
-    PresentationEvaluationResult, PresentationPolicyProvider, PresentationPolicyReference,
-    SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult,
+    canonical_template_signing_format, template_key_purpose, validate_definition_references,
+    CredentialTemplateProvider, CredentialTemplateReference, FlowDefinitionReferenceSet,
+    FlowProviderError, FlowProviderRegistry, FlowReference, FlowReferenceKind,
+    FlowReferenceProvider, PresentationEvaluationRequest, PresentationEvaluationResult,
+    PresentationPolicyProvider, PresentationPolicyReference, SigningIdentity,
+    SigningIdentityProvider, SigningRequest, SigningResult,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -228,8 +229,12 @@ async fn language_neutral_reference_contract_is_executable() {
     );
     assert_eq!(contract.catalog_active_statuses, ["active", "enabled"]);
     assert_eq!(contract.credential_active_statuses, ["active"]);
-    assert_eq!(contract.issuer_format_aliases["jwt_vc"], "jwt_vc_json");
-    assert_eq!(contract.issuer_format_aliases["mdoc"], "mso_mdoc");
+    for (alias, canonical) in &contract.issuer_format_aliases {
+        assert_eq!(canonical_template_signing_format(alias), canonical);
+    }
+    assert_eq!(template_key_purpose("mso_mdoc"), "mdoc_dsc");
+    assert_eq!(template_key_purpose("vds_nc"), "vdsnc_signing");
+    assert_eq!(template_key_purpose("jwt_vc_json"), "vc_jwt_issuer");
     assert_eq!(contract.failure_behavior, "fail_closed");
 
     let (draft_registry, calls) = registry("draft", "disabled", None, false);

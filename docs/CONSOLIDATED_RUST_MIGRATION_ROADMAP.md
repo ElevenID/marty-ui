@@ -499,9 +499,26 @@ must explicitly configure the credential-template, trust-profile and
 deployment-profile origins; local development alone may use defaults.
 `contracts/flow-provider-behavior.json` freezes the four method/path/auth
 triples, and the focused startup, provider and HTTP-adapter suites plus strict
-Clippy pass. Create, patch, validate and activate remain unadvertised until
-these resolved references are consumed with exact tenant, system-owner and
-active-status rules; no weakened mutation path is exposed in the interim.
+Clippy pass.
+
+Definition mutation parity is now attached to that catalog. Rust serves create,
+PATCH, validate, dry-run test and activate in addition to the existing reads
+and draft-only delete. Standard definitions preserve all twelve protocol graph
+families and released defaults; custom definitions preserve extension actions,
+configuration, timeouts, transitions and entry-step identity. PATCH retains
+unset-versus-null behavior, cannot move a definition between tenants, increments
+the version exactly once and returns the definition to draft. Draft writes
+require every reference to exist and be tenant-bound but continue to allow
+inactive dependencies; validation and activation require every direct and
+policy-nested dependency to be active and bind each credential template's
+public issuer DID to its exact organization, format, purpose, algorithm and
+public signing key. System-owned delivery destinations are the sole tenant
+exception. `contracts/flow-reference-validation-behavior.json` and the expanded
+HTTP contract execute these rules, including one-resolution-per-template
+caching and side-effect-free dry runs. The focused definition, reference and
+HTTP suites plus strict Clippy pass. The remaining HTTP surface is instance
+start/advance, QR generation, OID4VP/SIOP submissions, verifier DID publication,
+application-approved webhooks and protocol-specific verification starts.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

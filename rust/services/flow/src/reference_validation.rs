@@ -127,11 +127,11 @@ async fn validate_template(
     if !template.issuer_did.starts_with("did:") {
         return Err(rejected("credential template has no issuer DID"));
     }
-    let credential_format = canonical_signing_format(&template.credential_format);
+    let credential_format = canonical_template_signing_format(&template.credential_format);
     if credential_format.is_empty() {
         return Err(rejected("credential template has no credential format"));
     }
-    let key_purpose = key_purpose(credential_format);
+    let key_purpose = template_key_purpose(credential_format);
     let identity = signing
         .resolve(
             organization_id,
@@ -215,7 +215,8 @@ fn require_active_status(
     }
 }
 
-fn canonical_signing_format(value: &str) -> &str {
+#[must_use]
+pub fn canonical_template_signing_format(value: &str) -> &str {
     match value.trim().to_ascii_lowercase().as_str() {
         "sd_jwt_vc" | "ietf_sd_jwt" | "w3c_vcdm_v2_sd_jwt" | "vc+sd-jwt" => "dc+sd-jwt",
         "jwt_vc" | "vc_jwt" | "w3c_vcdm_v2_jwt_vc" => "jwt_vc_json",
@@ -225,7 +226,8 @@ fn canonical_signing_format(value: &str) -> &str {
     }
 }
 
-fn key_purpose(credential_format: &str) -> &'static str {
+#[must_use]
+pub fn template_key_purpose(credential_format: &str) -> &'static str {
     match credential_format {
         "mso_mdoc" | "zk_mdoc" => "mdoc_dsc",
         "vds_nc" | "vdsnc" => "vdsnc_signing",

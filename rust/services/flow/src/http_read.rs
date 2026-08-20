@@ -12,8 +12,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
-    FlowProviderError, FlowProviderRegistry, FlowRecordError, FlowType, PostgresFlowRepository,
-    RepositoryError,
+    create_definition_record, definition_references, parse_request, update_definition_record,
+    validate_definition_record, CreateFlowDefinitionRequest, DefinitionStatus,
+    FlowDefinitionMutationError, FlowProviderError, FlowProviderRegistry, FlowRecordError,
+    FlowType, PostgresFlowRepository, RepositoryError, UpdateFlowDefinitionRequest,
 };
 
 const MIP_VERSION: &str = "0.4.1";
@@ -29,10 +31,27 @@ pub struct FlowHttpState {
 pub fn flow_read_router(state: FlowHttpState) -> Router {
     Router::new()
         .route("/v1/flows/capabilities", get(capabilities))
-        .route("/v1/flows/definitions", get(list_definitions))
+        .route(
+            "/v1/flows/definitions",
+            get(list_definitions).post(create_definition),
+        )
         .route(
             "/v1/flows/definitions/{flow_id}",
-            get(get_definition).delete(delete_definition),
+            get(get_definition)
+                .patch(update_definition)
+                .delete(delete_definition),
+        )
+        .route(
+            "/v1/flows/definitions/{flow_id}/validate",
+            post(validate_definition),
+        )
+        .route(
+            "/v1/flows/definitions/{flow_id}/test",
+            post(test_definition),
+        )
+        .route(
+            "/v1/flows/definitions/{flow_id}/activate",
+            post(activate_definition),
         )
         .route("/v1/flows/instances", get(list_instances))
         .route("/v1/flows/instances/{instance_id}", get(get_instance))
@@ -55,18 +74,18 @@ pub fn flow_read_router(state: FlowHttpState) -> Router {
 #[derive(Debug, Serialize)]
 struct FlowHttpErrorBody {
     error: &'static str,
-    detail: String,
+    detail: Value,
 }
 
 #[derive(Debug)]
 struct FlowHttpError {
     status: StatusCode,
     code: &'static str,
-    detail: String,
+    detail: Value,
 }
 
 impl FlowHttpError {
-    fn new(status: StatusCode, code: &'static str, detail: impl Into<String>) -> Self {
+    fn new(status: StatusCode, code: &'static str, detail: impl Into<Value>) -> Self {
         Self {
             status,
             code,
@@ -163,6 +182,32 @@ async fn list_definitions(
     Ok(Json(json!(definitions)))
 }
 
+async fn create_definition(
+    State(state): State<FlowHttpState>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, FlowHttpError> {
+    let request: CreateFlowDefinitionRequest = parse_request(payload)?;
+    let principal = authorize(
+        &state,
+        &headers,
+        &request.organization_id,
+        "flow-definition:create",
+    )
+    .await?;
+    let record = create_definition_record(request, chrono::Utc::now())?;
+    crate::validate_definition_references(
+        &state.providers,
+        &principal,
+        &record.organization_id,
+        &definition_references(&record),
+        false,
+    )
+    .await?;
+    state.repository.save_definition(&record).await?;
+    Ok(Json(json!(record.projection()?)))
+}
+
 async fn get_definition(
     State(state): State<FlowHttpState>,
     headers: HeaderMap,
@@ -180,6 +225,148 @@ async fn get_definition(
         "flow-definition:view",
     )
     .await?;
+    Ok(Json(json!(definition.projection()?)))
+}
+
+async fn update_definition(
+    State(state): State<FlowHttpState>,
+    headers: HeaderMap,
+    Path(flow_id): Path<String>,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, FlowHttpError> {
+    let existing = state
+        .repository
+        .definition(&flow_id)
+        .await?
+        .ok_or_else(|| not_found("Flow Definition not found"))?;
+    if existing.status == DefinitionStatus::Archived {
+        return Err(FlowHttpError::new(
+            StatusCode::BAD_REQUEST,
+            "flow_definition_archived",
+            "Archived flow definitions cannot be updated",
+        ));
+    }
+    let principal = authorize(
+        &state,
+        &headers,
+        &existing.organization_id,
+        "flow-definition:edit",
+    )
+    .await?;
+    let request: UpdateFlowDefinitionRequest = parse_request(payload)?;
+    let record = update_definition_record(&existing, request, chrono::Utc::now())?;
+    crate::validate_definition_references(
+        &state.providers,
+        &principal,
+        &record.organization_id,
+        &definition_references(&record),
+        false,
+    )
+    .await?;
+    state.repository.save_definition(&record).await?;
+    Ok(Json(json!(record.projection()?)))
+}
+
+async fn validate_definition(
+    State(state): State<FlowHttpState>,
+    headers: HeaderMap,
+    Path(flow_id): Path<String>,
+) -> Result<Json<Value>, FlowHttpError> {
+    let definition = state
+        .repository
+        .definition(&flow_id)
+        .await?
+        .ok_or_else(|| not_found("Flow Definition not found"))?;
+    let principal = authorize(
+        &state,
+        &headers,
+        &definition.organization_id,
+        "flow-definition:view",
+    )
+    .await?;
+    Ok(Json(json!(
+        validate_definition_record(&state.providers, &principal, &definition).await
+    )))
+}
+
+async fn test_definition(
+    State(state): State<FlowHttpState>,
+    headers: HeaderMap,
+    Path(flow_id): Path<String>,
+) -> Result<Json<Value>, FlowHttpError> {
+    let definition = state
+        .repository
+        .definition(&flow_id)
+        .await?
+        .ok_or_else(|| not_found("Flow Definition not found"))?;
+    let principal = authorize(
+        &state,
+        &headers,
+        &definition.organization_id,
+        "flow-definition:view",
+    )
+    .await?;
+    let validation = validate_definition_record(&state.providers, &principal, &definition).await;
+    let would_execute = if validation.valid {
+        validation.resolved_steps.clone()
+    } else {
+        Vec::new()
+    };
+    let mut response = serde_json::to_value(validation).map_err(|_| {
+        FlowHttpError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "flow_serialization_failed",
+            "Flow validation could not be serialized",
+        )
+    })?;
+    let object = response.as_object_mut().ok_or_else(|| {
+        FlowHttpError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "flow_serialization_failed",
+            "Flow validation could not be serialized",
+        )
+    })?;
+    object.insert("mode".into(), json!("DRY_RUN"));
+    object.insert("would_execute".into(), json!(would_execute));
+    object.insert("side_effects_executed".into(), json!(false));
+    Ok(Json(response))
+}
+
+async fn activate_definition(
+    State(state): State<FlowHttpState>,
+    headers: HeaderMap,
+    Path(flow_id): Path<String>,
+) -> Result<Json<Value>, FlowHttpError> {
+    let mut definition = state
+        .repository
+        .definition(&flow_id)
+        .await?
+        .ok_or_else(|| not_found("Flow Definition not found"))?;
+    let principal = authorize(
+        &state,
+        &headers,
+        &definition.organization_id,
+        "flow-definition:activate",
+    )
+    .await?;
+    let validation = validate_definition_record(&state.providers, &principal, &definition).await;
+    if !validation.valid {
+        return Err(FlowHttpError::new(
+            StatusCode::BAD_REQUEST,
+            "flow_validation_failed",
+            json!({
+                "message": "Flow validation failed; resolve all blockers before activation.",
+                "valid": validation.valid,
+                "errors": validation.errors,
+                "warnings": validation.warnings,
+                "resolved_dependencies": validation.resolved_dependencies,
+                "resolved_steps": validation.resolved_steps
+            }),
+        ));
+    }
+    definition.status = DefinitionStatus::Active;
+    definition.updated_at = chrono::Utc::now();
+    state.repository.save_definition(&definition).await?;
     Ok(Json(json!(definition.projection()?)))
 }
 
@@ -505,7 +692,15 @@ impl From<FlowRecordError> for FlowHttpError {
 
 impl From<FlowProviderError> for FlowHttpError {
     fn from(error: FlowProviderError) -> Self {
+        let reference_validation = matches!(
+            &error,
+            FlowProviderError::Rejected {
+                provider: "reference_validation",
+                ..
+            }
+        );
         let status = match error {
+            FlowProviderError::Rejected { .. } if reference_validation => StatusCode::BAD_REQUEST,
             FlowProviderError::Rejected { .. } => StatusCode::FORBIDDEN,
             FlowProviderError::NotFound { .. } => StatusCode::NOT_FOUND,
             FlowProviderError::Conflict { .. } => StatusCode::CONFLICT,
@@ -513,7 +708,41 @@ impl From<FlowProviderError> for FlowHttpError {
             | FlowProviderError::Unavailable { .. }
             | FlowProviderError::Missing(_) => StatusCode::SERVICE_UNAVAILABLE,
         };
-        Self::new(status, "flow_authorization_failed", error.to_string())
+        let code = if reference_validation {
+            "flow_reference_invalid"
+        } else {
+            "flow_authorization_failed"
+        };
+        Self::new(status, code, error.to_string())
+    }
+}
+
+impl From<crate::FlowApiError> for FlowHttpError {
+    fn from(error: crate::FlowApiError) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, error.code, error.to_string())
+    }
+}
+
+impl From<FlowDefinitionMutationError> for FlowHttpError {
+    fn from(error: FlowDefinitionMutationError) -> Self {
+        match error {
+            FlowDefinitionMutationError::Api(error) => error.into(),
+            FlowDefinitionMutationError::Domain(error) => Self::new(
+                StatusCode::BAD_REQUEST,
+                "flow_definition_invalid",
+                error.to_string(),
+            ),
+            FlowDefinitionMutationError::Stored(_) => Self::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_stored_flow_state",
+                "Stored Flow state is invalid",
+            ),
+            FlowDefinitionMutationError::Serialization(_) => Self::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "flow_serialization_failed",
+                "Flow state could not be serialized",
+            ),
+        }
     }
 }
 
