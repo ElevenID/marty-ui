@@ -533,6 +533,18 @@ pub struct StartVerificationFlowRequest {
     pub expiry_minutes: u16,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct VerificationRequestResponse {
+    pub instance_id: String,
+    pub flow_definition_id: String,
+    pub request_uri: String,
+    pub qr_code_data: String,
+    pub presentation_policy_id: String,
+    pub nonce: String,
+    pub expires_at: String,
+    pub status: String,
+}
+
 impl StartVerificationFlowRequest {
     pub fn validate_for_environment(&self, allow_http_loopback: bool) -> Result<(), FlowApiError> {
         bounded_required(&self.organization_id, 255, "organization_id")?;

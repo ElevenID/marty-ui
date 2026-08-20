@@ -10,9 +10,9 @@ use crate::{
     FlowProviderRegistry, SigningIdentity, SigningRequest,
 };
 
-const REQUEST_FORMAT: &str = "oauth-authz-req+jwt";
-const REQUEST_PURPOSE: &str = "oid4vp_request_signing";
-const REQUEST_ALGORITHM: &str = "ES256";
+pub(crate) const REQUEST_FORMAT: &str = "oauth-authz-req+jwt";
+pub(crate) const REQUEST_PURPOSE: &str = "oid4vp_request_signing";
+pub(crate) const REQUEST_ALGORITHM: &str = "ES256";
 const MIP_VERSION: &str = "0.3.1";
 
 #[derive(Clone, Debug, PartialEq)]

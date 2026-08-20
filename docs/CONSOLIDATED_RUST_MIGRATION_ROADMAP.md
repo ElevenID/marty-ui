@@ -272,6 +272,9 @@ and bounded-retention payload scrubbing. This framework primitive will be
 shared by Flow and later service ports. MMF Push also owns tenant-bound callback
 destination templates at `a1806b9` and the canonical header-and-payload-bound
 event HMAC at `6d4462f`, eliminating two more Flow-only Python utilities.
+Its registry now exposes its configured/empty state at local commit `d6743be`,
+allowing Flow to require at least one valid deployed destination without
+copying MMF's private registration representation or matching rules.
 
 The first `marty-flow` crate slice now executes the checked-in
 `contracts/flow-service-behavior.json`. Twelve Rust tests freeze all 26 HTTP and
@@ -590,7 +593,20 @@ message, then enforces the released minimum/configured maximum URI bounds. It
 rejects HAIP and SIOP combinations and never invokes the signing provider.
 Four request-transport vectors and strict Clippy pass. The route remains
 private to the Rust crate until persistence and expiry transitions are
-complete.
+complete. Verification-flow start composition is now native under
+`contracts/flow-verification-start-behavior.json`: every start generates a
+32-byte cryptographic nonce, validates an exact active tenant policy with
+nonempty requirements, resolves the exact DID-bound ES256 Request Object
+identity, checks optional callbacks through the shared MMF tenant registry,
+and builds request-URI, signed by-value, bounded unsigned DCQL, or SIOP
+authorization requests before returning one complete persistable instance.
+The deployed startup contract now requires a nonempty, well-formed
+`FLOW_CALLBACK_DESTINATIONS`; missing, empty, malformed, credentialed, or
+unsupported destinations fail before service activation. Two focused start
+vectors, startup regressions and strict Clippy pass. The HTTP start route stays
+unadvertised until configured X.509/LISSI identity modes, request retrieval
+expiry/CAS behavior, and submission/finalization are all native, preventing a
+partial Rust cutover from dropping an existing verifier profile.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

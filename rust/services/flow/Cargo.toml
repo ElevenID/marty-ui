@@ -17,6 +17,7 @@ marty-crypto.workspace = true
 marty-oid4vci.workspace = true
 marty-verification.workspace = true
 percent-encoding.workspace = true
+rand.workspace = true
 mmf-messaging.workspace = true
 mmf-core.workspace = true
 mmf-platform.workspace = true

@@ -3877,6 +3877,7 @@ dependencies = [
  "percent-encoding",
  "prost",
  "protoc-bin-vendored",
+ "rand 0.9.5",
  "redis",
  "reqwest",
  "serde",
