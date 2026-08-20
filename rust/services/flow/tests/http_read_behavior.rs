@@ -17,6 +17,7 @@ struct Contract {
     removed_statuses: Vec<String>,
     result_terminal_statuses: Vec<String>,
     pending_result_status: u16,
+    mutations: Mutations,
     stored_private_context: String,
     malformed_stored_state: String,
     capabilities: Capabilities,
@@ -39,6 +40,14 @@ struct Capabilities {
     physical_document_source: String,
 }
 
+#[derive(Deserialize)]
+struct Mutations {
+    definition_delete_status: String,
+    instance_cancel: String,
+    instance_cancel_replay_status: u16,
+    state_history_event: String,
+}
+
 fn router() -> axum::Router {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgresql://localhost/flow")
@@ -56,8 +65,15 @@ async fn rust_read_surface_matches_the_language_neutral_contract() {
     ))
     .expect("read contract");
     assert_eq!(contract.schema_version, 1);
-    assert_eq!(contract.routes.len(), 8);
-    assert!(contract.routes.iter().all(|route| route[0] == "GET"));
+    assert_eq!(contract.routes.len(), 10);
+    assert_eq!(
+        contract
+            .routes
+            .iter()
+            .filter(|route| route[0] == "GET")
+            .count(),
+        8
+    );
     assert_eq!(contract.principal_header, "x-user-id");
     assert_eq!(contract.pagination.default_limit, 100);
     assert_eq!(contract.pagination.maximum_limit, 500);
@@ -69,6 +85,13 @@ async fn rust_read_surface_matches_the_language_neutral_contract() {
     );
     assert_eq!(contract.result_terminal_statuses, ["completed", "failed"]);
     assert_eq!(contract.pending_result_status, 409);
+    assert_eq!(contract.mutations.definition_delete_status, "draft_only");
+    assert_eq!(
+        contract.mutations.instance_cancel,
+        "atomic_nonterminal_to_cancelled"
+    );
+    assert_eq!(contract.mutations.instance_cancel_replay_status, 409);
+    assert_eq!(contract.mutations.state_history_event, "flow_cancelled");
     assert_eq!(contract.stored_private_context, "recursively_redacted");
     assert_eq!(contract.malformed_stored_state, "fail_closed");
     assert_eq!(

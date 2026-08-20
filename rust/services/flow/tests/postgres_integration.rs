@@ -345,6 +345,18 @@ async fn run_crud_contract(
             .id,
         artifact.id
     );
+    let cancelled = repository
+        .cancel_instance(&instance.id, "user-1", now + Duration::seconds(1))
+        .await?
+        .expect("cancelled instance");
+    assert_eq!(cancelled.status, FlowInstanceStatus::Cancelled);
+    assert_eq!(cancelled.state_history.len(), 2);
+    assert_eq!(cancelled.state_history[1]["event"], "flow_cancelled");
+    cancelled.kernel()?;
+    assert!(repository
+        .cancel_instance(&instance.id, "user-1", now + Duration::seconds(2))
+        .await?
+        .is_none());
     Ok(())
 }
 

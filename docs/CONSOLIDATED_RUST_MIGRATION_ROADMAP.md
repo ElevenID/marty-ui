@@ -478,6 +478,18 @@ behavior-vector test and strict Clippy pass. Definition and instance mutation,
 verification submission, SIOP, webhook, QR and DID routes remain before the
 HTTP listener can be advertised as complete.
 
+The same HTTP surface now includes the first two complete mutation paths:
+tenant-authorized draft-definition deletion and instance cancellation.
+Cancellation first validates the transition through the canonical Rust state
+machine, then uses one PostgreSQL statement to compare-and-set any nonterminal
+instance to `cancelled`, persist its completion time and append the
+`flow_cancelled` history event. Concurrent or replayed cancellation returns
+conflict and cannot overwrite a terminal result. The isolated PostgreSQL
+behavior suite now exercises the persisted transition and replay rejection.
+Create, patch and activate remain gated on completing the Application Template
+and delivery-profile provider ports; they are not exposed with weakened
+reference validation.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

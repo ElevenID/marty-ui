@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use marty_verification::flow::FlowInstanceStatus;
@@ -30,9 +30,16 @@ pub fn flow_read_router(state: FlowHttpState) -> Router {
     Router::new()
         .route("/v1/flows/capabilities", get(capabilities))
         .route("/v1/flows/definitions", get(list_definitions))
-        .route("/v1/flows/definitions/{flow_id}", get(get_definition))
+        .route(
+            "/v1/flows/definitions/{flow_id}",
+            get(get_definition).delete(delete_definition),
+        )
         .route("/v1/flows/instances", get(list_instances))
         .route("/v1/flows/instances/{instance_id}", get(get_instance))
+        .route(
+            "/v1/flows/instances/{instance_id}/cancel",
+            post(cancel_instance),
+        )
         .route("/v1/flows/instances/{instance_id}/result", get(get_result))
         .route(
             "/v1/flows/instances/{instance_id}/artifacts",
@@ -176,6 +183,36 @@ async fn get_definition(
     Ok(Json(json!(definition.projection()?)))
 }
 
+async fn delete_definition(
+    State(state): State<FlowHttpState>,
+    headers: HeaderMap,
+    Path(flow_id): Path<String>,
+) -> Result<Json<Value>, FlowHttpError> {
+    let definition = state
+        .repository
+        .definition(&flow_id)
+        .await?
+        .ok_or_else(|| not_found("Flow Definition not found"))?;
+    authorize(
+        &state,
+        &headers,
+        &definition.organization_id,
+        "flow-definition:delete",
+    )
+    .await?;
+    if definition.status != crate::DefinitionStatus::Draft {
+        return Err(FlowHttpError::new(
+            StatusCode::BAD_REQUEST,
+            "flow_definition_not_draft",
+            "Only draft flows can be deleted",
+        ));
+    }
+    if !state.repository.delete_definition(&flow_id).await? {
+        return Err(not_found("Flow Definition not found"));
+    }
+    Ok(Json(json!({"success": true})))
+}
+
 #[derive(Deserialize)]
 struct InstanceListQuery {
     organization_id: String,
@@ -233,6 +270,55 @@ async fn get_instance(
     )
     .await?;
     Ok(Json(json!(instance.projection()?)))
+}
+
+async fn cancel_instance(
+    State(state): State<FlowHttpState>,
+    headers: HeaderMap,
+    Path(instance_id): Path<String>,
+) -> Result<Json<Value>, FlowHttpError> {
+    let instance = required_instance(&state, &instance_id).await?;
+    let principal = authorize(
+        &state,
+        &headers,
+        &instance.organization_id,
+        "flow-instance:cancel",
+    )
+    .await?;
+    let mut kernel = instance.kernel()?;
+    let now = chrono::Utc::now();
+    kernel
+        .transition_to(
+            FlowInstanceStatus::Cancelled,
+            Some(principal.clone()),
+            Some("flow_cancelled".into()),
+            u64::try_from(now.timestamp_millis()).map_err(|_| {
+                FlowHttpError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "invalid_system_clock",
+                    "System clock is invalid",
+                )
+            })?,
+        )
+        .map_err(|_| {
+            FlowHttpError::new(
+                StatusCode::BAD_REQUEST,
+                "flow_already_ended",
+                "Flow already ended",
+            )
+        })?;
+    let cancelled = state
+        .repository
+        .cancel_instance(&instance_id, &principal, now)
+        .await?
+        .ok_or_else(|| {
+            FlowHttpError::new(
+                StatusCode::CONFLICT,
+                "flow_already_ended",
+                "Flow already ended",
+            )
+        })?;
+    Ok(Json(json!(cancelled.projection()?)))
 }
 
 async fn get_result(
@@ -334,7 +420,7 @@ async fn authorize(
     headers: &HeaderMap,
     organization_id: &str,
     permission: &str,
-) -> Result<(), FlowHttpError> {
+) -> Result<String, FlowHttpError> {
     let principal = headers
         .get("x-user-id")
         .and_then(|value| value.to_str().ok())
@@ -350,7 +436,7 @@ async fn authorize(
         .providers
         .authorize(principal, organization_id, permission, false)
         .await?;
-    Ok(())
+    Ok(principal.to_owned())
 }
 
 fn validate_page(limit: usize) -> Result<(), FlowHttpError> {

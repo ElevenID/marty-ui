@@ -196,6 +196,30 @@ impl PostgresFlowRepository {
             .transpose()
     }
 
+    pub async fn cancel_instance(
+        &self,
+        id: &str,
+        actor: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<FlowInstanceRecord>, RepositoryError> {
+        let row = sqlx::query(
+            "UPDATE flow_service.flow_instances SET status='cancelled', completed_at=$2, \
+             updated_at=$2, state_history=COALESCE(state_history, '[]'::jsonb) || \
+             jsonb_build_array(jsonb_build_object('prior_state', status, \
+             'new_state', 'cancelled', 'timestamp', $4, 'actor', $3, \
+             'event', 'flow_cancelled')) WHERE id=$1 AND status NOT IN \
+             ('completed','failed','cancelled','expired') RETURNING *",
+        )
+        .bind(id)
+        .bind(now)
+        .bind(actor)
+        .bind(now.to_rfc3339())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(storage)?;
+        row.map(|row| instance_from_row(&row)).transpose()
+    }
+
     pub async fn instances_for_tenant(
         &self,
         organization_id: &str,
