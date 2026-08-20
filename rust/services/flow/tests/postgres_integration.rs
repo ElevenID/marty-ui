@@ -3,8 +3,7 @@ use std::{env, error::Error, str::FromStr};
 use chrono::{Duration, Utc};
 use marty_flow::{
     migrate_flow_schema, ApprovalStrategy, ArtifactStatus, CallbackEvent, DefinitionStatus,
-    FlowArtifactRecord, FlowDefinitionRecord, FlowInstance, FlowInstanceRecord,
-    PostgresFlowRepository,
+    FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord, PostgresFlowRepository,
 };
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_push::WebhookDestinationRegistry;
@@ -54,8 +53,8 @@ async fn run_contract(pool: &PgPool) -> TestResult {
     run_crud_contract(&repository, now).await?;
     insert_live_instance(pool, FIRST_INSTANCE_ID, now, None).await?;
 
-    let candidate_a = terminal_instance(FIRST_INSTANCE_ID, now_ms, "allow-a");
-    let candidate_b = terminal_instance(FIRST_INSTANCE_ID, now_ms, "allow-b");
+    let candidate_a = terminal_instance(FIRST_INSTANCE_ID, now, "allow-a");
+    let candidate_b = terminal_instance(FIRST_INSTANCE_ID, now, "allow-b");
     let callback_a = callback(FIRST_INSTANCE_ID, now_ms, "a")?;
     let callback_b = callback(FIRST_INSTANCE_ID, now_ms, "b")?;
     let digest_a = "a".repeat(64);
@@ -80,19 +79,36 @@ async fn run_contract(pool: &PgPool) -> TestResult {
     let outcomes = [outcome_a?, outcome_b?];
     assert_eq!(outcomes.into_iter().filter(|accepted| *accepted).count(), 1);
     let winning_marker = if outcomes[0] { "a" } else { "b" };
+    let expected_subject = if outcomes[0] {
+        candidate_a.subject_id.clone()
+    } else {
+        candidate_b.subject_id.clone()
+    };
+    let expected_external_reference = if outcomes[0] {
+        candidate_a.external_reference.clone()
+    } else {
+        candidate_b.external_reference.clone()
+    };
     let expected_result = if outcomes[0] {
         candidate_a.result
     } else {
         candidate_b.result
     };
 
-    let (status, stored_result): (String, Option<Value>) =
-        sqlx::query_as("SELECT status, result FROM flow_service.flow_instances WHERE id=$1")
+    let (status, stored_result, subject_id, external_reference): (
+        String,
+        Option<Value>,
+        Option<String>,
+        Option<String>,
+    ) =
+        sqlx::query_as("SELECT status, result, subject_id, external_reference FROM flow_service.flow_instances WHERE id=$1")
             .bind(FIRST_INSTANCE_ID)
             .fetch_one(pool)
             .await?;
     assert_eq!(status, "completed");
     assert_eq!(stored_result, expected_result);
+    assert_eq!(subject_id, expected_subject);
+    assert_eq!(external_reference, expected_external_reference);
     let replay: (String, String) = sqlx::query_as(
         "SELECT nonce_digest, flow_instance_id FROM flow_service.flow_nonce_consumptions",
     )
@@ -173,7 +189,7 @@ async fn run_contract(pool: &PgPool) -> TestResult {
         Some(now - Duration::seconds(1)),
     )
     .await?;
-    let expired = terminal_instance(EXPIRED_INSTANCE_ID, now_ms, "allow");
+    let expired = terminal_instance(EXPIRED_INSTANCE_ID, now, "allow");
     assert!(
         !repository
             .finalize_verification(
@@ -458,21 +474,27 @@ async fn run_crud_contract(
     Ok(())
 }
 
-fn terminal_instance(id: &str, now_ms: u64, decision: &str) -> FlowInstance {
-    FlowInstance {
+fn terminal_instance(id: &str, now: chrono::DateTime<Utc>, decision: &str) -> FlowInstanceRecord {
+    FlowInstanceRecord {
         id: id.into(),
         flow_definition_id: "__verification__".into(),
         organization_id: "org-1".into(),
         status: FlowInstanceStatus::Completed,
         current_step_id: None,
-        application_flow_key_hash: None,
         context: json!({"request_digest": "c".repeat(64)}),
         step_history: Vec::new(),
         state_history: Vec::new(),
-        expires_at_ms: None,
-        completed_at_ms: Some(now_ms),
+        subject_id: Some(format!("subject-{decision}")),
+        subject_type: "holder".into(),
+        external_reference: Some(format!("external-{decision}")),
+        application_flow_key_hash: None,
+        started_at: Some(now - Duration::minutes(1)),
+        completed_at: Some(now),
+        expires_at: None,
         result: Some(json!({"evaluation_result": "passed", "decision": decision})),
         error: None,
+        created_at: now - Duration::minutes(1),
+        updated_at: now,
     }
 }
 

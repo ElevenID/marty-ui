@@ -7,8 +7,7 @@ use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
 use crate::{
-    FlowArtifactRecord, FlowDefinitionRecord, FlowInstance, FlowInstanceRecord, FlowRecordError,
-    RepositoryError,
+    FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord, FlowRecordError, RepositoryError,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -540,12 +539,13 @@ impl PostgresFlowRepository {
     /// and enqueues its callback. Any failed step rolls the entire unit back.
     pub async fn finalize_verification(
         &self,
-        instance: &FlowInstance,
+        instance: &FlowInstanceRecord,
         nonce_digest: &str,
         replay_expires_at_ms: u64,
         expected_status: FlowInstanceStatus,
         callback: Option<&Message>,
     ) -> Result<bool, RepositoryError> {
+        validate_instance_record(instance)?;
         if !valid_sha256(nonce_digest) {
             return Err(RepositoryError::InvalidReplayDigest);
         }
@@ -583,31 +583,34 @@ impl PostgresFlowRepository {
             return Ok(false);
         }
 
-        let completed_at = instance.completed_at_ms.map(timestamp).transpose()?;
-        let expires_at = instance.expires_at_ms.map(timestamp).transpose()?;
         let update = sqlx::query(
             "UPDATE flow_service.flow_instances SET \
-             flow_definition_id=$1, organization_id=$2, status=$3, \
-             current_step_id=$4, context=$5, step_history=$6, \
-             state_history=$7, application_flow_key_hash=$8, completed_at=$9, expires_at=$10, \
-             result=$11, error=$12, updated_at=clock_timestamp() \
-             WHERE id=$13 AND status=$14 \
+             status=$1, current_step_id=$2, context=$3, step_history=$4, \
+             state_history=$5, subject_id=$6, subject_type=$7, external_reference=$8, \
+             application_flow_key_hash=$9, started_at=$10, completed_at=$11, expires_at=$12, \
+             result=$13, error=$14, updated_at=$15 \
+             WHERE id=$16 AND status=$17 AND organization_id=$18 AND flow_definition_id=$19 \
              AND (expires_at IS NULL OR expires_at >= clock_timestamp())",
         )
-        .bind(&instance.flow_definition_id)
-        .bind(&instance.organization_id)
         .bind(instance.status.to_string())
         .bind(&instance.current_step_id)
         .bind(&instance.context)
-        .bind(serde_json::to_value(&instance.step_history).map_err(json_storage)?)
-        .bind(serde_json::to_value(&instance.state_history).map_err(json_storage)?)
+        .bind(json(&instance.step_history)?)
+        .bind(json(&instance.state_history)?)
+        .bind(&instance.subject_id)
+        .bind(&instance.subject_type)
+        .bind(&instance.external_reference)
         .bind(&instance.application_flow_key_hash)
-        .bind(completed_at)
-        .bind(expires_at)
+        .bind(instance.started_at)
+        .bind(instance.completed_at)
+        .bind(instance.expires_at)
         .bind(&instance.result)
         .bind(&instance.error)
+        .bind(instance.updated_at)
         .bind(&instance.id)
         .bind(expected_status.to_string())
+        .bind(&instance.organization_id)
+        .bind(&instance.flow_definition_id)
         .execute(&mut *transaction)
         .await
         .map_err(storage)?;
@@ -811,7 +814,7 @@ async fn insert_callback(
 }
 
 fn validate_callback(
-    instance: &FlowInstance,
+    instance: &FlowInstanceRecord,
     callback: Option<&Message>,
 ) -> Result<(), RepositoryError> {
     if callback.is_some_and(|message| {
@@ -834,10 +837,6 @@ fn timestamp(value: u64) -> Result<DateTime<Utc>, RepositoryError> {
 }
 
 fn storage(error: sqlx::Error) -> RepositoryError {
-    RepositoryError::Storage(error.to_string())
-}
-
-fn json_storage(error: serde_json::Error) -> RepositoryError {
     RepositoryError::Storage(error.to_string())
 }
 

@@ -300,13 +300,14 @@ and retention-scrubbing vectors against PostgreSQL. Compilation and all
 non-container tests pass locally; the real PostgreSQL execution remains a CI
 landing gate because the local Docker daemon is unavailable.
 
-The next Flow gates are the remaining protocol-specific HTTP/gRPC operations,
-executable listener and container startup/readiness parity. Provider, DTO,
-definition mutation, generic instance execution and start-side-effect parity
-are complete. Only after the remaining executable gates pass will the Python
-Flow runtime and its service dependencies be deleted. No deployment occurs
-during these slices; beta receives one aggregate update only after all
-wave-three work lands.
+The next Flow gates are HTTP compare-and-set adapters for native verification
+retrieval/submission, SIOPv2 submission, the remaining protocol-specific
+HTTP/gRPC operations, executable listener and container startup/readiness
+parity. Provider, DTO, definition mutation, generic instance execution,
+start-side-effect and OID4VP submission-kernel parity are complete. Only after
+the remaining executable gates pass will the Python Flow runtime and its
+service dependencies be deleted. No deployment occurs during these slices;
+beta receives one aggregate update only after all wave-three work lands.
 
 The public request boundary is now also represented in Rust. Strict DTOs cover
 definition create/PATCH (including unset-versus-explicit-null semantics),
@@ -481,9 +482,9 @@ removes private context. Malformed stored records and missing providers fail
 closed without returning storage diagnostics. Physical-document support is now
 derived from the mandatory healthy downstream provider instead of duplicating
 its private configuration in Flow. Three focused handler tests, the shared
-behavior-vector test and strict Clippy pass. Definition and instance mutation,
-verification submission, SIOP, webhook, QR and DID routes remain before the
-HTTP listener can be advertised as complete.
+behavior-vector test and strict Clippy pass. Definition and instance mutation
+are subsequently complete; verification HTTP adapters, SIOP, webhook, QR and
+DID routes remain before the HTTP listener can be advertised as complete.
 
 The same HTTP surface now includes the first two complete mutation paths:
 tenant-authorized draft-definition deletion and instance cancellation.
@@ -570,8 +571,8 @@ Presentation Exchange and DCQL artifacts. Missing templates, malformed claims,
 empty wallet format catalogs and provider failures have no fallback. The
 language-neutral composition contract, two focused vectors, provider
 regressions and strict Clippy pass. Request-object signing, URL-query/message
-composition, submission evaluation and terminal callback persistence remain in
-the active verification-route slice.
+composition, submission evaluation and terminal callback persistence are now
+implemented by the subsequent native verification slices below.
 
 Standard DID-bound OID4VP and SIOPv2 Request Object construction is now native
 under `contracts/flow-request-object-behavior.json`. Each fetch re-resolves the
@@ -642,6 +643,30 @@ HTTPS origins. Three retrieval vectors, six Request Object vectors, startup
 regressions and strict Clippy pass. The HTTP adapter must persist either the
 ready context or expiry transition with status-and-`updated_at` CAS and return
 the released no-store response headers before this endpoint is advertised.
+
+OID4VP submission evaluation and terminal composition are now native under
+`contracts/flow-verification-submission-behavior.json`. The kernel binds exact
+state in constant time, validates Presentation Submission shape, unwraps the
+single-token DCQL transport form, and delegates cryptographic verification
+only to the typed presentation-policy provider with exact nonce, audience,
+trust and verifier context. The pinned ISO 18013 implementation supplies mDoc
+session-transcript binding; pinned verification code validates and decrypts
+HAIP JWE responses through a tenant/flow-bound key envelope. Provider failure,
+empty credential evidence or any non-valid signature is retryable and consumes
+neither state nor nonce. An authenticated allow completes; an authenticated
+deny fails terminally and clears claims. Raw tokens and submissions are
+discarded in favor of canonical SHA-256 digests. Same-payload terminal replay
+returns the stable result while a different digest conflicts. The kernel emits
+the released MIP 0.3.1 VerificationResult and a tenant-registered MMF callback,
+requiring a minimum 32-byte delivery secret. PostgreSQL finalization now takes
+the complete `FlowInstanceRecord` and atomically preserves subject, external
+reference, histories, context, result and timestamps while consuming the nonce
+and enqueuing the callback; organization and definition identity are immutable
+CAS fences. Six language-neutral submission vectors, including the shared
+HAIP interoperability JWE, the PostgreSQL contract
+binary and strict all-target Clippy pass. Remaining route work is SIOPv2
+submission plus the HTTP adapters that commit retrieval, expiry and terminal
+records through their corresponding compare-and-set transactions.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

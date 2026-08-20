@@ -31,6 +31,7 @@ mod request_object;
 mod runtime;
 mod verification_request;
 mod verification_start;
+mod verification_submission;
 
 pub mod credential_template_proto {
     tonic::include_proto!("marty.ui.credential_template.v1");
@@ -73,3 +74,4 @@ pub use request_object::*;
 pub use runtime::*;
 pub use verification_request::*;
 pub use verification_start::*;
+pub use verification_submission::*;
