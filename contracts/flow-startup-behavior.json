@@ -3,6 +3,7 @@
   "deployed_environments": ["beta", "production"],
   "required_always": ["DATABASE_URL", "REDIS_URL"],
   "required_when_deployed": [
+    "PUBLIC_BASE_URL",
     "ORGANIZATION_GRPC_TARGET|ORG_GRPC_TARGET",
     "CT_GRPC_TARGET",
     "PP_GRPC_TARGET",
@@ -44,6 +45,7 @@
     "shared_listener_address",
     "unreadable_secret_file",
     "partial_workload_tls",
-    "implicit_deployed_plaintext"
+    "implicit_deployed_plaintext",
+    "insecure_public_origin"
   ]
 }

@@ -27,6 +27,7 @@ pub struct FlowServiceConfig {
     pub environment: Environment,
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
+    pub public_base_url: String,
     pub database_url: String,
     pub database_max_connections: u32,
     pub redis_url: String,
@@ -84,6 +85,7 @@ impl fmt::Debug for FlowServiceConfig {
             .field("environment", &self.environment)
             .field("http_addr", &self.http_addr)
             .field("grpc_addr", &self.grpc_addr)
+            .field("public_base_url", &self.public_base_url)
             .field("database_url", &"[REDACTED]")
             .field("database_max_connections", &self.database_max_connections)
             .field("redis_url", &"[REDACTED]")
@@ -159,6 +161,15 @@ impl FlowServiceConfig {
         )?;
         if http_addr == grpc_addr {
             return Err(invalid("FLOW_GRPC_ADDR"));
+        }
+        let public_base_url = service_url(
+            &values,
+            "PUBLIC_BASE_URL",
+            Some("http://localhost:8000"),
+            environment,
+        )?;
+        if environment.is_deployed() && !public_base_url.starts_with("https://") {
+            return Err(invalid("PUBLIC_BASE_URL"));
         }
 
         let database_url = required(&values, "DATABASE_URL")?.replacen(
@@ -267,6 +278,7 @@ impl FlowServiceConfig {
             environment,
             http_addr,
             grpc_addr,
+            public_base_url,
             database_url,
             database_max_connections,
             redis_url,

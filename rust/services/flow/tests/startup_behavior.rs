@@ -26,6 +26,7 @@ struct Contract {
 fn baseline(environment: &str) -> BTreeMap<String, String> {
     BTreeMap::from([
         ("ENVIRONMENT".into(), environment.into()),
+        ("PUBLIC_BASE_URL".into(), "https://issuer.example".into()),
         ("DATABASE_URL".into(), "postgresql://db/flow".into()),
         ("REDIS_URL".into(), "redis://redis:6379".into()),
         ("ORG_GRPC_TARGET".into(), "organization:9002".into()),
@@ -86,7 +87,7 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.schema_version, 1);
     assert_eq!(contract.deployed_environments, ["beta", "production"]);
     assert_eq!(contract.required_always, ["DATABASE_URL", "REDIS_URL"]);
-    assert_eq!(contract.required_when_deployed.len(), 19);
+    assert_eq!(contract.required_when_deployed.len(), 20);
     assert_eq!(contract.minimum_secret_bytes, 32);
     assert_eq!(contract.secret_file_suffix, "_FILE");
     assert_eq!(
@@ -101,7 +102,7 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.partial_tls_behavior, "fail_closed");
     assert_eq!(contract.database_connection_bounds, [1, 100]);
     assert_eq!(contract.redis_database_bounds, [0, 255]);
-    assert_eq!(contract.fail_closed_cases.len(), 10);
+    assert_eq!(contract.fail_closed_cases.len(), 11);
 }
 
 #[test]
@@ -110,6 +111,7 @@ fn deployed_configuration_is_complete_and_normalized() {
     assert_eq!(config.environment, Environment::Beta);
     assert_eq!(config.http_addr.to_string(), "0.0.0.0:8011");
     assert_eq!(config.grpc_addr.to_string(), "0.0.0.0:9011");
+    assert_eq!(config.public_base_url, "https://issuer.example");
     assert_eq!(config.organization_grpc_target, "http://organization:9002");
     assert!(config.workload_client_tls.is_some());
     assert!(config.workload_server_tls.is_some());
@@ -120,6 +122,7 @@ fn deployed_configuration_fails_closed() {
     for required in [
         "DATABASE_URL",
         "REDIS_URL",
+        "PUBLIC_BASE_URL",
         "ORG_GRPC_TARGET",
         "CT_GRPC_TARGET",
         "PP_GRPC_TARGET",
@@ -205,6 +208,15 @@ fn deployed_configuration_fails_closed() {
             name: "GRPC_INSECURE_ALLOWED"
         })
     );
+
+    let mut insecure_public_origin = baseline("production");
+    insecure_public_origin.insert("PUBLIC_BASE_URL".into(), "http://issuer.example".into());
+    assert_eq!(
+        FlowServiceConfig::from_values(insecure_public_origin),
+        Err(FlowConfigError::Invalid {
+            name: "PUBLIC_BASE_URL"
+        })
+    );
 }
 
 #[test]
@@ -217,6 +229,7 @@ fn local_mode_allows_only_non_secret_dependency_defaults() {
     let config = FlowServiceConfig::from_values(values).expect("development defaults");
     assert_eq!(config.environment, Environment::Development);
     assert_eq!(config.issuance_grpc_target, "http://issuance:9006");
+    assert_eq!(config.public_base_url, "http://localhost:8000");
     assert!(config.service_token.is_none());
     assert!(config.webhook_secret.is_none());
 }
