@@ -576,12 +576,17 @@ exact organization + issuer DID + `oid4vp_request_signing` +
 `oauth-authz-req+jwt` + ES256 identity, builds the canonical OAuth/OID4VP or
 SIOPv2 claims, delegates only the base64url signing input to the typed signing
 provider and validates the returned identity before assembling compact JWS.
-Flow never receives private key material. The request records exact state,
-audience, response URI and the released MIP `PresentationRequest` envelope;
-URL-query and HAIP paths remain fail-closed until their dedicated unsigned and
-response-encryption composition lands. Two request-object vectors and strict
-Clippy pass. The route remains private to the Rust crate until those remaining
-profiles, persistence and expiry transitions are complete.
+Flow never receives signing private key material. The request records exact
+state, audience, response URI and the released MIP `PresentationRequest`
+envelope. HAIP now generates a fresh native P-256 response-encryption key per
+flow, advertises only its public JWK and `direct_post.jwt`/ECDH-ES/A256GCM
+metadata, and persists the private JWK only through the organization- and
+flow-bound signing-service envelope provider. Re-fetch reuses the bound
+envelope and never serializes the private key into Flow context. Three
+request-object vectors and strict Clippy pass. URL-query remains fail-closed
+until its dedicated unsigned composition lands; the route remains private to
+the Rust crate until that profile, persistence and expiry transitions are
+complete.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

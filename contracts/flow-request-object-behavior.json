@@ -16,6 +16,8 @@
   "request_content_type": "application/oauth-authz-req+jwt",
   "mip_message_type": "PresentationRequest",
   "url_query_request_object": "rejected",
-  "haip_before_encryption_composition": "rejected",
+  "haip_response_mode": "direct_post.jwt",
+  "haip_jwe": {"alg": "ECDH-ES", "enc": "A256GCM"},
+  "haip_private_key_storage": "tenant_and_flow_bound_envelope_only",
   "identity_change": "fail_closed"
 }

@@ -7,8 +7,9 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{Duration, TimeZone, Utc};
 use marty_flow::{
-    build_standard_request_object, FlowInstanceRecord, FlowProviderError, FlowProviderRegistry,
-    SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult,
+    build_standard_request_object, FlowInstanceRecord, FlowKeyEnvelope, FlowKeyEnvelopeProvider,
+    FlowKeyEnvelopeRequest, FlowProviderError, FlowProviderRegistry, SigningIdentity,
+    SigningIdentityProvider, SigningRequest, SigningResult,
 };
 use marty_oid4vci::presentation_request::PresentationRequestArtifacts;
 use marty_verification::flow::FlowInstanceStatus;
@@ -28,8 +29,35 @@ struct Contract {
     request_content_type: String,
     mip_message_type: String,
     url_query_request_object: String,
-    haip_before_encryption_composition: String,
+    haip_response_mode: String,
+    haip_jwe: BTreeMap<String, String>,
+    haip_private_key_storage: String,
     identity_change: String,
+}
+
+#[derive(Clone, Default)]
+struct Envelopes {
+    requests: Arc<Mutex<Vec<FlowKeyEnvelopeRequest>>>,
+}
+
+#[async_trait]
+impl FlowKeyEnvelopeProvider for Envelopes {
+    async fn wrap(
+        &self,
+        request: &FlowKeyEnvelopeRequest,
+    ) -> Result<FlowKeyEnvelope, FlowProviderError> {
+        self.requests.lock().unwrap().push(request.clone());
+        Ok(FlowKeyEnvelope {
+            organization_id: request.organization_id.clone(),
+            flow_instance_id: request.flow_instance_id.clone(),
+            purpose: request.purpose.clone(),
+            envelope: "vault:encrypted-private-jwk".into(),
+        })
+    }
+
+    async fn unwrap(&self, _envelope: &FlowKeyEnvelope) -> Result<String, FlowProviderError> {
+        unreachable!("request construction only wraps keys")
+    }
 }
 
 #[derive(Clone, Default)]
@@ -142,7 +170,13 @@ async fn language_neutral_contract_builds_oid4vp_and_siop_request_objects() {
     );
     assert_eq!(contract.mip_message_type, "PresentationRequest");
     assert_eq!(contract.url_query_request_object, "rejected");
-    assert_eq!(contract.haip_before_encryption_composition, "rejected");
+    assert_eq!(contract.haip_response_mode, "direct_post.jwt");
+    assert_eq!(contract.haip_jwe["alg"], "ECDH-ES");
+    assert_eq!(contract.haip_jwe["enc"], "A256GCM");
+    assert_eq!(
+        contract.haip_private_key_storage,
+        "tenant_and_flow_bound_envelope_only"
+    );
     assert_eq!(contract.identity_change, "fail_closed");
 
     let signing = Signing::default();
@@ -194,6 +228,51 @@ async fn language_neutral_contract_builds_oid4vp_and_siop_request_objects() {
         "https://verifier.example/v1/flows/siop/submit"
     );
     assert_eq!(signing.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn haip_keys_are_native_and_only_the_envelope_is_persisted() {
+    let signing = Signing::default();
+    let envelopes = Envelopes::default();
+    let providers = FlowProviderRegistry {
+        signing_identity: Some(Arc::new(signing)),
+        flow_key_envelope: Some(Arc::new(envelopes.clone())),
+        ..Default::default()
+    };
+    let mut flow = instance("verification");
+    flow.context["oid4vp_profile"] = json!("haip");
+    let artifacts = PresentationRequestArtifacts {
+        presentation_definition: json!({"id": "pd-1"}),
+        dcql_query: json!({"credentials": [{"id": "member", "format": "dc+sd-jwt"}]}),
+    };
+    let result = build_standard_request_object(
+        &providers,
+        flow,
+        Some(&artifacts),
+        "https://verifier.example",
+        None,
+        None,
+        now(),
+    )
+    .await
+    .unwrap();
+    let request = payload(&result.compact_jwt);
+    assert_eq!(request["response_mode"], "direct_post.jwt");
+    assert_eq!(
+        request["client_metadata"]["encrypted_response_enc_values_supported"][0],
+        "A256GCM"
+    );
+    assert!(request["client_metadata"]["jwks"]["keys"][0]
+        .get("d")
+        .is_none());
+    assert_eq!(
+        result.instance.context["haip_response_encryption_key_envelope"],
+        "vault:encrypted-private-jwk"
+    );
+    assert!(result.instance.context.to_string().find("\"d\"").is_none());
+    let wrapped = envelopes.requests.lock().unwrap();
+    assert_eq!(wrapped.len(), 1);
+    assert!(serde_json::from_str::<Value>(&wrapped[0].key_json).unwrap()["d"].is_string());
 }
 
 #[tokio::test]

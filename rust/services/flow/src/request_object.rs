@@ -6,7 +6,8 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    FlowInstanceRecord, FlowProviderError, FlowProviderRegistry, SigningIdentity, SigningRequest,
+    FlowInstanceRecord, FlowKeyEnvelope, FlowKeyEnvelopeRequest, FlowProviderError,
+    FlowProviderRegistry, SigningIdentity, SigningRequest,
 };
 
 const REQUEST_FORMAT: &str = "oauth-authz-req+jwt";
@@ -56,11 +57,7 @@ pub async fn build_standard_request_object(
             "url_query has no request object",
         ));
     }
-    if context.get("oid4vp_profile").and_then(Value::as_str) == Some("haip") {
-        return Err(FlowRequestObjectError::UnsupportedProfile(
-            "HAIP requires response encryption composition",
-        ));
-    }
+    let haip = context.get("oid4vp_profile").and_then(Value::as_str) == Some("haip");
     let issuer_did = context
         .get("oid4vp_issuer_did")
         .and_then(Value::as_str)
@@ -116,6 +113,11 @@ pub async fn build_standard_request_object(
         .expires_at
         .or_else(|| now.checked_add_signed(Duration::minutes(15)))
         .ok_or(FlowRequestObjectError::InvalidClock)?;
+    let response_encryption = if haip && !is_siop {
+        Some(response_encryption_key(providers, &instance).await?)
+    } else {
+        None
+    };
     let mut payload = if is_siop {
         json!({
             "aud": "https://self-issued.me/v2",
@@ -149,6 +151,11 @@ pub async fn build_standard_request_object(
             "state": instance.id
         })
     };
+    if let Some((public_jwk, _)) = &response_encryption {
+        payload["response_mode"] = json!("direct_post.jwt");
+        payload["client_metadata"]["encrypted_response_enc_values_supported"] = json!(["A256GCM"]);
+        payload["client_metadata"]["jwks"] = json!({"keys": [public_jwk]});
+    }
     if let Some(wallet_nonce) = wallet_nonce.filter(|value| !value.trim().is_empty()) {
         payload
             .as_object_mut()
@@ -172,6 +179,22 @@ pub async fn build_standard_request_object(
         context.insert("oid4vp_expected_state".into(), json!(instance_id));
         context.insert("verification_audience".into(), json!(client_id));
         context.insert("oid4vp_verifier_context".into(), json!(true));
+        if let Some((public_jwk, envelope)) = response_encryption {
+            context.insert(
+                "haip_response_encryption_public_jwk".into(),
+                public_jwk.clone(),
+            );
+            context.insert(
+                "haip_response_encryption_key_envelope".into(),
+                json!(envelope.envelope),
+            );
+            context.insert("oid4vp_response_encryption_jwk".into(), public_jwk);
+            context.insert("haip_response_mode".into(), json!("direct_post.jwt"));
+            context.insert("haip_jwe_alg".into(), json!("ECDH-ES"));
+            context.insert("haip_jwe_enc".into(), json!("A256GCM"));
+        } else {
+            context.insert("oid4vp_response_encryption_jwk".into(), Value::Null);
+        }
         record_presentation_message(
             context,
             &instance_id,
@@ -189,6 +212,80 @@ pub async fn build_standard_request_object(
         client_id,
         response_uri,
     })
+}
+
+async fn response_encryption_key(
+    providers: &FlowProviderRegistry,
+    instance: &FlowInstanceRecord,
+) -> Result<(Value, FlowKeyEnvelope), FlowRequestObjectError> {
+    let context = instance
+        .context
+        .as_object()
+        .ok_or(FlowRequestObjectError::InvalidInstance(
+            "context must be an object",
+        ))?;
+    if let (Some(public), Some(envelope)) = (
+        context
+            .get("haip_response_encryption_public_jwk")
+            .filter(|value| value.is_object()),
+        context
+            .get("haip_response_encryption_key_envelope")
+            .and_then(Value::as_str)
+            .filter(|value| value.starts_with("vault:")),
+    ) {
+        return Ok((
+            public.clone(),
+            FlowKeyEnvelope {
+                organization_id: instance.organization_id.clone(),
+                flow_instance_id: instance.id.clone(),
+                purpose: "oid4vp_response_decryption".into(),
+                envelope: envelope.into(),
+            },
+        ));
+    }
+    let provider = providers
+        .flow_key_envelope
+        .as_ref()
+        .ok_or(FlowProviderError::Unavailable {
+            provider: "flow_key_envelope",
+        })?;
+    let (public_json, private_json) =
+        marty_verification::jwk::generate_haip_response_encryption_jwk_pair().map_err(|error| {
+            FlowRequestObjectError::Provider(FlowProviderError::Rejected {
+                provider: "flow_key_envelope",
+                message: error.to_string(),
+            })
+        })?;
+    let public: Value =
+        serde_json::from_str(&public_json).map_err(|_| FlowRequestObjectError::Serialization)?;
+    let private: Value =
+        serde_json::from_str(&private_json).map_err(|_| FlowRequestObjectError::Serialization)?;
+    if !public.is_object()
+        || public.get("d").is_some()
+        || private.get("d").and_then(Value::as_str).is_none()
+    {
+        return Err(FlowRequestObjectError::Serialization);
+    }
+    let envelope = provider
+        .wrap(&FlowKeyEnvelopeRequest {
+            organization_id: instance.organization_id.clone(),
+            flow_instance_id: instance.id.clone(),
+            purpose: "oid4vp_response_decryption".into(),
+            key_json: private_json,
+        })
+        .await?;
+    if envelope.organization_id != instance.organization_id
+        || envelope.flow_instance_id != instance.id
+        || envelope.purpose != "oid4vp_response_decryption"
+        || !envelope.envelope.starts_with("vault:")
+    {
+        return Err(FlowProviderError::InvalidResponse {
+            provider: "flow_key_envelope",
+            message: "response encryption envelope binding mismatch".into(),
+        }
+        .into());
+    }
+    Ok((public, envelope))
 }
 
 async fn sign_payload(
