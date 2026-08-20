@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod api;
+mod application_approval;
 mod callback;
 mod config;
 mod connections;
@@ -52,6 +53,7 @@ pub mod presentation_policy_proto {
 }
 
 pub use api::*;
+pub use application_approval::*;
 pub use callback::*;
 pub use config::*;
 pub use connections::*;

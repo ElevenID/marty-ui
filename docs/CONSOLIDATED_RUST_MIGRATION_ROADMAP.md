@@ -703,6 +703,26 @@ fails closed on malformed identity. The route behavior is frozen in
 `contracts/flow-verification-http-behavior.json` and exercised through the
 live Axum router.
 
+Application-approved issuance planning is now native under
+`contracts/flow-application-approved-behavior.json`. The reusable
+Applicant-to-Flow security boundary lives once in `mmf-security` at local
+commit `54b5805`: canonical Unicode JSON, dedicated purpose-bound HMAC,
+producer/audience/version binding, freshness, minimized evidence, deferred
+atomic replay consumption and one-winner replica races share a
+transport-neutral contract. Flow no longer duplicates that cryptographic
+kernel. Its native planner selects only active application-approved OID4VCI
+definitions, preserves exact optional template targeting, orders flows by ID,
+requires object claims and canonical manual-issuance UUIDs, and recreates both
+released v1 and v2 logical offer identities. The complete definition,
+applicant and claims snapshot is canonically hashed so a reused logical flow
+with changed semantics conflicts. PostgreSQL now reserves the authenticated
+event receipt and all selected instances in one transaction, recovers an exact
+replay plan, and rejects changed event payloads or changed offer semantics.
+Focused language-neutral planning, trusted-precondition, PostgreSQL contract
+and strict Clippy gates pass. The remaining application-event work is the
+shared Redis replay adapter, issuance side-effect completion and HTTP/gRPC
+transport adapters; no Python fallback is permitted.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

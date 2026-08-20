@@ -1,5 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use marty_verification::flow::{select_next_step, FlowInstanceStatus, TransitionOutcome};
+use mmf_security::{APPLICATION_EVENT_AUDIENCE, APPLICATION_EVENT_PRODUCER};
 use serde_json::{json, Map, Value};
 use thiserror::Error;
 use uuid::Uuid;
@@ -328,8 +329,8 @@ fn precondition_met(name: &str, evidence: Option<&Map<String, Value>>) -> bool {
     else {
         return false;
     };
-    approval.get("producer").and_then(Value::as_str) == Some("marty-applicant-service")
-        && approval.get("audience").and_then(Value::as_str) == Some("marty-flow-service")
+    approval.get("producer").and_then(Value::as_str) == Some(APPLICATION_EVENT_PRODUCER)
+        && approval.get("audience").and_then(Value::as_str) == Some(APPLICATION_EVENT_AUDIENCE)
         && approval
             .get("event_id_sha256")
             .and_then(Value::as_str)
@@ -351,7 +352,7 @@ fn lower_hex_digest(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn application_approved_trigger(definition: &FlowDefinitionRecord) -> bool {
+pub fn application_approved_trigger(definition: &FlowDefinitionRecord) -> bool {
     effective_flow_type(definition) == FlowType::Oid4vciPreAuthorized
         && definition
             .trigger

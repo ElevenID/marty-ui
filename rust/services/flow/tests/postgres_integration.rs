@@ -2,8 +2,9 @@ use std::{env, error::Error, str::FromStr};
 
 use chrono::{Duration, Utc};
 use marty_flow::{
-    migrate_flow_schema, ApprovalStrategy, ArtifactStatus, CallbackEvent, DefinitionStatus,
-    FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord, PostgresFlowRepository,
+    migrate_flow_schema, ApplicationEventReceipt, ApprovalStrategy, ArtifactStatus, CallbackEvent,
+    DefinitionStatus, FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord,
+    PlannedApplicationFlowRecord, PostgresFlowRepository,
 };
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_push::WebhookDestinationRegistry;
@@ -378,6 +379,66 @@ async fn run_crud_contract(
             .await?
     );
     assert!(repository.instance(&atomic_instance.id).await?.is_some());
+
+    let mut application_instance = instance.clone();
+    application_instance.id = "90000000-0000-0000-0000-000000000031".into();
+    application_instance.application_flow_key_hash = Some("e".repeat(64));
+    application_instance.context = json!({
+        "_marty_application_offer_semantics_hash_v1": "f".repeat(64)
+    });
+    let planned = PlannedApplicationFlowRecord {
+        instance: application_instance.clone(),
+        plan_entry: std::collections::BTreeMap::from([
+            ("flow_definition_id".into(), definition.id.clone()),
+            ("application_flow_key_hash".into(), "e".repeat(64)),
+            ("offer_semantics_hash".into(), "f".repeat(64)),
+            (
+                "offer_semantics_context_key".into(),
+                "_marty_application_offer_semantics_hash_v1".into(),
+            ),
+        ]),
+    };
+    let receipt = ApplicationEventReceipt {
+        event_id_sha256: "1".repeat(64),
+        payload_sha256: "2".repeat(64),
+        organization_id: "org-1".into(),
+        application_id: "application-1".into(),
+        flow_plan: Vec::new(),
+        created_at_ms: u64::try_from(now.timestamp_millis())?,
+        updated_at_ms: u64::try_from(now.timestamp_millis())?,
+    };
+    let (reserved, created) = repository
+        .reserve_application_event_plan(receipt.clone(), std::slice::from_ref(&planned))
+        .await?;
+    assert!(created);
+    assert_eq!(reserved.flow_plan[0]["instance_id"], application_instance.id);
+    let (replayed, created) = repository
+        .reserve_application_event_plan(receipt.clone(), std::slice::from_ref(&planned))
+        .await?;
+    assert!(!created);
+    assert_eq!(replayed.flow_plan, reserved.flow_plan);
+
+    let mut changed_payload = receipt.clone();
+    changed_payload.payload_sha256 = "3".repeat(64);
+    assert!(repository
+        .reserve_application_event_plan(changed_payload, std::slice::from_ref(&planned))
+        .await
+        .is_err());
+    let mut changed_semantics = planned;
+    changed_semantics.instance.id = "90000000-0000-0000-0000-000000000032".into();
+    changed_semantics.instance.context = json!({
+        "_marty_application_offer_semantics_hash_v1": "4".repeat(64)
+    });
+    changed_semantics
+        .plan_entry
+        .insert("offer_semantics_hash".into(), "4".repeat(64));
+    let mut new_event = receipt;
+    new_event.event_id_sha256 = "5".repeat(64);
+    new_event.payload_sha256 = "6".repeat(64);
+    assert!(repository
+        .reserve_application_event_plan(new_event, &[changed_semantics])
+        .await
+        .is_err());
     assert_eq!(
         repository
             .artifacts_for_instance(&atomic_instance.id)

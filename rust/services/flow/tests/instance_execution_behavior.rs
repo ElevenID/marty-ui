@@ -192,7 +192,7 @@ fn application_approval_requires_trusted_evidence() {
         "_marty_precondition_evidence_v1".into(),
         json!({"application_approved": {
             "producer": "marty-applicant-service",
-            "audience": "marty-flow-service",
+            "audience": "marty-flow-application-approved",
             "event_id_sha256": digest,
             "payload_sha256": "b".repeat(64),
             "authenticated_at": now().to_rfc3339()

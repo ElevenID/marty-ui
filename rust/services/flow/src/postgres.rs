@@ -7,7 +7,8 @@ use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
 use crate::{
-    FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord, FlowRecordError, RepositoryError,
+    ApplicationEventReceipt, FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord,
+    FlowRecordError, PlannedApplicationFlowRecord, RepositoryError,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -271,6 +272,161 @@ impl PostgresFlowRepository {
         }
         transaction.commit().await.map_err(storage)?;
         Ok(true)
+    }
+
+    /// Reserves an authenticated application event and every selected flow in
+    /// one transaction. Event identity and logical application-flow identity
+    /// are immutable; replays recover the original plan, while changed payload
+    /// or offer semantics fail closed.
+    pub async fn reserve_application_event_plan(
+        &self,
+        mut receipt: ApplicationEventReceipt,
+        planned: &[PlannedApplicationFlowRecord],
+    ) -> Result<(ApplicationEventReceipt, bool), RepositoryError> {
+        if !valid_sha256(&receipt.event_id_sha256) || !valid_sha256(&receipt.payload_sha256) {
+            return Err(RepositoryError::InvalidReplayDigest);
+        }
+        for candidate in planned {
+            validate_instance_record(&candidate.instance)?;
+            if candidate
+                .instance
+                .application_flow_key_hash
+                .as_deref()
+                .is_none_or(|digest| !valid_sha256(digest))
+            {
+                return Err(record("instance.application_flow_key_hash"));
+            }
+        }
+
+        let created_at = timestamp(receipt.created_at_ms)?;
+        let updated_at = timestamp(receipt.updated_at_ms)?;
+        let mut transaction = self.pool.begin().await.map_err(storage)?;
+        let inserted = sqlx::query(
+            "INSERT INTO flow_service.flow_application_event_receipts \
+             (event_id_sha256, payload_sha256, organization_id, application_id, flow_plan, \
+              created_at, updated_at) VALUES ($1,$2,$3,$4,'[]'::json,$5,$6) \
+             ON CONFLICT (event_id_sha256) DO NOTHING",
+        )
+        .bind(&receipt.event_id_sha256)
+        .bind(&receipt.payload_sha256)
+        .bind(&receipt.organization_id)
+        .bind(&receipt.application_id)
+        .bind(created_at)
+        .bind(updated_at)
+        .execute(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        if inserted.rows_affected() == 0 {
+            let row = sqlx::query(
+                "SELECT event_id_sha256, payload_sha256, organization_id, application_id, \
+                 flow_plan, created_at, updated_at \
+                 FROM flow_service.flow_application_event_receipts WHERE event_id_sha256=$1",
+            )
+            .bind(&receipt.event_id_sha256)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(storage)?
+            .ok_or_else(|| RepositoryError::Storage("application event plan is missing".into()))?;
+            let existing = application_receipt_from_row(&row)?;
+            if existing.payload_sha256 != receipt.payload_sha256
+                || existing.organization_id != receipt.organization_id
+                || existing.application_id != receipt.application_id
+            {
+                transaction.rollback().await.map_err(storage)?;
+                return Err(RepositoryError::ApplicationOfferConflict(
+                    "event identity is bound to another payload".into(),
+                ));
+            }
+            transaction.commit().await.map_err(storage)?;
+            return Ok((existing, false));
+        }
+
+        let mut final_plan = Vec::with_capacity(planned.len());
+        for candidate in planned {
+            let instance = &candidate.instance;
+            sqlx::query(
+                "INSERT INTO flow_service.flow_instances \
+                 (id, flow_definition_id, organization_id, status, current_step_id, context, \
+                  step_history, state_history, subject_id, subject_type, external_reference, \
+                  application_flow_key_hash, started_at, completed_at, expires_at, result, error, \
+                  created_at, updated_at) VALUES \
+                 ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) \
+                 ON CONFLICT (organization_id, application_flow_key_hash) DO NOTHING",
+            )
+            .bind(&instance.id)
+            .bind(&instance.flow_definition_id)
+            .bind(&instance.organization_id)
+            .bind(instance.status.to_string())
+            .bind(&instance.current_step_id)
+            .bind(&instance.context)
+            .bind(json(&instance.step_history)?)
+            .bind(json(&instance.state_history)?)
+            .bind(&instance.subject_id)
+            .bind(&instance.subject_type)
+            .bind(&instance.external_reference)
+            .bind(&instance.application_flow_key_hash)
+            .bind(instance.started_at)
+            .bind(instance.completed_at)
+            .bind(instance.expires_at)
+            .bind(&instance.result)
+            .bind(&instance.error)
+            .bind(instance.created_at)
+            .bind(instance.updated_at)
+            .execute(&mut *transaction)
+            .await
+            .map_err(storage)?;
+
+            let row = sqlx::query(
+                "SELECT id, flow_definition_id, organization_id, status, current_step_id, \
+                 context, step_history, state_history, subject_id, subject_type, \
+                 external_reference, application_flow_key_hash, started_at, completed_at, \
+                 expires_at, result, error, created_at, updated_at \
+                 FROM flow_service.flow_instances \
+                 WHERE organization_id=$1 AND application_flow_key_hash=$2",
+            )
+            .bind(&instance.organization_id)
+            .bind(&instance.application_flow_key_hash)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(storage)?
+            .ok_or_else(|| {
+                RepositoryError::Storage("application flow reservation is missing".into())
+            })?;
+            let selected = instance_from_row(&row)?;
+            let semantics_key = candidate
+                .plan_entry
+                .get("offer_semantics_context_key")
+                .map(String::as_str)
+                .unwrap_or("_marty_application_offer_semantics_hash_v1");
+            if selected.context.get(semantics_key).and_then(Value::as_str)
+                != candidate
+                    .plan_entry
+                    .get("offer_semantics_hash")
+                    .map(String::as_str)
+            {
+                transaction.rollback().await.map_err(storage)?;
+                return Err(RepositoryError::ApplicationOfferConflict(
+                    "application and flow are bound to different issuance claims".into(),
+                ));
+            }
+            let mut entry = candidate.plan_entry.clone();
+            entry.insert("instance_id".into(), selected.id);
+            final_plan.push(entry);
+        }
+
+        sqlx::query(
+            "UPDATE flow_service.flow_application_event_receipts SET flow_plan=$1, updated_at=$2 \
+             WHERE event_id_sha256=$3",
+        )
+        .bind(json(&final_plan)?)
+        .bind(updated_at)
+        .bind(&receipt.event_id_sha256)
+        .execute(&mut *transaction)
+        .await
+        .map_err(storage)?;
+        receipt.flow_plan = final_plan;
+        transaction.commit().await.map_err(storage)?;
+        Ok((receipt, true))
     }
 
     /// Persists one advancement only when the caller's source snapshot still
@@ -946,6 +1102,22 @@ fn definition_from_row(row: &PgRow) -> Result<FlowDefinitionRecord, RepositoryEr
         version: positive_u32(row, "version")?,
         created_at: row.try_get("created_at").map_err(storage)?,
         updated_at: row.try_get("updated_at").map_err(storage)?,
+    })
+}
+
+fn application_receipt_from_row(row: &PgRow) -> Result<ApplicationEventReceipt, RepositoryError> {
+    let flow_plan: Value = row.try_get("flow_plan").map_err(storage)?;
+    let flow_plan = serde_json::from_value(flow_plan).map_err(|_| record("receipt.flow_plan"))?;
+    let created_at: DateTime<Utc> = row.try_get("created_at").map_err(storage)?;
+    let updated_at: DateTime<Utc> = row.try_get("updated_at").map_err(storage)?;
+    Ok(ApplicationEventReceipt {
+        event_id_sha256: row.try_get("event_id_sha256").map_err(storage)?,
+        payload_sha256: row.try_get("payload_sha256").map_err(storage)?,
+        organization_id: row.try_get("organization_id").map_err(storage)?,
+        application_id: row.try_get("application_id").map_err(storage)?,
+        flow_plan,
+        created_at_ms: u64::try_from(created_at.timestamp_millis()).map_err(number_storage)?,
+        updated_at_ms: u64::try_from(updated_at.timestamp_millis()).map_err(number_storage)?,
     })
 }
 
