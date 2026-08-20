@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "routes": [
+    {"method": "POST", "path": "/internal/signing-keys/flow-key-envelopes/unwrap", "operation": "flow_envelope_unwrap"},
+    {"method": "POST", "path": "/internal/signing-keys/flow-key-envelopes/wrap", "operation": "flow_envelope_wrap"},
+    {"method": "GET", "path": "/internal/signing-keys/issuer-context", "operation": "issuer_context"},
+    {"method": "POST", "path": "/internal/signing-keys/issuer-dids/sign", "operation": "issuer_did_sign"},
+    {"method": "POST", "path": "/internal/signing-keys/issuer-profiles", "operation": "create_profile"},
+    {"method": "GET", "path": "/internal/signing-keys/issuer-profiles", "operation": "list_profiles"},
+    {"method": "GET", "path": "/internal/signing-keys/issuer-profiles/{issuer_profile_id}/identity", "example_path": "/internal/signing-keys/issuer-profiles/profile-1/identity", "operation": "profile_identity"},
+    {"method": "GET", "path": "/internal/signing-keys/issuer-profiles/{profile_id}", "example_path": "/internal/signing-keys/issuer-profiles/profile-1", "operation": "get_profile"},
+    {"method": "PATCH", "path": "/internal/signing-keys/issuer-profiles/{profile_id}", "example_path": "/internal/signing-keys/issuer-profiles/profile-1", "operation": "update_profile"},
+    {"method": "DELETE", "path": "/internal/signing-keys/issuer-profiles/{profile_id}", "example_path": "/internal/signing-keys/issuer-profiles/profile-1", "operation": "delete_profile"},
+    {"method": "PUT", "path": "/internal/signing-keys/issuer-profiles/{profile_id}/certificate", "example_path": "/internal/signing-keys/issuer-profiles/profile-1/certificate", "operation": "profile_certificate"},
+    {"method": "GET", "path": "/internal/signing-keys/issuer-profiles/{profile_id}/public-identity", "example_path": "/internal/signing-keys/issuer-profiles/profile-1/public-identity", "operation": "profile_public_identity"},
+    {"method": "GET", "path": "/internal/signing-keys/resolve-issuer-did", "operation": "resolve_issuer_did"},
+    {"method": "POST", "path": "/internal/signing-keys/services/{service_id}/sign", "example_path": "/internal/signing-keys/services/service-1/sign", "operation": "service_sign"}
+  ],
+  "dedicated_auth": {
+    "header": "X-API-Key",
+    "missing_status": 401,
+    "invalid_status": 401,
+    "forward_client_key": false
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "issuance_service_auth": [
+    {"name": "wallet_token", "path": "/v1/issuance/token", "required": true},
+    {"name": "wallet_offer", "path": "/v1/issuance/offers/tx-1", "required": true},
+    {"name": "management_transaction", "path": "/v1/issuance/tx-1", "required": true},
+    {"name": "application_template", "path": "/v1/application-templates/template-1", "required": true},
+    {"name": "issued_credential", "path": "/v1/issued-credentials/credential-1", "required": true},
+    {"name": "canvas_platform_management", "path": "/v1/integrations/canvas/platforms", "required": true},
+    {"name": "oauth_authorization", "path": "/v1/issuance/authorize", "required": false},
+    {"name": "canvas_public_jwks", "path": "/v1/integrations/canvas/lti/jwks", "required": false},
+    {"name": "canvas_oauth_callback", "path": "/v1/integrations/canvas/oauth/callback", "required": false},
+    {"name": "canvas_signed_ingress", "path": "/v1/integrations/canvas/evidence-events", "required": false},
+    {"name": "canvas_lti_launch", "path": "/v1/integrations/canvas/lti/platforms/platform-1/launch", "required": false},
+    {"name": "holder_inventory", "path": "/v1/issued-credentials/mine", "required": false}
+  ],
+  "special_ownership": [
+    {"method": "GET", "path": "/v1/me/preferences", "service": "organizations", "gateway_owned": false, "upstream_path": "/v1/me/preferences"},
+    {"method": "GET", "path": "/v1/issued-credentials/mine", "service": "applicant", "gateway_owned": false, "upstream_path": "/v1/issued-credentials/mine"},
+    {"method": "GET", "path": "/v1/organizations/org-1/applicants", "service": "applicant", "gateway_owned": false, "upstream_path": "/v1/organizations/org-1/applicants"},
+    {"method": "GET", "path": "/v1/organizations/org-1/revocation-profiles/profile-1/status-lists/bitstring/revocation", "service": "revocation-profiles", "gateway_owned": false, "upstream_path": "/v1/organizations/org-1/revocation-profiles/profile-1/status-lists/bitstring/revocation"},
+    {"method": "GET", "path": "/v1/organizations/org-1/applicants/app-1/evidence-summary", "service": "issuance", "gateway_owned": false, "upstream_path": "/internal/applications/app-1/evidence-summary"},
+    {"method": "GET", "path": "/v1/organizations/org-1/applicants/app-1/evidence-facts", "service": "issuance", "gateway_owned": false, "upstream_path": "/internal/applications/app-1/evidence-facts"},
+    {"method": "POST", "path": "/v1/organizations/org-1/applicants/app-1/evidence/api-checks/check-1/run", "service": "issuance", "gateway_owned": false, "upstream_path": "/internal/applications/app-1/evidence/api-checks/check-1/run"},
+    {"method": "GET", "path": "/v1/organizations/org-1/lifecycle", "service": "gateway", "gateway_owned": true, "upstream_path": "/v1/organizations/org-1/lifecycle"},
+    {"method": "GET", "path": "/v1/organizations/org-1/runtime/status", "service": "gateway", "gateway_owned": true, "upstream_path": "/v1/organizations/org-1/runtime/status"},
+    {"method": "GET", "path": "/v1/organizations/org-1/dashboard/applicant-stats", "service": "gateway", "gateway_owned": true, "upstream_path": "/v1/organizations/org-1/dashboard/applicant-stats"},
+    {"method": "GET", "path": "/v1/notifications/events/push", "service": "gateway", "gateway_owned": true, "upstream_path": "/v1/notifications/events/push"}
+  ]
+}

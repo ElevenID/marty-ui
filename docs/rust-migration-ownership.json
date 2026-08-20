@@ -1,7 +1,7 @@
 {
   "schema": "marty.rust-ownership/v1",
   "roadmap": "docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md",
-  "updated": "2026-08-14",
+  "updated": "2026-08-20",
   "policy": {
     "canonical_rule": "Each deterministic protocol, policy, validation, cryptographic, or state-machine capability has one Rust implementation.",
     "fallback_rule": "Required native capabilities fail closed; runtime fallback to Python or Dart is prohibited.",
@@ -562,12 +562,36 @@
           "disposition": "retain-http-cache-ui-delete-decisions"
         }
       ]
+    },
+    {
+      "id": "gateway-service",
+      "phase": 9,
+      "status": "cutover-in-progress",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/gateway"],
+        "binding_paths": []
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-ui",
+          "paths": ["services/gateway"],
+          "language": "python",
+          "disposition": "delete-after-immutable-mmf-redis-image-and-public-contract-gates"
+        }
+      ]
     }
   ],
   "guardrails": {
     "python_scan_roots": ["services", "scripts"],
     "excluded_path_parts": ["tests", "migrations", "__pycache__"],
     "restricted_import_roots": ["Crypto", "OpenSSL", "cryptography", "jose", "jwcrypto", "jwt", "nacl"],
+    "native_service_guards": [
+      {
+        "capability_id": "gateway-service",
+        "forbidden_globs": ["services/gateway/**/*.py"]
+      }
+    ],
     "approved_imports": [
       {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography import x509", "count": 2},
       {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.backends import default_backend"},

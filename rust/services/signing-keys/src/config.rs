@@ -3,13 +3,16 @@ use std::{collections::HashMap, env, fs, net::SocketAddr};
 const DEFAULT_HTTP_PORT: u16 = 8017;
 const DEVELOPMENT_INTERNAL_API_KEY: &str = "dev-signing-keys-internal-api-key";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     pub http_addr: SocketAddr,
     pub release_version: String,
     pub build_revision: String,
     pub internal_api_key: String,
     pub registry_redis_url: String,
+    pub bao_addr: Option<String>,
+    pub bao_token: Option<String>,
+    pub public_domain: Option<String>,
 }
 
 impl Config {
@@ -39,6 +42,15 @@ impl Config {
                     .to_string(),
             );
         }
+        let bao_addr = value(values, "BAO_ADDR");
+        let bao_token =
+            secret_value(values, "BAO_TOKEN")?.or(secret_value(values, "OPENBAO_SERVICE_TOKEN")?);
+        if bao_addr.is_some() != bao_token.is_some() {
+            return Err(
+                "BAO_ADDR and BAO_TOKEN (or OPENBAO_SERVICE_TOKEN) must be configured together"
+                    .into(),
+            );
+        }
         Ok(Self {
             http_addr: SocketAddr::from(([0, 0, 0, 0], port)),
             release_version,
@@ -46,6 +58,9 @@ impl Config {
             internal_api_key,
             registry_redis_url: value(values, "SIGNING_KEYS_REDIS_URL")
                 .unwrap_or_else(|| "redis://localhost:6379/2".into()),
+            bao_addr,
+            bao_token,
+            public_domain: value(values, "PUBLIC_DOMAIN"),
         })
     }
 }
@@ -85,6 +100,9 @@ mod tests {
         assert_eq!(config.build_revision, "unknown");
         assert_eq!(config.internal_api_key, DEVELOPMENT_INTERNAL_API_KEY);
         assert_eq!(config.registry_redis_url, "redis://localhost:6379/2");
+        assert_eq!(config.bao_addr, None);
+        assert_eq!(config.bao_token, None);
+        assert_eq!(config.public_domain, None);
     }
 
     #[test]
@@ -111,5 +129,22 @@ mod tests {
             Config::from_values(&configured).unwrap().internal_api_key,
             "a-production-strength-secret"
         );
+    }
+
+    #[test]
+    fn openbao_envelope_provider_requires_address_and_secret_together() {
+        for values in [
+            HashMap::from([("BAO_ADDR".into(), "http://bao:8200".into())]),
+            HashMap::from([("BAO_TOKEN".into(), "secret".into())]),
+        ] {
+            assert!(Config::from_values(&values).is_err());
+        }
+        let values = HashMap::from([
+            ("BAO_ADDR".into(), "http://bao:8200".into()),
+            ("OPENBAO_SERVICE_TOKEN".into(), "secret".into()),
+        ]);
+        let config = Config::from_values(&values).expect("OpenBao config");
+        assert_eq!(config.bao_addr.as_deref(), Some("http://bao:8200"));
+        assert_eq!(config.bao_token.as_deref(), Some("secret"));
     }
 }

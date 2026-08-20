@@ -206,6 +206,30 @@ async fn internal_document_routes_require_auth_and_fail_closed_without_storage()
         .await
         .unwrap();
     assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let compatibility_unavailable = marty_signing_keys::http::router()
+        .oneshot(
+            Request::post("/internal/compat/issuer-profiles")
+                .header("content-type", "application/json")
+                .header("x-api-key", "dev-signing-keys-internal-api-key")
+                .body(Body::from(
+                    serde_json::json!({
+                        "organization_id": "org-a",
+                        "body": {
+                            "issuer_did": "did:web:issuer.example:orgs:acme",
+                            "signing_service_id": "service-a"
+                        }
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        compatibility_unavailable.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
 }
 
 #[tokio::test]

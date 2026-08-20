@@ -1250,6 +1250,8 @@ Verification is handled through two complementary approaches:
     async def health_check() -> dict:
         return {"status": "healthy", "service": SERVICE_NAME}
 
+    @app.get("/ready")
+    @app.get("/health/ready")
     async def readiness_check():
         registry = get_registry()
         client = get_http_client()
@@ -1288,9 +1290,6 @@ Verification is handled through two complementary approaches:
         if unhealthy:
             return JSONResponse(status_code=503, content=payload)
         return payload
-
-    app.add_api_route("/ready", readiness_check, methods=["GET"])
-    app.add_api_route("/health/ready", readiness_check, methods=["GET"])
 
     async def _proxy_to_issuance_well_known(
         path: str, wallet_variant: str | None = None

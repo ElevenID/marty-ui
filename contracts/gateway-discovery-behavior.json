@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "base_url": "https://issuer.example",
+  "openid_configuration": {
+    "issuer": "https://issuer.example",
+    "authorization_endpoint": "https://issuer.example/v1/issuance/authorize",
+    "token_endpoint": "https://issuer.example/v1/issuance/token",
+    "pushed_authorization_request_endpoint": "https://issuer.example/v1/issuance/par",
+    "credential_endpoint": "https://issuer.example/v1/issuance/credential",
+    "nonce_endpoint": "https://issuer.example/v1/issuance/nonce",
+    "deferred_credential_endpoint": "https://issuer.example/v1/issuance/deferred-credential",
+    "notification_endpoint": "https://issuer.example/v1/issuance/notification",
+    "jwks_uri": "https://issuer.example/.well-known/jwks.json",
+    "response_types_supported": ["code", "token", "id_token"],
+    "subject_types_supported": ["public", "pairwise"],
+    "subject_syntax_types_supported": ["urn:ietf:params:oauth:jwk-thumbprint"],
+    "id_token_signing_alg_values_supported": ["EdDSA", "ES256"],
+    "grant_types_supported": ["authorization_code", "urn:ietf:params:oauth:grant-type:pre-authorized_code"],
+    "token_endpoint_auth_methods_supported": ["none"]
+  },
+  "compliance_profiles": [
+    {
+      "compliance_code": "OPEN_BADGES_3",
+      "credential_format": "VC_JWT",
+      "issuance_protocol": "OID4VCI_PRE_AUTH",
+      "api_surface": [
+        {"rel": "credential", "path_template": "/v1/issuance/credential", "method": "POST", "auth_required": false, "discoverable": true, "internal_note": "hidden"},
+        {"rel": "internal", "path_template": "/internal", "method": "GET", "auth_required": true, "discoverable": false}
+      ]
+    },
+    {"compliance_code": "AAMVA_MDL", "api_surface": []},
+    {"compliance_code": "OPEN_BADGES_3"},
+    {"compliance_code": ""}
+  ],
+  "mip_configuration": {
+    "mip_version": "0.4.1",
+    "issuer": "https://issuer.example",
+    "mip_configuration_endpoint": "https://issuer.example/.well-known/mip-configuration",
+    "supported_versions": ["0.4.1"],
+    "implementation_classes": ["ISSUER", "VERIFIER", "REGISTRY"],
+    "issuance_endpoint": "https://issuer.example/v1/issuance",
+    "openid_credential_issuer": "https://issuer.example/.well-known/openid-credential-issuer",
+    "presentation_endpoint": "https://issuer.example/v1/flows/verify",
+    "token_endpoint": "https://issuer.example/v1/issuance/token",
+    "authorization_endpoint": "https://issuer.example/v1/issuance/authorize",
+    "supported_credential_formats": ["MDOC", "SD_JWT_VC", "VC_JWT", "JSON_LD"],
+    "supported_compliance_profiles": ["AAMVA_MDL", "OPEN_BADGES_3"],
+    "active_compliance_profiles": [
+      {"compliance_code": "AAMVA_MDL", "api_surface": []},
+      {"compliance_code": "OPEN_BADGES_3", "api_surface": [{"rel": "credential", "path_template": "/v1/issuance/credential", "method": "POST", "auth_required": false, "discoverable": true}], "credential_format": "VC_JWT", "issuance_protocol": "OID4VCI_PRE_AUTH"},
+      {"compliance_code": "OPEN_BADGES_3", "api_surface": []}
+    ],
+    "supported_flow_types": ["oid4vci_pre_authorized", "oid4vci_authorization_code", "application_approval_issuance", "credential_renewal", "credential_revocation", "oid4vp_presentation", "mdl_presentation"],
+    "supported_signing_algorithms": ["ES256", "ES384", "EdDSA"],
+    "proximity_supported": false,
+    "scim_endpoint": "https://issuer.example/v1/organizations/{org_id}/scim/v2",
+    "revocation_endpoint": "https://issuer.example/v1/issuance/status-list",
+    "jwks_uri": "https://issuer.example/.well-known/jwks.json",
+    "service_documentation": "https://issuer.example/docs"
+  },
+  "release": {
+    "input": {
+      "release_version": "mip-0.4.1-beta-test",
+      "stack_version": "2026.07.0",
+      "marty_ui_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "image_digests": {"gateway": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+    },
+    "expected": {
+      "component": "services",
+      "release_version": "mip-0.4.1-beta-test",
+      "deployment_release_marker": "mip-0.4.1-beta-test",
+      "stack_version": "2026.07.0",
+      "mip_version": "0.4.1",
+      "marty_ui_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "image_digests": {"gateway": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+    }
+  },
+  "well_known_plans": [
+    {"path": "/.well-known//openid-credential-issuer", "upstream_path": "/.well-known/openid-credential-issuer", "variant": null, "normalize_issuer": true},
+    {"path": "/.well-known/openid-credential-issuer/org/org-1", "upstream_path": "/.well-known/openid-credential-issuer/org/org-1", "variant": null, "normalize_issuer": true},
+    {"path": "/org/org-1/waltid/.well-known/openid-credential-issuer", "upstream_path": "/.well-known/openid-credential-issuer/org/org-1", "variant": "waltid", "normalize_issuer": true},
+    {"path": "/org/org-1/credential-manager/.well-known/oauth-authorization-server", "upstream_path": "/.well-known/oauth-authorization-server/org/org-1/credential-manager", "variant": null, "normalize_issuer": false},
+    {"path": "/.well-known/jwks.json", "upstream_path": "/.well-known/jwks.json", "variant": null, "normalize_issuer": false},
+    {"path": "/credentials/default", "upstream_path": "/credentials/default", "variant": null, "normalize_issuer": false}
+  ],
+  "issuer_metadata": {
+    "input": {
+      "credential_issuer": "https://issuer.example/org/org-1",
+      "issuer_display_name": "Example University",
+      "credential_configurations_supported": {
+        "EmployeeCredential": {
+          "format": "jwt_vc_json",
+          "credential_definition": {"type": ["VerifiableCredential", "EmployeeCredential"], "credentialSubject": {"email": {"mandatory": true}}},
+          "display": [{"name": "Employee credential"}],
+          "credential_signing_alg_values_supported": ["ES256"]
+        },
+        "UnsupportedCredential": {"format": "unsupported"}
+      }
+    },
+    "default_expected": {
+      "credential_issuer": "https://issuer.example/org/org-1",
+      "display": [{"name": "Example University", "locale": "en-US"}],
+      "credential_configurations_supported": {
+        "EmployeeCredential": {
+          "format": "jwt_vc_json",
+          "credential_definition": {"type": ["VerifiableCredential", "EmployeeCredential"]},
+          "display": [{"name": "Employee credential"}],
+          "credential_metadata": {"display": [{"name": "Employee credential"}]},
+          "credential_signing_alg_values_supported": ["ES256"]
+        },
+        "UnsupportedCredential": {"format": "unsupported"}
+      }
+    },
+    "waltid_expected": {
+      "credential_issuer": "https://issuer.example/org/org-1/waltid",
+      "display": [{"name": "Example University", "locale": "en-US"}],
+      "credentials_supported": [
+        {"id": "EmployeeCredential", "format": "jwt_vc_json", "types": ["VerifiableCredential", "EmployeeCredential"], "display": [{"name": "Employee credential"}], "cryptographic_suites_supported": ["ES256"]},
+        {"id": "EmployeeCredential#sd-jwt", "format": "jwt_vc_json", "types": ["VerifiableCredential", "EmployeeCredential"], "display": [{"name": "Employee credential"}], "cryptographic_suites_supported": ["ES256"]}
+      ],
+      "credential_configurations_supported": {
+        "EmployeeCredential": {"id": "EmployeeCredential", "format": "jwt_vc_json", "types": ["VerifiableCredential", "EmployeeCredential"], "display": [{"name": "Employee credential"}], "cryptographic_suites_supported": ["ES256"]},
+        "EmployeeCredential#sd-jwt": {"id": "EmployeeCredential#sd-jwt", "format": "jwt_vc_json", "types": ["VerifiableCredential", "EmployeeCredential"], "display": [{"name": "Employee credential"}], "cryptographic_suites_supported": ["ES256"]}
+      }
+    }
+  }
+}

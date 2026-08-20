@@ -56,3 +56,43 @@ def test_guard_rejects_unrecorded_unsigned_token_decoder(tmp_path: Path) -> None
         "text guard unsigned-token changed: expected {}, found "
         "{'services/auth/adapter.py': 1}"
     ]
+
+
+def test_native_service_guard_rejects_python_reintroduction(tmp_path: Path) -> None:
+    manifest = json.loads(
+        (REPO_ROOT / "docs" / "rust-migration-ownership.json").read_text(encoding="utf-8")
+    )
+    manifest["guardrails"]["approved_imports"] = []
+    manifest["guardrails"]["text_rules"] = []
+    next(
+        capability
+        for capability in manifest["capabilities"]
+        if capability["id"] == "gateway-service"
+    )["status"] = "native-active"
+    manifest_path = tmp_path / "ownership.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    source = tmp_path / "services" / "gateway" / "fallback.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("def fallback(): return True\n", encoding="utf-8")
+
+    findings = scan_repository(tmp_path, manifest_path)
+
+    assert findings == [
+        "native service contains forbidden non-Rust source (gateway-service): "
+        "services/gateway/fallback.py"
+    ]
+
+
+def test_native_service_guard_allows_sources_only_during_cutover(tmp_path: Path) -> None:
+    manifest = json.loads(
+        (REPO_ROOT / "docs" / "rust-migration-ownership.json").read_text(encoding="utf-8")
+    )
+    manifest["guardrails"]["approved_imports"] = []
+    manifest["guardrails"]["text_rules"] = []
+    manifest_path = tmp_path / "ownership.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    source = tmp_path / "services" / "gateway" / "reference.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("REFERENCE_ONLY = True\n", encoding="utf-8")
+
+    assert scan_repository(tmp_path, manifest_path) == []

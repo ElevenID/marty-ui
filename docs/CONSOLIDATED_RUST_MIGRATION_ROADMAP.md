@@ -65,6 +65,293 @@ migrations, generated protobufs and caches.
 | 11 | Deployment profile | 1,558 | CRUD, validation, versioning, authorization and storage |
 | 12 | Compliance profile | 857 | CRUD, policy metadata, authorization and storage |
 
+### Gateway port status
+
+The gateway's 434 method/path declarations and eight-middleware execution
+order are frozen in `contracts/gateway-routes.json`. The Rust gateway now
+builds one MMF route table, classifies public and gateway-owned boundaries,
+uses the canonical MMF reverse proxy, and has provider adapters for static
+service discovery and bounded Reqwest transport. Gateway-specific tenant
+authorization is separated from the reusable Cedar engine: route permissions,
+resource-owner lookups, authorization skips, and published API-key scope
+compatibility execute `contracts/gateway-authorization-behavior.json`, while
+schema validation and policy evaluation remain solely in `mmf-security`.
+
+Generic protocol-version, content-type, ETag, and idempotency behavior now
+lives once in `mmf-platform`; rate limiting remains in `mmf-security`. Marty
+policy values, auth-provider ports, exact rate-key behavior, and normalized MIP
+errors are covered by `contracts/gateway-middleware-behavior.json`. A bounded,
+timeout-aware gRPC adapter now validates sessions, API keys, and exact tenant
+memberships without exposing backend details; malformed successful responses
+fail closed. The Axum library runtime now composes the frozen MIP, distributed
+rate-limit, authentication, content-type, ETag, tenant authorization,
+distributed idempotency, and credentialed-CORS stages in their exact legacy
+execution order. Organization resolution preserves path, resource-owner,
+query, JSON body, and authenticated-state precedence; membership/API-key
+decisions inject only trusted downstream identity. The language-neutral
+`contracts/gateway-runtime-authorization.json` and black-box Axum tests cover
+that boundary, including provider failures and observable middleware order.
+
+The Rust binary is now executable. Fail-closed environment and `_FILE` secret
+configuration, production Redis enforcement, static discovery, bounded HTTP
+resource-owner lookup, authenticated gRPC identity/membership channels,
+optional gRPC CA validation, graceful shutdown, readiness checks and release
+identity are composed at startup. The real binary starts and serves health in
+an executable smoke test. `/ready` and `/health/ready`, which the original AST
+extractor missed because FastAPI registered them dynamically, are now explicit
+members of the language-neutral route contract. The shared service image is
+prepared to dispatch `gateway` to `marty-gateway`; the image cannot be built or
+published until the temporary MMF path dependencies are replaced by the
+landed MMF revision.
+
+The complete 687-test Python gateway suite and the Rust gateway's 77 unit and
+black-box tests plus three executable health/fail-closed tests are green. The post-executable
+adapter audit is now closed: service-credential injection, route-bound tenant
+projection, request DTO canonicalization, response privacy projection,
+dependency preflight, organization composition, Hosted Pilot purge
+orchestration and scheduling, and the tenant-filtered gRPC-to-SSE bridge all
+execute in Rust under shared behavioral contracts. The Python package remains
+only as the parity oracle until the final Redis, executable/container,
+immutable-dependency and anti-reintroduction cutover gates pass; it is never a
+runtime fallback for an enabled Rust path. No deployment has occurred, and
+beta will not be updated until all wave-three slices land.
+
+The proxy trust-boundary slice now has executable parity for issuance service
+credentials and public Canvas exceptions, trusted identity forwarding,
+resource-owner lookup credentials, special service ownership, applicant
+evidence rewrites, retired state-addressed Canvas HTTP 410 responses, and
+organization query projection. `contracts/gateway-proxy-trust-boundary.json`
+runs against Python and Rust. The shared MMF proxy now exposes a distinct
+trusted-query override channel at local MMF commit `c3a378e`; unlike ordinary
+query defaults, these post-authorization values replace forged client tenant
+selectors. Rust black-box tests verify the replacement at the upstream request
+boundary. Body-scoped request canonicalization is complete in the DTO slice.
+
+The first privacy projection and request-canonicalization kernels are also
+active in Rust. Python and Rust
+execute `contracts/gateway-issuance-response-projection.json` for issuance
+initiation, transaction lists, transaction records, issued-credential records,
+lifecycle mutations and renewal offers. Lifecycle revoke, suspend and reinstate
+requests are canonicalized in Rust and reject undeclared custody or provider
+state. The Rust gateway removes redemption, custody and delivery-routing
+state, restores public defaults, validates status enums, rewrites management
+reads to the canonical transaction paths, and fails malformed successful
+upstream payloads with HTTP 502. Issuance creation now executes in Rust under
+`contracts/gateway-issuance-create-behavior.json`: strict public request
+validation rejects custody selectors and private wallet keys, template
+ownership and issuer-DID consistency are enforced, signing identity resolution
+fails closed, optional public wallet-client registration is preserved, and
+only the canonical DID plus public issuance fields reach the issuance service.
+Organization create/update canonicalization and public response validation now
+execute in Rust under `contracts/gateway-organization-behavior.json`. The
+adapter preserves create defaults and partial-update semantics, strips the
+body tenant selector in favor of the authorized path scope, rejects legacy
+no-op/private request fields, validates nested public membership projections,
+omits null public optionals exactly as Python does, and returns a normalized
+HTTP 502 when the organization service adds any undeclared/private field.
+Credential-template claim translation and public privacy projection now run in
+Rust under `contracts/gateway-credential-template-behavior.json`. Public claim
+display, derived-claim and mdoc namespace fields are translated to the one
+canonical service representation; responses reverse that mapping while
+removing derivability hints, validation constraints, custody selectors and
+unknown internal metadata. Draft updates and creation execute through this
+kernel. Creation now preserves the Python model defaults and format-specific
+identity validation, verifies optional trust-profile existence, verifies
+compliance-profile existence and tenant ownership, and resolves the issuer DID
+through the canonical signing service before forwarding the canonical internal
+request. Rust rejects cross-tenant or malformed dependencies and private JWK
+material fail closed. One language-neutral fixture now exercises the create
+request, claim translation, and privacy-safe response in both implementations.
+
+Issuer-entity and trust-profile issuer-relationship request and response
+contracts now execute in Rust under
+`contracts/gateway-trust-behavior.json`. The Rust adapter preserves create
+defaults, partial-update semantics, case-insensitive accreditation uniqueness,
+relationship policy defaults and exact protocol UUID shapes. It recursively
+rejects custody selectors and private JWK parameters from public metadata and
+strictly projects successful single and list responses, omitting only declared
+null optionals and failing closed on service drift. The same Rust kernel now
+owns trust-profile create/update defaults, nested validation rules, revocation
+and time policies, credential-free standard-port HTTPS registry-source checks,
+and exact profile and registry-sync response projections. The Axum path and
+shared Python/Rust fixture exercise these policies end to end.
+
+OID4VP verification-flow start now executes as a composed Rust operation under
+`contracts/gateway-verification-flow-behavior.json`. Rust validates and
+canonicalizes response type, transport, request-URI method, HAIP constraints,
+expiry, verifier DID and tenant scope; resolves presentation-policy and optional
+trust-profile ownership through the resource-owner provider; and forwards only
+the canonical request. The response is reduced to the exact public verification
+request resource, so flow-definition and signing selectors cannot escape.
+
+Presentation-policy create and update now execute as composed Rust operations
+under `contracts/gateway-presentation-policy-behavior.json`. The Rust kernel
+validates every nested requirement, requested claim, predicate, alternative,
+holder-binding proof, issuer/freshness constraint and ranking policy; accepts
+proof-only policies without weakening the obligation rule; and rejects private
+or undeclared selectors. Every referenced credential template is loaded in the
+authenticated tenant, and its canonical payload format replaces caller input
+before forwarding. Successful create/update/get/list/activate responses are
+allowlisted, validated and normalized, with disabled holder binding reduced to
+the exact public `{required:false}` shape.
+
+Deployment-profile and lane adapters now execute in Rust under
+`contracts/gateway-deployment-behavior.json`. Profile creation preserves the
+public defaults and biometric compatibility alias, requires a trust profile and
+at least one effective presentation policy, verifies policy/template ownership,
+and forwards only canonical fields. Profile and lane responses restore public
+defaults, remove API keys/device secrets/internal runtime state, and fail closed
+on malformed service output. The shared fixture runs against both language
+implementations and the Axum test exercises preflight and projection end to end.
+
+Flow-definition and flow-instance request and response kernels now execute in
+Rust under `contracts/gateway-flow-behavior.json`. Definition writes preserve
+all built-in flow types, approval modes, hooks, triggers and custom extension
+steps/transitions; preflight every credential, application, presentation,
+delivery and trust dependency; and forward canonical defaults. Instance starts
+recursively reject tokens, KMS selectors, private keys and signing state from
+initial context. Definition, instance and verification-result reads strip
+internal execution fields and fail closed if private service state appears in
+context, step results, metadata or history. Verification results now deeply
+validate and project every credential and claim result, preserve all public
+trust/freshness/signature/revocation fields and defaults, and strip nested
+provider state under the same language-neutral fixture.
+
+Organization cross-service composition now executes in Rust under
+`contracts/gateway-organization-composition-behavior.json`. The gateway derives
+runtime issuance/verification readiness from live credential-template, policy,
+deployment and flow artifacts; counts applicant lifecycle states; renders
+configured integration quick-start metadata; and composes organization
+lifecycle data with issuance retention summaries. Manual Hosted Pilot purge is
+a bounded transaction that validates retention enablement, forwards the exact
+retention window, privacy-projects the purge result and best-effort persists the
+last-purge timestamp only after successful deletion. The Rust executable also
+runs the paginated due-only automatic sweep with the legacy enabled/interval/
+batch configuration and cancels it during shutdown. Shared Python/Rust vectors,
+Axum route tests and a complete scheduled-sweep transaction test pass.
+
+Tenant-filtered event delivery now executes in Rust under
+`contracts/gateway-sse-behavior.json`. The gateway subscribes to the canonical
+event-stream gRPC service, binds organization and optional user filters to the
+authenticated session, rejects forged cross-tenant selectors and unsafe event
+types, drops cross-tenant backend events, and emits the exact connected, event
+and public failure SSE frames. The response uses bounded buffering and cancels
+and drops the live backend stream when the HTTP client disconnects. Streaming
+responses bypass ETag body buffering so an unbounded SSE body cannot deadlock
+the middleware chain. Shared Python/Rust vectors, backend-failure tests and a
+live disconnect/drop test pass.
+
+The frozen contract contains 64 explicitly gateway-owned declarations: 18
+well-known discovery routes, 14 internal signing-key compatibility routes,
+9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
+VC-API routes, 4 health/readiness routes, 5 organization composition routes,
+4 retired Canvas state routes and the event-stream bridge. Rust now owns VC-API
+JWT/JOSE-envelope/Data-Integrity representation adaptation, inline
+OID4VCI offer parsing, issuer extraction, evaluation request construction, and
+verification-result mapping. Both Python and Rust execute
+`contracts/vc-api-adapter-behavior.json`; the complete existing Python VC-API
+suite remains green. All three VC-API handlers are executable through the Axum
+runtime. Verification delegates cryptographic decisions to the canonical
+presentation-policy service. Issuance delegates transaction creation, token
+redemption, nonce issuance, and credential production to the canonical
+issuance service; its holder proof comes directly from the pinned
+`marty-oid4vci` crate, and the adapter fails closed unless exactly one native
+`ldp_vc` Data Integrity credential is returned for the requested issuer DID.
+The Python VC-API module remains until the disabled Rust gateway binary passes
+its complete executable/packaging cutover gate, at which point this now-ported
+module is deleted in the same change.
+
+Rust also owns the exact Marty and Canvas credential badge metadata, criteria,
+well-known VCT aliases, and SVG assets. Shared fixtures compare complete JSON
+bodies and byte-level asset digests in Python and Rust. Gateway-local health,
+OpenID, MIP and release documents now execute in Axum. Issuance-backed root,
+organization-scoped, insertion-style, appended-style, walt.id,
+credential-manager, Apple Wallet, JWKS, OAuth and generic credential-type
+discovery aliases are planned and normalized in Rust while the issuance
+service remains the canonical metadata source.
+
+Both public `did:web` resolution routes now execute in Axum and delegate slug
+lookup and DID document persistence to the existing Rust signing-key service.
+The gateway adapter preserves public-domain port encoding, exact scoped-record
+integrity, safe legacy-document retargeting, empty-document compatibility,
+`application/did+json`, five-minute caching and fail-closed registry errors.
+`contracts/gateway-did-web-behavior.json` runs against both languages.
+
+The 14 service-to-service signing-key compatibility operations are frozen in
+`contracts/gateway-internal-signing-behavior.json`. Their dedicated API key is
+checked independently in constant time and is replaced with the configured
+gateway-to-service credential before proxying. List, get and delete
+issuer-profile operations already execute against the canonical Rust profile
+store; delete retains the legacy response envelope. Flow-key wrapping and
+unwrapping now execute in the Rust signing service through one bounded OpenBao
+Transit provider. The encrypted envelope is bound to the organization, flow,
+schema and OID4VP response-decryption purpose; malformed key material,
+provider failures and binding mismatches fail closed. The gateway replaces any
+client-supplied organization field with its authenticated service scope before
+forwarding. Issuer-context selection also executes in the Rust signing
+service: it resolves by DID or the explicit `org_managed` default mode, requires
+exactly one active profile, validates the profile/service/registry binding,
+preserves profile-level X.509 material and rejects the removed private profile
+selector. Organization-scoped issuer-DID resolution and both profile identity
+projections now also execute in Rust. They select exactly one compatible active
+profile, bind it to the registered service and DID assertion method, strip
+private JWK parameters, preserve public certificate material without exposing
+provider credentials, reject cross-tenant or ambiguous records, and retain the
+legacy profile/public response shapes. Python and Rust execute the same
+`contracts/gateway-issuer-identity-behavior.json` fixture, while Axum black-box
+tests cover all three gateway adapters. All 14 operations now execute in Rust:
+direct-service and DID-mediated signing, profile creation/update, and
+certificate attachment joined the previously completed read, delete,
+envelope, context and identity operations. Signing delegates to the canonical
+KMS provider, profile writes reuse the canonical profile/document kernels,
+managed OpenBao keys retain create-and-retry behavior, and certificate chains
+are persisted and re-resolved without exposing custody configuration.
+
+#### Gateway completion slices
+
+The remaining gateway work proceeds in descending removable Python size and
+dependency order. Each slice first records behavioral HTTP/provider fixtures,
+runs them against Python and Rust, and deletes the superseded Python behavior
+as soon as the full gate passes.
+
+| Order | Slice | Required parity before deletion |
+|---|---|---|
+| 1 | Proxy trust-boundary policies | Complete: issuance/internal service credentials, trusted identity headers, special ownership/path rewrites, trusted path/query organization projection, request/response bounds, retries and public protocol exceptions pass |
+| 2 | Public DTO and privacy adapters | Complete: the route-by-route audit covers organization, issuance creation/lifecycle, credential templates, trust/issuer/registry sync, presentation policies, OID4VP flow start, flow definitions/instances/results, deployment profiles/lanes, VC-API and all corresponding privacy projections |
+| 3 | Cross-service composition | Complete: organization dashboard counts, runtime readiness, integration metadata, lifecycle/retention aggregation, dependency preflight, manual Hosted Pilot purge and the paginated scheduled sweep execute in Rust |
+| 4 | Streaming transport | Complete: tenant-filtered event-stream gRPC subscription is exposed as bounded SSE with exact frames, disconnect cancellation, backend-failure handling, ETag bypass and cross-tenant rejection |
+| 5 | Cutover and deletion | Active: full Rust and legacy behavioral suites, Redis-backed integration tests, executable/container health, immutable MMF pin, image build, Python gateway deletion and anti-reintroduction checks |
+
+The gateway branch currently uses temporary local paths for the unpublished
+MMF platform/security commits through local commit `c3a378e`. It must be
+repinned to the landed MMF commit
+before publication; no branch with local worktree dependencies may merge.
+
+Distributed rate-limit and idempotency state now uses the canonical MMF Redis
+adapters. Both adapters are atomic, expose health checks, preserve all four MMF
+rate-limit strategies, and use owner-token idempotency leases. Gateway provider
+composition permits canonical process-local adapters only in explicit
+development mode; production startup and any configured Redis failure refuse
+local fallback. The composed release executable is built locally and its
+process-level tests prove both missing and unavailable Redis terminate startup.
+CI now provisions a pinned disposable Redis instance and explicitly exercises
+all four strategies plus idempotency lease ownership, in-flight repetition,
+payload conflict, completion and exact replay through the production provider
+composition.
+
+The CI-only native service image now has a dedicated non-Python gateway target
+and container health smoke test. The ownership manifest records the gateway as
+`cutover-in-progress`; when the final dependency and public-contract gates pass,
+the same deletion change flips it to `native-active`, after which the ownership
+guard rejects every Python source reintroduced below `services/gateway`. The
+remaining cutover blockers are publication of MMF commit `c3a378e` at an
+immutable remote revision, execution of the new Redis and container gates in
+CI, and removal of the public-protocol checker's last imports from the Python
+gateway reference package. Docker cannot be executed in the current Windows
+sandbox, and GitHub publication is unavailable because the configured token is
+invalid and the configured local proxy cannot reach GitHub; neither condition
+permits a silent local substitute.
+
 ### Delivery and deletion rules
 
 1. Capture language-neutral HTTP, gRPC, event, storage, configuration,

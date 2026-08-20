@@ -5,6 +5,7 @@ WORKDIR /build/rust
 COPY rust /build/rust
 COPY proto /build/proto
 RUN cargo build --locked --release -p marty-event-stream --bin marty-event-stream
+RUN cargo build --locked --release -p marty-gateway --bin marty-gateway
 RUN cargo build --locked --release -p marty-revocation-profile --bin marty-revocation-profile
 RUN cargo build --locked --release -p marty-signing-keys --bin marty-signing-keys
 RUN cargo build --locked --release -p marty-notification --bin marty-notification
@@ -71,6 +72,7 @@ COPY packages/marty_proto /app/packages/marty_proto
 COPY services /app/services
 COPY scripts/load-secrets-env.sh /app/load-secrets-env.sh
 COPY --from=rust-service-builder /build/rust/target/release/marty-event-stream /usr/local/bin/marty-event-stream
+COPY --from=rust-service-builder /build/rust/target/release/marty-gateway /usr/local/bin/marty-gateway
 COPY --from=rust-service-builder /build/rust/target/release/marty-revocation-profile /usr/local/bin/marty-revocation-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-signing-keys /usr/local/bin/marty-signing-keys
 COPY --from=rust-service-builder /build/rust/target/release/marty-notification /usr/local/bin/marty-notification

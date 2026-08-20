@@ -1,6 +1,8 @@
+pub mod compat;
 pub mod config;
 pub mod documents;
 pub mod domain;
+pub mod flow_envelope;
 pub mod http;
 pub mod kms;
 pub mod profiles;

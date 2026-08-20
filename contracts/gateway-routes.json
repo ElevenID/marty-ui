@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 432,
+  "route_count": 434,
   "routes": [
     {
       "include_in_schema": true,
@@ -176,6 +176,12 @@
     {
       "include_in_schema": true,
       "method": "GET",
+      "path": "/health/ready",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
       "path": "/health/services",
       "status_code": 200
     },
@@ -315,6 +321,12 @@
       "include_in_schema": true,
       "method": "GET",
       "path": "/orgs/{org_slug}/did.json",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/ready",
       "status_code": 200
     },
     {

@@ -371,12 +371,3 @@ async def test_production_requires_shared_challenge_store(
     with pytest.raises(RuntimeError, match="REDIS_URL is required"):
         await device.init_challenge_store()
     assert device._challenge_store is None
-
-
-def test_gateway_classifies_device_challenge_as_authenticated() -> None:
-    from services.gateway.registry import get_route_config
-
-    assert get_route_config("/v1/devices/challenge") == {
-        "service": "device-registration",
-        "requires_auth": True,
-    }
