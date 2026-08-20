@@ -47,6 +47,7 @@ use crate::{
     },
     contract::{requires_issuance_service_auth, retired_canvas_state_route, route_ownership},
     credential_metadata, credential_template_contract, deployment_contract, did_web,
+    didcomm_contract,
     discovery::{self, ReleaseIdentity},
     flow_contract,
     issuance_create::IssuanceCreate,
@@ -805,6 +806,10 @@ async fn proxy_handler(
         .get::<TrustedIdentityContext>()
         .cloned()
         .unwrap_or_default();
+    let authenticated_organization_id = request
+        .extensions()
+        .get::<GatewayIdentity>()
+        .and_then(|identity| identity.session_organization_id.clone());
     let peer_ip = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
@@ -885,6 +890,28 @@ async fn proxy_handler(
                 )
             }
         };
+    }
+    if canonical_body.is_none() {
+        canonical_body = match didcomm_contract::canonicalize_request(
+            parts.method.as_str(),
+            &public_path,
+            &body,
+        ) {
+            Ok(body) => body,
+            Err(_) => {
+                return detail_response(
+                    422,
+                    "DIDComm delivery request is outside the public contract",
+                )
+            }
+        };
+        if let Some(canonical) = canonical_body.as_deref() {
+            if didcomm_contract::request_organization(canonical).as_deref()
+                != authenticated_organization_id.as_deref()
+            {
+                return detail_response(403, "Request is not authorized for this organization");
+            }
+        }
     }
     if canonical_body.is_none() && parts.method == "POST" && public_path == "/v1/flows/instances" {
         canonical_body = match flow_contract::canonicalize_instance(&body) {
@@ -1034,6 +1061,26 @@ async fn proxy_handler(
                         return detail_response(
                             502,
                             "Deployment service returned a response outside the public contract",
+                        );
+                    };
+                    response.body = serde_json::to_vec(&projected).ok();
+                    response.headers.remove("content-length");
+                    response.headers.remove("content-encoding");
+                    response.headers.remove("transfer-encoding");
+                    response
+                        .headers
+                        .insert("content-type".into(), "application/json".into());
+                }
+                if method == HttpMethod::Post && public_path == "/v1/issuance/didcomm/deliver" {
+                    let projected = response
+                        .body
+                        .as_deref()
+                        .and_then(|body| serde_json::from_slice(body).ok())
+                        .and_then(|value| didcomm_contract::project_response(value).ok());
+                    let Some(projected) = projected else {
+                        return detail_response(
+                            502,
+                            "DIDComm delivery service returned an invalid public response",
                         );
                     };
                     response.body = serde_json::to_vec(&projected).ok();
@@ -4202,6 +4249,15 @@ mod tests {
                 assert_eq!(instance.service_name, "issuance");
                 assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
             }
+            if request.path == "/v1/issuance/didcomm/deliver" {
+                assert_eq!(instance.service_name, "issuance");
+                assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+                let body: Value =
+                    serde_json::from_slice(request.body.as_deref().expect("DIDComm delivery body"))
+                        .expect("DIDComm delivery JSON");
+                assert_eq!(body["organization_id"], "org-1");
+                assert!(body.get("universal_resolver_url").is_none());
+            }
             if request.path == "/v1/integrations/canvas/lti/jwks" {
                 assert_eq!(instance.service_name, "issuance");
                 assert_eq!(request.header("x-api-key"), None);
@@ -4827,6 +4883,14 @@ mod tests {
                     .expect("offer")
                 }
                 "/v1/issuance/token" => br#"{"access_token":"access-token"}"#.to_vec(),
+                "/v1/issuance/didcomm/deliver" => serde_json::to_vec(&json!({
+                    "transaction_id":"tx-123", "credential_id":"credential-123",
+                    "holder_did":"did:peer:2.EzExample",
+                    "service_endpoint":"https://holder.example/didcomm",
+                    "didcomm_message_id":"message-123", "status":"delivered",
+                    "error":null, "provider_delivery_receipt":"must-not-leak"
+                }))
+                .expect("DIDComm delivery response"),
                 "/v1/issuance/transactions" => serde_json::to_vec(&json!([{
                     "id": "iss-1",
                     "organization_id": "org-1",
@@ -5162,6 +5226,66 @@ mod tests {
         let create: Value = serde_json::from_slice(&create_body).expect("json");
         assert_eq!(create["id"], "iss-1");
         assert!(create.get("pre_auth_code").is_none());
+    }
+
+    #[tokio::test]
+    async fn didcomm_delivery_is_tenant_bound_canonical_and_privacy_projected() {
+        let response = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/issuance/didcomm/deliver")
+                    .header("cookie", "sessionId=valid")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&json!({
+                            "organization_id":"org-1", "transaction_id":"tx-123",
+                            "holder_did":"did:peer:2.EzExample"
+                        }))
+                        .expect("DIDComm request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+            .await
+            .expect("body");
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let body: Value = serde_json::from_slice(&body).expect("DIDComm response");
+        assert_eq!(body["status"], "delivered");
+        assert!(body.get("provider_delivery_receipt").is_none());
+
+        for (organization_id, extra, expected) in [
+            ("org-other", None, StatusCode::FORBIDDEN),
+            (
+                "org-1",
+                Some(("universal_resolver_url", "https://attacker.example")),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+        ] {
+            let mut request = json!({
+                "organization_id":organization_id, "transaction_id":"tx-123",
+                "holder_did":"did:peer:2.EzExample"
+            });
+            if let Some((key, value)) = extra {
+                request[key] = Value::String(value.into());
+            }
+            let response = runtime_router()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/issuance/didcomm/deliver")
+                        .header("cookie", "sessionId=valid")
+                        .header("content-type", "application/json")
+                        .body(Body::from(serde_json::to_vec(&request).unwrap()))
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), expected);
+        }
     }
 
     #[tokio::test]

@@ -762,7 +762,7 @@ jobs:
       - name: Install contract-check dependencies
         run: uv pip install --system -r requirements-services.txt jsonschema
       - name: Enforce public response contract
-        run: python scripts/check_public_protocol_contract.py --protocol-root marty-protocol
+        run: python scripts/check_gateway_public_protocol_contract.py --protocol-root marty-protocol
 
   test-release-contracts:
     name: Release Contract Tests

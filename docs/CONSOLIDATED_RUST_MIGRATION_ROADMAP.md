@@ -104,7 +104,7 @@ prepared to dispatch `gateway` to `marty-gateway`; the image cannot be built or
 published until the temporary MMF path dependencies are replaced by the
 landed MMF revision.
 
-The complete 687-test Python gateway suite and the Rust gateway's 77 unit and
+The complete 688-test Python gateway suite and the Rust gateway's 79 unit and
 black-box tests plus three executable health/fail-closed tests are green. The post-executable
 adapter audit is now closed: service-credential injection, route-bound tenant
 projection, request DTO canonicalization, response privacy projection,
@@ -142,6 +142,13 @@ validation rejects custody selectors and private wallet keys, template
 ownership and issuer-DID consistency are enforced, signing identity resolution
 fails closed, optional public wallet-client registration is preserved, and
 only the canonical DID plus public issuance fields reach the issuance service.
+Authenticated DIDComm delivery now also has explicit Rust request and response
+ownership under `contracts/gateway-didcomm-delivery-behavior.json`. Rust rejects
+unknown resolver/provider selectors, binds the request organization to the
+authenticated session rather than a query/body projection, injects only the
+issuance service credential, and strips provider delivery receipts from exact
+public responses. The same fixture executes against the Python parity oracle
+and Rust, including malformed and cross-tenant failures.
 Organization create/update canonicalization and public response validation now
 execute in Rust under `contracts/gateway-organization-behavior.json`. The
 adapter preserves create defaults and partial-update semantics, strips the
@@ -345,9 +352,12 @@ and container health smoke test. The ownership manifest records the gateway as
 the same deletion change flips it to `native-active`, after which the ownership
 guard rejects every Python source reintroduced below `services/gateway`. The
 remaining cutover blockers are publication of MMF commit `c3a378e` at an
-immutable remote revision, execution of the new Redis and container gates in
-CI, and removal of the public-protocol checker's last imports from the Python
-gateway reference package. Docker cannot be executed in the current Windows
+immutable remote revision and execution of the new Redis and container gates
+in CI. The public-protocol gate no longer imports the Python gateway: it freezes
+all 40 exact DTO field/required sets, compares them with the pinned protocol,
+rejects recursively exposed private state, and requires every gateway behavior
+vector to execute in Rust. The superseded 1,306-line Python-runtime checker was
+deleted. Docker cannot be executed in the current Windows
 sandbox, and GitHub publication is unavailable because the configured token is
 invalid and the configured local proxy cannot reach GitHub; neither condition
 permits a silent local substitute.

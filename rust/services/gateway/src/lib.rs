@@ -7,6 +7,7 @@ pub mod credential_metadata;
 pub mod credential_template_contract;
 pub mod deployment_contract;
 pub mod did_web;
+pub mod didcomm_contract;
 pub mod discovery;
 pub mod flow_contract;
 pub mod issuance_create;

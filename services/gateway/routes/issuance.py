@@ -813,12 +813,13 @@ async def didcomm_deliver(body: DidcommDeliverRequest, request: Request) -> Resp
     """
     registry = get_registry()
     service_url = registry.get_service_url("issuance")
-    return await proxy_request(
+    response = await proxy_request(
         request,
         service_url,
         "/v1/issuance/didcomm/deliver",
         inject_headers=_ISSUANCE_HEADERS,
     )
+    return _sanitize_management_response(response, DidcommDeliveryResponse)
 
 
 # ── Issued Credentials ──────────────────────────────────────────────

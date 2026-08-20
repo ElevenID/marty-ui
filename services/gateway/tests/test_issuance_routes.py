@@ -1077,7 +1077,17 @@ async def test_didcomm_delivery_uses_authenticated_public_gateway_path(
             path=path,
             inject_headers=inject_headers,
         )
-        return JSONResponse({"status": "delivered"})
+        return JSONResponse(
+            {
+                "transaction_id": "tx-123",
+                "credential_id": "credential-123",
+                "holder_did": "did:peer:2.EzExample",
+                "service_endpoint": "https://holder.example/didcomm",
+                "didcomm_message_id": "message-123",
+                "status": "delivered",
+                "error": None,
+            }
+        )
 
     monkeypatch.setattr(issuance, "get_registry", lambda: _Registry())
     monkeypatch.setattr(issuance, "proxy_request", _proxy)
