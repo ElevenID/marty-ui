@@ -21,6 +21,8 @@ pub const HTTP_ROUTES: &[(&str, &str)] = &[
     ),
     ("POST", "/v1/flows/instances/{instance_id}/generate-qr"),
     ("POST", "/v1/flows/verify"),
+    ("GET", "/v1/flows/instances/{instance_id}/request"),
+    ("POST", "/v1/flows/instances/{instance_id}/request"),
     ("GET", "/oid4vp/did.json"),
     ("POST", "/v1/flows/instances/{instance_id}/submit"),
     ("POST", "/v1/flows/instances/{instance_id}/submit/dc-api"),

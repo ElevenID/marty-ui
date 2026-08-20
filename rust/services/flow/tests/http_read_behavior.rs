@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use axum::{body::Body, http::Request};
-use marty_flow::{flow_read_router, FlowHttpState, FlowProviderRegistry, PostgresFlowRepository};
+use marty_flow::{
+    flow_read_router, FlowHttpState, FlowHttpVerificationOptions, FlowProviderRegistry,
+    PostgresFlowRepository,
+};
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
@@ -63,6 +66,7 @@ fn router() -> axum::Router {
         repository: PostgresFlowRepository::new(pool),
         providers: Arc::new(FlowProviderRegistry::default()),
         public_base_url: "http://localhost:8000".into(),
+        verification: FlowHttpVerificationOptions::default(),
     })
 }
 

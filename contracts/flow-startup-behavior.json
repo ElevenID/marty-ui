@@ -39,6 +39,7 @@
   "verifier_profiles": {
     "client_id_schemes": ["redirect_uri", "decentralized_identifier", "x509_hash"],
     "did_methods": ["did:web", "did:jwk", "did:key"],
+    "issuer_did_sources": ["OID4VP_ISSUER_DID", "MARTY_ISSUER_DID", "public_origin_default"],
     "request_length_bounds": [1024, 1048576],
     "x509_certificate_sources": ["VERIFIER_X509_CERT_PEM", "VERIFIER_X509_CERT_FILE"],
     "dc_api_expected_origins": "configured_origins_or_public_origin",
@@ -64,6 +65,7 @@
     "missing_x509_certificate",
     "invalid_request_length_bound",
     "insecure_deployed_logo_uri",
-    "invalid_dc_api_expected_origin"
+    "invalid_dc_api_expected_origin",
+    "invalid_oid4vp_issuer_did"
   ]
 }

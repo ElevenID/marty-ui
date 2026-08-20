@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "routes": [
+    ["POST", "/v1/flows/verify", "verification:execute"],
+    ["POST", "/v1/flows/siop", "verification:execute"],
+    ["GET", "/v1/flows/instances/{instance_id}/request", "wallet_public"],
+    ["POST", "/v1/flows/instances/{instance_id}/request", "wallet_public"],
+    ["POST", "/v1/flows/instances/{instance_id}/submit", "wallet_public"],
+    ["POST", "/v1/flows/instances/{instance_id}/submit/dc-api", "browser_public"],
+    ["POST", "/v1/flows/siop/submit", "wallet_public"]
+  ],
+  "start_persistence": "insert_instance_once_after_all_side_effects",
+  "standalone_siop_start_response": ["instance_id", "request_uri", "siop_uri", "nonce", "expires_at"],
+  "retrieval_persistence": "status_and_updated_at_compare_and_set",
+  "retrieval_content_type": "application/oauth-authz-req+jwt",
+  "retrieval_cache_control": "no-store",
+  "direct_post_inputs": "exactly_one_plain_vp_token_or_encrypted_response",
+  "direct_post_success": "empty_object_or_haip_https_redirect",
+  "direct_post_denial": "invalid_presentation_without_decision_details",
+  "dc_api_protocol": "openid4vp-v1-signed",
+  "dc_api_origin": "exact_expected_origin",
+  "dc_api_audience": "origin_colon_exact_origin",
+  "terminal_persistence": "nonce_result_subject_and_callback_atomic",
+  "same_payload_race": "idempotent_for_dc_api_and_siop_rejected_for_direct_post",
+  "different_payload_race": "conflict",
+  "expired_persistence": "compare_and_set_then_gone",
+  "provider_failure": "no_state_or_nonce_consumption",
+  "python_fallback": "forbidden"
+}

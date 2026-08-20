@@ -88,7 +88,7 @@ pub async fn prepare_verification_request(
     }
     if instance
         .expires_at
-        .is_some_and(|expires_at| now > expires_at)
+        .is_some_and(|expires_at| now >= expires_at)
     {
         expire_request(&mut instance, now)?;
         return Ok(PreparedVerificationRequest::Expired(instance));

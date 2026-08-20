@@ -13,12 +13,12 @@ use serde_json::{json, Value};
 
 use crate::{
     advance_instance_record, apply_physical_advance_side_effect, create_definition_record,
-    definition_references, parse_request, prepare_instance_start, prepare_oid4vci_retry,
-    start_instance_record, update_definition_record, validate_definition_record,
-    AdvanceFlowRequest, CreateFlowDefinitionRequest, DefinitionStatus, FlowDefinitionMutationError,
-    FlowInstanceExecutionError, FlowInstanceSideEffectError, FlowProviderError,
-    FlowProviderRegistry, FlowRecordError, FlowType, PostgresFlowRepository, RepositoryError,
-    StartFlowRequest, UpdateFlowDefinitionRequest,
+    definition_references, flow_verification_routes, parse_request, prepare_instance_start,
+    prepare_oid4vci_retry, start_instance_record, update_definition_record,
+    validate_definition_record, AdvanceFlowRequest, CreateFlowDefinitionRequest, DefinitionStatus,
+    FlowDefinitionMutationError, FlowInstanceExecutionError, FlowInstanceSideEffectError,
+    FlowProviderError, FlowProviderRegistry, FlowRecordError, FlowType, PostgresFlowRepository,
+    RepositoryError, StartFlowRequest, UpdateFlowDefinitionRequest,
 };
 
 const MIP_VERSION: &str = "0.4.1";
@@ -30,6 +30,7 @@ pub struct FlowHttpState {
     pub repository: PostgresFlowRepository,
     pub providers: Arc<FlowProviderRegistry>,
     pub public_base_url: String,
+    pub verification: crate::FlowHttpVerificationOptions,
 }
 
 pub fn flow_read_router(state: FlowHttpState) -> Router {
@@ -83,6 +84,7 @@ pub fn flow_read_router(state: FlowHttpState) -> Router {
             "/v1/flows/instances/{instance_id}/generate-qr",
             post(generate_qr),
         )
+        .merge(flow_verification_routes())
         .with_state(state)
 }
 
@@ -93,14 +95,14 @@ struct FlowHttpErrorBody {
 }
 
 #[derive(Debug)]
-struct FlowHttpError {
+pub(crate) struct FlowHttpError {
     status: StatusCode,
     code: &'static str,
     detail: Value,
 }
 
 impl FlowHttpError {
-    fn new(status: StatusCode, code: &'static str, detail: impl Into<Value>) -> Self {
+    pub(crate) fn new(status: StatusCode, code: &'static str, detail: impl Into<Value>) -> Self {
         Self {
             status,
             code,
@@ -772,7 +774,7 @@ async fn generate_qr(
     Ok(Json(json!(artifact.projection()?)))
 }
 
-async fn required_instance(
+pub(crate) async fn required_instance(
     state: &FlowHttpState,
     instance_id: &str,
 ) -> Result<crate::FlowInstanceRecord, FlowHttpError> {
@@ -783,7 +785,7 @@ async fn required_instance(
         .ok_or_else(|| not_found("Flow Instance not found"))
 }
 
-async fn authorize(
+pub(crate) async fn authorize(
     state: &FlowHttpState,
     headers: &HeaderMap,
     organization_id: &str,
@@ -989,6 +991,7 @@ mod tests {
             repository: PostgresFlowRepository::new(pool),
             providers: Arc::new(FlowProviderRegistry::default()),
             public_base_url: "http://localhost:8000".into(),
+            verification: crate::FlowHttpVerificationOptions::default(),
         })
     }
 

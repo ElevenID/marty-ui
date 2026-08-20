@@ -65,7 +65,7 @@ fn contract() -> Contract {
 fn complete_transport_surface_is_frozen() {
     let contract = contract();
     assert_eq!(contract.schema_version, 1);
-    assert_eq!(contract.http_routes.len(), 26);
+    assert_eq!(contract.http_routes.len(), 28);
     assert_eq!(contract.grpc_methods.len(), 16);
     assert_eq!(
         contract.http_routes,

@@ -28,6 +28,7 @@ struct Contract {
 struct VerifierProfiles {
     client_id_schemes: Vec<String>,
     did_methods: Vec<String>,
+    issuer_did_sources: Vec<String>,
     request_length_bounds: Vec<u32>,
     x509_certificate_sources: Vec<String>,
     dc_api_expected_origins: String,
@@ -120,6 +121,7 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.redis_database_bounds, [0, 255]);
     assert_eq!(contract.verifier_profiles.client_id_schemes.len(), 3);
     assert_eq!(contract.verifier_profiles.did_methods.len(), 3);
+    assert_eq!(contract.verifier_profiles.issuer_did_sources.len(), 3);
     assert_eq!(
         contract.verifier_profiles.request_length_bounds,
         [1_024, 1_048_576]
@@ -134,7 +136,7 @@ fn language_neutral_startup_contract_is_frozen() {
         contract.verifier_profiles.dc_api_expected_origins,
         "configured_origins_or_public_origin"
     );
-    assert_eq!(contract.fail_closed_cases.len(), 19);
+    assert_eq!(contract.fail_closed_cases.len(), 20);
 }
 
 #[test]
@@ -144,6 +146,10 @@ fn deployed_configuration_is_complete_and_normalized() {
     assert_eq!(config.http_addr.to_string(), "0.0.0.0:8011");
     assert_eq!(config.grpc_addr.to_string(), "0.0.0.0:9011");
     assert_eq!(config.public_base_url, "https://issuer.example");
+    assert_eq!(
+        config.oid4vp_issuer_did,
+        "did:web:issuer.example:orgs:marty"
+    );
     assert!(!config.callback_destinations.is_empty());
     assert_eq!(
         config.oid4vp_client_id_scheme,
@@ -282,6 +288,7 @@ fn deployed_configuration_fails_closed() {
     for (name, invalid_value) in [
         ("OID4VP_CLIENT_ID_PREFIX", "unknown"),
         ("VERIFIER_DID_METHOD", "did:peer"),
+        ("OID4VP_ISSUER_DID", "https://not-a-did.example"),
         ("OID4VP_REQUEST_OBJECT_MAX_LENGTH", "1023"),
         ("OID4VP_URL_QUERY_MAX_LENGTH", "1048577"),
     ] {
@@ -331,6 +338,10 @@ fn deployed_configuration_fails_closed() {
 fn configured_verifier_profiles_are_preserved() {
     let mut values = baseline("beta");
     values.extend([
+        (
+            "MARTY_ISSUER_DID".into(),
+            "did:web:configured.example".into(),
+        ),
         ("OID4VP_CLIENT_ID_PREFIX".into(), "x509_hash".into()),
         ("VERIFIER_DID_METHOD".into(), "did:jwk".into()),
         ("VERIFIER_X509_CERT_PEM".into(), "certificate-bundle".into()),
@@ -360,6 +371,7 @@ fn configured_verifier_profiles_are_preserved() {
     );
     assert!(config.oid4vp_haip_enabled);
     assert!(config.oid4vp_strict_client_metadata);
+    assert_eq!(config.oid4vp_issuer_did, "did:web:configured.example");
     assert_eq!(config.oid4vp_request_object_maximum_length, 16_384);
     assert_eq!(config.oid4vp_url_query_maximum_length, 12_288);
     let request_options = config.request_object_options();

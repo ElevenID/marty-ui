@@ -252,7 +252,7 @@ live disconnect/drop test pass.
 
 The Flow migration inventory is frozen before implementation. The removable
 surface is 9,154 lines of production Python excluding tests, migrations and the
-migration runner. It contains 26 explicit HTTP operations, 16 gRPC operations,
+migration runner. It contains 28 explicit HTTP operations, 16 gRPC operations,
 12 built-in flow types, custom extension graphs, PostgreSQL persistence,
 atomic nonce consumption and terminal-result finalization, application-event
 idempotency, leased callback delivery, expiry, and protocol-provider calls.
@@ -277,10 +277,13 @@ allowing Flow to require at least one valid deployed destination without
 copying MMF's private registration representation or matching rules.
 
 The first `marty-flow` crate slice now executes the checked-in
-`contracts/flow-service-behavior.json`. Twelve Rust tests freeze all 26 HTTP and
+`contracts/flow-service-behavior.json`. Twelve Rust tests freeze all 28 HTTP and
 16 gRPC operations, every built-in type/reference/sequence, public status and
 private-context behavior, callback defaults, and atomicity obligations. The
-domain delegates transitions and graph validation directly to
+corrected HTTP inventory counts the separately released GET and POST Request
+Object retrieval operations that the first frozen catalog omitted; retaining
+both methods preserves the live wallet and Digital Credentials API surface.
+The domain delegates transitions and graph validation directly to
 `marty-verification`; callback retries use `mmf-workflow`, delivery composition
 uses `mmf-push`, and fenced storage uses `mmf-messaging`. Its repository tests
 prove concurrent finalization commits one nonce/result/callback exactly once,
@@ -300,14 +303,16 @@ and retention-scrubbing vectors against PostgreSQL. Compilation and all
 non-container tests pass locally; the real PostgreSQL execution remains a CI
 landing gate because the local Docker daemon is unavailable.
 
-The next Flow gates are HTTP compare-and-set adapters for native verification
-retrieval/submission, the remaining protocol-specific HTTP/gRPC operations,
-executable listener and container startup/readiness
-parity. Provider, DTO, definition mutation, generic instance execution,
-start-side-effect and OID4VP submission-kernel parity are complete. Only after
-the remaining executable gates pass will the Python Flow runtime and its
-service dependencies be deleted. No deployment occurs during these slices;
-beta receives one aggregate update only after all wave-three work lands.
+The native verification HTTP compare-and-set adapters are complete. The
+remaining Flow gates are the other protocol-specific HTTP/gRPC operations,
+executable listeners, container startup/readiness and packaging parity.
+Provider, DTO, definition mutation, generic instance execution,
+start-side-effect, Request Object retrieval, OID4VP and SIOPv2 submission, and
+terminal persistence parity are complete. After those remaining executable
+gates pass, the Python Flow runtime and its service dependencies are deleted
+immediately; this pre-v1 migration has no compatibility waiting period. No
+deployment occurs during these slices; beta receives one aggregate update only
+after all wave-three work lands.
 
 The public request boundary is now also represented in Rust. Strict DTOs cover
 definition create/PATCH (including unset-versus-explicit-null semantics),
@@ -367,8 +372,8 @@ consumes the canonical `mmf-platform` channel factories for all organization,
 credential-template, presentation-policy and issuance clients. Both eager
 startup/readiness and lazy development composition inherit the shared bounded
 plaintext, TLS and mutual-TLS policy; no Flow-local endpoint or certificate
-constructor remains. The focused five-test provider suite, all 26 current Rust
-tests in their applicable groups, and strict Clippy pass. HTTP/gRPC executable
+constructor remains. The focused provider suite, all applicable Rust test
+groups, and strict Clippy pass. HTTP/gRPC executable
 composition is now the next Flow runtime gate. Its first prerequisite is now
 frozen in `contracts/flow-startup-behavior.json` and implemented by the Rust
 configuration boundary. Beta and production must explicitly configure
@@ -556,9 +561,9 @@ HTTP, persistence and PostgreSQL contract suites, plus strict Clippy pass.
 Manual OID4VCI QR/offer regeneration is also native: each retry has a
 flow-and-attempt-bound idempotency key and one transaction expires prior active
 artifacts, inserts the replacement and updates instance offer context. The
-remaining Flow gate is the protocol-specific verification route set and actual
-HTTP/gRPC listener composition; no partial executable is activated or
-deployed.
+verification route set is now native. The remaining Flow gate is the other
+protocol route set and actual HTTP/gRPC listener composition; no partial
+executable is activated or deployed.
 
 OID4VP presentation-query construction is now composed in Rust before route
 signing and transport work. The typed credential-template provider preserves
@@ -640,9 +645,9 @@ envelope and advertises ECDH-ES with A128GCM/A256GCM receiver support. The
 public origin is the default exact DC API origin; configured comma-separated
 origins are normalized, deduplicated and rejected if they are not deployed
 HTTPS origins. Three retrieval vectors, six Request Object vectors, startup
-regressions and strict Clippy pass. The HTTP adapter must persist either the
-ready context or expiry transition with status-and-`updated_at` CAS and return
-the released no-store response headers before this endpoint is advertised.
+regressions and strict Clippy pass. The HTTP adapter now persists either the
+ready context or expiry transition with status-and-`updated_at` CAS and returns
+the released `Cache-Control: no-store` and `Pragma: no-cache` response headers.
 
 OID4VP submission evaluation and terminal composition are now native under
 `contracts/flow-verification-submission-behavior.json`. The kernel binds exact
@@ -680,9 +685,23 @@ history transitions, terminal result and nonce consumption commit through the
 full-record PostgreSQL compare-and-set, with no callback for this protocol.
 Same-token replay returns the stable terminal response and a different token
 conflicts. Four focused behavior groups, the OID4VP regressions, PostgreSQL
-contract binary and strict all-target Clippy pass. Remaining route work is the
-HTTP adapters that commit retrieval, expiry and both terminal protocols through
-their corresponding compare-and-set transactions.
+contract binary and strict all-target Clippy pass. The HTTP adapters now commit
+retrieval, expiry and both terminal protocols through their corresponding
+compare-and-set transactions. `/v1/flows/verify` and standalone
+`/v1/flows/siop` starts require authenticated `verification:execute`
+membership; Request Object GET/POST, direct-post, Digital Credentials API and
+SIOPv2 submission routes expose the released envelopes without a Python
+fallback. Direct post rejects terminal replay, while Digital Credentials API
+and SIOPv2 repeat submissions are idempotent only for the exact canonical
+digest. Different terminal payloads conflict. Digital Credentials API binds
+the exact HTTPS origin into `origin:{origin}` audience and native encrypted
+response processing. Retryable provider failures persist and consume nothing;
+expiry and terminal changes use full-record status-and-`updated_at` atomic
+compare-and-set. Startup accepts an explicit `OID4VP_ISSUER_DID`, the retained
+`MARTY_ISSUER_DID` alias, or a public-origin-derived `did:web` identity and
+fails closed on malformed identity. The route behavior is frozen in
+`contracts/flow-verification-http-behavior.json` and exercised through the
+live Axum router.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

@@ -33,6 +33,7 @@ pub struct FlowServiceConfig {
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
     pub public_base_url: String,
+    pub oid4vp_issuer_did: String,
     pub callback_destinations: WebhookDestinationRegistry,
     pub oid4vp_client_id_scheme: Oid4vpClientIdScheme,
     pub verifier_did_method: VerifierDidMethod,
@@ -105,6 +106,7 @@ impl fmt::Debug for FlowServiceConfig {
             .field("http_addr", &self.http_addr)
             .field("grpc_addr", &self.grpc_addr)
             .field("public_base_url", &self.public_base_url)
+            .field("oid4vp_issuer_did", &self.oid4vp_issuer_did)
             .field(
                 "callback_destinations",
                 &if self.callback_destinations.is_empty() {
@@ -229,6 +231,13 @@ impl FlowServiceConfig {
         )?;
         if environment.is_deployed() && !public_base_url.starts_with("https://") {
             return Err(invalid("PUBLIC_BASE_URL"));
+        }
+        let oid4vp_issuer_did = value(&values, "OID4VP_ISSUER_DID")
+            .or_else(|| value(&values, "MARTY_ISSUER_DID"))
+            .map(str::to_owned)
+            .unwrap_or_else(|| default_issuer_did(&public_base_url));
+        if !oid4vp_issuer_did.starts_with("did:") || oid4vp_issuer_did.len() > 2_048 {
+            return Err(invalid("OID4VP_ISSUER_DID"));
         }
         let callback_destinations = match value(&values, "FLOW_CALLBACK_DESTINATIONS") {
             Some(configuration) => {
@@ -409,6 +418,7 @@ impl FlowServiceConfig {
             http_addr,
             grpc_addr,
             public_base_url,
+            oid4vp_issuer_did,
             callback_destinations,
             oid4vp_client_id_scheme,
             verifier_did_method,
@@ -474,6 +484,15 @@ impl FlowServiceConfig {
             url_query_maximum_length: self.oid4vp_url_query_maximum_length,
         }
     }
+}
+
+fn default_issuer_did(public_base_url: &str) -> String {
+    let authority = public_base_url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_end_matches('/')
+        .replace(':', "%3A");
+    format!("did:web:{authority}:orgs:marty")
 }
 
 fn parse_client_id_scheme(value: &str) -> Result<Oid4vpClientIdScheme, FlowConfigError> {
