@@ -2,6 +2,7 @@ pub mod application;
 pub mod domain;
 pub mod grpc_service;
 pub mod http_service;
+pub mod native_kernel;
 pub mod persistence;
 pub mod postgres;
 pub mod verification;
@@ -20,6 +21,7 @@ pub use http_service::{
     presentation_policy_router, EvaluatePresentationRequest, PresentationPolicyHttpState,
     PresentationVerificationError, PresentationVerificationOrchestrator,
 };
+pub use native_kernel::RustCredentialKernel;
 pub use persistence::{PolicyRecord, PolicyRecordError, PRESENTATION_POLICY_MIGRATION};
 pub use postgres::{
     migrate_presentation_policy_schema, validate_presentation_policy_schema, PostgresPolicyStore,

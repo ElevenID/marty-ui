@@ -4475,6 +4475,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "marty-oid4vci",
  "marty-verification",
  "mmf-security",
  "prost",
