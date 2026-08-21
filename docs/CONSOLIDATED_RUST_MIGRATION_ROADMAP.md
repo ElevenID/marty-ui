@@ -1213,6 +1213,32 @@ executable/container packaging, configured live PostgreSQL acceptance and
 same-slice deletion of the superseded Python service. No beta deployment has
 occurred.
 
+The native Organization executable and its operational composition are now
+implemented in commit `de0baf57`. Startup validates deployed configuration and
+service credentials, connects PostgreSQL and the gateway Redis database,
+loads the shared MMF Cedar validator, runs idempotent schema/outbox migration,
+reconciles system roles and the configured Marty admin/reviewer memberships,
+then serves the complete Axum and tonic surfaces with MMF health, readiness,
+version and native-backend diagnostics. The gateway now injects its configured
+service token as a trusted override only for Organization HTTP upstreams;
+client headers cannot select that credential.
+
+Durable event publication remains one shared MMF implementation rather than an
+Organization worker. MMF commits `c6355b0` and `4abb2ae` add the reusable
+leased PostgreSQL outbox dispatcher with fenced acknowledgement, bounded
+exponential retry, dead-letter transitions, reconnect and graceful shutdown.
+Organization maps its canonical event envelope to the existing event-stream
+protobuf and treats an event-stream outage as observable degradation while the
+transactional outbox retains delivery. Ten MMF messaging unit tests, two MMF
+PostgreSQL behavior tests, the complete Organization Rust suite (including 24
+crate unit tests and all language-neutral service tests), the focused gateway
+credential-injection test, formatting, and strict Clippy pass. The remaining
+Organization cutover work is to publish and immutably pin the MMF commits,
+switch the service image/entrypoint to the Rust binary, run configured live
+PostgreSQL/Redis/event-stream executable acceptance, then delete the Python
+service and its Python-only dependencies in the same passing slice. No beta
+deployment has occurred.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
