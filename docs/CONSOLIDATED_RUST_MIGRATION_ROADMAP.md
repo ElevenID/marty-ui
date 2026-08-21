@@ -1102,6 +1102,30 @@ join/member/API-key, RBAC, policy/audit and SCIM families, followed by runtime,
 outbox worker, gateway credential injection, packaging and deletion. No beta
 deployment has occurred.
 
+Twenty-five of the 62 frozen HTTP contracts now execute through the same Axum
+router. The second adapter slice adds join-code admission and validation,
+direct open joining, team snapshots, paginated member list/invite/role-update/
+removal and paginated API-key create/list/revoke. It preserves 201 join
+responses, trusted forwarded email requirements, pending-versus-active team
+buckets, per-member role-alias de-duplication, sorted effective permissions,
+one-time raw API-key disclosure, tenant-bound member/key mutation and the Marty
+default-organization membership-removal prohibition. Gateway service
+authentication and user/API-key authorization run before application storage
+access, and malformed identifiers, emails, role sets, scopes and unavailable
+storage fail closed through stable envelopes.
+
+Language-neutral black-box route tests assert that the 25 native declarations
+remain unique members of the frozen 62-route surface, untrusted requests stop
+before database access and join admission refuses missing trusted email.
+Projection tests freeze team role buckets and one-time key-secret behavior. The
+optional PostgreSQL HTTP gate now also executes direct join, team snapshot,
+API-key create/list/revoke and tenant-bound member removal through Axum. Forty-
+two Rust Organization tests, all 74 surviving Python tests, formatting and
+strict Clippy pass. The remaining 37 HTTP contracts are RBAC, policy/audit and
+SCIM families, followed by runtime, outbox worker, gateway credential
+injection, packaging, full PostgreSQL acceptance and same-slice Python
+deletion. No beta deployment has occurred.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

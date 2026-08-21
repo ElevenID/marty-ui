@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, patch},
+    routing::{get, patch, post},
     Json, Router,
 };
 use chrono::Utc;
@@ -16,10 +16,12 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    authenticate_forwarded_http_request, authenticate_http_service, CreateOrganizationCommand,
-    ForwardedPrincipal, HttpTrustError, JoinMechanism, Member, Organization,
-    OrganizationApplication, OrganizationApplicationError, OrganizationAuthorizationContext,
-    OrganizationType, UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch,
+    authenticate_forwarded_http_request, authenticate_http_service, ApiKey, ApiKeyScopeType,
+    CreateApiKeyCommand, CreateOrganizationCommand, ForwardedPrincipal, HttpTrustError,
+    InviteMemberCommand, JoinByCodeCommand, JoinMechanism, JoinOrganizationCommand, Member,
+    MemberStatus, Organization, OrganizationApplication, OrganizationApplicationError,
+    OrganizationAuthorizationContext, OrganizationType, RemoveMemberCommand, RevokeApiKeyCommand,
+    SetMemberRolesCommand, UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch,
     UpdateOrganizationCommand, UpdateOrganizationPatch, ViewMode,
 };
 
@@ -40,11 +42,26 @@ pub const CORE_ORGANIZATION_HTTP_ROUTES: &[&str] = &[
     "GET /v1/organizations/{org_id}/lifecycle",
 ];
 
+pub const MEMBERSHIP_API_HTTP_ROUTES: &[&str] = &[
+    "POST /v1/organizations/join/code",
+    "GET /v1/organizations/join/code/validate",
+    "POST /v1/organizations/{org_id}/join",
+    "GET /v1/organizations/{org_id}/team/snapshot",
+    "GET /v1/organizations/{org_id}/members",
+    "POST /v1/organizations/{org_id}/members",
+    "PATCH /v1/organizations/{org_id}/members/{member_id}",
+    "DELETE /v1/organizations/{org_id}/members/{member_id}",
+    "GET /v1/organizations/{org_id}/api-keys",
+    "POST /v1/organizations/{org_id}/api-keys",
+    "DELETE /v1/organizations/{org_id}/api-keys/{key_id}",
+];
+
 #[derive(Clone)]
 pub struct OrganizationHttpState {
     pub application: Arc<OrganizationApplication>,
     pub service_authenticator: Arc<ServiceTokenAuthenticator>,
     pub organization_creation_enabled: bool,
+    pub marty_organization_id: Option<Uuid>,
 }
 
 pub fn organization_core_router(state: OrganizationHttpState) -> Router {
@@ -80,6 +97,35 @@ pub fn organization_core_router(state: OrganizationHttpState) -> Router {
             get(get_preferences).put(update_preferences),
         )
         .route("/api/onboarding/status", get(onboarding_status))
+        .route("/v1/organizations/join/code", post(join_by_code))
+        .route(
+            "/v1/organizations/join/code/validate",
+            get(validate_join_code),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/join",
+            post(join_organization),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/team/snapshot",
+            get(get_team_snapshot),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/members",
+            get(list_members).post(invite_member),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/members/{member_id}",
+            patch(update_member).delete(remove_member),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/api-keys",
+            get(list_api_keys).post(create_api_key),
+        )
+        .route(
+            "/v1/organizations/{organization_id}/api-keys/{key_id}",
+            axum::routing::delete(revoke_api_key),
+        )
         .with_state(state)
 }
 
@@ -223,6 +269,125 @@ struct OnboardingStatusResponse {
     organization_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     organization_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JoinByCodeRequest {
+    code: String,
+}
+
+#[derive(Deserialize)]
+struct ValidateJoinCodeQuery {
+    code: String,
+}
+
+#[derive(Serialize)]
+struct JoinResponse {
+    organization: OrganizationResponse,
+    membership: MemberResponse,
+}
+
+#[derive(Serialize)]
+struct ValidateJoinCodeResponse {
+    valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    organization_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    organization_name: Option<String>,
+    expired: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InviteMemberRequest {
+    email: String,
+    role_ids: Vec<Uuid>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdateMemberRequest {
+    role_ids: Vec<Uuid>,
+}
+
+#[derive(Serialize)]
+struct MemberResponse {
+    id: String,
+    organization_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email: Option<String>,
+    roles: Vec<RoleSummaryResponse>,
+    status: String,
+    permissions: Vec<String>,
+    has_org_console_access: bool,
+    is_owner: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invited_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    joined_at: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TeamMemberResponse {
+    id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email: Option<String>,
+    roles: Vec<RoleSummaryResponse>,
+    status: String,
+    is_owner: bool,
+    has_org_console_access: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    joined_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invited_at: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TeamSnapshotResponse {
+    members: Vec<TeamMemberResponse>,
+    pending_invites: Vec<TeamMemberResponse>,
+    role_distribution: BTreeMap<String, usize>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateApiKeyRequest {
+    name: String,
+    description: Option<String>,
+    scopes: Option<Vec<String>>,
+    #[serde(default)]
+    is_test: bool,
+}
+
+#[derive(Serialize)]
+struct ApiKeyResponse {
+    id: String,
+    organization_id: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    key_prefix: String,
+    scope_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deployment_profile_id: Option<String>,
+    scopes: Vec<String>,
+    enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_used_at: Option<String>,
+    created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
 }
 
 async fn create_organization(
@@ -558,6 +723,275 @@ async fn onboarding_status(
     }))
 }
 
+async fn join_by_code(
+    State(state): State<OrganizationHttpState>,
+    headers: HeaderMap,
+    Json(input): Json<JoinByCodeRequest>,
+) -> Result<(StatusCode, Json<JoinResponse>), OrganizationHttpError> {
+    let user_id = authenticated_user_id(&state, &headers)?;
+    let email = authenticated_user_email(&headers)?;
+    let result = state
+        .application
+        .join_by_code(JoinByCodeCommand {
+            user_id,
+            code: input.code.to_ascii_uppercase(),
+            email,
+            now: Utc::now(),
+        })
+        .await
+        .map_err(application_error)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(JoinResponse {
+            organization: organization_response(&result.value.0, None),
+            membership: member_response(&result.value.1),
+        }),
+    ))
+}
+
+async fn validate_join_code(
+    State(state): State<OrganizationHttpState>,
+    headers: HeaderMap,
+    Query(query): Query<ValidateJoinCodeQuery>,
+) -> Result<Json<ValidateJoinCodeResponse>, OrganizationHttpError> {
+    authenticate_service(&state, &headers)?;
+    let validation = state
+        .application
+        .validate_join_code(&query.code, Utc::now())
+        .await
+        .map_err(application_error)?;
+    Ok(Json(ValidateJoinCodeResponse {
+        valid: validation.is_valid,
+        organization_id: validation
+            .organization
+            .as_ref()
+            .map(|organization| organization.id.to_string()),
+        organization_name: validation
+            .organization
+            .as_ref()
+            .map(|organization| organization.name.clone()),
+        expired: validation.expired,
+        message: Some(validation.message),
+    }))
+}
+
+async fn join_organization(
+    State(state): State<OrganizationHttpState>,
+    Path(organization_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<JoinResponse>), OrganizationHttpError> {
+    let user_id = authenticated_user_id(&state, &headers)?;
+    let email = authenticated_user_email(&headers)?;
+    let result = state
+        .application
+        .join_organization(JoinOrganizationCommand {
+            user_id,
+            organization_id,
+            email,
+            now: Utc::now(),
+        })
+        .await
+        .map_err(application_error)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(JoinResponse {
+            organization: organization_response(&result.value.0, None),
+            membership: member_response(&result.value.1),
+        }),
+    ))
+}
+
+async fn get_team_snapshot(
+    State(state): State<OrganizationHttpState>,
+    Path(organization_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<TeamSnapshotResponse>, OrganizationHttpError> {
+    authorize_action(&state, &headers, organization_id, "team:view").await?;
+    let members = state
+        .application
+        .list_members(organization_id)
+        .await
+        .map_err(application_error)?;
+    let active = members
+        .iter()
+        .filter(|member| member.status == MemberStatus::Active)
+        .collect::<Vec<_>>();
+    let pending = members
+        .iter()
+        .filter(|member| matches!(member.status, MemberStatus::Invited | MemberStatus::Pending))
+        .collect::<Vec<_>>();
+    Ok(Json(TeamSnapshotResponse {
+        role_distribution: role_distribution(&active),
+        members: active.into_iter().map(team_member_response).collect(),
+        pending_invites: pending.into_iter().map(team_member_response).collect(),
+    }))
+}
+
+async fn list_members(
+    State(state): State<OrganizationHttpState>,
+    Path(organization_id): Path<Uuid>,
+    headers: HeaderMap,
+    Query(query): Query<PaginationQuery>,
+) -> Result<Json<Vec<MemberResponse>>, OrganizationHttpError> {
+    authorize_action(&state, &headers, organization_id, "team:view").await?;
+    let (offset, limit) = bounded_page(&query, 500)?;
+    let members = state
+        .application
+        .list_members(organization_id)
+        .await
+        .map_err(application_error)?;
+    Ok(Json(
+        members
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .map(member_response)
+            .collect(),
+    ))
+}
+
+async fn invite_member(
+    State(state): State<OrganizationHttpState>,
+    Path(organization_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<InviteMemberRequest>,
+) -> Result<Json<MemberResponse>, OrganizationHttpError> {
+    let context = authorize_action(&state, &headers, organization_id, "team:invite").await?;
+    if !valid_email(&input.email) || input.role_ids.is_empty() {
+        return Err(invalid_request());
+    }
+    let result = state
+        .application
+        .invite_member(InviteMemberCommand {
+            organization_id,
+            email: input.email,
+            role_ids: input.role_ids,
+            invited_by: context.principal_id,
+            now: Utc::now(),
+        })
+        .await
+        .map_err(application_error)?;
+    Ok(Json(member_response(&result.value)))
+}
+
+async fn update_member(
+    State(state): State<OrganizationHttpState>,
+    Path((organization_id, member_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    Json(input): Json<UpdateMemberRequest>,
+) -> Result<Json<MemberResponse>, OrganizationHttpError> {
+    let context = authorize_action(&state, &headers, organization_id, "team:manage").await?;
+    if input.role_ids.is_empty() {
+        return Err(invalid_request());
+    }
+    let result = state
+        .application
+        .set_member_roles(SetMemberRolesCommand {
+            member_id,
+            organization_id,
+            role_ids: input.role_ids,
+            updated_by: context.principal_id,
+            now: Utc::now(),
+        })
+        .await
+        .map_err(application_error)?;
+    Ok(Json(member_response(&result.value)))
+}
+
+async fn remove_member(
+    State(state): State<OrganizationHttpState>,
+    Path((organization_id, member_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, OrganizationHttpError> {
+    let context = authorize_action(&state, &headers, organization_id, "team:manage").await?;
+    if state.marty_organization_id == Some(organization_id) {
+        return Err(forbidden("ORGANIZATION.DEFAULT_MEMBERSHIP_IMMUTABLE"));
+    }
+    state
+        .application
+        .remove_member(RemoveMemberCommand {
+            organization_id,
+            member_id,
+            removed_by: context.principal_id,
+            now: Utc::now(),
+        })
+        .await
+        .map_err(application_error)?;
+    Ok(Json(json!({"success": true})))
+}
+
+async fn list_api_keys(
+    State(state): State<OrganizationHttpState>,
+    Path(organization_id): Path<Uuid>,
+    headers: HeaderMap,
+    Query(query): Query<PaginationQuery>,
+) -> Result<Json<Vec<ApiKeyResponse>>, OrganizationHttpError> {
+    authorize_action(&state, &headers, organization_id, "api-key:view").await?;
+    let (offset, limit) = bounded_page(&query, 500)?;
+    let api_keys = state
+        .application
+        .list_api_keys(organization_id)
+        .await
+        .map_err(application_error)?;
+    Ok(Json(
+        api_keys
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .map(|api_key| api_key_response(api_key, None))
+            .collect(),
+    ))
+}
+
+async fn create_api_key(
+    State(state): State<OrganizationHttpState>,
+    Path(organization_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<CreateApiKeyRequest>,
+) -> Result<Json<ApiKeyResponse>, OrganizationHttpError> {
+    let context = authorize_action(&state, &headers, organization_id, "api-key:create").await?;
+    let result = state
+        .application
+        .create_api_key(CreateApiKeyCommand {
+            organization_id,
+            name: input.name,
+            created_by: context.principal_id,
+            scopes: input.scopes,
+            description: input.description,
+            is_test: input.is_test,
+            scope_type: ApiKeyScopeType::Organization,
+            deployment_profile_id: None,
+            rate_limit: None,
+            expires_at: None,
+            now: Utc::now(),
+        })
+        .await
+        .map_err(application_error)?;
+    Ok(Json(api_key_response(
+        &result.value.api_key,
+        Some(result.value.raw_key),
+    )))
+}
+
+async fn revoke_api_key(
+    State(state): State<OrganizationHttpState>,
+    Path((organization_id, key_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, OrganizationHttpError> {
+    let context = authorize_action(&state, &headers, organization_id, "api-key:revoke").await?;
+    state
+        .application
+        .revoke_api_key(RevokeApiKeyCommand {
+            organization_id,
+            api_key_id: key_id,
+            revoked_by: context.principal_id,
+            now: Utc::now(),
+        })
+        .await
+        .map_err(application_error)?;
+    Ok(Json(json!({"success": true})))
+}
+
 fn authenticate_service(
     state: &OrganizationHttpState,
     headers: &HeaderMap,
@@ -575,6 +1009,16 @@ fn authenticated_user_id(
         ForwardedPrincipal::User { user_id } => Ok(user_id),
         ForwardedPrincipal::ApiKey { .. } => Err(forbidden("ORGANIZATION.USER_REQUIRED")),
     }
+}
+
+fn authenticated_user_email(headers: &HeaderMap) -> Result<String, OrganizationHttpError> {
+    headers
+        .get("x-user-email")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| valid_email(value))
+        .map(str::to_owned)
+        .ok_or_else(invalid_request)
 }
 
 async fn authorize_membership(
@@ -839,6 +1283,91 @@ fn membership_summary(member: &Member) -> MembershipSummaryResponse {
     }
 }
 
+fn member_response(member: &Member) -> MemberResponse {
+    MemberResponse {
+        id: member.id.to_string(),
+        organization_id: member.organization_id.to_string(),
+        user_id: (!member.user_id.is_empty()).then(|| member.user_id.clone()),
+        email: member.email.clone(),
+        roles: role_summaries(member),
+        status: member.status.as_str().into(),
+        permissions: member.effective_permissions().into_iter().collect(),
+        has_org_console_access: member.has_org_console_access(),
+        is_owner: member.is_owner(),
+        invited_at: member.invited_at.map(|value| value.to_rfc3339()),
+        joined_at: member.joined_at.map(|value| value.to_rfc3339()),
+    }
+}
+
+fn team_member_response(member: &Member) -> TeamMemberResponse {
+    TeamMemberResponse {
+        id: member.id.to_string(),
+        user_id: (!member.user_id.is_empty()).then(|| member.user_id.clone()),
+        email: member.email.clone(),
+        roles: role_summaries(member),
+        status: member.status.as_str().into(),
+        is_owner: member.is_owner(),
+        has_org_console_access: member.has_org_console_access(),
+        joined_at: member.joined_at.map(|value| value.to_rfc3339()),
+        invited_at: member.invited_at.map(|value| value.to_rfc3339()),
+    }
+}
+
+fn role_summaries(member: &Member) -> Vec<RoleSummaryResponse> {
+    member
+        .roles
+        .iter()
+        .map(|role| RoleSummaryResponse {
+            id: role.id.to_string(),
+            name: role.name.clone(),
+            display_name: role.display_name.clone(),
+        })
+        .collect()
+}
+
+fn role_distribution(members: &[&Member]) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::from([
+        ("admin".to_owned(), 0),
+        ("developer".to_owned(), 0),
+        ("operator".to_owned(), 0),
+    ]);
+    for member in members {
+        let mut seen = std::collections::BTreeSet::new();
+        for role in &member.roles {
+            let role_name = role.name.trim().to_ascii_lowercase();
+            let bucket = match role_name.as_str() {
+                "owner" | "admin" | "access_admin" => "admin",
+                "developer" | "access_developer" => "developer",
+                "operator" | "access_operator" => "operator",
+                value => value,
+            };
+            if !bucket.is_empty() && seen.insert(bucket.to_owned()) {
+                *counts.entry(bucket.to_owned()).or_default() += 1;
+            }
+        }
+    }
+    counts
+}
+
+fn api_key_response(api_key: &ApiKey, key: Option<String>) -> ApiKeyResponse {
+    ApiKeyResponse {
+        id: api_key.id.to_string(),
+        organization_id: api_key.organization_id.to_string(),
+        name: api_key.name.clone(),
+        description: api_key.description.clone(),
+        key_prefix: api_key.key_prefix.clone(),
+        scope_type: api_key.scope_type.clone(),
+        deployment_profile_id: api_key.deployment_profile_id.map(|value| value.to_string()),
+        scopes: api_key.scopes.clone(),
+        enabled: api_key.enabled,
+        expires_at: api_key.expires_at.map(|value| value.to_rfc3339()),
+        last_used_at: api_key.last_used_at.map(|value| value.to_rfc3339()),
+        created_at: api_key.created_at.to_rfc3339(),
+        updated_at: Some(api_key.updated_at.to_rfc3339()),
+        key,
+    }
+}
+
 fn lifecycle_response(organization: &Organization) -> OrganizationLifecycleResponse {
     let hosted_pilot = setting_bool(&organization.settings, "pilot_retention_enabled");
     let retention_days = setting_positive(&organization.settings, "pilot_retention_days", 30);
@@ -959,6 +1488,19 @@ fn valid_http_url(value: &str) -> bool {
 
 fn limit(query: &PaginationQuery, maximum: u32) -> u32 {
     query.limit.unwrap_or(100).min(maximum)
+}
+
+fn bounded_page(
+    query: &PaginationQuery,
+    maximum: u32,
+) -> Result<(usize, usize), OrganizationHttpError> {
+    if query.limit.is_some_and(|limit| limit > maximum) {
+        return Err(invalid_request());
+    }
+    Ok((
+        query.offset.unwrap_or(0) as usize,
+        query.limit.unwrap_or(100) as usize,
+    ))
 }
 
 fn default_organization_type() -> String {
@@ -1088,5 +1630,72 @@ mod tests {
         assert_eq!(pilot.data_retention_mode, "hosted_pilot_rolling_purge");
         assert_eq!(pilot.audit_retention_days, 45);
         assert_eq!(pilot.pilot_retention.unwrap().window_days, 45);
+    }
+
+    #[test]
+    fn team_snapshot_projection_preserves_buckets_aliases_and_pending_members() {
+        let now = Utc::now();
+        let organization_id = Uuid::new_v4();
+        let role = |name: &str| crate::Role {
+            id: Uuid::new_v4(),
+            organization_id,
+            name: name.into(),
+            display_name: None,
+            description: None,
+            is_system: false,
+            is_default_for_new_members: false,
+            permissions: vec![crate::Permission::new("team", "view")],
+            created_at: now,
+            updated_at: now,
+        };
+        let mut owner = Member::create(
+            organization_id,
+            "owner",
+            Some("owner@example.com".into()),
+            MemberStatus::Active,
+            now,
+        );
+        owner.roles = vec![role("owner"), role("access_admin")];
+        let mut developer = Member::create(
+            organization_id,
+            "developer",
+            Some("developer@example.com".into()),
+            MemberStatus::Active,
+            now,
+        );
+        developer.roles = vec![role("developer")];
+        let mut invited =
+            Member::create_invitation(organization_id, "invited@example.com", "owner", now);
+        invited.roles = vec![role("operator")];
+
+        let active = vec![&owner, &developer];
+        let counts = role_distribution(&active);
+        assert_eq!(counts["admin"], 1);
+        assert_eq!(counts["developer"], 1);
+        assert_eq!(counts["operator"], 0);
+        assert_eq!(team_member_response(&invited).status, "invited");
+        assert!(team_member_response(&invited).user_id.is_none());
+    }
+
+    #[test]
+    fn raw_api_key_is_disclosed_only_by_the_creation_projection() {
+        let now = Utc::now();
+        let (api_key, raw_key) = ApiKey::create(
+            crate::ApiKeySpec {
+                organization_id: Uuid::new_v4(),
+                name: "Automation".into(),
+                created_by: "owner".into(),
+                scopes: None,
+                description: None,
+                expires_at: None,
+                now,
+            },
+            true,
+        );
+        let created = serde_json::to_value(api_key_response(&api_key, Some(raw_key))).unwrap();
+        let listed = serde_json::to_value(api_key_response(&api_key, None)).unwrap();
+        assert!(created["key"].as_str().unwrap().starts_with("mk_test_"));
+        assert!(listed.get("key").is_none());
+        assert!(listed.get("key_hash").is_none());
     }
 }

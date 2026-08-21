@@ -7,7 +7,7 @@ use axum::{
 use marty_organization::postgres::PostgresOrganizationStore;
 use marty_organization::{
     organization_core_router, OrganizationApplication, OrganizationCache, OrganizationHttpState,
-    CORE_ORGANIZATION_HTTP_ROUTES,
+    CORE_ORGANIZATION_HTTP_ROUTES, MEMBERSHIP_API_HTTP_ROUTES,
 };
 use mmf_data::MemoryCache;
 use mmf_security::ServiceTokenAuthenticator;
@@ -35,11 +35,12 @@ fn router() -> axum::Router {
             ServiceTokenAuthenticator::new(Some(TOKEN.into()), true).unwrap(),
         ),
         organization_creation_enabled: true,
+        marty_organization_id: None,
     })
 }
 
 #[test]
-fn core_routes_are_unique_members_of_the_frozen_http_surface() {
+fn implemented_routes_are_unique_members_of_the_frozen_http_surface() {
     let surface: Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../../contracts/organization-service-surface.json"
@@ -53,9 +54,13 @@ fn core_routes_are_unique_members_of_the_frozen_http_surface() {
         .collect::<std::collections::BTreeSet<_>>();
     let implemented = CORE_ORGANIZATION_HTTP_ROUTES
         .iter()
+        .chain(MEMBERSHIP_API_HTTP_ROUTES)
         .copied()
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(implemented.len(), CORE_ORGANIZATION_HTTP_ROUTES.len());
+    assert_eq!(
+        implemented.len(),
+        CORE_ORGANIZATION_HTTP_ROUTES.len() + MEMBERSHIP_API_HTTP_ROUTES.len()
+    );
     assert!(implemented.is_subset(&frozen));
 }
 
@@ -103,6 +108,32 @@ async fn untrusted_requests_and_malformed_bodies_fail_before_database_access() {
         .await
         .unwrap();
     assert_eq!(private.status(), StatusCode::BAD_REQUEST);
+
+    let join_without_email = router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/organizations/join/code")
+                .header("content-type", "application/json")
+                .header("x-service-token", TOKEN)
+                .header("x-user-id", "user-1")
+                .body(Body::from(r#"{"code":"ABC123"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(join_without_email.status(), StatusCode::BAD_REQUEST);
+
+    let api_key_without_trust = router()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/organizations/{}/api-keys", Uuid::nil()))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(api_key_without_trust.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -163,6 +194,7 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
             ServiceTokenAuthenticator::new(Some(TOKEN.into()), true).unwrap(),
         ),
         organization_creation_enabled: true,
+        marty_organization_id: None,
     });
     let suffix = Uuid::new_v4().simple().to_string();
     let user_id = format!("http-owner-{}", &suffix[..8]);
@@ -207,13 +239,96 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
         Some(&user_id),
         Some(serde_json::json!({
             "description": "Native HTTP adapter",
-            "requires_approval": true
+            "requires_approval": false,
+            "visibility": "PUBLIC",
+            "join_mechanism": "open"
         })),
     )
     .await;
     assert_eq!(update.0, StatusCode::OK);
     assert_eq!(update.1["description"], "Native HTTP adapter");
-    assert_eq!(update.1["requires_approval"], true);
+    assert_eq!(update.1["requires_approval"], false);
+
+    let joined_user = format!("http-member-{}", &suffix[..8]);
+    let joined = request_json_with_email(
+        &router,
+        "POST",
+        &format!("/v1/organizations/{organization_id}/join"),
+        Some(&joined_user),
+        Some("member@example.com"),
+        None,
+    )
+    .await;
+    assert_eq!(joined.0, StatusCode::CREATED);
+    assert_eq!(joined.1["membership"]["status"], "active");
+    let joined_member_id = joined.1["membership"]["id"].as_str().unwrap().to_owned();
+
+    let team = request_json(
+        &router,
+        "GET",
+        &format!("/v1/organizations/{organization_id}/team/snapshot"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(team.0, StatusCode::OK);
+    assert_eq!(team.1["members"].as_array().unwrap().len(), 2);
+
+    let created_key = request_json(
+        &router,
+        "POST",
+        &format!("/v1/organizations/{organization_id}/api-keys"),
+        Some(&user_id),
+        Some(serde_json::json!({
+            "name": "HTTP acceptance",
+            "is_test": true
+        })),
+    )
+    .await;
+    assert_eq!(created_key.0, StatusCode::OK);
+    assert!(created_key.1["key"]
+        .as_str()
+        .unwrap()
+        .starts_with("mk_test_"));
+    let key_id = created_key.1["id"].as_str().unwrap().to_owned();
+
+    let listed_keys = request_json(
+        &router,
+        "GET",
+        &format!("/v1/organizations/{organization_id}/api-keys"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(listed_keys.0, StatusCode::OK);
+    assert!(listed_keys
+        .1
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value["id"] == key_id && value.get("key").is_none()));
+
+    let revoked = request_json(
+        &router,
+        "DELETE",
+        &format!("/v1/organizations/{organization_id}/api-keys/{key_id}"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(revoked.0, StatusCode::OK);
+    assert_eq!(revoked.1["success"], true);
+
+    let removed = request_json(
+        &router,
+        "DELETE",
+        &format!("/v1/organizations/{organization_id}/members/{joined_member_id}"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(removed.0, StatusCode::OK);
+    assert_eq!(removed.1["success"], true);
 
     let preferences = request_json(
         &router,
@@ -268,12 +383,26 @@ async fn request_json(
     user_id: Option<&str>,
     body: Option<Value>,
 ) -> (StatusCode, Value) {
+    request_json_with_email(router, method, uri, user_id, None, body).await
+}
+
+async fn request_json_with_email(
+    router: &axum::Router,
+    method: &str,
+    uri: &str,
+    user_id: Option<&str>,
+    user_email: Option<&str>,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
     let mut request = Request::builder()
         .method(method)
         .uri(uri)
         .header("x-service-token", TOKEN);
     if let Some(user_id) = user_id {
         request = request.header("x-user-id", user_id);
+    }
+    if let Some(user_email) = user_email {
+        request = request.header("x-user-email", user_email);
     }
     let body = if let Some(value) = body {
         request = request.header("content-type", "application/json");
