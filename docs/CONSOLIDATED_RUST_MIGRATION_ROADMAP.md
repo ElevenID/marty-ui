@@ -1681,13 +1681,14 @@ silently skipped or weakened. No beta deployment has occurred.
 
 ### Presentation-policy port status
 
-Presentation Policy is the next unmigrated service by removable production
-Python size: approximately 6,982 tracked lines, ahead of Trust Profile at
-approximately 6,320. Work is isolated in
-`marty-ui-rust-presentation-policy-wave3` on branch
-`agent/marty-ui-rust-presentation-policy-wave3`, stacked on the complete
-Credential Template packaging slice while its external acceptance gates remain
-pending.
+Presentation Policy has completed its local source cutover on the dedicated
+`marty-ui-rust-presentation-policy-cutover-wave3` worktree and
+`agent/marty-ui-rust-presentation-policy-cutover-wave3` branch, stacked on the
+complete Credential Template slice. Rust is now the only tracked runtime,
+domain, persistence, migration, catalog, verification and authorization
+implementation. The cutover deletes all 26 tracked files under
+`services/presentation_policy`: 13,172 Python lines in total, including 6,437
+production Python lines. No Python runtime or migration fallback remains.
 
 The baseline is frozen before implementation. All 193 surviving Python service
 tests pass. `presentation-policy-service-behavior.json` records all ten HTTP
@@ -1781,19 +1782,28 @@ shared `marty-verification` crate on the dedicated
 `agent/marty-core-presentation-verifier-wave3` branch at commit `7169663`. The
 Python extension delegates to that implementation and no longer directly owns
 COSE, ISO mdoc, PEM, time or test-certificate dependencies. Ten focused mdoc
-kernel tests, the complete 301-test verification suite and all 47 binding tests
-pass. Publication and the immutable Marty UI pin remain pending. The forced
+kernel tests and the complete 302-test verification suite pass. Publication and
+the immutable Marty UI pin remain pending. The forced
 loopback Git proxy is unavailable; bypassing it reaches GitHub but the local
 credential is invalid, while connected GitHub writes cannot be approved under
 the current session policy.
 
-Remaining work is narrowly gated: publish and pin the mdoc authentication
-revision, enable the now-tested native mdoc adapter, and run configured
-PostgreSQL, built-container and external-provider acceptance in CI. Once those
-gates pass, delete the approximately 6,982-line Python service, all nine Alembic
-revisions and implementation-specific Python tests immediately while retaining
-the language-neutral behavioral contracts and anti-reintroduction checks. No
-beta deployment has occurred; the only permitted update remains the single
+The native mdoc adapter, complete credential evidence projection and MMF Cedar
+authorization path are enabled and covered by language-neutral fixtures. All 38
+Presentation Policy Rust tests pass, including executable fail-closed startup,
+mdoc lifecycle, replay-boundary, Cedar denial, catalog and configured PostgreSQL
+contracts. Strict Clippy, formatting, the ownership scanner, focused cutover
+checks and base-plus-beta Compose rendering pass locally. The consolidated
+`presentation-policy-migration-history.json` assigns all nine retired Alembic
+revisions to the native idempotent schema/upgrade and catalog owners; CI already
+packages and runs the PostgreSQL migration/repository executable independently,
+so a second migration binary would duplicate the same acceptance boundary.
+
+Remaining work is publication and configured acceptance rather than source
+porting: publish the shared mdoc and MMF security commits, replace the temporary
+local core path and mixed Marty 0.1.57/0.1.59 graph with one immutable 0.1.59
+revision, then run the locked image, PostgreSQL and external-provider CI gates.
+No beta deployment has occurred; the only permitted update remains the single
 aggregate wave-three beta deployment after every service slice lands.
 
 ### Trust-profile port status
