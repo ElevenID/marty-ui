@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from services.auth.domain.entities import AuthenticatedUser, OIDCUserInfo, Session, SessionStatus
+from services.auth.infrastructure.adapters.user_provisioning_adapter import JITUserProvisioningAdapter
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,3 +72,18 @@ def test_python_display_and_session_behavior_matches_language_neutral_contract()
         assert session.is_valid == case["valid"]
         if not case["valid"]:
             assert session.remaining_ttl_seconds == case["remaining_ttl_seconds"]
+
+
+def test_python_provisioning_names_match_language_neutral_contract() -> None:
+    for case in CONTRACT["provisioning_name_cases"]:
+        user = OIDCUserInfo(
+            sub="user-1",
+            email="alice@example.com",
+            given_name=case["given_name"],
+            family_name=case["family_name"],
+            name=case["name"],
+        )
+        assert JITUserProvisioningAdapter._extract_names(user) == (
+            case["expected_given_name"],
+            case["expected_family_name"],
+        )

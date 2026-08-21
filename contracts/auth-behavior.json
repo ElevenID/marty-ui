@@ -74,6 +74,12 @@
     {"given_name": null, "family_name": "Ignored", "username": "asmith", "email": "alice@example.com", "expected": "asmith"},
     {"given_name": null, "family_name": null, "username": null, "email": "alice@example.com", "expected": "alice"}
   ],
+  "provisioning_name_cases": [
+    {"given_name": " Alice ", "family_name": " Smith ", "name": "Ignored Name", "expected_given_name": "Alice", "expected_family_name": "Smith"},
+    {"given_name": null, "family_name": null, "name": "Alice Smith", "expected_given_name": "Alice", "expected_family_name": "Smith"},
+    {"given_name": null, "family_name": null, "name": "Prince", "expected_given_name": "Prince", "expected_family_name": null},
+    {"given_name": "", "family_name": "", "name": null, "expected_given_name": null, "expected_family_name": null}
+  ],
   "session_validity_cases": [
     {"status": "active", "expires_offset_seconds": 1, "valid": true, "remaining_ttl_seconds": 1},
     {"status": "active", "expires_offset_seconds": 0, "valid": false, "remaining_ttl_seconds": 0},

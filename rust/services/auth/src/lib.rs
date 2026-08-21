@@ -4,6 +4,7 @@ pub mod application;
 pub mod cache_repository;
 pub mod domain;
 pub mod oidc;
+pub mod provisioning;
 
 pub use application::*;
 pub use cache_repository::*;
@@ -12,3 +13,4 @@ pub use domain::{
     OidcValidatedIdentity, PkcePair, PkceState, Session, SessionSpec, SessionStatus, UserType,
 };
 pub use oidc::*;
+pub use provisioning::*;
