@@ -72,26 +72,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
         grpc_channel(&config, &config.event_stream_grpc_target)?,
         config.grpc_service_token.clone(),
     ));
-    let state = Arc::new(GatewayRuntimeState::new(
-        routes,
-        proxy,
-        identities,
-        memberships,
-        owners,
-        readiness,
-        event_streams,
-        config.required_ready_services.clone(),
-        GatewayRateLimiter::new(distributed.rate_limiter, config.rate_limit_rpm)?,
-        distributed.idempotency,
-        config.cors_origins.clone(),
-        config.issuer_base_url.clone(),
-        config.public_api_url.clone(),
-        config.public_domain.clone(),
-        config.default_organization_id.clone(),
-        config.signing_internal_api_key.clone(),
-        config.issuance_api_key.clone(),
-        config.release_identity.clone(),
-    )?);
+    let state = Arc::new(
+        GatewayRuntimeState::new(
+            routes,
+            proxy,
+            identities,
+            memberships,
+            owners,
+            readiness,
+            event_streams,
+            config.required_ready_services.clone(),
+            GatewayRateLimiter::new(distributed.rate_limiter, config.rate_limit_rpm)?,
+            distributed.idempotency,
+            config.cors_origins.clone(),
+            config.issuer_base_url.clone(),
+            config.public_api_url.clone(),
+            config.public_domain.clone(),
+            config.default_organization_id.clone(),
+            config.signing_internal_api_key.clone(),
+            config.issuance_api_key.clone(),
+            config.release_identity.clone(),
+        )?
+        .with_service_token(config.grpc_service_token.clone())?,
+    );
 
     let purge_task = if config.hosted_pilot_auto_purge_enabled {
         let state = Arc::clone(&state);

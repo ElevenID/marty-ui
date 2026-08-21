@@ -89,6 +89,7 @@ pub struct GatewayRuntimeState {
     pub default_organization_id: Option<String>,
     pub signing_service_api_key: String,
     pub issuance_service_api_key: String,
+    pub service_token: Option<String>,
     pub release_identity: ReleaseIdentity,
     pub maximum_body_bytes: usize,
 }
@@ -195,9 +196,23 @@ impl GatewayRuntimeState {
                 .filter(|value| !value.is_empty()),
             signing_service_api_key,
             issuance_service_api_key,
+            service_token: None,
             release_identity,
             maximum_body_bytes: DEFAULT_MAXIMUM_BODY_BYTES,
         })
+    }
+
+    pub fn with_service_token(
+        mut self,
+        service_token: Option<String>,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if service_token.as_ref().is_some_and(|token| token.len() < 32) {
+            return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                "gateway service token must contain at least 32 bytes".into(),
+            ));
+        }
+        self.service_token = service_token;
+        Ok(self)
     }
 }
 
@@ -2499,6 +2514,13 @@ fn proxy_overrides(
             .insert("x-api-key".into(), state.issuance_service_api_key.clone());
     }
     let owner = route_ownership(path);
+    if owner.service == "organizations" {
+        if let Some(service_token) = &state.service_token {
+            overrides
+                .headers
+                .insert("x-service-token".into(), service_token.clone());
+        }
+    }
     let trusted_organization = if owner.service == "organizations" {
         extract_org_id(path).map(str::to_owned).or_else(|| {
             path.starts_with("/v1/policy-sets")
@@ -5022,8 +5044,24 @@ mod tests {
             "issuance-service-key",
             ReleaseIdentity::default(),
         )
-        .expect("runtime state");
+        .expect("runtime state")
+        .with_service_token(Some("s".repeat(32)))
+        .expect("service token");
         Arc::new(state)
+    }
+
+    #[test]
+    fn organization_proxy_receives_only_gateway_configured_service_credentials() {
+        let state = runtime_state();
+        let identity = TrustedIdentityContext::default();
+        let organization = proxy_overrides(
+            &state,
+            "/v1/organizations/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            &identity,
+        );
+        assert_eq!(organization.headers["x-service-token"], "s".repeat(32));
+        let applicant = proxy_overrides(&state, "/v1/applicants", &identity);
+        assert!(!applicant.headers.contains_key("x-service-token"));
     }
 
     #[tokio::test]

@@ -6,7 +6,9 @@ pub mod audit;
 pub mod authorization;
 pub mod cache;
 pub mod catalog;
+pub mod config;
 pub mod domain;
+pub mod event_stream_transport;
 pub mod events;
 pub mod grpc_service;
 pub mod http_security;
@@ -18,11 +20,17 @@ pub mod postgres;
 pub mod preferences;
 pub mod rbac_http;
 pub mod roles;
+pub mod runtime;
 pub mod scim;
 pub mod scim_http;
+pub mod startup;
 
 pub mod organization_proto {
     tonic::include_proto!("marty.ui.organization.v1");
+}
+
+pub mod event_stream_proto {
+    tonic::include_proto!("marty.ui.event_stream.v1");
 }
 
 pub use api_keys::{
@@ -48,12 +56,14 @@ pub use authorization::{
     OrganizationAuthorizationContext, PrincipalSource,
 };
 pub use cache::{OrganizationCache, OrganizationCacheError, OrganizationCacheKeys};
+pub use config::*;
 pub use domain::{
     ApiKey, ApiKeySpec, ApiKeyStatus, AuditEvent, AuditEventQuery, ConsoleContextPreference,
     DomainError, JoinCode, JoinMechanism, Member, MemberStatus, Organization, OrganizationCreate,
     OrganizationStatus, OrganizationType, Permission, PolicySet, PolicySetSpec, PolicySetStatus,
     PolicySetType, Role, ViewMode, APPLICANT_PERMISSION_KEYS,
 };
+pub use event_stream_transport::EventStreamTransport;
 pub use events::{
     OrganizationAuditSink, OrganizationEvent, OrganizationEventError, OrganizationEventKind,
     OrganizationEventPublisher, OrganizationEventPublisherError,
@@ -65,6 +75,7 @@ pub use policy_audit_http::*;
 pub use policy_sets::{
     deserialize_policy_documents, policy_set_ids_to_archive, validate_policy_documents,
     CedarPolicyDocument, CreatePolicySetCommand, UpdatePolicySetCommand, UpdatePolicySetPatch,
+    ORGANIZATION_CEDAR_SCHEMA,
 };
 pub use preferences::{
     apply_console_preference_patch, UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch,
@@ -75,4 +86,6 @@ pub use roles::{
     DeleteRoleCommand, RemoveMemberRoleCommand, UpdateRoleCommand, UpdateRolePatch,
     UpdateScimGroupCommand,
 };
+pub use runtime::*;
 pub use scim_http::*;
+pub use startup::*;

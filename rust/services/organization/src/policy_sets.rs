@@ -10,6 +10,19 @@ use crate::application::{OrganizationApplication, OrganizationApplicationError};
 use crate::domain::{PolicySet, PolicySetSpec, PolicySetStatus, PolicySetType};
 use crate::postgres::RepositoryError;
 
+pub const ORGANIZATION_CEDAR_SCHEMA: &str = r#"
+namespace MIP {
+  type ApprovalContext = { all_required_evidence_satisfied: Bool };
+  entity User;
+  entity Application;
+  action "applications:approve" appliesTo {
+    principal: [User],
+    resource: [Application],
+    context: ApprovalContext
+  };
+}
+"#;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CedarPolicyDocument {
     #[serde(default)]

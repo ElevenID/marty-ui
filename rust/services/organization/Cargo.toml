@@ -13,7 +13,9 @@ async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
 mmf-data.workspace = true
+mmf-core.workspace = true
 mmf-messaging.workspace = true
+mmf-runtime.workspace = true
 mmf-security.workspace = true
 prost.workspace = true
 rand.workspace = true
@@ -24,14 +26,18 @@ sha2.workspace = true
 sqlx.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
 tonic.workspace = true
+tonic-health.workspace = true
 tonic-prost.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
-tokio.workspace = true
 tower.workspace = true
 
 [build-dependencies]
