@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::env;
 use thiserror::Error;
 use url::Url;
 
@@ -47,6 +48,85 @@ impl WalletChoice {
 #[must_use]
 pub fn default_wallet_choices() -> Vec<WalletChoice> {
     vec![WalletChoice::sprucekit(), WalletChoice::lissi()]
+}
+
+/// Resolve every operator-configurable credential-login wallet setting.
+///
+/// The lookup form keeps configuration behavior deterministic in tests while
+/// [`configured_wallet_choices`] provides the production environment adapter.
+pub fn wallet_choices_from_lookup(
+    mut lookup: impl FnMut(&str) -> Option<String>,
+) -> Vec<WalletChoice> {
+    let mut sprucekit = WalletChoice::sprucekit();
+    sprucekit.generic_template = first_nonempty(
+        &mut lookup,
+        &["CREDENTIAL_LOGIN_SPRUCEKIT_DEEP_LINK_TEMPLATE"],
+        &sprucekit.generic_template,
+    );
+    sprucekit.android_template = first_nonempty(
+        &mut lookup,
+        &["CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_DEEP_LINK_TEMPLATE"],
+        &sprucekit.android_template,
+    );
+    sprucekit.ios_template = first_nonempty(
+        &mut lookup,
+        &[
+            "CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE",
+            "CREDENTIAL_LOGIN_SPRUCEKIT_IOS_DEEP_LINK_TEMPLATE",
+        ],
+        &sprucekit.ios_template,
+    );
+    sprucekit.android_package = first_nonempty(
+        &mut lookup,
+        &["CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_PACKAGE"],
+        &sprucekit.android_package,
+    );
+
+    let mut lissi = WalletChoice::lissi();
+    lissi.generic_template = first_nonempty(
+        &mut lookup,
+        &[
+            "CREDENTIAL_LOGIN_LISSI_DEEP_LINK_TEMPLATE",
+            "CREDENTIAL_LOGIN_LUCY_DEEP_LINK_TEMPLATE",
+        ],
+        &lissi.generic_template,
+    );
+    lissi.android_template = first_nonempty(
+        &mut lookup,
+        &["CREDENTIAL_LOGIN_LISSI_ANDROID_DEEP_LINK_TEMPLATE"],
+        &lissi.android_template,
+    );
+    lissi.ios_template = first_nonempty(
+        &mut lookup,
+        &[
+            "CREDENTIAL_LOGIN_LISSI_IOS_UNIVERSAL_LINK_TEMPLATE",
+            "CREDENTIAL_LOGIN_LISSI_IOS_DEEP_LINK_TEMPLATE",
+        ],
+        &lissi.ios_template,
+    );
+    lissi.android_package = first_nonempty(
+        &mut lookup,
+        &["CREDENTIAL_LOGIN_LISSI_ANDROID_PACKAGE"],
+        &lissi.android_package,
+    );
+
+    vec![sprucekit, lissi]
+}
+
+#[must_use]
+pub fn configured_wallet_choices() -> Vec<WalletChoice> {
+    wallet_choices_from_lookup(|name| env::var(name).ok())
+}
+
+fn first_nonempty(
+    lookup: &mut impl FnMut(&str) -> Option<String>,
+    names: &[&str],
+    fallback: &str,
+) -> String {
+    names
+        .iter()
+        .find_map(|name| lookup(name).filter(|value| !value.is_empty()))
+        .unwrap_or_else(|| fallback.to_owned())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

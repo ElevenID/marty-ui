@@ -13,13 +13,14 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::{
-    build_session_impersonation, build_ui_redirect_url, oidc_callback_url, sanitize_redirect_uri,
-    AuthApplication, AuthApplicationError, CanvasFinalizeContext, CanvasLtiApplication,
-    CredentialCallbackContext, CredentialCallbackError, CredentialCallbackHeaders,
-    CredentialCallbackResult, CredentialHttpError, CredentialLoginCompletion,
+    build_session_impersonation, build_ui_redirect_url, oidc_callback_url,
+    render_credential_login_error_page, sanitize_redirect_uri, AuthApplication,
+    AuthApplicationError, CanvasFinalizeContext, CanvasLtiApplication, CredentialCallbackContext,
+    CredentialCallbackError, CredentialCallbackHeaders, CredentialCallbackResult,
+    CredentialHttpError, CredentialLoginCompletion, CredentialLoginErrorPage,
     CredentialLoginHttpService, CredentialStateError, CredentialVerifiedPayload,
     HandleCallbackCommand, HandleCallbackResult, InitiateLoginCommand, PortError, Session,
-    SessionRepository, UiOriginPolicy,
+    SessionRepository, UiOriginPolicy, CREDENTIAL_LOGIN_CSS, CREDENTIAL_LOGIN_JAVASCRIPT,
 };
 
 pub const AUTH_CORE_HTTP_ROUTES: &[(&str, &str)] = &[
@@ -163,19 +164,12 @@ pub struct AuthHttpState {
     pub cookie: SessionCookieConfig,
     pub canvas_session_ttl_seconds: u64,
     pub impersonation_handoff_cookie_name: String,
-    pub credential_login_css: Arc<str>,
-    pub credential_login_javascript: Arc<str>,
-    pub credential_login_unavailable_html: Arc<str>,
 }
 
 impl AuthHttpState {
     pub fn validate(&self) -> Result<(), PortError> {
         self.cookie.validate()?;
-        if self.canvas_session_ttl_seconds == 0
-            || self.impersonation_handoff_cookie_name.is_empty()
-            || self.credential_login_css.is_empty()
-            || self.credential_login_javascript.is_empty()
-            || self.credential_login_unavailable_html.is_empty()
+        if self.canvas_session_ttl_seconds == 0 || self.impersonation_handoff_cookie_name.is_empty()
         {
             return Err(PortError::new(
                 "auth_http_configuration_invalid",
@@ -456,25 +450,32 @@ async fn update_me(
     auth_status(Some(&session.user))
 }
 
-async fn credential_login_styles(State(state): State<AuthHttpState>) -> Response {
-    static_asset("text/css; charset=utf-8", state.credential_login_css)
+async fn credential_login_styles() -> Response {
+    static_asset("text/css; charset=utf-8", CREDENTIAL_LOGIN_CSS)
 }
 
-async fn credential_login_script(State(state): State<AuthHttpState>) -> Response {
+async fn credential_login_script() -> Response {
     static_asset(
         "application/javascript; charset=utf-8",
-        state.credential_login_javascript,
+        CREDENTIAL_LOGIN_JAVASCRIPT,
     )
 }
 
 async fn credential_login(State(state): State<AuthHttpState>) -> Response {
     match state.credential_login.start_login().await {
         Ok(result) => html(StatusCode::OK, result.html),
-        Err(_) => {
-            let mut response = html(
-                StatusCode::SERVICE_UNAVAILABLE,
-                state.credential_login_unavailable_html.to_string(),
-            );
+        Err(error) => {
+            let unavailable = render_credential_login_error_page(&CredentialLoginErrorPage {
+                title: "Open Badge sign-in is temporarily unavailable",
+                message: "We could not start the wallet sign-in flow right now. Please try again in a moment, or use another sign-in method.",
+                primary_action_href: "/v1/auth/credential-login",
+                primary_action_label: "Try again",
+                secondary_action_href: state.origins.primary(),
+                secondary_action_label: "Return to ElevenID",
+                operator_details: &error.to_string(),
+            })
+            .unwrap_or_else(|_| "<!doctype html><title>Open Badge sign-in unavailable</title>".into());
+            let mut response = html(StatusCode::SERVICE_UNAVAILABLE, unavailable);
             no_store(&mut response);
             response
         }
@@ -624,8 +625,8 @@ fn credential_error(error: CredentialHttpError) -> Response {
     }
 }
 
-fn static_asset(content_type: &'static str, body: Arc<str>) -> Response {
-    let mut response = body.to_string().into_response();
+fn static_asset(content_type: &'static str, body: &'static str) -> Response {
+    let mut response = body.into_response();
     response
         .headers_mut()
         .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));

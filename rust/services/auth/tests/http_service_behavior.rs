@@ -231,9 +231,6 @@ fn harness() -> (axum::Router, Arc<AppStub>, Arc<Sessions>) {
         },
         canvas_session_ttl_seconds: 3_600,
         impersonation_handoff_cookie_name: "marty_impersonation_handoff".into(),
-        credential_login_css: "body { color: black; }".into(),
-        credential_login_javascript: "document.documentElement.dataset.ready = 'true';".into(),
-        credential_login_unavailable_html: "<!doctype html><title>Unavailable</title>".into(),
     })
     .unwrap();
     (router, app, sessions)

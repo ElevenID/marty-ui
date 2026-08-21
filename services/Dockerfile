@@ -4,6 +4,7 @@ FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92e
 WORKDIR /build/rust
 COPY rust /build/rust
 COPY proto /build/proto
+COPY services/auth/assets /build/services/auth/assets
 RUN cargo build --locked --release -p marty-event-stream --bin marty-event-stream
 RUN cargo build --locked --release -p marty-gateway --bin marty-gateway
 RUN cargo build --locked --release -p marty-revocation-profile --bin marty-revocation-profile

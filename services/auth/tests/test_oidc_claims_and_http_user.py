@@ -1216,6 +1216,21 @@ def test_credential_login_css_styles_status_detail():
     assert ".status-detail" in _CREDENTIAL_LOGIN_CSS
 
 
+def test_credential_login_assets_have_one_shared_file_source():
+    assert _CREDENTIAL_LOGIN_CSS == (
+        http_adapter._AUTH_ASSET_DIR / "credential-login.css"
+    ).read_text(encoding="utf-8")
+    assert _CREDENTIAL_LOGIN_JS == (
+        http_adapter._AUTH_ASSET_DIR / "credential-login.js"
+    ).read_text(encoding="utf-8")
+    assert http_adapter._CREDENTIAL_LOGIN_PAGE == (
+        http_adapter._AUTH_ASSET_DIR / "credential-login.html"
+    ).read_text(encoding="utf-8")
+    assert http_adapter._CREDENTIAL_LOGIN_ERROR_PAGE == (
+        http_adapter._AUTH_ASSET_DIR / "credential-login-error.html"
+    ).read_text(encoding="utf-8")
+
+
 def test_build_credential_login_wallet_options_uses_ios_universal_link_when_env_set(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(
         "CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE",
