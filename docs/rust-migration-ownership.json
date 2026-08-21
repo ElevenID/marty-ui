@@ -580,6 +580,17 @@
         "binding_paths": []
       },
       "legacy": []
+    },
+    {
+      "id": "presentation-policy-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/presentation-policy"],
+        "binding_paths": []
+      },
+      "legacy": []
     }
   ],
   "guardrails": {
@@ -602,10 +613,13 @@
       {
         "capability_id": "credential-template-service",
         "forbidden_globs": ["services/credential_template/**/*.py"]
+      },
+      {
+        "capability_id": "presentation-policy-service",
+        "forbidden_globs": ["services/presentation_policy/**/*.py"]
       }
     ],
     "approved_imports": [
-      {"path": "services/presentation_policy/main.py", "statement": "from jwcrypto import jwk"},
       {"path": "services/run_all_migrations.py", "statement": "from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey"},
       {"path": "services/run_all_migrations.py", "statement": "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey"},
       {"path": "services/run_all_migrations.py", "statement": "from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey"},
@@ -660,36 +674,6 @@
         "id": "no-disabled-signature-verification",
         "glob": "services/**/*.py",
         "pattern": "verify_signature[\\\"']?\\s*[:=]\\s*False",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-python-presentation-policy-evaluator",
-        "glob": "services/presentation_policy/*.py",
-        "pattern": "(?:_evaluate_constraint|_detected_format_to_canonical|_required_format_to_canonical|_credential_format_satisfies_requirement)",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-direct-presentation-policy-native-imports",
-        "glob": "services/presentation_policy/*.py",
-        "pattern": "(?:from|import)\\s+(?:marty_rs|_marty_rs)",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-presentation-native-none-fallback",
-        "glob": "services/presentation_policy/*.py",
-        "pattern": "(?:_marty_rs|marty_rs)\\s+is\\s+None",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-python-sd-jwt-disclosure-reconstruction",
-        "glob": "services/presentation_policy/*.py",
-        "pattern": "(?:disclosure_parts|Skipping malformed disclosure)",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-presentation-policy-default-engine-fallback",
-        "glob": "services/presentation_policy/*.py",
-        "pattern": "CedarEngine\\.with_defaults",
         "expected_matches": {}
       },
       {

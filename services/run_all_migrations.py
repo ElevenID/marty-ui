@@ -53,10 +53,6 @@ SERVICES = [
         "module": "issuance.infrastructure.models",
     },
     {
-        "name": "presentation_policy",
-        "module": "presentation_policy.infrastructure.models",
-    },
-    {
         "name": "deployment_profile",
         "module": "deployment_profile.infrastructure.models",
     },

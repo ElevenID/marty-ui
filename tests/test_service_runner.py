@@ -51,9 +51,9 @@ def test_runner_normalizes_hyphenated_service_names(
 
     monkeypatch.setattr(service_runner.importlib, "import_module", import_module)
 
-    service_runner.load_service_module("presentation-policy")
+    service_runner.load_service_module("deployment-profile")
 
-    assert imported == ["presentation_policy.main"]
+    assert imported == ["deployment_profile.main"]
 
 
 @pytest.mark.parametrize("service_name", ["", "../flow", "flow.main", "Flow"])

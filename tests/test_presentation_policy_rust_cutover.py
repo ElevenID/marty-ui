@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 
@@ -29,3 +30,35 @@ def test_ci_builds_the_dedicated_native_image_target() -> None:
     assert "FROM runtime AS presentation_policy" in dockerfile
     assert "target: presentation_policy" in workflow
     assert "tags: marty-presentation-policy:ci" in workflow
+
+
+def test_only_the_native_presentation_policy_runtime_remains() -> None:
+    behavior = json.loads(text("contracts/presentation-policy-rust-cutover.json"))
+
+    assert (ROOT / behavior["runtime_owner"]).is_dir()
+    assert (ROOT / behavior["migration_owner"]).is_file()
+    assert (ROOT / behavior["catalog_owner"]).is_file()
+    assert (ROOT / behavior["surface_contract"]).is_file()
+    assert (ROOT / behavior["migration_history_contract"]).is_file()
+    assert not list((ROOT / behavior["python_runtime_removed"]).rglob("*.*"))
+    assert behavior["python_runtime_fallback"] is False
+
+
+def test_python_migration_runner_does_not_import_deleted_presentation_policy() -> None:
+    migration_runner = text("services/run_all_migrations.py")
+
+    assert '"name": "presentation_policy"' not in migration_runner
+    assert '"module": "presentation_policy.infrastructure.models"' not in migration_runner
+
+
+def test_deleted_python_service_cannot_reenter_ownership_inventory() -> None:
+    ownership = json.loads(text("docs/rust-migration-ownership.json"))
+    capability = next(
+        item
+        for item in ownership["capabilities"]
+        if item["id"] == "presentation-policy-service"
+    )
+
+    assert capability["status"] == "native-active"
+    assert capability["canonical"]["paths"] == ["rust/services/presentation-policy"]
+    assert capability["legacy"] == []
