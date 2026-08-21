@@ -12,6 +12,7 @@ pub mod migration;
 pub mod oidc;
 pub mod postgres;
 pub mod provisioning;
+pub mod wallet;
 
 pub use application::*;
 pub use cache_repository::*;
@@ -28,3 +29,4 @@ pub use migration::*;
 pub use oidc::*;
 pub use postgres::*;
 pub use provisioning::*;
+pub use wallet::*;
