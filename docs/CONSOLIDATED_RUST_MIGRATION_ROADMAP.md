@@ -2063,6 +2063,35 @@ occurred. Compliance Profile completes the ordered wave-three service ports;
 publication/pinning, aggregate CI and one aggregate beta-only deployment and
 soak remain. Production remains unchanged.
 
+### Aggregate landing status
+
+The completed service stack is integrated on
+`agent/marty-ui-rust-wave3-aggregate` at merge commit `f4d24a83`, which combines
+the Compliance Profile completion head with the six locally known mainline
+release and durable revocation commits. The source merge is clean. All 62
+focused post-cutover packaging, Kubernetes, workload-identity and stack
+contract tests pass on the aggregate branch, and the Rust ownership scanner
+reports no duplicate Python service implementation.
+
+Immutable dependency pinning is intentionally not fabricated from local
+paths. The complete MMF Rust platform is clean at `784d73f` (58 commits above
+its known `origin/main`), and the required `marty-core` mdoc authentication
+work is clean at `535f2a5` (two commits above `origin/main`). GitHub publication
+for MMF, `marty-core` and `marty-ui` is blocked in this environment because all
+HTTPS traffic is forced through an unavailable `127.0.0.1` proxy. Until those
+canonical heads are published, the UI workspace retains explicit local path
+dependencies and cannot claim immutable release composition.
+
+The merged full Rust workspace also remains a configured CI gate: mainline's
+lockfile requires `h2 0.4.16`, which is not present in the forced-offline local
+Cargo index, so aggregate resolution stops before compilation. The individual
+cutover crates passed locked tests and strict Clippy before integration. Once
+networked publication is available, the remaining sequence is publish and
+merge MMF, publish and merge `marty-core`, replace local paths with immutable
+Git revisions, publish the aggregate UI branch, run aggregate CI including
+container and PostgreSQL/Redis acceptance, and perform one beta-only deploy
+and soak. Production remains unchanged.
+
 ### Trust-profile port status
 
 Trust Profile has completed its local native cutover on the dedicated
