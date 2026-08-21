@@ -10,7 +10,8 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::{
-    AuthenticatedUser, OidcUserInfo, OidcValidatedIdentity, PortError, UserProvisioner, UserType,
+    AuthenticatedUser, CredentialIdentityProvisioner, OidcUserInfo, OidcValidatedIdentity,
+    PortError, UserProvisioner, UserType,
 };
 
 pub const UNKNOWN_NATIONALITY: &str = "UNK";
@@ -246,6 +247,16 @@ impl UserProvisioner for JitUserProvisioner {
         identity: &OidcValidatedIdentity,
     ) -> Result<AuthenticatedUser, PortError> {
         self.provision_at(&identity.user_info, Utc::now()).await
+    }
+}
+
+#[async_trait]
+impl CredentialIdentityProvisioner for JitUserProvisioner {
+    async fn provision_credential_identity(
+        &self,
+        user: &OidcUserInfo,
+    ) -> Result<AuthenticatedUser, PortError> {
+        self.provision_at(user, Utc::now()).await
     }
 }
 
