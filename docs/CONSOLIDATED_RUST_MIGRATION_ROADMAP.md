@@ -1753,6 +1753,42 @@ the language-neutral behavioral contracts and anti-reintroduction checks. No
 beta deployment has occurred; the only permitted update remains the single
 aggregate wave-three beta deployment after every service slice lands.
 
+### Trust-profile port status
+
+Trust Profile is active as the next-largest removable service while the tested
+Presentation Policy branch awaits external publication and configured gates.
+The dedicated `marty-ui-rust-trust-profile-wave3` worktree and
+`agent/marty-ui-rust-trust-profile-wave3` branch are stacked on the complete
+Presentation Policy state. The target contains 8,618 tracked Python lines,
+including approximately 6,248 production and migration lines across the service,
+registry transport, PostgreSQL adapter and ten historical Alembic revisions.
+
+`trust-profile-service-behavior.json` is now the implementation-neutral oracle.
+It freezes all 32 public and internal HTTP operations, twelve enum families,
+three system frameworks, eight durable tables, the complete ten-revision chain,
+registry synchronization bounds and atomicity, destination/TLS/redirect policy,
+decision-time certificate revalidation, tenant permissions, internal service
+authentication, issuer uniqueness, cascade deletion and custody-metadata
+scrubbing. Four Python inventory tests execute the contract without requiring a
+working native wheel.
+
+The new `marty-trust-profile` crate owns that domain and surface inventory. It
+does not copy trust-registry synchronization: protocol constants, catalog,
+URL/destination policy, import decisions, feed validation, sequence handling and
+certificate-state revalidation remain in the existing
+`marty_verification::trust_sync` kernel. The initial two Rust contract tests pass
+with strict Clippy and formatting.
+
+The installed Python `_marty_rs` wheel on this workstation predates the required
+`trust_registry_sync` capability. Consequently, 50 legacy service tests pass,
+33 correctly fail closed on native unavailability and two cannot acquire the
+host pytest temporary directory. The direct Rust kernel and new shared-contract
+tests are green; no Python fallback will be restored. Next work is the complete
+native application/repository/schema layer, system and Marty catalog
+reconciliation, all HTTP adapters, scheduled bounded registry transport, shared
+MMF runtime/security, native packaging and configured parity gates. The Python
+service and ten revisions are deleted immediately after those gates pass.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
