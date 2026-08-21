@@ -7,6 +7,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use mmf_security::{ApplicantApprovalAuthorizationFacts, ApplicantApprovalPolicyEngine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -112,6 +113,58 @@ pub trait FlowProvider: Send + Sync {
 #[async_trait]
 pub trait ApprovalAuthorizer: Send + Sync {
     async fn authorize(&self, facts: &ApprovalFacts) -> Result<(), ProviderError>;
+}
+
+#[derive(Clone)]
+pub struct MmfApprovalAuthorizer {
+    engine: ApplicantApprovalPolicyEngine,
+}
+
+impl MmfApprovalAuthorizer {
+    pub fn new() -> Result<Self, ProviderError> {
+        Ok(Self {
+            engine: ApplicantApprovalPolicyEngine::new()
+                .map_err(|error| ProviderError::Unavailable(error.to_string()))?,
+        })
+    }
+}
+
+#[async_trait]
+impl ApprovalAuthorizer for MmfApprovalAuthorizer {
+    async fn authorize(&self, facts: &ApprovalFacts) -> Result<(), ProviderError> {
+        let risk_score = u32::try_from(facts.risk_score)
+            .map_err(|_| ProviderError::Denied("risk score is outside 0..=100".into()))?;
+        let biometric_match_score = u32::try_from(facts.biometric_match_score)
+            .map_err(|_| ProviderError::Denied("biometric score is outside 0..=100".into()))?;
+        let evidence_count = u64::try_from(facts.evidence_count)
+            .map_err(|_| ProviderError::Denied("evidence count is too large".into()))?;
+        let status = serde_json::to_value(facts.status)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .ok_or_else(|| ProviderError::Denied("application status is invalid".into()))?;
+        let decision = self
+            .engine
+            .authorize(&ApplicantApprovalAuthorizationFacts {
+                reviewer_id: facts.reviewer_id.clone(),
+                organization_id: facts.organization_id.clone(),
+                application_id: facts.application_id.clone(),
+                application_status: status,
+                risk_score,
+                document_verification_passed: facts.document_verification_passed,
+                biometric_match_score,
+                evidence_count,
+                applicant_country: facts.applicant_country.clone(),
+            })
+            .map_err(|error| ProviderError::Denied(error.to_string()))?;
+        if decision.allowed {
+            Ok(())
+        } else {
+            Err(ProviderError::Denied(format!(
+                "Applicant approval denied by {}",
+                decision.determining_policies.join(", ")
+            )))
+        }
+    }
 }
 
 #[async_trait]

@@ -4,8 +4,8 @@ use marty_applicant::{
     issuance::IssuanceOffer,
     service::{
         ApplicantService, ApplicationEvent, ApplicationTemplate, ApprovalAuthorizer, ApprovalFacts,
-        EventPublisher, FlowProvider, Identity, ProviderError, ServiceError, StorePersistence,
-        TemplateProvider,
+        EventPublisher, FlowProvider, Identity, MmfApprovalAuthorizer, ProviderError, ServiceError,
+        StorePersistence, TemplateProvider,
     },
     store::StoreDocument,
     Application, ClaimState, LifecycleStatus,
@@ -316,4 +316,27 @@ async fn uncertain_flow_retry_reuses_attempt_and_complete_claim_snapshot() {
         .system_data
         .get("active_issuance_attempt")
         .is_none());
+}
+
+#[tokio::test]
+async fn production_authorizer_uses_the_canonical_mmf_policy() {
+    let authorizer = MmfApprovalAuthorizer::new().unwrap();
+    let facts = ApprovalFacts {
+        reviewer_id: "reviewer-1".into(),
+        organization_id: "issuer-org".into(),
+        application_id: "application-1".into(),
+        status: LifecycleStatus::Submitted,
+        risk_score: 10,
+        document_verification_passed: true,
+        biometric_match_score: 95,
+        evidence_count: 1,
+        applicant_country: "US".into(),
+    };
+    authorizer.authorize(&facts).await.unwrap();
+    let mut invalid = facts;
+    invalid.risk_score = -1;
+    assert!(matches!(
+        authorizer.authorize(&invalid).await,
+        Err(ProviderError::Denied(_))
+    ));
 }
