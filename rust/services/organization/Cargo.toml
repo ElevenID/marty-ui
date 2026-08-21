@@ -9,8 +9,10 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+async-trait.workspace = true
 chrono.workspace = true
 mmf-data.workspace = true
+mmf-messaging.workspace = true
 rand.workspace = true
 regex.workspace = true
 serde.workspace = true

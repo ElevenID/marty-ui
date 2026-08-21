@@ -4364,8 +4364,10 @@ dependencies = [
 name = "marty-organization"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "mmf-data",
+ "mmf-messaging",
  "rand 0.9.5",
  "regex",
  "serde",

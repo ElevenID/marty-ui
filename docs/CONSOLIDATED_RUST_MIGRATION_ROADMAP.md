@@ -881,6 +881,22 @@ The optional live MMF Redis acceptance gate remains configured through
 `MMF_REDIS_TEST_URL`; no endpoint is available locally, so it is compiled but
 not executed here.
 
+All 12 Organization domain-event families now have one native envelope and
+audit projection under `contracts/organization-event-behavior.json`:
+organization create/update, member invite/add/remove, API-key create/revoke,
+and role create/update/delete/assign/remove. The surviving Python audit
+publisher and Rust execute the same action, category, resource, actor,
+severity, message and event-data vectors. Rust additionally projects every
+event into the canonical `mmf-messaging` at-least-once envelope with exact
+tenant partition, event deduplication identity, topic/routing key and bounded
+retry metadata. `OrganizationEventPublisher` persists the audit record before
+using the provider-neutral MMF transport and propagates audit, projection and
+transport failures instead of converting an unavailable live event path into
+success. Three Rust event groups, three Python audit groups, the full
+Organization suite and strict Clippy pass. The executable slice still must
+install the released event-stream gRPC transport and readiness policy before
+the Python publisher is deleted.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
