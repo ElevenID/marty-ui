@@ -22,20 +22,20 @@ hmac = "0.12"
 hex = "0.4"
 http = "1"
 jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
-marty-crypto = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false, features = ["ecdsa", "jwk", "x509-parsing"] }
-marty-didcomm = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false }
-marty-iso18013 = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false }
-marty-oid4vci = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false }
-marty-verification = { path = "../../marty-core-presentation-verifier-wave3/marty-verification", default-features = false }
-marty-status = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8" }
-mmf-platform = { path = "../../mmf-rust-gateway-wave25/crates/mmf-platform" }
-mmf-core = { path = "../../mmf-rust-gateway-wave25/crates/mmf-core" }
-mmf-data = { path = "../../mmf-rust-gateway-wave25/crates/mmf-data" }
-mmf-runtime = { path = "../../mmf-rust-gateway-wave25/crates/mmf-runtime" }
-mmf-security = { path = "../../mmf-rust-gateway-wave25/crates/mmf-security" }
-mmf-messaging = { path = "../../mmf-rust-gateway-wave25/crates/mmf-messaging", features = ["postgres"] }
-mmf-push = { path = "../../mmf-rust-gateway-wave25/crates/mmf-push" }
-mmf-workflow = { path = "../../mmf-rust-gateway-wave25/crates/mmf-workflow" }
+marty-crypto = { version = "=0.1.59", git = "https://github.com/ElevenID/marty-core", rev = "4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d", default-features = false, features = ["ecdsa", "jwk", "x509-parsing"] }
+marty-didcomm = { version = "=0.1.59", git = "https://github.com/ElevenID/marty-core", rev = "4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d", default-features = false }
+marty-iso18013 = { version = "=0.1.59", git = "https://github.com/ElevenID/marty-core", rev = "4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d", default-features = false }
+marty-oid4vci = { version = "=0.1.59", git = "https://github.com/ElevenID/marty-core", rev = "4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d", default-features = false }
+marty-verification = { version = "=0.1.59", git = "https://github.com/ElevenID/marty-core", rev = "4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d", default-features = false }
+marty-status = { version = "=0.1.59", git = "https://github.com/ElevenID/marty-core", rev = "4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d" }
+mmf-platform = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
+mmf-core = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
+mmf-data = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
+mmf-runtime = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
+mmf-security = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
+mmf-messaging = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2", features = ["postgres"] }
+mmf-push = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
+mmf-workflow = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
 prost = "0.14"
 protoc-bin-vendored = "3"
 rand = "0.9"

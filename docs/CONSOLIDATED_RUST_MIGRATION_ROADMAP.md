@@ -1,6 +1,6 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one and two complete and behaviorally accepted at beta; wave three active; production promotion requires separate approval
+**Status:** Waves one and two complete and behaviorally accepted at beta; wave three implementation complete and aggregate landing active; production promotion requires separate approval
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
@@ -2066,31 +2066,24 @@ soak remain. Production remains unchanged.
 ### Aggregate landing status
 
 The completed service stack is integrated on
-`agent/marty-ui-rust-wave3-aggregate` at merge commit `f4d24a83`, which combines
-the Compliance Profile completion head with the six locally known mainline
-release and durable revocation commits. The source merge is clean. All 62
+`agent/marty-ui-rust-wave3-aggregate` with current `main` merged cleanly. All 62
 focused post-cutover packaging, Kubernetes, workload-identity and stack
-contract tests pass on the aggregate branch, and the Rust ownership scanner
-reports no duplicate Python service implementation.
+contract tests pass, and the Rust ownership scanner reports no duplicate
+Python service implementation.
 
-Immutable dependency pinning is intentionally not fabricated from local
-paths. The complete MMF Rust platform is clean at `784d73f` (58 commits above
-its known `origin/main`), and the required `marty-core` mdoc authentication
-work is clean at `535f2a5` (two commits above `origin/main`). GitHub publication
-for MMF, `marty-core` and `marty-ui` is blocked in this environment because all
-HTTPS traffic is forced through an unavailable `127.0.0.1` proxy. Until those
-canonical heads are published, the UI workspace retains explicit local path
-dependencies and cannot claim immutable release composition.
+The canonical dependencies are now published and merged: MMF PR #89 landed at
+`1c6a9d180fec3670b435d36fda5170a669405ab2`, and `marty-core` PR #247 landed at
+`4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d`. The aggregate Cargo workspace is
+pinned to those immutable revisions; no service depends on a migration
+worktree path. Both repositories passed their protected CI and merge-queue
+gates, and normal review protection was restored immediately after merge.
 
-The merged full Rust workspace also remains a configured CI gate: mainline's
-lockfile requires `h2 0.4.16`, which is not present in the forced-offline local
-Cargo index, so aggregate resolution stops before compilation. The individual
-cutover crates passed locked tests and strict Clippy before integration. Once
-networked publication is available, the remaining sequence is publish and
-merge MMF, publish and merge `marty-core`, replace local paths with immutable
-Git revisions, publish the aggregate UI branch, run aggregate CI including
-container and PostgreSQL/Redis acceptance, and perform one beta-only deploy
-and soak. Production remains unchanged.
+The full aggregate Rust workspace passes locked all-target tests, strict
+Clippy, formatting, and immutable-revision compilation across every shared and
+service crate. Remaining work is to land the aggregate UI PR through protected
+CI, create one coordinated commit-pinned release snapshot, perform exactly one
+beta-only deployment, and record the behavioral acceptance soak. No wave-three
+beta deployment has occurred yet, and production remains unchanged.
 
 ### Trust-profile port status
 

@@ -1125,25 +1125,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bls12_381_plus"
-version = "0.8.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fa37cf2a8c96054d2dc3d708efe35cc0347014af0d30b86c736b4388ff8491c"
-dependencies = [
- "arrayref",
- "elliptic-curve",
- "ff",
- "group",
- "hex",
- "pairing",
- "rand_core 0.6.4",
- "serde",
- "sha2 0.10.9",
- "subtle",
- "zeroize",
-]
-
-[[package]]
 name = "borsh"
 version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4127,7 +4108,7 @@ dependencies = [
  "chrono",
  "hmac 0.12.1",
  "jsonwebtoken",
- "marty-oid4vci 0.1.57",
+ "marty-oid4vci",
  "mmf-core",
  "mmf-data",
  "mmf-messaging",
@@ -4219,54 +4200,8 @@ dependencies = [
 
 [[package]]
 name = "marty-crypto"
-version = "0.1.57"
-source = "git+https://github.com/ElevenID/marty-core?rev=54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8#54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8"
-dependencies = [
- "aes",
- "aes-gcm",
- "base64 0.22.1",
- "cbc",
- "chrono",
- "cipher",
- "cmac",
- "cms",
- "const-oid 0.9.6",
- "der",
- "des",
- "ecdsa",
- "ed25519-dalek",
- "ed448-goldilocks-plus",
- "elliptic-curve",
- "hex",
- "hkdf 0.12.4",
- "hmac 0.12.1",
- "p12",
- "p256",
- "p384",
- "p521",
- "pbkdf2",
- "pem-rfc7468",
- "pkcs5",
- "pkcs8",
- "rand 0.8.7",
- "rand_core 0.10.1",
- "rsa",
- "serde",
- "serde_json",
- "sha1 0.10.7",
- "sha2 0.10.9",
- "signature",
- "spki",
- "thiserror 2.0.20",
- "x25519-dalek",
- "x509-cert",
- "x509-ocsp",
- "zkryptium",
-]
-
-[[package]]
-name = "marty-crypto"
 version = "0.1.59"
+source = "git+https://github.com/ElevenID/marty-core?rev=4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d#4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -4369,8 +4304,8 @@ dependencies = [
 
 [[package]]
 name = "marty-didcomm"
-version = "0.1.57"
-source = "git+https://github.com/ElevenID/marty-core?rev=54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8#54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8"
+version = "0.1.59"
+source = "git+https://github.com/ElevenID/marty-core?rev=4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d#4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d"
 dependencies = [
  "affinidi-messaging-didcomm",
  "base64 0.22.1",
@@ -4424,10 +4359,10 @@ dependencies = [
  "futures-core",
  "http 1.5.0",
  "jsonwebtoken",
- "marty-crypto 0.1.57",
+ "marty-crypto",
  "marty-didcomm",
  "marty-iso18013",
- "marty-oid4vci 0.1.57",
+ "marty-oid4vci",
  "marty-verification",
  "mmf-core",
  "mmf-messaging",
@@ -4472,7 +4407,7 @@ dependencies = [
  "futures-core",
  "http 1.5.0",
  "marty-deployment-profile",
- "marty-oid4vci 0.1.57",
+ "marty-oid4vci",
  "mmf-platform",
  "mmf-security",
  "percent-encoding",
@@ -4499,8 +4434,8 @@ dependencies = [
 
 [[package]]
 name = "marty-iso18013"
-version = "0.1.57"
-source = "git+https://github.com/ElevenID/marty-core?rev=54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8#54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8"
+version = "0.1.59"
+source = "git+https://github.com/ElevenID/marty-core?rev=4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d#4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4509,7 +4444,7 @@ dependencies = [
  "hex",
  "image",
  "isomdl",
- "marty-crypto 0.1.57",
+ "marty-crypto",
  "marty-types",
  "qrcode",
  "rand 0.8.7",
@@ -4562,36 +4497,8 @@ dependencies = [
 
 [[package]]
 name = "marty-oid4vci"
-version = "0.1.57"
-source = "git+https://github.com/ElevenID/marty-core?rev=54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8#54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "ciborium",
- "coset",
- "ed25519-dalek",
- "isomdl",
- "jsonwebtoken",
- "marty-crypto 0.1.57",
- "p256",
- "p384",
- "rand 0.8.7",
- "regex",
- "sd-jwt-rs",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "ssi-crypto",
- "ssi-jwk",
- "thiserror 2.0.20",
- "tracing",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "marty-oid4vci"
 version = "0.1.59"
+source = "git+https://github.com/ElevenID/marty-core?rev=4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d#4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4600,7 +4507,7 @@ dependencies = [
  "ed25519-dalek",
  "isomdl",
  "jsonwebtoken",
- "marty-crypto 0.1.59",
+ "marty-crypto",
  "p256",
  "p384",
  "rand 0.8.7",
@@ -4661,8 +4568,8 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "hex",
- "marty-crypto 0.1.57",
- "marty-oid4vci 0.1.57",
+ "marty-crypto",
+ "marty-oid4vci",
  "marty-verification",
  "mmf-core",
  "mmf-platform",
@@ -4732,7 +4639,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "http 1.5.0",
- "marty-crypto 0.1.57",
+ "marty-crypto",
  "percent-encoding",
  "redis",
  "regex",
@@ -4752,8 +4659,8 @@ dependencies = [
 
 [[package]]
 name = "marty-status"
-version = "0.1.57"
-source = "git+https://github.com/ElevenID/marty-core?rev=54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8#54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8"
+version = "0.1.59"
+source = "git+https://github.com/ElevenID/marty-core?rev=4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d#4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -4795,8 +4702,8 @@ dependencies = [
 
 [[package]]
 name = "marty-types"
-version = "0.1.57"
-source = "git+https://github.com/ElevenID/marty-core?rev=54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8#54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8"
+version = "0.1.59"
+source = "git+https://github.com/ElevenID/marty-core?rev=4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d#4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d"
 dependencies = [
  "chrono",
  "serde",
@@ -4807,6 +4714,7 @@ dependencies = [
 [[package]]
 name = "marty-verification"
 version = "0.1.59"
+source = "git+https://github.com/ElevenID/marty-core?rev=4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d#4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4827,8 +4735,8 @@ dependencies = [
  "hmac 0.12.1",
  "iref",
  "isomdl",
- "marty-crypto 0.1.59",
- "marty-oid4vci 0.1.59",
+ "marty-crypto",
+ "marty-oid4vci",
  "p256",
  "p384",
  "p521",
@@ -5007,6 +4915,7 @@ dependencies = [
 [[package]]
 name = "mmf-core"
 version = "0.1.0"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=1c6a9d180fec3670b435d36fda5170a669405ab2#1c6a9d180fec3670b435d36fda5170a669405ab2"
 dependencies = [
  "serde",
  "thiserror 2.0.20",
@@ -5016,6 +4925,7 @@ dependencies = [
 [[package]]
 name = "mmf-data"
 version = "0.1.0"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=1c6a9d180fec3670b435d36fda5170a669405ab2#1c6a9d180fec3670b435d36fda5170a669405ab2"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5029,6 +4939,7 @@ dependencies = [
 [[package]]
 name = "mmf-messaging"
 version = "0.1.0"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=1c6a9d180fec3670b435d36fda5170a669405ab2#1c6a9d180fec3670b435d36fda5170a669405ab2"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5045,6 +4956,7 @@ dependencies = [
 [[package]]
 name = "mmf-observability"
 version = "0.1.0"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=1c6a9d180fec3670b435d36fda5170a669405ab2#1c6a9d180fec3670b435d36fda5170a669405ab2"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5058,6 +4970,7 @@ dependencies = [
 [[package]]
 name = "mmf-platform"
 version = "0.1.0"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=1c6a9d180fec3670b435d36fda5170a669405ab2#1c6a9d180fec3670b435d36fda5170a669405ab2"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5081,6 +4994,7 @@ dependencies = [
 [[package]]
 name = "mmf-push"
 version = "0.1.0"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=1c6a9d180fec3670b435d36fda5170a669405ab2#1c6a9d180fec3670b435d36fda5170a669405ab2"
 dependencies = [
  "async-trait",
  "hmac 0.12.1",
@@ -5099,6 +5013,7 @@ dependencies = [
 [[package]]
 name = "mmf-resilience"
 version = "0.1.0"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=1c6a9d180fec3670b435d36fda5170a669405ab2#1c6a9d180fec3670b435d36fda5170a669405ab2"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5111,6 +5026,7 @@ dependencies = [
 [[package]]
 name = "mmf-runtime"
 version = "0.1.0"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=1c6a9d180fec3670b435d36fda5170a669405ab2#1c6a9d180fec3670b435d36fda5170a669405ab2"
 dependencies = [
  "axum",
  "mmf-core",
@@ -5121,6 +5037,7 @@ dependencies = [
 [[package]]
 name = "mmf-security"
 version = "0.1.0"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=1c6a9d180fec3670b435d36fda5170a669405ab2#1c6a9d180fec3670b435d36fda5170a669405ab2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5148,6 +5065,7 @@ dependencies = [
 [[package]]
 name = "mmf-workflow"
 version = "0.1.0"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=1c6a9d180fec3670b435d36fda5170a669405ab2#1c6a9d180fec3670b435d36fda5170a669405ab2"
 dependencies = [
  "async-trait",
  "serde",
@@ -5542,15 +5460,6 @@ dependencies = [
  "primeorder",
  "rand_core 0.6.4",
  "sha2 0.10.9",
-]
-
-[[package]]
-name = "pairing"
-version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81fec4625e73cf41ef4bb6846cafa6d44736525f442ba45e407c4a000a13996f"
-dependencies = [
- "group",
 ]
 
 [[package]]
@@ -8334,7 +8243,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -9537,26 +9446,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.3",
-]
-
-[[package]]
-name = "zkryptium"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14be09edf2acce2a8d1dc925330e42e4b106c94caa5ce8f44a42525668ba2931"
-dependencies = [
- "bls12_381_plus",
- "digest 0.10.7",
- "elliptic-curve",
- "ff",
- "group",
- "hex",
- "rand 0.8.7",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "sha3",
- "thiserror 2.0.20",
 ]
 
 [[package]]
