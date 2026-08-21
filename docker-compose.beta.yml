@@ -165,6 +165,7 @@ services:
   verification:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/3
       VERIF_GRPC_ENABLED: "false"
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/verification_workload_client_cert

@@ -192,14 +192,7 @@
         "paths": ["marty-oid4vci/src/presentation_request.rs"],
         "binding_paths": ["marty-bindings/src/lib.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/verification/main.py"],
-          "language": "python",
-          "disposition": "verification-api-adapter-only"
-        }
-      ]
+      "legacy": []
     },
     {
       "id": "openid4vp-mdoc-handover",
@@ -607,6 +600,17 @@
         "binding_paths": ["contracts/device-registration-service-behavior.json"]
       },
       "legacy": []
+    },
+    {
+      "id": "verification-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/verification"],
+        "binding_paths": ["contracts/verification-service-behavior.json"]
+      },
+      "legacy": []
     }
   ],
   "guardrails": {
@@ -641,6 +645,10 @@
       {
         "capability_id": "device-registration-service",
         "forbidden_globs": ["services/device_registration/**/*.py"]
+      },
+      {
+        "capability_id": "verification-service",
+        "forbidden_globs": ["services/verification/**/*.py"]
       }
     ],
     "approved_imports": [

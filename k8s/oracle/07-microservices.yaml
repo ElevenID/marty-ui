@@ -981,6 +981,10 @@ spec:
               value: /var/run/secrets/marty/workload/ca.crt
             - name: PP_GRPC_TARGET
               value: "presentation-policy:9009"
+            - name: ORG_GRPC_TARGET
+              value: "organization:9002"
+            - name: CT_GRPC_TARGET
+              value: "credential-template:9003"
             - name: VERIF_GRPC_PORT
               value: "9017"
             - name: VERIF_GRPC_ENABLED
@@ -992,13 +996,6 @@ spec:
                   key: PUBLIC_API_URL
             - name: REDIS_URL
               value: "redis://redis:6379/3"
-            - name: SIGNING_KEYS_INTERNAL_URL
-              value: "http://gateway:8000/internal/signing-keys"
-            - name: SIGNING_KEYS_INTERNAL_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: SIGNING_KEYS_INTERNAL_API_KEY
           volumeMounts:
             - name: verification-workload-tls
               mountPath: /var/run/secrets/marty/workload

@@ -895,6 +895,8 @@ services:
       GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/verification_workload_client_key
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       VERIFICATION_SERVICE_PORT: "8012"
+      ORG_GRPC_TARGET: organization:9002
+      CT_GRPC_TARGET: credential-template:9003
       PP_GRPC_TARGET: presentation-policy:9009
       VERIF_GRPC_PORT: "9017"
       # The inbound proto carries no authenticated tenant principal and has no
@@ -902,10 +904,7 @@ services:
       VERIF_GRPC_ENABLED: "false"
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
       REDIS_URL: redis://redis:6379/3
-      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
-      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
     secrets:
-      - issuance_api_key
       - grpc_service_token
       - verification_workload_client_cert
       - verification_workload_client_key

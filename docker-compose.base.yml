@@ -1074,19 +1074,21 @@ services:
   verification:
     build:
       context: .
-      dockerfile: services/Dockerfile
+      dockerfile: rust/services/Dockerfile.ci
+      target: verification
       args:
-        <<: *marty_service_build_artifacts
-        SERVICE_NAME: verification
+        MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+        MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
+      ENVIRONMENT: development
       VERIFICATION_SERVICE_PORT: "8012"
+      ORG_GRPC_TARGET: organization:9002
+      CT_GRPC_TARGET: credential-template:9003
       PP_GRPC_TARGET: presentation-policy:9009
       VERIF_GRPC_PORT: "9017"
       VERIF_GRPC_ENABLED: "true"
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       REDIS_URL: redis://redis:6379/3
-      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
-      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
     ports:
       - "127.0.0.1:8012:8012"
