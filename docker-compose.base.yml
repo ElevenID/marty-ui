@@ -552,13 +552,16 @@ services:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: trust-profile
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       TRUST_PROFILE_SERVICE_PORT: "8004"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
-      # OpenBao KMS for certificate operations
-      BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
+      MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
+      MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:-}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
     ports:
       - "127.0.0.1:8004:8004"
     depends_on:

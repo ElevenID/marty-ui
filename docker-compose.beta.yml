@@ -69,6 +69,12 @@ services:
   trust-profile:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
+      MARTY_ORG_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}
+      MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set for beta}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
 
   applicant:
     environment:

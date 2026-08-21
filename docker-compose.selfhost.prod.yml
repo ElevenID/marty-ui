@@ -456,22 +456,18 @@ services:
       dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: trust-profile
-    entrypoint: ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
     environment:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       TRUST_PROFILE_SERVICE_PORT: "8004"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
-      BAO_ADDR: ${BAO_ADDR:-}
-      BAO_TOKEN_FILE: /run/secrets/openbao_service_token
     secrets:
       - marty_db_password
-      - openbao_service_token
       - grpc_service_token
-    volumes:
-      - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
+      - issuance_api_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully

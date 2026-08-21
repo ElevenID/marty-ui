@@ -48,6 +48,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: SIGNING_KEYS_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTERNAL_API_KEY
             - name: GATEWAY_PORT
               value: "8000"
             - name: AUTH_SERVICE_URL
@@ -244,11 +249,6 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: REDIS_URL
-            - name: RABBITMQ_URL
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: RABBITMQ_URL
             - name: OIDC_ISSUER_URL
               valueFrom:
                 configMapKeyRef:
