@@ -5,11 +5,12 @@ use chrono::{Duration, TimeZone, Utc};
 use marty_trust_profile::{
     CascadeRevocationPolicy, Change, ComplianceStatus, CreateProfileInput, IssuerEntity,
     IssuerEntityComplianceStatus, IssuerEntityPatch, IssuerEntityType,
-    MemoryTrustProfileRepository, ProfilePatch, RegistryImportSource, RegistryImportType,
-    RegistryImportedIssuer, RevocationPolicy, TimePolicy, TrustAuthorizationError, TrustProfile,
-    TrustProfileApplication, TrustProfileApplicationError, TrustProfileControlPlane,
-    TrustProfileIssuer, TrustProfileRepository, TrustProfileStatus, TrustProfileType,
-    TrustRelationshipStatus, TrustSource, TrustSourceType, ValidationRules,
+    MemoryTrustProfileRepository, OrganizationProfilePatch, OrganizationTrustProfile, ProfilePatch,
+    RegistryImportSource, RegistryImportType, RegistryImportedIssuer, RevocationPolicy, TimePolicy,
+    TrustAuthorizationError, TrustFramework, TrustProfile, TrustProfileApplication,
+    TrustProfileApplicationError, TrustProfileControlPlane, TrustProfileIssuer,
+    TrustProfileRepository, TrustProfileStatus, TrustProfileType, TrustRelationshipStatus,
+    TrustSource, TrustSourceType, ValidationRules,
 };
 use serde_json::{json, Map};
 use uuid::Uuid;
@@ -441,4 +442,98 @@ async fn dormant_registry_imports_preserve_full_features_and_reject_private_keys
         .await
         .unwrap()
         .is_empty());
+}
+
+#[tokio::test]
+async fn organization_profiles_frameworks_and_owner_reads_use_the_same_native_application() {
+    let (repository, application) = harness();
+    let framework = TrustFramework {
+        id: Uuid::new_v4(),
+        code: "CUSTOM".into(),
+        display_name: "Custom".into(),
+        description: None,
+        pkd_endpoints: Vec::new(),
+        default_algorithms: vec!["ES256".into()],
+        default_formats: vec!["MDOC".into()],
+        validation_ruleset: json!({}),
+        sync_config: json!({}),
+        is_system: false,
+        created_at: now(),
+        updated_at: now(),
+    };
+    repository.save_framework(&framework).await.unwrap();
+    let organization_profile = application
+        .create_organization_profile(
+            "user-a",
+            OrganizationTrustProfile {
+                id: Uuid::new_v4(),
+                organization_id: "org-a".into(),
+                framework_id: framework.id,
+                name: "Regional trust".into(),
+                display_name: None,
+                description: None,
+                enabled: true,
+                use_case_tags: vec!["travel".into()],
+                compliance_status: ComplianceStatus::SetupRequired,
+                auto_generated: false,
+                revocation_policy: None,
+                time_policy: None,
+                allowed_algorithms: Some(vec!["ES256".into()]),
+                allowed_formats: Some(vec!["MDOC".into()]),
+                allowed_issuers: None,
+                denied_issuers: None,
+                jurisdiction_filter: Some(vec!["us-ca".into()]),
+                metadata: json!({"public": true}),
+                created_at: now(),
+                updated_at: now(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        organization_profile.jurisdiction_filter,
+        Some(vec!["US-CA".into()])
+    );
+    assert_eq!(
+        application.framework(framework.id).await.unwrap(),
+        framework
+    );
+    let profiles = application
+        .organization_profiles("user-a", "org-a")
+        .await
+        .unwrap();
+    assert_eq!(profiles.len(), 1);
+    assert_eq!(profiles[0], organization_profile);
+    assert!(matches!(
+        application
+            .update_organization_profile(
+                "user-a",
+                "org-a",
+                organization_profile.id,
+                OrganizationProfilePatch {
+                    metadata: Change::Set(json!({"kms_provider": "vault"})),
+                    ..OrganizationProfilePatch::default()
+                },
+                now() + Duration::minutes(1),
+            )
+            .await,
+        Err(TrustProfileApplicationError::Domain(
+            marty_trust_profile::TrustDomainError::PrivateCustodyMetadata(_)
+        ))
+    ));
+
+    let profile = application
+        .create_profile(
+            "user-a",
+            CreateProfileInput {
+                profile: profile(),
+                allowed_issuers_was_provided: false,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        application.profile_owner(profile.id).await.unwrap(),
+        "org-a"
+    );
 }

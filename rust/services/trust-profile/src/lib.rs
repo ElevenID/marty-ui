@@ -6,9 +6,9 @@ pub mod postgres;
 pub mod repository;
 
 pub use application::{
-    Change, CreateProfileInput, IssuerEntityPatch, ProfilePatch, RelationshipPatch,
-    TrustAuthorizationError, TrustProfileApplication, TrustProfileApplicationError,
-    TrustProfileControlPlane,
+    Change, CreateProfileInput, IssuerEntityPatch, OrganizationProfilePatch, ProfilePatch,
+    RelationshipPatch, TrustAuthorizationError, TrustProfileApplication,
+    TrustProfileApplicationError, TrustProfileControlPlane,
 };
 pub use domain::{
     CascadeRevocationPolicy, ComplianceStatus, IssuerEntity, IssuerEntityComplianceStatus,

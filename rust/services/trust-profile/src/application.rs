@@ -7,11 +7,13 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    allowed_issuers_after_request, normalize_accreditations, reject_private_custody_metadata,
-    require_issuer_status_transition, CascadeRevocationPolicy, ComplianceStatus, IssuerEntity,
-    IssuerEntityComplianceStatus, IssuerEntityType, RegistryImportSource, RegistryImportedIssuer,
-    TimePolicy, TrustDomainError, TrustProfile, TrustProfileIssuer, TrustProfileRepository,
-    TrustProfileRepositoryError, TrustRelationshipStatus, TrustSource, ValidationRules,
+    allowed_issuers_after_request, normalize_accreditations, normalize_jurisdictions,
+    reject_private_custody_metadata, require_issuer_status_transition, CascadeRevocationPolicy,
+    ComplianceStatus, IssuerEntity, IssuerEntityComplianceStatus, IssuerEntityType,
+    OrganizationTrustProfile, RegistryImportSource, RegistryImportedIssuer, RegistryStatus,
+    TimePolicy, TrustAnchorType, TrustDomainError, TrustFramework, TrustProfile,
+    TrustProfileIssuer, TrustProfileRepository, TrustProfileRepositoryError, TrustRegistryEntry,
+    TrustRelationshipStatus, TrustSource, ValidationRules,
 };
 
 const VALID_ALGORITHMS: &[&str] = &[
@@ -121,6 +123,25 @@ pub struct IssuerEntityPatch {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
+pub struct OrganizationProfilePatch {
+    pub name: Change<String>,
+    pub display_name: Change<Option<String>>,
+    pub description: Change<Option<String>>,
+    pub enabled: Change<bool>,
+    pub use_case_tags: Change<Vec<String>>,
+    pub compliance_status: Change<ComplianceStatus>,
+    pub auto_generated: Change<bool>,
+    pub revocation_policy: Change<Option<Value>>,
+    pub time_policy: Change<Option<Value>>,
+    pub allowed_algorithms: Change<Option<Vec<String>>>,
+    pub allowed_formats: Change<Option<Vec<String>>>,
+    pub allowed_issuers: Change<Option<Vec<String>>>,
+    pub denied_issuers: Change<Option<Vec<String>>>,
+    pub jurisdiction_filter: Change<Option<Vec<String>>>,
+    pub metadata: Change<Value>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct RelationshipPatch {
     pub trust_level: Change<u8>,
     pub relationship_status: Change<TrustRelationshipStatus>,
@@ -169,6 +190,134 @@ impl TrustProfileApplication {
         validate_profile(&input.profile)?;
         self.repository.save_profile(&input.profile, None).await?;
         Ok(input.profile)
+    }
+
+    pub async fn create_organization_profile(
+        &self,
+        user_id: &str,
+        mut profile: OrganizationTrustProfile,
+    ) -> Result<OrganizationTrustProfile, TrustProfileApplicationError> {
+        self.control_plane
+            .require_permission(user_id, &profile.organization_id, "trust-profile", "create")
+            .await?;
+        if self
+            .repository
+            .framework_by_id(profile.framework_id)
+            .await?
+            .is_none()
+        {
+            return Err(TrustProfileApplicationError::Invalid(
+                "trust_framework_not_found",
+            ));
+        }
+        validate_organization_profile(&mut profile)?;
+        self.repository.save_organization_profile(&profile).await?;
+        Ok(profile)
+    }
+
+    pub async fn organization_profiles(
+        &self,
+        user_id: &str,
+        organization_id: &str,
+    ) -> Result<Vec<OrganizationTrustProfile>, TrustProfileApplicationError> {
+        self.control_plane
+            .require_permission(user_id, organization_id, "trust-profile", "view")
+            .await?;
+        self.repository
+            .organization_profiles(organization_id)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn organization_profile(
+        &self,
+        user_id: &str,
+        organization_id: &str,
+        profile_id: Uuid,
+    ) -> Result<OrganizationTrustProfile, TrustProfileApplicationError> {
+        let profile = self
+            .repository
+            .organization_profile_by_id(profile_id)
+            .await?
+            .filter(|profile| profile.organization_id == organization_id)
+            .ok_or(TrustProfileApplicationError::NotFound(
+                "organization_trust_profile",
+            ))?;
+        self.control_plane
+            .require_permission(user_id, organization_id, "trust-profile", "view")
+            .await?;
+        Ok(profile)
+    }
+
+    pub async fn update_organization_profile(
+        &self,
+        user_id: &str,
+        organization_id: &str,
+        profile_id: Uuid,
+        patch: OrganizationProfilePatch,
+        now: DateTime<Utc>,
+    ) -> Result<OrganizationTrustProfile, TrustProfileApplicationError> {
+        let mut profile = self
+            .repository
+            .organization_profile_by_id(profile_id)
+            .await?
+            .filter(|profile| profile.organization_id == organization_id)
+            .ok_or(TrustProfileApplicationError::NotFound(
+                "organization_trust_profile",
+            ))?;
+        self.control_plane
+            .require_permission(user_id, organization_id, "trust-profile", "edit")
+            .await?;
+        apply(&mut profile.name, patch.name);
+        apply(&mut profile.display_name, patch.display_name);
+        apply(&mut profile.description, patch.description);
+        apply(&mut profile.enabled, patch.enabled);
+        apply(&mut profile.use_case_tags, patch.use_case_tags);
+        apply(&mut profile.compliance_status, patch.compliance_status);
+        apply(&mut profile.auto_generated, patch.auto_generated);
+        apply(&mut profile.revocation_policy, patch.revocation_policy);
+        apply(&mut profile.time_policy, patch.time_policy);
+        apply(&mut profile.allowed_algorithms, patch.allowed_algorithms);
+        apply(&mut profile.allowed_formats, patch.allowed_formats);
+        apply(&mut profile.allowed_issuers, patch.allowed_issuers);
+        apply(&mut profile.denied_issuers, patch.denied_issuers);
+        apply(&mut profile.jurisdiction_filter, patch.jurisdiction_filter);
+        apply(&mut profile.metadata, patch.metadata);
+        profile.updated_at = now;
+        validate_organization_profile(&mut profile)?;
+        self.repository.save_organization_profile(&profile).await?;
+        Ok(profile)
+    }
+
+    pub async fn frameworks(&self) -> Result<Vec<TrustFramework>, TrustProfileApplicationError> {
+        self.repository.frameworks().await.map_err(Into::into)
+    }
+
+    pub async fn framework(
+        &self,
+        framework_id: Uuid,
+    ) -> Result<TrustFramework, TrustProfileApplicationError> {
+        self.repository
+            .framework_by_id(framework_id)
+            .await?
+            .ok_or(TrustProfileApplicationError::NotFound("trust_framework"))
+    }
+
+    pub async fn registry_entries(
+        &self,
+        anchor_type: Option<TrustAnchorType>,
+        country_code: Option<&str>,
+        current_only: bool,
+        since_sequence: Option<u64>,
+    ) -> Result<Vec<TrustRegistryEntry>, TrustProfileApplicationError> {
+        self.repository
+            .registry_entries(anchor_type, country_code, current_only, since_sequence)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn registry_status(&self) -> Result<RegistryStatus, TrustProfileApplicationError> {
+        self.repository.registry_status().await.map_err(Into::into)
     }
 
     pub async fn profiles(
@@ -354,6 +503,44 @@ impl TrustProfileApplication {
         Ok(issuer)
     }
 
+    pub async fn issuer_entities(
+        &self,
+        user_id: &str,
+        organization_id: Option<&str>,
+    ) -> Result<Vec<IssuerEntity>, TrustProfileApplicationError> {
+        if let Some(organization_id) = organization_id {
+            self.control_plane
+                .require_permission(user_id, organization_id, "trusted-issuer", "view")
+                .await?;
+            return self
+                .repository
+                .issuer_entities(Some(organization_id))
+                .await
+                .map_err(Into::into);
+        }
+        Ok(self
+            .repository
+            .issuer_entities(None)
+            .await?
+            .into_iter()
+            .filter(|issuer| issuer.is_system_issuer || issuer.organization_id.is_none())
+            .collect())
+    }
+
+    pub async fn issuer_entity(
+        &self,
+        user_id: &str,
+        issuer_id: Uuid,
+    ) -> Result<IssuerEntity, TrustProfileApplicationError> {
+        let issuer = self.required_issuer(issuer_id).await?;
+        if let Some(organization_id) = &issuer.organization_id {
+            self.control_plane
+                .require_permission(user_id, organization_id, "trusted-issuer", "view")
+                .await?;
+        }
+        Ok(issuer)
+    }
+
     pub async fn update_issuer_entity(
         &self,
         user_id: &str,
@@ -473,6 +660,48 @@ impl TrustProfileApplication {
         Ok(relationship)
     }
 
+    pub async fn relationships(
+        &self,
+        user_id: &str,
+        profile_id: Uuid,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<TrustProfileIssuer>, TrustProfileApplicationError> {
+        let profile = self.required_profile(profile_id).await?;
+        self.control_plane
+            .require_permission(user_id, &profile.organization_id, "trusted-issuer", "view")
+            .await?;
+        let relationships = self.repository.profile_issuers(profile_id).await?;
+        for relationship in &relationships {
+            self.required_issuer(relationship.issuer_id).await?;
+        }
+        Ok(relationships
+            .into_iter()
+            .skip(offset)
+            .take(limit.min(500))
+            .collect())
+    }
+
+    pub async fn relationship(
+        &self,
+        user_id: &str,
+        profile_id: Uuid,
+        relationship_id: Uuid,
+    ) -> Result<TrustProfileIssuer, TrustProfileApplicationError> {
+        let relationship = self.required_relationship(relationship_id).await?;
+        if relationship.trust_profile_id != profile_id {
+            return Err(TrustProfileApplicationError::NotFound(
+                "trusted_issuer_relationship",
+            ));
+        }
+        let profile = self.required_profile(profile_id).await?;
+        self.control_plane
+            .require_permission(user_id, &profile.organization_id, "trusted-issuer", "view")
+            .await?;
+        self.required_issuer(relationship.issuer_id).await?;
+        Ok(relationship)
+    }
+
     pub async fn update_relationship(
         &self,
         user_id: &str,
@@ -532,6 +761,23 @@ impl TrustProfileApplication {
             .delete_profile_issuer(relationship_id)
             .await?;
         Ok(())
+    }
+
+    pub async fn profile_owner(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<String, TrustProfileApplicationError> {
+        Ok(self.required_profile(profile_id).await?.organization_id)
+    }
+
+    pub async fn issuer_owner(
+        &self,
+        issuer_id: Uuid,
+    ) -> Result<String, TrustProfileApplicationError> {
+        self.required_issuer(issuer_id)
+            .await?
+            .organization_id
+            .ok_or(TrustProfileApplicationError::NotFound("issuer_entity"))
     }
 
     pub async fn save_registry_import_source(
@@ -635,6 +881,44 @@ fn apply<T>(target: &mut T, change: Change<T>) {
     if let Change::Set(value) = change {
         *target = value;
     }
+}
+
+fn validate_organization_profile(
+    profile: &mut OrganizationTrustProfile,
+) -> Result<(), TrustProfileApplicationError> {
+    if profile.organization_id.trim().is_empty()
+        || profile.name.trim().is_empty()
+        || profile.name.chars().count() > 255
+    {
+        return Err(TrustProfileApplicationError::Invalid(
+            "organization_trust_profile",
+        ));
+    }
+    if profile
+        .allowed_algorithms
+        .as_ref()
+        .is_some_and(|algorithms| {
+            algorithms.is_empty()
+                || algorithms
+                    .iter()
+                    .any(|value| !VALID_ALGORITHMS.contains(&value.as_str()))
+        })
+    {
+        return Err(TrustProfileApplicationError::Invalid("allowed_algorithms"));
+    }
+    if profile.allowed_formats.as_ref().is_some_and(|formats| {
+        formats.is_empty()
+            || formats
+                .iter()
+                .any(|value| !VALID_FORMATS.contains(&value.as_str()))
+    }) {
+        return Err(TrustProfileApplicationError::Invalid("allowed_formats"));
+    }
+    if let Some(jurisdictions) = profile.jurisdiction_filter.take() {
+        profile.jurisdiction_filter = Some(normalize_jurisdictions(jurisdictions)?);
+    }
+    reject_private_custody_metadata(&profile.metadata)?;
+    Ok(())
 }
 
 fn validate_profile(profile: &TrustProfile) -> Result<(), TrustProfileApplicationError> {
