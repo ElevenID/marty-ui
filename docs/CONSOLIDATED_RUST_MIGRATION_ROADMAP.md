@@ -65,7 +65,7 @@ generated protobufs and caches remain excluded.
 | 8 | Applicant | 5,652 deleted | Applicant/application state transitions, vetting, evidence, biometrics, reviewer locks, issuance orchestration and storage |
 | 9 | Device registration | 3,220 at cutover | Registration lifecycle, atomic challenge consumption, versioned key rotation, preferences, organization checks, legacy adoption and storage |
 | 10 | Verification | 3,529 deleted | Complete: session APIs, OID4VP/SIOPv2 construction, provider/service integration, Redis coordination, HTTP/gRPC compatibility and canonical results now execute in Rust |
-| 11 | Deployment profile | 2,588 current | CRUD, validation, versioning, authorization and storage |
+| 11 | Deployment profile | 3,010 deleted | Complete: all 14 profile/lane operations, complete runtime configuration, one-time API keys, tenant authorization, atomic device assignment, PostgreSQL migration/seed ownership and Gateway contract consolidation now execute in Rust |
 | 12 | Compliance profile | 1,054 current | CRUD, policy metadata, authorization and storage |
 
 ### Gateway port status
@@ -1951,8 +1951,60 @@ pytest temporary directories remain blocked by the known Windows/OneDrive ACL;
 the scanner they exercise passes directly. Docker image execution and live
 Redis replica behavior remain configured CI gates because the local Docker
 daemon and service stack are unavailable. No beta deployment has occurred;
-Verification joins the one aggregate wave-three beta update after Deployment
-Profile and Compliance Profile land, and production remains unchanged.
+Verification joins the one aggregate wave-three beta update after Compliance
+Profile lands, and production remains unchanged.
+
+### Deployment-profile port status
+
+Deployment Profile has completed its native implementation, behavioral gates
+and same-slice Python deletion on the dedicated
+`marty-ui-rust-deployment-profile-cutover-wave3` worktree and
+`agent/marty-ui-rust-deployment-profile-cutover-wave3` branch. The new
+`marty-deployment-profile` crate is the single implementation for all 14
+released profile and lane operations. It preserves profile lifecycle,
+environment and site bindings, callbacks, API-key/OAuth2/mTLS/JWT settings,
+rate limits, all general and Canvas feature flags, complete branding and QR
+configuration, trust/policy/template/default bindings, network and key-access
+modes, environment and update policy, offline TTL, operator biometrics, audit
+settings, enabled flows, one-time API-key disclosure and lane/device behavior.
+
+The port closes three latent Python feature defects without changing the
+intended API: callback/auth/rate/branding updates are now durably persisted,
+all accepted QR and mTLS fields survive create/update storage, and lane
+deletion checks the actual `device_ids` collection. Device assignment is
+idempotent and unique across a profile under a PostgreSQL advisory lock and
+row locks, eliminating the prior read-then-write race. Profile responses keep
+private runtime configuration and complete API keys out of the public
+projection.
+
+`contracts/deployment-profile-service-behavior.json` freezes the transport,
+enum, configuration and failure invariants independently of Python or Rust.
+The same crate owns the Gateway canonical request/dependency/response contract,
+so the 553-line duplicate Gateway implementation has been deleted. Generic
+lifecycle, health/readiness, bounded gRPC transport and exact active tenant
+membership authorization come from MMF crates rather than service-local
+copies. Deployed startup requires PostgreSQL, a service token and workload
+mutual TLS and has no Python fallback.
+
+Rust now owns additive install/upgrade migration, final-schema verification,
+legacy biometric-column adoption, migration history and the current Marty
+Open Badge login seed under one advisory lock. The shared Python migration
+runner no longer imports or creates this schema. Before deletion, the Python
+oracle passed all nine tests. After deletion, 12 Rust contract/config/domain/
+HTTP/migration tests, all 78 Gateway tests, formatting, strict all-target
+Clippy, a locked binary build, 70 focused packaging/migration/Kubernetes tests,
+the ownership scanner and base/beta/self-host Compose rendering pass locally.
+All 18 tracked files under `services/deployment_profile` were removed, deleting
+3,010 lines; the separate 553-line Rust Gateway contract duplicate was also
+removed, and an ownership guard prevents Python reintroduction.
+
+The dedicated native image and shared compatibility image both dispatch the
+Rust binary. CI, beta, self-host and Kubernetes manifests include its workload
+identity and native health path. The local Docker daemon and PostgreSQL URL are
+unavailable, so built-container health and live migration concurrency remain
+configured CI gates. No beta deployment has occurred. Deployment Profile joins
+the one aggregate wave-three beta update after Compliance Profile lands, and
+production remains unchanged.
 
 ### Trust-profile port status
 
