@@ -38,7 +38,8 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
     .await
     .expect("Credential Template data reconciliation must pass");
     let store = PostgresCredentialTemplateStore::new(pool);
-    let now = Utc::now();
+    let now = chrono::DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
+        .expect("current timestamp");
     let suffix = "rust-contract-fixed";
     let template_id = format!("ct-{suffix}");
     let wallet_id = format!("wr-{suffix}");

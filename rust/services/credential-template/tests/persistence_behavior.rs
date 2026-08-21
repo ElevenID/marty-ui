@@ -9,7 +9,14 @@ struct Contract {
     schema_version: u32,
     legacy_claims: Vec<LegacyClaim>,
     legacy_claim_type_aliases: serde_json::Map<String, Value>,
+    legacy_null_optional_claim: NullOptionalClaim,
     validity_round_trip_fields: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct NullOptionalClaim {
+    input: Value,
+    expected: Value,
 }
 
 #[derive(Deserialize)]
@@ -68,6 +75,18 @@ fn legacy_claims_hydrate_without_silent_data_loss() {
     assert!(claim.derivable);
     assert_eq!(claim.min_value, Some(1.0));
     assert!(ClaimDefinition::from_legacy_value("template-1", 1, &json!("invalid")).is_err());
+
+    let null_case = contract().legacy_null_optional_claim;
+    let claim = ClaimDefinition::from_legacy_value("template-1", 2, &null_case.input)
+        .expect("explicit null optional claim fields must hydrate");
+    assert_eq!(
+        json!({
+            "enum_values": claim.enum_values,
+            "min_value": claim.min_value,
+            "max_value": claim.max_value,
+        }),
+        null_case.expected
+    );
 }
 
 #[test]

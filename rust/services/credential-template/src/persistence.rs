@@ -576,22 +576,22 @@ fn optional_bool(value: Option<&Value>) -> Option<bool> {
 fn optional_string_list(
     value: Option<&Value>,
 ) -> Result<Option<Vec<String>>, CredentialTemplateError> {
-    value
-        .map(|value| {
-            serde_json::from_value(value.clone())
-                .map_err(|_| invalid("claim enum_values", &value.to_string()))
-        })
-        .transpose()
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    serde_json::from_value(value.clone())
+        .map(Some)
+        .map_err(|_| invalid("claim enum_values", &value.to_string()))
 }
 
 fn optional_number(value: Option<&Value>) -> Result<Option<f64>, CredentialTemplateError> {
+    let Some(value) = value.filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
     value
-        .map(|value| {
-            value
-                .as_f64()
-                .ok_or_else(|| invalid("claim numeric bound", &value.to_string()))
-        })
-        .transpose()
+        .as_f64()
+        .map(Some)
+        .ok_or_else(|| invalid("claim numeric bound", &value.to_string()))
 }
 
 fn title_case(value: &str) -> String {

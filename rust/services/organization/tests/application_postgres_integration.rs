@@ -245,7 +245,7 @@ async fn mutations_commit_domain_audit_and_outbox_state_together_when_configured
     let join_code = JoinCode {
         id: uuid::Uuid::new_v4(),
         organization_id,
-        code: format!("RUST{}", &organization_id.simple().to_string()[..8]).to_uppercase(),
+        code: format!("RUST{}", &organization_id.simple().to_string()[..4]).to_uppercase(),
         created_by: "application-owner".into(),
         expires_at: None,
         max_uses: Some(2),
