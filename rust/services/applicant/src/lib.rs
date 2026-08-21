@@ -9,6 +9,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub mod migration;
+pub mod store;
 
 pub const MAX_EVIDENCE_BYTES: usize = 10 * 1024 * 1024;
 pub const LOCK_TTL_SECONDS: i64 = 300;
@@ -225,7 +226,7 @@ pub struct Evidence {
     pub source: String,
     pub media_type: String,
     pub filename: String,
-    #[serde(with = "base64_bytes")]
+    #[serde(rename = "content_base64", with = "base64_bytes")]
     pub content: Vec<u8>,
     pub size_bytes: usize,
     pub sha256: String,
