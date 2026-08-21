@@ -1480,17 +1480,25 @@ formats, wallet configuration and null optionals. Black-box tests exercise
 create/update/activate/delete and prove untrusted requests fail before use-case
 execution.
 
-The Rust crate now passes 21 HTTP, application, domain, lifecycle, catalog, surface,
-migration, persistence and configured-PostgreSQL contract tests; the surviving
-Python oracle passes all 171 tests; formatting and strict Clippy pass. The
-configured PostgreSQL tests run when `CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL`
-is supplied. Remaining work is the wallet-compatibility operation, seven wallet
-registry operations, five delivery-destination operations, two internal HTTP
-operations and all 12 intended gRPC handlers over the frozen operations, plus
-MMF runtime/outbox
-composition, packaging,
-configured acceptance and immediate Python deletion. No beta deployment has
-occurred.
+The complete wallet-compatibility kernel now also runs in Rust under
+`credential-template-wallet-compatibility.json`. All eight intended AAMVA,
+ICAO, EUDI, Open Badges, enterprise and generic profiles plus unknown-format
+fallbacks are retained. Organization overrides are active-only and tenant
+bound, match canonical protocol aliases, sort by descending precedence with a
+stable ID tie-breaker, and preserve exact unique APPEND versus component-wise
+REPLACE behavior. Both languages prove the complete profile inventory from the
+same fixture.
+
+The Rust crate now passes 23 HTTP, application, wallet, domain, lifecycle,
+catalog, surface, migration, persistence and configured-PostgreSQL contract
+tests; the surviving Python oracle passes all 172 tests; formatting and strict
+Clippy pass. The configured PostgreSQL tests run when
+`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is supplied. Remaining work is to wire
+the completed wallet-compatibility kernel into its HTTP operation, implement
+the seven wallet-registry operations, five delivery-destination operations,
+two internal HTTP operations and all 12 intended gRPC handlers over the frozen
+operations, then finish MMF runtime/outbox composition, packaging, configured
+acceptance and immediate Python deletion. No beta deployment has occurred.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
