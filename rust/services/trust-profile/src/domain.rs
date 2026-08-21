@@ -102,6 +102,14 @@ pub enum RegistrySource {
     Manual,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RegistryImportType {
+    IcaoPkd,
+    EuTrustList,
+    Aamva,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TrustSource {
     pub id: Uuid,
@@ -314,6 +322,43 @@ pub struct TrustProfileIssuer {
     pub relationship_status: TrustRelationshipStatus,
     pub cascade_revocation_policy: CascadeRevocationPolicy,
     pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RegistryImportSource {
+    pub id: Uuid,
+    pub trust_profile_id: Uuid,
+    pub registry_type: RegistryImportType,
+    pub registry_name: String,
+    pub registry_url: Option<String>,
+    pub enabled: bool,
+    pub sync_enabled: bool,
+    pub last_synced_at: Option<DateTime<Utc>>,
+    pub next_sync_at: Option<DateTime<Utc>>,
+    pub sync_interval_hours: u16,
+    pub credential_format_filter: Vec<String>,
+    pub metadata: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RegistryImportedIssuer {
+    pub id: Uuid,
+    pub registry_source_id: Uuid,
+    pub trust_profile_id: Uuid,
+    pub issuer_did: String,
+    pub issuer_name: Option<String>,
+    pub country_code: Option<String>,
+    pub issuer_type: Option<String>,
+    pub verification_keys: Vec<Value>,
+    pub credential_templates: Vec<Value>,
+    pub status: String,
+    pub imported_at: DateTime<Utc>,
+    pub valid_from: Option<DateTime<Utc>>,
+    pub valid_until: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

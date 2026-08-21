@@ -7,8 +7,8 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::{
-    IssuerEntity, OrganizationTrustProfile, TrustAnchorType, TrustFramework, TrustProfile,
-    TrustProfileIssuer, TrustRegistryEntry,
+    IssuerEntity, OrganizationTrustProfile, RegistryImportSource, RegistryImportedIssuer,
+    TrustAnchorType, TrustFramework, TrustProfile, TrustProfileIssuer, TrustRegistryEntry,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
@@ -133,6 +133,41 @@ pub trait TrustProfileRepository: Send + Sync {
         &self,
         link_id: Uuid,
     ) -> Result<bool, TrustProfileRepositoryError>;
+
+    async fn save_registry_import_source(
+        &self,
+        source: &RegistryImportSource,
+    ) -> Result<(), TrustProfileRepositoryError>;
+    async fn registry_import_source_by_id(
+        &self,
+        source_id: Uuid,
+    ) -> Result<Option<RegistryImportSource>, TrustProfileRepositoryError>;
+    async fn registry_import_sources(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<Vec<RegistryImportSource>, TrustProfileRepositoryError>;
+    async fn delete_registry_import_source(
+        &self,
+        source_id: Uuid,
+    ) -> Result<bool, TrustProfileRepositoryError>;
+
+    async fn save_registry_imported_issuer(
+        &self,
+        issuer: &RegistryImportedIssuer,
+    ) -> Result<(), TrustProfileRepositoryError>;
+    async fn registry_imported_issuer_by_id(
+        &self,
+        issuer_id: Uuid,
+    ) -> Result<Option<RegistryImportedIssuer>, TrustProfileRepositoryError>;
+    async fn registry_imported_issuers(
+        &self,
+        profile_id: Uuid,
+        source_id: Option<Uuid>,
+    ) -> Result<Vec<RegistryImportedIssuer>, TrustProfileRepositoryError>;
+    async fn delete_registry_imported_issuer(
+        &self,
+        issuer_id: Uuid,
+    ) -> Result<bool, TrustProfileRepositoryError>;
 }
 
 #[derive(Default)]
@@ -143,6 +178,8 @@ struct MemoryState {
     profiles: HashMap<Uuid, TrustProfile>,
     issuers: HashMap<Uuid, IssuerEntity>,
     profile_issuers: HashMap<Uuid, TrustProfileIssuer>,
+    registry_import_sources: HashMap<Uuid, RegistryImportSource>,
+    registry_imported_issuers: HashMap<Uuid, RegistryImportedIssuer>,
 }
 
 #[derive(Clone, Default)]
@@ -532,6 +569,117 @@ impl TrustProfileRepository for MemoryTrustProfileRepository {
             .await
             .profile_issuers
             .remove(&link_id)
+            .is_some())
+    }
+
+    async fn save_registry_import_source(
+        &self,
+        source: &RegistryImportSource,
+    ) -> Result<(), TrustProfileRepositoryError> {
+        self.state
+            .write()
+            .await
+            .registry_import_sources
+            .insert(source.id, source.clone());
+        Ok(())
+    }
+
+    async fn registry_import_source_by_id(
+        &self,
+        source_id: Uuid,
+    ) -> Result<Option<RegistryImportSource>, TrustProfileRepositoryError> {
+        Ok(self
+            .state
+            .read()
+            .await
+            .registry_import_sources
+            .get(&source_id)
+            .cloned())
+    }
+
+    async fn registry_import_sources(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<Vec<RegistryImportSource>, TrustProfileRepositoryError> {
+        let mut sources = self
+            .state
+            .read()
+            .await
+            .registry_import_sources
+            .values()
+            .filter(|source| source.trust_profile_id == profile_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        sources.sort_by_key(|source| (source.created_at, source.id));
+        Ok(sources)
+    }
+
+    async fn delete_registry_import_source(
+        &self,
+        source_id: Uuid,
+    ) -> Result<bool, TrustProfileRepositoryError> {
+        let mut state = self.state.write().await;
+        let deleted = state.registry_import_sources.remove(&source_id).is_some();
+        state
+            .registry_imported_issuers
+            .retain(|_, issuer| issuer.registry_source_id != source_id);
+        Ok(deleted)
+    }
+
+    async fn save_registry_imported_issuer(
+        &self,
+        issuer: &RegistryImportedIssuer,
+    ) -> Result<(), TrustProfileRepositoryError> {
+        self.state
+            .write()
+            .await
+            .registry_imported_issuers
+            .insert(issuer.id, issuer.clone());
+        Ok(())
+    }
+
+    async fn registry_imported_issuer_by_id(
+        &self,
+        issuer_id: Uuid,
+    ) -> Result<Option<RegistryImportedIssuer>, TrustProfileRepositoryError> {
+        Ok(self
+            .state
+            .read()
+            .await
+            .registry_imported_issuers
+            .get(&issuer_id)
+            .cloned())
+    }
+
+    async fn registry_imported_issuers(
+        &self,
+        profile_id: Uuid,
+        source_id: Option<Uuid>,
+    ) -> Result<Vec<RegistryImportedIssuer>, TrustProfileRepositoryError> {
+        let mut issuers = self
+            .state
+            .read()
+            .await
+            .registry_imported_issuers
+            .values()
+            .filter(|issuer| issuer.trust_profile_id == profile_id)
+            .filter(|issuer| source_id.is_none_or(|value| issuer.registry_source_id == value))
+            .cloned()
+            .collect::<Vec<_>>();
+        issuers.sort_by_key(|issuer| (issuer.imported_at, issuer.id));
+        Ok(issuers)
+    }
+
+    async fn delete_registry_imported_issuer(
+        &self,
+        issuer_id: Uuid,
+    ) -> Result<bool, TrustProfileRepositoryError> {
+        Ok(self
+            .state
+            .write()
+            .await
+            .registry_imported_issuers
+            .remove(&issuer_id)
             .is_some())
     }
 }

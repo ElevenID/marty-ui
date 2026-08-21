@@ -154,5 +154,19 @@
     "optimistic_update_conflict": false,
     "profile_delete_cascades_relationships": true,
     "issuer_delete_cascades_relationships": true
+  },
+  "registry_import_storage_capabilities": {
+    "registry_types": ["ICAO_PKD", "EU_TRUST_LIST", "AAMVA"],
+    "source_fields": [
+      "id", "trust_profile_id", "registry_type", "registry_name", "registry_url",
+      "enabled", "sync_enabled", "last_synced_at", "next_sync_at", "sync_interval_hours",
+      "credential_format_filter", "metadata", "created_at", "updated_at"
+    ],
+    "issuer_fields": [
+      "id", "registry_source_id", "trust_profile_id", "issuer_did", "issuer_name",
+      "country_code", "issuer_type", "verification_keys", "credential_templates", "status",
+      "imported_at", "valid_from", "valid_until", "created_at", "updated_at"
+    ],
+    "source_delete_cascades_imported_issuers": true
   }
 }

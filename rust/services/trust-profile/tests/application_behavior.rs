@@ -5,10 +5,11 @@ use chrono::{Duration, TimeZone, Utc};
 use marty_trust_profile::{
     CascadeRevocationPolicy, Change, ComplianceStatus, CreateProfileInput, IssuerEntity,
     IssuerEntityComplianceStatus, IssuerEntityPatch, IssuerEntityType,
-    MemoryTrustProfileRepository, ProfilePatch, RevocationPolicy, TimePolicy,
-    TrustAuthorizationError, TrustProfile, TrustProfileApplication, TrustProfileApplicationError,
-    TrustProfileControlPlane, TrustProfileIssuer, TrustProfileRepository, TrustProfileStatus,
-    TrustProfileType, TrustRelationshipStatus, TrustSource, TrustSourceType, ValidationRules,
+    MemoryTrustProfileRepository, ProfilePatch, RegistryImportSource, RegistryImportType,
+    RegistryImportedIssuer, RevocationPolicy, TimePolicy, TrustAuthorizationError, TrustProfile,
+    TrustProfileApplication, TrustProfileApplicationError, TrustProfileControlPlane,
+    TrustProfileIssuer, TrustProfileRepository, TrustProfileStatus, TrustProfileType,
+    TrustRelationshipStatus, TrustSource, TrustSourceType, ValidationRules,
 };
 use serde_json::{json, Map};
 use uuid::Uuid;
@@ -360,4 +361,84 @@ async fn tenant_safe_relationships_block_profile_deletion_until_unlinked() {
         application.add_relationship("user-a", cross_tenant).await,
         Err(TrustProfileApplicationError::NotFound("issuer_entity"))
     ));
+}
+
+#[tokio::test]
+async fn dormant_registry_imports_preserve_full_features_and_reject_private_keys() {
+    let (repository, application) = harness();
+    let profile = application
+        .create_profile(
+            "user-a",
+            CreateProfileInput {
+                profile: profile(),
+                allowed_issuers_was_provided: false,
+            },
+        )
+        .await
+        .unwrap();
+    let source = application
+        .save_registry_import_source(
+            "user-a",
+            RegistryImportSource {
+                id: Uuid::new_v4(),
+                trust_profile_id: profile.id,
+                registry_type: RegistryImportType::IcaoPkd,
+                registry_name: "ICAO PKD".into(),
+                registry_url: Some("https://registry.example.test/pkd".into()),
+                enabled: true,
+                sync_enabled: true,
+                last_synced_at: None,
+                next_sync_at: Some(now()),
+                sync_interval_hours: 24,
+                credential_format_filter: vec!["MDOC".into()],
+                metadata: json!({"mode": "delta"}),
+                created_at: now(),
+                updated_at: now(),
+            },
+        )
+        .await
+        .unwrap();
+    let imported = RegistryImportedIssuer {
+        id: Uuid::new_v4(),
+        registry_source_id: source.id,
+        trust_profile_id: profile.id,
+        issuer_did: "did:web:imported.example".into(),
+        issuer_name: Some("Imported issuer".into()),
+        country_code: Some("US".into()),
+        issuer_type: Some("MDL_ISSUER".into()),
+        verification_keys: vec![json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y"})],
+        credential_templates: vec![json!({"doctype": "org.iso.18013.5.1.mDL"})],
+        status: "active".into(),
+        imported_at: now(),
+        valid_from: Some(now()),
+        valid_until: None,
+        created_at: now(),
+        updated_at: now(),
+    };
+    application
+        .save_registry_imported_issuer("user-a", imported.clone())
+        .await
+        .unwrap();
+
+    let mut private = imported;
+    private.id = Uuid::new_v4();
+    private.verification_keys = vec![json!({"kty": "EC", "d": "private"})];
+    assert!(matches!(
+        application
+            .save_registry_imported_issuer("user-a", private)
+            .await,
+        Err(TrustProfileApplicationError::Domain(
+            marty_trust_profile::TrustDomainError::PrivateCustodyMetadata(_)
+        ))
+    ));
+
+    application
+        .delete_registry_import_source("user-a", source.id)
+        .await
+        .unwrap();
+    assert!(repository
+        .registry_imported_issuers(profile.id, None)
+        .await
+        .unwrap()
+        .is_empty());
 }

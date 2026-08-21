@@ -95,6 +95,14 @@ def test_storage_and_all_historical_revisions_have_one_native_owner() -> None:
 
     assert revisions == dict(CONTRACT["migration_chain"])
 
+    registry_imports = CONTRACT["registry_import_storage_capabilities"]
+    assert set(models.trust_registry_sources_table.c.keys()) == set(
+        registry_imports["source_fields"]
+    )
+    assert set(models.trust_registry_issuers_table.c.keys()) == set(
+        registry_imports["issuer_fields"]
+    )
+
 
 def test_registry_transport_and_security_obligations_are_frozen() -> None:
     registry = CONTRACT["registry_sync"]

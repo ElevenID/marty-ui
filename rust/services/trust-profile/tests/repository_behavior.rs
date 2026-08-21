@@ -1,10 +1,10 @@
 use chrono::{Duration, TimeZone, Utc};
 use marty_trust_profile::{
     CascadeRevocationPolicy, ComplianceStatus, IssuerEntity, IssuerEntityComplianceStatus,
-    IssuerEntityType, MemoryTrustProfileRepository, RegistryOperation, RegistrySource,
-    RevocationPolicy, TimePolicy, TrustAnchorType, TrustFramework, TrustProfile,
-    TrustProfileIssuer, TrustProfileRepository, TrustProfileStatus, TrustProfileType,
-    TrustRelationshipStatus, ValidationRules,
+    IssuerEntityType, MemoryTrustProfileRepository, RegistryImportSource, RegistryImportType,
+    RegistryImportedIssuer, RegistryOperation, RegistrySource, RevocationPolicy, TimePolicy,
+    TrustAnchorType, TrustFramework, TrustProfile, TrustProfileIssuer, TrustProfileRepository,
+    TrustProfileStatus, TrustProfileType, TrustRelationshipStatus, ValidationRules,
 };
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
@@ -279,4 +279,74 @@ async fn visibility_optimistic_writes_and_cascades_match_the_shared_vectors() {
             .as_bool()
             .unwrap()
     );
+}
+
+#[tokio::test]
+async fn dormant_registry_import_capabilities_round_trip_and_cascade_without_feature_loss() {
+    let repository = MemoryTrustProfileRepository::default();
+    let profile_id = Uuid::new_v4();
+    let source = RegistryImportSource {
+        id: Uuid::new_v4(),
+        trust_profile_id: profile_id,
+        registry_type: RegistryImportType::EuTrustList,
+        registry_name: "EU trust list".into(),
+        registry_url: Some("https://registry.example.test/lotl".into()),
+        enabled: true,
+        sync_enabled: true,
+        last_synced_at: Some(now()),
+        next_sync_at: Some(now() + Duration::hours(24)),
+        sync_interval_hours: 24,
+        credential_format_filter: vec!["SD_JWT_VC".into(), "MDOC".into()],
+        metadata: json!({"operator": "example"}),
+        created_at: now(),
+        updated_at: now(),
+    };
+    repository
+        .save_registry_import_source(&source)
+        .await
+        .unwrap();
+    assert_eq!(
+        repository
+            .registry_import_source_by_id(source.id)
+            .await
+            .unwrap(),
+        Some(source.clone())
+    );
+
+    let issuer = RegistryImportedIssuer {
+        id: Uuid::new_v4(),
+        registry_source_id: source.id,
+        trust_profile_id: profile_id,
+        issuer_did: "did:web:issuer.example".into(),
+        issuer_name: Some("Example issuer".into()),
+        country_code: Some("DE".into()),
+        issuer_type: Some("PID_PROVIDER".into()),
+        verification_keys: vec![json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y"})],
+        credential_templates: vec![json!({"vct": "urn:example:pid"})],
+        status: "active".into(),
+        imported_at: now(),
+        valid_from: Some(now()),
+        valid_until: None,
+        created_at: now(),
+        updated_at: now(),
+    };
+    repository
+        .save_registry_imported_issuer(&issuer)
+        .await
+        .unwrap();
+    let imported = repository
+        .registry_imported_issuers(profile_id, Some(source.id))
+        .await
+        .unwrap();
+    assert_eq!(imported.len(), 1);
+    assert_eq!(imported[0], issuer);
+    repository
+        .delete_registry_import_source(source.id)
+        .await
+        .unwrap();
+    assert!(repository
+        .registry_imported_issuer_by_id(issuer.id)
+        .await
+        .unwrap()
+        .is_none());
 }

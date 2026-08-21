@@ -7,9 +7,10 @@ use uuid::Uuid;
 
 use crate::{
     IssuerEntity, IssuerEntityComplianceStatus, IssuerEntityType, OrganizationTrustProfile,
-    RegistryOperation, RegistrySource, RegistryStatus, TrustAnchorType, TrustFramework,
-    TrustProfile, TrustProfileIssuer, TrustProfileRecord, TrustProfileRepository,
-    TrustProfileRepositoryError, TrustRelationshipStatus,
+    RegistryImportSource, RegistryImportedIssuer, RegistryOperation, RegistrySource,
+    RegistryStatus, TrustAnchorType, TrustFramework, TrustProfile, TrustProfileIssuer,
+    TrustProfileRecord, TrustProfileRepository, TrustProfileRepositoryError,
+    TrustRelationshipStatus,
 };
 
 #[derive(Clone, Debug)]
@@ -622,6 +623,189 @@ impl TrustProfileRepository for PostgresTrustProfileRepository {
                 > 0,
         )
     }
+
+    async fn save_registry_import_source(
+        &self,
+        source: &RegistryImportSource,
+    ) -> Result<(), TrustProfileRepositoryError> {
+        sqlx::query(
+            "INSERT INTO trust_profile_service.trust_registry_sources
+             (id,trust_profile_id,registry_type,registry_name,registry_url,enabled,sync_enabled,
+              last_synced_at,next_sync_at,sync_interval_hours,credential_format_filter,metadata,
+              created_at,updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+             ON CONFLICT (id) DO UPDATE SET trust_profile_id=EXCLUDED.trust_profile_id,
+              registry_type=EXCLUDED.registry_type,registry_name=EXCLUDED.registry_name,
+              registry_url=EXCLUDED.registry_url,enabled=EXCLUDED.enabled,
+              sync_enabled=EXCLUDED.sync_enabled,last_synced_at=EXCLUDED.last_synced_at,
+              next_sync_at=EXCLUDED.next_sync_at,sync_interval_hours=EXCLUDED.sync_interval_hours,
+              credential_format_filter=EXCLUDED.credential_format_filter,
+              metadata=EXCLUDED.metadata,updated_at=EXCLUDED.updated_at",
+        )
+        .bind(source.id.to_string())
+        .bind(source.trust_profile_id.to_string())
+        .bind(text(&source.registry_type, "registry_type")?)
+        .bind(&source.registry_name)
+        .bind(&source.registry_url)
+        .bind(source.enabled)
+        .bind(source.sync_enabled)
+        .bind(source.last_synced_at)
+        .bind(source.next_sync_at)
+        .bind(i32::from(source.sync_interval_hours))
+        .bind(json(
+            &source.credential_format_filter,
+            "credential_format_filter",
+        )?)
+        .bind(&source.metadata)
+        .bind(source.created_at)
+        .bind(source.updated_at)
+        .execute(&self.pool)
+        .await
+        .map_err(database)?;
+        Ok(())
+    }
+
+    async fn registry_import_source_by_id(
+        &self,
+        source_id: Uuid,
+    ) -> Result<Option<RegistryImportSource>, TrustProfileRepositoryError> {
+        let row =
+            sqlx::query("SELECT * FROM trust_profile_service.trust_registry_sources WHERE id=$1")
+                .bind(source_id.to_string())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(database)?;
+        row.as_ref()
+            .map(registry_import_source_from_row)
+            .transpose()
+    }
+
+    async fn registry_import_sources(
+        &self,
+        profile_id: Uuid,
+    ) -> Result<Vec<RegistryImportSource>, TrustProfileRepositoryError> {
+        let rows = sqlx::query(
+            "SELECT * FROM trust_profile_service.trust_registry_sources
+             WHERE trust_profile_id=$1 ORDER BY created_at,id",
+        )
+        .bind(profile_id.to_string())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(database)?;
+        rows.iter().map(registry_import_source_from_row).collect()
+    }
+
+    async fn delete_registry_import_source(
+        &self,
+        source_id: Uuid,
+    ) -> Result<bool, TrustProfileRepositoryError> {
+        let mut transaction = self.pool.begin().await.map_err(database)?;
+        sqlx::query(
+            "DELETE FROM trust_profile_service.trust_registry_issuers WHERE registry_source_id=$1",
+        )
+        .bind(source_id.to_string())
+        .execute(&mut *transaction)
+        .await
+        .map_err(database)?;
+        let deleted =
+            sqlx::query("DELETE FROM trust_profile_service.trust_registry_sources WHERE id=$1")
+                .bind(source_id.to_string())
+                .execute(&mut *transaction)
+                .await
+                .map_err(database)?
+                .rows_affected()
+                > 0;
+        transaction.commit().await.map_err(database)?;
+        Ok(deleted)
+    }
+
+    async fn save_registry_imported_issuer(
+        &self,
+        issuer: &RegistryImportedIssuer,
+    ) -> Result<(), TrustProfileRepositoryError> {
+        sqlx::query(
+            "INSERT INTO trust_profile_service.trust_registry_issuers
+             (id,registry_source_id,trust_profile_id,issuer_did,issuer_name,country_code,
+              issuer_type,verification_keys,credential_templates,status,imported_at,valid_from,
+              valid_until,created_at,updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+             ON CONFLICT (id) DO UPDATE SET registry_source_id=EXCLUDED.registry_source_id,
+              trust_profile_id=EXCLUDED.trust_profile_id,issuer_did=EXCLUDED.issuer_did,
+              issuer_name=EXCLUDED.issuer_name,country_code=EXCLUDED.country_code,
+              issuer_type=EXCLUDED.issuer_type,verification_keys=EXCLUDED.verification_keys,
+              credential_templates=EXCLUDED.credential_templates,status=EXCLUDED.status,
+              imported_at=EXCLUDED.imported_at,valid_from=EXCLUDED.valid_from,
+              valid_until=EXCLUDED.valid_until,updated_at=EXCLUDED.updated_at",
+        )
+        .bind(issuer.id.to_string())
+        .bind(issuer.registry_source_id.to_string())
+        .bind(issuer.trust_profile_id.to_string())
+        .bind(&issuer.issuer_did)
+        .bind(&issuer.issuer_name)
+        .bind(&issuer.country_code)
+        .bind(&issuer.issuer_type)
+        .bind(json(&issuer.verification_keys, "verification_keys")?)
+        .bind(json(&issuer.credential_templates, "credential_templates")?)
+        .bind(&issuer.status)
+        .bind(issuer.imported_at)
+        .bind(issuer.valid_from)
+        .bind(issuer.valid_until)
+        .bind(issuer.created_at)
+        .bind(issuer.updated_at)
+        .execute(&self.pool)
+        .await
+        .map_err(database)?;
+        Ok(())
+    }
+
+    async fn registry_imported_issuer_by_id(
+        &self,
+        issuer_id: Uuid,
+    ) -> Result<Option<RegistryImportedIssuer>, TrustProfileRepositoryError> {
+        let row =
+            sqlx::query("SELECT * FROM trust_profile_service.trust_registry_issuers WHERE id=$1")
+                .bind(issuer_id.to_string())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(database)?;
+        row.as_ref()
+            .map(registry_imported_issuer_from_row)
+            .transpose()
+    }
+
+    async fn registry_imported_issuers(
+        &self,
+        profile_id: Uuid,
+        source_id: Option<Uuid>,
+    ) -> Result<Vec<RegistryImportedIssuer>, TrustProfileRepositoryError> {
+        let source_id = source_id.map(|value| value.to_string());
+        let rows = sqlx::query(
+            "SELECT * FROM trust_profile_service.trust_registry_issuers
+             WHERE trust_profile_id=$1 AND ($2::text IS NULL OR registry_source_id=$2)
+             ORDER BY imported_at,id",
+        )
+        .bind(profile_id.to_string())
+        .bind(source_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(database)?;
+        rows.iter().map(registry_imported_issuer_from_row).collect()
+    }
+
+    async fn delete_registry_imported_issuer(
+        &self,
+        issuer_id: Uuid,
+    ) -> Result<bool, TrustProfileRepositoryError> {
+        Ok(
+            sqlx::query("DELETE FROM trust_profile_service.trust_registry_issuers WHERE id=$1")
+                .bind(issuer_id.to_string())
+                .execute(&self.pool)
+                .await
+                .map_err(database)?
+                .rows_affected()
+                > 0,
+        )
+    }
 }
 
 fn framework_from_row(row: &PgRow) -> Result<TrustFramework, TrustProfileRepositoryError> {
@@ -743,6 +927,51 @@ fn profile_issuer_from_row(row: &PgRow) -> Result<TrustProfileIssuer, TrustProfi
         relationship_status: enum_get::<TrustRelationshipStatus>(row, "relationship_status")?,
         cascade_revocation_policy: enum_get(row, "cascade_revocation_policy")?,
         metadata: get(row, "metadata")?,
+        created_at: get(row, "created_at")?,
+        updated_at: get(row, "updated_at")?,
+    })
+}
+
+fn registry_import_source_from_row(
+    row: &PgRow,
+) -> Result<RegistryImportSource, TrustProfileRepositoryError> {
+    let sync_interval_hours: i32 = get(row, "sync_interval_hours")?;
+    Ok(RegistryImportSource {
+        id: uuid(row, "id")?,
+        trust_profile_id: uuid(row, "trust_profile_id")?,
+        registry_type: enum_get(row, "registry_type")?,
+        registry_name: get(row, "registry_name")?,
+        registry_url: get(row, "registry_url")?,
+        enabled: get(row, "enabled")?,
+        sync_enabled: get(row, "sync_enabled")?,
+        last_synced_at: get(row, "last_synced_at")?,
+        next_sync_at: get(row, "next_sync_at")?,
+        sync_interval_hours: u16::try_from(sync_interval_hours)
+            .map_err(|_| invalid("sync_interval_hours"))?,
+        credential_format_filter: json_get(row, "credential_format_filter")?,
+        metadata: get(row, "metadata")?,
+        created_at: get(row, "created_at")?,
+        updated_at: get(row, "updated_at")?,
+    })
+}
+
+fn registry_imported_issuer_from_row(
+    row: &PgRow,
+) -> Result<RegistryImportedIssuer, TrustProfileRepositoryError> {
+    Ok(RegistryImportedIssuer {
+        id: uuid(row, "id")?,
+        registry_source_id: uuid(row, "registry_source_id")?,
+        trust_profile_id: uuid(row, "trust_profile_id")?,
+        issuer_did: get(row, "issuer_did")?,
+        issuer_name: get(row, "issuer_name")?,
+        country_code: get(row, "country_code")?,
+        issuer_type: get(row, "issuer_type")?,
+        verification_keys: json_get(row, "verification_keys")?,
+        credential_templates: json_get(row, "credential_templates")?,
+        status: get(row, "status")?,
+        imported_at: get(row, "imported_at")?,
+        valid_from: get(row, "valid_from")?,
+        valid_until: get(row, "valid_until")?,
         created_at: get(row, "created_at")?,
         updated_at: get(row, "updated_at")?,
     })

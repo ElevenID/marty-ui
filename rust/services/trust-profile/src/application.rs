@@ -9,9 +9,9 @@ use uuid::Uuid;
 use crate::{
     allowed_issuers_after_request, normalize_accreditations, reject_private_custody_metadata,
     require_issuer_status_transition, CascadeRevocationPolicy, ComplianceStatus, IssuerEntity,
-    IssuerEntityComplianceStatus, IssuerEntityType, TimePolicy, TrustDomainError, TrustProfile,
-    TrustProfileIssuer, TrustProfileRepository, TrustProfileRepositoryError,
-    TrustRelationshipStatus, TrustSource, ValidationRules,
+    IssuerEntityComplianceStatus, IssuerEntityType, RegistryImportSource, RegistryImportedIssuer,
+    TimePolicy, TrustDomainError, TrustProfile, TrustProfileIssuer, TrustProfileRepository,
+    TrustProfileRepositoryError, TrustRelationshipStatus, TrustSource, ValidationRules,
 };
 
 const VALID_ALGORITHMS: &[&str] = &[
@@ -534,6 +534,70 @@ impl TrustProfileApplication {
         Ok(())
     }
 
+    pub async fn save_registry_import_source(
+        &self,
+        user_id: &str,
+        source: RegistryImportSource,
+    ) -> Result<RegistryImportSource, TrustProfileApplicationError> {
+        let profile = self.required_profile(source.trust_profile_id).await?;
+        self.control_plane
+            .require_permission(user_id, &profile.organization_id, "trust-profile", "edit")
+            .await?;
+        validate_registry_import_source(&source)?;
+        self.repository.save_registry_import_source(&source).await?;
+        Ok(source)
+    }
+
+    pub async fn save_registry_imported_issuer(
+        &self,
+        user_id: &str,
+        issuer: RegistryImportedIssuer,
+    ) -> Result<RegistryImportedIssuer, TrustProfileApplicationError> {
+        let profile = self.required_profile(issuer.trust_profile_id).await?;
+        self.control_plane
+            .require_permission(user_id, &profile.organization_id, "trust-profile", "edit")
+            .await?;
+        let source = self
+            .repository
+            .registry_import_source_by_id(issuer.registry_source_id)
+            .await?
+            .ok_or(TrustProfileApplicationError::NotFound(
+                "registry_import_source",
+            ))?;
+        if source.trust_profile_id != issuer.trust_profile_id {
+            return Err(TrustProfileApplicationError::NotFound(
+                "registry_import_source",
+            ));
+        }
+        validate_registry_imported_issuer(&issuer)?;
+        self.repository
+            .save_registry_imported_issuer(&issuer)
+            .await?;
+        Ok(issuer)
+    }
+
+    pub async fn delete_registry_import_source(
+        &self,
+        user_id: &str,
+        source_id: Uuid,
+    ) -> Result<(), TrustProfileApplicationError> {
+        let source = self
+            .repository
+            .registry_import_source_by_id(source_id)
+            .await?
+            .ok_or(TrustProfileApplicationError::NotFound(
+                "registry_import_source",
+            ))?;
+        let profile = self.required_profile(source.trust_profile_id).await?;
+        self.control_plane
+            .require_permission(user_id, &profile.organization_id, "trust-profile", "edit")
+            .await?;
+        self.repository
+            .delete_registry_import_source(source_id)
+            .await?;
+        Ok(())
+    }
+
     async fn required_profile(
         &self,
         profile_id: Uuid,
@@ -765,6 +829,75 @@ fn validate_relationship(
         return Err(TrustProfileApplicationError::Invalid("trust_level"));
     }
     reject_private_custody_metadata(&relationship.metadata)?;
+    Ok(())
+}
+
+fn validate_registry_import_source(
+    source: &RegistryImportSource,
+) -> Result<(), TrustProfileApplicationError> {
+    if source.registry_name.trim().is_empty() || !(1..=720).contains(&source.sync_interval_hours) {
+        return Err(TrustProfileApplicationError::Invalid(
+            "registry_import_source",
+        ));
+    }
+    if let Some(url) = &source.registry_url {
+        marty_verification::trust_sync::validate_registry_url(url)
+            .map_err(|_| TrustProfileApplicationError::Invalid("registry_import_url"))?;
+    }
+    if source
+        .credential_format_filter
+        .iter()
+        .any(|value| !VALID_FORMATS.contains(&value.as_str()))
+    {
+        return Err(TrustProfileApplicationError::Invalid(
+            "credential_format_filter",
+        ));
+    }
+    reject_private_custody_metadata(&source.metadata)?;
+    Ok(())
+}
+
+fn validate_registry_imported_issuer(
+    issuer: &RegistryImportedIssuer,
+) -> Result<(), TrustProfileApplicationError> {
+    if !issuer.issuer_did.starts_with("did:") || issuer.status.trim().is_empty() {
+        return Err(TrustProfileApplicationError::Invalid(
+            "registry_imported_issuer",
+        ));
+    }
+    if issuer.country_code.as_ref().is_some_and(|value| {
+        !(2..=3).contains(&value.len())
+            || !value
+                .bytes()
+                .all(|character| character.is_ascii_uppercase())
+    }) {
+        return Err(TrustProfileApplicationError::Invalid(
+            "registry_import_country",
+        ));
+    }
+    if issuer.verification_keys.len() > 32
+        || issuer.verification_keys.iter().any(|value| {
+            value
+                .as_object()
+                .and_then(|key| key.get("kty"))
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+        })
+    {
+        return Err(TrustProfileApplicationError::Invalid(
+            "registry_import_verification_keys",
+        ));
+    }
+    reject_private_custody_metadata(&Value::Array(issuer.verification_keys.clone()))?;
+    if issuer.valid_until.is_some_and(|until| {
+        issuer
+            .valid_from
+            .is_some_and(|valid_from| until <= valid_from)
+    }) {
+        return Err(TrustProfileApplicationError::Invalid(
+            "registry_import_validity",
+        ));
+    }
     Ok(())
 }
 

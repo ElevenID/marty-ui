@@ -12,9 +12,10 @@ pub use application::{
 };
 pub use domain::{
     CascadeRevocationPolicy, ComplianceStatus, IssuerEntity, IssuerEntityComplianceStatus,
-    IssuerEntityType, OrganizationTrustProfile, RegistryOperation, RegistrySource,
-    RevocationCheckMode, RevocationPolicy, TimePolicy, TrustAnchorType, TrustFramework,
-    TrustProfile, TrustProfileIssuer, TrustProfileStatus, TrustProfileType, TrustRegistryEntry,
+    IssuerEntityType, OrganizationTrustProfile, RegistryImportSource, RegistryImportType,
+    RegistryImportedIssuer, RegistryOperation, RegistrySource, RevocationCheckMode,
+    RevocationPolicy, TimePolicy, TrustAnchorType, TrustFramework, TrustProfile,
+    TrustProfileIssuer, TrustProfileStatus, TrustProfileType, TrustRegistryEntry,
     TrustRelationshipStatus, TrustSource, TrustSourceType, ValidationRules,
 };
 pub use persistence::{TrustProfileRecord, TrustProfileRecordError, TRUST_PROFILE_MIGRATION};

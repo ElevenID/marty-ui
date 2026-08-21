@@ -2,8 +2,9 @@ use std::collections::BTreeMap;
 
 use marty_trust_profile::{
     CascadeRevocationPolicy, ComplianceStatus, IssuerEntityComplianceStatus, IssuerEntityType,
-    RegistryOperation, RegistrySource, RevocationCheckMode, TrustAnchorType, TrustProfileStatus,
-    TrustProfileType, TrustRelationshipStatus, TrustSourceType, HTTP_OPERATIONS,
+    RegistryImportType, RegistryOperation, RegistrySource, RevocationCheckMode, TrustAnchorType,
+    TrustProfileStatus, TrustProfileType, TrustRelationshipStatus, TrustSourceType,
+    HTTP_OPERATIONS,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -132,6 +133,15 @@ fn complete_surface_and_domain_inventory_match_the_shared_contract() {
     assert_eq!(
         serde_json::to_value(actual).unwrap(),
         contract["domain_enums"]
+    );
+    assert_eq!(
+        serde_json::to_value(values(&[
+            RegistryImportType::IcaoPkd,
+            RegistryImportType::EuTrustList,
+            RegistryImportType::Aamva,
+        ]))
+        .unwrap(),
+        contract["registry_import_storage_capabilities"]["registry_types"]
     );
 }
 
