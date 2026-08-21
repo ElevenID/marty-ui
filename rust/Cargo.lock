@@ -4577,6 +4577,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-trust-profile"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "marty-verification",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
 name = "marty-types"
 version = "0.1.57"
 source = "git+https://github.com/ElevenID/marty-core?rev=54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8#54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8"

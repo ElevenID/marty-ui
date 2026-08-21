@@ -1,0 +1,62 @@
+pub mod domain;
+
+pub use domain::{
+    CascadeRevocationPolicy, ComplianceStatus, IssuerEntity, IssuerEntityComplianceStatus,
+    IssuerEntityType, OrganizationTrustProfile, RegistryOperation, RegistrySource,
+    RevocationCheckMode, RevocationPolicy, TimePolicy, TrustAnchorType, TrustFramework,
+    TrustProfile, TrustProfileIssuer, TrustProfileStatus, TrustProfileType, TrustRegistryEntry,
+    TrustRelationshipStatus, TrustSource, TrustSourceType, ValidationRules,
+};
+
+pub const HTTP_OPERATIONS: [(&str, &str); 32] = [
+    ("POST", "/v1/organizations/{organization_id}/trust-profiles"),
+    ("GET", "/v1/organizations/{organization_id}/trust-profiles"),
+    (
+        "GET",
+        "/v1/organizations/{organization_id}/trust-profiles/{profile_id}",
+    ),
+    (
+        "PUT",
+        "/v1/organizations/{organization_id}/trust-profiles/{profile_id}",
+    ),
+    ("POST", "/v1/trust-profiles"),
+    ("GET", "/v1/trust-profiles"),
+    ("GET", "/v1/trust-profiles/{profile_id}"),
+    ("PATCH", "/v1/trust-profiles/{profile_id}"),
+    ("POST", "/v1/trust-profiles/{profile_id}/activate"),
+    ("POST", "/v1/trust-profiles/{profile_id}/suspend"),
+    ("DELETE", "/v1/trust-profiles/{profile_id}"),
+    ("POST", "/v1/trust-profiles/{profile_id}/registry-sync"),
+    ("POST", "/v1/trust-profiles/{profile_id}/issuers"),
+    ("GET", "/v1/trust-profiles/{profile_id}/issuers"),
+    ("GET", "/v1/trust-profiles/{profile_id}/issuers/{issuer_id}"),
+    (
+        "PATCH",
+        "/v1/trust-profiles/{profile_id}/issuers/{issuer_id}",
+    ),
+    (
+        "DELETE",
+        "/v1/trust-profiles/{profile_id}/issuers/{issuer_id}",
+    ),
+    ("GET", "/internal/v1/trust-profiles/{profile_id}"),
+    (
+        "GET",
+        "/internal/v1/resource-owners/trust-profiles/{profile_id}",
+    ),
+    (
+        "GET",
+        "/internal/v1/resource-owners/issuer-entities/{issuer_entity_id}",
+    ),
+    ("GET", "/v1/trust-frameworks"),
+    ("GET", "/v1/trust-frameworks/{framework_id}"),
+    ("GET", "/v1/trust-registry/sync"),
+    ("GET", "/v1/trust-registry/csca"),
+    ("GET", "/v1/trust-registry/dsc"),
+    ("GET", "/v1/trust-registry/csca/{country_code}"),
+    ("GET", "/v1/trust-registry/status"),
+    ("POST", "/v1/issuer-entities"),
+    ("GET", "/v1/issuer-entities"),
+    ("GET", "/v1/issuer-entities/{issuer_entity_id}"),
+    ("PATCH", "/v1/issuer-entities/{issuer_entity_id}"),
+    ("DELETE", "/v1/issuer-entities/{issuer_entity_id}"),
+];
