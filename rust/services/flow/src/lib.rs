@@ -9,6 +9,7 @@
 mod api;
 mod application_approval;
 mod callback;
+mod callback_delivery;
 mod config;
 mod connections;
 mod contract;
@@ -57,6 +58,7 @@ pub mod presentation_policy_proto {
 pub use api::*;
 pub use application_approval::*;
 pub use callback::*;
+pub use callback_delivery::*;
 pub use config::*;
 pub use connections::*;
 pub use contract::*;

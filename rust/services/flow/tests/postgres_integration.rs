@@ -1,10 +1,16 @@
-use std::{env, error::Error, str::FromStr};
+use std::{
+    env,
+    error::Error,
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
 
+use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
 use chrono::{Duration, Utc};
 use marty_flow::{
-    migrate_flow_schema, ApplicationEventReceipt, ApprovalStrategy, ArtifactStatus, CallbackEvent,
-    DefinitionStatus, FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord,
-    PlannedApplicationFlowRecord, PostgresFlowRepository,
+    deliver_due_callbacks, migrate_flow_schema, ApplicationEventReceipt, ApprovalStrategy,
+    ArtifactStatus, CallbackDeliveryConfig, CallbackEvent, DefinitionStatus, FlowArtifactRecord,
+    FlowDefinitionRecord, FlowInstanceRecord, PlannedApplicationFlowRecord, PostgresFlowRepository,
 };
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_push::WebhookDestinationRegistry;
@@ -14,8 +20,11 @@ use sqlx::{postgres::PgConnectOptions, PgPool};
 const TEST_DATABASE_NAME: &str = "marty_atomic_test";
 const FIRST_INSTANCE_ID: &str = "90000000-0000-0000-0000-000000000001";
 const EXPIRED_INSTANCE_ID: &str = "90000000-0000-0000-0000-000000000002";
+const DELIVERED_CALLBACK_INSTANCE_ID: &str = "90000000-0000-0000-0000-000000000003";
+const REJECTED_CALLBACK_INSTANCE_ID: &str = "90000000-0000-0000-0000-000000000004";
 
 type TestResult = Result<(), Box<dyn Error + Send + Sync>>;
+type CallbackReceiver = Arc<Mutex<Option<tokio::sync::oneshot::Sender<(HeaderMap, Value)>>>>;
 
 #[tokio::test]
 async fn postgres_finalization_and_callback_leases_are_atomic() -> TestResult {
@@ -183,6 +192,8 @@ async fn run_contract(pool: &PgPool) -> TestResult {
     .await?;
     assert_eq!(delivered, ("delivered".into(), String::new(), json!({}), 2));
 
+    run_callback_delivery_contract(pool, &repository, now, replay_expiry).await?;
+
     insert_live_instance(
         pool,
         EXPIRED_INSTANCE_ID,
@@ -216,6 +227,123 @@ async fn run_contract(pool: &PgPool) -> TestResult {
     .await?;
     assert_eq!(expired_replays, 0);
     Ok(())
+}
+
+async fn run_callback_delivery_contract(
+    pool: &PgPool,
+    repository: &PostgresFlowRepository,
+    now: chrono::DateTime<Utc>,
+    replay_expiry: u64,
+) -> TestResult {
+    let (received_tx, received_rx) = tokio::sync::oneshot::channel();
+    let state = Arc::new(Mutex::new(Some(received_tx)));
+    let router = Router::new()
+        .route("/callback", post(receive_callback))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = tokio::spawn(async move { axum::serve(listener, router).await });
+    let destination = format!("http://{address}/callback");
+    let registration = format!("org-1|{destination}");
+    let destinations = WebhookDestinationRegistry::parse(&registration)?;
+
+    insert_live_instance(pool, DELIVERED_CALLBACK_INSTANCE_ID, now, None).await?;
+    let callback = CallbackEvent::new(
+        DELIVERED_CALLBACK_INSTANCE_ID,
+        "org-1",
+        &destination,
+        json!({"flow_instance_id": DELIVERED_CALLBACK_INSTANCE_ID, "decision": "allow"}),
+        u64::try_from(now.timestamp_millis())?,
+        &destinations,
+    )?
+    .into_outbox_message();
+    assert!(
+        repository
+            .finalize_verification(
+                &terminal_instance(DELIVERED_CALLBACK_INSTANCE_ID, now, "allow"),
+                &"d".repeat(64),
+                replay_expiry,
+                FlowInstanceStatus::AwaitingWallet,
+                Some(&callback),
+            )
+            .await?
+    );
+    let report = deliver_due_callbacks(
+        repository,
+        &destinations,
+        "0123456789abcdef0123456789abcdef",
+        &CallbackDeliveryConfig::default(),
+    )
+    .await?;
+    assert_eq!(report.claimed, 1);
+    assert_eq!(report.delivered, 1);
+    let (headers, payload) = received_rx.await?;
+    assert_eq!(headers["x-mip-audience"], "marty-auth-service");
+    assert_eq!(headers["x-mip-event"], "flow.verification_completed");
+    assert_eq!(headers["x-mip-delivery-attempt"], "1");
+    assert_eq!(headers["x-mip-signature"].len(), 64);
+    assert_eq!(payload["flow_instance_id"], DELIVERED_CALLBACK_INSTANCE_ID);
+    let delivered: (String, String, Value) = sqlx::query_as(
+        "SELECT status, destination_url, payload FROM flow_service.flow_callback_outbox \
+         WHERE event_id=$1",
+    )
+    .bind(DELIVERED_CALLBACK_INSTANCE_ID)
+    .fetch_one(pool)
+    .await?;
+    assert_eq!(delivered, ("delivered".into(), String::new(), json!({})));
+
+    insert_live_instance(pool, REJECTED_CALLBACK_INSTANCE_ID, now, None).await?;
+    let rejected = CallbackEvent::new(
+        REJECTED_CALLBACK_INSTANCE_ID,
+        "org-1",
+        &destination,
+        json!({"flow_instance_id": REJECTED_CALLBACK_INSTANCE_ID, "decision": "allow"}),
+        u64::try_from(now.timestamp_millis())?,
+        &destinations,
+    )?
+    .into_outbox_message();
+    assert!(
+        repository
+            .finalize_verification(
+                &terminal_instance(REJECTED_CALLBACK_INSTANCE_ID, now, "allow"),
+                &"e".repeat(64),
+                replay_expiry,
+                FlowInstanceStatus::AwaitingWallet,
+                Some(&rejected),
+            )
+            .await?
+    );
+    let report = deliver_due_callbacks(
+        repository,
+        &WebhookDestinationRegistry::default(),
+        "0123456789abcdef0123456789abcdef",
+        &CallbackDeliveryConfig::default(),
+    )
+    .await?;
+    assert_eq!(report.dead_lettered, 1);
+    let rejected_status: (String, Option<String>) = sqlx::query_as(
+        "SELECT status, last_error_code FROM flow_service.flow_callback_outbox WHERE event_id=$1",
+    )
+    .bind(REJECTED_CALLBACK_INSTANCE_ID)
+    .fetch_one(pool)
+    .await?;
+    assert_eq!(
+        rejected_status,
+        ("dead_letter".into(), Some("destination_rejected".into()))
+    );
+    server.abort();
+    Ok(())
+}
+
+async fn receive_callback(
+    State(sender): State<CallbackReceiver>,
+    headers: HeaderMap,
+    Json(payload): Json<Value>,
+) -> axum::http::StatusCode {
+    if let Some(sender) = sender.lock().expect("callback receiver lock").take() {
+        let _ = sender.send((headers, payload));
+    }
+    axum::http::StatusCode::NO_CONTENT
 }
 
 async fn run_crud_contract(

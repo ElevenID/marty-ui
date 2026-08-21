@@ -9,7 +9,10 @@
     "issuance_grpc",
     "signing_keys_http",
     "physical_issuance_http",
-    "reference_catalog_http"
+    "reference_catalog_http",
+    "callback_delivery",
+    "http_listener",
+    "grpc_listener"
   ],
   "native_backend": "marty-flow-rust",
   "native_capabilities": [
@@ -19,7 +22,10 @@
     "oid4vp_evaluation",
     "mdoc_handover",
     "haip_jwe",
-    "siopv2_verification"
+    "siopv2_verification",
+    "http_service",
+    "grpc_service",
+    "callback_delivery"
   ],
   "ready_before_all_healthy": false,
   "ready_after_all_healthy": true,

@@ -8,6 +8,7 @@ use marty_flow::{
     FlowProviderRegistry, FlowVerificationSubmissionError, PreparedVerificationSubmission,
     PresentationEvaluationRequest, PresentationEvaluationResult, PresentationPolicyProvider,
     PresentationPolicyReference, VerificationSubmissionInput, VerificationSubmissionOptions,
+    CALLBACK_MAX_ATTEMPTS, CALLBACK_RETENTION_SECONDS,
 };
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_push::WebhookDestinationRegistry;
@@ -150,6 +151,8 @@ fn options(secret: Option<&str>) -> VerificationSubmissionOptions {
         callback_secret: secret.map(str::to_owned),
         verifier_sender_id: "did:web:verifier.example".into(),
         nonce_ttl_seconds: 900,
+        callback_retention_seconds: CALLBACK_RETENTION_SECONDS,
+        callback_max_attempts: CALLBACK_MAX_ATTEMPTS,
     }
 }
 

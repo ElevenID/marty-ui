@@ -16,6 +16,9 @@ pub enum FlowDependency {
     SigningKeys,
     PhysicalIssuance,
     ReferenceCatalog,
+    CallbackDelivery,
+    HttpListener,
+    GrpcListener,
 }
 
 impl FlowDependency {
@@ -31,6 +34,9 @@ impl FlowDependency {
             Self::SigningKeys => "signing_keys_http",
             Self::PhysicalIssuance => "physical_issuance_http",
             Self::ReferenceCatalog => "reference_catalog_http",
+            Self::CallbackDelivery => "callback_delivery",
+            Self::HttpListener => "http_listener",
+            Self::GrpcListener => "grpc_listener",
         }
     }
 
@@ -45,6 +51,9 @@ impl FlowDependency {
             Self::SigningKeys,
             Self::PhysicalIssuance,
             Self::ReferenceCatalog,
+            Self::CallbackDelivery,
+            Self::HttpListener,
+            Self::GrpcListener,
         ]
         .into_iter()
     }
@@ -147,6 +156,9 @@ async fn native_backend_health() -> Json<NativeBackendDiagnostics> {
             "mdoc_handover",
             "haip_jwe",
             "siopv2_verification",
+            "http_service",
+            "grpc_service",
+            "callback_delivery",
         ],
     })
 }

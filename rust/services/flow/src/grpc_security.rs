@@ -29,9 +29,9 @@ pub enum FlowGrpcSecurityError {
 }
 
 pub struct FlowGrpcSecurity {
-    service_token: Vec<u8>,
+    service_token: Option<Vec<u8>>,
     workload_policy: WorkloadIdentityPolicy,
-    server_tls: GrpcServerTlsMaterial,
+    server_tls: Option<GrpcServerTlsMaterial>,
 }
 
 impl FlowGrpcSecurity {
@@ -39,17 +39,28 @@ impl FlowGrpcSecurity {
         let service_token = config
             .service_token
             .as_deref()
-            .ok_or_else(|| FlowGrpcSecurityError::Configuration("service token is missing".into()))?
-            .as_bytes()
-            .to_vec();
-        let files = config.workload_server_tls.as_ref().ok_or_else(|| {
-            FlowGrpcSecurityError::Configuration("workload server TLS is missing".into())
-        })?;
-        let server_tls = GrpcServerTlsMaterial::from_pem_files(
-            &files.ca_certificate,
-            &files.certificate,
-            &files.private_key,
-        )?;
+            .map(|value| value.as_bytes().to_vec());
+        if config.environment.is_deployed() && service_token.is_none() {
+            return Err(FlowGrpcSecurityError::Configuration(
+                "service token is missing".into(),
+            ));
+        }
+        let server_tls = config
+            .workload_server_tls
+            .as_ref()
+            .map(|files| {
+                GrpcServerTlsMaterial::from_pem_files(
+                    &files.ca_certificate,
+                    &files.certificate,
+                    &files.private_key,
+                )
+            })
+            .transpose()?;
+        if config.environment.is_deployed() && server_tls.is_none() {
+            return Err(FlowGrpcSecurityError::Configuration(
+                "workload server TLS is missing".into(),
+            ));
+        }
         let workload_policy = WorkloadIdentityPolicy::new(BTreeMap::from([
             (
                 START_VERIFICATION_METHOD.into(),
@@ -68,18 +79,23 @@ impl FlowGrpcSecurity {
     }
 
     #[must_use]
-    pub fn server_tls_config(&self) -> tonic::transport::ServerTlsConfig {
-        self.server_tls.server_tls_config()
+    pub fn server_tls_config(&self) -> Option<tonic::transport::ServerTlsConfig> {
+        self.server_tls
+            .as_ref()
+            .map(GrpcServerTlsMaterial::server_tls_config)
     }
 
     pub fn authenticate_service<T>(&self, request: &Request<T>) -> Result<(), Status> {
+        let Some(expected) = self.service_token.as_deref() else {
+            return Ok(());
+        };
         let candidate = request
             .metadata()
             .get("x-service-token")
             .and_then(|value| value.to_str().ok())
             .map(str::as_bytes)
             .unwrap_or_default();
-        if constant_time_secret_eq(&self.service_token, candidate) {
+        if constant_time_secret_eq(expected, candidate) {
             Ok(())
         } else {
             Err(Status::unauthenticated("service authentication failed"))
@@ -131,7 +147,7 @@ mod tests {
 
     fn security() -> FlowGrpcSecurity {
         FlowGrpcSecurity {
-            service_token: b"0123456789abcdef0123456789abcdef".to_vec(),
+            service_token: Some(b"0123456789abcdef0123456789abcdef".to_vec()),
             workload_policy: WorkloadIdentityPolicy::new(BTreeMap::from([
                 (
                     START_VERIFICATION_METHOD.into(),
@@ -143,12 +159,14 @@ mod tests {
                 ),
             ]))
             .unwrap(),
-            server_tls: GrpcServerTlsMaterial::new(
-                b"-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----".to_vec(),
-                b"-----BEGIN CERTIFICATE-----\nserver\n-----END CERTIFICATE-----".to_vec(),
-                b"-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----".to_vec(),
-            )
-            .unwrap(),
+            server_tls: Some(
+                GrpcServerTlsMaterial::new(
+                    b"-----BEGIN CERTIFICATE-----\nca\n-----END CERTIFICATE-----".to_vec(),
+                    b"-----BEGIN CERTIFICATE-----\nserver\n-----END CERTIFICATE-----".to_vec(),
+                    b"-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----".to_vec(),
+                )
+                .unwrap(),
+            ),
         }
     }
 
@@ -200,6 +218,26 @@ mod tests {
             .insert("x-service-token", "wrong".parse().unwrap());
         assert_eq!(
             security.authenticate_service(&invalid).unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+    }
+
+    #[test]
+    fn development_can_bind_plaintext_but_sensitive_methods_still_require_mtls() {
+        let config = FlowServiceConfig::from_values([
+            ("ENVIRONMENT".into(), "development".into()),
+            ("DATABASE_URL".into(), "postgresql://db/flow".into()),
+            ("REDIS_URL".into(), "redis://redis".into()),
+        ])
+        .unwrap();
+        let security = FlowGrpcSecurity::from_config(&config).unwrap();
+        assert!(security.server_tls_config().is_none());
+        assert!(security.authenticate_service(&Request::new(())).is_ok());
+        assert_eq!(
+            security
+                .authorize_workload(&Request::new(()), START_VERIFICATION_METHOD)
+                .unwrap_err()
+                .code(),
             tonic::Code::Unauthenticated
         );
     }

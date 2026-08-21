@@ -38,6 +38,8 @@ pub struct FlowHttpVerificationOptions {
     pub default_organization_id: String,
     pub allow_http_loopback: bool,
     pub nonce_ttl_seconds: u64,
+    pub callback_retention_seconds: u64,
+    pub callback_max_attempts: u32,
 }
 
 impl Default for FlowHttpVerificationOptions {
@@ -51,6 +53,8 @@ impl Default for FlowHttpVerificationOptions {
             default_organization_id: "00000000-0000-0000-0000-000000000001".into(),
             allow_http_loopback: true,
             nonce_ttl_seconds: NONCE_TTL_SECONDS,
+            callback_retention_seconds: crate::CALLBACK_RETENTION_SECONDS,
+            callback_max_attempts: crate::CALLBACK_MAX_ATTEMPTS,
         }
     }
 }
@@ -67,6 +71,8 @@ impl FlowHttpVerificationOptions {
             default_organization_id: config.marty_organization_id.clone(),
             allow_http_loopback: !config.environment.is_deployed(),
             nonce_ttl_seconds: NONCE_TTL_SECONDS,
+            callback_retention_seconds: crate::CALLBACK_RETENTION_SECONDS,
+            callback_max_attempts: crate::CALLBACK_MAX_ATTEMPTS,
         }
     }
 }
@@ -558,6 +564,8 @@ async fn evaluate_submission(
             callback_secret: state.verification.callback_secret.clone(),
             verifier_sender_id,
             nonce_ttl_seconds: state.verification.nonce_ttl_seconds,
+            callback_retention_seconds: state.verification.callback_retention_seconds,
+            callback_max_attempts: state.verification.callback_max_attempts,
         },
         now,
     )

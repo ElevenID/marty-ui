@@ -30,6 +30,8 @@ pub struct VerificationSubmissionOptions {
     pub callback_secret: Option<String>,
     pub verifier_sender_id: String,
     pub nonce_ttl_seconds: u64,
+    pub callback_retention_seconds: u64,
+    pub callback_max_attempts: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -619,15 +621,16 @@ fn build_callback(
     payload["decision_digest"] = json!(decision_digest);
     let created_at_ms = u64::try_from(now.timestamp_millis())
         .map_err(|_| FlowVerificationSubmissionError::InvalidClock)?;
-    CallbackEvent::new(
+    CallbackEvent::new_with_retention(
         instance.id.clone(),
         instance.organization_id.clone(),
         destination,
         payload,
         created_at_ms,
         &options.callback_destinations,
+        options.callback_retention_seconds,
     )
-    .map(CallbackEvent::into_outbox_message)
+    .map(|event| event.into_outbox_message_with_max_attempts(options.callback_max_attempts))
     .map(Some)
     .map_err(|_| FlowVerificationSubmissionError::CallbackUnavailable)
 }

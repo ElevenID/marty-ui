@@ -34,6 +34,27 @@ impl CallbackEvent {
         created_at_ms: u64,
         destinations: &WebhookDestinationRegistry,
     ) -> Result<Self, PushError> {
+        Self::new_with_retention(
+            flow_instance_id,
+            organization_id,
+            destination_url,
+            payload,
+            created_at_ms,
+            destinations,
+            CALLBACK_RETENTION_SECONDS,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_retention(
+        flow_instance_id: impl Into<String>,
+        organization_id: impl Into<String>,
+        destination_url: impl Into<String>,
+        payload: Value,
+        created_at_ms: u64,
+        destinations: &WebhookDestinationRegistry,
+        retention_seconds: u64,
+    ) -> Result<Self, PushError> {
         let flow_instance_id = flow_instance_id.into();
         let organization_id = organization_id.into();
         let destination_url = destination_url.into();
@@ -55,13 +76,17 @@ impl CallbackEvent {
             event_type: CALLBACK_EVENT_TYPE.into(),
             payload,
             created_at_ms,
-            expires_at_ms: created_at_ms
-                .saturating_add(CALLBACK_RETENTION_SECONDS.saturating_mul(1_000)),
+            expires_at_ms: created_at_ms.saturating_add(retention_seconds.saturating_mul(1_000)),
         })
     }
 
     #[must_use]
     pub fn into_outbox_message(self) -> Message {
+        self.into_outbox_message_with_max_attempts(CALLBACK_MAX_ATTEMPTS)
+    }
+
+    #[must_use]
+    pub fn into_outbox_message_with_max_attempts(self, max_attempts: u32) -> Message {
         Message {
             metadata: MessageMetadata {
                 message_id: self.event_id.clone(),
@@ -96,7 +121,7 @@ impl CallbackEvent {
             reply_to: Some(self.destination_url),
             payload: self.payload,
             retry_count: 0,
-            max_retries: CALLBACK_MAX_ATTEMPTS.saturating_sub(1),
+            max_retries: max_attempts.saturating_sub(1),
         }
     }
 

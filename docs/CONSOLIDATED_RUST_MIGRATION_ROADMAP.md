@@ -411,12 +411,12 @@ enabled. The reusable lifecycle portion is now complete at local MMF commit
 `06a52ac`: required components block activation unless healthy and immediately
 remove live readiness when they degrade. Flow consumes that primitive under
 `contracts/flow-runtime-behavior.json`, registers PostgreSQL, Redis nonce
-storage, four typed gRPC dependencies and three HTTP provider adapters as
-mandatory, and exposes the shared `/health`, `/ready`, `/version` routes plus
-native backend/version/capability diagnostics. Two Flow runtime tests, five MMF
-runtime tests and strict Clippy pass. Actual dependency connection, seed
-ownership and HTTP/gRPC application listener composition remain before the
-runtime may call `activate`.
+storage, four typed gRPC dependencies, three HTTP provider adapters, callback
+delivery and both application listeners as mandatory, and exposes the shared
+`/health`, `/ready`, `/version` routes plus native backend/version/capability
+diagnostics. Two Flow runtime tests, five MMF runtime tests and strict Clippy
+pass. Dependency connection, seed ownership and HTTP/gRPC application listener
+composition are now complete in the executable described below.
 
 The startup boundary also preserves the released container contract instead
 of requiring a flag-day configuration rewrite. It accepts the existing
@@ -756,9 +756,29 @@ supports instance and flow-type filters, uses a bounded 256-event channel and
 terminates a lagging subscriber explicitly instead of silently losing events.
 Health probes the live database and requires service authentication. Four
 adapter unit vectors, two language-neutral contract tests, all-target compile
-and strict Clippy pass. Flow's remaining executable work is therefore limited
-to HTTP/gRPC listener composition, lifecycle activation/drain/shutdown,
-container packaging and the final deletion/acceptance gates.
+and strict Clippy pass.
+
+The native Flow executable is now composed under
+`contracts/flow-executable-behavior.json`. It connects and probes every required
+dependency, binds both listener sockets, starts the durable callback worker and
+only then activates shared MMF readiness and the standard gRPC health service.
+HTTP merges all application routes with shared lifecycle/version/native-backend
+diagnostics; gRPC serves the complete adapter with optional development
+plaintext and required deployed mTLS. Shutdown transitions to draining, marks
+gRPC not serving, gracefully closes both listeners, stops the callback worker
+and then records stopped. The callback worker preserves the released bounded
+retention, attempts, lease, poll, retry and batch configuration; uses
+`SKIP LOCKED` fenced claims; revalidates the tenant destination for every
+attempt; signs the canonical event; forbids redirects; distinguishes HTTP,
+timeout and network failures; retries with bounded exponential delay;
+dead-letters removed destinations; and scrubs delivered or expired payloads.
+The optional PostgreSQL integration gate now drives a real loopback callback
+receiver and verifies signed delivery, payload scrubbing and destination
+dead-lettering in addition to the existing lease races. Executable, callback,
+runtime, submission and strict Clippy gates pass locally; real PostgreSQL
+delivery remains a configured Linux CI execution gate. Flow's remaining work
+is container packaging, complete executable acceptance and immediate Python
+deletion.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
