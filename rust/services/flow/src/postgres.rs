@@ -574,10 +574,10 @@ impl PostgresFlowRepository {
     ) -> Result<Option<FlowInstanceRecord>, RepositoryError> {
         let row = sqlx::query(
             "UPDATE flow_service.flow_instances SET status='cancelled', completed_at=$2, \
-             updated_at=$2, state_history=COALESCE(state_history, '[]'::jsonb) || \
+             updated_at=$2, state_history=(COALESCE(state_history, '[]'::json)::jsonb || \
              jsonb_build_array(jsonb_build_object('prior_state', status, \
              'new_state', 'cancelled', 'timestamp', $4, 'actor', $3, \
-             'event', 'flow_cancelled')) WHERE id=$1 AND status NOT IN \
+             'event', 'flow_cancelled')))::json WHERE id=$1 AND status NOT IN \
              ('completed','failed','cancelled','expired') RETURNING *",
         )
         .bind(id)

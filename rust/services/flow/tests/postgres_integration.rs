@@ -281,7 +281,9 @@ async fn run_callback_delivery_contract(
     assert_eq!(headers["x-mip-audience"], "marty-auth-service");
     assert_eq!(headers["x-mip-event"], "flow.verification_completed");
     assert_eq!(headers["x-mip-delivery-attempt"], "1");
-    assert_eq!(headers["x-mip-signature"].len(), 64);
+    let signature = headers["x-mip-signature"].to_str()?;
+    assert!(signature.starts_with("sha256="));
+    assert_eq!(signature.len(), "sha256=".len() + 64);
     assert_eq!(payload["flow_instance_id"], DELIVERED_CALLBACK_INSTANCE_ID);
     let delivered: (String, String, Value) = sqlx::query_as(
         "SELECT status, destination_url, payload FROM flow_service.flow_callback_outbox \

@@ -665,6 +665,7 @@ jobs:
           MARTY_ISSUER_DID: did:web:beta.example.test
           MARTY_ORG_ID: 00000000-0000-0000-0000-000000000001
           PUBLIC_API_URL: https://beta.example.test
+          PUBLIC_DOMAIN: beta.example.test
           MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE: /dev/null
           PP_WORKLOAD_SERVER_CERT_FILE: /dev/null
           PP_WORKLOAD_SERVER_KEY_FILE: /dev/null
