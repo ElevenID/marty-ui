@@ -104,6 +104,53 @@ impl PostgresOrganizationStore {
         rows.iter().map(organization_from_row).collect()
     }
 
+    pub async fn list_organizations_filtered(
+        &self,
+        search: Option<&str>,
+        org_type: Option<OrganizationType>,
+        join_mechanism: Option<JoinMechanism>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<(Vec<Organization>, u64), RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT * FROM organization_service.organizations
+             WHERE ($1::text IS NULL OR name ILIKE '%' || $1 || '%'
+                    OR display_name ILIKE '%' || $1 || '%')
+               AND ($2::text IS NULL OR org_type=$2)
+               AND ($3::text IS NULL OR join_mechanism=$3)
+             ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+        )
+        .bind(search)
+        .bind(org_type.map(OrganizationType::as_str))
+        .bind(join_mechanism.map(JoinMechanism::as_str))
+        .bind(i64::from(limit.min(1_000)))
+        .bind(i64::from(offset))
+        .fetch_all(&self.pool)
+        .await?;
+        let total = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM organization_service.organizations
+             WHERE ($1::text IS NULL OR name ILIKE '%' || $1 || '%'
+                    OR display_name ILIKE '%' || $1 || '%')
+               AND ($2::text IS NULL OR org_type=$2)
+               AND ($3::text IS NULL OR join_mechanism=$3)",
+        )
+        .bind(search)
+        .bind(org_type.map(OrganizationType::as_str))
+        .bind(join_mechanism.map(JoinMechanism::as_str))
+        .fetch_one(&self.pool)
+        .await?;
+        let total = u64::try_from(total).map_err(|_| RepositoryError::InvalidData {
+            field: "organization_count",
+            value: total.to_string(),
+        })?;
+        Ok((
+            rows.iter()
+                .map(organization_from_row)
+                .collect::<Result<Vec<_>, _>>()?,
+            total,
+        ))
+    }
+
     pub async fn list_discoverable_organizations(
         &self,
         search: Option<&str>,

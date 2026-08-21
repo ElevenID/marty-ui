@@ -8,12 +8,17 @@ pub mod cache;
 pub mod catalog;
 pub mod domain;
 pub mod events;
+pub mod grpc_service;
 pub mod migration;
 pub mod policy_sets;
 pub mod postgres;
 pub mod preferences;
 pub mod roles;
 pub mod scim;
+
+pub mod organization_proto {
+    tonic::include_proto!("marty.ui.organization.v1");
+}
 
 pub use api_keys::{
     validate_create_api_key, ApiKeyCreation, ApiKeyScopeType, CreateApiKeyCommand,
@@ -47,6 +52,7 @@ pub use events::{
     OrganizationAuditSink, OrganizationEvent, OrganizationEventError, OrganizationEventKind,
     OrganizationEventPublisher, OrganizationEventPublisherError,
 };
+pub use grpc_service::*;
 pub use policy_sets::{
     deserialize_policy_documents, policy_set_ids_to_archive, validate_policy_documents,
     CedarPolicyDocument, CreatePolicySetCommand, UpdatePolicySetCommand, UpdatePolicySetPatch,

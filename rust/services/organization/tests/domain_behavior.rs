@@ -278,6 +278,13 @@ fn frozen_surface_is_unique_and_complete() {
             .len(),
         12
     );
+    let grpc_methods = fixture["grpc_methods"]
+        .as_array()
+        .expect("gRPC methods must be an array")
+        .iter()
+        .map(|method| method.as_str().expect("method must be a string"))
+        .collect::<Vec<_>>();
+    assert_eq!(grpc_methods, marty_organization::ORGANIZATION_GRPC_METHODS);
     assert_eq!(
         fixture["legacy_python_grpc_gap"]
             .as_array()

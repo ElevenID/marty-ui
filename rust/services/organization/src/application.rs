@@ -107,6 +107,7 @@ pub struct SetMemberRolesCommand {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoveMemberCommand {
+    pub organization_id: Uuid,
     pub member_id: Uuid,
     pub removed_by: String,
     pub now: DateTime<Utc>,
@@ -482,6 +483,20 @@ impl OrganizationApplication {
         Ok(self.store.list_organizations(limit, offset).await?)
     }
 
+    pub async fn list_organizations_filtered(
+        &self,
+        search: Option<&str>,
+        org_type: Option<OrganizationType>,
+        join_mechanism: Option<JoinMechanism>,
+        limit: u32,
+        offset: u32,
+    ) -> Result<(Vec<Organization>, u64), OrganizationApplicationError> {
+        Ok(self
+            .store
+            .list_organizations_filtered(search, org_type, join_mechanism, limit, offset)
+            .await?)
+    }
+
     pub async fn discover_organizations(
         &self,
         search: Option<&str>,
@@ -704,6 +719,11 @@ impl OrganizationApplication {
             .ok_or(OrganizationApplicationError::MemberNotFound(
                 command.member_id,
             ))?;
+        if member.organization_id != command.organization_id {
+            return Err(OrganizationApplicationError::MemberNotFound(
+                command.member_id,
+            ));
+        }
         let organization = self
             .store
             .organization_by_id_for_update_in_transaction(&mut transaction, member.organization_id)

@@ -1044,6 +1044,25 @@ Organization work is the trusted HTTP/gRPC adapter boundary, runtime and
 outbox composition, executable/container packaging, PostgreSQL acceptance and
 same-slice Python deletion. No beta deployment has occurred.
 
+The complete intended 12-method Organization protobuf service now executes in
+Rust, including `CreateOrganization`, `UpdateOrganization`,
+`ListOrganizations` and `RemoveMember`, which were declared but absent from
+the Python server. Generated Tonic types remain authoritative; DTO projection,
+UUID and enum validation, API-key validation, member permissions, filtered
+organization totals and stable gRPC status normalization are implemented at
+the adapter boundary. Every RPC requires the configured service token using a
+constant-time comparison, while deployed runtime configuration will also
+require mutual TLS before the server can bind. Member removal now carries and
+checks the path organization in the application command, closing a latent
+cross-tenant selector gap before exposing that previously missing RPC.
+
+The frozen 12-method list is asserted against the compiled adapter and the
+existing protobuf/Python surface oracle remains green. Thirty-three Rust
+Organization tests, the focused six-test Python protobuf/domain oracle,
+formatting and strict Clippy pass. HTTP/SCIM adapters, deployed trust-boundary
+composition, runtime/outbox workers, executable/container packaging and the
+final acceptance/deletion gate remain. No beta deployment has occurred.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

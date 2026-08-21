@@ -4369,6 +4369,8 @@ dependencies = [
  "mmf-data",
  "mmf-messaging",
  "mmf-security",
+ "prost",
+ "protoc-bin-vendored",
  "rand 0.9.5",
  "regex",
  "serde",
@@ -4378,6 +4380,9 @@ dependencies = [
  "subtle",
  "thiserror 2.0.20",
  "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
  "uuid",
 ]
 

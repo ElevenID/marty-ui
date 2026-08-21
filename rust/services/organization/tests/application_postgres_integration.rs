@@ -214,8 +214,22 @@ async fn mutations_commit_domain_audit_and_outbox_state_together_when_configured
         .await
         .expect("member role replacement must commit");
     assert_eq!(assigned.value.roles[0].name, "reviewer");
+    let cross_tenant = application
+        .remove_member(RemoveMemberCommand {
+            organization_id: uuid::Uuid::new_v4(),
+            member_id: accepted.value.id,
+            removed_by: "application-owner".into(),
+            now: Utc::now(),
+        })
+        .await
+        .expect_err("cross-tenant member removal must fail closed");
+    assert!(matches!(
+        cross_tenant,
+        OrganizationApplicationError::MemberNotFound(id) if id == accepted.value.id
+    ));
     application
         .remove_member(RemoveMemberCommand {
+            organization_id,
             member_id: accepted.value.id,
             removed_by: "application-owner".into(),
             now: Utc::now(),
