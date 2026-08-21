@@ -123,6 +123,27 @@ pub struct AddMemberDirectCommand {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreateScimMemberCommand {
+    pub organization_id: Uuid,
+    pub user_id: String,
+    pub email: String,
+    pub active: bool,
+    pub role_ids: Option<Vec<Uuid>>,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateScimMemberCommand {
+    pub organization_id: Uuid,
+    pub member_id: Uuid,
+    pub user_id: String,
+    pub email: String,
+    pub active: bool,
+    pub role_ids: Option<Vec<Uuid>>,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JoinByCodeCommand {
     pub user_id: String,
     pub code: String,
@@ -771,6 +792,191 @@ impl OrganizationApplication {
             .member_by_id(member_id)
             .await?
             .filter(|member| member.organization_id == organization_id))
+    }
+
+    pub async fn create_scim_member(
+        &self,
+        command: CreateScimMemberCommand,
+    ) -> Result<MutationResult<Member>, OrganizationApplicationError> {
+        require_non_empty(&command.user_id, "user_id is required")?;
+        require_non_empty(&command.email, "email is required")?;
+        let mut transaction = self.store.begin_transaction().await?;
+        self.store
+            .organization_by_id_for_update_in_transaction(&mut transaction, command.organization_id)
+            .await?
+            .ok_or(OrganizationApplicationError::NotFound(
+                command.organization_id,
+            ))?;
+        if self
+            .store
+            .member_by_email_and_organization_for_update_in_transaction(
+                &mut transaction,
+                &command.email,
+                command.organization_id,
+            )
+            .await?
+            .is_some()
+        {
+            return Err(OrganizationApplicationError::MemberConflict(
+                "userName already exists in this organization".into(),
+            ));
+        }
+        let roles = self
+            .scim_roles_in_transaction(
+                &mut transaction,
+                command.organization_id,
+                command.active,
+                command.role_ids.as_deref(),
+            )
+            .await?;
+        let mut member = Member::create(
+            command.organization_id,
+            command.user_id,
+            Some(command.email),
+            if command.active {
+                MemberStatus::Active
+            } else {
+                MemberStatus::Deactivated
+            },
+            command.now,
+        );
+        member.roles = roles;
+        self.store
+            .save_member_in_transaction(&mut transaction, &member)
+            .await?;
+        self.store
+            .set_member_roles_in_transaction(
+                &mut transaction,
+                member.id,
+                &member.roles.iter().map(|role| role.id).collect::<Vec<_>>(),
+            )
+            .await?;
+        let event = member_added_event(&member, command.now)?;
+        self.persist_event_in_transaction(&mut transaction, &event)
+            .await?;
+        transaction.commit().await.map_err(RepositoryError::from)?;
+        let warnings = self
+            .invalidate_member_after_commit(&member.user_id, member.organization_id)
+            .await;
+        Ok(MutationResult {
+            value: member,
+            warnings,
+        })
+    }
+
+    pub async fn update_scim_member(
+        &self,
+        command: UpdateScimMemberCommand,
+    ) -> Result<MutationResult<Member>, OrganizationApplicationError> {
+        require_non_empty(&command.email, "email is required")?;
+        let mut transaction = self.store.begin_transaction().await?;
+        let mut member = self
+            .store
+            .member_by_id_for_update_in_transaction(&mut transaction, command.member_id)
+            .await?
+            .filter(|member| member.organization_id == command.organization_id)
+            .ok_or(OrganizationApplicationError::MemberNotFound(
+                command.member_id,
+            ))?;
+        let organization = self
+            .store
+            .organization_by_id_for_update_in_transaction(&mut transaction, command.organization_id)
+            .await?
+            .ok_or(OrganizationApplicationError::NotFound(
+                command.organization_id,
+            ))?;
+        if self
+            .store
+            .member_by_email_and_organization_for_update_in_transaction(
+                &mut transaction,
+                &command.email,
+                command.organization_id,
+            )
+            .await?
+            .is_some_and(|existing| existing.id != member.id)
+        {
+            return Err(OrganizationApplicationError::MemberConflict(
+                "userName already exists in this organization".into(),
+            ));
+        }
+        if !command.active && member.user_id == organization.owner_id {
+            return Err(OrganizationApplicationError::OwnerCannotBeRemoved);
+        }
+        let was_active = member.status == MemberStatus::Active;
+        let old_user_id = member.user_id.clone();
+        let roles = self
+            .scim_roles_in_transaction(
+                &mut transaction,
+                command.organization_id,
+                command.active,
+                command.role_ids.as_deref(),
+            )
+            .await?;
+        member.user_id = command.user_id;
+        member.email = Some(command.email);
+        member.status = if command.active {
+            MemberStatus::Active
+        } else {
+            MemberStatus::Deactivated
+        };
+        member.roles = roles;
+        member.updated_at = command.now;
+        self.store
+            .save_member_in_transaction(&mut transaction, &member)
+            .await?;
+        self.store
+            .set_member_roles_in_transaction(
+                &mut transaction,
+                member.id,
+                &member.roles.iter().map(|role| role.id).collect::<Vec<_>>(),
+            )
+            .await?;
+        let transition_event = match (was_active, command.active) {
+            (true, false) => Some(member_removed_event(&member, command.now)?),
+            (false, true) => Some(member_added_event(&member, command.now)?),
+            _ => None,
+        };
+        if let Some(event) = transition_event {
+            self.persist_event_in_transaction(&mut transaction, &event)
+                .await?;
+        }
+        transaction.commit().await.map_err(RepositoryError::from)?;
+        let mut warnings = self
+            .invalidate_member_after_commit(&old_user_id, member.organization_id)
+            .await;
+        if member.user_id != old_user_id {
+            warnings.extend(
+                self.invalidate_member_after_commit(&member.user_id, member.organization_id)
+                    .await,
+            );
+        }
+        Ok(MutationResult {
+            value: member,
+            warnings,
+        })
+    }
+
+    async fn scim_roles_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+        active: bool,
+        role_ids: Option<&[Uuid]>,
+    ) -> Result<Vec<Role>, OrganizationApplicationError> {
+        if !active {
+            return Ok(Vec::new());
+        }
+        match role_ids {
+            Some([]) => Ok(Vec::new()),
+            Some(role_ids) => {
+                self.validated_roles_in_transaction(transaction, organization_id, role_ids)
+                    .await
+            }
+            None => {
+                self.default_roles_in_transaction(transaction, organization_id)
+                    .await
+            }
+        }
     }
 
     pub async fn get_membership(

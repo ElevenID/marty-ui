@@ -68,7 +68,207 @@ pub struct RemoveMemberRoleCommand {
     pub now: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreateScimGroupCommand {
+    pub organization_id: Uuid,
+    pub name: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub permission_ids: Vec<Uuid>,
+    pub member_ids: Vec<Uuid>,
+    pub created_by: String,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateScimGroupCommand {
+    pub organization_id: Uuid,
+    pub role_id: Uuid,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub permission_ids: Vec<Uuid>,
+    pub member_ids: Vec<Uuid>,
+    pub updated_by: String,
+    pub now: DateTime<Utc>,
+}
+
 impl OrganizationApplication {
+    pub async fn create_scim_group(
+        &self,
+        command: CreateScimGroupCommand,
+    ) -> Result<MutationResult<(Role, Vec<Member>)>, OrganizationApplicationError> {
+        require_text(&command.name, "role name is required")?;
+        require_text(&command.display_name, "display_name is required")?;
+        require_text(&command.created_by, "created_by is required")?;
+        let mut transaction = self.store.begin_transaction().await?;
+        self.store
+            .organization_by_id_for_update_in_transaction(&mut transaction, command.organization_id)
+            .await?
+            .ok_or(OrganizationApplicationError::NotFound(
+                command.organization_id,
+            ))?;
+        if self
+            .store
+            .role_by_name_for_update_in_transaction(
+                &mut transaction,
+                command.organization_id,
+                &command.name,
+            )
+            .await?
+            .is_some()
+        {
+            return Err(OrganizationApplicationError::RoleConflict(command.name));
+        }
+        let permissions = self
+            .permissions_in_transaction(&mut transaction, &command.permission_ids)
+            .await?;
+        let members = self
+            .scim_members_in_transaction(
+                &mut transaction,
+                command.organization_id,
+                &command.member_ids,
+            )
+            .await?;
+        let role = Role {
+            id: Uuid::new_v4(),
+            organization_id: command.organization_id,
+            name: command.name,
+            display_name: Some(command.display_name),
+            description: command.description,
+            is_system: false,
+            is_default_for_new_members: false,
+            permissions,
+            created_at: command.now,
+            updated_at: command.now,
+        };
+        self.store
+            .save_role_in_transaction(&mut transaction, &role)
+            .await?;
+        for member in &members {
+            self.store
+                .add_member_role_in_transaction(&mut transaction, member.id, role.id)
+                .await?;
+        }
+        let event = role_event(
+            OrganizationEventKind::RoleCreated,
+            role.organization_id,
+            &role,
+            "created_by",
+            &command.created_by,
+            command.now,
+            None,
+        )?;
+        self.persist_event_in_transaction(&mut transaction, &event)
+            .await?;
+        transaction.commit().await.map_err(RepositoryError::from)?;
+        let warnings = self.invalidate_members_after_commit(&members).await;
+        Ok(MutationResult {
+            value: (role, members),
+            warnings,
+        })
+    }
+
+    pub async fn update_scim_group(
+        &self,
+        command: UpdateScimGroupCommand,
+    ) -> Result<MutationResult<(Role, Vec<Member>)>, OrganizationApplicationError> {
+        require_text(&command.display_name, "display_name is required")?;
+        require_text(&command.updated_by, "updated_by is required")?;
+        let mut transaction = self.store.begin_transaction().await?;
+        let mut role = self
+            .store
+            .role_by_id_for_update_in_transaction(&mut transaction, command.role_id)
+            .await?
+            .filter(|role| role.organization_id == command.organization_id)
+            .ok_or(OrganizationApplicationError::RoleNotFound(command.role_id))?;
+        if role.is_system {
+            return Err(OrganizationApplicationError::SystemRoleDeleteForbidden);
+        }
+        let permissions = self
+            .permissions_in_transaction(&mut transaction, &command.permission_ids)
+            .await?;
+        let desired_members = self
+            .scim_members_in_transaction(
+                &mut transaction,
+                command.organization_id,
+                &command.member_ids,
+            )
+            .await?;
+        let existing_ids = self
+            .store
+            .member_ids_with_role_in_transaction(&mut transaction, role.id)
+            .await?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let desired_ids = desired_members
+            .iter()
+            .map(|member| member.id)
+            .collect::<BTreeSet<_>>();
+        role.display_name = Some(command.display_name);
+        role.description = command.description;
+        role.permissions = permissions;
+        role.updated_at = command.now;
+        self.store
+            .save_role_in_transaction(&mut transaction, &role)
+            .await?;
+        for member_id in desired_ids.difference(&existing_ids) {
+            self.store
+                .add_member_role_in_transaction(&mut transaction, *member_id, role.id)
+                .await?;
+        }
+        for member_id in existing_ids.difference(&desired_ids) {
+            self.store
+                .remove_member_role_in_transaction(&mut transaction, *member_id, role.id)
+                .await?;
+        }
+        let event = role_event(
+            OrganizationEventKind::RoleUpdated,
+            role.organization_id,
+            &role,
+            "updated_by",
+            &command.updated_by,
+            command.now,
+            None,
+        )?;
+        self.persist_event_in_transaction(&mut transaction, &event)
+            .await?;
+        let mut affected = desired_members.clone();
+        for member_id in existing_ids.difference(&desired_ids) {
+            if let Some(member) = self
+                .store
+                .member_by_id_for_update_in_transaction(&mut transaction, *member_id)
+                .await?
+            {
+                affected.push(member);
+            }
+        }
+        transaction.commit().await.map_err(RepositoryError::from)?;
+        let warnings = self.invalidate_members_after_commit(&affected).await;
+        Ok(MutationResult {
+            value: (role, desired_members),
+            warnings,
+        })
+    }
+
+    async fn scim_members_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+        member_ids: &[Uuid],
+    ) -> Result<Vec<Member>, OrganizationApplicationError> {
+        let mut members = Vec::new();
+        for member_id in deduplicate_ids(member_ids) {
+            let member = self
+                .store
+                .member_by_id_for_update_in_transaction(transaction, member_id)
+                .await?
+                .filter(|member| member.organization_id == organization_id)
+                .ok_or(OrganizationApplicationError::MemberNotFound(member_id))?;
+            members.push(member);
+        }
+        Ok(members)
+    }
+
     pub async fn create_role(
         &self,
         command: CreateRoleCommand,

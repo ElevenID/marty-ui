@@ -8,7 +8,7 @@ use marty_organization::postgres::PostgresOrganizationStore;
 use marty_organization::{
     organization_core_router, OrganizationApplication, OrganizationCache, OrganizationHttpState,
     CORE_ORGANIZATION_HTTP_ROUTES, MEMBERSHIP_API_HTTP_ROUTES, RBAC_HTTP_ROUTES,
-    SCIM_READ_HTTP_ROUTES,
+    SCIM_GROUP_MUTATION_HTTP_ROUTES, SCIM_READ_HTTP_ROUTES, SCIM_USER_MUTATION_HTTP_ROUTES,
 };
 use mmf_data::MemoryCache;
 use mmf_security::ServiceTokenAuthenticator;
@@ -58,6 +58,8 @@ fn implemented_routes_are_unique_members_of_the_frozen_http_surface() {
         .chain(MEMBERSHIP_API_HTTP_ROUTES)
         .chain(RBAC_HTTP_ROUTES)
         .chain(SCIM_READ_HTTP_ROUTES)
+        .chain(SCIM_USER_MUTATION_HTTP_ROUTES)
+        .chain(SCIM_GROUP_MUTATION_HTTP_ROUTES)
         .copied()
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
@@ -66,6 +68,8 @@ fn implemented_routes_are_unique_members_of_the_frozen_http_surface() {
             + MEMBERSHIP_API_HTTP_ROUTES.len()
             + RBAC_HTTP_ROUTES.len()
             + SCIM_READ_HTTP_ROUTES.len()
+            + SCIM_USER_MUTATION_HTTP_ROUTES.len()
+            + SCIM_GROUP_MUTATION_HTTP_ROUTES.len()
     );
     assert!(implemented.is_subset(&frozen));
 }
@@ -386,6 +390,124 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
     assert_eq!(created_role.0, StatusCode::CREATED);
     assert_eq!(created_role.1["member_count"], 0);
     let role_id = created_role.1["id"].as_str().unwrap().to_owned();
+
+    let scim_created = request_json(
+        &router,
+        "POST",
+        &format!("/v1/organizations/{organization_id}/scim/v2/Users"),
+        Some(&user_id),
+        Some(serde_json::json!({
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+            "userName": "scim-user@example.com",
+            "externalId": format!("scim-user-{}", &suffix[..8]),
+            "active": true,
+            "urn:mip:scim:schemas:extension:Organization:2.0:User": {
+                "role_ids": [role_id]
+            }
+        })),
+    )
+    .await;
+    assert_eq!(scim_created.0, StatusCode::CREATED);
+    assert_eq!(scim_created.1["active"], true);
+    let scim_member_id = scim_created.1["id"].as_str().unwrap().to_owned();
+
+    let scim_patched = request_json(
+        &router,
+        "PATCH",
+        &format!("/v1/organizations/{organization_id}/scim/v2/Users/{scim_member_id}"),
+        Some(&user_id),
+        Some(serde_json::json!({
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{"op": "replace", "path": "externalId", "value": "scim-updated"}]
+        })),
+    )
+    .await;
+    assert_eq!(scim_patched.0, StatusCode::OK);
+    assert_eq!(scim_patched.1["externalId"], "scim-updated");
+
+    let scim_replaced = request_json(
+        &router,
+        "PUT",
+        &format!("/v1/organizations/{organization_id}/scim/v2/Users/{scim_member_id}"),
+        Some(&user_id),
+        Some(serde_json::json!({
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+            "userName": "scim-replaced@example.com",
+            "externalId": "scim-replaced",
+            "active": true
+        })),
+    )
+    .await;
+    assert_eq!(scim_replaced.0, StatusCode::OK);
+    assert_eq!(scim_replaced.1["userName"], "scim-replaced@example.com");
+
+    let scim_deleted = request_json(
+        &router,
+        "DELETE",
+        &format!("/v1/organizations/{organization_id}/scim/v2/Users/{scim_member_id}"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(scim_deleted.0, StatusCode::NO_CONTENT);
+
+    let scim_deactivated = request_json(
+        &router,
+        "GET",
+        &format!("/v1/organizations/{organization_id}/scim/v2/Users/{scim_member_id}"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(scim_deactivated.0, StatusCode::OK);
+    assert_eq!(scim_deactivated.1["active"], false);
+
+    let scim_group = request_json(
+        &router,
+        "POST",
+        &format!("/v1/organizations/{organization_id}/scim/v2/Groups"),
+        Some(&user_id),
+        Some(serde_json::json!({
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+            "displayName": format!("SCIM Auditors {}", &suffix[..8]),
+            "members": [{"value": joined_member_id}],
+            "urn:mip:scim:schemas:extension:Organization:2.0:Role": {
+                "permissions": ["organization:view"],
+                "description": "SCIM managed"
+            }
+        })),
+    )
+    .await;
+    assert_eq!(scim_group.0, StatusCode::CREATED);
+    assert_eq!(scim_group.1["members"].as_array().unwrap().len(), 1);
+    let scim_group_id = scim_group.1["id"].as_str().unwrap().to_owned();
+
+    let scim_group_patch = request_json(
+        &router,
+        "PATCH",
+        &format!("/v1/organizations/{organization_id}/scim/v2/Groups/{scim_group_id}"),
+        Some(&user_id),
+        Some(serde_json::json!({
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [
+                {"op": "replace", "path": "urn:mip:scim:schemas:extension:Organization:2.0:Role:description", "value": "Updated"},
+                {"op": "remove", "path": "members", "value": [{"value": joined_member_id}]}
+            ]
+        })),
+    )
+    .await;
+    assert_eq!(scim_group_patch.0, StatusCode::OK);
+    assert_eq!(scim_group_patch.1["members"].as_array().unwrap().len(), 0);
+
+    let scim_group_delete = request_json(
+        &router,
+        "DELETE",
+        &format!("/v1/organizations/{organization_id}/scim/v2/Groups/{scim_group_id}"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(scim_group_delete.0, StatusCode::NO_CONTENT);
 
     let updated_role = request_json(
         &router,

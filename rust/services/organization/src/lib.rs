@@ -31,11 +31,12 @@ pub use api_keys::{
 pub use application::{
     evaluate_join_code, plan_direct_member_roles, plan_organization_creation,
     plan_organization_update, AcceptInvitationCommand, AddMemberDirectCommand, ApplicationWarning,
-    ApplicationWarningCode, CreateOrganizationCommand, InviteMemberCommand, JoinByCodeCommand,
-    JoinCodeEvaluation, JoinCodeState, JoinCodeValidation, JoinOrganizationCommand,
-    MembershipPolicy, MutationResult, OrganizationApplication, OrganizationApplicationError,
-    OrganizationCreationPlan, RemoveMemberCommand, SetMemberRolesCommand,
-    UpdateOrganizationCommand, UpdateOrganizationPatch,
+    ApplicationWarningCode, CreateOrganizationCommand, CreateScimMemberCommand,
+    InviteMemberCommand, JoinByCodeCommand, JoinCodeEvaluation, JoinCodeState, JoinCodeValidation,
+    JoinOrganizationCommand, MembershipPolicy, MutationResult, OrganizationApplication,
+    OrganizationApplicationError, OrganizationCreationPlan, RemoveMemberCommand,
+    SetMemberRolesCommand, UpdateOrganizationCommand, UpdateOrganizationPatch,
+    UpdateScimMemberCommand,
 };
 pub use audit::{
     normalize_audit_query, normalize_pagination, start_from_time_range, AuditEventPage,
@@ -68,7 +69,8 @@ pub use preferences::{
 };
 pub use rbac_http::*;
 pub use roles::{
-    resolve_replacement_role, AddMemberRoleCommand, CreateRoleCommand, DeleteRoleCommand,
-    RemoveMemberRoleCommand, UpdateRoleCommand, UpdateRolePatch,
+    resolve_replacement_role, AddMemberRoleCommand, CreateRoleCommand, CreateScimGroupCommand,
+    DeleteRoleCommand, RemoveMemberRoleCommand, UpdateRoleCommand, UpdateRolePatch,
+    UpdateScimGroupCommand,
 };
 pub use scim_http::*;

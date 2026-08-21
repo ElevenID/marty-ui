@@ -1170,6 +1170,28 @@ provisioning mutations and twelve policy/audit routes, followed by runtime,
 outbox worker, gateway credential injection, packaging, full PostgreSQL
 acceptance and same-slice Python deletion. No beta deployment has occurred.
 
+Fifty of the 62 frozen HTTP contracts now execute natively, completing the
+entire intended SCIM 2.0 surface. User POST/PUT/PATCH/DELETE preserves primary
+email selection, external IDs, active/deactivated state, default or explicit
+roles, PATCH operation/path behavior, uniqueness responses, extension fields,
+Location headers and owner deprovisioning protection. Group
+POST/PUT/PATCH/DELETE preserves display-name slugging, permission-key
+resolution, member references, filtered member removal, extension metadata,
+system-role immutability and SCIM status/error envelopes.
+
+Unlike the superseded Python adapter's independent repository writes, Rust
+commits SCIM User profile/status/role transitions and Group role/permission/
+membership replacements in one PostgreSQL transaction with canonical audit,
+outbox and cache effects. All IDs are tenant-bound and validated before
+mutation. The frozen-route assertion covers all 50 native declarations, pure
+behavior tests freeze payload/projection semantics, and the optional live
+PostgreSQL HTTP scenario now traverses User and Group provisioning lifecycles.
+Forty-nine Rust Organization tests, all 74 surviving Python tests, formatting
+and strict Clippy pass. The remaining 12 HTTP contracts are nine policy-set
+and three audit routes, followed by runtime, outbox worker, gateway credential
+injection, packaging, full PostgreSQL acceptance and same-slice Python
+deletion. No beta deployment has occurred.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
