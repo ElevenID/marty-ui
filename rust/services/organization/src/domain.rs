@@ -108,6 +108,17 @@ pub enum OrganizationStatus {
     Pending,
 }
 
+impl OrganizationStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Suspended => "suspended",
+            Self::Pending => "pending",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OrganizationType {
@@ -121,6 +132,22 @@ pub enum OrganizationType {
     Other,
 }
 
+impl OrganizationType {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Enterprise => "enterprise",
+            Self::Startup => "startup",
+            Self::Individual => "individual",
+            Self::Government => "government",
+            Self::Education => "education",
+            Self::Healthcare => "healthcare",
+            Self::Financial => "financial",
+            Self::Other => "other",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemberStatus {
@@ -128,6 +155,18 @@ pub enum MemberStatus {
     Pending,
     Invited,
     Deactivated,
+}
+
+impl MemberStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Pending => "pending",
+            Self::Invited => "invited",
+            Self::Deactivated => "deactivated",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,11 +177,32 @@ pub enum ApiKeyStatus {
     Expired,
 }
 
+impl ApiKeyStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Revoked => "revoked",
+            Self::Expired => "expired",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ViewMode {
     Applicant,
     OrgAdmin,
+}
+
+impl ViewMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Applicant => "applicant",
+            Self::OrgAdmin => "org_admin",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -152,6 +212,61 @@ pub enum JoinMechanism {
     Code,
     Invite,
     Domain,
+}
+
+impl JoinMechanism {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Code => "code",
+            Self::Invite => "invite",
+            Self::Domain => "domain",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AuditEvent {
+    pub id: Uuid,
+    pub organization_id: Uuid,
+    pub event_type: String,
+    pub action: String,
+    pub category: String,
+    pub resource_type: String,
+    pub resource_id: Option<String>,
+    pub resource_name: Option<String>,
+    pub actor_id: Option<String>,
+    pub actor_type: String,
+    pub severity: String,
+    pub message: String,
+    pub changes: Option<Value>,
+    pub metadata: Value,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuditEventQuery {
+    pub category: Option<String>,
+    pub event_type: Option<String>,
+    pub resource_type: Option<String>,
+    pub resource_id: Option<String>,
+    pub actor_id: Option<String>,
+    pub severity: Option<String>,
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub limit: u32,
+    pub offset: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsoleContextPreference {
+    pub id: Uuid,
+    pub user_id: String,
+    pub last_view_mode: ViewMode,
+    pub last_active_org_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -571,6 +686,17 @@ pub enum PolicySetStatus {
     Archived,
 }
 
+impl PolicySetStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Draft => "DRAFT",
+            Self::Active => "ACTIVE",
+            Self::Archived => "ARCHIVED",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum PolicySetType {
@@ -578,6 +704,18 @@ pub enum PolicySetType {
     CredentialVerification,
     ApprovalRules,
     Custom,
+}
+
+impl PolicySetType {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AccessControl => "ACCESS_CONTROL",
+            Self::CredentialVerification => "CREDENTIAL_VERIFICATION",
+            Self::ApprovalRules => "APPROVAL_RULES",
+            Self::Custom => "CUSTOM",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

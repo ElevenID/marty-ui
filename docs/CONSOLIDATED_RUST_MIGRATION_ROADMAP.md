@@ -834,11 +834,24 @@ It preserves existing Alembic installations while adding the intended API-key
 the Python entity exposed but did not persist. A language-neutral persistence
 contract and Rust source gate pass; live PostgreSQL execution is configured as
 a CI gate because no local Organization database URL is present. The next
-slices add SQLx repositories, shared MMF event publication/cache invalidation,
-authorization and audit policy, all HTTP and gRPC adapters, executable
-composition, packaging, PostgreSQL acceptance and same-slice deletion of
-`services/organization` after those gates pass. No beta deployment occurs
-during these slices.
+slices add shared MMF event publication/cache invalidation, authorization and
+audit policy, all HTTP and gRPC adapters, executable composition, packaging,
+PostgreSQL acceptance and same-slice deletion of `services/organization` after
+those gates pass. No beta deployment occurs during these slices.
+
+All nine Python persistence adapter families are now consolidated into one DRY
+`PostgresOrganizationStore`. It owns organization, member, API-key,
+console-preference, join-code, permission, role/member-role, policy-set and
+audit storage without duplicating connection/session lifecycle. Tenant-owned
+lookups bind organization IDs in SQL, membership email matching remains
+case-insensitive, role replacement is transactional, assignments are
+idempotent, audit filters are parameterized and bounded, persisted enum drift
+fails closed, and released lowercase/DRAFT compatibility values remain
+accepted deliberately. The optional live PostgreSQL contract exercises the
+complete round trip and cascade behavior when
+`ORGANIZATION_POSTGRES_TEST_URL` is configured. Locked unit/source tests,
+strict Clippy, cross-language domain vectors and the ownership guard pass
+locally; live execution remains a CI gate.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

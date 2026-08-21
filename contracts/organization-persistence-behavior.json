@@ -28,6 +28,17 @@
     "policy_sets.cedar_schema_version",
     "audit_events.metadata"
   ],
+  "repository_operations": [
+    "organization CRUD and discoverable search",
+    "member CRUD by id, tenant, user, and case-insensitive email",
+    "API-key CRUD by id, tenant, and hash including MIP scope metadata",
+    "console-context preference upsert by user",
+    "join-code CRUD by code and tenant",
+    "permission lookup and role CRUD",
+    "atomic member-role replacement and idempotent assignment",
+    "tenant-bound policy-set CRUD and status filtering",
+    "tenant-bound audit persistence, filtering, and pagination"
+  ],
   "invariants": [
     "organization slugs are unique",
     "one non-empty membership exists per organization and user identifier",
