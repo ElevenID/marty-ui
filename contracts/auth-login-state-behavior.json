@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "session_id_vectors": [
+    {
+      "secret": "test-flow-webhook-secret-at-least-32-bytes",
+      "flow_instance_id": "flow-1",
+      "nonce": "nonce-1",
+      "expected": "6b1eb358-efac-4344-a360-bacbf842ccd3"
+    }
+  ],
+  "canvas_cases": [
+    {
+      "session": {
+        "organization_id": "00000000-0000-0000-0000-000000000001",
+        "canvas_account_id": "canvas",
+        "learner_key": "learner-key-1",
+        "learner_display_name": "Canvas Learner",
+        "roles": ["Learner"]
+      },
+      "expected": {
+        "user_id": "canvas-lti-2f905d9ae0026eda91a6ae13156121c9",
+        "email": "canvas-2f905d9ae0026eda@canvas.lti.local",
+        "username": "canvas-2f905d9ae0026eda",
+        "given_name": "Canvas",
+        "family_name": "Learner",
+        "roles": ["applicant", "canvas_lti_learner"],
+        "organization_id": "00000000-0000-0000-0000-000000000001"
+      }
+    }
+  ],
+  "failure_cases": [
+    {
+      "reason": "Credential verification failed: Issuer did:web:example does not match any trust source issuer identifier",
+      "reason_code": "issuer_not_trusted",
+      "message_contains": "does not trust",
+      "detail": true
+    },
+    {
+      "reason": "Credential verification failed: Revocation status was not checked by the verifier",
+      "reason_code": "revocation_not_checked",
+      "message_contains": "still active",
+      "detail": true
+    },
+    {
+      "reason": "keycloak_user_not_found",
+      "reason_code": "keycloak_user_not_found",
+      "message_contains": "no ElevenID account",
+      "detail": false
+    },
+    {
+      "reason": "invalid presentation payload",
+      "reason_code": "credential_payload_invalid",
+      "message_contains": "could not verify",
+      "detail": true
+    }
+  ]
+}

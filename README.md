@@ -337,16 +337,16 @@ make grpc-health
 
 #### Adding or updating backend capabilities
 
-New backend features should be implemented in the relevant service under `services/`, then surfaced through `services/gateway/` and the UI as needed.
+New backend features should be implemented in the relevant canonical Rust service, then surfaced through the native gateway and the UI as needed.
 
 Typical areas:
 
-- `services/trust_profile/`
-- `services/presentation_policy/`
+- `rust/services/trust-profile/`
+- `rust/services/presentation-policy/`
 - `rust/services/revocation-profile/` (canonical Rust service)
-- `services/notification/`
-- `services/auth/`
-- `services/gateway/`
+- `rust/services/notification/`
+- `rust/services/auth/`
+- `rust/services/gateway/`
 
 ## Troubleshooting
 

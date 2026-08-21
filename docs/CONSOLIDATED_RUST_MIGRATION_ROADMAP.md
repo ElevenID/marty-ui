@@ -1,12 +1,12 @@
 # Consolidated Rust Migration Roadmap
 
-**Status:** Waves one and two complete and behaviorally accepted at beta; production promotion requires separate approval
+**Status:** Waves one and two complete and behaviorally accepted at beta; wave three implementation complete and aggregate landing active; production promotion requires separate approval
 
 **Scope:** Marty backend services, protocol kernels, security-sensitive mobile logic, and licensing
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-08-15
+**Last updated:** 2026-08-21
 
 ## Objective
 
@@ -15,6 +15,2254 @@ Reduce the amount of Python and other non-Rust protocol code in the Marty stack 
 This is not a line-for-line translation project. Rust owns deterministic protocol, policy, validation, cryptographic, and state-machine behavior. Python remains only where it is useful for API composition, persistence adapters, scheduling, OCR, and third-party integrations until a whole service is deliberately replaced. Flutter/Dart remains responsible for application UI and platform integrations.
 
 The immediate deployment boundary is beta. Production and persistent self-host environments are not changed by this roadmap without a separate approval and promotion decision.
+
+## Wave three — Rust service plane and complete MMF replacement
+
+Wave three replaces the remaining deployed Python service plane with Rust and
+replaces the Python Marty Microservices Framework with a complete, reusable,
+DRY Rust platform. Removing MMF must not remove either currently consumed or
+intended framework features. The authoritative feature inventory and crate
+architecture live in `marty-microservices-framework` at
+`docs/RUST_PLATFORM_MIGRATION_ROADMAP.md`.
+
+The MMF work is a replacement, not a retirement shortcut. Its Rust workspace
+must preserve REST/gRPC/hybrid runtime behavior; configuration and secret
+providers; SQL, MongoDB and Redis infrastructure; migrations; Kafka, outbox,
+DLQ and replay; workflows, saga, CQRS and event sourcing; security and identity;
+observability; resilience; discovery, gateway and service mesh; plugins; push;
+ML; documentation and contract tooling; deployment support; built-in services;
+testing; and the developer CLI.
+
+### DRY ownership rule
+
+Generic service behavior lives once in feature-oriented MMF crates and is
+consumed by every Rust service. `marty-ui` service binaries may contain only
+their domain routes, use cases, repositories and provider adapters. They may
+not copy service lifecycle, health/readiness, configuration, secret loading,
+migrations, event envelopes, outbox, retry/circuit-breaker, telemetry,
+authorization-context, discovery or error-normalization implementations.
+`marty-core` remains the sole owner of protocol, policy, verification and
+cryptographic kernels.
+
+### Ordered `marty-ui` ports
+
+Work proceeds in descending removable Python size after the MMF foundation is
+available. Completed services retain their historical production-source
+estimates. Services are remeasured from all tracked Python below the
+service boundary, including implementation-specific tests and migrations that
+will be replaced by language-neutral contracts and Rust-owned schema history;
+generated protobufs and caches remain excluded.
+
+| Order | Service | Approximate removable Python | Required preservation |
+|---|---|---:|---|
+| 1 | Gateway (cut over) | 16,962 | Complete: every public/internal route, proxy behavior, auth context, tenancy, signing/KMS orchestration, provider routing, limits, errors and observability now execute in Rust |
+| 2 | Flow | 9,154 | OID4VCI/OID4VP/SIOP/mDoc/DIDComm transaction orchestration, persistence, callbacks, outbox, idempotency and expiry |
+| 3 | Organization | 7,952 | Organization, membership, RBAC, SCIM, invitations, tenant boundaries, events and storage |
+| 4 | Auth | 6,498 | OIDC, Keycloak administration, provisioning, sessions, claims, tenancy, errors and audit behavior |
+| 5 | Credential template | 13,418 | CRUD/versioning, issuance context, wallet registry and routing, delivery destinations, validation, seeds and storage |
+| 6 | Presentation policy | 11,631 | CRUD/versioning, trust resolution, credential-format dispatch, status lookup, native evaluation adaptation and exact decision responses |
+| 7 | Trust profile | 8,618 | CRUD/versioning, registry synchronization orchestration, trust material, scheduling, storage and authorization |
+| 8 | Applicant | 5,652 deleted | Applicant/application state transitions, vetting, evidence, biometrics, reviewer locks, issuance orchestration and storage |
+| 9 | Device registration | 3,220 at cutover | Registration lifecycle, atomic challenge consumption, versioned key rotation, preferences, organization checks, legacy adoption and storage |
+| 10 | Verification | 3,529 deleted | Complete: session APIs, OID4VP/SIOPv2 construction, provider/service integration, Redis coordination, HTTP/gRPC compatibility and canonical results now execute in Rust |
+| 11 | Deployment profile | 3,010 deleted | Complete: all 14 profile/lane operations, complete runtime configuration, one-time API keys, tenant authorization, atomic device assignment, PostgreSQL migration/seed ownership and Gateway contract consolidation now execute in Rust |
+| 12 | Compliance profile | 1,194 deleted | Complete: all eight profile operations, complete policy metadata, four-profile system catalog, exact tenant authorization, durable PostgreSQL ownership and native deployment now execute in Rust |
+
+### Gateway port status
+
+The gateway's 434 method/path declarations and eight-middleware execution
+order are frozen in `contracts/gateway-routes.json`. The Rust gateway now
+builds one MMF route table, classifies public and gateway-owned boundaries,
+uses the canonical MMF reverse proxy, and has provider adapters for static
+service discovery and bounded Reqwest transport. Gateway-specific tenant
+authorization is separated from the reusable Cedar engine: route permissions,
+resource-owner lookups, authorization skips, and published API-key scope
+compatibility execute `contracts/gateway-authorization-behavior.json`, while
+schema validation and policy evaluation remain solely in `mmf-security`.
+
+Generic protocol-version, content-type, ETag, and idempotency behavior now
+lives once in `mmf-platform`; rate limiting remains in `mmf-security`. Marty
+policy values, auth-provider ports, exact rate-key behavior, and normalized MIP
+errors are covered by `contracts/gateway-middleware-behavior.json`. A bounded,
+timeout-aware gRPC adapter now validates sessions, API keys, and exact tenant
+memberships without exposing backend details; malformed successful responses
+fail closed. The Axum library runtime now composes the frozen MIP, distributed
+rate-limit, authentication, content-type, ETag, tenant authorization,
+distributed idempotency, and credentialed-CORS stages in their exact legacy
+execution order. Organization resolution preserves path, resource-owner,
+query, JSON body, and authenticated-state precedence; membership/API-key
+decisions inject only trusted downstream identity. The language-neutral
+`contracts/gateway-runtime-authorization.json` and black-box Axum tests cover
+that boundary, including provider failures and observable middleware order.
+
+The Rust binary is now executable. Fail-closed environment and `_FILE` secret
+configuration, production Redis enforcement, static discovery, bounded HTTP
+resource-owner lookup, authenticated gRPC identity/membership channels,
+optional gRPC CA validation, graceful shutdown, readiness checks and release
+identity are composed at startup. The real binary starts and serves health in
+an executable smoke test. `/ready` and `/health/ready`, which the original AST
+extractor missed because FastAPI registered them dynamically, are now explicit
+members of the language-neutral route contract. The shared service image
+dispatches `gateway` directly to `marty-gateway`, and the dedicated CI image
+has a non-Python Gateway target plus an executable health smoke test.
+Publication still requires the temporary MMF worktree paths to be replaced by
+the landed immutable MMF revision.
+
+The complete 688-test Python gateway suite passed as the final baseline before
+deletion. Post-deletion, the Rust gateway's 80 unit and black-box tests plus
+three executable health/fail-closed tests and strict Clippy are green. The post-executable
+adapter audit is now closed: service-credential injection, route-bound tenant
+projection, request DTO canonicalization, response privacy projection,
+dependency preflight, organization composition, Hosted Pilot purge
+orchestration and scheduling, and the tenant-filtered gRPC-to-SSE bridge all
+execute in Rust under shared behavioral contracts. The superseded Python
+runtime and implementation-specific suite have been deleted, and production
+has no Python fallback. No deployment has occurred, and beta will not be
+updated until all wave-three slices land.
+
+The proxy trust-boundary slice now has executable parity for issuance service
+credentials and public Canvas exceptions, trusted identity forwarding,
+resource-owner lookup credentials, special service ownership, applicant
+evidence rewrites, retired state-addressed Canvas HTTP 410 responses, and
+organization query projection. `contracts/gateway-proxy-trust-boundary.json`
+runs against Python and Rust. The shared MMF proxy now exposes a distinct
+trusted-query override channel at local MMF commit `c3a378e`; unlike ordinary
+query defaults, these post-authorization values replace forged client tenant
+selectors. Rust black-box tests verify the replacement at the upstream request
+boundary. Body-scoped request canonicalization is complete in the DTO slice.
+
+The first privacy projection and request-canonicalization kernels are also
+active in Rust. Python and Rust
+execute `contracts/gateway-issuance-response-projection.json` for issuance
+initiation, transaction lists, transaction records, issued-credential records,
+lifecycle mutations and renewal offers. Lifecycle revoke, suspend and reinstate
+requests are canonicalized in Rust and reject undeclared custody or provider
+state. The Rust gateway removes redemption, custody and delivery-routing
+state, restores public defaults, validates status enums, rewrites management
+reads to the canonical transaction paths, and fails malformed successful
+upstream payloads with HTTP 502. Issuance creation now executes in Rust under
+`contracts/gateway-issuance-create-behavior.json`: strict public request
+validation rejects custody selectors and private wallet keys, template
+ownership and issuer-DID consistency are enforced, signing identity resolution
+fails closed, optional public wallet-client registration is preserved, and
+only the canonical DID plus public issuance fields reach the issuance service.
+Authenticated DIDComm delivery now also has explicit Rust request and response
+ownership under `contracts/gateway-didcomm-delivery-behavior.json`. Rust rejects
+unknown resolver/provider selectors, binds the request organization to the
+authenticated session rather than a query/body projection, injects only the
+issuance service credential, and strips provider delivery receipts from exact
+public responses. The same fixture executes against the Python parity oracle
+and Rust, including malformed and cross-tenant failures.
+Organization create/update canonicalization and public response validation now
+execute in Rust under `contracts/gateway-organization-behavior.json`. The
+adapter preserves create defaults and partial-update semantics, strips the
+body tenant selector in favor of the authorized path scope, rejects legacy
+no-op/private request fields, validates nested public membership projections,
+omits null public optionals exactly as Python does, and returns a normalized
+HTTP 502 when the organization service adds any undeclared/private field.
+Credential-template claim translation and public privacy projection now run in
+Rust under `contracts/gateway-credential-template-behavior.json`. Public claim
+display, derived-claim and mdoc namespace fields are translated to the one
+canonical service representation; responses reverse that mapping while
+removing derivability hints, validation constraints, custody selectors and
+unknown internal metadata. Draft updates and creation execute through this
+kernel. Creation now preserves the Python model defaults and format-specific
+identity validation, verifies optional trust-profile existence, verifies
+compliance-profile existence and tenant ownership, and resolves the issuer DID
+through the canonical signing service before forwarding the canonical internal
+request. Rust rejects cross-tenant or malformed dependencies and private JWK
+material fail closed. One language-neutral fixture now exercises the create
+request, claim translation, and privacy-safe response in both implementations.
+
+Issuer-entity and trust-profile issuer-relationship request and response
+contracts now execute in Rust under
+`contracts/gateway-trust-behavior.json`. The Rust adapter preserves create
+defaults, partial-update semantics, case-insensitive accreditation uniqueness,
+relationship policy defaults and exact protocol UUID shapes. It recursively
+rejects custody selectors and private JWK parameters from public metadata and
+strictly projects successful single and list responses, omitting only declared
+null optionals and failing closed on service drift. The same Rust kernel now
+owns trust-profile create/update defaults, nested validation rules, revocation
+and time policies, credential-free standard-port HTTPS registry-source checks,
+and exact profile and registry-sync response projections. The Axum path and
+shared Python/Rust fixture exercise these policies end to end.
+
+OID4VP verification-flow start now executes as a composed Rust operation under
+`contracts/gateway-verification-flow-behavior.json`. Rust validates and
+canonicalizes response type, transport, request-URI method, HAIP constraints,
+expiry, verifier DID and tenant scope; resolves presentation-policy and optional
+trust-profile ownership through the resource-owner provider; and forwards only
+the canonical request. The response is reduced to the exact public verification
+request resource, so flow-definition and signing selectors cannot escape.
+
+Presentation-policy create and update now execute as composed Rust operations
+under `contracts/gateway-presentation-policy-behavior.json`. The Rust kernel
+validates every nested requirement, requested claim, predicate, alternative,
+holder-binding proof, issuer/freshness constraint and ranking policy; accepts
+proof-only policies without weakening the obligation rule; and rejects private
+or undeclared selectors. Every referenced credential template is loaded in the
+authenticated tenant, and its canonical payload format replaces caller input
+before forwarding. Successful create/update/get/list/activate responses are
+allowlisted, validated and normalized, with disabled holder binding reduced to
+the exact public `{required:false}` shape.
+
+Deployment-profile and lane adapters now execute in Rust under
+`contracts/gateway-deployment-behavior.json`. Profile creation preserves the
+public defaults and biometric compatibility alias, requires a trust profile and
+at least one effective presentation policy, verifies policy/template ownership,
+and forwards only canonical fields. Profile and lane responses restore public
+defaults, remove API keys/device secrets/internal runtime state, and fail closed
+on malformed service output. The shared fixture runs against both language
+implementations and the Axum test exercises preflight and projection end to end.
+
+Flow-definition and flow-instance request and response kernels now execute in
+Rust under `contracts/gateway-flow-behavior.json`. Definition writes preserve
+all built-in flow types, approval modes, hooks, triggers and custom extension
+steps/transitions; preflight every credential, application, presentation,
+delivery and trust dependency; and forward canonical defaults. Instance starts
+recursively reject tokens, KMS selectors, private keys and signing state from
+initial context. Definition, instance and verification-result reads strip
+internal execution fields and fail closed if private service state appears in
+context, step results, metadata or history. Verification results now deeply
+validate and project every credential and claim result, preserve all public
+trust/freshness/signature/revocation fields and defaults, and strip nested
+provider state under the same language-neutral fixture.
+
+Organization cross-service composition now executes in Rust under
+`contracts/gateway-organization-composition-behavior.json`. The gateway derives
+runtime issuance/verification readiness from live credential-template, policy,
+deployment and flow artifacts; counts applicant lifecycle states; renders
+configured integration quick-start metadata; and composes organization
+lifecycle data with issuance retention summaries. Manual Hosted Pilot purge is
+a bounded transaction that validates retention enablement, forwards the exact
+retention window, privacy-projects the purge result and best-effort persists the
+last-purge timestamp only after successful deletion. The Rust executable also
+runs the paginated due-only automatic sweep with the legacy enabled/interval/
+batch configuration and cancels it during shutdown. Shared Python/Rust vectors,
+Axum route tests and a complete scheduled-sweep transaction test pass.
+
+Tenant-filtered event delivery now executes in Rust under
+`contracts/gateway-sse-behavior.json`. The gateway subscribes to the canonical
+event-stream gRPC service, binds organization and optional user filters to the
+authenticated session, rejects forged cross-tenant selectors and unsafe event
+types, drops cross-tenant backend events, and emits the exact connected, event
+and public failure SSE frames. The response uses bounded buffering and cancels
+and drops the live backend stream when the HTTP client disconnects. Streaming
+responses bypass ETag body buffering so an unbounded SSE body cannot deadlock
+the middleware chain. Shared Python/Rust vectors, backend-failure tests and a
+live disconnect/drop test pass.
+
+### Flow port status
+
+The Flow migration inventory is frozen before implementation. The removable
+surface is 9,154 lines of production Python excluding tests, migrations and the
+migration runner. It contains 28 explicit HTTP operations, 16 gRPC operations,
+12 built-in flow types, custom extension graphs, PostgreSQL persistence,
+atomic nonce consumption and terminal-result finalization, application-event
+idempotency, leased callback delivery, expiry, and protocol-provider calls.
+The port must preserve all of these behaviors; the Python package remains the
+parity oracle until the complete executable and persistence gates pass.
+
+Protocol ownership is already consolidated: the pinned `marty-core` revision
+owns lifecycle transitions, graph validation and next-step selection, OID4VP
+request construction/evaluation, mDoc handover binding, HAIP response-key and
+JWE operations, verifier DID/X.509 identity, and SIOPv2 token verification.
+The Rust Flow binary will call those crates directly and will not reproduce
+their decisions. Generic durable workflow, messaging, retry and callback
+delivery behavior belongs to MMF. The MMF messaging crate now has
+language-neutral fenced-lease behavior at local commit `05d858a`, including
+expired-lease recovery, stale-worker rejection, retry/dead-letter transitions,
+and bounded-retention payload scrubbing. This framework primitive will be
+shared by Flow and later service ports. MMF Push also owns tenant-bound callback
+destination templates at `a1806b9` and the canonical header-and-payload-bound
+event HMAC at `6d4462f`, eliminating two more Flow-only Python utilities.
+Its registry now exposes its configured/empty state at local commit `d6743be`,
+allowing Flow to require at least one valid deployed destination without
+copying MMF's private registration representation or matching rules.
+
+The first `marty-flow` crate slice now executes the checked-in
+`contracts/flow-service-behavior.json`. Twelve Rust tests freeze all 28 HTTP and
+16 gRPC operations, every built-in type/reference/sequence, public status and
+private-context behavior, callback defaults, and atomicity obligations. The
+corrected HTTP inventory counts the separately released GET and POST Request
+Object retrieval operations that the first frozen catalog omitted; retaining
+both methods preserves the live wallet and Digital Credentials API surface.
+The domain delegates transitions and graph validation directly to
+`marty-verification`; callback retries use `mmf-workflow`, delivery composition
+uses `mmf-push`, and fenced storage uses `mmf-messaging`. Its repository tests
+prove concurrent finalization commits one nonce/result/callback exactly once,
+terminal decisions are immutable, application event plans are replay-safe and
+payload-conflict-safe, and issuance artifacts are transaction-idempotent.
+
+The PostgreSQL repository now implements the same fenced finalization and
+callback lifecycle over the released `flow_service` tables. It uses database
+clock time and one SQLx transaction for expired-nonce cleanup, nonce insertion,
+live-state compare-and-swap, terminal result persistence and callback enqueue.
+Callback claims use `FOR UPDATE SKIP LOCKED` and per-attempt UUID leases;
+completion, retry and dead-letter updates reject stale workers and successful
+delivery scrubs the destination and payload. The Rust-service CI job now
+provisions the isolated `marty_atomic_test` database. Its behavioral test runs
+the concurrent-winner, expiry rollback, retry/reclaim, stale-lease rejection
+and retention-scrubbing vectors against PostgreSQL. Compilation and all
+non-container tests pass locally; the real PostgreSQL execution remains a CI
+landing gate because the local Docker daemon is unavailable.
+
+The native HTTP and gRPC application adapters are complete. The remaining Flow
+gates are listener/lifecycle composition, container startup/readiness,
+packaging parity and the final executable acceptance suite. Provider, DTO,
+definition mutation, generic instance execution, start-side-effect, Request
+Object retrieval, OID4VP and SIOPv2 submission, application-event processing,
+terminal persistence and all 16 released gRPC operations now share the same
+Rust records and kernels. After those executable gates pass, the Python Flow
+runtime and its service dependencies are deleted immediately; this pre-v1
+migration has no compatibility waiting period. No deployment occurs during
+these slices; beta receives one aggregate update only after all wave-three work
+lands.
+
+The public request boundary is now also represented in Rust. Strict DTOs cover
+definition create/PATCH (including unset-versus-explicit-null semantics),
+custom extension graphs, hooks and triggers, instance start/advance, OID4VP and
+SIOP starts/submissions, Digital Credentials API responses, and authenticated
+application-approved events. Unknown fields, missing type-specific references,
+private context injection, invalid graph topology, unsupported OID4VP transport
+combinations, oversized fields and unsafe callback destinations fail with
+normalized codes. `contracts/flow-api-behavior.json` supplies 12 accepted and
+13 rejected transport-neutral vectors. Four Rust tests pass, and a Python
+conformance test consumes the same vectors so the legacy boundary remains the
+parity oracle until deletion. That Python test compiles locally but its runtime
+execution is deferred to service CI because the available local environment is
+missing `grpc_health`; CI installs the full locked service dependency set.
+
+Provider ownership is now explicit and fail-closed. A shared tenant-membership
+port and authorization decision live in `mmf-security` at local commit
+`1a2bf0a`, with nine language-neutral allow/deny vectors; this removes the need
+for Flow to create another membership model and gives the gateway a later DRY
+consolidation target. `marty-flow` declares typed ports for all seven required
+runtime capabilities: tenant membership, credential templates, presentation
+policies/evaluation, issuance, signing identity, flow-key envelopes and
+physical-document operations. Startup composition reports every absent port
+instead of enabling a partial runtime. Signing identities and signatures are
+bound to the exact organization, public DID, verification method, purpose,
+credential format and algorithm; private JWK members, mismatched curves and
+mismatched signer responses are rejected. The provider behavior contract now
+also freezes all seven physical-document operations and exact downstream
+method/path pairs. Live gRPC and bounded HTTP adapters consume these contracts;
+common mTLS/channel composition and executable readiness remain in the active
+provider step.
+
+The released protobuf contracts now generate Rust clients and the future Flow
+server directly at build time. Live typed gRPC adapters cover organization
+membership, credential-template lookup, presentation-policy lookup/evaluation
+and issuance initiation. They propagate the internal service token, bound JSON
+responses to one MiB, preserve nested issuance claims through the canonical
+JSON field, normalize gRPC failure classes, and reject mismatched tenant,
+resource, policy/nonce, template and issuance identities. The crate compiles,
+all 23 non-container behavior tests pass, and strict Clippy is clean. The HTTP
+adapters now cover signing-identity resolution/signing, tenant-bound flow-key
+wrap/unwrap and every physical-document lifecycle operation. They preserve
+gateway path prefixes, disable redirects, bound response bodies to one MiB,
+apply operation timeouts, reject malformed or incomplete responses, and accept
+the generic signature field only when its declared encoding is raw IEEE P1363.
+The public definition, instance, verification-result and artifact projections
+now also execute in Rust against `contracts/flow-response-behavior.json`.
+These DTOs preserve protocol status, resolved steps, tenant/subject metadata,
+timestamps, references, hooks, trigger, verification details and artifact
+lifecycle fields while recursively removing private service state. Malformed
+persisted timestamps, custom extensions, context types and protocol fields fail
+closed. The same golden vectors compile into the Python parity suite; all 25
+Rust non-container tests pass individually and strict Clippy is clean. The
+Windows host cannot link every test binary concurrently because of its PDB
+limit, so the aggregate suite remains a Linux CI landing gate. Flow now
+consumes the canonical `mmf-platform` channel factories for all organization,
+credential-template, presentation-policy and issuance clients. Both eager
+startup/readiness and lazy development composition inherit the shared bounded
+plaintext, TLS and mutual-TLS policy; no Flow-local endpoint or certificate
+constructor remains. The focused provider suite, all applicable Rust test
+groups, and strict Clippy pass. HTTP/gRPC executable
+composition is now the next Flow runtime gate. Its first prerequisite is now
+frozen in `contracts/flow-startup-behavior.json` and implemented by the Rust
+configuration boundary. Beta and production must explicitly configure
+PostgreSQL, Redis, all nine downstream endpoint origins and all four service/webhook
+credentials; every secret is at least 32 bytes, endpoint origins are
+credential-free, listener addresses cannot collide, and connection/database
+bounds fail closed. Local development may default only non-secret service
+locations. Four behavioral tests and strict Clippy pass. The next executable
+slice must connect these dependencies into MMF lifecycle/readiness and must
+expand the Rust persistence records to preserve every released definition,
+instance and artifact field before any application operation is advertised as
+ready. That record boundary is now implemented under
+`contracts/flow-persistence-behavior.json`: 28 definition fields, 20 instance
+fields and 17 artifact fields round-trip losslessly, then feed the smaller
+canonical protocol kernels and privacy-safe public projections through
+explicit fail-closed conversion. This preserves legacy step details,
+preconditions, retry/resume settings, all linked profiles, localized offers,
+issuance lifecycle data and timestamps instead of narrowing storage to the
+security kernel. Three behavioral tests and strict Clippy pass. The contract
+also requires a dedicated `state_history` JSON column during Rust migration;
+the Python object previously accumulated this history in memory but its
+PostgreSQL adapter never stored it. Rust now also owns the complete install and
+upgrade schema under an advisory lock, adding dedicated `state_history` and
+`retry_cooldown_minutes` columns without replacing Alembic's legacy version
+record. SQLx CRUD covers definition create/update/get/list/delete, immutable
+terminal instance create/update/get/filtered-list, and transaction-idempotent
+artifact create/update/get/list/code lookup. The existing atomic nonce,
+terminal result and callback transaction now persists state history as well.
+Two migration contract tests, three record tests, the PostgreSQL integration
+binary (which runs the real migration/CRUD/atomicity vectors when its isolated
+CI database is configured), and strict Clippy pass. Seed ownership and MMF
+lifecycle/readiness are the next sub-gates before the HTTP/gRPC listeners are
+enabled. The reusable lifecycle portion is now complete at local MMF commit
+`06a52ac`: required components block activation unless healthy and immediately
+remove live readiness when they degrade. Flow consumes that primitive under
+`contracts/flow-runtime-behavior.json`, registers PostgreSQL, Redis nonce
+storage, four typed gRPC dependencies, three HTTP provider adapters, callback
+delivery and both application listeners as mandatory, and exposes the shared
+`/health`, `/ready`, `/version` routes plus native backend/version/capability
+diagnostics. Two Flow runtime tests, five MMF runtime tests and strict Clippy
+pass. Dependency connection, seed ownership and HTTP/gRPC application listener
+composition are now complete in the executable described below.
+
+The startup boundary also preserves the released container contract instead
+of requiring a flag-day configuration rewrite. It accepts the existing
+`ORG_GRPC_TARGET`, `FLOW_SERVICE_PORT`, `FLOW_GRPC_PORT`, `ISSUANCE_API_KEY`
+and AsyncPG-tagged PostgreSQL URL forms, normalizes them to the canonical Rust
+types, and loads all four mandatory credentials from the existing `_FILE`
+secret convention. Direct values take precedence; unreadable or empty secret
+files fail startup, and configuration diagnostics redact database, Redis and
+all secret values. Six startup/unit vectors and strict Clippy pass. The
+checked-in base and self-host manifests now carry Flow's explicit
+reference-owner endpoints; these source changes are not a deployment. Beta
+remains queued for one aggregate cutover after every wave-three slice lands.
+
+Rust migration ownership now also includes the complete built-in Flow seed
+surface. `contracts/flow-seed-behavior.json` freezes the Open Badge login flow,
+both legacy-member and verified-badge issuance flows, the bootstrap instance,
+the Marty deployment-profile link, effective protocol types, template IDs and
+structured trigger events. The seed SQL stores the post-MIP custom extension
+graphs directly, inserts missing records without overwriting administrator
+changes, and only touches the cross-service deployment-profile table when it
+exists. The isolated PostgreSQL CI vector loads every seeded definition back
+through the fail-closed Rust kernel and public projection. Three migration
+contract tests and strict Clippy pass; live SQL execution remains in the
+configured CI database gate.
+
+The gRPC connection plan now preserves Flow's asymmetric released trust
+boundary. Typed configuration requires complete inbound and outbound workload
+certificate/key/CA groups in beta and production, rejects partial groups, and
+requires an explicit deployed plaintext decision for the three legacy token-
+authenticated channels. The presentation-policy channel alone upgrades its
+existing target to mutual TLS with private-CA trust, while organization,
+credential-template and issuance continue through the shared bounded MMF
+factory under the explicit compatibility flag. No service-local endpoint,
+certificate loader or channel constructor is reintroduced. Six provider tests,
+five startup tests, the secret-file unit vector and strict Clippy pass.
+
+The executable dependency connection step is now implemented under
+`contracts/flow-connection-behavior.json`. Startup opens a bounded PostgreSQL
+pool, runs the Rust-owned schema and seed migrations under their advisory lock,
+executes a live query, canonicalizes and connects the configured Redis nonce
+database, requires `PING`/`PONG`, eagerly connects all four typed gRPC clients
+through the shared MMF transport factory, probes all three bounded HTTP
+provider adapters and all four reference-owner services,
+and rejects an incomplete provider registry. Each required component becomes
+healthy only after its own probe succeeds; any database, migration, Redis,
+transport, HTTP, credential or registry error aborts startup before lifecycle
+activation. The language-neutral connection contract test, Redis database
+selection test and strict Clippy pass. Inbound gRPC security now consumes MMF's
+shared workload server-TLS and exact method-authorization primitives under
+`contracts/flow-grpc-security-behavior.json`. Every RPC requires the configured
+service token using constant-time comparison; sensitive verification start and
+application-approved calls additionally derive identity only from the verified
+client certificate URI SAN parsed by `marty-crypto`, then require the exact
+Auth or Applicant SPIFFE identity. A bearer value cannot replace certificate
+identity, partial server credentials fail startup, and missing versus wrong
+identities map to unauthenticated versus permission-denied status. Two focused
+security tests, the language-neutral contract test and strict Clippy pass. The
+complete application surface is now attached in the crate; the next executable
+slice must bind both listeners and activate only after both are serving.
+
+The first executable HTTP operation slice is complete under
+`contracts/flow-http-read-behavior.json`. Axum now serves the public MIP 0.4.1
+capability document plus tenant-authorized definition, instance, terminal
+verification-result and artifact reads directly from Rust-owned PostgreSQL
+records. Pagination is bounded to 500, removed lifecycle aliases stay rejected,
+nonterminal result polling returns conflict, tenant permissions are checked
+through the shared MMF membership policy, and every projection recursively
+removes private context. Malformed stored records and missing providers fail
+closed without returning storage diagnostics. Physical-document support is now
+derived from the mandatory healthy downstream provider instead of duplicating
+its private configuration in Flow. Three focused handler tests, the shared
+behavior-vector test and strict Clippy pass. Definition and instance mutation
+are subsequently complete; verification HTTP adapters, webhook, QR and DID
+routes remain before the HTTP listener can be advertised as complete.
+
+The same HTTP surface now includes the first two complete mutation paths:
+tenant-authorized draft-definition deletion and instance cancellation.
+Cancellation first validates the transition through the canonical Rust state
+machine, then uses one PostgreSQL statement to compare-and-set any nonterminal
+instance to `cancelled`, persist its completion time and append the
+`flow_cancelled` history event. Concurrent or replayed cancellation returns
+conflict and cannot overwrite a terminal result. The isolated PostgreSQL
+behavior suite now exercises the persisted transition and replay rejection.
+The authoritative reference catalog port is now complete. Application
+Templates resolve from issuance with the internal API key; delivery
+destinations, trust profiles and deployment profiles resolve from their owning
+services with the authenticated user identity. Exact returned IDs, bounded
+responses, redirects, malformed bodies, unavailable owners and non-success
+statuses all fail closed. The catalog is one mandatory readiness component and
+all four owners must pass health probes before activation. Beta and production
+must explicitly configure the credential-template, trust-profile and
+deployment-profile origins; local development alone may use defaults.
+`contracts/flow-provider-behavior.json` freezes the four method/path/auth
+triples, and the focused startup, provider and HTTP-adapter suites plus strict
+Clippy pass.
+
+Definition mutation parity is now attached to that catalog. Rust serves create,
+PATCH, validate, dry-run test and activate in addition to the existing reads
+and draft-only delete. Standard definitions preserve all twelve protocol graph
+families and released defaults; custom definitions preserve extension actions,
+configuration, timeouts, transitions and entry-step identity. PATCH retains
+unset-versus-null behavior, cannot move a definition between tenants, increments
+the version exactly once and returns the definition to draft. Draft writes
+require every reference to exist and be tenant-bound but continue to allow
+inactive dependencies; validation and activation require every direct and
+policy-nested dependency to be active and bind each credential template's
+public issuer DID to its exact organization, format, purpose, algorithm and
+public signing key. System-owned delivery destinations are the sole tenant
+exception. `contracts/flow-reference-validation-behavior.json` and the expanded
+HTTP contract execute these rules, including one-resolution-per-template
+caching and side-effect-free dry runs. The focused definition, reference and
+HTTP suites plus strict Clippy pass. The remaining HTTP surface is QR
+generation, native verification adapters, verifier DID publication,
+application-approved webhooks and protocol-specific verification starts.
+
+The provider-independent instance execution kernel is also complete under
+`contracts/flow-instance-execution-behavior.json`. Active-definition and exact
+tenant binding, initial status/history, definition-driven expiry, protocol
+context, recursive private-state rejection, canonical next-step selection,
+wallet-resume transitions, terminal success/failure and step-result history now
+execute in Rust. Initial history preserves the released nullable prior state,
+while every subsequent transition remains a typed canonical state. Direct
+starts fail closed on application-approval, unknown or malformed preconditions;
+only separately supplied server-authenticated evidence can satisfy the
+application-approved control. Three execution vectors, persistence and atomic
+repository regressions, and strict Clippy pass.
+
+Public instance start and advance are now composed around that kernel under
+`contracts/flow-instance-side-effects-behavior.json`. OID4VCI starts use only
+the typed issuance provider, bind idempotency to the Flow instance (or the
+existing application-flow digest), reconstruct missing per-wallet offers with
+the pinned `marty-oid4vci` implementation and the complete template wallet
+configuration, persist the released MIP 0.3.1 `CredentialOffer` envelope and
+preserve every artifact/context field. Deployed public origins are explicit,
+origin-only HTTPS configuration and fail closed. Physical-document starts
+consume rather than persist raw applicant/MRZ/data-group input, then call the
+typed provider for initialization and all six subsequent lifecycle operations.
+Provider operation, flow and tenant identities are checked before state is
+accepted. PostgreSQL inserts each new instance and optional artifact in one
+transaction; advancement compares both source status and `updated_at`, so a
+concurrent stale transition cannot win. Three side-effect vectors, startup,
+HTTP, persistence and PostgreSQL contract suites, plus strict Clippy pass.
+Manual OID4VCI QR/offer regeneration is also native: each retry has a
+flow-and-attempt-bound idempotency key and one transaction expires prior active
+artifacts, inserts the replacement and updates instance offer context. The
+verification route set is now native. The remaining Flow gate is the other
+protocol route set and actual HTTP/gRPC listener composition; no partial
+executable is activated or deployed.
+
+OID4VP presentation-query construction is now composed in Rust before route
+signing and transport work. The typed credential-template provider preserves
+VCT, mDoc doctype, supported formats and claim namespace/element mappings, and
+reads active wallet formats from the owning service's wallet registry rather
+than copying its catalog into Flow. Exact active policy/template tenant
+bindings and requirement shapes are checked before the pinned
+`marty-oid4vci::presentation_request` builder produces the equivalent
+Presentation Exchange and DCQL artifacts. Missing templates, malformed claims,
+empty wallet format catalogs and provider failures have no fallback. The
+language-neutral composition contract, two focused vectors, provider
+regressions and strict Clippy pass. Request-object signing, URL-query/message
+composition, submission evaluation and terminal callback persistence are now
+implemented by the subsequent native verification slices below.
+
+Standard DID-bound OID4VP and SIOPv2 Request Object construction is now native
+under `contracts/flow-request-object-behavior.json`. Each fetch re-resolves the
+exact organization + issuer DID + `oid4vp_request_signing` +
+`oauth-authz-req+jwt` + ES256 identity, builds the canonical OAuth/OID4VP or
+SIOPv2 claims, delegates only the base64url signing input to the typed signing
+provider and validates the returned identity before assembling compact JWS.
+Flow never receives signing private key material. The request records exact
+state, audience, response URI and the released MIP `PresentationRequest`
+envelope. HAIP now generates a fresh native P-256 response-encryption key per
+flow, advertises only its public JWK and `direct_post.jwt`/ECDH-ES/A256GCM
+metadata, and persists the private JWK only through the organization- and
+flow-bound signing-service envelope provider. Re-fetch reuses the bound
+envelope and never serializes the private key into Flow context. Three
+request-object vectors and strict Clippy pass. The unsigned URL-query profile
+now composes the same native DCQL artifact with redirect-URI client identity,
+direct-post state/audience binding, canonical client metadata and the same MIP
+message, then enforces the released minimum/configured maximum URI bounds. It
+rejects HAIP and SIOP combinations and never invokes the signing provider.
+Four request-transport vectors and strict Clippy pass. The route remains
+private to the Rust crate until persistence and expiry transitions are
+complete. Verification-flow start composition is now native under
+`contracts/flow-verification-start-behavior.json`: every start generates a
+32-byte cryptographic nonce, validates an exact active tenant policy with
+nonempty requirements, resolves the exact DID-bound ES256 Request Object
+identity, checks optional callbacks through the shared MMF tenant registry,
+and builds request-URI, signed by-value, bounded unsigned DCQL, or SIOP
+authorization requests before returning one complete persistable instance.
+The deployed startup contract now requires a nonempty, well-formed
+`FLOW_CALLBACK_DESTINATIONS`; missing, empty, malformed, credentialed, or
+unsupported destinations fail before service activation. Two focused start
+vectors, startup regressions and strict Clippy pass. The HTTP start route stays
+unadvertised until request retrieval expiry/CAS behavior, DC API transport and
+submission/finalization are all native, preventing a partial Rust cutover from
+dropping an existing verifier profile.
+
+The configured verifier identity matrix is now native as well. Flow accepts
+the released redirect-URI, decentralized-identifier and `x509_hash` client-ID
+schemes plus `did:web`, canonical `did:jwk` and canonical P-256 `did:key`
+derivation. DID derivation delegates to pinned `marty-didcomm`; `x509_hash`,
+leaf-key matching, certificate thumbprinting and leaf-first `x5c` shaping
+delegate to `marty-verification`. X.509 Request Objects omit `kid` and carry
+only the validated chain. The LISSI compatibility profile retains raw DID
+client identity, `client_id_scheme=did`, Presentation Exchange rather than
+DCQL, no standard client metadata and an explicit HAIP incompatibility. Strict
+client metadata, branding, HAIP enablement, both request-size limits and PEM or
+file-backed verifier certificates are typed startup configuration; unsupported
+values, missing X.509 material, insecure deployed logo URLs and out-of-range
+limits fail closed. The focused request-object suite now has five vectors, the
+startup suite has six vectors, and strict Clippy passes. Route exposure is now
+gated on atomic retrieval/expiry, DC API transport/origin parity and complete
+submission/finalization rather than verifier identity support.
+
+Wallet Request Object retrieval is now a native, persistence-neutral kernel
+under `contracts/flow-verification-request-behavior.json`. It accepts only
+`awaiting_wallet` or `in_progress` snapshots, returns an explicit expired
+record carrying the `request_expired` terminal history for repository CAS,
+rejects URL-query flows, enforces POST-only retrieval and a nonempty
+`wallet_nonce` when configured, and re-resolves the signing identity on every
+fetch. Standard and LISSI retrieval share the same profiled builder. Digital
+Credentials API retrieval now emits `openid4vp-v1-signed` / `dc_api.jwt`, binds
+the exact configured HTTPS origins, omits redirect/state fields, creates the
+native per-flow encrypted-response key, stores only its tenant/flow-bound
+envelope and advertises ECDH-ES with A128GCM/A256GCM receiver support. The
+public origin is the default exact DC API origin; configured comma-separated
+origins are normalized, deduplicated and rejected if they are not deployed
+HTTPS origins. Three retrieval vectors, six Request Object vectors, startup
+regressions and strict Clippy pass. The HTTP adapter now persists either the
+ready context or expiry transition with status-and-`updated_at` CAS and returns
+the released `Cache-Control: no-store` and `Pragma: no-cache` response headers.
+
+OID4VP submission evaluation and terminal composition are now native under
+`contracts/flow-verification-submission-behavior.json`. The kernel binds exact
+state in constant time, validates Presentation Submission shape, unwraps the
+single-token DCQL transport form, and delegates cryptographic verification
+only to the typed presentation-policy provider with exact nonce, audience,
+trust and verifier context. The pinned ISO 18013 implementation supplies mDoc
+session-transcript binding; pinned verification code validates and decrypts
+HAIP JWE responses through a tenant/flow-bound key envelope. Provider failure,
+empty credential evidence or any non-valid signature is retryable and consumes
+neither state nor nonce. An authenticated allow completes; an authenticated
+deny fails terminally and clears claims. Raw tokens and submissions are
+discarded in favor of canonical SHA-256 digests. Same-payload terminal replay
+returns the stable result while a different digest conflicts. The kernel emits
+the released MIP 0.3.1 VerificationResult and a tenant-registered MMF callback,
+requiring a minimum 32-byte delivery secret. PostgreSQL finalization now takes
+the complete `FlowInstanceRecord` and atomically preserves subject, external
+reference, histories, context, result and timestamps while consuming the nonce
+and enqueuing the callback; organization and definition identity are immutable
+CAS fences. Six language-neutral submission vectors, including the shared
+HAIP interoperability JWE, the PostgreSQL contract binary and strict all-target
+Clippy pass.
+
+SIOPv2 submission is now native under
+`contracts/flow-siop-submission-behavior.json` and reuses the same terminal
+finalization unit rather than creating another transaction implementation. The
+pinned `marty-oid4vci` verifier exclusively owns JOSE parsing, ES256/EdDSA
+policy, public `sub_jwk` signature validation and RFC 7638 thumbprint binding.
+Flow then enforces `iss == sub`, exact string-or-array audience membership,
+constant-time nonce equality, numeric `iat`/`exp`, the released 60-second clock
+skew and the rule that a token cannot predate its transaction. Success stores
+only the self-attested subject, subject syntax, signing algorithm and canonical
+submission digest; the raw ID token is discarded. Subject identity, both
+history transitions, terminal result and nonce consumption commit through the
+full-record PostgreSQL compare-and-set, with no callback for this protocol.
+Same-token replay returns the stable terminal response and a different token
+conflicts. Four focused behavior groups, the OID4VP regressions, PostgreSQL
+contract binary and strict all-target Clippy pass. The HTTP adapters now commit
+retrieval, expiry and both terminal protocols through their corresponding
+compare-and-set transactions. `/v1/flows/verify` and standalone
+`/v1/flows/siop` starts require authenticated `verification:execute`
+membership; Request Object GET/POST, direct-post, Digital Credentials API and
+SIOPv2 submission routes expose the released envelopes without a Python
+fallback. Direct post rejects terminal replay, while Digital Credentials API
+and SIOPv2 repeat submissions are idempotent only for the exact canonical
+digest. Different terminal payloads conflict. Digital Credentials API binds
+the exact HTTPS origin into `origin:{origin}` audience and native encrypted
+response processing. Retryable provider failures persist and consume nothing;
+expiry and terminal changes use full-record status-and-`updated_at` atomic
+compare-and-set. Startup accepts an explicit `OID4VP_ISSUER_DID`, the retained
+`MARTY_ISSUER_DID` alias, or a public-origin-derived `did:web` identity and
+fails closed on malformed identity. The route behavior is frozen in
+`contracts/flow-verification-http-behavior.json` and exercised through the
+live Axum router.
+
+Application-approved issuance planning is now native under
+`contracts/flow-application-approved-behavior.json`. The reusable
+Applicant-to-Flow security boundary lives once in `mmf-security` at local
+commit `54b5805`: canonical Unicode JSON, dedicated purpose-bound HMAC,
+producer/audience/version binding, freshness, minimized evidence, deferred
+atomic replay consumption and one-winner replica races share a
+transport-neutral contract. Flow no longer duplicates that cryptographic
+kernel. Its native planner selects only active application-approved OID4VCI
+definitions, preserves exact optional template targeting, orders flows by ID,
+requires object claims and canonical manual-issuance UUIDs, and recreates both
+released v1 and v2 logical offer identities. The complete definition,
+applicant and claims snapshot is canonically hashed so a reused logical flow
+with changed semantics conflicts. PostgreSQL now reserves the authenticated
+event receipt and all selected instances in one transaction, recovers an exact
+replay plan, and rejects changed event payloads or changed offer semantics.
+Focused language-neutral planning, trusted-precondition, PostgreSQL contract
+and strict Clippy gates pass. The HTTP adapter now authenticates before plan
+reservation, consumes the shared Redis replay key only after durable planning,
+recovers exact planned replays, and completes each OID4VCI offer through the
+typed issuance provider. Offer completion is flow-idempotent and race-safe:
+an existing active artifact is reused, while concurrent first completion uses
+snapshot CAS and reloads the winner. Provider failures retain the released
+per-flow partial-failure response and remain retryable through the durable
+plan. The gRPC adapter now consumes this exact kernel and security evidence; no
+Python fallback is permitted.
+
+The `/oid4vp/did.json` compatibility endpoint is native under
+`contracts/flow-did-http-behavior.json`. It resolves the exact configured
+organization + issuer DID + `oid4vp_request_signing` +
+`oauth-authz-req+jwt` + ES256 identity, publishes only the sanitized public
+JWK as `JsonWebKey2020`, preserves authentication/assertion relationships and
+the released DID media type, no-store and CORS headers, and fails closed when
+the signing-identity provider is absent or invalid. The default organization
+UUID and application-event freshness/replay settings are now typed startup
+configuration; deployed environments require the dedicated 32-byte event key.
+
+All 16 released Flow gRPC operations are now implemented by one native adapter
+under `contracts/flow-grpc-behavior.json`. Legacy protobuf definition, instance,
+artifact and verification DTOs translate into the same PostgreSQL records,
+provider registry, graph/transition kernels, protocol side effects and atomic
+mutations used by HTTP. Ordinary RPCs require constant-time service-token
+authentication plus tenant membership and method-specific permission;
+verification start and application approval additionally require their exact
+mTLS SPIFFE identities. Application-event protobuf strings recover canonical
+JSON before the shared MMF HMAC check. Starts persist their optional artifact
+atomically, advances use snapshot compare-and-swap, cancellations fence terminal
+state, and verification/application starts preserve their existing idempotency
+units. Public projections redact private context. Streaming is tenant-bound,
+supports instance and flow-type filters, uses a bounded 256-event channel and
+terminates a lagging subscriber explicitly instead of silently losing events.
+Health probes the live database and requires service authentication. Four
+adapter unit vectors, two language-neutral contract tests, all-target compile
+and strict Clippy pass.
+
+The native Flow executable is now composed under
+`contracts/flow-executable-behavior.json`. It connects and probes every required
+dependency, binds both listener sockets, starts the durable callback worker and
+only then activates shared MMF readiness and the standard gRPC health service.
+HTTP merges all application routes with shared lifecycle/version/native-backend
+diagnostics; gRPC serves the complete adapter with optional development
+plaintext and required deployed mTLS. Shutdown transitions to draining, marks
+gRPC not serving, gracefully closes both listeners, stops the callback worker
+and then records stopped. The callback worker preserves the released bounded
+retention, attempts, lease, poll, retry and batch configuration; uses
+`SKIP LOCKED` fenced claims; revalidates the tenant destination for every
+attempt; signs the canonical event; forbids redirects; distinguishes HTTP,
+timeout and network failures; retries with bounded exponential delay;
+dead-letters removed destinations; and scrubs delivered or expired payloads.
+The optional PostgreSQL integration gate now drives a real loopback callback
+receiver and verifies signed delivery, payload scrubbing and destination
+dead-lettering in addition to the existing lease races. Executable, callback,
+runtime, submission and strict Clippy gates pass locally; real PostgreSQL
+delivery remains a configured Linux CI execution gate. Native container
+packaging is now complete: the shared service image builds and contains
+`marty-flow`, the production-equivalent Rust service image has a dedicated
+non-Python `flow` target with HTTP and gRPC ports plus a native health check,
+and CI builds that target as `marty-flow:ci`. The language-neutral packaging
+contract verifies all three boundaries. The source cutover is now complete:
+the shared image dispatches Flow only to `marty-flow`, the shared Python
+migration runner no longer owns the Flow schema, and Rust startup runs the
+advisory-locked schema and seed migrations. The complete `services/flow`
+package and its obsolete Python-only PostgreSQL contract image are deleted,
+removing 19,935 Python, migration, fixture and image-contract lines while
+retaining the language-neutral contracts and native tests. The Rust
+PostgreSQL integration gate now explicitly owns event-plan races, payload and
+semantic conflicts, artifact idempotency, callback leases, migration and seed
+behavior in CI.
+
+Development is explicitly configured as development. Beta is explicitly
+deployed and fail closed: Flow receives distinct inbound and outbound workload
+certificates, presentation-policy receives its server identity, and auth,
+applicant and verification receive separate client identities. A beta-only
+provisioning helper creates short-lived identities with exact DNS and SPIFFE
+URI SANs without printing keys; the release runner validates every required
+secret, file, chain and expiry before stack mutation. The three documented
+legacy downstream gRPC channels retain their explicit beta plaintext decision,
+but sensitive Flow RPC authorization still derives only from verified client
+certificates. Local full-suite, strict Clippy, optimized binary, packaging,
+Compose and anti-reintroduction gates pass. Remaining Flow work is external CI
+container/PostgreSQL execution and branch landing; no beta deployment has
+occurred.
+
+### Organization port status
+
+The Organization whole-service port is active on its own worktree and branch
+from the completed Flow cutover. The authoritative source scan freezes 62
+unique HTTP method/path contracts spanning organization CRUD, membership,
+join flows, API keys, preferences, lifecycle, audit, RBAC, Cedar policy sets,
+onboarding and SCIM 2.0. It also freezes all 12 intended protobuf RPCs and
+records the four RPCs declared by the protocol but never implemented by the
+Python server (`CreateOrganization`, `UpdateOrganization`,
+`ListOrganizations` and `RemoveMember`). Rust must implement the full intended
+12-method surface rather than preserve that omission.
+
+The first implementation slice establishes `marty-organization` and ports the
+organization, membership, role, permission, API-key, join-code and policy-set
+domain behavior plus deterministic SCIM pagination, equality-filter parsing,
+error envelopes and role-name normalization. Both languages consume the same
+`contracts/organization-domain-behavior.json`; the complete route, RPC and
+event inventory is frozen in `contracts/organization-service-surface.json`.
+Six Rust vector groups, three Python parity groups, locked tests, formatting
+and strict Clippy pass. Rust migration ownership is also established over the
+released `organization_service` schema: an advisory-locked, idempotent final
+schema creates or validates all 11 tenant, membership, key, preference, join,
+RBAC, policy and audit tables and records an independent Rust migration head.
+It preserves existing Alembic installations while adding the intended API-key
+`scope_type`, `deployment_profile_id`, `enabled` and `updated_at` fields that
+the Python entity exposed but did not persist. A language-neutral persistence
+contract and Rust source gate pass; live PostgreSQL execution is configured as
+a CI gate because no local Organization database URL is present. The next
+slices add the application use cases over shared MMF event publication,
+authorization and audit policy, all HTTP and gRPC adapters, executable
+composition, packaging, PostgreSQL acceptance and same-slice deletion of
+`services/organization` after those gates pass. No beta deployment occurs
+during these slices.
+
+All nine Python persistence adapter families are now consolidated into one DRY
+`PostgresOrganizationStore`. It owns organization, member, API-key,
+console-preference, join-code, permission, role/member-role, policy-set and
+audit storage without duplicating connection/session lifecycle. Tenant-owned
+lookups bind organization IDs in SQL, membership email matching remains
+case-insensitive, role replacement is transactional, assignments are
+idempotent, audit filters are parameterized and bounded, persisted enum drift
+fails closed, and released lowercase/DRAFT compatibility values remain
+accepted deliberately. The optional live PostgreSQL contract exercises the
+complete round trip and cascade behavior when
+`ORGANIZATION_POSTGRES_TEST_URL` is configured. Locked unit/source tests,
+strict Clippy, cross-language domain vectors and the ownership guard pass
+locally; live execution remains a CI gate.
+
+The 104-entry permission catalog is now frozen as language-neutral data and
+consumed by both Python and Rust. Rust derives all eight intended system roles
+from that single catalog: owner, admin, access administrator, catalog
+administrator, reviewer, operator, viewer and applicant. Owner/admin retain
+the complete catalog; reviewer/operator keep their exact view and action
+supplements; applicant remains the sole default role and has no organization
+console access. Permission IDs and new system-role IDs are deterministic,
+while released database IDs are retained on reseed. Catalog and role seeding
+are idempotent and included in the optional PostgreSQL round-trip gate. Four
+Python parity tests, ten Rust unit/contract groups and strict Clippy pass.
+
+Organization cache behavior now consumes the canonical production Redis
+adapter in `mmf-data`; no service-local Redis client or command implementation
+was added. MMF commits `b566451` and `9f9be66` provide fail-closed Redis
+operations, TLS/startup health enforcement, namespace-bounded `SCAN`, complete
+ordinary/sorted-set behavior and multiple keyspaces over one multiplexed
+connection. `marty-organization` derives three scoped views that preserve the
+mixed-deployment keys exactly: `org_membership:{user}:{organization}`,
+`member_permissions:{user}:{organization}` and `org:{organization}:plan`.
+The language-neutral `contracts/organization-cache-behavior.json` freezes those
+keys and default-plan semantics. Rust tests prove dual membership/permission
+invalidation, plan synchronization, namespace compatibility and rejection of
+empty identifiers/plans; the full Organization suite and strict Clippy pass.
+The optional live MMF Redis acceptance gate remains configured through
+`MMF_REDIS_TEST_URL`; no endpoint is available locally, so it is compiled but
+not executed here.
+
+All 12 Organization domain-event families now have one native envelope and
+audit projection under `contracts/organization-event-behavior.json`:
+organization create/update, member invite/add/remove, API-key create/revoke,
+and role create/update/delete/assign/remove. The surviving Python audit
+publisher and Rust execute the same action, category, resource, actor,
+severity, message and event-data vectors. Rust additionally projects every
+event into the canonical `mmf-messaging` at-least-once envelope with exact
+tenant partition, event deduplication identity, topic/routing key and bounded
+retry metadata. `OrganizationEventPublisher` persists the audit record before
+using the provider-neutral MMF transport and propagates audit, projection and
+transport failures instead of converting an unavailable live event path into
+success. Mutating application paths no longer use that non-atomic sequence:
+the native `OrganizationApplication` locks updates and commits organization,
+owner membership, the complete permission/role seed, owner-role assignment,
+audit projection and the canonical MMF PostgreSQL outbox message in one
+transaction. Existing permission IDs are resolved from the upsert before role
+links are written, preserving databases seeded by Python. Acknowledgement only
+occurs after the durable event is queued. Default-plan cache synchronization
+runs after commit as derived state and is returned as a typed warning when it
+fails, avoiding both silent drift and unsafe client retries after a successful
+database commit.
+
+`contracts/organization-application-behavior.json` now freezes create defaults,
+owner membership, the 104-entry catalog, partial-update ordering,
+explicit-null clearing, settings merge behavior and the open-join/public-only
+invariant across Python and Rust. Native reads cover get, bounded list,
+discoverable filtering and active user memberships. Twenty-two Rust tests,
+all 65 surviving Python Organization tests, formatting and strict Clippy pass;
+the atomic PostgreSQL acceptance test is compiled and runs when
+`ORGANIZATION_POSTGRES_TEST_URL` is available. The remaining Organization
+slices are member/join/API-key/preference/RBAC/policy/audit application
+mutations, Cedar authorization, all HTTP and gRPC adapters, event-outbox
+dispatch/readiness, executable/container packaging, acceptance gates and
+same-slice deletion of the Python service. No beta deployment occurs before
+those slices and the rest of wave three land.
+
+The largest remaining Organization application family—membership and
+joining—is now native as well. Invitations, acceptance, tenant-bound role
+replacement, owner-role retention, owner-removal rejection, member reads and
+removal, idempotent direct provisioning, pre-seeded email linking, default
+role selection, Marty/demo-admin promotion, join-code consumption and direct
+open joins all execute through `OrganizationApplication`. Member, role-link,
+join-code-counter, audit and MMF outbox writes share one transaction; update
+and code rows are locked before decisions, and membership/permission cache
+invalidation is an explicit post-commit warning. The direct-provisioning
+planner centralizes role deduplication and the applicant-to-admin promotion
+rule rather than duplicating it across callers. Owner retention is enforced on
+direct provisioning as well as ordinary role replacement.
+
+`contracts/organization-membership-behavior.json` freezes direct-role
+resolution and join-code failure precedence across Python and Rust. It also
+corrects the legacy ambiguity where an exhausted code with a future expiry was
+reported as expired: inactivity wins first, then actual expiration, then
+exhaustion. The optional PostgreSQL acceptance gate now covers invite,
+acceptance, role replacement, owner protection, removal, code/open joins and
+direct provisioning while asserting one durable audit/outbox pair for every
+emitted mutation. Twenty-five Rust tests, all 67 surviving Python Organization
+tests, formatting and strict Clippy pass. API keys and preferences are next,
+followed by RBAC/policy/audit application mutations and the adapter/runtime
+cutover.
+
+API-key and console-preference application behavior is now native. API-key
+creation validates the complete MIP scope allowlist, organization versus
+deployment-profile binding, positive rate limits and future expiry before
+persisting every intended field. Creation and tenant-bound revocation commit
+the key, audit record and MMF outbox event atomically; validation hashes the
+presented secret, performs the domain's constant-time verification and rejects
+disabled, revoked or expired keys. Tenant-scoped list/get operations no longer
+permit a path organization to select another tenant's key. The raw secret is
+retained only in the one-time creation result.
+
+Console preferences now distinguish an omitted active-organization field from
+explicit null and an explicit UUID, lock an existing preference during partial
+updates and preserve the default applicant/no-active-organization behavior.
+This fixes the surviving Python command's `hasattr` ambiguity, which made every
+request appear to contain `last_active_org_id` and could clear it during an
+unrelated view-mode update. `contracts/organization-api-preference-behavior.json`
+drives both languages for key scope/binding cases and preference
+omit/clear/replace semantics. Twenty-seven Rust tests, all 69 surviving Python
+Organization tests, formatting and strict Clippy pass. The optional PostgreSQL
+gate now also validates key creation, constant-time lookup, cross-tenant
+revocation rejection, revocation, and persisted preference partial updates.
+Policy-set and audit-query application behavior remains before the
+adapter/runtime cutover.
+
+Organization RBAC application behavior is now native. Custom role creation,
+partial update and tenant-bound deletion; permission resolution; default-role
+uniqueness and transfer; member assignment/removal; system-role deletion
+protection; owner-role retention; last-role retention; and role/permission
+reads all execute through `OrganizationApplication`. Each mutation locks its
+decision rows and commits role, member-role, audit and canonical MMF outbox
+state in one PostgreSQL transaction. Cache invalidation occurs only after
+commit and reports typed warnings. Role deletion reassigns members that would
+otherwise become roleless and fails closed when a required replacement is
+missing or invalid.
+
+`contracts/organization-rbac-behavior.json` freezes replacement selection,
+default transfer, missing-role and self-replacement behavior across Python and
+Rust. The temporary Python oracle was corrected to transfer default status
+rather than deleting the only default, and its behavior remains covered until
+the native adapter/runtime cutover deletes the Python service. Twenty-seven
+Rust tests, all 70 surviving Python Organization tests, formatting, strict
+Clippy and the ownership guard pass. The optional PostgreSQL acceptance gate
+compiles RBAC create/update/assign/remove/delete behavior, system-role
+protection and exactly one durable audit/outbox pair per successful mutation;
+live execution still awaits `ORGANIZATION_POSTGRES_TEST_URL`. Policy-set and
+audit-query application behavior is next, followed by authorization and the
+adapter/runtime cutover. No beta deployment occurs before all wave-three
+slices land.
+
+Policy-set lifecycle and audit-query application behavior are now native.
+`marty-organization` creates, reads, filters, partially updates, validates,
+activates, archives and tenant-binds deletion of structured Cedar policy sets.
+Mutations lock their tenant and policy rows; activation atomically archives
+the previously active set of the same type, enforcing the domain's intended
+one-active-set-per-organization/type invariant that the Python implementation
+documented but did not enforce. Missing native validation fails before any
+database access. Legacy Cedar text still projects into the stable structured
+response shape, while malformed, duplicate, effect-mismatched, disabled-only
+and schema-invalid policy documents fail closed.
+
+The reusable implementation belongs to `mmf-security`, not the Organization
+service: MMF commit `e87a538` adds one bounded `CedarPolicyValidator` for JSON
+or human-readable schemas and shares strict parsing/schema validation with
+the existing authorization engine. Organization consumes that API rather
+than adding a second Cedar kernel. All 69 MMF security unit and integration
+tests plus strict Clippy pass.
+
+Native audit reads now preserve tenant-bound detail lookup, total counts,
+bounded page/per-page and legacy limit/offset semantics, exact category,
+event, resource, action and severity filters, actor substring matching,
+metadata IP matching, full-text search, explicit ISO date bounds and positive
+hour/day/week windows. `contracts/organization-policy-audit-behavior.json`
+freezes policy validation, active-set replacement, legacy projection, audit
+pagination and time-window behavior across Python and Rust. Thirty Rust tests,
+all 73 surviving Python Organization tests, formatting, strict Clippy and the
+ownership guard pass. The optional PostgreSQL gate compiles complete
+policy-set lifecycle, active-set replacement, filtered/count-consistent audit
+queries and cross-tenant detail denial; live execution still awaits
+`ORGANIZATION_POSTGRES_TEST_URL`. Organization authorization and HTTP/gRPC
+adapter/runtime packaging are next. No beta deployment has occurred.
+
+Organization authorization decisions are now native and shared rather than
+reimplemented in the service. MMF commit `707425d` extracts active,
+tenant-bound membership authentication from permission evaluation; both paths
+retain the same typed fail-closed outcomes for absent identity, missing or
+cross-tenant membership, inactive membership and denied actions. Organization
+projects persisted roles and effective permissions into that primitive and
+adds exact gateway-forwarded API-key binding: the synthetic principal, key ID,
+tenant and minimized route permission must agree, and API keys cannot satisfy
+owner-only actions. Membership-only routes preserve the released behavior
+without weakening permissioned routes.
+
+`contracts/organization-authorization-behavior.json` executes the same user,
+owner and API-key cases against Python and Rust, including missing identity,
+inactive membership, permission mismatch, tenant mismatch and owner-only
+denial. Stable application errors replace implicit `None` or permissive
+fallbacks. Thirty-one Rust tests, all 74 surviving Python Organization tests,
+all 69 MMF security tests, formatting and strict Clippy pass. The remaining
+Organization work is the trusted HTTP/gRPC adapter boundary, runtime and
+outbox composition, executable/container packaging, PostgreSQL acceptance and
+same-slice Python deletion. No beta deployment has occurred.
+
+The complete intended 12-method Organization protobuf service now executes in
+Rust, including `CreateOrganization`, `UpdateOrganization`,
+`ListOrganizations` and `RemoveMember`, which were declared but absent from
+the Python server. Generated Tonic types remain authoritative; DTO projection,
+UUID and enum validation, API-key validation, member permissions, filtered
+organization totals and stable gRPC status normalization are implemented at
+the adapter boundary. Every RPC requires the configured service token using a
+constant-time comparison, while deployed runtime configuration will also
+require mutual TLS before the server can bind. Member removal now carries and
+checks the path organization in the application command, closing a latent
+cross-tenant selector gap before exposing that previously missing RPC.
+
+The frozen 12-method list is asserted against the compiled adapter and the
+existing protobuf/Python surface oracle remains green. Thirty-three Rust
+Organization tests, the focused six-test Python protobuf/domain oracle,
+formatting and strict Clippy pass. HTTP/SCIM adapters, deployed trust-boundary
+composition, runtime/outbox workers, executable/container packaging and the
+final acceptance/deletion gate remain. No beta deployment has occurred.
+
+The inbound HTTP trust boundary is now defined once before route migration.
+MMF commit `fe6e6b5` owns minimum-length service-token configuration,
+production-required startup failure and constant-time request authentication;
+Organization gRPC and HTTP consume that shared primitive. The HTTP adapter
+accepts forwarded user or API-key context only after the gateway credential is
+validated, and API-key contexts additionally require a valid tenant UUID and
+nonempty minimized permission. Missing, malformed and partial contexts return
+typed failures before membership or domain code runs.
+
+`contracts/organization-http-trust-behavior.json` freezes trusted user/API-key
+projection and every missing/wrong credential branch. Thirty-four Rust
+Organization tests, all 71 MMF security tests, formatting and strict Clippy
+pass. The gateway must inject the same service credential on proxied HTTP
+requests before the deployed Organization runtime can require it; that wiring
+is part of the remaining executable cutover, not a fallback. No beta
+deployment has occurred.
+
+Fourteen of the 62 frozen HTTP contracts now execute through Axum:
+organization create/list/discovery/mine/get/update, public and internal
+lifecycle reads, public environment read/update, trusted internal settings,
+console preferences and onboarding status. The adapters preserve creation
+defaults and disablement, strict unknown-field rejection, explicit
+omit/null/replace update semantics, membership and exact permission checks,
+owner membership projection, no-store preferences, Hosted Pilot retention
+projection and stable error envelopes. Organization type, join mechanism and
+view-mode parsing now live in the domain and are shared with gRPC rather than
+being duplicated per adapter.
+
+Black-box Axum tests prove missing gateway credentials and malformed/private
+bodies fail before storage access and preserve the released onboarding
+projection. The optional `ORGANIZATION_POSTGRES_TEST_URL` gate exercises
+creation, owner membership, authenticated reads, permissioned updates,
+preferences, internal settings, lifecycle projection and cleanup through the
+actual HTTP router. Forty Rust Organization tests, all 74 surviving Python
+tests, formatting and strict Clippy pass. The remaining 48 HTTP contracts are
+join/member/API-key, RBAC, policy/audit and SCIM families, followed by runtime,
+outbox worker, gateway credential injection, packaging and deletion. No beta
+deployment has occurred.
+
+Twenty-five of the 62 frozen HTTP contracts now execute through the same Axum
+router. The second adapter slice adds join-code admission and validation,
+direct open joining, team snapshots, paginated member list/invite/role-update/
+removal and paginated API-key create/list/revoke. It preserves 201 join
+responses, trusted forwarded email requirements, pending-versus-active team
+buckets, per-member role-alias de-duplication, sorted effective permissions,
+one-time raw API-key disclosure, tenant-bound member/key mutation and the Marty
+default-organization membership-removal prohibition. Gateway service
+authentication and user/API-key authorization run before application storage
+access, and malformed identifiers, emails, role sets, scopes and unavailable
+storage fail closed through stable envelopes.
+
+Language-neutral black-box route tests assert that the 25 native declarations
+remain unique members of the frozen 62-route surface, untrusted requests stop
+before database access and join admission refuses missing trusted email.
+Projection tests freeze team role buckets and one-time key-secret behavior. The
+optional PostgreSQL HTTP gate now also executes direct join, team snapshot,
+API-key create/list/revoke and tenant-bound member removal through Axum. Forty-
+two Rust Organization tests, all 74 surviving Python tests, formatting and
+strict Clippy pass. The remaining 37 HTTP contracts are RBAC, policy/audit and
+SCIM families, followed by runtime, outbox worker, gateway credential
+injection, packaging, full PostgreSQL acceptance and same-slice Python
+deletion. No beta deployment has occurred.
+
+Thirty-five of the 62 frozen HTTP contracts now execute natively. The third
+adapter slice exposes the complete intended RBAC surface: grouped permission
+catalog, role list/create/get/update/delete, replace/add/remove member-role
+assignments and current-member permissions. It preserves permission ID and
+legacy `resource:action` key inputs, deterministic de-duplication, role member
+counts, default-role behavior, response projections and 201/204 status
+semantics. Every read and mutation is tenant-bound and requires its exact
+`role:view`, `role:create`, `role:edit`, `role:delete` or `role:assign`
+permission after gateway service authentication; missing memberships,
+cross-tenant IDs, system-role deletion, owner-role removal, empty final role
+sets and unknown permissions fail closed.
+
+The shared frozen-route assertion now covers all 35 native HTTP declarations,
+and black-box requests prove RBAC routes reject missing trust before storage.
+The optional PostgreSQL HTTP scenario now includes grouped catalog reads,
+permission-key resolution, custom-role create/update, owner permission
+projection and role deletion through Axum. Forty-four Rust Organization tests,
+all 74 surviving Python tests, formatting and strict Clippy pass. The remaining
+27 HTTP contracts are the policy/audit and SCIM families, followed by runtime,
+outbox worker, gateway credential injection, packaging, full PostgreSQL
+acceptance and same-slice Python deletion. No beta deployment has occurred.
+
+Forty-two of the 62 frozen HTTP contracts now execute natively. Because the
+1,012-line Python SCIM adapter is the largest remaining deletion target, its
+discovery/read half moved next: service-provider configuration, schemas,
+resource types, paginated/filterable/sortable Users and Groups collections,
+and tenant-bound User/Group detail. The Rust adapter reuses the canonical SCIM
+parsers and pagination helpers, emits the registered core and MIP extension
+URNs, preserves metadata locations and timestamps, projects effective role
+membership, and returns typed SCIM `invalidFilter` and 404 envelopes.
+Discovery requires the trusted gateway service credential even though it is
+storage-independent; resource reads additionally require an active
+organization membership.
+
+Black-box tests freeze trust-first discovery and the expanded 42-route subset,
+while language-neutral projection/filter tests cover extension keys, email,
+external-ID and active-state behavior. The optional PostgreSQL HTTP scenario
+now traverses SCIM User and Group collection projections through Axum. Forty-
+seven Rust Organization tests, all 74 surviving Python tests, formatting and
+strict Clippy pass. The remaining 20 HTTP contracts are eight SCIM User/Group
+provisioning mutations and twelve policy/audit routes, followed by runtime,
+outbox worker, gateway credential injection, packaging, full PostgreSQL
+acceptance and same-slice Python deletion. No beta deployment has occurred.
+
+Fifty of the 62 frozen HTTP contracts now execute natively, completing the
+entire intended SCIM 2.0 surface. User POST/PUT/PATCH/DELETE preserves primary
+email selection, external IDs, active/deactivated state, default or explicit
+roles, PATCH operation/path behavior, uniqueness responses, extension fields,
+Location headers and owner deprovisioning protection. Group
+POST/PUT/PATCH/DELETE preserves display-name slugging, permission-key
+resolution, member references, filtered member removal, extension metadata,
+system-role immutability and SCIM status/error envelopes.
+
+Unlike the superseded Python adapter's independent repository writes, Rust
+commits SCIM User profile/status/role transitions and Group role/permission/
+membership replacements in one PostgreSQL transaction with canonical audit,
+outbox and cache effects. All IDs are tenant-bound and validated before
+mutation. The frozen-route assertion covers all 50 native declarations, pure
+behavior tests freeze payload/projection semantics, and the optional live
+PostgreSQL HTTP scenario now traverses User and Group provisioning lifecycles.
+Forty-nine Rust Organization tests, all 74 surviving Python tests, formatting
+and strict Clippy pass. The remaining 12 HTTP contracts are nine policy-set
+and three audit routes, followed by runtime, outbox worker, gateway credential
+injection, packaging, full PostgreSQL acceptance and same-slice Python
+deletion. No beta deployment has occurred.
+
+All 62 frozen Organization HTTP contracts now execute through the native Axum
+router. The final slice adds policy-set list/create/templates/validate/get/
+update/archive/activate/delete and audit list/export/detail. Policy requests
+preserve strict document shapes, omit/null/replace updates, status/type
+projection, starter templates, active-set replacement and 201/204 semantics;
+all Cedar decisions use the shared MMF validator and fail closed when it is
+unavailable. Audit requests preserve exact `audit:view`/`audit:export`
+authorization, modern and legacy pagination, category/event/resource/action/
+actor/severity/search/IP/date/time-range filters, tenant-bound detail lookup,
+JSON export and correctly escaped CSV export.
+
+The router contract now asserts exact set equality—not merely subset
+membership—against all 62 frozen routes. The optional PostgreSQL HTTP scenario
+adds policy create/archive/activate/delete and audit list/export to the full
+native lifecycle. Fifty-two Rust Organization tests, all 74 surviving Python
+tests, formatting and strict Clippy pass. The remaining Organization work is
+runtime and outbox-worker composition, gateway credential injection,
+executable/container packaging, configured live PostgreSQL acceptance and
+same-slice deletion of the superseded Python service. No beta deployment has
+occurred.
+
+The native Organization executable and its operational composition are now
+implemented in commit `de0baf57`. Startup validates deployed configuration and
+service credentials, connects PostgreSQL and the gateway Redis database,
+loads the shared MMF Cedar validator, runs idempotent schema/outbox migration,
+reconciles system roles and the configured Marty admin/reviewer memberships,
+then serves the complete Axum and tonic surfaces with MMF health, readiness,
+version and native-backend diagnostics. The gateway now injects its configured
+service token as a trusted override only for Organization HTTP upstreams;
+client headers cannot select that credential.
+
+Durable event publication remains one shared MMF implementation rather than an
+Organization worker. MMF commits `c6355b0` and `4abb2ae` add the reusable
+leased PostgreSQL outbox dispatcher with fenced acknowledgement, bounded
+exponential retry, dead-letter transitions, reconnect and graceful shutdown.
+Organization maps its canonical event envelope to the existing event-stream
+protobuf and treats an event-stream outage as observable degradation while the
+transactional outbox retains delivery. Ten MMF messaging unit tests, two MMF
+PostgreSQL behavior tests, the complete Organization Rust suite (including 24
+crate unit tests and all language-neutral service tests), the focused gateway
+credential-injection test, formatting, and strict Clippy pass. The remaining
+Organization cutover work is to publish and immutably pin the MMF commits,
+switch the service image/entrypoint to the Rust binary, run configured live
+PostgreSQL/Redis/event-stream executable acceptance, then delete the Python
+service and its Python-only dependencies in the same passing slice. No beta
+deployment has occurred.
+
+Commit `9ab00486` adds the native Organization binary to the shared service
+image, dispatches `SERVICE_NAME=organization` directly to that binary, and
+marks the beta overlay as a deployed environment so missing service
+credentials fail closed. Twelve focused packaging/entrypoint tests pass. The
+image build remains gated by publication of the MMF branch because the Marty
+UI workspace still intentionally points at its clean MMF worktree; GitHub CLI
+authentication is invalid and connector writes are prohibited by the current
+execution policy. A PostgreSQL listener is available locally but its test
+credential is not, and Docker API access is denied, so no unsafe guess or
+shared-database mutation was used to manufacture live acceptance evidence.
+Python deletion therefore remains pending the immutable MMF pin, image build,
+and configured executable acceptance. No beta deployment has occurred.
+
+The Organization source cutover is complete in commit `ce882181`. The native
+crate is now the sole runtime and migration owner; the Python migration runner
+no longer imports the deleted service, and the ownership manifest marks
+`organization-service` as `native-active` with an anti-reintroduction guard.
+The cutover removed all 86 tracked files below `services/organization`,
+including 8,145 production Python lines and 16,437 tracked service lines in
+total, while retaining the frozen 62-route HTTP surface, all 12 intended gRPC
+methods, PostgreSQL schema, Redis state, Cedar policy behavior, SCIM, audit,
+startup reconciliation and durable MMF outbox delivery in Rust.
+
+The final local gate is 61 passing Rust tests, including two executable
+fail-closed tests, formatting and strict Clippy under Rust 1.95. Thirty-five
+focused ownership, packaging, release and migration-history checks pass;
+base-plus-beta Compose and the Kubernetes/self-host YAML models validate. CI
+now builds a dedicated Organization image, smoke-tests it against pinned
+PostgreSQL and Redis containers, and runs the migration, application and
+repository PostgreSQL executables with a required database URL. Those live
+gates cannot execute on this host because its Docker daemon and test database
+are unavailable, so merge remains contingent on the configured CI jobs rather
+than weakening or silently skipping them. MMF publication and immutable pinning
+remain aggregate landing work. No beta deployment has occurred.
+
+### Auth port status
+
+Auth is active in dependent worktree `marty-ui-rust-auth-wave3` on branch
+`agent/marty-ui-rust-auth-wave3`, based on the complete Organization head so
+the service can consume the same MMF platform without copying framework code.
+The measured deletion target is 7,578 non-test Python lines. Commit
+`bfcbbfcd` freezes all 14 HTTP routes and six gRPC methods in
+`contracts/auth-behavior.json`; the contract explicitly preserves the two
+retired gRPC mutation methods as `UNIMPLEMENTED`. Shared Python/Rust vectors
+cover claim precedence, Keycloak realm/resource role merging, organization
+claim extraction, display-name precedence, session validity and RFC 7636 PKCE
+S256 output.
+
+The first native application slices are complete. Commit `9f7b2fd6` ports the
+OIDC login/registration and callback orchestration, single-use state and nonce
+binding, validated-claims-only session creation, provisioning port, event
+families, activity refresh, invalid-session cleanup and idempotent logout.
+Commit `df1f194d` ports session and PKCE persistence against the shared MMF
+cache contract, including user-session indexes, bulk user logout, exact TTL
+behavior and typed fail-closed malformed-cache errors. MMF commit `db47333`
+adds atomic cache consume and expiring set primitives once in `mmf-data`, with
+equivalent memory and Redis implementations, instead of embedding Redis
+commands in Auth.
+
+Commit `636216f6` ports the complete Keycloak OIDC provider boundary. Bounded
+no-redirect discovery, JWKS and token fetches preserve internal/external issuer
+separation and trusted JWKS-origin/path validation; key rotation performs
+exactly one forced refresh. Signature, algorithm, issuer, audience, authorized
+party, nonce, time and `at_hash` decisions execute directly in the pinned
+canonical `marty-oid4vci` kernel, and access tokens remain opaque. Commit
+`0f18de11` ports JIT applicant upsert planning and organization membership
+enrichment, with shared Python/Rust name vectors and observable optional
+organization degradation. Commit `f6408648` ports credential-login identity
+enrichment, including deterministic fallback IDs, DID extraction, Keycloak and
+credential role/context merging, provisioning fallback and Canvas defaults.
+Commit `a5af692b` ports Keycloak Admin user lookup/create, verified-user policy,
+role and organization enrichment, native-validated RFC 8693 token exchange,
+bounded transport and container URL normalization. Thirty-three Rust
+behavioral tests, the focused Python oracle suites, formatting and strict
+Clippy pass.
+
+Commit `c281dec2` ports Auth persistence. Auth now owns a non-destructive,
+advisory-lock-protected schema migration and strict owned/shared schema
+validation; the shared `public.applicants` table remains externally owned.
+The PostgreSQL repository serializes both applicant natural keys, fails closed
+when account and email identify different records, preserves existing names
+when later claims are incomplete, merges JIT metadata, and writes each
+authentication/logout audit pair with its session-history mutation in one
+transaction. Audit and session-history query behavior remains available. The
+language-neutral persistence contract and optional
+`AUTH_POSTGRES_TEST_URL` round trip cover migration idempotency, JIT updates,
+the four event families and revocation history. No configured test database is
+available locally, so the live gate compiled and skipped without claiming
+external acceptance.
+
+Commit `adf28056` ports the Canvas learner-identity and credential callback
+state kernels. The callback is bound to the canonical MMF event signature,
+decision digest, audience, event ID, timestamp window, pending flow, policy and
+organization. Completion/failure polling, crash-safe claims, deterministic
+retry session IDs and final session-cookie handoff are single-use and
+replica-safe. Canvas identities preserve stable issuer/subject derivation,
+fallback email and username, LTI LIS name precedence, constrained applicant
+roles and tenant context. `contracts/auth-login-state-behavior.json` runs
+against both Python and Rust. MMF commit `1ab07f1` adds the required expiring
+atomic `set_if_absent` lease once to `mmf-data`, with memory and Redis contract
+coverage, rather than embedding a service-specific Redis command. Thirty-nine
+Rust Auth tests, 51 focused Python callback/Canvas tests with one optional Redis
+skip, formatting and strict Clippy pass.
+
+Commit `17172606` ports the credential callback business orchestrator on top of
+that state machine. It preserves Keycloak account eligibility and optional
+creation, native-validated token context, provisioning fallback, deterministic
+retry sessions, denial normalization, revocation status and already-processed
+idempotency. Commit `41f40038` ports all SpruceKit and LISSI wallet-link
+behavior, including platform templates, Android intent packages, legacy LISSI
+compatibility, DID client-ID normalization and fail-closed duplicate or
+mismatched outer request parameters.
+
+MMF commit `8b79e82` adds one bounded no-redirect outbound HTTP client to
+`mmf-platform`. It validates URLs, methods, headers, timeouts and response
+limits; streams bodies under the configured bound; and normalizes timeout and
+transport failures. Auth consumes that shared primitive rather than adding a
+service-local client. Commit `58459daf` uses it for Canvas experience-session
+transport and ports Canvas session finalization, optional applicant profile
+enrichment, tenant shape, client context and positive TTL enforcement.
+
+Commit `c523851e` ports all six Auth gRPC methods from the frozen contract.
+Session validation, invalidation and status use the canonical Rust application;
+health remains serving; direct session minting and the retired gRPC credential
+callback fail explicitly with `UNIMPLEMENTED`. Commit `62fe4864` ports trusted
+UI-origin selection, post-auth redirect resolution, OIDC callback URLs and
+Keycloak/handoff impersonation context. One shared fixture executes in Python
+and Rust. Network-path redirects such as `//attacker.example` now fail closed
+instead of retaining an open-redirect interpretation.
+
+Commits `16aae0d0`, `c52579b7` and `16a31cfd` now expose all 14 frozen HTTP
+routes through one Axum service, including the six credential-login asset,
+start, poll, finalize and callback routes. Commit `18a82ba1` moves credential
+page and error rendering into Rust, preserves every SpruceKit/LISSI operator
+override, and compiles four shared assets from one source. Exact Python/Rust
+page hashes pass, and 710 embedded Python asset lines were deleted immediately
+after that gate.
+
+Commit `b7ad9c03` ports the remaining Flow verification, Organization
+provisioning, Applicant profile and event provider boundaries. Flow and
+Organization channels are created only through the shared MMF gRPC factory;
+Applicant requests use the bounded no-redirect MMF HTTP client; Auth events use
+the canonical MMF envelope. `contracts/auth-service-transport-behavior.json`
+freezes request defaults, incomplete-response rejection, organization
+degradation behavior, exact Applicant headers/bounds and all four event types.
+
+Commit `e665f9b7` establishes fail-closed Auth configuration, MMF lifecycle and
+readiness, organization-scoped events, a PostgreSQL MMF outbox publisher and a
+bounded event-stream gRPC transport. `contracts/auth-executable-behavior.json`
+requires every database, cache, OIDC, provider, outbox, event-stream and
+listener component to be healthy before activation; it explicitly forbids a
+Python fallback and any per-slice beta deployment. The complete Rust Auth
+suite, strict Clippy and the focused Python parity suite (71 passed, one
+optional configured integration skipped) are green.
+
+Commit `78f9e821` completes the Auth source cutover. The native executable now
+connects and validates the Auth PostgreSQL schema, MMF PostgreSQL outbox, MMF
+Redis session/PKCE/credential state, MMF Redis sliding-window rate limiter,
+OIDC discovery/JWKS, Flow and Organization gRPC, Applicant and Canvas/issuance
+HTTP health, and event-stream gRPC before readiness. Flow uses the shared MMF
+workload-mTLS client when configured; production configuration additionally
+requires an inbound workload server identity. Both listeners bind before
+activation, the durable outbox dispatcher starts and drains with the process,
+gRPC health changes with lifecycle state, and shutdown drains HTTP, gRPC and
+outbox work in order.
+
+The service image builds and installs `marty-auth`, and the entrypoint dispatches
+Auth directly to that binary without a Python path. The beta Compose model now
+selects the beta environment explicitly, carries the Rust-compatible PostgreSQL
+URL and required identity values, preserves outbound Flow workload identity,
+and renders successfully without changing the running beta deployment. The
+complete pre-deletion Python oracle gate passed 95 tests with one optional
+configured integration skipped; the post-cutover Rust gate passes all 76 Auth
+tests, executable/packaging checks, formatting and strict Clippy. The same
+change deleted 9,724 superseded lines, leaving only the four Rust-compiled
+credential-login assets below `services/auth`, removed Python Auth migration
+dispatch, marked Auth `native-active`, and added anti-reintroduction ownership
+checks.
+
+Auth source migration is complete. Its remaining release gates are the shared
+wave-three immutable MMF pin plus configured PostgreSQL/Redis/provider and
+container acceptance in the aggregate landing branch. No beta deployment has
+occurred.
+
+### Credential-template port status
+
+Credential Template is now the largest remaining source-deletion target after
+Organization when tracked Python migrations and implementation-specific tests
+are included. Work is active in dedicated worktree
+`marty-ui-rust-credential-template-wave3` on branch
+`agent/marty-ui-rust-credential-template-wave3`, based on the completed Auth
+source cutover. The first slice establishes `marty-credential-template` and
+moves credential-format aliases, public and signing wire names, payload-format
+defaults, issuance-protocol aliases, SD-JWT VCT and mdoc doctype requirements,
+wallet inner-URI policy, wallet route rendering, and delivery-destination
+tenant invariants into one Rust domain implementation.
+
+`contracts/credential-template-domain-behavior.json` is the language-neutral
+oracle for canonical, legacy and invalid format names—including the retained
+VDS-NC family—registered and HTTPS VCTs, placeholder-origin rejection,
+environment-specific URI schemes, encoded and inline credential offers, and
+system versus organization delivery destinations. The surviving Python oracle
+and Rust execute the same fixture; four tests pass in each language, and strict
+Clippy passes. This parity pass caught and closed an initial VDS-NC inventory
+omission before any caller or data was moved.
+
+The persistence slice now consolidates the three Python repository families
+into one `PostgresCredentialTemplateStore`. Rust owns a non-destructive,
+advisory-locked and idempotent schema migration for credential templates,
+wallet profiles and delivery destinations, including compatibility upgrades
+for every retained column. The final schema deliberately does not resurrect
+the cached issuer-profile/KMS routing columns retired in August 2026; live
+`issuer_did` plus `issuer_algorithm` remain the complete template-side signing
+selector. The Rust model closes two transition data-loss gaps by persisting the
+domain-level `issuance_protocol` and every validity field, including
+`not_before_offset_seconds`. Legacy claim rows retain Python-compatible UUIDv5
+identity, type aliases and display defaults, while malformed records fail
+closed. Tenant destination listings include system entries, exclude other
+tenants and sort system-first by case-insensitive name without an application
+side re-sort or N+1 hydration.
+
+`contracts/credential-template-persistence-behavior.json` is the shared
+language-neutral persistence oracle. `credential-template-service-surface.json`
+now freezes all 24 HTTP operations and all 12 intended gRPC methods against
+both Python decorators/protobuf and Rust-owned constants, preventing a partial
+port from being mistaken for a complete service. The first application kernel
+also owns PascalCase/reverse-domain credential-type validation, unique and
+referentially sound claims, released seconds-to-days validity aliases and
+rounding, canonical not-before precedence, draft-only mutation/deletion,
+activation, deprecation and lossless new-version creation under
+`credential-template-lifecycle-behavior.json`.
+
+Rust now also owns all ten intended system wallet profiles and all four system
+delivery destinations under `credential-template-system-catalog.json`, not
+only the profiles currently used by a caller. One DRY catalog builder preserves
+SpruceKit, Marty, generic OID4VCI, LISSI, disabled walt.id interoperability,
+Sphereon, DC4EU, Google Credential Manager, Apple Wallet and DIDComm V2
+capabilities plus both wallet and Canvas delivery modes. Startup seeding inserts
+only missing IDs so operator-managed existing rows are not overwritten.
+
+The template application layer now owns all ten template use cases behind one
+repository and one fail-closed control-plane boundary: create, tenant-scoped
+list/get, draft update, activate, deprecate, new version, delete, add claim and
+internal active-template listing. Membership is enforced inside every public
+use case. Create/update resolve the active issuer live; activation additionally
+requires an active revocation profile and an accepting trust profile. Provider
+failure occurs before persistence. The update plan now preserves claims,
+derived attributes and display style exposed by the released request model but
+previously left unwired by the Python handler.
+
+Nine template HTTP operations are now executable through Axum: create, list,
+get, update, activate, deprecate, new-version, delete and add-claim. Every route
+requires the shared MMF service token plus a trusted forwarded user before the
+application-level membership decision. Request DTOs reject undeclared fields,
+validity aliases resolve against existing state, and responses reproduce the
+public claim/privacy/TTL projection while omitting issuer algorithms, supported
+formats, wallet configuration and null optionals. Black-box tests exercise
+create/update/activate/delete and prove untrusted requests fail before use-case
+execution.
+
+The complete wallet-compatibility kernel now also runs in Rust under
+`credential-template-wallet-compatibility.json`. All eight intended AAMVA,
+ICAO, EUDI, Open Badges, enterprise and generic profiles plus unknown-format
+fallbacks are retained. Organization overrides are active-only and tenant
+bound, match canonical protocol aliases, sort by descending precedence with a
+stable ID tie-breaker, and preserve exact unique APPEND versus component-wise
+REPLACE behavior. Both languages prove the complete profile inventory from the
+same fixture.
+
+The registry application and HTTP slice now makes all 22 external operations
+executable in Rust: ten template and compatibility operations, seven wallet
+registry operations and five delivery-destination operations. One DRY registry
+repository covers PostgreSQL wallets and destinations. Membership and explicit
+wallet/destination administration remain fail-closed control-plane decisions;
+system records are immutable; wallet ownership cannot be transferred; private
+overrides are tenant-bound; aliases, same-device routing, capabilities and open
+links use the shared Rust domain kernels. Unscoped wallet and destination lists
+now return only global/system records. This closes an unsafe legacy Python
+delivery-list behavior that could expose tenant entries when no organization
+scope was supplied.
+
+`credential-template-registry-behavior.json` is the shared route-level oracle
+for catalog sizes, canonical formats and protocols, iOS routing, write status
+codes, success bodies and tenancy rules. Rust black-box tests execute complete
+wallet and destination CRUD plus compatibility and open-link behavior against
+it; the surviving Python catalog and normalization oracle consumes the same
+fixture, and its route suite proves the corrected unscoped destination rule.
+
+The final two internal HTTP operations are now native as well, completing all
+24 frozen routes. The issuance-context route preserves the public projection
+and adds only the signing algorithm, supported formats, issuance protocol,
+selective-disclosure fields, predicates, wallet configurations and full
+validity rules needed by trusted issuance callers; retired cached profile,
+provider, service and KMS coordinates remain absent. Dynamic OID4VCI metadata
+advertises active DID-backed SD-JWT, mdoc and VC-JWT templates in their actual
+production formats, skips unsupported or incomplete entries and treats the
+issuer display-name lookup as optional. Unlike the legacy Python endpoint, a
+repository failure now returns a dependency error instead of silently
+publishing an empty successful configuration set.
+
+`credential-template-internal-behavior.json` is the shared behavioral oracle
+for the safe issuance snapshot, three advertised OID4VCI formats, skipped
+formats, fail-closed repository behavior and optional display lookup. Rust
+black-box and application tests and the surviving Python configuration kernel
+consume the same cases.
+
+All 12 frozen gRPC methods are now implemented by one native Tonic service over
+the same template and registry applications as HTTP. The former Python adapter
+implemented only get/list/configuration/wallet/health queries and deliberately
+left six declared mutations absent; Rust now executes create, update, activate,
+deprecate, version and delete as authenticated, tenant-authorized operations.
+Every call requires the shared MMF service token, and tenant operations also
+require trusted forwarded user identity. Repository/control-plane failures map
+to unavailable, authorization failures map to permission denied and malformed
+requests fail as invalid arguments.
+
+The pre-v1 protobuf now carries the already-intended compliance, trust,
+revocation, derived-attribute, full-validity, wallet-override and routing state,
+plus an update mask so empty collections can be distinguished from omitted
+fields. Removed custody selectors remain reserved and absent. The native
+configuration method reuses the exact HTTP metadata kernel instead of the
+legacy gRPC adapter's JWT-only approximation and empty-on-error fallback.
+`credential-template-grpc-behavior.json` language-neutrally covers the complete
+method inventory, authentication failures, lifecycle sequence, wire format,
+wallet lookup, health and forbidden private fields.
+
+The service now has its native executable and MMF lifecycle composition as
+well. Fail-closed configuration normalizes the legacy asyncpg URL, rejects
+invalid listener and dependency endpoints, and requires both the shared
+service token and signing-key internal credential in beta and production. MMF
+owns `/health`, `/ready`, `/version`, lifecycle transitions and required
+component gating; the service adds explicit native-backend/version/capability
+diagnostics. Startup connects PostgreSQL, applies and validates the Rust schema,
+reconciles the system wallet/destination catalog, constructs the real control
+plane, and binds Axum and Tonic with coordinated graceful shutdown.
+
+One native control-plane adapter now consolidates organization membership and
+administration, organization display names, active revocation profiles,
+managed issuer DID resolution and trust-profile issuer acceptance. It preserves
+the existing gRPC and internal HTTP protocols, forwards service credentials,
+checks exact tenant/resource identities, rejects inactive or cross-tenant
+responses, and refuses signing responses with incomplete identity state or
+private JWK fields. `credential-template-control-plane-behavior.json` is the
+shared language-neutral oracle for key-purpose selection, DID/method
+normalization, disabled trust sources and fail-closed signing identity rules.
+
+Credential Template did not previously publish domain events, so this port
+does not invent a non-atomic event contract merely to enable an idle outbox.
+The MMF transactional-outbox implementation remains the single shared Rust
+implementation for services that own event behavior; Credential Template will
+adopt it only with a documented event schema and atomic repository operation.
+
+The Rust crate now passes 37 HTTP, gRPC, application, control-plane, runtime,
+configuration, wallet, domain, lifecycle, catalog, surface, migration,
+persistence and configured-PostgreSQL tests. The complete surviving Python
+service oracle passes all 178 tests; formatting and strict Clippy pass. The
+configured PostgreSQL tests run when `CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL`
+is supplied.
+
+The historical migration translation is now explicit rather than inferred.
+`credential-template-migration-history.json` assigns each of the 45 Python
+Alembic revisions to exactly one Rust owner: final schema/retired columns,
+authoritative system catalog, legacy template reconciliation or history-only
+merge. Rust migration head `rust_credential_template_0002` applies one-way,
+idempotent repairs for compliance references, conformant Open Badge VC-JWT,
+obsolete Spruce selectors and retired ICAO/mDL prototypes. Environment-aware
+Rust reconciliation preserves public VCT and issuer-DID backfills, sole-active
+revocation binding, fail-closed deprecation and the self-host login-only
+catalog. Schema validation rejects every retired cached custody column and a
+nullable compliance dependency.
+
+This audit caught stale in-memory catalog behavior that had diverged from the
+released safety migration: Apple is again an inactive compatibility
+placeholder with no generic deep link, and the generic OID4VCI wallet no longer
+claims unverified mdoc support. The Rust system catalog is authoritative for
+immutable system IDs on every startup while organization overrides remain
+untouched. Both surviving Python and Rust behavior now consume the corrected
+fixtures; all 178 Python service tests and all 37 Rust tests pass, as do strict
+Clippy and formatting. Docker/PostgreSQL configured execution is still gated
+because this workstation cannot access the Docker API and no
+`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is configured.
+
+Fresh-install ownership is now complete. The Rust catalog creates the final
+released Marty login badge with its stable identity, public issuer/VCT/image,
+eleven claims, compliance, trust and revocation dependencies, VC-JWT format and
+ES256 signing behavior. A language-neutral catalog contract proves the final
+shape on an empty store while startup remains idempotent and does not overwrite
+an existing operator-managed record.
+
+Native packaging is also wired without deployment. The shared service image
+builds and dispatches `credential_template` directly to
+`marty-credential-template`; the native CI image exposes ports 8003 and 9003;
+base, beta and Oracle Kubernetes configuration supply the fail-closed runtime
+dependencies; and readiness uses `/ready` rather than process-only health.
+The complete beta Compose overlay renders successfully, four static packaging
+contracts pass and an optimized release binary builds locally. CI now builds
+the native image and executes the configured PostgreSQL migration,
+reconciliation and repository contract against the database job.
+
+The workspace-wide all-target compatibility gate exposed and fixed one
+cross-service tenancy defect before cutover: Flow now passes the actual
+organization ID when querying the credential-template wallet registry. Three
+Flow behavioral suites assert that tenant propagation and all eight tests pass;
+`cargo check --workspace --all-targets` is green.
+
+Remaining Credential Template work is the aggregate immutable-MMF pin, a real
+configured PostgreSQL run, container build/health acceptance, and external
+provider acceptance. The local Docker daemon is unavailable and the Marty
+workspace still points to MMF crates in a sibling worktree that is outside the
+container build context, so an image result cannot yet be claimed. Once those
+gates pass, delete the Python implementation, all 45 Alembic revisions and
+implementation-specific Python tests immediately, retain the shared behavioral
+fixtures, and add anti-reintroduction ownership checks. No beta deployment has
+occurred; the only permitted beta update remains the single aggregate wave-three
+deployment after every service slice lands.
+
+Credential Template source cutover is complete in commit `9072bc8f`. The Rust
+crate is now the sole runtime, domain, catalog, persistence and migration owner;
+the Python migration runner no longer imports the service, and ownership marks
+`credential-template-service` as `native-active` with a source-reintroduction
+guard. The change removes all 78 tracked files under
+`services/credential_template`, including 4,202 production Python lines and
+15,795 tracked service linesâ€”plus the obsolete Python patch image.
+
+The deletion audit found one external Python dependency on the old in-memory
+wallet catalog. Verification now reads active wallet formats through the native
+Credential Template gRPC service, fails closed when that service or catalog is
+unavailable, and keeps the Rust system catalog as the single implementation.
+The post-cutover gate passes 39 Rust tests, formatting, strict Clippy under Rust
+1.95, 49 focused caller/ownership/packaging/release checks, Ruff syntax checks,
+and the base-plus-beta Compose model. CI now independently runs the idempotent
+migration executable and a pinned-PostgreSQL container health smoke in addition
+to the repository contract. This host has no Docker daemon or configured test
+database, so those live jobs remain merge requirements rather than being
+silently skipped or weakened. No beta deployment has occurred.
+
+### Presentation-policy port status
+
+Presentation Policy has completed its local source cutover on the dedicated
+`marty-ui-rust-presentation-policy-cutover-wave3` worktree and
+`agent/marty-ui-rust-presentation-policy-cutover-wave3` branch, stacked on the
+complete Credential Template slice. Rust is now the only tracked runtime,
+domain, persistence, migration, catalog, verification and authorization
+implementation. The cutover deletes all 26 tracked files under
+`services/presentation_policy`: 13,172 Python lines in total, including 6,437
+production Python lines. No Python runtime or migration fallback remains.
+
+The baseline is frozen before implementation. All 193 surviving Python service
+tests pass. `presentation-policy-service-behavior.json` records all ten HTTP
+operations, all ten gRPC methods, four lifecycle states, eleven claim
+constraints, eight request purposes, both legacy holder-binding normalization
+cases, every released credential-format alias and all nine Alembic revisions.
+Python executes the same contract rather than relying on a Rust-specific unit
+test inventory.
+
+The `marty-presentation-policy` crate owns the service domain and calls
+`marty_verification::policy::evaluate_service_policy` directly. It does not
+copy the decision engine currently reached through `_marty_rs`. The first Rust
+behavioral tests prove surface completeness, holder-binding normalization,
+format aliases, fail-closed lifecycle transitions, lossless new-version
+creation and the existing cross-language verified-fact golden vector.
+
+Rust now also owns the lossless PostgreSQL record, canonical policy document,
+legacy-row upgrade, idempotent schema migration and tenant-scoped repository.
+CI bundles and executes its configured PostgreSQL integration contract. The
+shared application layer owns every lifecycle mutation and all authorization
+actions. All ten frozen HTTP operations execute through that layer, including
+saved and inline evaluation. Public DTO conversion preserves generated nested
+identities, protocol-first required-claim bridging, holder-binding
+normalization, paging and response projections without exposing internal IDs.
+Raw tokens can enter the decision kernel only through a required verification
+orchestrator that supplies cryptographically verified facts; an unavailable
+or malformed verifier fails closed. All ten declared gRPC methods now use the
+same application and verification layers, require authenticated service and
+principal identities, preserve paging/filtering and expose complete nested
+policy data. The Rust gRPC create path also rebuilds credential and alternative
+requirements that the superseded Python adapter silently ignored.
+
+The native executable, fail-closed deployed configuration and shared MMF
+runtime are complete. Startup migrates and validates PostgreSQL, reconciles the
+canonical built-in catalog, connects the live organization/trust/status control
+plane, activates readiness only after every required dependency is healthy and
+serves both Axum HTTP and tonic gRPC with graceful shutdown. Sensitive Flow and
+Verification RPCs require exact workload mTLS URI identities. Managed issuer
+scope preserves all explicit deployment aliases and the released public-URL/
+organization-slug derivation rather than requiring a new beta-only setting.
+
+Rust owns the final catalog produced by all historical seed and repair
+revisions: the three email-only MemberLogin variants, conformant OpenBadgeLogin
+with trust/revocation/freshness requirements and the private online age-proof
+mDoc policy. Deterministic nested identifiers and repository-level
+reconciliation make repeated startup idempotent. The language-neutral
+`presentation-policy-catalog-behavior.json` freezes the final identities,
+formats, claims, versions and trust behavior.
+
+Native container packaging and entrypoint dispatch are wired for local and CI
+images, and CI has a dedicated Presentation Policy image build. The complete
+crate now has 28 green behavioral, startup, catalog and persistence tests and
+passes formatting and strict Clippy. All 195 surviving Python service and
+packaging tests pass, beta Compose renders with the complete immutable-artifact,
+secret and workload-mTLS contract, and the full locked Rust workspace passes.
+The workspace acceptance run also removed two unrelated nondeterministic gates:
+Auth credential HTML now renders canonical LF output from either checkout style,
+and Notification webhook JSON is recursively key-sorted before HMAC calculation
+regardless of Cargo feature unification.
+
+The verifier orchestration layer is now native and deterministic. It routes with
+the canonical `marty-verification` format detector, applies request/policy/
+requirement trust-profile precedence, supplies verifier-owned nonce and audience
+context only when binding requires it, enforces trust-profile tenant identity,
+enriches authenticated credentials with authoritative status evidence, and
+projects every result into the one strict verified-facts request consumed by the
+policy kernel. Malformed formats never reach a credential kernel and unavailable
+trust dependencies fail closed. The language-neutral
+`presentation-verification-facts.json` contract freezes this projection and its
+trust/status normalization.
+
+Concrete native credential adapters are now present for VC-JWT, VCDM Data
+Integrity, SD-JWT and Open Badges v2/v3. JWT verification keys are selected from
+exact active Trust Profile relationships or system overrides using the
+unverified issuer and `kid` only as selectors; ambiguous keys, private JWK
+material and untrusted relationships deny verification. The adapter preserves
+the authenticated VC object while applying Open Badges profile verification,
+so normalized claims cannot replace signed material. Malformed routes and the
+temporarily unpinned mdoc route fail closed with no Python compatibility path.
+
+Rust also owns the presentation-policy control-plane client at commits
+`9dee79d4` and `774934e0`. It enforces live organization membership and action
+permissions, loads tenant-bound Trust Profiles for every decision, evaluates
+issuer relationship lifecycle/trust/compliance evidence, projects governed
+Data Integrity methods and performs authenticated managed-issuer credential
+status reads. `presentation-control-plane-behavior.json` freezes those
+cross-service semantics independently of implementation language.
+
+Complete mdoc issuer and holder authentication is also consolidated in the
+shared `marty-verification` crate on the dedicated
+`agent/marty-core-presentation-verifier-wave3` branch at commit `7169663`. The
+Python extension delegates to that implementation and no longer directly owns
+COSE, ISO mdoc, PEM, time or test-certificate dependencies. Ten focused mdoc
+kernel tests and the complete 302-test verification suite pass. Publication and
+the immutable Marty UI pin remain pending. The forced
+loopback Git proxy is unavailable; bypassing it reaches GitHub but the local
+credential is invalid, while connected GitHub writes cannot be approved under
+the current session policy.
+
+The native mdoc adapter, complete credential evidence projection and MMF Cedar
+authorization path are enabled and covered by language-neutral fixtures. All 38
+Presentation Policy Rust tests pass, including executable fail-closed startup,
+mdoc lifecycle, replay-boundary, Cedar denial, catalog and configured PostgreSQL
+contracts. Strict Clippy, formatting, the ownership scanner, focused cutover
+checks and base-plus-beta Compose rendering pass locally. The consolidated
+`presentation-policy-migration-history.json` assigns all nine retired Alembic
+revisions to the native idempotent schema/upgrade and catalog owners; CI already
+packages and runs the PostgreSQL migration/repository executable independently,
+so a second migration binary would duplicate the same acceptance boundary.
+
+Remaining work is publication and configured acceptance rather than source
+porting: publish the shared mdoc and MMF security commits, replace the temporary
+local core path and mixed Marty 0.1.57/0.1.59 graph with one immutable 0.1.59
+revision, then run the locked image, PostgreSQL and external-provider CI gates.
+No beta deployment has occurred; the only permitted update remains the single
+aggregate wave-three beta deployment after every service slice lands.
+
+### Applicant port status
+
+Applicant has completed its local source cutover on the dedicated
+`marty-ui-rust-applicant-cutover-wave3` worktree and
+`agent/marty-ui-rust-applicant-cutover-wave3` branch. Rust is now the only
+tracked runtime, domain, persistence, migration and protocol-orchestration
+implementation. The cutover deletes all ten tracked Python files under
+`services/applicant`, removing 5,652 lines immediately after the
+implementation-neutral behavior, native executable, packaging and ownership
+gates passed. There is no Python runtime or migration fallback.
+
+The language-neutral `applicant-service-behavior.json` contract freezes all 32
+canonical self-service and organization-review HTTP operations, the shared
+Applicant/Application lifecycle, claim and evidence states, upload limits,
+reviewer-lock TTL and all eleven intended capabilities. A second neutral vector
+freezes the lossless MIP 0.2-to-0.3 JSON-store migration, including metadata
+partitioning, template resolution, idempotency and fail-before-mutation
+behavior. Both the retired Python oracle and the Rust crate executed these
+contracts before deletion.
+
+The `marty-applicant` crate owns one DRY lifecycle state machine, strict
+template-derived field validation, tenant-bound profiles and applications,
+biometric metadata, bounded and digest-verified evidence, reviewer locks,
+vetting checks, request-information/review/withdrawal decisions and
+retry-stable Flow issuance. Issuance reservations and exact claim snapshots are
+persisted before external effects; a generated offer remains `OFFERED` until
+the issuance transaction reports `issued`; expired offers and missing active
+flows produce stable fail-closed claim blockers. Reads reconcile transaction
+state through the Issuance service without reimplementing the canonical Rust
+issuance transition kernel.
+
+Production adapters preserve every intended service integration. Application
+Templates and issued-credential inventory remain Issuance-owned; Flow offer
+creation uses the purpose-bound `ApplicationEventAuthenticator` from
+`mmf-security`; tenant-scoped domain events publish to the central Rust event
+stream and governed Notification ingestion; and approval uses the single MMF
+Cedar policy in `mmf-security` rather than an Applicant-local evaluator. The
+shared image and entrypoint dispatch directly to `marty-applicant`, the
+dedicated CI image owns its binary/health gate, startup runs the native
+one-way store migration, and health diagnostics report the required Rust
+backend and crate version.
+
+The post-cutover local gate passes all 21 Applicant Rust behavior tests,
+formatting, strict Clippy, the locked native binary build, 13 focused packaging,
+ownership and runner regressions, the ownership scanner and base Compose
+rendering. Four ownership-guard self-tests that require pytest temporary
+directories remain host-blocked by the existing Windows/OneDrive temporary
+ACL; the scanner they exercise passes directly. The local Docker daemon and a
+configured live service stack are unavailable, so the dedicated image build,
+health smoke and cross-service acceptance remain CI landing gates. No beta
+deployment has occurred; Applicant will ship only in the single aggregate
+wave-three beta update after every remaining service slice lands.
+
+### Device Registration port status
+
+Device Registration has completed its implementation and pre-deletion gates
+on the dedicated `marty-ui-rust-device-registration-cutover-wave3` worktree and
+`agent/marty-ui-rust-device-registration-cutover-wave3` branch. The
+`marty-device-registration` crate is the single service implementation: Axum
+owns all six released HTTP routes and stable response models; SQLx owns the
+registration, immutable key-history and transition repositories; Redis owns
+atomic one-time challenge allocation and compare-and-delete consumption; and
+tonic preserves fail-closed active organization-membership checks.
+
+The service does not duplicate cryptography. Canonical PKCS#1 RSA parsing, RFC
+7638 thumbprints, PS256 proof verification, challenge message construction and
+expiry/binding decisions, plus current/retiring key eligibility remain in
+`marty-verification::device_auth`. The service crate adds only durable
+allocation and lifecycle concerns. Key rotation is an exact PostgreSQL
+compare-and-swap that moves the old key to bounded `RETIRING`, creates exactly
+one next `CURRENT` version, updates the current-key projection and records the
+transition in one transaction. Deletion is an idempotent, audit-preserving
+deactivation that revokes current and retiring keys; re-registration receives
+a new identity and history.
+
+`contracts/device-registration-service-behavior.json` freezes the complete
+route, challenge, failure, lifecycle and deployment contract independently of
+either language. Rust also executes the shared `device_auth.json` challenge
+golden vectors. The native migration uses an advisory lock, creates the same
+schema constraints and partial indexes, rejects incomplete legacy key
+projections, losslessly adopts complete legacy projections as version one and
+never exposes a downgrade that could discard key history. The shared Python
+migration runner no longer imports or owns this schema; native startup applies
+and verifies it before binding the service listener.
+
+The pre-deletion evidence is 27 passing Python-oracle tests (two configured
+PostgreSQL/Redis tests skipped), nine Rust language-neutral/domain/HTTP/
+migration tests, formatting, strict all-target Clippy, a locked native binary
+build, Compose rendering and the dedicated non-Python image/CI target. The
+remaining local limitation is the unavailable Docker daemon and PostgreSQL
+test URL, so live image health, migration races and Redis replica acceptance
+remain configured CI gates. After the ownership and packaging checks pass, all
+21 tracked files under `services/device_registration` (3,220 lines) are deleted
+in this same cutover; no Python fallback remains. No beta deployment occurs at
+this stage. Device Registration joins the one aggregate wave-three beta update
+after Verification, Deployment Profile and Compliance Profile have also
+landed; production remains unchanged.
+
+### Verification port status
+
+Verification has completed its native implementation, behavioral gates and
+same-slice Python deletion on the dedicated
+`marty-ui-rust-verification-cutover-wave3` worktree and
+`agent/marty-ui-rust-verification-cutover-wave3` branch. The
+`marty-verification-service` crate is the only standalone Verification service
+implementation. Axum owns all eight released HTTP operations, tonic preserves
+the seven-operation legacy gRPC contract for development/internal callers, and
+one shared application service owns both transports. Deployed inbound gRPC
+remains fail closed because the released protobuf has no authenticated tenant
+principal and has no production caller; beta and production configuration
+reject enabling that ingress.
+
+The port deliberately does not create another protocol implementation.
+Presentation-policy and credential-template visibility, active-state and
+tenant checks are resolved once through the public `marty-flow` presentation
+resolver. OID4VP/DCQL request artifacts come from the canonical Flow and
+`marty-core` implementation, while presentation evaluation remains in the
+native Presentation Policy service. The standalone crate owns only session
+orchestration: API-key and membership authorization through `mmf-security`,
+Redis-backed storage, shared Redis time, atomic digest claims, stale-lease
+recovery, fenced terminal commits, pagination and compatibility projections.
+SIOPv2 `id_token` sessions preserve the intended no-policy `scope=openid`
+path rather than manufacturing DCQL.
+
+`contracts/verification-service-behavior.json` is the language-neutral
+contract for routes, transport parity, stable protocol fields, status and
+failure mappings, submission outcomes, public-wallet boundaries, fail-closed
+dependencies and terminal-data minimization. Raw presentation tokens,
+disclosed values, inspection payloads and callback destinations are never
+retained in terminal records; only bounded decision evidence and digests
+remain. Optional inspection is still supported through an explicit configured
+gRPC method and remains non-fatal, without exposing its raw payload.
+
+Before deletion, the Python oracle passed 38 tests with its two live-Redis
+acceptance cases skipped because no local Redis service was configured. After
+deletion, 14 Rust configuration, contract, state-machine, HTTP and gRPC tests,
+the two shared Flow presentation-request tests, formatting, strict all-target
+Clippy, a locked native binary build, 20 focused packaging/regression tests,
+the ownership scanner and base/beta Compose rendering pass locally. All nine
+tracked Python files under `services/verification` were then removed, deleting
+3,529 lines with no fallback. The four ownership-guard self-tests that require
+pytest temporary directories remain blocked by the known Windows/OneDrive ACL;
+the scanner they exercise passes directly. Docker image execution and live
+Redis replica behavior remain configured CI gates because the local Docker
+daemon and service stack are unavailable. No beta deployment has occurred;
+Verification joins the one aggregate wave-three beta update after Compliance
+Profile lands, and production remains unchanged.
+
+### Deployment-profile port status
+
+Deployment Profile has completed its native implementation, behavioral gates
+and same-slice Python deletion on the dedicated
+`marty-ui-rust-deployment-profile-cutover-wave3` worktree and
+`agent/marty-ui-rust-deployment-profile-cutover-wave3` branch. The new
+`marty-deployment-profile` crate is the single implementation for all 14
+released profile and lane operations. It preserves profile lifecycle,
+environment and site bindings, callbacks, API-key/OAuth2/mTLS/JWT settings,
+rate limits, all general and Canvas feature flags, complete branding and QR
+configuration, trust/policy/template/default bindings, network and key-access
+modes, environment and update policy, offline TTL, operator biometrics, audit
+settings, enabled flows, one-time API-key disclosure and lane/device behavior.
+
+The port closes three latent Python feature defects without changing the
+intended API: callback/auth/rate/branding updates are now durably persisted,
+all accepted QR and mTLS fields survive create/update storage, and lane
+deletion checks the actual `device_ids` collection. Device assignment is
+idempotent and unique across a profile under a PostgreSQL advisory lock and
+row locks, eliminating the prior read-then-write race. Profile responses keep
+private runtime configuration and complete API keys out of the public
+projection.
+
+`contracts/deployment-profile-service-behavior.json` freezes the transport,
+enum, configuration and failure invariants independently of Python or Rust.
+The same crate owns the Gateway canonical request/dependency/response contract,
+so the 553-line duplicate Gateway implementation has been deleted. Generic
+lifecycle, health/readiness, bounded gRPC transport and exact active tenant
+membership authorization come from MMF crates rather than service-local
+copies. Deployed startup requires PostgreSQL, a service token and workload
+mutual TLS and has no Python fallback.
+
+Rust now owns additive install/upgrade migration, final-schema verification,
+legacy biometric-column adoption, migration history and the current Marty
+Open Badge login seed under one advisory lock. The shared Python migration
+runner no longer imports or creates this schema. Before deletion, the Python
+oracle passed all nine tests. After deletion, 12 Rust contract/config/domain/
+HTTP/migration tests, all 78 Gateway tests, formatting, strict all-target
+Clippy, a locked binary build, 70 focused packaging/migration/Kubernetes tests,
+the ownership scanner and base/beta/self-host Compose rendering pass locally.
+All 18 tracked files under `services/deployment_profile` were removed, deleting
+3,010 lines; the separate 553-line Rust Gateway contract duplicate was also
+removed, and an ownership guard prevents Python reintroduction.
+
+The dedicated native image and shared compatibility image both dispatch the
+Rust binary. CI, beta, self-host and Kubernetes manifests include its workload
+identity and native health path. The local Docker daemon and PostgreSQL URL are
+unavailable, so built-container health and live migration concurrency remain
+configured CI gates. No beta deployment has occurred. Deployment Profile joins
+the one aggregate wave-three beta update after Compliance Profile lands, and
+production remains unchanged.
+
+### Compliance-profile port status
+
+Compliance Profile has completed its native implementation, behavioral gates
+and same-slice Python deletion on the dedicated
+`marty-ui-rust-compliance-profile-cutover-wave3` worktree and
+`agent/marty-ui-rust-compliance-profile-cutover-wave3` branch. The new
+`marty-compliance-profile` crate is the single implementation for all eight
+released HTTP operations. It preserves DRAFT, ACTIVE, SUSPENDED and DEPRECATED
+status semantics; every credential format and issuance protocol; issuer
+artifact and trust-profile constraints; API-surface metadata; discovery;
+framework references; retention, consent and audit policy; data minimization;
+jurisdiction and residency constraints; age verification; lifecycle changes;
+pagination; and the four OID4VC, ISO 18013-5, Open Badges 3.0 and ICAO VDS-NC
+system profiles.
+
+The port reuses the canonical `CredentialFormat` parser from
+`marty-credential-template` rather than maintaining another format map. Generic
+lifecycle/readiness, bounded gRPC transport, service identity and exact tenant
+permission checks come from MMF crates. Seeded system profiles are now
+migration-owned and immutable: public discovery remains anonymous and returns
+only active discoverable profiles, while organization profiles require the
+exact action permission. This closes the Python path that allowed API callers
+to create or mutate system profiles through broad role aliases. The parity
+audit also caught and fixed an initial Rust seed coupling so ISO 18013-5
+correctly requires DID material without incorrectly requiring JWK material.
+
+`contracts/compliance-profile-service-behavior.json` freezes all routes, enum
+families, seven policy sections, system catalog and fail-closed invariants
+independently of either implementation language. The public response remains
+protocol-scoped and does not expose internal retention, consent, audit,
+minimization, jurisdiction, age or framework policy, while PostgreSQL stores
+the complete profile as a durable JSONB policy aggregate under indexed tenant,
+status and discovery projections. Native startup owns additive schema history,
+scope constraints, indexes and idempotent system seeds under an advisory lock;
+there is no process-local production repository or Python fallback.
+
+Before deletion, all five Python behavior-oracle tests passed. After deletion,
+11 Rust contract/config/domain/HTTP/migration tests, formatting, strict
+all-target Clippy, a locked native binary build, 62 focused packaging,
+ownership, Kubernetes and workload-identity tests, the direct ownership
+scanner, JSON and PowerShell syntax validation, and base/beta/self-host Compose
+rendering pass locally. The four ownership-guard self-tests that manufacture
+temporary repositories remain blocked by the known Windows/OneDrive temporary
+directory ACL; the real scanner they exercise passes directly and those tests
+remain configured in CI. Both tracked Python files under
+`services/compliance_profile` were removed, deleting 1,194 lines, and an
+ownership guard prevents reintroduction.
+
+The dedicated non-Python image, CI build target, beta and self-host Compose
+profiles, Kubernetes manifest and deployment helpers now provision the native
+binary with a service-scoped client certificate. The local Docker daemon and
+PostgreSQL URL remain unavailable, so executable container health and live
+migration concurrency are configured CI gates. No beta deployment has
+occurred. Compliance Profile completes the ordered wave-three service ports;
+publication/pinning, aggregate CI and one aggregate beta-only deployment and
+soak remain. Production remains unchanged.
+
+### Aggregate landing status
+
+The completed service stack is integrated on
+`agent/marty-ui-rust-wave3-aggregate` with current `main` merged cleanly. All 62
+focused post-cutover packaging, Kubernetes, workload-identity and stack
+contract tests pass, and the Rust ownership scanner reports no duplicate
+Python service implementation.
+
+The canonical dependencies are now published and merged: MMF PR #89 landed at
+`1c6a9d180fec3670b435d36fda5170a669405ab2`, and `marty-core` PR #247 landed at
+`4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d`. The aggregate Cargo workspace is
+pinned to those immutable revisions; no service depends on a migration
+worktree path. Both repositories passed their protected CI and merge-queue
+gates, and normal review protection was restored immediately after merge.
+
+The full aggregate Rust workspace passes locked all-target tests, strict
+Clippy, formatting, and immutable-revision compilation across every shared and
+service crate. Remaining work is to land the aggregate UI PR through protected
+CI, create one coordinated commit-pinned release snapshot, perform exactly one
+beta-only deployment, and record the behavioral acceptance soak. No wave-three
+beta deployment has occurred yet, and production remains unchanged.
+
+### Trust-profile port status
+
+Trust Profile has completed its local native cutover on the dedicated
+`marty-ui-rust-trust-profile-wave3` worktree and
+`agent/marty-ui-rust-trust-profile-wave3` branch, stacked on the complete
+Presentation Policy state. Rust now owns the service runtime, application,
+domain, PostgreSQL repository, additive schema migration, system catalog,
+control-plane authorization, all HTTP adapters, internal decision projection,
+registry transport, scheduled refresh and lifecycle diagnostics.
+
+`trust-profile-service-behavior.json` is now the implementation-neutral oracle.
+It freezes all 32 public and internal HTTP operations, twelve enum families,
+three system frameworks, eight durable tables, the complete ten-revision chain,
+registry synchronization bounds and atomicity, destination/TLS/redirect policy,
+80%-of-interval scheduled refresh, per-profile scheduler failure isolation,
+decision-time certificate revalidation, tenant permissions, internal service
+authentication, issuer uniqueness, cascade behavior and custody-metadata
+scrubbing. Rust tests execute the oracle directly; no Python behavior oracle or
+native wheel is required.
+
+The `marty-trust-profile` crate owns that domain and surface inventory. It
+does not copy trust-registry synchronization: protocol constants, catalog,
+URL/destination policy, import decisions, feed validation, sequence handling and
+certificate-state revalidation remain in the existing
+`marty_verification::trust_sync` kernel. Generic guarded outbound HTTP, DNS/IP
+classification, redirect suppression, body bounds and operator CA handling live
+once in `mmf-platform`. The parity audit found and closed two pre-deletion gaps:
+scheduled registry refresh and legacy-compatible fail-closed 503 decisions for
+unsynchronized, stale, malformed or unsupported registry state.
+
+Commits `8c2282a9` and `cbb35827` add the scheduler/decision parity and native
+packaging. The shared service image, dedicated CI image, development, beta,
+self-host and Kubernetes manifests now select the Rust binary and supply its
+fail-closed configuration. CI packages and executes the real PostgreSQL
+migration contract. The full Rust suite, strict Clippy, 16 cutover/migration
+tests, 90 stack/Compose/release tests, nine entrypoint tests and rendered base
+and beta Compose models pass locally.
+
+The superseded `services/trust_profile` runtime, adapter, native bridge,
+scheduler, implementation-specific tests and all ten Alembic revisions have
+been deleted immediately after those checks: 10,241 tracked lines were removed.
+The Python migration runner no longer claims the schema, and anti-reintroduction
+tests require the Rust runtime and migration owner. Remaining external gates are
+publication and immutable pinning of the clean MMF branch, the configured CI
+PostgreSQL execution, and a built-container health check; Docker is unavailable
+on this workstation. No beta deployment has occurred, and production remains
+unchanged. These gates join the aggregate wave-three landing before the single
+permitted beta deployment and acceptance soak.
+
+The frozen contract contains 64 explicitly gateway-owned declarations: 18
+well-known discovery routes, 14 internal signing-key compatibility routes,
+9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
+VC-API routes, 4 health/readiness routes, 5 organization composition routes,
+4 retired Canvas state routes and the event-stream bridge. Rust now owns VC-API
+JWT/JOSE-envelope/Data-Integrity representation adaptation, inline
+OID4VCI offer parsing, issuer extraction, evaluation request construction, and
+verification-result mapping. Both Python and Rust execute
+`contracts/vc-api-adapter-behavior.json`; the complete existing Python VC-API
+suite remains green. All three VC-API handlers are executable through the Axum
+runtime. Verification delegates cryptographic decisions to the canonical
+presentation-policy service. Issuance delegates transaction creation, token
+redemption, nonce issuance, and credential production to the canonical
+issuance service; its holder proof comes directly from the pinned
+`marty-oid4vci` crate, and the adapter fails closed unless exactly one native
+`ldp_vc` Data Integrity credential is returned for the requested issuer DID.
+The superseded Python VC-API module was deleted with the Gateway runtime after
+the executable, packaging and language-neutral behavioral gates passed.
+
+Rust also owns the exact Marty and Canvas credential badge metadata, criteria,
+well-known VCT aliases, and SVG assets. Shared fixtures compare complete JSON
+bodies and byte-level asset digests in Python and Rust. Gateway-local health,
+OpenID, MIP and release documents now execute in Axum. Issuance-backed root,
+organization-scoped, insertion-style, appended-style, walt.id,
+credential-manager, Apple Wallet, JWKS, OAuth and generic credential-type
+discovery aliases are planned and normalized in Rust while the issuance
+service remains the canonical metadata source.
+
+Both public `did:web` resolution routes now execute in Axum and delegate slug
+lookup and DID document persistence to the existing Rust signing-key service.
+The gateway adapter preserves public-domain port encoding, exact scoped-record
+integrity, safe legacy-document retargeting, empty-document compatibility,
+`application/did+json`, five-minute caching and fail-closed registry errors.
+`contracts/gateway-did-web-behavior.json` runs against both languages.
+
+The 14 service-to-service signing-key compatibility operations are frozen in
+`contracts/gateway-internal-signing-behavior.json`. Their dedicated API key is
+checked independently in constant time and is replaced with the configured
+gateway-to-service credential before proxying. List, get and delete
+issuer-profile operations already execute against the canonical Rust profile
+store; delete retains the legacy response envelope. Flow-key wrapping and
+unwrapping now execute in the Rust signing service through one bounded OpenBao
+Transit provider. The encrypted envelope is bound to the organization, flow,
+schema and OID4VP response-decryption purpose; malformed key material,
+provider failures and binding mismatches fail closed. The gateway replaces any
+client-supplied organization field with its authenticated service scope before
+forwarding. Issuer-context selection also executes in the Rust signing
+service: it resolves by DID or the explicit `org_managed` default mode, requires
+exactly one active profile, validates the profile/service/registry binding,
+preserves profile-level X.509 material and rejects the removed private profile
+selector. Organization-scoped issuer-DID resolution and both profile identity
+projections now also execute in Rust. They select exactly one compatible active
+profile, bind it to the registered service and DID assertion method, strip
+private JWK parameters, preserve public certificate material without exposing
+provider credentials, reject cross-tenant or ambiguous records, and retain the
+legacy profile/public response shapes. Python and Rust execute the same
+`contracts/gateway-issuer-identity-behavior.json` fixture, while Axum black-box
+tests cover all three gateway adapters. All 14 operations now execute in Rust:
+direct-service and DID-mediated signing, profile creation/update, and
+certificate attachment joined the previously completed read, delete,
+envelope, context and identity operations. Signing delegates to the canonical
+KMS provider, profile writes reuse the canonical profile/document kernels,
+managed OpenBao keys retain create-and-retry behavior, and certificate chains
+are persisted and re-resolved without exposing custody configuration.
+
+#### Gateway completion slices
+
+The remaining gateway work proceeds in descending removable Python size and
+dependency order. Each slice first records behavioral HTTP/provider fixtures,
+runs them against Python and Rust, and deletes the superseded Python behavior
+as soon as the full gate passes.
+
+| Order | Slice | Required parity before deletion |
+|---|---|---|
+| 1 | Proxy trust-boundary policies | Complete: issuance/internal service credentials, trusted identity headers, special ownership/path rewrites, trusted path/query organization projection, request/response bounds, retries and public protocol exceptions pass |
+| 2 | Public DTO and privacy adapters | Complete: the route-by-route audit covers organization, issuance creation/lifecycle, credential templates, trust/issuer/registry sync, presentation policies, OID4VP flow start, flow definitions/instances/results, deployment profiles/lanes, VC-API and all corresponding privacy projections |
+| 3 | Cross-service composition | Complete: organization dashboard counts, runtime readiness, integration metadata, lifecycle/retention aggregation, dependency preflight, manual Hosted Pilot purge and the paginated scheduled sweep execute in Rust |
+| 4 | Streaming transport | Complete: tenant-filtered event-stream gRPC subscription is exposed as bounded SSE with exact frames, disconnect cancellation, backend-failure handling, ETag bypass and cross-tenant rejection |
+| 5 | Cutover and deletion | Complete locally: final 688-test Python baseline, 80 Rust tests, three executable tests, strict Clippy, ownership/stack/Compose gates, Python deletion and anti-reintroduction checks pass; remote Redis/container CI and immutable MMF publication remain aggregate landing gates |
+
+The gateway branch currently uses temporary local paths for the unpublished
+MMF platform/security commits through local commit `498fb39`. It must be
+repinned to the landed MMF commit
+before publication; no branch with local worktree dependencies may merge.
+
+Distributed rate-limit and idempotency state now uses the canonical MMF Redis
+adapters. Both adapters are atomic, expose health checks, preserve all four MMF
+rate-limit strategies, and use owner-token idempotency leases. Gateway provider
+composition permits canonical process-local adapters only in explicit
+development mode; production startup and any configured Redis failure refuse
+local fallback. The composed release executable is built locally and its
+process-level tests prove both missing and unavailable Redis terminate startup.
+CI now provisions a pinned disposable Redis instance and explicitly exercises
+all four strategies plus idempotency lease ownership, in-flight repetition,
+payload conflict, completion and exact replay through the production provider
+composition.
+
+The CI-only native service image has a dedicated non-Python gateway target and
+container health smoke test. The ownership manifest records the gateway as
+`native-active`, and its guard rejects every Python source reintroduced below
+`services/gateway`. The deletion removed 37,048 tracked lines across the
+Python runtime, implementation-specific tests and obsolete Python AST route
+extractor. The remaining aggregate landing gates are publication of MMF commit
+`498fb39` at an immutable remote revision and execution of the Redis and
+container gates in CI. The public-protocol gate no longer imports the Python gateway: it freezes
+all 40 exact DTO field/required sets, compares them with the pinned protocol,
+rejects recursively exposed private state, and requires every gateway behavior
+vector to execute in Rust. The superseded 1,306-line Python-runtime checker was
+deleted. Docker cannot be executed in the current Windows
+sandbox, and GitHub publication is unavailable because the configured token is
+invalid and the configured local proxy cannot reach GitHub; neither condition
+permits a silent local substitute.
+
+### Delivery and deletion rules
+
+1. Capture language-neutral HTTP, gRPC, event, storage, configuration,
+   observability and provider fixtures before implementation.
+2. Implement shared behavior in MMF crates first and domain behavior in the
+   owning Rust service.
+3. Run the same fixtures against Python and Rust until parity, including
+   malformed input, unavailable dependencies, concurrency, timeout, retry and
+   disconnect cases.
+4. Switch packaging and deployment dispatch to Rust, verify startup and public
+   behavior, then delete the Python service and implementation-specific tests
+   in the same slice.
+5. Guard against reintroduction of Python services and duplicated MMF behavior.
+6. Land and test all wave-three slices without repeatedly updating beta. After
+   every slice and cross-repository release has landed, perform one aggregate
+   beta deployment and soak. Production remains unchanged.
 
 ## Implementation status (2026-08-15)
 

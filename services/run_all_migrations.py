@@ -49,40 +49,8 @@ from marty_common.system_ids import (  # noqa: E402 - services path is bootstrap
 # Service configurations
 SERVICES = [
     {
-        "name": "organization",
-        "module": "organization.infrastructure.models",
-    },
-    {
-        "name": "auth",
-        "module": "auth.infrastructure.models",
-    },
-    {
-        "name": "credential_template",
-        "module": "credential_template.infrastructure.models",
-    },
-    {
-        "name": "trust_profile",
-        "module": "trust_profile.infrastructure.models",
-    },
-    {
         "name": "issuance",
         "module": "issuance.infrastructure.models",
-    },
-    {
-        "name": "presentation_policy",
-        "module": "presentation_policy.infrastructure.models",
-    },
-    {
-        "name": "deployment_profile",
-        "module": "deployment_profile.infrastructure.models",
-    },
-    {
-        "name": "flow",
-        "module": "flow.infrastructure.models",
-    },
-    {
-        "name": "device_registration",
-        "module": "device_registration.infrastructure.models",
     },
 ]
 
@@ -1079,11 +1047,8 @@ def ensure_schemas(database_url: str) -> None:
         "organization_service",
         "auth_service",
         "credential_template_service",
-        "trust_profile_service",
         "issuance_service",
         "presentation_policy_service",
-        "deployment_profile_service",
-        "flow_service",
         "notification_service",
         "device_registration_service",
         "revocation_profile_service",

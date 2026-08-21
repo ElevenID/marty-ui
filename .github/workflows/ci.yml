@@ -283,8 +283,32 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    services:
+      postgres:
+        image: postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c
+        env:
+          POSTGRES_DB: marty_atomic_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d marty_atomic_test"
+          --health-interval 1s
+          --health-timeout 2s
+          --health-retries 30
+      redis:
+        image: redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 20
     env:
       CARGO_INCREMENTAL: 0
+      FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@localhost:5432/marty_atomic_test
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: ${{ (github.event_name == 'merge_group' || github.actor == 'dependabot[bot]') && 'READ_ONLY' || 'READ_WRITE' }}
@@ -358,12 +382,103 @@ jobs:
             exit 1
           fi
           issuer_profile_relative="${issuer_profile_executable#"$PWD/"}"
+          credential_template_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "postgres_integration")
+            | select(.package_id | contains("marty-credential-template"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$credential_template_executable" || ! -x "$credential_template_executable" ]]; then
+            echo "Unable to locate the compiled Credential Template PostgreSQL contract executable." >&2
+            exit 1
+          fi
+          credential_template_relative="${credential_template_executable#"$PWD/"}"
+          credential_template_migration_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "migration_contract")
+            | select(.package_id | contains("marty-credential-template"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$credential_template_migration_executable" || ! -x "$credential_template_migration_executable" ]]; then
+            echo "Unable to locate the compiled Credential Template migration contract executable." >&2
+            exit 1
+          fi
+          cp "$credential_template_migration_executable" target/debug/credential-template-migration-contract
+          presentation_policy_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "postgres_integration")
+            | select(.package_id | contains("marty-presentation-policy"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$presentation_policy_executable" || ! -x "$presentation_policy_executable" ]]; then
+            echo "Unable to locate the compiled Presentation Policy PostgreSQL contract executable." >&2
+            exit 1
+          fi
+          presentation_policy_relative="${presentation_policy_executable#"$PWD/"}"
+          trust_profile_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "migration_contract")
+            | select(.package_id | contains("marty-trust-profile"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$trust_profile_executable" || ! -x "$trust_profile_executable" ]]; then
+            echo "Unable to locate the compiled Trust Profile PostgreSQL contract executable." >&2
+            exit 1
+          fi
+          trust_profile_relative="${trust_profile_executable#"$PWD/"}"
+          organization_migration_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "migration_contract")
+            | select(.package_id | contains("marty-organization"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$organization_migration_executable" || ! -x "$organization_migration_executable" ]]; then
+            echo "Unable to locate the compiled Organization migration contract executable." >&2
+            exit 1
+          fi
+          organization_application_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "application_postgres_integration")
+            | select(.package_id | contains("marty-organization"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$organization_application_executable" || ! -x "$organization_application_executable" ]]; then
+            echo "Unable to locate the compiled Organization application PostgreSQL contract executable." >&2
+            exit 1
+          fi
+          organization_repository_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "postgres_integration")
+            | select(.package_id | contains("marty-organization"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$organization_repository_executable" || ! -x "$organization_repository_executable" ]]; then
+            echo "Unable to locate the compiled Organization repository PostgreSQL contract executable." >&2
+            exit 1
+          fi
+          cp "$organization_migration_executable" target/debug/organization-migration-contract
+          cp "$organization_application_executable" target/debug/organization-application-postgres-contract
+          cp "$organization_repository_executable" target/debug/organization-repository-postgres-contract
           test -x target/debug/marty-revocation-profile
           tar -cf "$RUNNER_TEMP/rust-db-test-bundle.tar" \
             "$contract_relative" \
             "$registry_relative" \
             "$document_relative" \
             "$issuer_profile_relative" \
+            "$credential_template_relative" \
+            target/debug/credential-template-migration-contract \
+            "$presentation_policy_relative" \
+            "$trust_profile_relative" \
+            target/debug/organization-migration-contract \
+            target/debug/organization-application-postgres-contract \
+            target/debug/organization-repository-postgres-contract \
             target/debug/marty-revocation-profile
       - name: Publish reusable database contract executables
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -375,6 +490,18 @@ jobs:
       - name: Test Rust service contracts
         working-directory: rust
         run: cargo test --locked --workspace
+      - name: Require native Flow PostgreSQL idempotency and callback contract
+        working-directory: rust
+        run: >-
+          cargo test --locked -p marty-flow --test postgres_integration
+          -- --test-threads=1
+      - name: Test gateway Redis-backed runtime
+        working-directory: rust
+        env:
+          MARTY_GATEWAY_TEST_REDIS_URL: redis://127.0.0.1:6379/15
+        run: >-
+          cargo test --locked -p marty-gateway --test redis_runtime
+          -- --ignored --exact production_gateway_redis_state_is_atomic_and_replay_safe
       - name: Report compiler cache effectiveness
         if: always()
         run: sccache --show-stats
@@ -414,6 +541,10 @@ jobs:
       MARTY_TEST_REDIS_URL: redis://127.0.0.1:6379/0
       MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
       MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME: marty_revocation_test
+      CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
+      PRESENTATION_POLICY_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
+      ORGANIZATION_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
+      TEST_POSTGRES_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -455,6 +586,28 @@ jobs:
             exit 1
           fi
           "${issuer_profile_contracts[0]}" --ignored --test-threads=1
+          mapfile -t service_postgres_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'postgres_integration-*' -perm -u+x)
+          if (( ${#service_postgres_contracts[@]} != 2 )); then
+            printf 'Expected two service PostgreSQL contract executables, found %s.\n' "${#service_postgres_contracts[@]}" >&2
+            exit 1
+          fi
+          for contract in "${service_postgres_contracts[@]}"; do
+            "$contract" --test-threads=1
+          done
+          test -x target/debug/credential-template-migration-contract
+          target/debug/credential-template-migration-contract --test-threads=1
+          mapfile -t trust_profile_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'migration_contract-*' -perm -u+x)
+          if (( ${#trust_profile_contracts[@]} != 1 )); then
+            printf 'Expected one Trust Profile PostgreSQL contract executable, found %s.\n' "${#trust_profile_contracts[@]}" >&2
+            exit 1
+          fi
+          "${trust_profile_contracts[0]}" --test-threads=1
+          test -x target/debug/organization-migration-contract
+          test -x target/debug/organization-application-postgres-contract
+          test -x target/debug/organization-repository-postgres-contract
+          target/debug/organization-migration-contract --test-threads=1
+          target/debug/organization-application-postgres-contract --test-threads=1
+          target/debug/organization-repository-postgres-contract --test-threads=1
 
   rust-lint-policy:
     name: Rust Lint and Packaging
@@ -504,10 +657,32 @@ jobs:
           MARTY_MIGRATIONS_IMAGE: example.invalid/migrations@sha256:7777777777777777777777777777777777777777777777777777777777777777
           MARTY_UI_IMAGE: example.invalid/ui@sha256:8888888888888888888888888888888888888888888888888888888888888888
           GRPC_SERVICE_TOKEN: ci-only-token-with-at-least-32-characters
+          ISSUANCE_API_KEY: ci-only-issuance-api-key-with-32-characters
+          SIGNING_KEYS_INTERNAL_API_KEY: ci-only-signing-key-api-key-32-characters
+          FLOW_WEBHOOK_SECRET: ci-only-flow-webhook-secret-32-characters
+          FLOW_APPLICATION_EVENT_HMAC_KEY: ci-only-flow-application-event-key-32-chars
           REDIS_PASSWORD: ci-only-redis-password
           MARTY_ISSUER_DID: did:web:beta.example.test
           MARTY_ORG_ID: 00000000-0000-0000-0000-000000000001
           PUBLIC_API_URL: https://beta.example.test
+          PUBLIC_DOMAIN: beta.example.test
+          MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE: /dev/null
+          PP_WORKLOAD_SERVER_CERT_FILE: /dev/null
+          PP_WORKLOAD_SERVER_KEY_FILE: /dev/null
+          FLOW_WORKLOAD_CLIENT_CERT_FILE: /dev/null
+          FLOW_WORKLOAD_CLIENT_KEY_FILE: /dev/null
+          FLOW_WORKLOAD_SERVER_CERT_FILE: /dev/null
+          FLOW_WORKLOAD_SERVER_KEY_FILE: /dev/null
+          AUTH_WORKLOAD_CLIENT_CERT_FILE: /dev/null
+          AUTH_WORKLOAD_CLIENT_KEY_FILE: /dev/null
+          APPLICANT_WORKLOAD_CLIENT_CERT_FILE: /dev/null
+          APPLICANT_WORKLOAD_CLIENT_KEY_FILE: /dev/null
+          VERIFICATION_WORKLOAD_CLIENT_CERT_FILE: /dev/null
+          VERIFICATION_WORKLOAD_CLIENT_KEY_FILE: /dev/null
+          DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE: /dev/null
+          DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE: /dev/null
+          COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE: /dev/null
+          COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE: /dev/null
         run: |
           set -euo pipefail
           rendered="$(docker compose \
@@ -526,6 +701,17 @@ jobs:
           grep -F 'ENVIRONMENT: beta' <<<"$rendered"
           grep -F 'RUST_LOG: info' <<<"$rendered"
           grep -F 'GRPC_SERVICE_TOKEN: ci-only-token-with-at-least-32-characters' <<<"$rendered"
+          rendered="$(docker compose \
+            --file docker-compose.base.yml \
+            --file docker-compose.beta.yml \
+            config flow auth applicant presentation-policy verification deployment-profile compliance-profile)"
+          grep -F 'ENVIRONMENT: beta' <<<"$rendered"
+          grep -F 'GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert' <<<"$rendered"
+          grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert' <<<"$rendered"
+          grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/applicant_workload_client_cert' <<<"$rendered"
+          grep -F 'GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert' <<<"$rendered"
+          grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/deployment_profile_workload_client_cert' <<<"$rendered"
+          grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/compliance_profile_workload_client_cert' <<<"$rendered"
           rendered="$(docker compose \
             --file docker-compose.base.yml \
             --file docker-compose.beta.yml \
@@ -570,6 +756,20 @@ jobs:
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
           cache-to: ${{ github.event_name == 'pull_request' && 'type=gha,mode=max,scope=marty-ui-rust-service-images' || '' }}
+      - name: Build gateway image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: gateway
+          load: true
+          push: false
+          tags: marty-gateway:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build revocation-profile image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
@@ -612,71 +812,291 @@ jobs:
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
-
-  flow-idempotency-contract:
-    name: Flow Idempotency PostgreSQL Contract
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    env:
-      FLOW_IDEMPOTENCY_SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
-      COMPOSE_PROJECT_NAME: flow-idempotency-${{ github.run_id }}-${{ github.run_attempt }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Build flow image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
-          path: marty-ui
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Validate disposable Flow idempotency topology
-        working-directory: marty-ui
-        run: docker compose --file docker-compose.flow-idempotency-contract.yml config --quiet
-
-      - name: Build Flow idempotency contract image
-        working-directory: marty-ui
-        run: |
-          mkdir -p tests/artifacts/flow-idempotency
-          chmod 0777 tests/artifacts/flow-idempotency
-          docker compose --file docker-compose.flow-idempotency-contract.yml build --pull flow-idempotency-contract
-
-      - name: Race Flow reservations and durable artifacts in PostgreSQL
-        working-directory: marty-ui
-        run: >-
-          docker compose --file docker-compose.flow-idempotency-contract.yml
-          up --force-recreate --abort-on-container-exit
-          --exit-code-from flow-idempotency-contract flow-idempotency-contract
-
-      - name: Require sanitized Flow idempotency evidence
-        working-directory: marty-ui
-        run: |
-          test "$(jq -r '.status' tests/artifacts/flow-idempotency/contract-result.json)" = passed
-          test "$(jq -r '.migration_revision' tests/artifacts/flow-idempotency/contract-result.json)" = 20260810_0100
-          test "$(jq -r '.production_repository_exercised' tests/artifacts/flow-idempotency/contract-result.json)" = true
-          test "$(jq -r '.instance_created_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
-          test "$(jq -r '.instance_recovered_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
-          test "$(jq -r '.same_instance' tests/artifacts/flow-idempotency/contract-result.json)" = true
-          test "$(jq -r '.event_receipt_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
-          test "$(jq -r '.same_durable_plan' tests/artifacts/flow-idempotency/contract-result.json)" = true
-          test "$(jq -r '.artifact_count' tests/artifacts/flow-idempotency/contract-result.json)" = 1
-          test "$(jq -r '.same_artifact' tests/artifacts/flow-idempotency/contract-result.json)" = true
-          test "$(jq -r '.cross_instance_rebind_rejected' tests/artifacts/flow-idempotency/contract-result.json)" = true
-          test "$(jq -r '.semantic_conflict_rolled_back' tests/artifacts/flow-idempotency/contract-result.json)" = true
-          test "$(jq -r '.changed_payload_rejected' tests/artifacts/flow-idempotency/contract-result.json)" = true
-          test "$(jq -r '.source_revision' tests/artifacts/flow-idempotency/contract-result.json)" = "$FLOW_IDEMPOTENCY_SOURCE_REVISION"
-
-      - name: Upload Flow idempotency evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: flow
+          load: true
+          push: false
+          tags: marty-flow:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Build organization image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
-          name: flow-idempotency-${{ github.run_id }}-${{ github.run_attempt }}
-          path: marty-ui/tests/artifacts/flow-idempotency/contract-result.json
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Remove disposable Flow idempotency stack
-        if: always()
-        working-directory: marty-ui
-        run: docker compose --file docker-compose.flow-idempotency-contract.yml down --volumes --remove-orphans
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: organization
+          load: true
+          push: false
+          tags: marty-organization:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Build credential-template image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: credential_template
+          load: true
+          push: false
+          tags: marty-credential-template:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Build presentation-policy image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: presentation_policy
+          load: true
+          push: false
+          tags: marty-presentation-policy:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Build trust-profile image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: trust_profile
+          load: true
+          push: false
+          tags: marty-trust-profile:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Build applicant image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: applicant
+          load: true
+          push: false
+          tags: marty-applicant:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Build device-registration image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: device_registration
+          load: true
+          push: false
+          tags: marty-device-registration:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Build verification image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: verification
+          load: true
+          push: false
+          tags: marty-verification-service:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Build deployment-profile image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: deployment_profile
+          load: true
+          push: false
+          tags: marty-deployment-profile:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Build compliance-profile image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: compliance_profile
+          load: true
+          push: false
+          tags: marty-compliance-profile:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Smoke-test gateway image
+        shell: bash
+        run: |
+          set -euo pipefail
+          container="$(docker run --detach \
+            --env ENVIRONMENT=test \
+            --env RATE_LIMIT_RPM=0 \
+            --publish 127.0.0.1::8000 \
+            marty-gateway:ci)"
+          trap 'docker rm --force "$container" >/dev/null 2>&1 || true' EXIT
+          port="$(docker inspect \
+            --format '{{(index (index .NetworkSettings.Ports "8000/tcp") 0).HostPort}}' \
+            "$container")"
+          for _ in {1..40}; do
+            if curl --fail --silent "http://127.0.0.1:${port}/health" \
+              | grep --fixed-strings --quiet '"service":"gateway"'; then
+              exit 0
+            fi
+            sleep 0.25
+          done
+          docker logs "$container"
+          exit 1
+      - name: Smoke-test organization image with PostgreSQL and Redis
+        shell: bash
+        run: |
+          set -euo pipefail
+          network="organization-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          postgres="organization-postgres-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          redis="organization-redis-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          organization="organization-service-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm --force "$organization" "$postgres" "$redis" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker network create "$network" >/dev/null
+          docker run --detach \
+            --name "$postgres" \
+            --network "$network" \
+            --network-alias organization-postgres \
+            --env POSTGRES_USER=marty \
+            --env POSTGRES_PASSWORD=marty-test \
+            --env POSTGRES_DB=marty \
+            postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f \
+            >/dev/null
+          docker run --detach \
+            --name "$redis" \
+            --network "$network" \
+            --network-alias organization-redis \
+            redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2 \
+            >/dev/null
+          for attempt in {1..60}; do
+            if docker exec "$postgres" pg_isready --username marty --dbname marty >/dev/null \
+              && docker exec "$redis" redis-cli ping | grep --fixed-strings --quiet PONG; then
+              break
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              docker logs "$postgres"
+              docker logs "$redis"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          docker run --detach \
+            --name "$organization" \
+            --network "$network" \
+            --env ENVIRONMENT=test \
+            --env DATABASE_URL=postgresql://marty:marty-test@organization-postgres/marty \
+            --env REDIS_URL=redis://organization-redis:6379 \
+            --env ES_GRPC_TARGET=event-stream:9015 \
+            --env ES_GRPC_TIMEOUT_SECONDS=1 \
+            --publish 127.0.0.1::8002 \
+            marty-organization:ci \
+            >/dev/null
+          port="$(docker inspect \
+            --format '{{(index (index .NetworkSettings.Ports "8002/tcp") 0).HostPort}}' \
+            "$organization")"
+          for attempt in {1..60}; do
+            if curl --fail --silent "http://127.0.0.1:${port}/health" \
+                | grep --extended-regexp --quiet '"status":"(healthy|degraded)"' \
+              && curl --fail --silent "http://127.0.0.1:${port}/version" \
+                | grep --fixed-strings --quiet '"service":"organization"'; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          docker logs "$organization"
+          exit 1
+      - name: Smoke-test credential-template image with PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          network="credential-template-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          postgres="credential-template-postgres-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          service="credential-template-service-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm --force "$service" "$postgres" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker network create "$network" >/dev/null
+          docker run --detach \
+            --name "$postgres" \
+            --network "$network" \
+            --network-alias credential-template-postgres \
+            --env POSTGRES_USER=marty \
+            --env POSTGRES_PASSWORD=marty-test \
+            --env POSTGRES_DB=marty \
+            postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f \
+            >/dev/null
+          for attempt in {1..60}; do
+            if docker exec "$postgres" pg_isready --username marty --dbname marty >/dev/null; then
+              break
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              docker logs "$postgres"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          docker run --detach \
+            --name "$service" \
+            --network "$network" \
+            --env ENVIRONMENT=test \
+            --env DATABASE_URL=postgresql://marty:marty-test@credential-template-postgres/marty \
+            --env PUBLIC_API_URL=https://issuer.example \
+            --env MARTY_MIGRATION_PROFILE=test \
+            --env CREDENTIAL_TEMPLATE_DEPENDENCY_TIMEOUT_SECONDS=1 \
+            --publish 127.0.0.1::8003 \
+            marty-credential-template:ci \
+            >/dev/null
+          port="$(docker inspect \
+            --format '{{(index (index .NetworkSettings.Ports "8003/tcp") 0).HostPort}}' \
+            "$service")"
+          for attempt in {1..60}; do
+            if curl --fail --silent "http://127.0.0.1:${port}/health" \
+                | grep --extended-regexp --quiet '"status":"(healthy|degraded)"' \
+              && curl --fail --silent "http://127.0.0.1:${port}/version" \
+                | grep --fixed-strings --quiet '"service":"credential-template"'; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          docker logs "$service"
+          exit 1
 
   public-protocol-contract:
     name: Public Protocol Contract
@@ -709,7 +1129,7 @@ jobs:
       - name: Install contract-check dependencies
         run: uv pip install --system -r requirements-services.txt jsonschema
       - name: Enforce public response contract
-        run: python scripts/check_public_protocol_contract.py --protocol-root marty-protocol
+        run: python scripts/check_gateway_public_protocol_contract.py --protocol-root marty-protocol
 
   test-release-contracts:
     name: Release Contract Tests
@@ -947,7 +1367,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [lint, fast-feedback, test-ui, test-services, test-rust-services, test-rust-db-contracts, rust-lint-policy, test-rust-service-images, flow-idempotency-contract, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
+    needs: [lint, fast-feedback, test-ui, test-services, test-rust-services, test-rust-db-contracts, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
     runs-on: ubuntu-latest
     permissions:
       actions: read

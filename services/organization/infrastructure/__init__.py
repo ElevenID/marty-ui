@@ -1,3 +1,0 @@
-"""
-Organization Service - Infrastructure Layer
-"""

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "service": "organization",
+  "runtime_owner": "rust/services/organization",
+  "migration_owner": "rust/services/organization/migrations/0001_organization_schema.sql",
+  "python_runtime_removed": "services/organization",
+  "surface_contract": "contracts/organization-service-surface.json",
+  "required_binary": "marty-organization",
+  "required_ci_target": "organization",
+  "python_runtime_fallback": false
+}

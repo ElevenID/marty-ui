@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "api_key_cases": [
+    {
+      "name": "organization_default_scopes",
+      "scope_type": "ORGANIZATION",
+      "deployment_profile_id": null,
+      "scopes": null,
+      "rate_limit": 120,
+      "expires_at": "2099-01-01T00:00:00Z",
+      "valid": true
+    },
+    {
+      "name": "deployment_profile_binding",
+      "scope_type": "DEPLOYMENT_PROFILE",
+      "deployment_profile_id": "70000000-0000-0000-0000-000000000001",
+      "scopes": ["credentials:read"],
+      "rate_limit": null,
+      "expires_at": null,
+      "valid": true
+    },
+    {
+      "name": "unknown_scope",
+      "scope_type": "ORGANIZATION",
+      "deployment_profile_id": null,
+      "scopes": ["credentials:destroy"],
+      "rate_limit": null,
+      "expires_at": null,
+      "valid": false
+    },
+    {
+      "name": "deployment_profile_requires_binding",
+      "scope_type": "DEPLOYMENT_PROFILE",
+      "deployment_profile_id": null,
+      "scopes": ["credentials:read"],
+      "rate_limit": null,
+      "expires_at": null,
+      "valid": false
+    },
+    {
+      "name": "organization_rejects_profile_binding",
+      "scope_type": "ORGANIZATION",
+      "deployment_profile_id": "70000000-0000-0000-0000-000000000001",
+      "scopes": ["credentials:read"],
+      "rate_limit": null,
+      "expires_at": null,
+      "valid": false
+    },
+    {
+      "name": "admin_scope_is_organization_only",
+      "scope_type": "DEPLOYMENT_PROFILE",
+      "deployment_profile_id": "70000000-0000-0000-0000-000000000001",
+      "scopes": ["admin:full"],
+      "rate_limit": null,
+      "expires_at": null,
+      "valid": false
+    },
+    {
+      "name": "rate_limit_must_be_positive",
+      "scope_type": "ORGANIZATION",
+      "deployment_profile_id": null,
+      "scopes": ["credentials:read"],
+      "rate_limit": 0,
+      "expires_at": null,
+      "valid": false
+    },
+    {
+      "name": "expiry_must_be_future",
+      "scope_type": "ORGANIZATION",
+      "deployment_profile_id": null,
+      "scopes": ["credentials:read"],
+      "rate_limit": null,
+      "expires_at": "2020-01-01T00:00:00Z",
+      "valid": false
+    }
+  ],
+  "preference_cases": [
+    {
+      "name": "omitted_active_org_is_preserved",
+      "last_view_mode": "applicant",
+      "last_active_org": {"operation": "omitted"},
+      "expected_view_mode": "applicant",
+      "expected_active_org_id": "11111111-1111-1111-1111-111111111111"
+    },
+    {
+      "name": "explicit_null_clears_active_org",
+      "last_view_mode": null,
+      "last_active_org": {"operation": "clear"},
+      "expected_view_mode": "org_admin",
+      "expected_active_org_id": null
+    },
+    {
+      "name": "explicit_value_replaces_active_org",
+      "last_view_mode": null,
+      "last_active_org": {
+        "operation": "set",
+        "organization_id": "22222222-2222-2222-2222-222222222222"
+      },
+      "expected_view_mode": "org_admin",
+      "expected_active_org_id": "22222222-2222-2222-2222-222222222222"
+    }
+  ]
+}

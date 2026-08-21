@@ -6,7 +6,6 @@ import asyncio
 import os
 import socket
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -231,26 +230,6 @@ class TestServiceAuthentication:
 
         assert getattr(rejected, cardinality) is not None
 
-    @pytest.mark.parametrize(
-        "service_source",
-        [
-            "credential_template/main.py",
-            "flow/main.py",
-            "verification/main.py",
-        ],
-    )
-    def test_service_source_does_not_bypass_authenticated_channel_factory(
-        self,
-        service_source,
-    ):
-        source = (Path(__file__).resolve().parents[2] / service_source).read_text(
-            encoding="utf-8"
-        )
-
-        assert "grpc.aio.insecure_channel" not in source
-        assert "grpc_aio.insecure_channel" not in source
-
-
 class TestWorkloadIdentityAuthentication:
     _METHOD = "/marty.test.v1.Verifier/Evaluate"
     _FLOW_IDENTITY = "spiffe://marty.internal/service/flow"
@@ -400,52 +379,6 @@ class TestWorkloadIdentityAuthentication:
             "The authenticated workload is not authorized for this RPC",
         )
         original.assert_not_called()
-
-    @pytest.mark.parametrize(
-        "service_source",
-        ["flow/main.py", "verification/main.py"],
-    )
-    def test_presentation_policy_channels_require_workload_identity(
-        self, service_source
-    ):
-        source = (Path(__file__).resolve().parents[2] / service_source).read_text(
-            encoding="utf-8"
-        )
-
-        assert "require_workload_identity=True" in source
-
-    def test_presentation_policy_server_uses_certificate_authorization(self):
-        source = (
-            Path(__file__).resolve().parents[2] / "presentation_policy/main.py"
-        ).read_text(encoding="utf-8")
-
-        assert "workload_identity_authorization=" in source
-        assert "spiffe://marty.internal/service/flow" in source
-        assert "spiffe://marty.internal/service/verification" in source
-        assert "require_workload_identity=True" in source
-
-    @pytest.mark.parametrize(
-        "service_source",
-        ["auth/main.py", "common/events.py"],
-    )
-    def test_flow_callers_require_workload_identity(self, service_source):
-        source = (Path(__file__).resolve().parents[2] / service_source).read_text(
-            encoding="utf-8"
-        )
-
-        assert "require_workload_identity=True" in source
-
-    def test_flow_server_authorizes_only_exact_rpc_workloads(self):
-        source = (Path(__file__).resolve().parents[2] / "flow/main.py").read_text(
-            encoding="utf-8"
-        )
-
-        assert "workload_identity_authorization=" in source
-        assert "spiffe://marty.internal/service/auth" in source
-        assert "spiffe://marty.internal/service/applicant" in source
-        assert "StartVerification" in source
-        assert "ApplicationApproved" in source
-        assert "require_workload_identity=True" in source
 
     @staticmethod
     def _certificate_material(tmp_path):

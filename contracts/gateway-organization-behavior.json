@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "request_cases": [
+    {
+      "name": "canonical_create_defaults",
+      "method": "POST",
+      "path": "/v1/organizations",
+      "input": {"name":"example-issuer","display_name":"Example Issuer","org_type":"healthcare","visibility":"PUBLIC","join_mechanism":"open","requires_approval":true},
+      "expected": {"name":"example-issuer","display_name":"Example Issuer","description":null,"org_type":"healthcare","contact_email":null,"visibility":"PUBLIC","join_mechanism":"open","requires_approval":true}
+    },
+    {
+      "name": "partial_update_strips_tenant_selector",
+      "method": "PATCH",
+      "path": "/v1/organizations/20000000-0000-4000-8000-000000000001",
+      "input": {"organization_id":"20000000-0000-4000-8000-000000000001","display_name":"Updated Issuer","contact_email":null},
+      "expected": {"display_name":"Updated Issuer","contact_email":null}
+    }
+  ],
+  "invalid_requests": [
+    {"name":"legacy_noop_field","method":"POST","path":"/v1/organizations","input":{"name":"example-issuer","display_name":"Example Issuer","settings":{"private":true}}},
+    {"name":"open_private_admission","method":"POST","path":"/v1/organizations","input":{"name":"example-issuer","display_name":"Example Issuer","join_mechanism":"open","visibility":"PRIVATE"}}
+  ],
+  "valid_response": {
+    "id":"20000000-0000-4000-8000-000000000001","name":"example-issuer","display_name":"Example Issuer","description":"Example tenant","join_code":null,"visibility":"PUBLIC","owner_id":"owner-subject","status":"active","org_type":"enterprise","join_mechanism":"open","requires_approval":true,"is_discoverable":true,"contact_email":"operator@example.com","contact_phone":null,"website":"https://example.com","membership":null,"created_at":"2026-07-31T00:00:00Z","updated_at":"2026-07-31T00:00:00Z"
+  },
+  "expected_response": {
+    "id":"20000000-0000-4000-8000-000000000001","name":"example-issuer","display_name":"Example Issuer","description":"Example tenant","visibility":"PUBLIC","owner_id":"owner-subject","status":"active","org_type":"enterprise","join_mechanism":"open","requires_approval":true,"is_discoverable":true,"contact_email":"operator@example.com","website":"https://example.com","created_at":"2026-07-31T00:00:00Z","updated_at":"2026-07-31T00:00:00Z"
+  },
+  "private_response_field": "settings"
+}

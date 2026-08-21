@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 
@@ -6,12 +7,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_marty_oid4vp_services_do_not_accept_private_signing_key_files() -> None:
     checked = [
-        ROOT / "services" / "flow" / "main.py",
+        ROOT / "rust" / "services" / "flow" / "src",
         ROOT / "docker-compose.base.yml",
         ROOT / "docker-compose.profile.oidf-haip.yml",
         ROOT / ".env.example",
     ]
-    combined = "\n".join(path.read_text(encoding="utf-8") for path in checked)
+    combined = "\n".join(
+        "\n".join(
+            source.read_text(encoding="utf-8") for source in path.rglob("*.rs")
+        )
+        if path.is_dir()
+        else path.read_text(encoding="utf-8")
+        for path in checked
+    )
 
     assert "VERIFIER_" + "SIGNING_KEY_PEM" not in combined
     assert "VERIFIER_" + "SIGNING_KEY_FILE" not in combined
@@ -31,18 +39,26 @@ def test_oid4vp_signing_and_flow_envelopes_have_dedicated_kms_keys() -> None:
 
 
 def test_protocol_services_cannot_select_an_issuer_profile_for_signing() -> None:
-    gateway = (ROOT / "services" / "gateway" / "routes" / "signing_keys.py").read_text(
-        encoding="utf-8"
+    gateway_routes = json.loads(
+        (ROOT / "contracts" / "gateway-routes.json").read_text(encoding="utf-8")
     )
-    flow = (ROOT / "services" / "flow" / "main.py").read_text(encoding="utf-8")
+    gateway_paths = {route["path"] for route in gateway_routes["routes"]}
+    gateway = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "rust" / "services" / "gateway").rglob("*.rs")
+    )
+    flow = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "rust" / "services" / "flow").rglob("*.rs")
+    )
 
     obsolete_route = "/issuer-" + "profiles/{issuer_profile_id}/sign"
     obsolete_helper = "sign_payload_with_" + "issuer_profile"
-    assert obsolete_route not in gateway
+    assert obsolete_route not in gateway_paths
     assert obsolete_route not in flow
     assert obsolete_helper not in gateway
     assert obsolete_helper not in flow
-    assert 'f"{base_url}/issuer-dids/sign"' in flow
-    assert '"credential_format": "oauth-authz-req+jwt"' in flow
-    assert '"key_purpose": "oid4vp_request_signing"' in flow
+    assert '"issuer-dids/sign"' in flow
+    assert 'REQUEST_FORMAT: &str = "oauth-authz-req+jwt"' in flow
+    assert 'REQUEST_PURPOSE: &str = "oid4vp_request_signing"' in flow
     assert '"oid4vp_issuer_profile_id"' not in flow

@@ -1,3 +1,0 @@
-"""
-Organization Service - Application Layer
-"""

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "service": "device-registration",
+  "routes": [
+    {"method": "POST", "path": "/v1/devices/challenge", "success": 200},
+    {"method": "POST", "path": "/v1/devices", "success": 200},
+    {"method": "GET", "path": "/v1/devices", "success": 200},
+    {"method": "GET", "path": "/v1/devices/{registration_id}", "success": 200},
+    {"method": "PATCH", "path": "/v1/devices/{registration_id}", "success": 200},
+    {"method": "DELETE", "path": "/v1/devices/{registration_id}", "success": 200}
+  ],
+  "challenge": {
+    "algorithm": "PS256",
+    "audience": "marty-device-registration",
+    "message_version": 2,
+    "one_time": true,
+    "production_store": "redis-atomic-compare-delete"
+  },
+  "key_lifecycle": [
+    {"operation": "initial-registration", "from": null, "to": "CURRENT", "version": 1, "audit": "KEY_REGISTERED"},
+    {"operation": "rotation", "from": "CURRENT", "to": "RETIRING", "new": "CURRENT", "audit": "KEY_ROTATED"},
+    {"operation": "deactivation", "from": ["CURRENT", "RETIRING"], "to": "REVOKED", "audit": "KEYS_REVOKED"}
+  ],
+  "failure_contract": [
+    {"case": "wrong-user", "status": 404, "detail": "Device registration not found"},
+    {"case": "stale-key-version", "status": 409, "detail": "Current device key version changed"},
+    {"case": "replayed-challenge", "status": 400, "detail": "Device challenge is invalid or expired"},
+    {"case": "binding-mismatch", "status": 400, "detail": "Device challenge binding mismatch"},
+    {"case": "inactive-rotation", "status": 409, "detail": "inactive device registrations cannot rotate keys"},
+    {"case": "inactive-reactivation", "status": 409, "detail": "a deactivated device must be registered with a new key"},
+    {"case": "organization-membership", "status": 403, "detail": "Not a member of this organization"}
+  ],
+  "invariants": [
+    "public key identifiers are RFC 7638 thumbprints",
+    "only canonical PKCS#1 RSA keys from 2048 through 8192 bits are accepted",
+    "key validity and rotation grace are assigned by the server",
+    "rotation uses an exact version compare-and-swap",
+    "key rotation is exclusive even when an additional request field is explicitly null",
+    "deletion is an idempotent audit-preserving deactivation",
+    "deactivated registrations cannot be reactivated or reuse key history",
+    "deployed environments require PostgreSQL, Redis, native device authentication, and organization authorization"
+  ]
+}

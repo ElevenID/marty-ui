@@ -14,9 +14,11 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 
 COPY --from=planner /build/rust/recipe.json recipe.json
+COPY --from=planner /build/rust/third_party /build/rust/third_party
 COPY proto /build/proto
 RUN cargo chef cook --locked --release --workspace --recipe-path recipe.json
 
+COPY contracts /build/contracts
 COPY rust /build/rust
 COPY proto /build/proto
 RUN cargo build --locked --release -p marty-event-stream --bin marty-event-stream

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "api_key_extraction": [
+    {"headers":{"X-API-Key":"  mk_live_header  "},"expected":"mk_live_header"},
+    {"headers":{"Authorization":"Bearer mk_test_bearer"},"expected":"mk_test_bearer"},
+    {"headers":{"authorization":"bearer pk_live_public"},"expected":"pk_live_public"},
+    {"headers":{"Authorization":"Bearer ordinary-jwt"},"expected":null},
+    {"headers":{"X-API-Key":"   ","Authorization":"Bearer pk_test_fallback"},"expected":"pk_test_fallback"},
+    {"headers":{},"expected":null}
+  ],
+  "rate_keys": [
+    {"session_id":"session-1","forwarded_for":"192.0.2.1","peer_ip":null,"expected":"sid:84097828fc31a8c8"},
+    {"session_id":null,"forwarded_for":"192.0.2.1, 198.51.100.1","peer_ip":"203.0.113.1","expected":"ip:192.0.2.1"},
+    {"session_id":null,"forwarded_for":null,"peer_ip":"203.0.113.1","expected":"ip:203.0.113.1"},
+    {"session_id":null,"forwarded_for":null,"peer_ip":null,"expected":"ip:unknown"}
+  ],
+  "rate_buckets": [
+    {"path":"/v1/organizations/org-1","expected":"v1/organizations"},
+    {"path":"/health","expected":"health"},
+    {"path":"/","expected":"root"}
+  ],
+  "authentication": [
+    {"required":false,"headers":{},"cookies":{},"provider":"reject","outcome":"bypass","status":null,"user_id":null},
+    {"required":true,"headers":{},"cookies":{},"provider":"reject","outcome":"failed","status":401,"user_id":null},
+    {"required":true,"headers":{},"cookies":{"sessionId":"valid"},"provider":"session_valid","outcome":"authenticated","status":null,"user_id":"user-1"},
+    {"required":true,"headers":{},"cookies":{"sessionId":"invalid"},"provider":"reject","outcome":"failed","status":401,"user_id":null},
+    {"required":true,"headers":{},"cookies":{"sessionId":"backend"},"provider":"backend_error","outcome":"failed","status":502,"user_id":null},
+    {"required":true,"headers":{"X-API-Key":"mk_live_valid"},"cookies":{},"provider":"api_key_valid","outcome":"authenticated","status":null,"user_id":"api_key:key-1"},
+    {"required":true,"headers":{"X-API-Key":"mk_live_invalid"},"cookies":{},"provider":"reject","outcome":"failed","status":401,"user_id":null},
+    {"required":true,"headers":{"X-API-Key":"mk_live_backend"},"cookies":{},"provider":"backend_error","outcome":"failed","status":503,"user_id":null}
+  ],
+  "distributed_providers": [
+    {"name":"development_memory","production":false,"redis_url":null,"expected":"memory"},
+    {"name":"production_missing_redis","production":true,"redis_url":null,"expected":"error"},
+    {"name":"configured_invalid_redis","production":false,"redis_url":"not a URL","expected":"error"}
+  ],
+  "mip_error": {
+    "error": "bad_request",
+    "description": "Missing required field",
+    "message_id": "fixed-message-id",
+    "expected": {
+      "error": "bad_request",
+      "error_description": "Missing required field",
+      "message_id": "fixed-message-id"
+    }
+  }
+}

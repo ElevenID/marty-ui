@@ -46,6 +46,13 @@ async fn redis_round_trip_preserves_certificate_jwks_did_and_slug_behavior() {
             .unwrap()["services"][service_id]["cert_expires_at"],
         "2035-01-01T00:00:00Z"
     );
+    assert_eq!(
+        documents
+            .certificate_overrides(&organization_id)
+            .await
+            .unwrap()["services"][service_id]["x5c"],
+        serde_json::json!([fixture["certificate"]["expected_x5c"]])
+    );
 
     let publication = documents
         .publish_jwk(

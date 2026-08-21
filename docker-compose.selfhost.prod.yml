@@ -326,6 +326,8 @@ services:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       AUTH_SERVICE_PORT: "8001"
+      DATABASE_URL_TEMPLATE: *database-url-sync-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       UI_BASE_URL: ${UI_BASE_URL:?UI_BASE_URL must be set}
       UI_ADDITIONAL_BASE_URLS: ${UI_ADDITIONAL_BASE_URLS:-}
       REDIS_URL: redis://redis:6379/0
@@ -365,6 +367,7 @@ services:
       FLOW_WEBHOOK_SECRET_FILE: /run/secrets/flow_webhook_secret
     secrets:
       - marty_api_client_secret
+      - marty_db_password
       - grpc_service_token
       - auth_workload_client_cert
       - auth_workload_client_key
@@ -401,6 +404,7 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
       ORG_GRPC_PORT: "9002"
+      ES_GRPC_TARGET: event-stream:9015
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
     secrets:
       - marty_db_password
@@ -453,22 +457,18 @@ services:
       dockerfile: services/Dockerfile
       args:
         SERVICE_NAME: trust-profile
-    entrypoint: ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
     environment:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       TRUST_PROFILE_SERVICE_PORT: "8004"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
-      BAO_ADDR: ${BAO_ADDR:-}
-      BAO_TOKEN_FILE: /run/secrets/openbao_service_token
     secrets:
       - marty_db_password
-      - openbao_service_token
       - grpc_service_token
-    volumes:
-      - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
+      - issuance_api_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -702,9 +702,11 @@ services:
   compliance-profile:
     build:
       context: .
-      dockerfile: services/Dockerfile
+      dockerfile: rust/services/Dockerfile.ci
+      target: compliance_profile
       args:
-        SERVICE_NAME: compliance-profile
+        MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+        MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
@@ -712,9 +714,16 @@ services:
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/compliance_profile_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/compliance_profile_workload_client_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      RUST_LOG: ${COMPLIANCE_PROFILE_RUST_LOG:-info}
     secrets:
       - marty_db_password
       - grpc_service_token
+      - compliance_profile_workload_client_cert
+      - compliance_profile_workload_client_key
+      - workload_identity_ca_cert
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -770,9 +779,11 @@ services:
   deployment-profile:
     build:
       context: .
-      dockerfile: services/Dockerfile
+      dockerfile: rust/services/Dockerfile.ci
+      target: deployment_profile
       args:
-        SERVICE_NAME: deployment-profile
+        MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+        MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
@@ -780,9 +791,16 @@ services:
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/deployment_profile_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/deployment_profile_workload_client_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      RUST_LOG: ${DEPLOYMENT_PROFILE_RUST_LOG:-info}
     secrets:
       - marty_db_password
       - grpc_service_token
+      - deployment_profile_workload_client_cert
+      - deployment_profile_workload_client_key
+      - workload_identity_ca_cert
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -845,6 +863,9 @@ services:
       CT_GRPC_TARGET: credential-template:9003
       ISSUANCE_GRPC_TARGET: issuance:9005
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
+      DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
       REDIS_URL: redis://redis:6379
       REDIS_DB_FLOW: "3"
       FLOW_GRPC_PORT: "9011"
@@ -892,6 +913,8 @@ services:
       GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/verification_workload_client_key
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       VERIFICATION_SERVICE_PORT: "8012"
+      ORG_GRPC_TARGET: organization:9002
+      CT_GRPC_TARGET: credential-template:9003
       PP_GRPC_TARGET: presentation-policy:9009
       VERIF_GRPC_PORT: "9017"
       # The inbound proto carries no authenticated tenant principal and has no
@@ -899,10 +922,7 @@ services:
       VERIF_GRPC_ENABLED: "false"
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
       REDIS_URL: redis://redis:6379/3
-      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
-      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
     secrets:
-      - issuance_api_key
       - grpc_service_token
       - verification_workload_client_cert
       - verification_workload_client_key
@@ -1151,6 +1171,14 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/verification_workload_client_cert
   verification_workload_client_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/verification_workload_client_key
+  deployment_profile_workload_client_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/deployment_profile_workload_client_cert
+  deployment_profile_workload_client_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/deployment_profile_workload_client_key
+  compliance_profile_workload_client_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/compliance_profile_workload_client_cert
+  compliance_profile_workload_client_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/compliance_profile_workload_client_key
   flow_webhook_secret:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_webhook_secret
   flow_application_event_hmac_key:

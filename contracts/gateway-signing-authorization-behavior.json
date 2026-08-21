@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "service": {
+    "id": "service-1",
+    "service_type": "custom-transit-compatible",
+    "endpoint": "https://private.example",
+    "auth_reference": "secret-token",
+    "key_reference": "issuer-key",
+    "key_purposes": ["vc_jwt_issuer", "lti_tool_signing"],
+    "algorithms": ["ES256", "RS256"]
+  },
+  "cases": [
+    {
+      "name": "valid_urlsafe_payload",
+      "registry": {
+        "key_reference_purposes": {"service-1": {"issuer-key": ["vc_jwt_issuer"]}}
+      },
+      "request": {
+        "payload_b64": "cGF5bG9hZA",
+        "algorithm": "ES256",
+        "key_reference": "issuer-key",
+        "key_purpose": "vc_jwt_issuer"
+      },
+      "expected": {"payload_hex": "7061796c6f6164", "algorithm": "ES256"}
+    },
+    {
+      "name": "valid_hex_payload",
+      "registry": {
+        "key_reference_purposes": {"service-1": {"issuer-key": ["vc_jwt_issuer"]}}
+      },
+      "request": {
+        "payload_hex": "7061796c6f6164",
+        "algorithm": "ES256",
+        "key_reference": "issuer-key",
+        "key_purpose": "vc_jwt_issuer"
+      },
+      "expected": {"payload_hex": "7061796c6f6164", "algorithm": "ES256"}
+    },
+    {
+      "name": "reserved_lti_key_requires_lti_purpose",
+      "registry": {
+        "key_reference_purposes": {"service-1": {"lti-key": ["lti_tool_signing"]}}
+      },
+      "request": {
+        "payload_b64": "cGF5bG9hZA",
+        "algorithm": "RS256",
+        "key_reference": "lti-key"
+      },
+      "expected_error": {"status": 409, "contains": "reserved exclusively for lti_tool_signing"}
+    },
+    {
+      "name": "lti_requires_rs256",
+      "registry": {
+        "key_reference_purposes": {"service-1": {"lti-key": ["lti_tool_signing"]}}
+      },
+      "request": {
+        "payload_b64": "cGF5bG9hZA",
+        "algorithm": "ES256",
+        "key_reference": "lti-key",
+        "key_purpose": "lti_tool_signing"
+      },
+      "expected_error": {"status": 409, "contains": "dedicated RSA/RS256 key"}
+    },
+    {
+      "name": "unknown_purpose_fails_closed",
+      "registry": {
+        "key_reference_purposes": {"service-1": {"issuer-key": ["vc_jwt_issuer"]}}
+      },
+      "request": {
+        "payload_b64": "cGF5bG9hZA",
+        "algorithm": "ES256",
+        "key_reference": "issuer-key",
+        "key_purpose": "unknown_purpose"
+      },
+      "expected_error": {"status": 422, "contains": "Unsupported key_purpose"}
+    },
+    {
+      "name": "unsupported_algorithm_fails_closed",
+      "registry": {
+        "key_reference_purposes": {"service-1": {"issuer-key": ["vc_jwt_issuer"]}}
+      },
+      "request": {
+        "payload_b64": "cGF5bG9hZA",
+        "algorithm": "ES384",
+        "key_reference": "issuer-key",
+        "key_purpose": "vc_jwt_issuer"
+      },
+      "expected_error": {"status": 400, "contains": "not supported by this service"}
+    }
+  ]
+}

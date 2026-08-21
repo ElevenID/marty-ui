@@ -1,3 +1,7 @@
+use crate::compat::{
+    CompatibilityError, IssuerContextRequest, IssuerDidSignRequest, ProfileIdentityRequest,
+    ProfileWriteRequest, ResolveIssuerDidRequest, ServiceSignRequest, SigningCompatibilityService,
+};
 use crate::documents::{
     self, CertificateAlertsRequest, CertificateAlertsResponse, DeleteJwkResponse, DocumentStore,
     InspectCertificateRequest, InspectCertificateResponse, LoadDidRequest, LoadDidResponse,
@@ -5,6 +9,9 @@ use crate::documents::{
     StoredCertificate, UpdateJwkRequest, UpdateJwkResponse,
 };
 use crate::domain::{key_purposes, service_capabilities};
+use crate::flow_envelope::{
+    FlowEnvelopeError, OpenBaoEnvelopeProvider, UnwrapRequest, WrapRequest,
+};
 use crate::kms::{self, ProviderRequest, SignRequest};
 use crate::profiles::{
     self, CustodyFormatRequest, CustodyFormatResponse, DuplicateProfileRequest,
@@ -49,6 +56,8 @@ struct AppState {
     registry_store: Option<RegistryStore>,
     document_store: Option<DocumentStore>,
     profile_store: Option<ProfileStore>,
+    flow_envelopes: Option<OpenBaoEnvelopeProvider>,
+    compatibility: Option<SigningCompatibilityService>,
 }
 
 pub fn router() -> Router {
@@ -56,7 +65,7 @@ pub fn router() -> Router {
 }
 
 pub fn router_with_internal_api_key(internal_api_key: String) -> Router {
-    router_with_dependencies(internal_api_key, None, None, None)
+    router_with_dependencies(internal_api_key, None, None, None, None, None)
 }
 
 pub fn router_with_dependencies(
@@ -64,7 +73,20 @@ pub fn router_with_dependencies(
     registry_store: Option<RegistryStore>,
     document_store: Option<DocumentStore>,
     profile_store: Option<ProfileStore>,
+    flow_envelopes: Option<OpenBaoEnvelopeProvider>,
+    public_domain: Option<String>,
 ) -> Router {
+    let compatibility = match (&registry_store, &document_store, &profile_store) {
+        (Some(registry), Some(documents), Some(profiles)) => {
+            Some(SigningCompatibilityService::new(
+                registry.clone(),
+                documents.clone(),
+                profiles.clone(),
+                public_domain.clone(),
+            ))
+        }
+        _ => None,
+    };
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
@@ -81,6 +103,38 @@ pub fn router_with_dependencies(
         .route("/internal/kms/sign", post(kms_sign))
         .route("/internal/kms/public-key", post(kms_public_key))
         .route("/internal/kms/verify", post(kms_verify))
+        .route("/internal/flow-key-envelopes/wrap", post(wrap_flow_key))
+        .route("/internal/flow-key-envelopes/unwrap", post(unwrap_flow_key))
+        .route("/internal/compat/issuer-context", post(issuer_context))
+        .route(
+            "/internal/compat/resolve-issuer-did",
+            post(resolve_issuer_did),
+        )
+        .route(
+            "/internal/compat/issuer-profiles/{profile_id}/identity",
+            post(profile_identity),
+        )
+        .route(
+            "/internal/compat/issuer-profiles/{profile_id}/public-identity",
+            post(profile_public_identity),
+        )
+        .route(
+            "/internal/compat/services/{service_id}/sign",
+            post(service_sign),
+        )
+        .route("/internal/compat/issuer-dids/sign", post(issuer_did_sign))
+        .route(
+            "/internal/compat/issuer-profiles",
+            post(create_compatibility_profile),
+        )
+        .route(
+            "/internal/compat/issuer-profiles/{profile_id}",
+            axum::routing::patch(update_compatibility_profile),
+        )
+        .route(
+            "/internal/compat/issuer-profiles/{profile_id}/certificate",
+            axum::routing::put(attach_compatibility_certificate),
+        )
         .route("/internal/config/validate", post(validate_service))
         .route("/internal/registry/catalog", get(registry_catalog))
         .route(
@@ -160,7 +214,174 @@ pub fn router_with_dependencies(
             registry_store,
             document_store,
             profile_store,
+            flow_envelopes,
+            compatibility,
         })
+}
+
+async fn issuer_context(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<IssuerContextRequest>,
+) -> Result<Json<serde_json::Value>, CompatibilityError> {
+    authorize_internal(&state, &headers).map_err(|_| CompatibilityError::Unauthorized)?;
+    let service = state
+        .compatibility
+        .as_ref()
+        .ok_or(CompatibilityError::Unavailable)?;
+    service.issuer_context(&request).await.map(Json)
+}
+
+async fn resolve_issuer_did(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ResolveIssuerDidRequest>,
+) -> Result<Json<serde_json::Value>, CompatibilityError> {
+    authorize_internal(&state, &headers).map_err(|_| CompatibilityError::Unauthorized)?;
+    let service = state
+        .compatibility
+        .as_ref()
+        .ok_or(CompatibilityError::Unavailable)?;
+    service.resolve_issuer_did(&request).await.map(Json)
+}
+
+async fn profile_identity(
+    State(state): State<AppState>,
+    Path(profile_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<ProfileIdentityRequest>,
+) -> Result<Json<serde_json::Value>, CompatibilityError> {
+    profile_identity_response(&state, &headers, &request, &profile_id, false).await
+}
+
+async fn profile_public_identity(
+    State(state): State<AppState>,
+    Path(profile_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<ProfileIdentityRequest>,
+) -> Result<Json<serde_json::Value>, CompatibilityError> {
+    profile_identity_response(&state, &headers, &request, &profile_id, true).await
+}
+
+async fn profile_identity_response(
+    state: &AppState,
+    headers: &HeaderMap,
+    request: &ProfileIdentityRequest,
+    profile_id: &str,
+    public_projection: bool,
+) -> Result<Json<serde_json::Value>, CompatibilityError> {
+    authorize_internal(state, headers).map_err(|_| CompatibilityError::Unauthorized)?;
+    let service = state
+        .compatibility
+        .as_ref()
+        .ok_or(CompatibilityError::Unavailable)?;
+    service
+        .profile_identity(&request.organization_id, profile_id, public_projection)
+        .await
+        .map(Json)
+}
+
+async fn service_sign(
+    State(state): State<AppState>,
+    Path(service_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<ServiceSignRequest>,
+) -> Result<Json<serde_json::Value>, CompatibilityError> {
+    authorize_internal(&state, &headers).map_err(|_| CompatibilityError::Unauthorized)?;
+    let service = state
+        .compatibility
+        .as_ref()
+        .ok_or(CompatibilityError::Unavailable)?;
+    service
+        .sign_with_service(&service_id, &request)
+        .await
+        .map(Json)
+}
+
+async fn issuer_did_sign(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<IssuerDidSignRequest>,
+) -> Result<Json<serde_json::Value>, CompatibilityError> {
+    authorize_internal(&state, &headers).map_err(|_| CompatibilityError::Unauthorized)?;
+    let service = state
+        .compatibility
+        .as_ref()
+        .ok_or(CompatibilityError::Unavailable)?;
+    service.sign_with_issuer_did(&request).await.map(Json)
+}
+
+async fn create_compatibility_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ProfileWriteRequest>,
+) -> Result<Json<serde_json::Value>, CompatibilityError> {
+    authorize_internal(&state, &headers).map_err(|_| CompatibilityError::Unauthorized)?;
+    let service = state
+        .compatibility
+        .as_ref()
+        .ok_or(CompatibilityError::Unavailable)?;
+    service.create_profile(&request).await.map(Json)
+}
+
+async fn update_compatibility_profile(
+    State(state): State<AppState>,
+    Path(profile_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<ProfileWriteRequest>,
+) -> Result<Json<serde_json::Value>, CompatibilityError> {
+    authorize_internal(&state, &headers).map_err(|_| CompatibilityError::Unauthorized)?;
+    let service = state
+        .compatibility
+        .as_ref()
+        .ok_or(CompatibilityError::Unavailable)?;
+    service
+        .update_profile(&profile_id, &request)
+        .await
+        .map(Json)
+}
+
+async fn attach_compatibility_certificate(
+    State(state): State<AppState>,
+    Path(profile_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<ProfileWriteRequest>,
+) -> Result<Json<serde_json::Value>, CompatibilityError> {
+    authorize_internal(&state, &headers).map_err(|_| CompatibilityError::Unauthorized)?;
+    let service = state
+        .compatibility
+        .as_ref()
+        .ok_or(CompatibilityError::Unavailable)?;
+    service
+        .attach_profile_certificate(&profile_id, &request)
+        .await
+        .map(Json)
+}
+
+async fn wrap_flow_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<WrapRequest>,
+) -> Result<Json<serde_json::Value>, FlowEnvelopeError> {
+    authorize_internal(&state, &headers).map_err(|_| FlowEnvelopeError::Unauthorized)?;
+    let provider = state
+        .flow_envelopes
+        .as_ref()
+        .ok_or(FlowEnvelopeError::Unavailable)?;
+    provider.wrap(request).await.map(Json)
+}
+
+async fn unwrap_flow_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<UnwrapRequest>,
+) -> Result<Json<serde_json::Value>, FlowEnvelopeError> {
+    authorize_internal(&state, &headers).map_err(|_| FlowEnvelopeError::Unauthorized)?;
+    let provider = state
+        .flow_envelopes
+        .as_ref()
+        .ok_or(FlowEnvelopeError::Unavailable)?;
+    provider.unwrap(request).await.map(Json)
 }
 
 async fn kms_sign(

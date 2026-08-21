@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "route": ["GET", "/oid4vp/did.json"],
+  "identity_binding": {
+    "organization_id": "configured_marty_organization",
+    "issuer_did": "configured_oid4vp_issuer_did",
+    "key_purpose": "oid4vp_request_signing",
+    "credential_format": "oauth-authz-req+jwt",
+    "algorithm": "ES256"
+  },
+  "content_type": "application/did+json",
+  "cache_control": "no-store",
+  "pragma": "no-cache",
+  "cors": "*",
+  "verification_method_type": "JsonWebKey2020",
+  "relationships": ["authentication", "assertionMethod"],
+  "private_jwk_members": "forbidden",
+  "provider_failure": "fail_closed",
+  "python_fallback": "forbidden"
+}

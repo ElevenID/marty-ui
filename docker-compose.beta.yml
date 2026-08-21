@@ -30,31 +30,62 @@ services:
   gateway:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      GRPC_INSECURE_ALLOWED: "true"
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:?ISSUANCE_API_KEY must be set for beta}
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379
 
   auth:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      ALLOW_PLAINTEXT_GRPC: "true"
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/0
       CREDENTIAL_LOGIN_ORGANIZATION_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}
       CREDENTIAL_LOGIN_ISSUER_DID: ${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/auth_workload_client_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+    secrets:
+      - auth_workload_client_cert
+      - auth_workload_client_key
+      - workload_identity_ca_cert
 
   organization:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379
 
   credential-template:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
+      MARTY_ORG_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}
+      MARTY_MIGRATION_PROFILE: beta
 
   trust-profile:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
+      MARTY_ORG_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}
+      MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set for beta}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
 
   applicant:
     environment:
       <<: *beta-grpc-service-auth
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/applicant_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/applicant_workload_client_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+    secrets:
+      - applicant_workload_client_cert
+      - applicant_workload_client_key
+      - workload_identity_ca_cert
 
   notification:
     environment:
@@ -63,14 +94,37 @@ services:
   compliance-profile:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/compliance_profile_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/compliance_profile_workload_client_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+    secrets:
+      - compliance_profile_workload_client_cert
+      - compliance_profile_workload_client_key
+      - workload_identity_ca_cert
 
   presentation-policy:
     environment:
       <<: *beta-grpc-service-auth
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/pp_workload_server_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+    secrets:
+      - pp_workload_server_cert
+      - pp_workload_server_key
+      - workload_identity_ca_cert
 
   deployment-profile:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/deployment_profile_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/deployment_profile_workload_client_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+    secrets:
+      - deployment_profile_workload_client_cert
+      - deployment_profile_workload_client_key
+      - workload_identity_ca_cert
 
   signing-keys:
     environment:
@@ -79,7 +133,25 @@ services:
   flow:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      GRPC_INSECURE_ALLOWED: "true"
+      PUBLIC_BASE_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:?ISSUANCE_API_KEY must be set for beta}
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
+      FLOW_WEBHOOK_SECRET: ${FLOW_WEBHOOK_SECRET:?FLOW_WEBHOOK_SECRET must be set for beta}
+      FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:?FLOW_APPLICATION_EVENT_HMAC_KEY must be set for beta}
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/flow_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/flow_workload_client_key
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/flow_workload_server_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+    secrets:
+      - flow_workload_client_cert
+      - flow_workload_client_key
+      - flow_workload_server_cert
+      - flow_workload_server_key
+      - workload_identity_ca_cert
 
   revocation-profile:
     environment:
@@ -109,5 +181,49 @@ services:
   verification:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/3
       VERIF_GRPC_ENABLED: "false"
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/verification_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/verification_workload_client_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+    secrets:
+      - verification_workload_client_cert
+      - verification_workload_client_key
+      - workload_identity_ca_cert
+
+secrets:
+  workload_identity_ca_cert:
+    file: ${MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE:?MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE must be set for beta}
+  pp_workload_server_cert:
+    file: ${PP_WORKLOAD_SERVER_CERT_FILE:?PP_WORKLOAD_SERVER_CERT_FILE must be set for beta}
+  pp_workload_server_key:
+    file: ${PP_WORKLOAD_SERVER_KEY_FILE:?PP_WORKLOAD_SERVER_KEY_FILE must be set for beta}
+  flow_workload_client_cert:
+    file: ${FLOW_WORKLOAD_CLIENT_CERT_FILE:?FLOW_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
+  flow_workload_client_key:
+    file: ${FLOW_WORKLOAD_CLIENT_KEY_FILE:?FLOW_WORKLOAD_CLIENT_KEY_FILE must be set for beta}
+  flow_workload_server_cert:
+    file: ${FLOW_WORKLOAD_SERVER_CERT_FILE:?FLOW_WORKLOAD_SERVER_CERT_FILE must be set for beta}
+  flow_workload_server_key:
+    file: ${FLOW_WORKLOAD_SERVER_KEY_FILE:?FLOW_WORKLOAD_SERVER_KEY_FILE must be set for beta}
+  auth_workload_client_cert:
+    file: ${AUTH_WORKLOAD_CLIENT_CERT_FILE:?AUTH_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
+  auth_workload_client_key:
+    file: ${AUTH_WORKLOAD_CLIENT_KEY_FILE:?AUTH_WORKLOAD_CLIENT_KEY_FILE must be set for beta}
+  applicant_workload_client_cert:
+    file: ${APPLICANT_WORKLOAD_CLIENT_CERT_FILE:?APPLICANT_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
+  applicant_workload_client_key:
+    file: ${APPLICANT_WORKLOAD_CLIENT_KEY_FILE:?APPLICANT_WORKLOAD_CLIENT_KEY_FILE must be set for beta}
+  verification_workload_client_cert:
+    file: ${VERIFICATION_WORKLOAD_CLIENT_CERT_FILE:?VERIFICATION_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
+  verification_workload_client_key:
+    file: ${VERIFICATION_WORKLOAD_CLIENT_KEY_FILE:?VERIFICATION_WORKLOAD_CLIENT_KEY_FILE must be set for beta}
+  deployment_profile_workload_client_cert:
+    file: ${DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE:?DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
+  deployment_profile_workload_client_key:
+    file: ${DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE:?DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE must be set for beta}
+  compliance_profile_workload_client_cert:
+    file: ${COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE:?COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
+  compliance_profile_workload_client_key:
+    file: ${COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE:?COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE must be set for beta}

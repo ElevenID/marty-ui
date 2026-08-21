@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "implementation_owner": "marty-auth",
+  "required_configuration": [
+    "KEYCLOAK_REALM",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "CREDENTIAL_LOGIN_POLICY_ID",
+    "CREDENTIAL_LOGIN_ORGANIZATION_ID",
+    "CREDENTIAL_LOGIN_ISSUER_DID",
+    "FLOW_WEBHOOK_SECRET"
+  ],
+  "minimum_secret_bytes": 32,
+  "listeners": {
+    "http": "AUTH_HTTP_ADDR_or_AUTH_SERVICE_PORT",
+    "grpc": "AUTH_GRPC_ADDR_or_AUTH_GRPC_PORT",
+    "addresses_must_differ": true,
+    "both_required": true
+  },
+  "required_runtime_components": [
+    "database",
+    "session_cache",
+    "auth_rate_limit",
+    "oidc",
+    "flow_grpc",
+    "organization_grpc",
+    "applicant_http",
+    "canvas_lti_http",
+    "event_outbox",
+    "event_stream_grpc",
+    "http_listener",
+    "grpc_listener"
+  ],
+  "readiness_only_while_active": true,
+  "rate_limit": {
+    "strategy": "sliding_window",
+    "window_seconds": 60,
+    "limited_paths": [
+      "/v1/auth/login",
+      "/v1/auth/register",
+      "/v1/auth/callback",
+      "/v1/auth/credential-login"
+    ],
+    "excluded_paths": [
+      "/v1/auth/credential-login/status",
+      "/v1/auth/credential-login/assets/styles.css"
+    ],
+    "backend_failure_status": 503,
+    "limit_status": 429
+  },
+  "production_plaintext_grpc": false,
+  "production_workload_transport": "mutual_tls",
+  "python_fallback": false,
+  "deployment_during_slice": false
+}

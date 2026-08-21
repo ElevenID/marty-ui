@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "service": "verification",
+  "transports": ["http", "grpc"],
+  "routes": [
+    {"method": "POST", "path": "/v1/verify", "authorization": "management", "success": 200},
+    {"method": "GET", "path": "/v1/verify/sessions", "authorization": "management", "success": 200},
+    {"method": "GET", "path": "/v1/verify/{session_id}/request", "authorization": "public-wallet", "success": 200},
+    {"method": "GET", "path": "/v1/verify/{session_id}", "authorization": "management", "success": 200},
+    {"method": "POST", "path": "/v1/verify/{session_id}/submit", "authorization": "public-wallet", "success": 200},
+    {"method": "POST", "path": "/v1/verify/evaluate", "authorization": "management", "success": 200},
+    {"method": "GET", "path": "/v1/verify/{session_id}/inspection", "authorization": "management", "success": 200},
+    {"method": "POST", "path": "/v1/verify/zkp", "authorization": "management", "success": 200}
+  ],
+  "protocol_projection": {
+    "allowed_session_fields": ["id", "flow_id", "flow_instance_id", "presentation_policy_id", "deployment_profile_id", "verifier_nonce", "holder_id", "status", "result", "expires_at", "created_at", "completed_at", "updated_at", "error"],
+    "start_only_fields": ["request_uri", "qr_code_data"],
+    "statuses": ["PENDING", "PASSED", "FAILED", "EXPIRED"]
+  },
+  "submission_outcomes": ["claimed", "committed", "duplicate", "busy", "conflict", "expired", "missing"],
+  "failure_contract": [
+    {"case": "authentication-missing", "status": 401, "detail": "Authentication required"},
+    {"case": "organization-mismatch", "status": 403, "detail": "Organization mismatch"},
+    {"case": "policy-not-found-or-foreign", "status": 404, "detail": "Presentation policy not found"},
+    {"case": "policy-inactive", "status": 409, "detail": "Presentation policy is not active"},
+    {"case": "session-missing", "status": 404, "detail": "Session not found"},
+    {"case": "session-expired", "status": 410, "detail": "Session expired"},
+    {"case": "different-presentation", "status": 409, "detail": "Session is already bound to a different presentation"},
+    {"case": "submission-busy", "status": 409, "detail": "Presentation evaluation is already in progress"},
+    {"case": "coordination-unavailable", "status": 503, "detail": "Verification session coordination unavailable"}
+  ],
+  "invariants": [
+    "OID4VP and DCQL artifacts are produced by the canonical Rust flow and marty-core implementation",
+    "standalone callbacks and trust or deployment profile overrides are rejected in favor of the Flow service",
+    "SIOPv2 id_token sessions do not require a presentation policy and emit scope openid without DCQL",
+    "wallet request and submission routes remain public while management routes are tenant authorized",
+    "one presentation digest owns a session and duplicate submissions reuse the canonical terminal result",
+    "Redis server time controls expiry and lease recovery across replicas",
+    "claim transitions preserve the original session TTL and terminal writes are lease fenced",
+    "raw presentation tokens, disclosed values, inspection payloads, and callback destinations are never retained in terminal records",
+    "deployed environments require Redis and workload-authenticated control-plane providers",
+    "optional inspection failure is non-fatal and never exposes raw inspection material"
+  ]
+}

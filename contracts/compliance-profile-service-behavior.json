@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "service": "compliance-profile",
+  "routes": [
+    {"method":"POST","path":"/v1/compliance-profiles","permission":"compliance-profile:create"},
+    {"method":"GET","path":"/v1/compliance-profiles","permission":"compliance-profile:view"},
+    {"method":"GET","path":"/v1/compliance-profiles/system/discoverable","permission":"public"},
+    {"method":"GET","path":"/v1/compliance-profiles/{profile_id}","permission":"membership-or-system"},
+    {"method":"PATCH","path":"/v1/compliance-profiles/{profile_id}","permission":"compliance-profile:edit"},
+    {"method":"POST","path":"/v1/compliance-profiles/{profile_id}/activate","permission":"compliance-profile:activate"},
+    {"method":"POST","path":"/v1/compliance-profiles/{profile_id}/suspend","permission":"compliance-profile:suspend"},
+    {"method":"DELETE","path":"/v1/compliance-profiles/{profile_id}","permission":"compliance-profile:delete"}
+  ],
+  "statuses": ["DRAFT","ACTIVE","SUSPENDED","DEPRECATED"],
+  "credential_formats": ["MDOC","SD_JWT_VC","VC_JWT","JSON_LD","ZK_MDOC","VDS_NC"],
+  "issuance_protocols": ["OID4VCI_PRE_AUTH","OID4VCI_AUTH_CODE","DIRECT","CREDENTIAL_MANAGER","APPLE_WALLET"],
+  "retention_periods": ["none","session","1_day","1_week","1_month","1_year","3_years","7_years","indefinite"],
+  "consent_types": ["explicit","implicit","opt_out","none"],
+  "audit_levels": ["none","minimal","standard","detailed","forensic"],
+  "policy_sections": ["frameworks","data_retention","consent_requirement","audit_configuration","data_minimization_rules","jurisdictional_constraints","age_verification"],
+  "system_profile_codes": ["OID4VC","ISO_18013_5","OPEN_BADGES_3","ICAO_VDS_NC"],
+  "invariants": [
+    "organization profiles require exact active tenant permissions",
+    "system profiles have no organization and are migration-owned immutable catalog entries",
+    "only active discoverable system profiles appear in public discovery",
+    "all accepted policy sections round trip through durable PostgreSQL storage",
+    "public responses expose protocol metadata but not internal policy enforcement configuration",
+    "credential formats use the canonical credential-template parser",
+    "unknown fields and unsupported enum values fail closed",
+    "production never falls back to process-local storage"
+  ]
+}

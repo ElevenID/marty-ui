@@ -1,6 +1,6 @@
 //! Provider-native signing, public-key discovery, and connectivity probes.
 
-use std::time::Duration;
+use std::{env, fs, time::Duration};
 
 use aws_config::BehaviorVersion;
 use aws_sdk_kms::config::Region;
@@ -124,7 +124,9 @@ enum Provider {
 impl Provider {
     fn from_config(config: &Value) -> Result<Self, KmsError> {
         match string(config, "service_type").unwrap_or_default() {
-            "openbao-transit" | "hashicorp-vault-transit" => Ok(Self::OpenBao),
+            "openbao-transit" | "hashicorp-vault-transit" | "custom-transit-compatible" => {
+                Ok(Self::OpenBao)
+            }
             "aws-kms" => Ok(Self::Aws),
             "azure-key-vault" => Ok(Self::Azure),
             "gcp-cloud-kms" => Ok(Self::Gcp),
@@ -146,7 +148,16 @@ pub async fn sign(request: SignRequest) -> Result<SignResponse, KmsError> {
     let payload = decode_urlsafe(&request.payload_b64, "payload_b64")?;
     let algorithm = string(&request.service_config, "algorithm").unwrap_or("ES256");
     let signature = match provider {
-        Provider::OpenBao => sign_openbao(&request.service_config, &payload).await?,
+        Provider::OpenBao => match sign_openbao(&request.service_config, &payload).await {
+            Err(KmsError::ProviderStatus { status, .. })
+                if status == StatusCode::NOT_FOUND
+                    && string(&request.service_config, "id") == Some("managed-openbao-transit") =>
+            {
+                create_managed_openbao_key(&request.service_config).await?;
+                sign_openbao(&request.service_config, &payload).await?
+            }
+            result => result?,
+        },
         Provider::Aws => sign_aws(&request.service_config, &payload).await?,
         Provider::Azure => sign_azure(&request.service_config, &payload).await?,
         Provider::Gcp => sign_gcp(&request.service_config, &payload).await?,
@@ -211,10 +222,7 @@ async fn sign_openbao(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsErro
         Client::new()
             .post(url)
             .timeout(HTTP_TIMEOUT)
-            .header(
-                "X-Vault-Token",
-                string(config, "auth_reference").unwrap_or_default(),
-            )
+            .header("X-Vault-Token", transit_token(config))
             .json(&json!({"input": input, "prehashed": prehashed})),
     )
     .await?;
@@ -249,10 +257,7 @@ async fn public_key_openbao(config: &Value) -> Result<Value, KmsError> {
                 endpoint.trim_end_matches('/')
             ))
             .timeout(HTTP_TIMEOUT)
-            .header(
-                "X-Vault-Token",
-                string(config, "auth_reference").unwrap_or_default(),
-            ),
+            .header("X-Vault-Token", transit_token(config)),
     )
     .await?;
     let data = response
@@ -320,6 +325,91 @@ async fn public_key_openbao(config: &Value) -> Result<Value, KmsError> {
     jwk_value(jwk, key_reference)
 }
 
+async fn create_managed_openbao_key(config: &Value) -> Result<(), KmsError> {
+    let endpoint = required(
+        config,
+        "endpoint",
+        "Managed OpenBao key creation requires 'endpoint' and 'key_reference'",
+    )?;
+    let key_reference = required(
+        config,
+        "key_reference",
+        "Managed OpenBao key creation requires 'endpoint' and 'key_reference'",
+    )?;
+    let mount = string(config, "mount")
+        .unwrap_or("transit")
+        .trim_matches('/');
+    let algorithm = string(config, "algorithm").unwrap_or("ES256");
+    let key_type = match algorithm {
+        "ES256" => "ecdsa-p256",
+        "ES384" => "ecdsa-p384",
+        "RS256" => "rsa-2048",
+        "EdDSA" => "ed25519",
+        other => {
+            return Err(KmsError::InvalidConfig(format!(
+                "Unsupported signing algorithm '{other}'."
+            )))
+        }
+    };
+    let token = transit_token(config);
+    if token.is_empty() {
+        return Err(KmsError::InvalidConfig(
+            "Managed OpenBao access is not configured for the signing service.".into(),
+        ));
+    }
+    let create = || {
+        send_json_or_empty(
+            Client::new()
+                .post(format!(
+                    "{}/v1/{mount}/keys/{key_reference}",
+                    endpoint.trim_end_matches('/')
+                ))
+                .timeout(HTTP_TIMEOUT)
+                .header("X-Vault-Token", &token)
+                .json(&json!({"type": key_type})),
+        )
+    };
+    match create().await {
+        Ok(_) => Ok(()),
+        Err(KmsError::ProviderStatus { status, detail })
+            if status == StatusCode::BAD_REQUEST && existing_key_detail(&detail) =>
+        {
+            Ok(())
+        }
+        Err(KmsError::ProviderStatus { status, detail })
+            if status == StatusCode::NOT_FOUND && missing_route_detail(&detail) =>
+        {
+            match send_json_or_empty(
+                Client::new()
+                    .post(format!(
+                        "{}/v1/sys/mounts/{mount}",
+                        endpoint.trim_end_matches('/')
+                    ))
+                    .timeout(HTTP_TIMEOUT)
+                    .header("X-Vault-Token", &token)
+                    .json(&json!({"type": "transit"})),
+            )
+            .await
+            {
+                Ok(_) => {}
+                Err(KmsError::ProviderStatus { status, detail })
+                    if status == StatusCode::BAD_REQUEST && mount_exists_detail(&detail) => {}
+                Err(error) => return Err(error),
+            }
+            match create().await {
+                Ok(_) => Ok(()),
+                Err(KmsError::ProviderStatus { status, detail })
+                    if status == StatusCode::BAD_REQUEST && existing_key_detail(&detail) =>
+                {
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
 async fn verify_openbao(config: &Value) -> CapabilityResult {
     let endpoint = match string(config, "endpoint").filter(|value| !value.is_empty()) {
         Some(value) => value,
@@ -335,10 +425,7 @@ async fn verify_openbao(config: &Value) -> CapabilityResult {
             endpoint.trim_end_matches('/')
         ))
         .timeout(PROBE_TIMEOUT)
-        .header(
-            "X-Vault-Token",
-            string(config, "auth_reference").unwrap_or_default(),
-        );
+        .header("X-Vault-Token", transit_token(config));
     let mut result = CapabilityResult::ok();
     match request.send().await {
         Ok(response) if response.status() == StatusCode::OK => {
@@ -615,6 +702,9 @@ async fn aws_client(config: &Value) -> aws_sdk_kms::Client {
     let mut loader = aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region));
     if let Some(endpoint) = string(config, "endpoint").filter(|value| !value.is_empty()) {
         loader = loader.endpoint_url(endpoint);
+        if endpoint.starts_with("http://") {
+            loader = loader.http_client(aws_smithy_http_client::Builder::new().build_http());
+        }
     }
     aws_sdk_kms::Client::new(&loader.load().await)
 }
@@ -731,6 +821,31 @@ fn bearer(builder: reqwest::RequestBuilder, config: &Value) -> reqwest::RequestB
     }
 }
 
+fn transit_token(config: &Value) -> String {
+    if string(config, "auth_mode") == Some("service_token") {
+        return secret_value("BAO_TOKEN")
+            .or_else(|| secret_value("OPENBAO_SERVICE_TOKEN"))
+            .unwrap_or_default();
+    }
+    string(config, "auth_reference")
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn secret_value(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let path = env::var(format!("{name}_FILE")).ok()?;
+            fs::read_to_string(path)
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+        })
+}
+
 async fn send_json(builder: reqwest::RequestBuilder) -> Result<Value, KmsError> {
     let response = builder
         .send()
@@ -747,6 +862,48 @@ async fn send_json(builder: reqwest::RequestBuilder) -> Result<Value, KmsError> 
     response.json().await.map_err(|error| {
         KmsError::InvalidResponse(format!("Provider returned invalid JSON: {error}"))
     })
+}
+
+async fn send_json_or_empty(builder: reqwest::RequestBuilder) -> Result<Value, KmsError> {
+    let response = builder
+        .send()
+        .await
+        .map_err(|error| KmsError::Provider(format!("Provider request failed: {error}")))?;
+    let status = response.status();
+    let body = response
+        .bytes()
+        .await
+        .map_err(|error| KmsError::Provider(format!("Provider response failed: {error}")))?;
+    if !status.is_success() {
+        return Err(KmsError::ProviderStatus {
+            status,
+            detail: bounded(&String::from_utf8_lossy(&body)),
+        });
+    }
+    if body.is_empty() {
+        Ok(Value::Null)
+    } else {
+        serde_json::from_slice(&body).map_err(|error| {
+            KmsError::InvalidResponse(format!("Provider returned invalid JSON: {error}"))
+        })
+    }
+}
+
+fn existing_key_detail(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    detail.contains("already exists") || detail.contains("existing key")
+}
+
+fn missing_route_detail(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    detail.contains("no handler for route")
+        || detail.contains("unsupported path")
+        || detail.contains("route not found")
+}
+
+fn mount_exists_detail(detail: &str) -> bool {
+    let detail = detail.to_ascii_lowercase();
+    detail.contains("path is already in use") || detail.contains("already exists")
 }
 
 async fn verify_http_status<F>(
@@ -828,6 +985,7 @@ mod tests {
         for service_type in [
             "openbao-transit",
             "hashicorp-vault-transit",
+            "custom-transit-compatible",
             "aws-kms",
             "azure-key-vault",
             "gcp-cloud-kms",

@@ -1,5 +1,5 @@
 [workspace]
-members = ["services/event-stream", "services/notification", "services/revocation-profile", "services/signing-keys"]
+members = ["services/applicant", "services/auth", "services/compliance-profile", "services/credential-template", "services/deployment-profile", "services/device-registration", "services/event-stream", "services/flow", "services/gateway", "services/notification", "services/organization", "services/presentation-policy", "services/revocation-profile", "services/signing-keys", "services/trust-profile", "services/verification"]
 resolver = "2"
 
 [workspace.package]
@@ -13,25 +13,41 @@ axum = "0.8"
 async-trait = "0.1"
 aws-config = { version = "1.10.1", default-features = false, features = ["credentials-process", "default-https-client", "rt-tokio", "sso"] }
 aws-sdk-kms = { version = "1.114.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-smithy-http-client = "1.3.0"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+ed25519-dalek = { version = "2", features = ["pkcs8"] }
 futures-core = "0.3"
 hmac = "0.12"
 hex = "0.4"
 http = "1"
-marty-crypto = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false, features = ["ecdsa", "jwk", "x509-parsing"] }
-marty-status = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8" }
+jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
+marty-crypto = { version = "=0.1.59", git = "https://github.com/ElevenID/marty-core", rev = "4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d", default-features = false, features = ["ecdsa", "jwk", "x509-parsing"] }
+marty-didcomm = { version = "=0.1.59", git = "https://github.com/ElevenID/marty-core", rev = "4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d", default-features = false }
+marty-iso18013 = { version = "=0.1.59", git = "https://github.com/ElevenID/marty-core", rev = "4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d", default-features = false }
+marty-oid4vci = { version = "=0.1.59", git = "https://github.com/ElevenID/marty-core", rev = "4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d", default-features = false }
+marty-verification = { version = "=0.1.59", git = "https://github.com/ElevenID/marty-core", rev = "4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d", default-features = false }
+marty-status = { version = "=0.1.59", git = "https://github.com/ElevenID/marty-core", rev = "4a2d2c32f9f1e3641a402ce9bb18cd47c4d7da2d" }
+mmf-platform = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
+mmf-core = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
+mmf-data = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
+mmf-runtime = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
+mmf-security = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
+mmf-messaging = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2", features = ["postgres"] }
+mmf-push = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
+mmf-workflow = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "1c6a9d180fec3670b435d36fda5170a669405ab2" }
 prost = "0.14"
 protoc-bin-vendored = "3"
 rand = "0.9"
 redis = { version = "1.5", default-features = false, features = ["connection-manager", "script", "tokio-comp"] }
 regex = "1"
 percent-encoding = "2"
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
-sqlx = { version = "0.9", default-features = false, features = ["chrono", "json", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
+sqlx = { version = "0.9", default-features = false, features = ["chrono", "json", "postgres", "runtime-tokio", "tls-rustls-ring-webpki", "uuid"] }
 subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
@@ -55,3 +71,4 @@ debug = "line-tables-only"
 
 [patch.crates-io]
 isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "7a443cf6c37c8d7f11e9a767c1002684842ab5d0" }
+ssi-jwt = { path = "third_party/ssi-jwt" }

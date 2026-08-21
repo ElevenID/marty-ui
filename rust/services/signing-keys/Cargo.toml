@@ -17,6 +17,7 @@ test = false
 axum.workspace = true
 aws-config.workspace = true
 aws-sdk-kms.workspace = true
+aws-smithy-http-client.workspace = true
 base64.workspace = true
 chrono.workspace = true
 marty-crypto.workspace = true

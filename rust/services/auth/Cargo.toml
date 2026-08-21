@@ -1,0 +1,51 @@
+[package]
+name = "marty-auth"
+version = "0.1.0"
+description = "Marty Rust authentication, OIDC, session, and credential-login service"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+hmac.workspace = true
+mmf-data.workspace = true
+mmf-messaging.workspace = true
+mmf-core.workspace = true
+mmf-platform.workspace = true
+mmf-push.workspace = true
+mmf-runtime.workspace = true
+mmf-security.workspace = true
+marty-oid4vci.workspace = true
+prost.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tonic-health.workspace = true
+tonic-prost.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+jsonwebtoken.workspace = true
+p256.workspace = true
+serde_json.workspace = true
+tower.workspace = true
+
+[build-dependencies]
+protoc-bin-vendored.workspace = true
+tonic-prost-build.workspace = true

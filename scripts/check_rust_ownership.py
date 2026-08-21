@@ -129,6 +129,38 @@ def _scan_text_rules(root: Path, guardrails: dict[str, Any]) -> list[str]:
     return findings
 
 
+def _scan_native_service_guards(
+    root: Path,
+    manifest: dict[str, Any],
+    guardrails: dict[str, Any],
+) -> list[str]:
+    findings: list[str] = []
+    statuses = {
+        capability["id"]: capability["status"]
+        for capability in manifest["capabilities"]
+        if isinstance(capability, dict)
+        and isinstance(capability.get("id"), str)
+        and isinstance(capability.get("status"), str)
+    }
+    for guard in guardrails.get("native_service_guards", []):
+        capability_id = guard.get("capability_id")
+        if capability_id not in statuses:
+            findings.append(
+                f"native service guard references unknown capability: {capability_id}"
+            )
+            continue
+        if statuses[capability_id] != "native-active":
+            continue
+        for pattern in guard.get("forbidden_globs", []):
+            for path in sorted(root.glob(pattern)):
+                if path.is_file():
+                    findings.append(
+                        "native service contains forbidden non-Rust source "
+                        f"({capability_id}): {path.relative_to(root).as_posix()}"
+                    )
+    return findings
+
+
 def scan_repository(root: Path, manifest_path: Path | None = None) -> list[str]:
     root = root.resolve()
     path = manifest_path or root / MANIFEST_PATH
@@ -144,6 +176,7 @@ def scan_repository(root: Path, manifest_path: Path | None = None) -> list[str]:
         return sorted(findings + ["manifest guardrails must be an object"])
     findings.extend(_scan_restricted_imports(root, guardrails))
     findings.extend(_scan_text_rules(root, guardrails))
+    findings.extend(_scan_native_service_guards(root, manifest, guardrails))
     return sorted(findings)
 
 

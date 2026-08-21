@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "required_providers": [
+    "tenant_membership",
+    "credential_template",
+    "presentation_policy",
+    "issuance",
+    "signing_identity",
+    "flow_key_envelope",
+    "physical_document",
+    "reference_catalog"
+  ],
+  "reference_catalog": {
+    "application_template": ["GET", "v1/application-templates/{id}", "x-api-key"],
+    "delivery_destination": ["GET", "v1/delivery-destinations/{id}", "x-user-id"],
+    "trust_profile": ["GET", "v1/trust-profiles/{id}", "x-user-id"],
+    "deployment_profile": ["GET", "v1/deployment-profiles/{id}", "x-user-id"]
+  },
+  "signing_identity": {
+    "organization_id": "org-1",
+    "issuer_did": "did:web:issuer.example",
+    "verification_method_id": "did:web:issuer.example#key-1",
+    "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x-coordinate", "y": "y-coordinate"},
+    "key_purpose": "oid4vp_request_signing",
+    "credential_format": "oauth-authz-req+jwt",
+    "algorithm": "ES256"
+  },
+  "invalid_identity_mutations": [
+    "organization_id",
+    "issuer_did",
+    "verification_method_id",
+    "key_purpose",
+    "credential_format",
+    "algorithm",
+    "public_key_curve",
+    "private_key"
+  ],
+  "physical_document_operations": {
+    "initialize": ["POST", "v1/passport/applications"],
+    "generate_data_groups": ["POST", "v1/passport/applications/application-1/generate-data-groups"],
+    "sign_sod": ["POST", "v1/passport/applications/application-1/generate-sod"],
+    "submit_to_personalization": ["POST", "v1/passport/applications/application-1/submit-personalization"],
+    "track_production": ["GET", "v1/passport/applications/application-1/production-status"],
+    "quality_verify": ["POST", "v1/passport/applications/application-1/quality-verify"],
+    "activate_credential": ["POST", "v1/passport/applications/application-1/activate"]
+  },
+  "authorization": [
+    {"principal_id": "user-1", "organization_id": "org-1", "permission": "flow-definition:view", "result": "allow"},
+    {"principal_id": "user-1", "organization_id": "org-2", "permission": "flow-definition:view", "result": "reject"},
+    {"principal_id": "user-1", "organization_id": "org-1", "permission": "flow-definition:delete", "result": "reject"}
+  ]
+}

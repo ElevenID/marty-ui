@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "authorized_organization_id": "org-1",
+  "authenticated_user_id": "user-1",
+  "valid_query": "organization_id=org-1&tenant_id=org-1&user_id=user-1&subscriptions=application.approved",
+  "expected_event_types": ["application.approved"],
+  "events": [
+    {"event_id":"event-other","event_type":"application.approved","aggregate_id":"application-other","aggregate_type":"application","organization_id":"org-other","data":{"application_id":"application-other"},"timestamp":"2026-08-06T11:59:00Z"},
+    {"event_id":"event-1","event_type":"application.approved","aggregate_id":"application-1","aggregate_type":"application","organization_id":"org-1","data":{"application_id":"application-1"},"timestamp":"2026-08-06T12:00:00Z"}
+  ],
+  "expected_frames": [
+    "data: {\"type\": \"connected\"}\n\n",
+    "event: application.approved\ndata: {\"event_id\": \"event-1\", \"aggregate_id\": \"application-1\", \"aggregate_type\": \"application\", \"organization_id\": \"org-1\", \"data\": {\"application_id\": \"application-1\"}, \"timestamp\": \"2026-08-06T12:00:00Z\"}\n\n"
+  ],
+  "expected_error_frames": [
+    "data: {\"type\": \"connected\"}\n\n",
+    "data: {\"error\": \"stream_error\"}\n\n"
+  ],
+  "rejected_queries": [
+    "organization_id=org-other",
+    "organization_id=org-1&tenant_id=org-other",
+    "organization_id=org-1&user_id=user-other"
+  ]
+}

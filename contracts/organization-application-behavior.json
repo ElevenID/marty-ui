@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "create": {
+    "name": "behavior-org",
+    "owner_id": "owner-subject",
+    "org_type": "education",
+    "display_name": null,
+    "description": "Behavioral organization contract",
+    "contact_email": "owner@example.com",
+    "visibility": "PUBLIC",
+    "join_mechanism": "open",
+    "requires_approval": true,
+    "expected": {
+      "display_name": "behavior-org",
+      "slug_prefix": "behavior-org-",
+      "status": "active",
+      "plan": "free",
+      "is_discoverable": true,
+      "owner_status": "active",
+      "permission_count": 104
+    }
+  },
+  "update": {
+    "fields_set": [
+      "name",
+      "description",
+      "contact_phone",
+      "visibility",
+      "join_mechanism",
+      "settings"
+    ],
+    "name": "renamed-org",
+    "description": null,
+    "contact_phone": "+1-303-555-0100",
+    "visibility": "PUBLIC",
+    "join_mechanism": "open",
+    "settings": {
+      "new_setting": "enabled"
+    },
+    "expected_updated_fields": [
+      "name",
+      "description",
+      "contact_phone",
+      "visibility",
+      "is_discoverable",
+      "join_mechanism",
+      "settings"
+    ],
+    "expected_existing_setting": "preserved"
+  },
+  "invalid_admission": {
+    "visibility": "PRIVATE",
+    "join_mechanism": "open",
+    "error_code": "ORGANIZATION.APPLICATION_OPEN_JOIN_REQUIRES_PUBLIC_VISIBILITY"
+  }
+}
