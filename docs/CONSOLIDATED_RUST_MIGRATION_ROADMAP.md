@@ -917,6 +917,31 @@ dispatch/readiness, executable/container packaging, acceptance gates and
 same-slice deletion of the Python service. No beta deployment occurs before
 those slices and the rest of wave three land.
 
+The largest remaining Organization application family—membership and
+joining—is now native as well. Invitations, acceptance, tenant-bound role
+replacement, owner-role retention, owner-removal rejection, member reads and
+removal, idempotent direct provisioning, pre-seeded email linking, default
+role selection, Marty/demo-admin promotion, join-code consumption and direct
+open joins all execute through `OrganizationApplication`. Member, role-link,
+join-code-counter, audit and MMF outbox writes share one transaction; update
+and code rows are locked before decisions, and membership/permission cache
+invalidation is an explicit post-commit warning. The direct-provisioning
+planner centralizes role deduplication and the applicant-to-admin promotion
+rule rather than duplicating it across callers. Owner retention is enforced on
+direct provisioning as well as ordinary role replacement.
+
+`contracts/organization-membership-behavior.json` freezes direct-role
+resolution and join-code failure precedence across Python and Rust. It also
+corrects the legacy ambiguity where an exhausted code with a future expiry was
+reported as expired: inactivity wins first, then actual expiration, then
+exhaustion. The optional PostgreSQL acceptance gate now covers invite,
+acceptance, role replacement, owner protection, removal, code/open joins and
+direct provisioning while asserting one durable audit/outbox pair for every
+emitted mutation. Twenty-five Rust tests, all 67 surviving Python Organization
+tests, formatting and strict Clippy pass. API keys and preferences are next,
+followed by RBAC/policy/audit application mutations and the adapter/runtime
+cutover.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

@@ -10,10 +10,13 @@ pub mod postgres;
 pub mod scim;
 
 pub use application::{
-    plan_organization_creation, plan_organization_update, ApplicationWarning,
-    ApplicationWarningCode, CreateOrganizationCommand, MutationResult, OrganizationApplication,
-    OrganizationApplicationError, OrganizationCreationPlan, UpdateOrganizationCommand,
-    UpdateOrganizationPatch,
+    evaluate_join_code, plan_direct_member_roles, plan_organization_creation,
+    plan_organization_update, AcceptInvitationCommand, AddMemberDirectCommand, ApplicationWarning,
+    ApplicationWarningCode, CreateOrganizationCommand, InviteMemberCommand, JoinByCodeCommand,
+    JoinCodeEvaluation, JoinCodeState, JoinCodeValidation, JoinOrganizationCommand,
+    MembershipPolicy, MutationResult, OrganizationApplication, OrganizationApplicationError,
+    OrganizationCreationPlan, RemoveMemberCommand, SetMemberRolesCommand,
+    UpdateOrganizationCommand, UpdateOrganizationPatch,
 };
 pub use cache::{OrganizationCache, OrganizationCacheError, OrganizationCacheKeys};
 pub use domain::{

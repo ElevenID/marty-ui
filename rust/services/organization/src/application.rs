@@ -1,9 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use mmf_messaging::{MessagingError, PostgresOutboxStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sqlx::{Postgres, Transaction};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -12,8 +13,8 @@ use crate::catalog::{
     materialize_permission_catalog, materialize_system_roles, CatalogError, SeedError,
 };
 use crate::domain::{
-    DomainError, JoinMechanism, Member, MemberStatus, Organization, OrganizationCreate,
-    OrganizationType, Permission,
+    DomainError, JoinCode, JoinMechanism, Member, MemberStatus, Organization, OrganizationCreate,
+    OrganizationType, Permission, Role,
 };
 use crate::events::{OrganizationEvent, OrganizationEventError, OrganizationEventKind};
 use crate::migration::{migrate_organization_schema, OrganizationMigrationError};
@@ -75,6 +76,119 @@ pub struct UpdateOrganizationCommand {
     pub now: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InviteMemberCommand {
+    pub organization_id: Uuid,
+    pub email: String,
+    pub role_ids: Vec<Uuid>,
+    pub invited_by: String,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AcceptInvitationCommand {
+    pub member_id: Uuid,
+    pub user_id: String,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SetMemberRolesCommand {
+    pub member_id: Uuid,
+    pub organization_id: Uuid,
+    pub role_ids: Vec<Uuid>,
+    pub updated_by: String,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoveMemberCommand {
+    pub member_id: Uuid,
+    pub removed_by: String,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AddMemberDirectCommand {
+    pub organization_id: Uuid,
+    pub user_id: String,
+    pub email: Option<String>,
+    pub role_ids: Option<Vec<Uuid>>,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JoinByCodeCommand {
+    pub user_id: String,
+    pub code: String,
+    pub email: String,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JoinOrganizationCommand {
+    pub user_id: String,
+    pub organization_id: Uuid,
+    pub email: String,
+    pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct JoinCodeValidation {
+    pub is_valid: bool,
+    pub organization: Option<Organization>,
+    pub message: String,
+    pub expired: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum JoinCodeState {
+    Valid,
+    Inactive,
+    Expired,
+    Exhausted,
+    Invalid,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JoinCodeEvaluation {
+    pub state: JoinCodeState,
+    pub message: &'static str,
+    pub expired: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MembershipPolicy {
+    pub marty_organization_id: Option<Uuid>,
+    pub marty_admin_emails: BTreeSet<String>,
+}
+
+impl MembershipPolicy {
+    #[must_use]
+    pub fn new(
+        marty_organization_id: Option<Uuid>,
+        marty_admin_emails: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self {
+            marty_organization_id,
+            marty_admin_emails: marty_admin_emails
+                .into_iter()
+                .map(|email| email.trim().to_lowercase())
+                .filter(|email| !email.is_empty())
+                .collect(),
+        }
+    }
+
+    fn grants_marty_admin(&self, organization_id: Uuid, email: Option<&str>) -> bool {
+        self.marty_organization_id == Some(organization_id)
+            && email.is_some_and(|email| {
+                self.marty_admin_emails
+                    .contains(email.trim().to_lowercase().as_str())
+            })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct OrganizationCreationPlan {
     pub organization: Organization,
@@ -86,6 +200,7 @@ pub struct OrganizationCreationPlan {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ApplicationWarningCode {
     PlanCacheSynchronizationFailed,
+    MembershipCacheInvalidationFailed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,6 +236,26 @@ pub enum OrganizationApplicationError {
     NotFound(Uuid),
     #[error("ORGANIZATION.APPLICATION_OWNER_ROLE_MISSING")]
     OwnerRoleMissing,
+    #[error("ORGANIZATION.APPLICATION_MEMBER_NOT_FOUND: {0}")]
+    MemberNotFound(Uuid),
+    #[error("ORGANIZATION.APPLICATION_ROLE_NOT_FOUND: {0}")]
+    RoleNotFound(Uuid),
+    #[error("ORGANIZATION.APPLICATION_MEMBER_CONFLICT: {0}")]
+    MemberConflict(String),
+    #[error("ORGANIZATION.APPLICATION_DEFAULT_ROLE_MISSING")]
+    DefaultRoleMissing,
+    #[error("ORGANIZATION.APPLICATION_ADMIN_ROLE_MISSING")]
+    AdminRoleMissing,
+    #[error("ORGANIZATION.APPLICATION_OWNER_ROLE_REQUIRED")]
+    OwnerRoleRequired,
+    #[error("ORGANIZATION.APPLICATION_OWNER_CANNOT_BE_REMOVED")]
+    OwnerCannotBeRemoved,
+    #[error("ORGANIZATION.APPLICATION_JOIN_CODE_INVALID: {0}")]
+    InvalidJoinCode(&'static str),
+    #[error("ORGANIZATION.APPLICATION_DIRECT_JOIN_NOT_ALLOWED")]
+    DirectJoinNotAllowed,
+    #[error("ORGANIZATION.APPLICATION_JOIN_REQUEST_PENDING")]
+    JoinRequestPending,
     #[error("ORGANIZATION.APPLICATION_TIME_PRECEDES_UNIX_EPOCH")]
     InvalidTimestamp,
     #[error(transparent)]
@@ -144,6 +279,7 @@ pub struct OrganizationApplication {
     store: PostgresOrganizationStore,
     outbox: PostgresOutboxStore,
     cache: OrganizationCache,
+    membership_policy: MembershipPolicy,
 }
 
 impl OrganizationApplication {
@@ -157,7 +293,14 @@ impl OrganizationApplication {
             store,
             outbox,
             cache,
+            membership_policy: MembershipPolicy::default(),
         })
+    }
+
+    #[must_use]
+    pub fn with_membership_policy(mut self, membership_policy: MembershipPolicy) -> Self {
+        self.membership_policy = membership_policy;
+        self
     }
 
     #[must_use]
@@ -197,9 +340,6 @@ impl OrganizationApplication {
             event_data,
             now,
         )?;
-        let audit = event.to_audit_event()?;
-        let message = event.to_message()?;
-
         let mut transaction = self.store.begin_transaction().await?;
         self.store
             .save_organization_in_transaction(&mut transaction, &creation.organization)
@@ -232,11 +372,7 @@ impl OrganizationApplication {
         self.store
             .add_member_role_in_transaction(&mut transaction, creation.owner.id, owner_role.id)
             .await?;
-        self.store
-            .save_audit_event_in_transaction(&mut transaction, &audit)
-            .await?;
-        self.outbox
-            .enqueue_in_transaction(&mut transaction, message)
+        self.persist_event_in_transaction(&mut transaction, &event)
             .await?;
         transaction.commit().await.map_err(RepositoryError::from)?;
 
@@ -276,17 +412,10 @@ impl OrganizationApplication {
             event_data,
             command.now,
         )?;
-        let audit = event.to_audit_event()?;
-        let message = event.to_message()?;
-
         self.store
             .save_organization_in_transaction(&mut transaction, &organization)
             .await?;
-        self.store
-            .save_audit_event_in_transaction(&mut transaction, &audit)
-            .await?;
-        self.outbox
-            .enqueue_in_transaction(&mut transaction, message)
+        self.persist_event_in_transaction(&mut transaction, &event)
             .await?;
         transaction.commit().await.map_err(RepositoryError::from)?;
         Ok(MutationResult::without_warnings(organization))
@@ -358,6 +487,731 @@ impl OrganizationApplication {
             .map(|(organization, _)| organization)
             .collect())
     }
+
+    pub async fn invite_member(
+        &self,
+        command: InviteMemberCommand,
+    ) -> Result<MutationResult<Member>, OrganizationApplicationError> {
+        require_non_empty(&command.email, "email is required")?;
+        require_non_empty(&command.invited_by, "invited_by is required")?;
+        if command.role_ids.is_empty() {
+            return Err(OrganizationApplicationError::InvalidCommand(
+                "invites must include at least one role",
+            ));
+        }
+        let mut transaction = self.store.begin_transaction().await?;
+        self.store
+            .organization_by_id_for_update_in_transaction(&mut transaction, command.organization_id)
+            .await?
+            .ok_or(OrganizationApplicationError::NotFound(
+                command.organization_id,
+            ))?;
+        if self
+            .store
+            .member_by_email_and_organization_for_update_in_transaction(
+                &mut transaction,
+                &command.email,
+                command.organization_id,
+            )
+            .await?
+            .is_some()
+        {
+            return Err(OrganizationApplicationError::MemberConflict(format!(
+                "{} is already invited or is a member",
+                command.email
+            )));
+        }
+        let roles = self
+            .validated_roles_in_transaction(
+                &mut transaction,
+                command.organization_id,
+                &command.role_ids,
+            )
+            .await?;
+        let mut member = Member::create_invitation(
+            command.organization_id,
+            command.email.clone(),
+            command.invited_by.clone(),
+            command.now,
+        );
+        self.store
+            .save_member_in_transaction(&mut transaction, &member)
+            .await?;
+        self.store
+            .set_member_roles_in_transaction(
+                &mut transaction,
+                member.id,
+                &roles.iter().map(|role| role.id).collect::<Vec<_>>(),
+            )
+            .await?;
+        member.roles = roles;
+        let event = member_invited_event(&command, member.id)?;
+        self.persist_event_in_transaction(&mut transaction, &event)
+            .await?;
+        transaction.commit().await.map_err(RepositoryError::from)?;
+        Ok(MutationResult::without_warnings(member))
+    }
+
+    pub async fn accept_invitation(
+        &self,
+        command: AcceptInvitationCommand,
+    ) -> Result<MutationResult<Member>, OrganizationApplicationError> {
+        require_non_empty(&command.user_id, "user_id is required")?;
+        let mut transaction = self.store.begin_transaction().await?;
+        let mut member = self
+            .store
+            .member_by_id_for_update_in_transaction(&mut transaction, command.member_id)
+            .await?
+            .ok_or(OrganizationApplicationError::MemberNotFound(
+                command.member_id,
+            ))?;
+        member.accept_invitation(command.user_id.clone(), command.now)?;
+        self.store
+            .save_member_in_transaction(&mut transaction, &member)
+            .await?;
+        let event = member_added_event(&member, command.now)?;
+        self.persist_event_in_transaction(&mut transaction, &event)
+            .await?;
+        transaction.commit().await.map_err(RepositoryError::from)?;
+        let warnings = self
+            .invalidate_member_after_commit(&member.user_id, member.organization_id)
+            .await;
+        Ok(MutationResult {
+            value: member,
+            warnings,
+        })
+    }
+
+    pub async fn set_member_roles(
+        &self,
+        command: SetMemberRolesCommand,
+    ) -> Result<MutationResult<Member>, OrganizationApplicationError> {
+        require_non_empty(&command.updated_by, "updated_by is required")?;
+        if command.role_ids.is_empty() {
+            return Err(OrganizationApplicationError::InvalidCommand(
+                "a member must have at least one role",
+            ));
+        }
+        let mut transaction = self.store.begin_transaction().await?;
+        let mut member = self
+            .store
+            .member_by_id_for_update_in_transaction(&mut transaction, command.member_id)
+            .await?
+            .ok_or(OrganizationApplicationError::MemberNotFound(
+                command.member_id,
+            ))?;
+        if member.organization_id != command.organization_id {
+            return Err(OrganizationApplicationError::MemberNotFound(
+                command.member_id,
+            ));
+        }
+        let organization = self
+            .store
+            .organization_by_id_for_update_in_transaction(&mut transaction, command.organization_id)
+            .await?
+            .ok_or(OrganizationApplicationError::NotFound(
+                command.organization_id,
+            ))?;
+        let roles = self
+            .validated_roles_in_transaction(
+                &mut transaction,
+                command.organization_id,
+                &command.role_ids,
+            )
+            .await?;
+        if member.user_id == organization.owner_id && !roles.iter().any(|role| role.name == "owner")
+        {
+            return Err(OrganizationApplicationError::OwnerRoleRequired);
+        }
+        self.store
+            .set_member_roles_in_transaction(
+                &mut transaction,
+                member.id,
+                &roles.iter().map(|role| role.id).collect::<Vec<_>>(),
+            )
+            .await?;
+        member.roles = roles;
+        member.updated_at = command.now;
+        self.store
+            .save_member_in_transaction(&mut transaction, &member)
+            .await?;
+        transaction.commit().await.map_err(RepositoryError::from)?;
+        let warnings = self
+            .invalidate_member_after_commit(&member.user_id, member.organization_id)
+            .await;
+        Ok(MutationResult {
+            value: member,
+            warnings,
+        })
+    }
+
+    pub async fn remove_member(
+        &self,
+        command: RemoveMemberCommand,
+    ) -> Result<MutationResult<()>, OrganizationApplicationError> {
+        require_non_empty(&command.removed_by, "removed_by is required")?;
+        let mut transaction = self.store.begin_transaction().await?;
+        let member = self
+            .store
+            .member_by_id_for_update_in_transaction(&mut transaction, command.member_id)
+            .await?
+            .ok_or(OrganizationApplicationError::MemberNotFound(
+                command.member_id,
+            ))?;
+        let organization = self
+            .store
+            .organization_by_id_for_update_in_transaction(&mut transaction, member.organization_id)
+            .await?
+            .ok_or(OrganizationApplicationError::NotFound(
+                member.organization_id,
+            ))?;
+        if !organization.owner_id.is_empty() && member.user_id == organization.owner_id {
+            return Err(OrganizationApplicationError::OwnerCannotBeRemoved);
+        }
+        let event = member_removed_event(&member, command.now)?;
+        if !self
+            .store
+            .delete_member_in_transaction(&mut transaction, member.id)
+            .await?
+        {
+            return Err(OrganizationApplicationError::MemberNotFound(member.id));
+        }
+        self.persist_event_in_transaction(&mut transaction, &event)
+            .await?;
+        transaction.commit().await.map_err(RepositoryError::from)?;
+        let warnings = self
+            .invalidate_member_after_commit(&member.user_id, member.organization_id)
+            .await;
+        Ok(MutationResult {
+            value: (),
+            warnings,
+        })
+    }
+
+    pub async fn list_members(
+        &self,
+        organization_id: Uuid,
+    ) -> Result<Vec<Member>, OrganizationApplicationError> {
+        Ok(self.store.members_by_organization(organization_id).await?)
+    }
+
+    pub async fn get_membership(
+        &self,
+        user_id: &str,
+        organization_id: Uuid,
+    ) -> Result<Option<Member>, OrganizationApplicationError> {
+        require_non_empty(user_id, "user_id is required")?;
+        Ok(self
+            .store
+            .member_by_user_and_organization(user_id, organization_id)
+            .await?)
+    }
+
+    pub async fn add_member_direct(
+        &self,
+        command: AddMemberDirectCommand,
+    ) -> Result<MutationResult<Member>, OrganizationApplicationError> {
+        require_non_empty(&command.user_id, "user_id is required")?;
+        if command
+            .email
+            .as_deref()
+            .is_some_and(|email| email.trim().is_empty())
+        {
+            return Err(OrganizationApplicationError::InvalidCommand(
+                "email must not be empty",
+            ));
+        }
+        let mut transaction = self.store.begin_transaction().await?;
+        let organization = self
+            .store
+            .organization_by_id_for_update_in_transaction(&mut transaction, command.organization_id)
+            .await?
+            .ok_or(OrganizationApplicationError::NotFound(
+                command.organization_id,
+            ))?;
+
+        if let Some(mut member) = self
+            .store
+            .member_by_user_and_organization_for_update_in_transaction(
+                &mut transaction,
+                &command.user_id,
+                command.organization_id,
+            )
+            .await?
+        {
+            let roles = self
+                .resolve_direct_roles_in_transaction(
+                    &mut transaction,
+                    command.organization_id,
+                    command.email.as_deref(),
+                    command.role_ids.as_deref(),
+                    &member.roles,
+                )
+                .await?;
+            validate_owner_roles(&organization, &member.user_id, &roles)?;
+            let changed = role_id_set(&roles) != role_id_set(&member.roles);
+            if changed {
+                let ids = roles.iter().map(|role| role.id).collect::<Vec<_>>();
+                self.store
+                    .set_member_roles_in_transaction(&mut transaction, member.id, &ids)
+                    .await?;
+                member.roles = roles;
+                member.updated_at = command.now;
+                self.store
+                    .save_member_in_transaction(&mut transaction, &member)
+                    .await?;
+            }
+            transaction.commit().await.map_err(RepositoryError::from)?;
+            let warnings = if changed {
+                self.invalidate_member_after_commit(&member.user_id, member.organization_id)
+                    .await
+            } else {
+                Vec::new()
+            };
+            return Ok(MutationResult {
+                value: member,
+                warnings,
+            });
+        }
+
+        if let Some(email) = command.email.as_deref() {
+            if let Some(mut member) = self
+                .store
+                .member_by_email_and_organization_for_update_in_transaction(
+                    &mut transaction,
+                    email,
+                    command.organization_id,
+                )
+                .await?
+            {
+                if !member.user_id.is_empty() {
+                    return Err(OrganizationApplicationError::MemberConflict(format!(
+                        "{email} is already linked to another member"
+                    )));
+                }
+                let roles = self
+                    .resolve_direct_roles_in_transaction(
+                        &mut transaction,
+                        command.organization_id,
+                        command.email.as_deref(),
+                        command.role_ids.as_deref(),
+                        &member.roles,
+                    )
+                    .await?;
+                validate_owner_roles(&organization, &command.user_id, &roles)?;
+                member.user_id.clone_from(&command.user_id);
+                member.joined_at = Some(command.now);
+                member.updated_at = command.now;
+                self.store
+                    .save_member_in_transaction(&mut transaction, &member)
+                    .await?;
+                let ids = roles.iter().map(|role| role.id).collect::<Vec<_>>();
+                self.store
+                    .set_member_roles_in_transaction(&mut transaction, member.id, &ids)
+                    .await?;
+                member.roles = roles;
+                transaction.commit().await.map_err(RepositoryError::from)?;
+                let warnings = self
+                    .invalidate_member_after_commit(&member.user_id, member.organization_id)
+                    .await;
+                return Ok(MutationResult {
+                    value: member,
+                    warnings,
+                });
+            }
+        }
+
+        let mut member = Member::create(
+            command.organization_id,
+            command.user_id,
+            command.email.clone(),
+            MemberStatus::Active,
+            command.now,
+        );
+        let roles = self
+            .resolve_direct_roles_in_transaction(
+                &mut transaction,
+                command.organization_id,
+                command.email.as_deref(),
+                command.role_ids.as_deref(),
+                &[],
+            )
+            .await?;
+        validate_owner_roles(&organization, &member.user_id, &roles)?;
+        self.store
+            .save_member_in_transaction(&mut transaction, &member)
+            .await?;
+        let ids = roles.iter().map(|role| role.id).collect::<Vec<_>>();
+        self.store
+            .set_member_roles_in_transaction(&mut transaction, member.id, &ids)
+            .await?;
+        member.roles = roles;
+        let event = member_added_event(&member, command.now)?;
+        self.persist_event_in_transaction(&mut transaction, &event)
+            .await?;
+        transaction.commit().await.map_err(RepositoryError::from)?;
+        let warnings = self
+            .invalidate_member_after_commit(&member.user_id, member.organization_id)
+            .await;
+        Ok(MutationResult {
+            value: member,
+            warnings,
+        })
+    }
+
+    pub async fn join_by_code(
+        &self,
+        command: JoinByCodeCommand,
+    ) -> Result<MutationResult<(Organization, Member)>, OrganizationApplicationError> {
+        require_non_empty(&command.user_id, "user_id is required")?;
+        require_non_empty(&command.email, "email is required")?;
+        let code = normalize_join_code(&command.code)?;
+        let mut transaction = self.store.begin_transaction().await?;
+        let mut join_code = self
+            .store
+            .join_code_by_code_for_update_in_transaction(&mut transaction, &code)
+            .await?
+            .ok_or(OrganizationApplicationError::InvalidJoinCode("not found"))?;
+        validate_join_code_state(&join_code, command.now)?;
+        let organization = self
+            .store
+            .organization_by_id_for_update_in_transaction(
+                &mut transaction,
+                join_code.organization_id,
+            )
+            .await?
+            .ok_or(OrganizationApplicationError::NotFound(
+                join_code.organization_id,
+            ))?;
+        if self
+            .store
+            .member_by_user_and_organization_for_update_in_transaction(
+                &mut transaction,
+                &command.user_id,
+                organization.id,
+            )
+            .await?
+            .is_some()
+        {
+            return Err(OrganizationApplicationError::MemberConflict(
+                "already a member of this organization".into(),
+            ));
+        }
+        let roles = self
+            .default_roles_in_transaction(&mut transaction, organization.id)
+            .await?;
+        let status = if organization.requires_approval {
+            MemberStatus::Pending
+        } else {
+            MemberStatus::Active
+        };
+        let mut member = Member::create(
+            organization.id,
+            command.user_id,
+            Some(command.email),
+            status,
+            command.now,
+        );
+        join_code.increment_usage(command.now)?;
+        self.store
+            .save_member_in_transaction(&mut transaction, &member)
+            .await?;
+        let ids = roles.iter().map(|role| role.id).collect::<Vec<_>>();
+        self.store
+            .set_member_roles_in_transaction(&mut transaction, member.id, &ids)
+            .await?;
+        member.roles = roles;
+        self.store
+            .save_join_code_in_transaction(&mut transaction, &join_code)
+            .await?;
+        let event = member_added_event(&member, command.now)?;
+        self.persist_event_in_transaction(&mut transaction, &event)
+            .await?;
+        transaction.commit().await.map_err(RepositoryError::from)?;
+        let warnings = self
+            .invalidate_member_after_commit(&member.user_id, member.organization_id)
+            .await;
+        Ok(MutationResult {
+            value: (organization, member),
+            warnings,
+        })
+    }
+
+    pub async fn join_organization(
+        &self,
+        command: JoinOrganizationCommand,
+    ) -> Result<MutationResult<(Organization, Member)>, OrganizationApplicationError> {
+        require_non_empty(&command.user_id, "user_id is required")?;
+        require_non_empty(&command.email, "email is required")?;
+        let mut transaction = self.store.begin_transaction().await?;
+        let organization = self
+            .store
+            .organization_by_id_for_update_in_transaction(&mut transaction, command.organization_id)
+            .await?
+            .ok_or(OrganizationApplicationError::NotFound(
+                command.organization_id,
+            ))?;
+        if organization.join_mechanism != JoinMechanism::Open {
+            return Err(OrganizationApplicationError::DirectJoinNotAllowed);
+        }
+        if let Some(existing) = self
+            .store
+            .member_by_user_and_organization_for_update_in_transaction(
+                &mut transaction,
+                &command.user_id,
+                organization.id,
+            )
+            .await?
+        {
+            return if existing.status == MemberStatus::Pending {
+                Err(OrganizationApplicationError::JoinRequestPending)
+            } else {
+                Err(OrganizationApplicationError::MemberConflict(
+                    "already a member of this organization".into(),
+                ))
+            };
+        }
+        let roles = self
+            .default_roles_in_transaction(&mut transaction, organization.id)
+            .await?;
+        let status = if organization.requires_approval {
+            MemberStatus::Pending
+        } else {
+            MemberStatus::Active
+        };
+        let mut member = Member::create(
+            organization.id,
+            command.user_id,
+            Some(command.email),
+            status,
+            command.now,
+        );
+        self.store
+            .save_member_in_transaction(&mut transaction, &member)
+            .await?;
+        let ids = roles.iter().map(|role| role.id).collect::<Vec<_>>();
+        self.store
+            .set_member_roles_in_transaction(&mut transaction, member.id, &ids)
+            .await?;
+        member.roles = roles;
+        let event = member_added_event(&member, command.now)?;
+        self.persist_event_in_transaction(&mut transaction, &event)
+            .await?;
+        transaction.commit().await.map_err(RepositoryError::from)?;
+        let warnings = self
+            .invalidate_member_after_commit(&member.user_id, member.organization_id)
+            .await;
+        Ok(MutationResult {
+            value: (organization, member),
+            warnings,
+        })
+    }
+
+    pub async fn validate_join_code(
+        &self,
+        code: &str,
+        now: DateTime<Utc>,
+    ) -> Result<JoinCodeValidation, OrganizationApplicationError> {
+        let code = match normalize_join_code(code) {
+            Ok(code) => code,
+            Err(_) => {
+                return Ok(invalid_join_code_validation("Join code is required", false));
+            }
+        };
+        let Some(join_code) = self.store.join_code_by_code(&code).await? else {
+            return Ok(invalid_join_code_validation(
+                "Invitation code not found",
+                false,
+            ));
+        };
+        let evaluation = evaluate_join_code(&join_code, now);
+        if evaluation.state != JoinCodeState::Valid {
+            return Ok(invalid_join_code_validation(
+                evaluation.message,
+                evaluation.expired,
+            ));
+        }
+        let Some(organization) = self
+            .store
+            .organization_by_id(join_code.organization_id)
+            .await?
+        else {
+            return Ok(invalid_join_code_validation(
+                "Organization not found",
+                false,
+            ));
+        };
+        Ok(JoinCodeValidation {
+            is_valid: true,
+            message: format!("Valid invitation to join {}", organization.name),
+            organization: Some(organization),
+            expired: false,
+        })
+    }
+
+    async fn validated_roles_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+        role_ids: &[Uuid],
+    ) -> Result<Vec<Role>, OrganizationApplicationError> {
+        let unique_role_ids = deduplicate_ids(role_ids);
+        if unique_role_ids.is_empty() {
+            return Err(OrganizationApplicationError::InvalidCommand(
+                "a member must have at least one role",
+            ));
+        }
+        let roles = self
+            .store
+            .roles_by_ids_for_organization_in_transaction(
+                transaction,
+                organization_id,
+                &unique_role_ids,
+            )
+            .await?;
+        let found = role_id_set(&roles);
+        if let Some(missing) = unique_role_ids
+            .into_iter()
+            .find(|role_id| !found.contains(role_id))
+        {
+            return Err(OrganizationApplicationError::RoleNotFound(missing));
+        }
+        Ok(roles)
+    }
+
+    async fn default_roles_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+    ) -> Result<Vec<Role>, OrganizationApplicationError> {
+        let roles = self
+            .store
+            .default_roles_for_organization_in_transaction(transaction, organization_id)
+            .await?;
+        if roles.is_empty() {
+            Err(OrganizationApplicationError::DefaultRoleMissing)
+        } else {
+            Ok(roles)
+        }
+    }
+
+    async fn resolve_direct_roles_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+        email: Option<&str>,
+        requested_role_ids: Option<&[Uuid]>,
+        current_roles: &[Role],
+    ) -> Result<Vec<Role>, OrganizationApplicationError> {
+        let requested_roles = match requested_role_ids.filter(|role_ids| !role_ids.is_empty()) {
+            Some(role_ids) => Some(
+                self.validated_roles_in_transaction(transaction, organization_id, role_ids)
+                    .await?,
+            ),
+            None => None,
+        };
+        let grants_marty_admin = self
+            .membership_policy
+            .grants_marty_admin(organization_id, email);
+        let admin_role = if grants_marty_admin {
+            Some(
+                self.store
+                    .role_by_name_in_transaction(transaction, organization_id, "admin")
+                    .await?
+                    .ok_or(OrganizationApplicationError::AdminRoleMissing)?,
+            )
+        } else {
+            None
+        };
+        let default_roles = self
+            .store
+            .default_roles_for_organization_in_transaction(transaction, organization_id)
+            .await?;
+        plan_direct_member_roles(
+            grants_marty_admin,
+            requested_roles.as_deref(),
+            current_roles,
+            admin_role.as_ref(),
+            &default_roles,
+        )
+    }
+
+    async fn invalidate_member_after_commit(
+        &self,
+        user_id: &str,
+        organization_id: Uuid,
+    ) -> Vec<ApplicationWarning> {
+        if user_id.trim().is_empty() {
+            return Vec::new();
+        }
+        self.cache
+            .invalidate_member(user_id, organization_id)
+            .await
+            .err()
+            .map(|error| ApplicationWarning {
+                code: ApplicationWarningCode::MembershipCacheInvalidationFailed,
+                message: error.to_string(),
+            })
+            .into_iter()
+            .collect()
+    }
+
+    async fn persist_event_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        event: &OrganizationEvent,
+    ) -> Result<(), OrganizationApplicationError> {
+        let audit = event.to_audit_event()?;
+        let message = event.to_message()?;
+        self.store
+            .save_audit_event_in_transaction(transaction, &audit)
+            .await?;
+        self.outbox
+            .enqueue_in_transaction(transaction, message)
+            .await?;
+        Ok(())
+    }
+}
+
+pub fn plan_direct_member_roles(
+    grants_marty_admin: bool,
+    requested_roles: Option<&[Role]>,
+    current_roles: &[Role],
+    admin_role: Option<&Role>,
+    default_roles: &[Role],
+) -> Result<Vec<Role>, OrganizationApplicationError> {
+    let explicitly_requested = requested_roles.is_some_and(|roles| !roles.is_empty());
+    let mut resolved = requested_roles
+        .filter(|roles| !roles.is_empty())
+        .unwrap_or(current_roles)
+        .to_vec();
+    if grants_marty_admin {
+        let admin = admin_role.ok_or(OrganizationApplicationError::AdminRoleMissing)?;
+        let current_names = current_roles
+            .iter()
+            .map(|role| role.name.as_str())
+            .collect::<BTreeSet<_>>();
+        if explicitly_requested {
+            if !resolved.iter().any(|role| role.id == admin.id) {
+                resolved.push(admin.clone());
+            }
+        } else if resolved.is_empty() || current_names == BTreeSet::from(["applicant"]) {
+            resolved = vec![admin.clone()];
+        } else if !current_names.contains("admin")
+            && !resolved.iter().any(|role| role.id == admin.id)
+        {
+            resolved.push(admin.clone());
+        }
+    }
+    if resolved.is_empty() {
+        if default_roles.is_empty() {
+            return Err(OrganizationApplicationError::DefaultRoleMissing);
+        }
+        resolved = default_roles.to_vec();
+    }
+    let mut seen = BTreeSet::new();
+    resolved.retain(|role| seen.insert(role.id));
+    Ok(resolved)
 }
 
 pub fn plan_organization_creation(
@@ -493,5 +1347,170 @@ fn cache_warning(error: OrganizationCacheError) -> ApplicationWarning {
     ApplicationWarning {
         code: ApplicationWarningCode::PlanCacheSynchronizationFailed,
         message: error.to_string(),
+    }
+}
+
+fn deduplicate_ids(role_ids: &[Uuid]) -> Vec<Uuid> {
+    let mut seen = BTreeSet::new();
+    role_ids
+        .iter()
+        .copied()
+        .filter(|role_id| seen.insert(*role_id))
+        .collect()
+}
+
+fn role_id_set(roles: &[Role]) -> BTreeSet<Uuid> {
+    roles.iter().map(|role| role.id).collect()
+}
+
+fn validate_owner_roles(
+    organization: &Organization,
+    user_id: &str,
+    roles: &[Role],
+) -> Result<(), OrganizationApplicationError> {
+    if !organization.owner_id.is_empty()
+        && organization.owner_id == user_id
+        && !roles.iter().any(|role| role.name == "owner")
+    {
+        Err(OrganizationApplicationError::OwnerRoleRequired)
+    } else {
+        Ok(())
+    }
+}
+
+fn member_invited_event(
+    command: &InviteMemberCommand,
+    member_id: Uuid,
+) -> Result<OrganizationEvent, OrganizationEventError> {
+    let mut data = Map::new();
+    data.insert("member_id".into(), Value::String(member_id.to_string()));
+    data.insert("email".into(), Value::String(command.email.clone()));
+    data.insert(
+        "invited_by".into(),
+        Value::String(command.invited_by.clone()),
+    );
+    OrganizationEvent::new(
+        OrganizationEventKind::MemberInvited,
+        command.organization_id,
+        data,
+        command.now,
+    )
+}
+
+fn member_added_event(
+    member: &Member,
+    now: DateTime<Utc>,
+) -> Result<OrganizationEvent, OrganizationEventError> {
+    let mut data = Map::new();
+    data.insert("member_id".into(), Value::String(member.id.to_string()));
+    data.insert("user_id".into(), Value::String(member.user_id.clone()));
+    data.insert(
+        "roles".into(),
+        Value::Array(
+            member
+                .role_names()
+                .into_iter()
+                .map(|role| Value::String(role.to_owned()))
+                .collect(),
+        ),
+    );
+    OrganizationEvent::new(
+        OrganizationEventKind::MemberAdded,
+        member.organization_id,
+        data,
+        now,
+    )
+}
+
+fn member_removed_event(
+    member: &Member,
+    now: DateTime<Utc>,
+) -> Result<OrganizationEvent, OrganizationEventError> {
+    let mut data = Map::new();
+    data.insert("member_id".into(), Value::String(member.id.to_string()));
+    data.insert("user_id".into(), Value::String(member.user_id.clone()));
+    OrganizationEvent::new(
+        OrganizationEventKind::MemberRemoved,
+        member.organization_id,
+        data,
+        now,
+    )
+}
+
+fn normalize_join_code(code: &str) -> Result<String, OrganizationApplicationError> {
+    let code = code.trim().to_uppercase();
+    if code.is_empty() {
+        Err(OrganizationApplicationError::InvalidCommand(
+            "join code is required",
+        ))
+    } else {
+        Ok(code)
+    }
+}
+
+fn validate_join_code_state(
+    join_code: &JoinCode,
+    now: DateTime<Utc>,
+) -> Result<(), OrganizationApplicationError> {
+    match evaluate_join_code(join_code, now).state {
+        JoinCodeState::Valid => Ok(()),
+        JoinCodeState::Inactive => Err(OrganizationApplicationError::InvalidJoinCode(
+            "no longer active",
+        )),
+        JoinCodeState::Expired => Err(OrganizationApplicationError::InvalidJoinCode("expired")),
+        JoinCodeState::Exhausted => Err(OrganizationApplicationError::InvalidJoinCode(
+            "maximum uses reached",
+        )),
+        JoinCodeState::Invalid => Err(OrganizationApplicationError::InvalidJoinCode("invalid")),
+    }
+}
+
+#[must_use]
+pub fn evaluate_join_code(join_code: &JoinCode, now: DateTime<Utc>) -> JoinCodeEvaluation {
+    if join_code.is_valid_at(now) {
+        JoinCodeEvaluation {
+            state: JoinCodeState::Valid,
+            message: "valid",
+            expired: false,
+        }
+    } else if !join_code.is_active {
+        JoinCodeEvaluation {
+            state: JoinCodeState::Inactive,
+            message: "This invitation is no longer active",
+            expired: false,
+        }
+    } else if join_code
+        .expires_at
+        .is_some_and(|expires_at| now > expires_at)
+    {
+        JoinCodeEvaluation {
+            state: JoinCodeState::Expired,
+            message: "This invitation has expired",
+            expired: true,
+        }
+    } else if join_code
+        .max_uses
+        .is_some_and(|max_uses| join_code.use_count >= max_uses)
+    {
+        JoinCodeEvaluation {
+            state: JoinCodeState::Exhausted,
+            message: "This invitation has reached its maximum uses",
+            expired: false,
+        }
+    } else {
+        JoinCodeEvaluation {
+            state: JoinCodeState::Invalid,
+            message: "Invalid invitation code",
+            expired: false,
+        }
+    }
+}
+
+fn invalid_join_code_validation(message: &str, expired: bool) -> JoinCodeValidation {
+    JoinCodeValidation {
+        is_valid: false,
+        organization: None,
+        message: message.to_owned(),
+        expired,
     }
 }

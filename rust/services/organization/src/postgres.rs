@@ -163,6 +163,18 @@ impl PostgresOrganizationStore {
         self.hydrate_optional_member(row).await
     }
 
+    pub async fn member_by_id_for_update_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        member_id: Uuid,
+    ) -> Result<Option<Member>, RepositoryError> {
+        let row = sqlx::query("SELECT * FROM organization_service.members WHERE id=$1 FOR UPDATE")
+            .bind(member_id)
+            .fetch_optional(&mut **transaction)
+            .await?;
+        hydrate_optional_member_in_transaction(transaction, row).await
+    }
+
     pub async fn member_by_user_and_organization(
         &self,
         user_id: &str,
@@ -179,6 +191,23 @@ impl PostgresOrganizationStore {
         self.hydrate_optional_member(row).await
     }
 
+    pub async fn member_by_user_and_organization_for_update_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        user_id: &str,
+        organization_id: Uuid,
+    ) -> Result<Option<Member>, RepositoryError> {
+        let row = sqlx::query(
+            "SELECT * FROM organization_service.members
+             WHERE user_id=$1 AND organization_id=$2 FOR UPDATE",
+        )
+        .bind(user_id)
+        .bind(organization_id)
+        .fetch_optional(&mut **transaction)
+        .await?;
+        hydrate_optional_member_in_transaction(transaction, row).await
+    }
+
     pub async fn member_by_email_and_organization(
         &self,
         email: &str,
@@ -193,6 +222,23 @@ impl PostgresOrganizationStore {
         .fetch_optional(&self.pool)
         .await?;
         self.hydrate_optional_member(row).await
+    }
+
+    pub async fn member_by_email_and_organization_for_update_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        email: &str,
+        organization_id: Uuid,
+    ) -> Result<Option<Member>, RepositoryError> {
+        let row = sqlx::query(
+            "SELECT * FROM organization_service.members
+             WHERE lower(email)=lower($1) AND organization_id=$2 FOR UPDATE",
+        )
+        .bind(email)
+        .bind(organization_id)
+        .fetch_optional(&mut **transaction)
+        .await?;
+        hydrate_optional_member_in_transaction(transaction, row).await
     }
 
     pub async fn members_by_organization(
@@ -223,6 +269,18 @@ impl PostgresOrganizationStore {
         let result = sqlx::query("DELETE FROM organization_service.members WHERE id=$1")
             .bind(member_id)
             .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn delete_member_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        member_id: Uuid,
+    ) -> Result<bool, RepositoryError> {
+        let result = sqlx::query("DELETE FROM organization_service.members WHERE id=$1")
+            .bind(member_id)
+            .execute(&mut **transaction)
             .await?;
         Ok(result.rows_affected() == 1)
     }
@@ -384,41 +442,29 @@ impl PostgresOrganizationStore {
     }
 
     pub async fn save_join_code(&self, join_code: &JoinCode) -> Result<(), RepositoryError> {
-        let max_uses = join_code
-            .max_uses
-            .map(i32::try_from)
-            .transpose()
-            .map_err(|_| {
-                invalid(
-                    "join_codes.max_uses",
-                    join_code.max_uses.unwrap().to_string(),
-                )
-            })?;
-        let use_count = i32::try_from(join_code.use_count)
-            .map_err(|_| invalid("join_codes.use_count", join_code.use_count.to_string()))?;
-        sqlx::query(
-            "INSERT INTO organization_service.join_codes (
-                id,organization_id,code,created_by,expires_at,max_uses,use_count,is_active,
-                created_at,updated_at
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-             ON CONFLICT (id) DO UPDATE SET
-                code=EXCLUDED.code,expires_at=EXCLUDED.expires_at,max_uses=EXCLUDED.max_uses,
-                use_count=EXCLUDED.use_count,is_active=EXCLUDED.is_active,
-                updated_at=EXCLUDED.updated_at",
-        )
-        .bind(join_code.id)
-        .bind(join_code.organization_id)
-        .bind(&join_code.code)
-        .bind(&join_code.created_by)
-        .bind(join_code.expires_at)
-        .bind(max_uses)
-        .bind(use_count)
-        .bind(join_code.is_active)
-        .bind(join_code.created_at)
-        .bind(join_code.updated_at)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        let mut connection = self.pool.acquire().await?;
+        save_join_code_on(&mut connection, join_code).await
+    }
+
+    pub async fn save_join_code_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        join_code: &JoinCode,
+    ) -> Result<(), RepositoryError> {
+        save_join_code_on(&mut *transaction, join_code).await
+    }
+
+    pub async fn join_code_by_code_for_update_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        code: &str,
+    ) -> Result<Option<JoinCode>, RepositoryError> {
+        let row =
+            sqlx::query("SELECT * FROM organization_service.join_codes WHERE code=$1 FOR UPDATE")
+                .bind(code)
+                .fetch_optional(&mut **transaction)
+                .await?;
+        row.as_ref().map(join_code_from_row).transpose()
     }
 
     pub async fn join_code_by_code(&self, code: &str) -> Result<Option<JoinCode>, RepositoryError> {
@@ -580,6 +626,60 @@ impl PostgresOrganizationStore {
         Ok(roles)
     }
 
+    pub async fn roles_by_ids_for_organization_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+        role_ids: &[Uuid],
+    ) -> Result<Vec<Role>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT * FROM organization_service.roles
+             WHERE organization_id=$1 AND id=ANY($2)
+             ORDER BY is_system DESC,name",
+        )
+        .bind(organization_id)
+        .bind(role_ids)
+        .fetch_all(&mut **transaction)
+        .await?;
+        hydrate_roles_in_transaction(transaction, rows).await
+    }
+
+    pub async fn default_roles_for_organization_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+    ) -> Result<Vec<Role>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT * FROM organization_service.roles
+             WHERE organization_id=$1 AND is_default_for_new_members=true
+             ORDER BY is_system DESC,name",
+        )
+        .bind(organization_id)
+        .fetch_all(&mut **transaction)
+        .await?;
+        hydrate_roles_in_transaction(transaction, rows).await
+    }
+
+    pub async fn role_by_name_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+        name: &str,
+    ) -> Result<Option<Role>, RepositoryError> {
+        let row = sqlx::query(
+            "SELECT * FROM organization_service.roles
+             WHERE organization_id=$1 AND name=$2",
+        )
+        .bind(organization_id)
+        .bind(name)
+        .fetch_optional(&mut **transaction)
+        .await?;
+        match row {
+            Some(row) => Ok(Some(hydrate_role_in_transaction(transaction, &row).await?)),
+            None => Ok(None),
+        }
+    }
+
     pub async fn roles_for_member(&self, member_id: Uuid) -> Result<Vec<Role>, RepositoryError> {
         let rows = sqlx::query(
             "SELECT roles.* FROM organization_service.roles roles
@@ -632,6 +732,22 @@ impl PostgresOrganizationStore {
             add_member_role_on(&mut transaction, member_id, *role_id).await?;
         }
         transaction.commit().await?;
+        Ok(())
+    }
+
+    pub async fn set_member_roles_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        member_id: Uuid,
+        role_ids: &[Uuid],
+    ) -> Result<(), RepositoryError> {
+        sqlx::query("DELETE FROM organization_service.member_roles WHERE member_id=$1")
+            .bind(member_id)
+            .execute(&mut **transaction)
+            .await?;
+        for role_id in role_ids {
+            add_member_role_on(&mut *transaction, member_id, *role_id).await?;
+        }
         Ok(())
     }
 
@@ -915,6 +1031,47 @@ async fn save_member_on(
     Ok(())
 }
 
+async fn save_join_code_on(
+    connection: &mut PgConnection,
+    join_code: &JoinCode,
+) -> Result<(), RepositoryError> {
+    let max_uses = join_code
+        .max_uses
+        .map(i32::try_from)
+        .transpose()
+        .map_err(|_| {
+            invalid(
+                "join_codes.max_uses",
+                join_code.max_uses.unwrap().to_string(),
+            )
+        })?;
+    let use_count = i32::try_from(join_code.use_count)
+        .map_err(|_| invalid("join_codes.use_count", join_code.use_count.to_string()))?;
+    sqlx::query(
+        "INSERT INTO organization_service.join_codes (
+            id,organization_id,code,created_by,expires_at,max_uses,use_count,is_active,
+            created_at,updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT (id) DO UPDATE SET
+            code=EXCLUDED.code,expires_at=EXCLUDED.expires_at,max_uses=EXCLUDED.max_uses,
+            use_count=EXCLUDED.use_count,is_active=EXCLUDED.is_active,
+            updated_at=EXCLUDED.updated_at",
+    )
+    .bind(join_code.id)
+    .bind(join_code.organization_id)
+    .bind(&join_code.code)
+    .bind(&join_code.created_by)
+    .bind(join_code.expires_at)
+    .bind(max_uses)
+    .bind(use_count)
+    .bind(join_code.is_active)
+    .bind(join_code.created_at)
+    .bind(join_code.updated_at)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
 async fn save_permission_on(
     connection: &mut PgConnection,
     permission: &Permission,
@@ -1027,6 +1184,68 @@ async fn add_member_role_on(
     .execute(connection)
     .await?;
     Ok(())
+}
+
+async fn hydrate_optional_member_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    row: Option<PgRow>,
+) -> Result<Option<Member>, RepositoryError> {
+    match row {
+        Some(row) => Ok(Some(
+            hydrate_member_in_transaction(transaction, &row).await?,
+        )),
+        None => Ok(None),
+    }
+}
+
+async fn hydrate_member_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    row: &PgRow,
+) -> Result<Member, RepositoryError> {
+    let member_id: Uuid = row.try_get("id")?;
+    let role_rows = sqlx::query(
+        "SELECT roles.* FROM organization_service.roles roles
+         JOIN organization_service.member_roles links ON links.role_id=roles.id
+         WHERE links.member_id=$1 ORDER BY roles.is_system DESC,roles.name",
+    )
+    .bind(member_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut member = member_from_row(row)?;
+    member.roles = hydrate_roles_in_transaction(transaction, role_rows).await?;
+    Ok(member)
+}
+
+async fn hydrate_roles_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    rows: Vec<PgRow>,
+) -> Result<Vec<Role>, RepositoryError> {
+    let mut roles = Vec::with_capacity(rows.len());
+    for row in rows {
+        roles.push(hydrate_role_in_transaction(transaction, &row).await?);
+    }
+    Ok(roles)
+}
+
+async fn hydrate_role_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    row: &PgRow,
+) -> Result<Role, RepositoryError> {
+    let role_id: Uuid = row.try_get("id")?;
+    let permission_rows = sqlx::query(
+        "SELECT permissions.* FROM organization_service.permissions permissions
+         JOIN organization_service.role_permissions links
+           ON links.permission_id=permissions.id
+         WHERE links.role_id=$1 ORDER BY permissions.resource,permissions.action",
+    )
+    .bind(role_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    let permissions = permission_rows
+        .iter()
+        .map(permission_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    role_from_row(row, permissions)
 }
 
 fn push_optional_filter(

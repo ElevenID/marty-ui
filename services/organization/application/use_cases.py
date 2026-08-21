@@ -850,7 +850,7 @@ class JoinUseCase:
         if not join_code.is_valid():
             if not join_code.is_active:
                 raise ValueError("Join code is no longer active")
-            if join_code.expires_at:
+            if join_code.expires_at and datetime.now(timezone.utc) > join_code.expires_at:
                 raise ValueError("Join code has expired")
             if join_code.max_uses is not None:
                 raise ValueError("Join code has reached maximum uses")
@@ -929,7 +929,7 @@ class JoinUseCase:
         if not join_code.is_valid():
             if not join_code.is_active:
                 return False, None, "This invitation is no longer active", False
-            if join_code.expires_at:
+            if join_code.expires_at and datetime.now(timezone.utc) > join_code.expires_at:
                 return False, None, "This invitation has expired", True
             if join_code.max_uses is not None:
                 return (

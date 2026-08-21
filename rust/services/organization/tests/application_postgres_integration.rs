@@ -3,8 +3,10 @@ use std::sync::Arc;
 use chrono::Utc;
 use marty_organization::postgres::PostgresOrganizationStore;
 use marty_organization::{
-    CreateOrganizationCommand, JoinMechanism, OrganizationApplication, OrganizationCache,
-    OrganizationType, UpdateOrganizationCommand, UpdateOrganizationPatch,
+    AcceptInvitationCommand, AddMemberDirectCommand, CreateOrganizationCommand,
+    InviteMemberCommand, JoinByCodeCommand, JoinCode, JoinMechanism, JoinOrganizationCommand,
+    OrganizationApplication, OrganizationApplicationError, OrganizationCache, OrganizationType,
+    RemoveMemberCommand, SetMemberRolesCommand, UpdateOrganizationCommand, UpdateOrganizationPatch,
 };
 use mmf_data::MemoryCache;
 use sqlx::postgres::PgPoolOptions;
@@ -130,6 +132,162 @@ async fn mutations_commit_domain_audit_and_outbox_state_together_when_configured
         .await
         .expect("outbox count must pass"),
         2
+    );
+
+    let roles = application
+        .store()
+        .roles_by_organization(organization_id)
+        .await
+        .expect("role lookup must pass");
+    let applicant_role = roles
+        .iter()
+        .find(|role| role.name == "applicant")
+        .expect("applicant role")
+        .clone();
+    let reviewer_role = roles
+        .iter()
+        .find(|role| role.name == "reviewer")
+        .expect("reviewer role")
+        .clone();
+
+    let owner_role_error = application
+        .set_member_roles(SetMemberRolesCommand {
+            member_id: owner.id,
+            organization_id,
+            role_ids: vec![applicant_role.id],
+            updated_by: "application-owner".into(),
+            now: Utc::now(),
+        })
+        .await
+        .expect_err("owner role removal must fail closed");
+    assert!(matches!(
+        owner_role_error,
+        OrganizationApplicationError::OwnerRoleRequired
+    ));
+
+    let invitation = application
+        .invite_member(InviteMemberCommand {
+            organization_id,
+            email: "invited@example.com".into(),
+            role_ids: vec![applicant_role.id],
+            invited_by: "application-owner".into(),
+            now: Utc::now(),
+        })
+        .await
+        .expect("invitation must commit");
+    let accepted = application
+        .accept_invitation(AcceptInvitationCommand {
+            member_id: invitation.value.id,
+            user_id: "invited-user".into(),
+            now: Utc::now(),
+        })
+        .await
+        .expect("invitation acceptance must commit");
+    let assigned = application
+        .set_member_roles(SetMemberRolesCommand {
+            member_id: accepted.value.id,
+            organization_id,
+            role_ids: vec![reviewer_role.id],
+            updated_by: "application-owner".into(),
+            now: Utc::now(),
+        })
+        .await
+        .expect("member role replacement must commit");
+    assert_eq!(assigned.value.roles[0].name, "reviewer");
+    application
+        .remove_member(RemoveMemberCommand {
+            member_id: accepted.value.id,
+            removed_by: "application-owner".into(),
+            now: Utc::now(),
+        })
+        .await
+        .expect("member removal must commit");
+    assert!(application
+        .get_membership("invited-user", organization_id)
+        .await
+        .expect("membership lookup must pass")
+        .is_none());
+
+    let join_code = JoinCode {
+        id: uuid::Uuid::new_v4(),
+        organization_id,
+        code: format!("RUST{}", &organization_id.simple().to_string()[..8]).to_uppercase(),
+        created_by: "application-owner".into(),
+        expires_at: None,
+        max_uses: Some(2),
+        use_count: 0,
+        is_active: true,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+    application
+        .store()
+        .save_join_code(&join_code)
+        .await
+        .expect("join-code seed must pass");
+    let joined_by_code = application
+        .join_by_code(JoinByCodeCommand {
+            user_id: "code-user".into(),
+            code: join_code.code.to_lowercase(),
+            email: "code@example.com".into(),
+            now: Utc::now(),
+        })
+        .await
+        .expect("code join must commit");
+    assert!(joined_by_code.value.1.has_role(&["applicant"]));
+    assert_eq!(
+        application
+            .store()
+            .join_code_by_code(&join_code.code)
+            .await
+            .expect("join-code lookup must pass")
+            .expect("join code must exist")
+            .use_count,
+        1
+    );
+
+    let joined_directly = application
+        .join_organization(JoinOrganizationCommand {
+            user_id: "open-user".into(),
+            organization_id,
+            email: "open@example.com".into(),
+            now: Utc::now(),
+        })
+        .await
+        .expect("open join must commit");
+    assert!(joined_directly.value.1.has_role(&["applicant"]));
+    let provisioned = application
+        .add_member_direct(AddMemberDirectCommand {
+            organization_id,
+            user_id: "provisioned-user".into(),
+            email: Some("provisioned@example.com".into()),
+            role_ids: Some(vec![reviewer_role.id]),
+            now: Utc::now(),
+        })
+        .await
+        .expect("direct provisioning must commit");
+    assert!(provisioned.value.has_role(&["reviewer"]));
+
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM organization_service.audit_events WHERE organization_id=$1",
+        )
+        .bind(organization_id)
+        .fetch_one(&pool)
+        .await
+        .expect("final audit count must pass"),
+        8
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM mmf_messaging.outbox_messages
+             WHERE source_service='organization' AND tenant_id=$1",
+        )
+        .bind(organization_id.to_string())
+        .fetch_one(&pool)
+        .await
+        .expect("final outbox count must pass"),
+        8
     );
 
     application
