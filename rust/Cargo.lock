@@ -4368,6 +4368,7 @@ dependencies = [
  "chrono",
  "mmf-data",
  "mmf-messaging",
+ "mmf-security",
  "rand 0.9.5",
  "regex",
  "serde",

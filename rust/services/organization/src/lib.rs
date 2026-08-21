@@ -2,11 +2,13 @@
 
 pub mod api_keys;
 pub mod application;
+pub mod audit;
 pub mod cache;
 pub mod catalog;
 pub mod domain;
 pub mod events;
 pub mod migration;
+pub mod policy_sets;
 pub mod postgres;
 pub mod preferences;
 pub mod roles;
@@ -25,6 +27,10 @@ pub use application::{
     OrganizationCreationPlan, RemoveMemberCommand, SetMemberRolesCommand,
     UpdateOrganizationCommand, UpdateOrganizationPatch,
 };
+pub use audit::{
+    normalize_audit_query, normalize_pagination, start_from_time_range, AuditEventPage,
+    AuditQueryInput, NormalizedAuditQuery,
+};
 pub use cache::{OrganizationCache, OrganizationCacheError, OrganizationCacheKeys};
 pub use domain::{
     ApiKey, ApiKeySpec, ApiKeyStatus, AuditEvent, AuditEventQuery, ConsoleContextPreference,
@@ -35,6 +41,10 @@ pub use domain::{
 pub use events::{
     OrganizationAuditSink, OrganizationEvent, OrganizationEventError, OrganizationEventKind,
     OrganizationEventPublisher, OrganizationEventPublisherError,
+};
+pub use policy_sets::{
+    deserialize_policy_documents, policy_set_ids_to_archive, validate_policy_documents,
+    CedarPolicyDocument, CreatePolicySetCommand, UpdatePolicySetCommand, UpdatePolicySetPatch,
 };
 pub use preferences::{
     apply_console_preference_patch, UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch,

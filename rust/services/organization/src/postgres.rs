@@ -928,32 +928,64 @@ impl PostgresOrganizationStore {
     }
 
     pub async fn save_policy_set(&self, policy_set: &PolicySet) -> Result<(), RepositoryError> {
-        sqlx::query(
-            "INSERT INTO organization_service.policy_sets (
-                id,organization_id,name,description,policy_type,status,cedar_policies,
-                cedar_schema_version,created_by,created_at,updated_at
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-             ON CONFLICT (id) DO UPDATE SET
-                name=EXCLUDED.name,description=EXCLUDED.description,
-                policy_type=EXCLUDED.policy_type,status=EXCLUDED.status,
-                cedar_policies=EXCLUDED.cedar_policies,
-                cedar_schema_version=EXCLUDED.cedar_schema_version,
-                updated_at=EXCLUDED.updated_at",
+        let mut connection = self.pool.acquire().await?;
+        save_policy_set_on(&mut connection, policy_set).await
+    }
+
+    pub async fn save_policy_set_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        policy_set: &PolicySet,
+    ) -> Result<(), RepositoryError> {
+        save_policy_set_on(&mut *transaction, policy_set).await
+    }
+
+    pub async fn policy_set_by_id_for_update_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+        policy_set_id: Uuid,
+    ) -> Result<Option<PolicySet>, RepositoryError> {
+        let row = sqlx::query(
+            "SELECT * FROM organization_service.policy_sets
+             WHERE organization_id=$1 AND id=$2 FOR UPDATE",
         )
-        .bind(policy_set.id)
-        .bind(policy_set.organization_id)
-        .bind(&policy_set.name)
-        .bind(&policy_set.description)
-        .bind(policy_set.policy_type.as_str())
-        .bind(policy_set.status.as_str())
-        .bind(&policy_set.cedar_policies)
-        .bind(&policy_set.cedar_schema_version)
-        .bind(&policy_set.created_by)
-        .bind(policy_set.created_at)
-        .bind(policy_set.updated_at)
-        .execute(&self.pool)
+        .bind(organization_id)
+        .bind(policy_set_id)
+        .fetch_optional(&mut **transaction)
         .await?;
-        Ok(())
+        row.as_ref().map(policy_set_from_row).transpose()
+    }
+
+    pub async fn policy_sets_by_organization_for_update_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+    ) -> Result<Vec<PolicySet>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT * FROM organization_service.policy_sets
+             WHERE organization_id=$1 ORDER BY created_at DESC,id FOR UPDATE",
+        )
+        .bind(organization_id)
+        .fetch_all(&mut **transaction)
+        .await?;
+        rows.iter().map(policy_set_from_row).collect()
+    }
+
+    pub async fn delete_policy_set_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+        policy_set_id: Uuid,
+    ) -> Result<bool, RepositoryError> {
+        let result = sqlx::query(
+            "DELETE FROM organization_service.policy_sets WHERE organization_id=$1 AND id=$2",
+        )
+        .bind(organization_id)
+        .bind(policy_set_id)
+        .execute(&mut **transaction)
+        .await?;
+        Ok(result.rows_affected() == 1)
     }
 
     pub async fn policy_set_by_id(
@@ -1042,22 +1074,7 @@ impl PostgresOrganizationStore {
             "SELECT * FROM organization_service.audit_events WHERE organization_id=",
         );
         builder.push_bind(organization_id);
-        push_optional_filter(&mut builder, "category", query.category.as_deref());
-        push_optional_filter(&mut builder, "event_type", query.event_type.as_deref());
-        push_optional_filter(
-            &mut builder,
-            "resource_type",
-            query.resource_type.as_deref(),
-        );
-        push_optional_filter(&mut builder, "resource_id", query.resource_id.as_deref());
-        push_optional_filter(&mut builder, "actor_id", query.actor_id.as_deref());
-        push_optional_filter(&mut builder, "severity", query.severity.as_deref());
-        if let Some(from) = query.from {
-            builder.push(" AND created_at >= ").push_bind(from);
-        }
-        if let Some(to) = query.to {
-            builder.push(" AND created_at <= ").push_bind(to);
-        }
+        push_audit_filters(&mut builder, query);
         builder
             .push(" ORDER BY created_at DESC,id LIMIT ")
             .push_bind(i64::from(query.limit.clamp(1, 1_000)))
@@ -1066,6 +1083,58 @@ impl PostgresOrganizationStore {
         let rows = builder.build().fetch_all(&self.pool).await?;
         rows.iter().map(audit_event_from_row).collect()
     }
+
+    pub async fn count_audit_events(
+        &self,
+        organization_id: Uuid,
+        query: &AuditEventQuery,
+    ) -> Result<u64, RepositoryError> {
+        let mut builder = QueryBuilder::new(
+            "SELECT count(*) FROM organization_service.audit_events WHERE organization_id=",
+        );
+        builder.push_bind(organization_id);
+        push_audit_filters(&mut builder, query);
+        let count = builder
+            .build_query_scalar::<i64>()
+            .fetch_one(&self.pool)
+            .await?;
+        u64::try_from(count).map_err(|_| RepositoryError::InvalidData {
+            field: "audit_events.count",
+            value: count.to_string(),
+        })
+    }
+}
+
+async fn save_policy_set_on(
+    connection: &mut PgConnection,
+    policy_set: &PolicySet,
+) -> Result<(), RepositoryError> {
+    sqlx::query(
+        "INSERT INTO organization_service.policy_sets (
+            id,organization_id,name,description,policy_type,status,cedar_policies,
+            cedar_schema_version,created_by,created_at,updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+         ON CONFLICT (id) DO UPDATE SET
+            name=EXCLUDED.name,description=EXCLUDED.description,
+            policy_type=EXCLUDED.policy_type,status=EXCLUDED.status,
+            cedar_policies=EXCLUDED.cedar_policies,
+            cedar_schema_version=EXCLUDED.cedar_schema_version,
+            updated_at=EXCLUDED.updated_at",
+    )
+    .bind(policy_set.id)
+    .bind(policy_set.organization_id)
+    .bind(&policy_set.name)
+    .bind(&policy_set.description)
+    .bind(policy_set.policy_type.as_str())
+    .bind(policy_set.status.as_str())
+    .bind(&policy_set.cedar_policies)
+    .bind(&policy_set.cedar_schema_version)
+    .bind(&policy_set.created_by)
+    .bind(policy_set.created_at)
+    .bind(policy_set.updated_at)
+    .execute(connection)
+    .await?;
+    Ok(())
 }
 
 async fn save_organization_on(
@@ -1444,6 +1513,52 @@ fn push_optional_filter(
             .push(column)
             .push(" = ")
             .push_bind(value);
+    }
+}
+
+fn push_audit_filters(builder: &mut QueryBuilder<Postgres>, query: &AuditEventQuery) {
+    push_optional_filter(builder, "category", query.category.as_deref());
+    push_optional_filter(builder, "event_type", query.event_type.as_deref());
+    push_optional_filter(builder, "resource_type", query.resource_type.as_deref());
+    push_optional_filter(builder, "resource_id", query.resource_id.as_deref());
+    push_optional_filter(builder, "action", query.action.as_deref());
+    push_optional_filter(builder, "severity", query.severity.as_deref());
+    if let Some(actor_id) = query.actor_id.as_deref() {
+        builder
+            .push(" AND actor_id ILIKE ")
+            .push_bind(format!("%{actor_id}%"));
+    }
+    if let Some(ip_address) = query.ip_address.as_deref() {
+        builder
+            .push(" AND metadata::text ILIKE ")
+            .push_bind(format!("%{ip_address}%"));
+    }
+    if let Some(from) = query.from {
+        builder.push(" AND created_at >= ").push_bind(from);
+    }
+    if let Some(to) = query.to {
+        builder.push(" AND created_at <= ").push_bind(to);
+    }
+    if let Some(search) = query.search.as_deref() {
+        let pattern = format!("%{search}%");
+        builder
+            .push(" AND (event_type ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR action ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR message ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR resource_type ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR resource_id ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR resource_name ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR actor_id ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR metadata::text ILIKE ")
+            .push_bind(pattern)
+            .push(")");
     }
 }
 

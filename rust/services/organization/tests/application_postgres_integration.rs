@@ -4,14 +4,17 @@ use chrono::Utc;
 use marty_organization::postgres::PostgresOrganizationStore;
 use marty_organization::{
     AcceptInvitationCommand, AddMemberDirectCommand, AddMemberRoleCommand, ApiKeyScopeType,
-    CreateApiKeyCommand, CreateOrganizationCommand, CreateRoleCommand, DeleteRoleCommand,
-    InviteMemberCommand, JoinByCodeCommand, JoinCode, JoinMechanism, JoinOrganizationCommand,
-    OrganizationApplication, OrganizationApplicationError, OrganizationCache, OrganizationType,
-    RemoveMemberCommand, RemoveMemberRoleCommand, RevokeApiKeyCommand, SetMemberRolesCommand,
-    UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch, UpdateOrganizationCommand,
-    UpdateOrganizationPatch, UpdateRoleCommand, UpdateRolePatch, ViewMode,
+    AuditQueryInput, CedarPolicyDocument, CreateApiKeyCommand, CreateOrganizationCommand,
+    CreatePolicySetCommand, CreateRoleCommand, DeleteRoleCommand, InviteMemberCommand,
+    JoinByCodeCommand, JoinCode, JoinMechanism, JoinOrganizationCommand, OrganizationApplication,
+    OrganizationApplicationError, OrganizationCache, OrganizationType, PolicySetStatus,
+    PolicySetType, RemoveMemberCommand, RemoveMemberRoleCommand, RevokeApiKeyCommand,
+    SetMemberRolesCommand, UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch,
+    UpdateOrganizationCommand, UpdateOrganizationPatch, UpdatePolicySetCommand,
+    UpdatePolicySetPatch, UpdateRoleCommand, UpdateRolePatch, ViewMode,
 };
 use mmf_data::MemoryCache;
+use mmf_security::{CedarConfig, CedarPolicyValidator};
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::test]
@@ -29,9 +32,23 @@ async fn mutations_commit_domain_audit_and_outbox_state_together_when_configured
         Arc::new(MemoryCache::default()),
         Arc::new(MemoryCache::default()),
     );
+    let policy_validator = CedarPolicyValidator::from_human_schema(
+        r#"
+            namespace MIP {
+                entity User;
+                entity Application;
+                action "applications:approve" appliesTo {
+                    principal: [User], resource: [Application], context: {}
+                };
+            }
+        "#,
+        CedarConfig::default(),
+    )
+    .expect("policy validator must compose");
     let application =
         OrganizationApplication::new(PostgresOrganizationStore::new(pool.clone()), cache)
-            .expect("application must compose");
+            .expect("application must compose")
+            .with_policy_validator(Arc::new(policy_validator));
     application
         .initialize()
         .await
@@ -449,6 +466,120 @@ async fn mutations_commit_domain_audit_and_outbox_state_together_when_configured
         system_role_error,
         OrganizationApplicationError::SystemRoleDeleteForbidden
     ));
+
+    let policy = CedarPolicyDocument {
+        policy_id: "approve".into(),
+        effect: "permit".into(),
+        cedar_text: "permit(principal, action == MIP::Action::\"applications:approve\", resource);"
+            .into(),
+        description: Some("application contract".into()),
+        enabled: true,
+    };
+    let first_policy_set = application
+        .create_policy_set(CreatePolicySetCommand {
+            organization_id,
+            name: "First approval policy".into(),
+            policies: vec![policy.clone()],
+            policy_type: PolicySetType::ApprovalRules,
+            description: Some("first".into()),
+            created_by: Some("application-owner".into()),
+            now: Utc::now(),
+        })
+        .await
+        .expect("first policy set must persist");
+    application
+        .activate_policy_set(organization_id, first_policy_set.id, Utc::now())
+        .await
+        .expect("first policy set must activate");
+    let second_policy_set = application
+        .create_policy_set(CreatePolicySetCommand {
+            organization_id,
+            name: "Second approval policy".into(),
+            policies: vec![policy],
+            policy_type: PolicySetType::ApprovalRules,
+            description: Some("second".into()),
+            created_by: Some("application-owner".into()),
+            now: Utc::now(),
+        })
+        .await
+        .expect("second policy set must persist");
+    let second_policy_set = application
+        .update_policy_set(UpdatePolicySetCommand {
+            organization_id,
+            policy_set_id: second_policy_set.id,
+            patch: UpdatePolicySetPatch {
+                name: Some("Updated approval policy".into()),
+                description: Some(None),
+                policies: None,
+            },
+            now: Utc::now(),
+        })
+        .await
+        .expect("policy set update must persist");
+    assert_eq!(second_policy_set.description, None);
+    application
+        .activate_policy_set(organization_id, second_policy_set.id, Utc::now())
+        .await
+        .expect("second policy set must activate");
+    assert_eq!(
+        application
+            .get_policy_set(organization_id, first_policy_set.id)
+            .await
+            .expect("first policy lookup must pass")
+            .expect("first policy set must remain")
+            .status,
+        PolicySetStatus::Archived
+    );
+    assert_eq!(
+        application
+            .list_policy_sets(organization_id, Some(PolicySetStatus::Active))
+            .await
+            .expect("active policy list must pass")
+            .len(),
+        1
+    );
+    application
+        .archive_policy_set(organization_id, second_policy_set.id, Utc::now())
+        .await
+        .expect("policy set archive must persist");
+    application
+        .delete_policy_set(organization_id, first_policy_set.id)
+        .await
+        .expect("first policy set deletion must persist");
+    application
+        .delete_policy_set(organization_id, second_policy_set.id)
+        .await
+        .expect("second policy set deletion must persist");
+
+    let role_audit = application
+        .query_audit_events(
+            AuditQueryInput {
+                organization_id,
+                page: 1,
+                per_page: 50,
+                action: Some("team.role.deleted".into()),
+                actor: Some("owner".into()),
+                severity: Some("warning".into()),
+                search: Some("deleted".into()),
+                ..AuditQueryInput::default()
+            },
+            Utc::now(),
+        )
+        .await
+        .expect("audit query must pass");
+    assert_eq!(role_audit.total, 1);
+    assert_eq!(role_audit.events.len(), 1);
+    assert_eq!(role_audit.events[0].resource_type, "role");
+    assert!(application
+        .get_audit_event(organization_id, role_audit.events[0].id)
+        .await
+        .expect("audit detail lookup must pass")
+        .is_some());
+    assert!(application
+        .get_audit_event(uuid::Uuid::new_v4(), role_audit.events[0].id)
+        .await
+        .expect("cross-tenant audit detail lookup must pass")
+        .is_none());
 
     assert_eq!(
         sqlx::query_scalar::<_, i64>(

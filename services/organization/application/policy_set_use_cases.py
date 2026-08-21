@@ -102,6 +102,16 @@ class PolicySetUseCase:
         errors = self.validate_policies(self.deserialize_policies(policy_set.cedar_policies))
         if errors:
             raise ValueError(f"Policy set cannot be activated: {'; '.join(errors)}")
+        active_policy_sets = await self.repo.list_by_org(
+            organization_id, status=PolicySetStatus.ACTIVE.value
+        )
+        for active_policy_set in active_policy_sets:
+            if (
+                active_policy_set.id != policy_set.id
+                and active_policy_set.policy_type == policy_set.policy_type
+            ):
+                active_policy_set.archive()
+                await self.repo.save(active_policy_set)
         policy_set.activate()
         await self.repo.save(policy_set)
         logger.info(f"Activated PolicySet {policy_set_id}")

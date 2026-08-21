@@ -991,6 +991,38 @@ audit-query application behavior is next, followed by authorization and the
 adapter/runtime cutover. No beta deployment occurs before all wave-three
 slices land.
 
+Policy-set lifecycle and audit-query application behavior are now native.
+`marty-organization` creates, reads, filters, partially updates, validates,
+activates, archives and tenant-binds deletion of structured Cedar policy sets.
+Mutations lock their tenant and policy rows; activation atomically archives
+the previously active set of the same type, enforcing the domain's intended
+one-active-set-per-organization/type invariant that the Python implementation
+documented but did not enforce. Missing native validation fails before any
+database access. Legacy Cedar text still projects into the stable structured
+response shape, while malformed, duplicate, effect-mismatched, disabled-only
+and schema-invalid policy documents fail closed.
+
+The reusable implementation belongs to `mmf-security`, not the Organization
+service: MMF commit `e87a538` adds one bounded `CedarPolicyValidator` for JSON
+or human-readable schemas and shares strict parsing/schema validation with
+the existing authorization engine. Organization consumes that API rather
+than adding a second Cedar kernel. All 69 MMF security unit and integration
+tests plus strict Clippy pass.
+
+Native audit reads now preserve tenant-bound detail lookup, total counts,
+bounded page/per-page and legacy limit/offset semantics, exact category,
+event, resource, action and severity filters, actor substring matching,
+metadata IP matching, full-text search, explicit ISO date bounds and positive
+hour/day/week windows. `contracts/organization-policy-audit-behavior.json`
+freezes policy validation, active-set replacement, legacy projection, audit
+pagination and time-window behavior across Python and Rust. Thirty Rust tests,
+all 73 surviving Python Organization tests, formatting, strict Clippy and the
+ownership guard pass. The optional PostgreSQL gate compiles complete
+policy-set lifecycle, active-set replacement, filtered/count-consistent audit
+queries and cross-tenant detail denial; live execution still awaits
+`ORGANIZATION_POSTGRES_TEST_URL`. Organization authorization and HTTP/gRPC
+adapter/runtime packaging are next. No beta deployment has occurred.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

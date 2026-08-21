@@ -1,7 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use chrono::{DateTime, Utc};
 use mmf_messaging::{MessagingError, PostgresOutboxStore};
+use mmf_security::CedarPolicyValidator;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sqlx::{Postgres, Transaction};
@@ -252,6 +256,14 @@ pub enum OrganizationApplicationError {
     LastMemberRoleRemovalForbidden,
     #[error("ORGANIZATION.APPLICATION_ROLE_NOT_ASSIGNED")]
     RoleNotAssigned,
+    #[error("ORGANIZATION.APPLICATION_POLICY_SET_NOT_FOUND: {0}")]
+    PolicySetNotFound(Uuid),
+    #[error("ORGANIZATION.APPLICATION_POLICY_VALIDATOR_UNAVAILABLE")]
+    PolicyValidatorUnavailable,
+    #[error("ORGANIZATION.APPLICATION_INVALID_POLICY: {0}")]
+    InvalidPolicy(String),
+    #[error("ORGANIZATION.APPLICATION_INVALID_AUDIT_FILTER: {0}")]
+    InvalidAuditFilter(&'static str),
     #[error("ORGANIZATION.APPLICATION_MEMBER_CONFLICT: {0}")]
     MemberConflict(String),
     #[error("ORGANIZATION.APPLICATION_DEFAULT_ROLE_MISSING")]
@@ -298,6 +310,7 @@ pub struct OrganizationApplication {
     pub(crate) outbox: PostgresOutboxStore,
     pub(crate) cache: OrganizationCache,
     pub(crate) membership_policy: MembershipPolicy,
+    pub(crate) policy_validator: Option<Arc<CedarPolicyValidator>>,
 }
 
 impl OrganizationApplication {
@@ -312,12 +325,19 @@ impl OrganizationApplication {
             outbox,
             cache,
             membership_policy: MembershipPolicy::default(),
+            policy_validator: None,
         })
     }
 
     #[must_use]
     pub fn with_membership_policy(mut self, membership_policy: MembershipPolicy) -> Self {
         self.membership_policy = membership_policy;
+        self
+    }
+
+    #[must_use]
+    pub fn with_policy_validator(mut self, validator: Arc<CedarPolicyValidator>) -> Self {
+        self.policy_validator = Some(validator);
         self
     }
 
