@@ -166,31 +166,45 @@ class RoleUseCase:
         if role.is_system:
             raise ValueError("System roles cannot be deleted")
 
+        org_roles = await self.role_repo.list_by_organization(
+            command.organization_id
+        )
+        replacement = None
+        if command.replacement_role_id:
+            replacement = next(
+                (r for r in org_roles if r.id == command.replacement_role_id), None
+            )
+            if replacement is None:
+                raise ValueError(f"Role {command.replacement_role_id} not found")
+            if replacement.id == role.id:
+                raise ValueError("Replacement role must differ from the deleted role")
+
         # Reassign members that only have this role
         affected_member_ids = await self.role_repo.get_members_with_role(command.role_id)
-        if affected_member_ids:
-            # Find a replacement role
-            replacement_id = command.replacement_role_id
-            if not replacement_id:
-                # Fall back to the default role for new members
-                org_roles = await self.role_repo.list_by_organization(
-                    command.organization_id
-                )
-                default = next(
-                    (r for r in org_roles if r.is_default_for_new_members), None
-                )
-                if default:
-                    replacement_id = default.id
-                else:
-                    raise ValueError("A replacement role is required to delete this role")
+        if replacement is None and (affected_member_ids or role.is_default_for_new_members):
+            replacement = next(
+                (
+                    r
+                    for r in org_roles
+                    if r.id != role.id and r.is_default_for_new_members
+                ),
+                None,
+            )
+        if (affected_member_ids or role.is_default_for_new_members) and replacement is None:
+            raise ValueError("A replacement role is required to delete this role")
 
-            if replacement_id:
-                for mid in affected_member_ids:
-                    # Check if member has other roles
-                    member_role_list = await self.role_repo.get_member_roles(mid)
-                    other_roles = [r for r in member_role_list if r.id != command.role_id]
-                    if not other_roles:
-                        await self.role_repo.add_member_role(mid, replacement_id)
+        if affected_member_ids:
+            for mid in affected_member_ids:
+                member_role_list = await self.role_repo.get_member_roles(mid)
+                other_roles = [r for r in member_role_list if r.id != command.role_id]
+                if not other_roles:
+                    await self.role_repo.add_member_role(mid, replacement.id)
+
+        if role.is_default_for_new_members:
+            await self._clear_default_flag(command.organization_id)
+            replacement.is_default_for_new_members = True
+            replacement.updated_at = datetime.now(timezone.utc)
+            await self.role_repo.save(replacement)
 
         await self.role_repo.delete(command.role_id)
 

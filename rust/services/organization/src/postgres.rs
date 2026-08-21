@@ -540,6 +540,21 @@ impl PostgresOrganizationStore {
         rows.iter().map(permission_from_row).collect()
     }
 
+    pub async fn permissions_by_ids_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        permission_ids: &[Uuid],
+    ) -> Result<Vec<Permission>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT * FROM organization_service.permissions WHERE id=ANY($1)
+             ORDER BY resource,action",
+        )
+        .bind(permission_ids)
+        .fetch_all(&mut **transaction)
+        .await?;
+        rows.iter().map(permission_from_row).collect()
+    }
+
     pub async fn save_role(&self, role: &Role) -> Result<(), RepositoryError> {
         let mut transaction = self.pool.begin().await?;
         save_role_on(&mut transaction, role).await?;
@@ -571,6 +586,21 @@ impl PostgresOrganizationStore {
             .await?;
         match row {
             Some(row) => Ok(Some(self.hydrate_role(&row).await?)),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn role_by_id_for_update_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        role_id: Uuid,
+    ) -> Result<Option<Role>, RepositoryError> {
+        let row = sqlx::query("SELECT * FROM organization_service.roles WHERE id=$1 FOR UPDATE")
+            .bind(role_id)
+            .fetch_optional(&mut **transaction)
+            .await?;
+        match row {
+            Some(row) => Ok(Some(hydrate_role_in_transaction(transaction, &row).await?)),
             None => Ok(None),
         }
     }
@@ -665,6 +695,41 @@ impl PostgresOrganizationStore {
         }
     }
 
+    pub async fn role_by_name_for_update_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+        name: &str,
+    ) -> Result<Option<Role>, RepositoryError> {
+        let row = sqlx::query(
+            "SELECT * FROM organization_service.roles
+             WHERE organization_id=$1 AND name=$2 FOR UPDATE",
+        )
+        .bind(organization_id)
+        .bind(name)
+        .fetch_optional(&mut **transaction)
+        .await?;
+        match row {
+            Some(row) => Ok(Some(hydrate_role_in_transaction(transaction, &row).await?)),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn roles_by_organization_for_update_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+    ) -> Result<Vec<Role>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT * FROM organization_service.roles
+             WHERE organization_id=$1 ORDER BY is_system DESC,name FOR UPDATE",
+        )
+        .bind(organization_id)
+        .fetch_all(&mut **transaction)
+        .await?;
+        hydrate_roles_in_transaction(transaction, rows).await
+    }
+
     pub async fn roles_for_member(&self, member_id: Uuid) -> Result<Vec<Role>, RepositoryError> {
         let rows = sqlx::query(
             "SELECT roles.* FROM organization_service.roles roles
@@ -679,6 +744,22 @@ impl PostgresOrganizationStore {
             roles.push(self.hydrate_role(&row).await?);
         }
         Ok(roles)
+    }
+
+    pub async fn roles_for_member_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        member_id: Uuid,
+    ) -> Result<Vec<Role>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT roles.* FROM organization_service.roles roles
+             JOIN organization_service.member_roles links ON links.role_id=roles.id
+             WHERE links.member_id=$1 ORDER BY roles.is_system DESC,roles.name",
+        )
+        .bind(member_id)
+        .fetch_all(&mut **transaction)
+        .await?;
+        hydrate_roles_in_transaction(transaction, rows).await
     }
 
     async fn hydrate_role(&self, row: &PgRow) -> Result<Role, RepositoryError> {
@@ -762,6 +843,22 @@ impl PostgresOrganizationStore {
         Ok(result.rows_affected() == 1)
     }
 
+    pub async fn remove_member_role_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        member_id: Uuid,
+        role_id: Uuid,
+    ) -> Result<bool, RepositoryError> {
+        let result = sqlx::query(
+            "DELETE FROM organization_service.member_roles WHERE member_id=$1 AND role_id=$2",
+        )
+        .bind(member_id)
+        .bind(role_id)
+        .execute(&mut **transaction)
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub async fn member_permissions(
         &self,
         member_id: Uuid,
@@ -793,10 +890,39 @@ impl PostgresOrganizationStore {
             .collect()
     }
 
+    pub async fn member_ids_with_role_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        role_id: Uuid,
+    ) -> Result<Vec<Uuid>, RepositoryError> {
+        let rows = sqlx::query(
+            "SELECT member_id FROM organization_service.member_roles
+             WHERE role_id=$1 ORDER BY member_id FOR UPDATE",
+        )
+        .bind(role_id)
+        .fetch_all(&mut **transaction)
+        .await?;
+        rows.iter()
+            .map(|row| row.try_get("member_id").map_err(RepositoryError::from))
+            .collect()
+    }
+
     pub async fn delete_role(&self, role_id: Uuid) -> Result<bool, RepositoryError> {
         let result = sqlx::query("DELETE FROM organization_service.roles WHERE id=$1")
             .bind(role_id)
             .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn delete_role_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        role_id: Uuid,
+    ) -> Result<bool, RepositoryError> {
+        let result = sqlx::query("DELETE FROM organization_service.roles WHERE id=$1")
+            .bind(role_id)
+            .execute(&mut **transaction)
             .await?;
         Ok(result.rows_affected() == 1)
     }

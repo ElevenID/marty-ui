@@ -3,12 +3,13 @@ use std::sync::Arc;
 use chrono::Utc;
 use marty_organization::postgres::PostgresOrganizationStore;
 use marty_organization::{
-    AcceptInvitationCommand, AddMemberDirectCommand, ApiKeyScopeType, CreateApiKeyCommand,
-    CreateOrganizationCommand, InviteMemberCommand, JoinByCodeCommand, JoinCode, JoinMechanism,
-    JoinOrganizationCommand, OrganizationApplication, OrganizationApplicationError,
-    OrganizationCache, OrganizationType, RemoveMemberCommand, RevokeApiKeyCommand,
-    SetMemberRolesCommand, UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch,
-    UpdateOrganizationCommand, UpdateOrganizationPatch, ViewMode,
+    AcceptInvitationCommand, AddMemberDirectCommand, AddMemberRoleCommand, ApiKeyScopeType,
+    CreateApiKeyCommand, CreateOrganizationCommand, CreateRoleCommand, DeleteRoleCommand,
+    InviteMemberCommand, JoinByCodeCommand, JoinCode, JoinMechanism, JoinOrganizationCommand,
+    OrganizationApplication, OrganizationApplicationError, OrganizationCache, OrganizationType,
+    RemoveMemberCommand, RemoveMemberRoleCommand, RevokeApiKeyCommand, SetMemberRolesCommand,
+    UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch, UpdateOrganizationCommand,
+    UpdateOrganizationPatch, UpdateRoleCommand, UpdateRolePatch, ViewMode,
 };
 use mmf_data::MemoryCache;
 use sqlx::postgres::PgPoolOptions;
@@ -355,6 +356,100 @@ async fn mutations_commit_domain_audit_and_outbox_state_together_when_configured
         .expect("explicit preference clear must pass");
     assert_eq!(cleared.last_active_org_id, None);
 
+    let permission = application
+        .list_permissions()
+        .await
+        .expect("permission catalog lookup must pass")
+        .into_iter()
+        .next()
+        .expect("permission catalog must not be empty");
+    let custom_role = application
+        .create_role(CreateRoleCommand {
+            organization_id,
+            name: "application-contract-custom".into(),
+            created_by: "application-owner".into(),
+            display_name: Some("Application Contract Custom".into()),
+            description: Some("native RBAC contract".into()),
+            permission_ids: vec![permission.id],
+            is_default_for_new_members: false,
+            now: Utc::now(),
+        })
+        .await
+        .expect("role creation must commit");
+    assert_eq!(custom_role.value.permissions, vec![permission]);
+    let custom_role = application
+        .update_role(UpdateRoleCommand {
+            role_id: custom_role.value.id,
+            organization_id,
+            updated_by: "application-owner".into(),
+            patch: UpdateRolePatch {
+                display_name: Some("Updated Contract Custom".into()),
+                is_default_for_new_members: Some(true),
+                ..UpdateRolePatch::default()
+            },
+            now: Utc::now(),
+        })
+        .await
+        .expect("role update must commit");
+    assert!(custom_role.value.is_default_for_new_members);
+    application
+        .add_member_role(AddMemberRoleCommand {
+            member_id: provisioned.value.id,
+            organization_id,
+            role_id: custom_role.value.id,
+            updated_by: "application-owner".into(),
+            now: Utc::now(),
+        })
+        .await
+        .expect("role assignment must commit");
+    application
+        .remove_member_role(RemoveMemberRoleCommand {
+            member_id: provisioned.value.id,
+            organization_id,
+            role_id: custom_role.value.id,
+            updated_by: "application-owner".into(),
+            now: Utc::now(),
+        })
+        .await
+        .expect("role removal must commit");
+    application
+        .delete_role(DeleteRoleCommand {
+            role_id: custom_role.value.id,
+            organization_id,
+            deleted_by: "application-owner".into(),
+            replacement_role_id: Some(applicant_role.id),
+            now: Utc::now(),
+        })
+        .await
+        .expect("role deletion and default transfer must commit");
+    assert!(application
+        .get_role(organization_id, custom_role.value.id)
+        .await
+        .expect("deleted role lookup must pass")
+        .is_none());
+    assert!(
+        application
+            .get_role(organization_id, applicant_role.id)
+            .await
+            .expect("replacement role lookup must pass")
+            .expect("replacement role must remain")
+            .is_default_for_new_members
+    );
+    let system_role_error = application
+        .delete_role(DeleteRoleCommand {
+            role_id: reviewer_role.id,
+            organization_id,
+            deleted_by: "application-owner".into(),
+            replacement_role_id: Some(applicant_role.id),
+            now: Utc::now(),
+        })
+        .await
+        .expect_err("system role deletion must fail closed");
+    assert!(matches!(
+        system_role_error,
+        OrganizationApplicationError::SystemRoleDeleteForbidden
+    ));
+
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM organization_service.audit_events WHERE organization_id=$1",
@@ -363,7 +458,7 @@ async fn mutations_commit_domain_audit_and_outbox_state_together_when_configured
         .fetch_one(&pool)
         .await
         .expect("final audit count must pass"),
-        10
+        15
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
@@ -374,7 +469,7 @@ async fn mutations_commit_domain_audit_and_outbox_state_together_when_configured
         .fetch_one(&pool)
         .await
         .expect("final outbox count must pass"),
-        10
+        15
     );
 
     application

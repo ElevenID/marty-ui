@@ -240,6 +240,18 @@ pub enum OrganizationApplicationError {
     MemberNotFound(Uuid),
     #[error("ORGANIZATION.APPLICATION_ROLE_NOT_FOUND: {0}")]
     RoleNotFound(Uuid),
+    #[error("ORGANIZATION.APPLICATION_PERMISSION_NOT_FOUND: {0}")]
+    PermissionNotFound(Uuid),
+    #[error("ORGANIZATION.APPLICATION_ROLE_CONFLICT: {0}")]
+    RoleConflict(String),
+    #[error("ORGANIZATION.APPLICATION_SYSTEM_ROLE_DELETE_FORBIDDEN")]
+    SystemRoleDeleteForbidden,
+    #[error("ORGANIZATION.APPLICATION_REPLACEMENT_ROLE_REQUIRED")]
+    ReplacementRoleRequired,
+    #[error("ORGANIZATION.APPLICATION_LAST_MEMBER_ROLE_REMOVAL_FORBIDDEN")]
+    LastMemberRoleRemovalForbidden,
+    #[error("ORGANIZATION.APPLICATION_ROLE_NOT_ASSIGNED")]
+    RoleNotAssigned,
     #[error("ORGANIZATION.APPLICATION_MEMBER_CONFLICT: {0}")]
     MemberConflict(String),
     #[error("ORGANIZATION.APPLICATION_DEFAULT_ROLE_MISSING")]
@@ -1142,7 +1154,7 @@ impl OrganizationApplication {
         )
     }
 
-    async fn invalidate_member_after_commit(
+    pub(crate) async fn invalidate_member_after_commit(
         &self,
         user_id: &str,
         organization_id: Uuid,

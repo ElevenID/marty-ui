@@ -963,8 +963,33 @@ omit/clear/replace semantics. Twenty-seven Rust tests, all 69 surviving Python
 Organization tests, formatting and strict Clippy pass. The optional PostgreSQL
 gate now also validates key creation, constant-time lookup, cross-tenant
 revocation rejection, revocation, and persisted preference partial updates.
-RBAC, policy-set and audit-query application behavior remains before the
+Policy-set and audit-query application behavior remains before the
 adapter/runtime cutover.
+
+Organization RBAC application behavior is now native. Custom role creation,
+partial update and tenant-bound deletion; permission resolution; default-role
+uniqueness and transfer; member assignment/removal; system-role deletion
+protection; owner-role retention; last-role retention; and role/permission
+reads all execute through `OrganizationApplication`. Each mutation locks its
+decision rows and commits role, member-role, audit and canonical MMF outbox
+state in one PostgreSQL transaction. Cache invalidation occurs only after
+commit and reports typed warnings. Role deletion reassigns members that would
+otherwise become roleless and fails closed when a required replacement is
+missing or invalid.
+
+`contracts/organization-rbac-behavior.json` freezes replacement selection,
+default transfer, missing-role and self-replacement behavior across Python and
+Rust. The temporary Python oracle was corrected to transfer default status
+rather than deleting the only default, and its behavior remains covered until
+the native adapter/runtime cutover deletes the Python service. Twenty-seven
+Rust tests, all 70 surviving Python Organization tests, formatting, strict
+Clippy and the ownership guard pass. The optional PostgreSQL acceptance gate
+compiles RBAC create/update/assign/remove/delete behavior, system-role
+protection and exactly one durable audit/outbox pair per successful mutation;
+live execution still awaits `ORGANIZATION_POSTGRES_TEST_URL`. Policy-set and
+audit-query application behavior is next, followed by authorization and the
+adapter/runtime cutover. No beta deployment occurs before all wave-three
+slices land.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

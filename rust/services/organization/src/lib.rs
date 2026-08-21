@@ -9,6 +9,7 @@ pub mod events;
 pub mod migration;
 pub mod postgres;
 pub mod preferences;
+pub mod roles;
 pub mod scim;
 
 pub use api_keys::{
@@ -37,4 +38,8 @@ pub use events::{
 };
 pub use preferences::{
     apply_console_preference_patch, UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch,
+};
+pub use roles::{
+    resolve_replacement_role, AddMemberRoleCommand, CreateRoleCommand, DeleteRoleCommand,
+    RemoveMemberRoleCommand, UpdateRoleCommand, UpdateRolePatch,
 };
