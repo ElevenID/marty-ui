@@ -5,6 +5,7 @@ pub mod cache_repository;
 pub mod canvas;
 pub mod canvas_transport;
 pub mod credential_callback;
+pub mod credential_http;
 pub mod credential_login;
 pub mod credential_state;
 pub mod domain;
@@ -23,6 +24,7 @@ pub use cache_repository::*;
 pub use canvas::*;
 pub use canvas_transport::*;
 pub use credential_callback::*;
+pub use credential_http::*;
 pub use credential_login::*;
 pub use credential_state::*;
 pub use domain::{
