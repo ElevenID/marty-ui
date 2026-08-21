@@ -1676,7 +1676,7 @@ same application and verification layers, require authenticated service and
 principal identities, preserve paging/filtering and expose complete nested
 policy data. The Rust gRPC create path also rebuilds credential and alternative
 requirements that the superseded Python adapter silently ignored. The complete
-crate now has 18 green behavioral and persistence tests and passes strict
+crate now has 23 green behavioral and persistence tests and passes strict
 Clippy.
 
 The verifier orchestration layer is now native and deterministic. It routes with
@@ -1690,6 +1690,23 @@ trust dependencies fail closed. The language-neutral
 `presentation-verification-facts.json` contract freezes this projection and its
 trust/status normalization.
 
+Concrete native credential adapters are now present for VC-JWT, VCDM Data
+Integrity, SD-JWT and Open Badges v2/v3. JWT verification keys are selected from
+exact active Trust Profile relationships or system overrides using the
+unverified issuer and `kid` only as selectors; ambiguous keys, private JWK
+material and untrusted relationships deny verification. The adapter preserves
+the authenticated VC object while applying Open Badges profile verification,
+so normalized claims cannot replace signed material. Malformed routes and the
+temporarily unpinned mdoc route fail closed with no Python compatibility path.
+
+Rust also owns the presentation-policy control-plane client at commits
+`9dee79d4` and `774934e0`. It enforces live organization membership and action
+permissions, loads tenant-bound Trust Profiles for every decision, evaluates
+issuer relationship lifecycle/trust/compliance evidence, projects governed
+Data Integrity methods and performs authenticated managed-issuer credential
+status reads. `presentation-control-plane-behavior.json` freezes those
+cross-service semantics independently of implementation language.
+
 Complete mdoc issuer and holder authentication is also consolidated in the
 shared `marty-verification` crate on the dedicated
 `agent/marty-core-presentation-verifier-wave3` branch at commit `7169663`. The
@@ -1699,12 +1716,12 @@ kernel tests, the complete 301-test verification suite and all 47 binding tests
 pass. Publication and the immutable Marty UI pin remain pending because the
 local GitHub proxy is refusing connections to `127.0.0.1:443`.
 
-Next work is the concrete Rust adapters for every supported credential format,
-the Trust Profile and credential-status clients, then service runtime,
-configuration and packaging. Configured
-PostgreSQL, container and external-provider acceptance then gate immediate
-deletion of the Python service and its nine revisions. No beta deployment has
-occurred; this remains part of the single aggregate wave-three beta update.
+Next work is to publish and pin the mdoc authentication revision, add the
+service runtime, configuration, mutual-TLS workload authorization and native
+packaging, then run configured PostgreSQL, container and external-provider
+acceptance. Those gates permit immediate deletion of the Python service and its
+nine revisions. No beta deployment has occurred; this remains part of the
+single aggregate wave-three beta update.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
