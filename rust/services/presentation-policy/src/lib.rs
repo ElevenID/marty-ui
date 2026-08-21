@@ -1,4 +1,5 @@
 pub mod domain;
+pub mod persistence;
 
 pub use domain::{
     evaluate_verified_facts_json, normalize_credential_format, AlternativeRequirement,
@@ -6,6 +7,7 @@ pub use domain::{
     HolderBinding, IssuerConstraints, PolicyDomainError, PolicyStatus, PresentationPolicy,
     RequestPurpose, RequestedClaim,
 };
+pub use persistence::{PolicyRecord, PolicyRecordError, PRESENTATION_POLICY_MIGRATION};
 
 pub const HTTP_OPERATIONS: [(&str, &str); 10] = [
     ("POST", "/v1/presentation-policies"),
