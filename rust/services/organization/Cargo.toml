@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 chrono.workspace = true
+mmf-data.workspace = true
 rand.workspace = true
 regex.workspace = true
 serde.workspace = true

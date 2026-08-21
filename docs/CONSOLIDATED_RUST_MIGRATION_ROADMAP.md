@@ -834,10 +834,11 @@ It preserves existing Alembic installations while adding the intended API-key
 the Python entity exposed but did not persist. A language-neutral persistence
 contract and Rust source gate pass; live PostgreSQL execution is configured as
 a CI gate because no local Organization database URL is present. The next
-slices add shared MMF event publication/cache invalidation, authorization and
-audit policy, all HTTP and gRPC adapters, executable composition, packaging,
-PostgreSQL acceptance and same-slice deletion of `services/organization` after
-those gates pass. No beta deployment occurs during these slices.
+slices add the application use cases over shared MMF event publication,
+authorization and audit policy, all HTTP and gRPC adapters, executable
+composition, packaging, PostgreSQL acceptance and same-slice deletion of
+`services/organization` after those gates pass. No beta deployment occurs
+during these slices.
 
 All nine Python persistence adapter families are now consolidated into one DRY
 `PostgresOrganizationStore`. It owns organization, member, API-key,
@@ -863,6 +864,22 @@ console access. Permission IDs and new system-role IDs are deterministic,
 while released database IDs are retained on reseed. Catalog and role seeding
 are idempotent and included in the optional PostgreSQL round-trip gate. Four
 Python parity tests, ten Rust unit/contract groups and strict Clippy pass.
+
+Organization cache behavior now consumes the canonical production Redis
+adapter in `mmf-data`; no service-local Redis client or command implementation
+was added. MMF commits `b566451` and `9f9be66` provide fail-closed Redis
+operations, TLS/startup health enforcement, namespace-bounded `SCAN`, complete
+ordinary/sorted-set behavior and multiple keyspaces over one multiplexed
+connection. `marty-organization` derives three scoped views that preserve the
+mixed-deployment keys exactly: `org_membership:{user}:{organization}`,
+`member_permissions:{user}:{organization}` and `org:{organization}:plan`.
+The language-neutral `contracts/organization-cache-behavior.json` freezes those
+keys and default-plan semantics. Rust tests prove dual membership/permission
+invalidation, plan synchronization, namespace compatibility and rejection of
+empty identifiers/plans; the full Organization suite and strict Clippy pass.
+The optional live MMF Redis acceptance gate remains configured through
+`MMF_REDIS_TEST_URL`; no endpoint is available locally, so it is compiled but
+not executed here.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

@@ -4365,6 +4365,7 @@ name = "marty-organization"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "mmf-data",
  "rand 0.9.5",
  "regex",
  "serde",
@@ -4630,6 +4631,19 @@ dependencies = [
  "serde",
  "thiserror 2.0.20",
  "uuid",
+]
+
+[[package]]
+name = "mmf-data"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "mmf-core",
+ "redis",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]

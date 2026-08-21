@@ -1,11 +1,13 @@
 #![forbid(unsafe_code)]
 
+pub mod cache;
 pub mod catalog;
 pub mod domain;
 pub mod migration;
 pub mod postgres;
 pub mod scim;
 
+pub use cache::{OrganizationCache, OrganizationCacheError, OrganizationCacheKeys};
 pub use domain::{
     ApiKey, ApiKeySpec, ApiKeyStatus, AuditEvent, AuditEventQuery, ConsoleContextPreference,
     DomainError, JoinCode, JoinMechanism, Member, MemberStatus, Organization, OrganizationCreate,
