@@ -1252,6 +1252,38 @@ shared-database mutation was used to manufacture live acceptance evidence.
 Python deletion therefore remains pending the immutable MMF pin, image build,
 and configured executable acceptance. No beta deployment has occurred.
 
+### Auth port status
+
+Auth is active in dependent worktree `marty-ui-rust-auth-wave3` on branch
+`agent/marty-ui-rust-auth-wave3`, based on the complete Organization head so
+the service can consume the same MMF platform without copying framework code.
+The measured deletion target is 7,578 non-test Python lines. Commit
+`bfcbbfcd` freezes all 14 HTTP routes and six gRPC methods in
+`contracts/auth-behavior.json`; the contract explicitly preserves the two
+retired gRPC mutation methods as `UNIMPLEMENTED`. Shared Python/Rust vectors
+cover claim precedence, Keycloak realm/resource role merging, organization
+claim extraction, display-name precedence, session validity and RFC 7636 PKCE
+S256 output.
+
+The first native application slices are complete. Commit `9f7b2fd6` ports the
+OIDC login/registration and callback orchestration, single-use state and nonce
+binding, validated-claims-only session creation, provisioning port, event
+families, activity refresh, invalid-session cleanup and idempotent logout.
+Commit `df1f194d` ports session and PKCE persistence against the shared MMF
+cache contract, including user-session indexes, bulk user logout, exact TTL
+behavior and typed fail-closed malformed-cache errors. MMF commit `db47333`
+adds atomic cache consume and expiring set primitives once in `mmf-data`, with
+equivalent memory and Redis implementations, instead of embedding Redis
+commands in Auth. Thirteen Rust behavioral tests, 16 focused Python oracle
+tests, formatting and strict Clippy pass.
+
+Remaining Auth work is the native OIDC/JWKS and Keycloak administration
+adapters, JIT applicant/organization provisioning, credential-login and Canvas
+LTI state machines, PostgreSQL audit adapter and migration, HTTP/gRPC adapters,
+MMF runtime/outbox composition, executable packaging, configured acceptance,
+and immediate deletion of the Python service after the aggregate gate passes.
+No beta deployment has occurred.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
