@@ -70,6 +70,24 @@ impl SessionRepository for MemorySessions {
         self.0.lock().expect("sessions lock").remove(session_id);
         Ok(())
     }
+
+    async fn get_by_user(&self, user_id: &str) -> Result<Vec<Session>, PortError> {
+        Ok(self
+            .0
+            .lock()
+            .expect("sessions lock")
+            .values()
+            .filter(|session| session.user.user_id == user_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn delete_all_for_user(&self, user_id: &str) -> Result<usize, PortError> {
+        let mut sessions = self.0.lock().expect("sessions lock");
+        let before = sessions.len();
+        sessions.retain(|_, session| session.user.user_id != user_id);
+        Ok(before - sessions.len())
+    }
 }
 
 #[derive(Default)]

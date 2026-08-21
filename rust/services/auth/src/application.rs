@@ -146,6 +146,8 @@ pub trait SessionRepository: Send + Sync {
     async fn save(&self, session: &Session) -> Result<(), PortError>;
     async fn get(&self, session_id: &str) -> Result<Option<Session>, PortError>;
     async fn delete(&self, session_id: &str) -> Result<(), PortError>;
+    async fn get_by_user(&self, user_id: &str) -> Result<Vec<Session>, PortError>;
+    async fn delete_all_for_user(&self, user_id: &str) -> Result<usize, PortError>;
 }
 
 #[async_trait]
