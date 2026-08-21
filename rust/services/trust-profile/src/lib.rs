@@ -1,9 +1,15 @@
+pub mod application;
 pub mod domain;
 pub mod persistence;
 pub mod policy;
 pub mod postgres;
 pub mod repository;
 
+pub use application::{
+    Change, CreateProfileInput, IssuerEntityPatch, ProfilePatch, RelationshipPatch,
+    TrustAuthorizationError, TrustProfileApplication, TrustProfileApplicationError,
+    TrustProfileControlPlane,
+};
 pub use domain::{
     CascadeRevocationPolicy, ComplianceStatus, IssuerEntity, IssuerEntityComplianceStatus,
     IssuerEntityType, OrganizationTrustProfile, RegistryOperation, RegistrySource,
