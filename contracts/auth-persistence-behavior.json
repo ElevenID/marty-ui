@@ -1,0 +1,38 @@
+{
+  "migration_head": "rust_auth_0001",
+  "owned_schema": "auth_service",
+  "owned_tables": ["audit_logs", "session_history"],
+  "shared_applicant_table": "public.applicants",
+  "shared_applicant_columns": [
+    "id",
+    "account_id",
+    "email",
+    "surname",
+    "given_names",
+    "date_of_birth",
+    "nationality",
+    "identity_proofing_completed",
+    "identity_proofing_date",
+    "active",
+    "suspended",
+    "extra_data",
+    "created_at",
+    "updated_at",
+    "deleted_at"
+  ],
+  "jit_upsert": {
+    "lookup_keys": ["account_id", "email"],
+    "preserve_existing_names_when_claims_missing": true,
+    "merge_extra_data": true,
+    "fail_on_split_identity": true
+  },
+  "audit_pairs": {
+    "authentication": ["user_authenticated", "session_created"],
+    "logout": ["logout", "session_revoked"]
+  },
+  "query_limits": {"default": 100, "maximum": 1000},
+  "transactional": [
+    "authentication audit and session history",
+    "logout audit and session revocation history"
+  ]
+}

@@ -5,7 +5,9 @@ pub mod cache_repository;
 pub mod credential_login;
 pub mod domain;
 pub mod keycloak;
+pub mod migration;
 pub mod oidc;
+pub mod postgres;
 pub mod provisioning;
 
 pub use application::*;
@@ -16,5 +18,7 @@ pub use domain::{
     OidcValidatedIdentity, PkcePair, PkceState, Session, SessionSpec, SessionStatus, UserType,
 };
 pub use keycloak::*;
+pub use migration::*;
 pub use oidc::*;
+pub use postgres::*;
 pub use provisioning::*;
