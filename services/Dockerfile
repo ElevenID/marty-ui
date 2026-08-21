@@ -9,6 +9,7 @@ RUN cargo build --locked --release -p marty-gateway --bin marty-gateway
 RUN cargo build --locked --release -p marty-revocation-profile --bin marty-revocation-profile
 RUN cargo build --locked --release -p marty-signing-keys --bin marty-signing-keys
 RUN cargo build --locked --release -p marty-notification --bin marty-notification
+RUN cargo build --locked --release -p marty-flow --bin marty-flow
 
 FROM python:3.12-slim
 
@@ -76,6 +77,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-gateway /usr/l
 COPY --from=rust-service-builder /build/rust/target/release/marty-revocation-profile /usr/local/bin/marty-revocation-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-signing-keys /usr/local/bin/marty-signing-keys
 COPY --from=rust-service-builder /build/rust/target/release/marty-notification /usr/local/bin/marty-notification
+COPY --from=rust-service-builder /build/rust/target/release/marty-flow /usr/local/bin/marty-flow
 RUN chmod +x /app/services/entrypoint.sh /app/load-secrets-env.sh \
     && adduser --disabled-password --gecos '' appuser \
     && install -d -o appuser -g appuser -m 0700 /app/data

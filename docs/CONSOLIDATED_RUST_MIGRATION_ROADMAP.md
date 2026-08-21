@@ -776,9 +776,16 @@ The optional PostgreSQL integration gate now drives a real loopback callback
 receiver and verifies signed delivery, payload scrubbing and destination
 dead-lettering in addition to the existing lease races. Executable, callback,
 runtime, submission and strict Clippy gates pass locally; real PostgreSQL
-delivery remains a configured Linux CI execution gate. Flow's remaining work
-is container packaging, complete executable acceptance and immediate Python
-deletion.
+delivery remains a configured Linux CI execution gate. Native container
+packaging is now complete: the shared service image builds and contains
+`marty-flow`, the production-equivalent Rust service image has a dedicated
+non-Python `flow` target with HTTP and gRPC ports plus a native health check,
+and CI builds that target as `marty-flow:ci`. The language-neutral packaging
+contract verifies all three boundaries. The shared service entrypoint still
+dispatches Flow to the Python parity oracle until complete executable,
+PostgreSQL and container acceptance pass. Flow's remaining work is that final
+acceptance gate followed immediately by entrypoint cutover, migration-runner
+cleanup and deletion of the superseded Python package and dependencies.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
