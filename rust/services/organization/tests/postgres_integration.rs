@@ -1,9 +1,10 @@
 use chrono::{Duration, Utc};
 use marty_organization::{
-    migration::migrate_organization_schema, postgres::PostgresOrganizationStore, ApiKey,
-    ApiKeySpec, AuditEvent, AuditEventQuery, ConsoleContextPreference, JoinCode, JoinMechanism,
-    Member, MemberStatus, Organization, OrganizationStatus, OrganizationType, Permission,
-    PolicySet, PolicySetSpec, PolicySetStatus, PolicySetType, Role, ViewMode,
+    catalog::seed_system_roles, migration::migrate_organization_schema,
+    postgres::PostgresOrganizationStore, ApiKey, ApiKeySpec, AuditEvent, AuditEventQuery,
+    ConsoleContextPreference, JoinCode, JoinMechanism, Member, MemberStatus, Organization,
+    OrganizationStatus, OrganizationType, Permission, PolicySet, PolicySetSpec, PolicySetStatus,
+    PolicySetType, Role, ViewMode,
 };
 use serde_json::{json, Map};
 use sqlx::postgres::PgPoolOptions;
@@ -80,6 +81,12 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
         .expect("discoverable lookup must pass")
         .iter()
         .any(|item| item.id == organization_id));
+
+    let seeded_roles = seed_system_roles(&store, organization_id, now)
+        .await
+        .expect("permission catalog and system roles must seed");
+    assert_eq!(seeded_roles.len(), 8);
+    assert!(seeded_roles["applicant"].is_default_for_new_members);
 
     let permission = Permission {
         id: Uuid::new_v5(&organization_id, b"audit:view"),

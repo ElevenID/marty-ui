@@ -11,6 +11,7 @@ import pytest
 from services.organization.domain import entities as entities_module
 from services.organization.domain.entities import ApiKey, JoinCode, Member, Permission, Role
 from services.organization.infrastructure.adapters import scim_http_adapter
+from services.organization._migration_permissions import PERMISSION_CATALOG
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -195,4 +196,25 @@ def test_frozen_surface_matches_python_and_declared_proto() -> None:
     )
     assert declared_methods - implemented_methods == set(
         SURFACE_CONTRACT["legacy_python_grpc_gap"]
+    )
+
+
+def test_permission_catalog_matches_language_neutral_contract() -> None:
+    catalog = json.loads(
+        (ROOT / "contracts" / "organization-permission-catalog.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected = [
+        {
+            "resource": resource,
+            "action": action,
+            "description": description,
+        }
+        for resource, action, description in PERMISSION_CATALOG
+    ]
+    assert catalog["schema_version"] == 1
+    assert catalog["permissions"] == expected
+    assert len({f"{item['resource']}:{item['action']}" for item in expected}) == len(
+        expected
     )

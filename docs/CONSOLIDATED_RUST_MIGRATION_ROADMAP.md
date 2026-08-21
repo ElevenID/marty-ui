@@ -853,6 +853,17 @@ complete round trip and cascade behavior when
 strict Clippy, cross-language domain vectors and the ownership guard pass
 locally; live execution remains a CI gate.
 
+The 104-entry permission catalog is now frozen as language-neutral data and
+consumed by both Python and Rust. Rust derives all eight intended system roles
+from that single catalog: owner, admin, access administrator, catalog
+administrator, reviewer, operator, viewer and applicant. Owner/admin retain
+the complete catalog; reviewer/operator keep their exact view and action
+supplements; applicant remains the sole default role and has no organization
+console access. Permission IDs and new system-role IDs are deterministic,
+while released database IDs are retained on reseed. Catalog and role seeding
+are idempotent and included in the optional PostgreSQL round-trip gate. Four
+Python parity tests, ten Rust unit/contract groups and strict Clippy pass.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
