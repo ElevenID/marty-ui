@@ -1676,11 +1676,32 @@ same application and verification layers, require authenticated service and
 principal identities, preserve paging/filtering and expose complete nested
 policy data. The Rust gRPC create path also rebuilds credential and alternative
 requirements that the superseded Python adapter silently ignored. The complete
-crate currently has 14 green behavioral and persistence tests and passes strict
+crate now has 18 green behavioral and persistence tests and passes strict
 Clippy.
 
-Next work is the concrete Rust verification/trust/status orchestrator, service
-runtime/configuration and packaging. Configured
+The verifier orchestration layer is now native and deterministic. It routes with
+the canonical `marty-verification` format detector, applies request/policy/
+requirement trust-profile precedence, supplies verifier-owned nonce and audience
+context only when binding requires it, enforces trust-profile tenant identity,
+enriches authenticated credentials with authoritative status evidence, and
+projects every result into the one strict verified-facts request consumed by the
+policy kernel. Malformed formats never reach a credential kernel and unavailable
+trust dependencies fail closed. The language-neutral
+`presentation-verification-facts.json` contract freezes this projection and its
+trust/status normalization.
+
+Complete mdoc issuer and holder authentication is also consolidated in the
+shared `marty-verification` crate on the dedicated
+`agent/marty-core-presentation-verifier-wave3` branch at commit `7169663`. The
+Python extension delegates to that implementation and no longer directly owns
+COSE, ISO mdoc, PEM, time or test-certificate dependencies. Ten focused mdoc
+kernel tests, the complete 301-test verification suite and all 47 binding tests
+pass. Publication and the immutable Marty UI pin remain pending because the
+local GitHub proxy is refusing connections to `127.0.0.1:443`.
+
+Next work is the concrete Rust adapters for every supported credential format,
+the Trust Profile and credential-status clients, then service runtime,
+configuration and packaging. Configured
 PostgreSQL, container and external-provider acceptance then gate immediate
 deletion of the Python service and its nine revisions. No beta deployment has
 occurred; this remains part of the single aggregate wave-three beta update.
