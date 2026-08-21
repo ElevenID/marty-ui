@@ -15,6 +15,7 @@ base64.workspace = true
 chrono.workspace = true
 hmac.workspace = true
 mmf-data.workspace = true
+mmf-messaging.workspace = true
 mmf-platform.workspace = true
 mmf-push.workspace = true
 marty-oid4vci.workspace = true

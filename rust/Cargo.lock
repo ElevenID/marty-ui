@@ -4104,6 +4104,7 @@ dependencies = [
  "jsonwebtoken",
  "marty-oid4vci",
  "mmf-data",
+ "mmf-messaging",
  "mmf-platform",
  "mmf-push",
  "p256",

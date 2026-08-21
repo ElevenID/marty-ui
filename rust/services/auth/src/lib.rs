@@ -18,6 +18,7 @@ pub mod migration;
 pub mod oidc;
 pub mod postgres;
 pub mod provisioning;
+pub mod service_transports;
 pub mod wallet;
 
 pub use application::*;
@@ -41,8 +42,17 @@ pub use migration::*;
 pub use oidc::*;
 pub use postgres::*;
 pub use provisioning::*;
+pub use service_transports::*;
 pub use wallet::*;
 
 pub mod auth_proto {
     tonic::include_proto!("marty.ui.auth.v1");
+}
+
+pub mod flow_proto {
+    tonic::include_proto!("marty.ui.flow.v1");
+}
+
+pub mod organization_proto {
+    tonic::include_proto!("marty.ui.organization.v1");
 }
