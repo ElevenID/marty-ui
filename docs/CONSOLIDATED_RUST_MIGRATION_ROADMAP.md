@@ -1372,11 +1372,34 @@ Python fallback and any per-slice beta deployment. The complete Rust Auth
 suite, strict Clippy and the focused Python parity suite (71 passed, one
 optional configured integration skipped) are green.
 
-Remaining Auth work is concrete executable connection composition, gRPC
-workload TLS/server security, outbox dispatcher startup and shutdown, binary
-and container dispatch, configured PostgreSQL/Redis/provider acceptance,
-immutable MMF pinning, and immediate deletion of the Python service plus an
-anti-reintroduction gate. No beta deployment has occurred.
+Commit `78f9e821` completes the Auth source cutover. The native executable now
+connects and validates the Auth PostgreSQL schema, MMF PostgreSQL outbox, MMF
+Redis session/PKCE/credential state, MMF Redis sliding-window rate limiter,
+OIDC discovery/JWKS, Flow and Organization gRPC, Applicant and Canvas/issuance
+HTTP health, and event-stream gRPC before readiness. Flow uses the shared MMF
+workload-mTLS client when configured; production configuration additionally
+requires an inbound workload server identity. Both listeners bind before
+activation, the durable outbox dispatcher starts and drains with the process,
+gRPC health changes with lifecycle state, and shutdown drains HTTP, gRPC and
+outbox work in order.
+
+The service image builds and installs `marty-auth`, and the entrypoint dispatches
+Auth directly to that binary without a Python path. The beta Compose model now
+selects the beta environment explicitly, carries the Rust-compatible PostgreSQL
+URL and required identity values, preserves outbound Flow workload identity,
+and renders successfully without changing the running beta deployment. The
+complete pre-deletion Python oracle gate passed 95 tests with one optional
+configured integration skipped; the post-cutover Rust gate passes all 76 Auth
+tests, executable/packaging checks, formatting and strict Clippy. The same
+change deleted 9,724 superseded lines, leaving only the four Rust-compiled
+credential-login assets below `services/auth`, removed Python Auth migration
+dispatch, marked Auth `native-active`, and added anti-reintroduction ownership
+checks.
+
+Auth source migration is complete. Its remaining release gates are the shared
+wave-three immutable MMF pin plus configured PostgreSQL/Redis/provider and
+container acceptance in the aggregate landing branch. No beta deployment has
+occurred.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
