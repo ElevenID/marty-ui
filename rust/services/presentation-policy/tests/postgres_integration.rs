@@ -1,7 +1,7 @@
 use chrono::Utc;
 use marty_presentation_policy::{
-    migrate_presentation_policy_schema, validate_presentation_policy_schema, PolicyStatus,
-    PostgresPolicyStore, PresentationPolicy,
+    migrate_presentation_policy_schema, reconcile_builtin_policies,
+    validate_presentation_policy_schema, PolicyStatus, PostgresPolicyStore, PresentationPolicy,
 };
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
@@ -35,6 +35,13 @@ async fn migration_and_complete_repository_round_trip_when_configured() {
     migrate_presentation_policy_schema(&pool).await.unwrap();
     validate_presentation_policy_schema(&pool).await.unwrap();
     let store = PostgresPolicyStore::new(pool);
+    assert_eq!(reconcile_builtin_policies(&store).await.unwrap(), 5);
+    assert_eq!(reconcile_builtin_policies(&store).await.unwrap(), 5);
+    assert!(store
+        .policy_by_id("50000000-0000-0000-0000-000000000005".parse().unwrap())
+        .await
+        .unwrap()
+        .is_some());
     let id = Uuid::new_v4();
     let organization_id = Uuid::new_v4();
     let other_organization_id = Uuid::new_v4();

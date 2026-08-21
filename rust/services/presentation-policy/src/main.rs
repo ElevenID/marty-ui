@@ -3,12 +3,12 @@ use std::{error::Error, sync::Arc, time::Duration};
 use marty_presentation_policy::{
     migrate_presentation_policy_schema,
     presentation_policy_proto::presentation_policy_service_server::PresentationPolicyServiceServer,
-    presentation_policy_router, validate_presentation_policy_schema, CredentialStatusResolver,
-    CredentialVerificationKernel, NativePresentationControlPlane, PolicyApplication,
-    PolicyAuthorization, PolicyRepository, PostgresPolicyStore, PresentationGrpcSecurity,
-    PresentationPolicyDependency, PresentationPolicyGrpcService, PresentationPolicyHttpState,
-    PresentationPolicyRuntime, PresentationPolicyServiceConfig, PresentationTrustResolver,
-    RustCredentialKernel, VerifiedFactsOrchestrator,
+    presentation_policy_router, reconcile_builtin_policies, validate_presentation_policy_schema,
+    CredentialStatusResolver, CredentialVerificationKernel, NativePresentationControlPlane,
+    PolicyApplication, PolicyAuthorization, PolicyRepository, PostgresPolicyStore,
+    PresentationGrpcSecurity, PresentationPolicyDependency, PresentationPolicyGrpcService,
+    PresentationPolicyHttpState, PresentationPolicyRuntime, PresentationPolicyServiceConfig,
+    PresentationTrustResolver, RustCredentialKernel, VerifiedFactsOrchestrator,
 };
 use mmf_security::ServiceTokenAuthenticator;
 use sqlx::postgres::PgPoolOptions;
@@ -54,6 +54,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     runtime.mark_healthy(PresentationPolicyDependency::ControlPlane)?;
 
     let store = Arc::new(PostgresPolicyStore::new(pool));
+    reconcile_builtin_policies(store.as_ref()).await?;
     let repository: Arc<dyn PolicyRepository> = store;
     let authorization: Arc<dyn PolicyAuthorization> = control.clone();
     let application = Arc::new(PolicyApplication::new(repository, authorization));

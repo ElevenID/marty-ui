@@ -1,4 +1,5 @@
 pub mod application;
+pub mod catalog;
 pub mod config;
 pub mod control_plane;
 pub mod domain;
@@ -14,6 +15,7 @@ pub mod verification;
 pub use application::{
     PolicyApplication, PolicyApplicationError, PolicyAuthorization, PolicyRepository,
 };
+pub use catalog::{built_in_presentation_policies, reconcile_builtin_policies};
 pub use config::{
     PresentationPolicyConfigError, PresentationPolicyServiceConfig, RuntimeEnvironment,
     WorkloadServerTlsFiles,
