@@ -1470,12 +1470,24 @@ failure occurs before persistence. The update plan now preserves claims,
 derived attributes and display style exposed by the released request model but
 previously left unwired by the Python handler.
 
-The Rust crate now passes 19 application, domain, lifecycle, catalog, surface,
+Nine template HTTP operations are now executable through Axum: create, list,
+get, update, activate, deprecate, new-version, delete and add-claim. Every route
+requires the shared MMF service token plus a trusted forwarded user before the
+application-level membership decision. Request DTOs reject undeclared fields,
+validity aliases resolve against existing state, and responses reproduce the
+public claim/privacy/TTL projection while omitting issuer algorithms, supported
+formats, wallet configuration and null optionals. Black-box tests exercise
+create/update/activate/delete and prove untrusted requests fail before use-case
+execution.
+
+The Rust crate now passes 21 HTTP, application, domain, lifecycle, catalog, surface,
 migration, persistence and configured-PostgreSQL contract tests; the surviving
 Python oracle passes all 171 tests; formatting and strict Clippy pass. The
 configured PostgreSQL tests run when `CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL`
-is supplied. Remaining work is all 24 HTTP and 12 intended gRPC handlers over
-the frozen operations, MMF authorization/runtime/outbox
+is supplied. Remaining work is the wallet-compatibility operation, seven wallet
+registry operations, five delivery-destination operations, two internal HTTP
+operations and all 12 intended gRPC handlers over the frozen operations, plus
+MMF runtime/outbox
 composition, packaging,
 configured acceptance and immediate Python deletion. No beta deployment has
 occurred.

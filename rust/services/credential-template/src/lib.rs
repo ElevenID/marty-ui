@@ -5,6 +5,7 @@
 pub mod application;
 pub mod catalog;
 mod domain;
+pub mod http_service;
 pub mod migration;
 pub mod persistence;
 pub mod postgres;

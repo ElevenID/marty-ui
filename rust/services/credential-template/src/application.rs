@@ -7,11 +7,11 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    normalize_payload_format, validate_claim_definitions, validate_credential_type,
-    validate_protocol_requirements, ClaimDefinition, CredentialFormat, CredentialTemplate,
-    CredentialTemplateError, CredentialTemplateRepositoryError, DerivedAttribute, DisplayStyle,
-    IssuerRequirements, PostgresCredentialTemplateStore, PrivacyPosture, TemplateStatus,
-    ValidityRules, WalletConfig,
+    normalize_payload_format, resolve_validity_rules, validate_claim_definitions,
+    validate_credential_type, validate_protocol_requirements, ClaimDefinition, CredentialFormat,
+    CredentialTemplate, CredentialTemplateError, CredentialTemplateRepositoryError,
+    DerivedAttribute, DisplayStyle, IssuerRequirements, PostgresCredentialTemplateStore,
+    PrivacyPosture, TemplateStatus, ValidityRules, ValidityRulesInput, WalletConfig,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -158,7 +158,7 @@ pub struct UpdateTemplatePatch {
     pub zk_predicate_claims: Option<Vec<String>>,
     pub derived_attributes: Option<Vec<DerivedAttribute>>,
     pub display_style: Option<DisplayStyle>,
-    pub validity_rules: Option<ValidityRules>,
+    pub validity_rules: Option<ValidityRulesInput>,
     pub supported_formats: Option<Vec<CredentialFormat>>,
     pub application_template_id: Option<String>,
     pub trust_profile_id: Option<String>,
@@ -543,7 +543,7 @@ fn apply_update(
         template.display_style = value;
     }
     if let Some(value) = patch.validity_rules {
-        template.validity_rules = value;
+        template.validity_rules = resolve_validity_rules(&value, Some(&template.validity_rules))?;
     }
     if let Some(value) = patch.supported_formats {
         template.supported_formats = value;
