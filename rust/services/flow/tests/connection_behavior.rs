@@ -51,7 +51,7 @@ fn flow_connection_contract_freezes_fail_closed_startup_composition() {
     assert_eq!(contract.schema_version, 1);
     assert_eq!(
         contract.required_probes,
-        FlowDependency::all()
+        FlowDependency::connection_probes()
             .map(|dependency| dependency.name().to_owned())
             .collect::<Vec<_>>()
     );

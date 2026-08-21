@@ -89,9 +89,10 @@ struct FailureBehavior {
 
 #[test]
 fn released_grpc_surface_is_owned_by_one_fail_closed_rust_adapter() {
-    let contract: Contract =
-        serde_json::from_str(include_str!("../../../../contracts/flow-grpc-behavior.json"))
-            .expect("contract");
+    let contract: Contract = serde_json::from_str(include_str!(
+        "../../../../contracts/flow-grpc-behavior.json"
+    ))
+    .expect("contract");
     assert_eq!(contract.schema_version, 1);
     assert_eq!(contract.package, "marty.ui.flow.v1");
     assert_eq!(contract.implementation_owner, "marty-flow.grpc_service");
@@ -136,9 +137,10 @@ fn released_grpc_surface_is_owned_by_one_fail_closed_rust_adapter() {
 
 #[test]
 fn grpc_mutations_streams_and_projections_have_behavioral_gates() {
-    let contract: Contract =
-        serde_json::from_str(include_str!("../../../../contracts/flow-grpc-behavior.json"))
-            .expect("contract");
+    let contract: Contract = serde_json::from_str(include_str!(
+        "../../../../contracts/flow-grpc-behavior.json"
+    ))
+    .expect("contract");
     assert_eq!(
         contract.application_event_authentication.owner,
         "mmf-security.application_event"

@@ -130,10 +130,20 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.partial_tls_behavior, "fail_closed");
     assert_eq!(contract.database_connection_bounds, [1, 100]);
     assert_eq!(contract.redis_database_bounds, [0, 255]);
-    assert_eq!(contract.application_event_auth.owner, "mmf-security.application_event");
+    assert_eq!(
+        contract.application_event_auth.owner,
+        "mmf-security.application_event"
+    );
     assert_eq!(contract.application_event_auth.max_age_default_seconds, 60);
-    assert_eq!(contract.application_event_auth.replay_ttl_default_seconds, 300);
-    assert!(contract.application_event_auth.replay_ttl_must_cover_max_age);
+    assert_eq!(
+        contract.application_event_auth.replay_ttl_default_seconds,
+        300
+    );
+    assert!(
+        contract
+            .application_event_auth
+            .replay_ttl_must_cover_max_age
+    );
     assert_eq!(
         contract.application_event_auth.organization_id_default,
         "00000000-0000-0000-0000-000000000001"

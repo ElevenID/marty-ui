@@ -250,6 +250,11 @@ fn configured_factories_apply_workload_mtls_only_to_the_policy_provider() {
     .unwrap();
     let config = FlowServiceConfig::from_values([
         ("ENVIRONMENT".into(), "beta".into()),
+        ("PUBLIC_BASE_URL".into(), "https://issuer.example".into()),
+        (
+            "FLOW_CALLBACK_DESTINATIONS".into(),
+            "org-1|https://callback.example/result?nonce=__MARTY_TOKEN__".into(),
+        ),
         ("DATABASE_URL".into(), "postgresql://db/flow".into()),
         ("REDIS_URL".into(), "redis://redis".into()),
         ("ORG_GRPC_TARGET".into(), "organization:9002".into()),
@@ -275,6 +280,7 @@ fn configured_factories_apply_workload_mtls_only_to_the_policy_provider() {
         ("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into()),
         ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
         ("FLOW_WEBHOOK_SECRET".into(), "w".repeat(32)),
+        ("FLOW_APPLICATION_EVENT_HMAC_KEY".into(), "a".repeat(32)),
         ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "k".repeat(32)),
         ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
         ("GRPC_INSECURE_ALLOWED".into(), "true".into()),

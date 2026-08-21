@@ -57,6 +57,23 @@ impl FlowDependency {
         ]
         .into_iter()
     }
+
+    /// Dependencies that must be connected and probed before listener and
+    /// callback-worker startup can begin.
+    pub fn connection_probes() -> impl Iterator<Item = Self> {
+        [
+            Self::Database,
+            Self::NonceStore,
+            Self::Organization,
+            Self::CredentialTemplate,
+            Self::PresentationPolicy,
+            Self::IssuanceGrpc,
+            Self::SigningKeys,
+            Self::PhysicalIssuance,
+            Self::ReferenceCatalog,
+        ]
+        .into_iter()
+    }
 }
 
 #[derive(Clone)]
