@@ -20,6 +20,7 @@ chrono.workspace = true
 futures-core.workspace = true
 http.workspace = true
 marty-oid4vci.workspace = true
+marty-deployment-profile = { path = "../deployment-profile" }
 mmf-platform.workspace = true
 mmf-security.workspace = true
 percent-encoding.workspace = true

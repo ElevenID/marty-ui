@@ -1,0 +1,43 @@
+[package]
+name = "marty-deployment-profile"
+version = "0.1.0"
+description = "Canonical Rust deployment runtime-profile service"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "marty-deployment-profile"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+marty-flow = { path = "../flow" }
+mmf-core.workspace = true
+mmf-platform.workspace = true
+mmf-runtime.workspace = true
+mmf-security.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tonic.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tower.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

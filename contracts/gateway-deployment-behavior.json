@@ -13,7 +13,12 @@
     "organization_id": "org-1",
     "name": "Campus runtime",
     "environment": "development",
-    "callbacks": {"issuance_complete_url": "https://client.example/issued"},
+    "callbacks": {
+      "issuance_complete_url": "https://client.example/issued",
+      "require_signature_verification": true,
+      "max_retries": 3,
+      "retry_delay_seconds": 30
+    },
     "feature_flags": {
       "enable_selective_disclosure": true,
       "enable_derived_attributes": true,
@@ -38,7 +43,11 @@
     "default_policy_id": "policy-1",
     "enabled_flow_ids": [],
     "network_mode": "ONLINE",
-    "update_channel": "stable"
+    "key_access_mode": "KEY_VAULT",
+    "update_channel": "stable",
+    "offline_cache_ttl_hours": 24,
+    "operator_biometric_authentication_required": false,
+    "audit_all_events": true
   },
   "update_alias_input": {"biometric_required": true, "description": null},
   "expected_update": {"operator_biometric_authentication_required": true},

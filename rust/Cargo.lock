@@ -4282,6 +4282,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-deployment-profile"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "marty-flow",
+ "mmf-core",
+ "mmf-platform",
+ "mmf-runtime",
+ "mmf-security",
+ "rand 0.9.5",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.20",
+ "tokio",
+ "tonic",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "marty-device-registration"
 version = "0.1.0"
 dependencies = [
@@ -4416,6 +4444,7 @@ dependencies = [
  "chrono",
  "futures-core",
  "http 1.5.0",
+ "marty-deployment-profile",
  "marty-oid4vci 0.1.57",
  "mmf-platform",
  "mmf-security",

@@ -5,7 +5,7 @@ pub mod config;
 pub mod contract;
 pub mod credential_metadata;
 pub mod credential_template_contract;
-pub mod deployment_contract;
+pub use marty_deployment_profile::gateway_contract as deployment_contract;
 pub mod did_web;
 pub mod didcomm_contract;
 pub mod discovery;
