@@ -1274,15 +1274,31 @@ cache contract, including user-session indexes, bulk user logout, exact TTL
 behavior and typed fail-closed malformed-cache errors. MMF commit `db47333`
 adds atomic cache consume and expiring set primitives once in `mmf-data`, with
 equivalent memory and Redis implementations, instead of embedding Redis
-commands in Auth. Thirteen Rust behavioral tests, 16 focused Python oracle
-tests, formatting and strict Clippy pass.
+commands in Auth.
 
-Remaining Auth work is the native OIDC/JWKS and Keycloak administration
-adapters, JIT applicant/organization provisioning, credential-login and Canvas
-LTI state machines, PostgreSQL audit adapter and migration, HTTP/gRPC adapters,
-MMF runtime/outbox composition, executable packaging, configured acceptance,
-and immediate deletion of the Python service after the aggregate gate passes.
-No beta deployment has occurred.
+Commit `636216f6` ports the complete Keycloak OIDC provider boundary. Bounded
+no-redirect discovery, JWKS and token fetches preserve internal/external issuer
+separation and trusted JWKS-origin/path validation; key rotation performs
+exactly one forced refresh. Signature, algorithm, issuer, audience, authorized
+party, nonce, time and `at_hash` decisions execute directly in the pinned
+canonical `marty-oid4vci` kernel, and access tokens remain opaque. Commit
+`0f18de11` ports JIT applicant upsert planning and organization membership
+enrichment, with shared Python/Rust name vectors and observable optional
+organization degradation. Commit `f6408648` ports credential-login identity
+enrichment, including deterministic fallback IDs, DID extraction, Keycloak and
+credential role/context merging, provisioning fallback and Canvas defaults.
+Commit `a5af692b` ports Keycloak Admin user lookup/create, verified-user policy,
+role and organization enrichment, native-validated RFC 8693 token exchange,
+bounded transport and container URL normalization. Thirty-three Rust
+behavioral tests, the focused Python oracle suites, formatting and strict
+Clippy pass.
+
+Remaining Auth work is the credential-login HTTP/wallet callback and Canvas LTI
+state machines, PostgreSQL applicant/audit adapters and migration,
+organization/applicant/event-stream transports, HTTP/gRPC adapters, MMF
+runtime/outbox composition, executable packaging, configured acceptance, and
+immediate deletion of the Python service after the aggregate gate passes. No
+beta deployment has occurred.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
