@@ -394,6 +394,18 @@ jobs:
             exit 1
           fi
           credential_template_relative="${credential_template_executable#"$PWD/"}"
+          presentation_policy_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "postgres_integration")
+            | select(.package_id | contains("marty-presentation-policy"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$presentation_policy_executable" || ! -x "$presentation_policy_executable" ]]; then
+            echo "Unable to locate the compiled Presentation Policy PostgreSQL contract executable." >&2
+            exit 1
+          fi
+          presentation_policy_relative="${presentation_policy_executable#"$PWD/"}"
           test -x target/debug/marty-revocation-profile
           tar -cf "$RUNNER_TEMP/rust-db-test-bundle.tar" \
             "$contract_relative" \
@@ -401,6 +413,7 @@ jobs:
             "$document_relative" \
             "$issuer_profile_relative" \
             "$credential_template_relative" \
+            "$presentation_policy_relative" \
             target/debug/marty-revocation-profile
       - name: Publish reusable database contract executables
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -464,6 +477,7 @@ jobs:
       MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
       MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME: marty_revocation_test
       CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
+      PRESENTATION_POLICY_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -505,12 +519,14 @@ jobs:
             exit 1
           fi
           "${issuer_profile_contracts[0]}" --ignored --test-threads=1
-          mapfile -t credential_template_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'postgres_integration-*' -perm -u+x)
-          if (( ${#credential_template_contracts[@]} != 1 )); then
-            printf 'Expected one Credential Template PostgreSQL contract executable, found %s.\n' "${#credential_template_contracts[@]}" >&2
+          mapfile -t service_postgres_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'postgres_integration-*' -perm -u+x)
+          if (( ${#service_postgres_contracts[@]} != 2 )); then
+            printf 'Expected two service PostgreSQL contract executables, found %s.\n' "${#service_postgres_contracts[@]}" >&2
             exit 1
           fi
-          "${credential_template_contracts[0]}" --test-threads=1
+          for contract in "${service_postgres_contracts[@]}"; do
+            "$contract" --test-threads=1
+          done
 
   rust-lint-policy:
     name: Rust Lint and Packaging
