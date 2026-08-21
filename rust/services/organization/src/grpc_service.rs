@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use mmf_security::constant_time_secret_eq;
+use mmf_security::{SecurityError, ServiceTokenAuthenticator};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
@@ -38,20 +38,26 @@ pub const ORGANIZATION_GRPC_METHODS: &[&str] = &[
 #[derive(Clone)]
 pub struct OrganizationGrpcService {
     application: Arc<OrganizationApplication>,
-    service_token: Option<Arc<[u8]>>,
+    service_authenticator: ServiceTokenAuthenticator,
 }
 
 impl OrganizationGrpcService {
-    #[must_use]
-    pub fn new(application: Arc<OrganizationApplication>, service_token: Option<String>) -> Self {
-        Self {
+    pub fn new(
+        application: Arc<OrganizationApplication>,
+        service_token: Option<String>,
+        service_authentication_required: bool,
+    ) -> Result<Self, SecurityError> {
+        Ok(Self {
             application,
-            service_token: service_token.map(|token| Arc::from(token.into_bytes())),
-        }
+            service_authenticator: ServiceTokenAuthenticator::new(
+                service_token,
+                service_authentication_required,
+            )?,
+        })
     }
 
     fn authenticate<T>(&self, request: &Request<T>) -> Result<(), Status> {
-        authenticate_service_token(self.service_token.as_deref(), request)
+        authenticate_service_token(&self.service_authenticator, request)
     }
 }
 
@@ -467,25 +473,17 @@ fn application_status(error: OrganizationApplicationError) -> Status {
 }
 
 fn authenticate_service_token<T>(
-    expected: Option<&[u8]>,
+    authenticator: &ServiceTokenAuthenticator,
     request: &Request<T>,
 ) -> Result<(), Status> {
-    let Some(expected) = expected else {
-        return Ok(());
-    };
     let candidate = request
         .metadata()
         .get("x-service-token")
         .and_then(|value| value.to_str().ok())
-        .map(str::as_bytes)
-        .unwrap_or_default();
-    if constant_time_secret_eq(expected, candidate) {
-        Ok(())
-    } else {
-        Err(Status::unauthenticated(
-            "ORGANIZATION.GRPC_SERVICE_AUTHENTICATION_REQUIRED",
-        ))
-    }
+        .map(str::trim);
+    authenticator
+        .authenticate(candidate)
+        .map_err(|_| Status::unauthenticated("ORGANIZATION.GRPC_SERVICE_AUTHENTICATION_REQUIRED"))
 }
 
 #[cfg(test)]
@@ -512,10 +510,13 @@ mod tests {
 
     #[test]
     fn configured_service_tokens_are_required_and_compared_exactly() {
-        let expected = b"0123456789abcdef0123456789abcdef";
-        assert!(authenticate_service_token(None, &Request::new(())).is_ok());
+        let optional = ServiceTokenAuthenticator::new(None, false).unwrap();
+        assert!(authenticate_service_token(&optional, &Request::new(())).is_ok());
+        let required =
+            ServiceTokenAuthenticator::new(Some("0123456789abcdef0123456789abcdef".into()), true)
+                .unwrap();
         assert_eq!(
-            authenticate_service_token(Some(expected), &Request::new(()))
+            authenticate_service_token(&required, &Request::new(()))
                 .unwrap_err()
                 .code(),
             tonic::Code::Unauthenticated
@@ -525,6 +526,6 @@ mod tests {
             "x-service-token",
             "0123456789abcdef0123456789abcdef".parse().unwrap(),
         );
-        assert!(authenticate_service_token(Some(expected), &valid).is_ok());
+        assert!(authenticate_service_token(&required, &valid).is_ok());
     }
 }

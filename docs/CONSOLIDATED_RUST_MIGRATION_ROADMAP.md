@@ -1063,6 +1063,23 @@ formatting and strict Clippy pass. HTTP/SCIM adapters, deployed trust-boundary
 composition, runtime/outbox workers, executable/container packaging and the
 final acceptance/deletion gate remain. No beta deployment has occurred.
 
+The inbound HTTP trust boundary is now defined once before route migration.
+MMF commit `fe6e6b5` owns minimum-length service-token configuration,
+production-required startup failure and constant-time request authentication;
+Organization gRPC and HTTP consume that shared primitive. The HTTP adapter
+accepts forwarded user or API-key context only after the gateway credential is
+validated, and API-key contexts additionally require a valid tenant UUID and
+nonempty minimized permission. Missing, malformed and partial contexts return
+typed failures before membership or domain code runs.
+
+`contracts/organization-http-trust-behavior.json` freezes trusted user/API-key
+projection and every missing/wrong credential branch. Thirty-four Rust
+Organization tests, all 71 MMF security tests, formatting and strict Clippy
+pass. The gateway must inject the same service credential on proxied HTTP
+requests before the deployed Organization runtime can require it; that wiring
+is part of the remaining executable cutover, not a fallback. No beta
+deployment has occurred.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
