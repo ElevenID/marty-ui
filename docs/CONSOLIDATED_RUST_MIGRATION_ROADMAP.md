@@ -1659,6 +1659,26 @@ fixtures, and add anti-reintroduction ownership checks. No beta deployment has
 occurred; the only permitted beta update remains the single aggregate wave-three
 deployment after every service slice lands.
 
+Credential Template source cutover is complete in commit `9072bc8f`. The Rust
+crate is now the sole runtime, domain, catalog, persistence and migration owner;
+the Python migration runner no longer imports the service, and ownership marks
+`credential-template-service` as `native-active` with a source-reintroduction
+guard. The change removes all 78 tracked files under
+`services/credential_template`, including 4,202 production Python lines and
+15,795 tracked service linesâ€”plus the obsolete Python patch image.
+
+The deletion audit found one external Python dependency on the old in-memory
+wallet catalog. Verification now reads active wallet formats through the native
+Credential Template gRPC service, fails closed when that service or catalog is
+unavailable, and keeps the Rust system catalog as the single implementation.
+The post-cutover gate passes 39 Rust tests, formatting, strict Clippy under Rust
+1.95, 49 focused caller/ownership/packaging/release checks, Ruff syntax checks,
+and the base-plus-beta Compose model. CI now independently runs the idempotent
+migration executable and a pinned-PostgreSQL container health smoke in addition
+to the repository contract. This host has no Docker daemon or configured test
+database, so those live jobs remain merge requirements rather than being
+silently skipped or weakened. No beta deployment has occurred.
+
 ### Presentation-policy port status
 
 Presentation Policy is the next unmigrated service by removable production
