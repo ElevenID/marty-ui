@@ -503,7 +503,6 @@ def test_all_shared_service_builds_receive_the_verified_bootstrap_artifacts() ->
         "deployment-profile",
         "flow",
         "revocation-profile",
-        "device-registration",
         "event-stream",
         "verification",
     ):
@@ -513,6 +512,14 @@ def test_all_shared_service_builds_receive_the_verified_bootstrap_artifacts() ->
         )
         assert section is not None
         assert "<<: *marty_service_build_artifacts" in section.group(1)
+
+    native_device = re.search(
+        r"(?ms)^  device-registration:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+        compose,
+    )
+    assert native_device is not None
+    assert "dockerfile: rust/services/Dockerfile.ci" in native_device.group(1)
+    assert "target: device_registration" in native_device.group(1)
 
 
 def test_oidf_bridge_listener_uses_the_published_https_port(

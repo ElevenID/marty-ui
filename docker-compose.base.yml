@@ -1017,10 +1017,11 @@ services:
   device-registration:
     build:
       context: .
-      dockerfile: services/Dockerfile
+      dockerfile: rust/services/Dockerfile.ci
+      target: device_registration
       args:
-        <<: *marty_service_build_artifacts
-        SERVICE_NAME: device_registration
+        MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+        MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty

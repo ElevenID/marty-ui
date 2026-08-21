@@ -69,6 +69,11 @@ if [ "$MODULE_NAME" = "applicant" ]; then
 	exec /usr/local/bin/marty-applicant
 fi
 
+if [ "$MODULE_NAME" = "device_registration" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-device-registration
+fi
+
 echo "Starting service: $SERVICE_NAME (module: $MODULE_NAME)"
 echo "Working directory: $(pwd)"
 echo "Python version: $(python --version)"

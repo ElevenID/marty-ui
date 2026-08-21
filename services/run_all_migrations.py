@@ -56,10 +56,6 @@ SERVICES = [
         "name": "deployment_profile",
         "module": "deployment_profile.infrastructure.models",
     },
-    {
-        "name": "device_registration",
-        "module": "device_registration.infrastructure.models",
-    },
 ]
 
 MANAGED_OPENBAO_SERVICE_ID = "managed-openbao-transit"
