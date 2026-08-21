@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true
+base64.workspace = true
 chrono.workspace = true
 marty-oid4vci.workspace = true
 marty-verification.workspace = true

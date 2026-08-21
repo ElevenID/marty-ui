@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::DateTime;
 use marty_verification::credential_format::DetectedCredentialFormat;
 use serde_json::{json, Map, Value};
@@ -50,8 +51,8 @@ async fn verify_vc_jwt_material(
 ) -> Result<VerifiedJwtMaterial, PresentationVerificationError> {
     let token = token_string(&context.token)?;
     let mut request = json!({"token": token});
-    if let Some(public_jwk) = trust_value(context, "issuer_public_jwk") {
-        request["issuer_public_jwk"] = public_jwk.clone();
+    if let Some(public_jwk) = governed_public_jwk(context, token) {
+        request["issuer_public_jwk"] = public_jwk;
     }
     let raw = if open_badge_v3 {
         marty_verification::vcdm::verify_open_badge_v3_jwt_json_async(&request.to_string()).await
@@ -156,8 +157,11 @@ fn verify_sd_jwt(
     context: &CredentialVerificationContext,
 ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
     let token = token_string(&context.token)?;
-    let public_jwk = trust_value(context, "issuer_public_jwk")
-        .ok_or_else(|| invalid_input("No governed issuer public JWK is available for SD-JWT"))?;
+    let Some(public_jwk) = governed_public_jwk(context, token) else {
+        return Ok(rejected(
+            "No governed issuer public JWK is available for SD-JWT",
+        ));
+    };
     let verified = marty_oid4vci::formats::sd_jwt::verify_sd_jwt(
         token,
         &public_jwk.to_string(),
@@ -443,6 +447,137 @@ fn trust_value<'a>(context: &'a CredentialVerificationContext, key: &str) -> Opt
         .and_then(|profile| profile.document.get(key))
 }
 
+fn governed_public_jwk(context: &CredentialVerificationContext, token: &str) -> Option<Value> {
+    if let Some(jwk) = trust_value(context, "issuer_public_jwk").and_then(Value::as_object) {
+        return public_jwk(jwk).then(|| Value::Object(jwk.clone()));
+    }
+    let profile = context.trust_profile.as_ref()?.document.as_object()?;
+    if profile
+        .get("status")
+        .and_then(Value::as_str)
+        .is_none_or(|status| !status.eq_ignore_ascii_case("active"))
+    {
+        return None;
+    }
+    let (issuer, kid) = jwt_selector(token)?;
+    let normalized_issuer = normalize_issuer(&issuer);
+
+    let overrides = profile
+        .get("system_issuer_overrides")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flat_map(|values| values.iter())
+        .filter(|(identifier, _)| normalize_issuer(identifier) == normalized_issuer)
+        .filter_map(|(_, value)| value.get("public_jwk").and_then(Value::as_object))
+        .filter(|jwk| public_jwk(jwk) && kid_matches(jwk, kid.as_deref()))
+        .collect::<Vec<_>>();
+    if overrides.len() == 1 {
+        return Some(Value::Object(overrides[0].clone()));
+    }
+    if !overrides.is_empty() {
+        return None;
+    }
+
+    let relationships = profile
+        .get("issuer_relationships")
+        .and_then(Value::as_array)?;
+    let matching_relationships = relationships
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|relationship| {
+            relationship
+                .get("issuer_id")
+                .and_then(Value::as_str)
+                .is_some_and(|value| normalize_issuer(value) == normalized_issuer)
+                && relationship
+                    .get("relationship_status")
+                    .and_then(Value::as_str)
+                    == Some("TRUSTED")
+                && matches!(
+                    relationship
+                        .get("compliance_status")
+                        .and_then(Value::as_str),
+                    Some("ACCREDITED" | "COMPLIANT")
+                )
+                && relationship.get("revoked_at").is_none_or(Value::is_null)
+        })
+        .collect::<Vec<_>>();
+    if matching_relationships.len() != 1 {
+        return None;
+    }
+    let keys = matching_relationships[0]
+        .get("verification_keys")
+        .and_then(Value::as_array)?;
+    let public_keys = keys
+        .iter()
+        .filter_map(Value::as_object)
+        .filter(|jwk| public_jwk(jwk))
+        .collect::<Vec<_>>();
+    let matching_keys = public_keys
+        .iter()
+        .copied()
+        .filter(|jwk| kid_matches(jwk, kid.as_deref()))
+        .collect::<Vec<_>>();
+    let selected = if matching_keys.len() == 1 {
+        matching_keys[0]
+    } else if kid.is_some()
+        && public_keys.len() == 1
+        && public_keys[0].get("kid").is_none_or(Value::is_null)
+    {
+        public_keys[0]
+    } else {
+        return None;
+    };
+    Some(Value::Object(selected.clone()))
+}
+
+fn jwt_selector(token: &str) -> Option<(String, Option<String>)> {
+    let jwt = token.split('~').next()?;
+    let mut parts = jwt.split('.');
+    let header = decode_jwt_object(parts.next()?)?;
+    let payload = decode_jwt_object(parts.next()?)?;
+    parts.next()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let issuer = payload.get("iss")?.as_str()?.trim();
+    if issuer.is_empty() {
+        return None;
+    }
+    let kid = header
+        .get("kid")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    Some((issuer.to_owned(), kid))
+}
+
+fn decode_jwt_object(segment: &str) -> Option<Map<String, Value>> {
+    URL_SAFE_NO_PAD
+        .decode(segment)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        .and_then(|value| value.as_object().cloned())
+}
+
+fn public_jwk(jwk: &Map<String, Value>) -> bool {
+    jwk.get("kty")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+        && ["d", "p", "q", "dp", "dq", "qi", "oth", "k"]
+            .iter()
+            .all(|parameter| !jwk.contains_key(*parameter))
+}
+
+fn kid_matches(jwk: &Map<String, Value>, expected: Option<&str>) -> bool {
+    expected.is_none_or(|expected| jwk.get("kid").and_then(Value::as_str) == Some(expected))
+}
+
+fn normalize_issuer(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_ascii_lowercase()
+}
+
 fn token_string(token: &Value) -> Result<&str, PresentationVerificationError> {
     token
         .as_str()
@@ -517,4 +652,59 @@ fn invalid_native(detail: &str) -> PresentationVerificationError {
     PresentationVerificationError::Failed(format!(
         "PRESENTATION_POLICY.INVALID_NATIVE_EVIDENCE: {detail}"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ResolvedTrustProfile;
+    use uuid::Uuid;
+
+    fn compact_jwt(issuer: &str, kid: &str) -> String {
+        let header = URL_SAFE_NO_PAD.encode(json!({"alg": "EdDSA", "kid": kid}).to_string());
+        let payload = URL_SAFE_NO_PAD.encode(json!({"iss": issuer}).to_string());
+        format!("{header}.{payload}.signature")
+    }
+
+    fn context(document: Value) -> CredentialVerificationContext {
+        CredentialVerificationContext {
+            format: DetectedCredentialFormat::SdJwt,
+            token: Value::Null,
+            nonce: None,
+            audience: None,
+            verifier_context: Map::new(),
+            trust_profile: Some(ResolvedTrustProfile {
+                id: Uuid::from_u128(1),
+                organization_id: Uuid::from_u128(2),
+                document,
+            }),
+        }
+    }
+
+    #[test]
+    fn governed_key_selection_requires_one_exact_public_relationship_key() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/presentation-control-plane-behavior.json"
+        ))
+        .unwrap();
+        let profile = fixture["trust_profile"].clone();
+        let issuer = fixture["issuer_id"].as_str().unwrap();
+        let kid = format!("{issuer}#key-1");
+        let token = compact_jwt(issuer, &kid);
+        let selected = governed_public_jwk(&context(profile.clone()), &token).unwrap();
+        assert_eq!(selected["kid"], kid);
+        assert!(selected.get("d").is_none());
+
+        let mut ambiguous = profile.clone();
+        let relationship = ambiguous["issuer_relationships"][0].clone();
+        ambiguous["issuer_relationships"]
+            .as_array_mut()
+            .unwrap()
+            .push(relationship);
+        assert!(governed_public_jwk(&context(ambiguous), &token).is_none());
+
+        let mut private = profile;
+        private["issuer_relationships"][0]["verification_keys"][0]["d"] = json!("secret");
+        assert!(governed_public_jwk(&context(private), &token).is_none());
+    }
 }
