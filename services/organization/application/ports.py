@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from ..domain.entities import (
@@ -92,6 +93,10 @@ class CreateApiKeyCommand:
     scopes: list[str] | None = None
     description: str | None = None
     is_test: bool = False
+    scope_type: str = "ORGANIZATION"
+    deployment_profile_id: str | None = None
+    rate_limit: int | None = None
+    expires_at: datetime | None = None
 
 
 @dataclass
@@ -109,6 +114,7 @@ class UpsertConsoleContextPreferenceCommand:
     user_id: str
     last_view_mode: ViewMode | None = None
     last_active_org_id: str | None = None
+    last_active_org_id_set: bool = False
 
 
 @dataclass

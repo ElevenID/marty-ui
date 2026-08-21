@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod api_keys;
 pub mod application;
 pub mod cache;
 pub mod catalog;
@@ -7,8 +8,13 @@ pub mod domain;
 pub mod events;
 pub mod migration;
 pub mod postgres;
+pub mod preferences;
 pub mod scim;
 
+pub use api_keys::{
+    validate_create_api_key, ApiKeyCreation, ApiKeyScopeType, CreateApiKeyCommand,
+    RevokeApiKeyCommand, MIP_API_KEY_SCOPES,
+};
 pub use application::{
     evaluate_join_code, plan_direct_member_roles, plan_organization_creation,
     plan_organization_update, AcceptInvitationCommand, AddMemberDirectCommand, ApplicationWarning,
@@ -28,4 +34,7 @@ pub use domain::{
 pub use events::{
     OrganizationAuditSink, OrganizationEvent, OrganizationEventError, OrganizationEventKind,
     OrganizationEventPublisher, OrganizationEventPublisherError,
+};
+pub use preferences::{
+    apply_console_preference_patch, UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch,
 };

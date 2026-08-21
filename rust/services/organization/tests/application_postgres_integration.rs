@@ -3,10 +3,12 @@ use std::sync::Arc;
 use chrono::Utc;
 use marty_organization::postgres::PostgresOrganizationStore;
 use marty_organization::{
-    AcceptInvitationCommand, AddMemberDirectCommand, CreateOrganizationCommand,
-    InviteMemberCommand, JoinByCodeCommand, JoinCode, JoinMechanism, JoinOrganizationCommand,
-    OrganizationApplication, OrganizationApplicationError, OrganizationCache, OrganizationType,
-    RemoveMemberCommand, SetMemberRolesCommand, UpdateOrganizationCommand, UpdateOrganizationPatch,
+    AcceptInvitationCommand, AddMemberDirectCommand, ApiKeyScopeType, CreateApiKeyCommand,
+    CreateOrganizationCommand, InviteMemberCommand, JoinByCodeCommand, JoinCode, JoinMechanism,
+    JoinOrganizationCommand, OrganizationApplication, OrganizationApplicationError,
+    OrganizationCache, OrganizationType, RemoveMemberCommand, RevokeApiKeyCommand,
+    SetMemberRolesCommand, UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch,
+    UpdateOrganizationCommand, UpdateOrganizationPatch, ViewMode,
 };
 use mmf_data::MemoryCache;
 use sqlx::postgres::PgPoolOptions;
@@ -268,6 +270,91 @@ async fn mutations_commit_domain_audit_and_outbox_state_together_when_configured
         .expect("direct provisioning must commit");
     assert!(provisioned.value.has_role(&["reviewer"]));
 
+    let created_key = application
+        .create_api_key(CreateApiKeyCommand {
+            organization_id,
+            name: "application-contract-key".into(),
+            created_by: "application-owner".into(),
+            scopes: Some(vec!["credentials:read".into()]),
+            description: None,
+            is_test: true,
+            scope_type: ApiKeyScopeType::Organization,
+            deployment_profile_id: None,
+            rate_limit: Some(120),
+            expires_at: None,
+            now: Utc::now(),
+        })
+        .await
+        .expect("API-key creation must commit");
+    assert!(application
+        .validate_api_key(&created_key.value.raw_key, Utc::now())
+        .await
+        .expect("API-key validation must pass")
+        .is_some());
+    let cross_tenant_revoke = application
+        .revoke_api_key(RevokeApiKeyCommand {
+            organization_id: uuid::Uuid::new_v4(),
+            api_key_id: created_key.value.api_key.id,
+            revoked_by: "application-owner".into(),
+            now: Utc::now(),
+        })
+        .await
+        .expect_err("cross-tenant revocation must fail closed");
+    assert!(matches!(
+        cross_tenant_revoke,
+        OrganizationApplicationError::ApiKeyNotFound(_)
+    ));
+    application
+        .revoke_api_key(RevokeApiKeyCommand {
+            organization_id,
+            api_key_id: created_key.value.api_key.id,
+            revoked_by: "application-owner".into(),
+            now: Utc::now(),
+        })
+        .await
+        .expect("API-key revocation must commit");
+    assert!(application
+        .validate_api_key(&created_key.value.raw_key, Utc::now())
+        .await
+        .expect("revoked API-key validation must pass")
+        .is_none());
+
+    let preference = application
+        .update_console_preferences(UpdateConsolePreferenceCommand {
+            user_id: "preference-user".into(),
+            patch: UpdateConsolePreferencePatch {
+                last_view_mode: Some(ViewMode::OrgAdmin),
+                last_active_organization_id: Some(Some(organization_id)),
+            },
+            now: Utc::now(),
+        })
+        .await
+        .expect("preference creation must pass");
+    let preserved = application
+        .update_console_preferences(UpdateConsolePreferenceCommand {
+            user_id: "preference-user".into(),
+            patch: UpdateConsolePreferencePatch {
+                last_view_mode: Some(ViewMode::Applicant),
+                last_active_organization_id: None,
+            },
+            now: Utc::now(),
+        })
+        .await
+        .expect("partial preference update must pass");
+    assert_eq!(preserved.last_active_org_id, preference.last_active_org_id);
+    let cleared = application
+        .update_console_preferences(UpdateConsolePreferenceCommand {
+            user_id: "preference-user".into(),
+            patch: UpdateConsolePreferencePatch {
+                last_view_mode: None,
+                last_active_organization_id: Some(None),
+            },
+            now: Utc::now(),
+        })
+        .await
+        .expect("explicit preference clear must pass");
+    assert_eq!(cleared.last_active_org_id, None);
+
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT count(*) FROM organization_service.audit_events WHERE organization_id=$1",
@@ -276,7 +363,7 @@ async fn mutations_commit_domain_audit_and_outbox_state_together_when_configured
         .fetch_one(&pool)
         .await
         .expect("final audit count must pass"),
-        8
+        10
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
@@ -287,7 +374,7 @@ async fn mutations_commit_domain_audit_and_outbox_state_together_when_configured
         .fetch_one(&pool)
         .await
         .expect("final outbox count must pass"),
-        8
+        10
     );
 
     application

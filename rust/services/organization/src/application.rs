@@ -256,6 +256,12 @@ pub enum OrganizationApplicationError {
     DirectJoinNotAllowed,
     #[error("ORGANIZATION.APPLICATION_JOIN_REQUEST_PENDING")]
     JoinRequestPending,
+    #[error("ORGANIZATION.APPLICATION_API_KEY_NOT_FOUND: {0}")]
+    ApiKeyNotFound(Uuid),
+    #[error("ORGANIZATION.APPLICATION_INVALID_API_KEY_SCOPE: {0}")]
+    InvalidApiKeyScope(String),
+    #[error("ORGANIZATION.APPLICATION_INVALID_API_KEY_BINDING: {0}")]
+    InvalidApiKeyBinding(&'static str),
     #[error("ORGANIZATION.APPLICATION_TIME_PRECEDES_UNIX_EPOCH")]
     InvalidTimestamp,
     #[error(transparent)]
@@ -276,10 +282,10 @@ pub enum OrganizationApplicationError {
 
 #[derive(Clone)]
 pub struct OrganizationApplication {
-    store: PostgresOrganizationStore,
-    outbox: PostgresOutboxStore,
-    cache: OrganizationCache,
-    membership_policy: MembershipPolicy,
+    pub(crate) store: PostgresOrganizationStore,
+    pub(crate) outbox: PostgresOutboxStore,
+    pub(crate) cache: OrganizationCache,
+    pub(crate) membership_policy: MembershipPolicy,
 }
 
 impl OrganizationApplication {
@@ -1156,7 +1162,7 @@ impl OrganizationApplication {
             .collect()
     }
 
-    async fn persist_event_in_transaction(
+    pub(crate) async fn persist_event_in_transaction(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
         event: &OrganizationEvent,

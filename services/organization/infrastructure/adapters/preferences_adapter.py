@@ -155,6 +155,7 @@ async def update_preferences(
         # Pydantic's model includes the field even if None, so we check if it was provided
         if "last_active_org_id" in request.model_dump(exclude_unset=True):
             command.last_active_org_id = request.last_active_org_id
+            command.last_active_org_id_set = True
         
         preference = await use_case.upsert_preferences(command)
         

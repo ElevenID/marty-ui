@@ -942,6 +942,30 @@ tests, formatting and strict Clippy pass. API keys and preferences are next,
 followed by RBAC/policy/audit application mutations and the adapter/runtime
 cutover.
 
+API-key and console-preference application behavior is now native. API-key
+creation validates the complete MIP scope allowlist, organization versus
+deployment-profile binding, positive rate limits and future expiry before
+persisting every intended field. Creation and tenant-bound revocation commit
+the key, audit record and MMF outbox event atomically; validation hashes the
+presented secret, performs the domain's constant-time verification and rejects
+disabled, revoked or expired keys. Tenant-scoped list/get operations no longer
+permit a path organization to select another tenant's key. The raw secret is
+retained only in the one-time creation result.
+
+Console preferences now distinguish an omitted active-organization field from
+explicit null and an explicit UUID, lock an existing preference during partial
+updates and preserve the default applicant/no-active-organization behavior.
+This fixes the surviving Python command's `hasattr` ambiguity, which made every
+request appear to contain `last_active_org_id` and could clear it during an
+unrelated view-mode update. `contracts/organization-api-preference-behavior.json`
+drives both languages for key scope/binding cases and preference
+omit/clear/replace semantics. Twenty-seven Rust tests, all 69 surviving Python
+Organization tests, formatting and strict Clippy pass. The optional PostgreSQL
+gate now also validates key creation, constant-time lookup, cross-tenant
+revocation rejection, revocation, and persisted preference partial updates.
+RBAC, policy-set and audit-query application behavior remains before the
+adapter/runtime cutover.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

@@ -311,54 +311,32 @@ impl PostgresOrganizationStore {
     }
 
     pub async fn save_api_key(&self, api_key: &ApiKey) -> Result<(), RepositoryError> {
-        let rate_limit = api_key
-            .rate_limit
-            .map(i32::try_from)
-            .transpose()
-            .map_err(|_| {
-                invalid(
-                    "api_keys.rate_limit",
-                    api_key.rate_limit.unwrap().to_string(),
-                )
-            })?;
-        sqlx::query(
-            "INSERT INTO organization_service.api_keys (
-                id,organization_id,name,description,key_prefix,key_hash,scopes,scope_type,
-                deployment_profile_id,status,enabled,rate_limit,created_by,last_used_at,
-                last_used_ip,expires_at,created_at,updated_at
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
-             ON CONFLICT (id) DO UPDATE SET
-                name=EXCLUDED.name,description=EXCLUDED.description,scopes=EXCLUDED.scopes,
-                scope_type=EXCLUDED.scope_type,deployment_profile_id=EXCLUDED.deployment_profile_id,
-                status=EXCLUDED.status,enabled=EXCLUDED.enabled,rate_limit=EXCLUDED.rate_limit,
-                last_used_at=EXCLUDED.last_used_at,last_used_ip=EXCLUDED.last_used_ip,
-                expires_at=EXCLUDED.expires_at,updated_at=EXCLUDED.updated_at",
-        )
-        .bind(api_key.id)
-        .bind(api_key.organization_id)
-        .bind(&api_key.name)
-        .bind(&api_key.description)
-        .bind(&api_key.key_prefix)
-        .bind(&api_key.key_hash)
-        .bind(&api_key.scopes)
-        .bind(&api_key.scope_type)
-        .bind(api_key.deployment_profile_id)
-        .bind(api_key.status.as_str())
-        .bind(api_key.enabled)
-        .bind(rate_limit)
-        .bind(&api_key.created_by)
-        .bind(api_key.last_used_at)
-        .bind(&api_key.last_used_ip)
-        .bind(api_key.expires_at)
-        .bind(api_key.created_at)
-        .bind(api_key.updated_at)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        let mut connection = self.pool.acquire().await?;
+        save_api_key_on(&mut connection, api_key).await
+    }
+
+    pub async fn save_api_key_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        api_key: &ApiKey,
+    ) -> Result<(), RepositoryError> {
+        save_api_key_on(&mut *transaction, api_key).await
     }
 
     pub async fn api_key_by_id(&self, key_id: Uuid) -> Result<Option<ApiKey>, RepositoryError> {
         self.api_key_by("id", key_id.to_string()).await
+    }
+
+    pub async fn api_key_by_id_for_update_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        key_id: Uuid,
+    ) -> Result<Option<ApiKey>, RepositoryError> {
+        let row = sqlx::query("SELECT * FROM organization_service.api_keys WHERE id=$1 FOR UPDATE")
+            .bind(key_id)
+            .fetch_optional(&mut **transaction)
+            .await?;
+        row.as_ref().map(api_key_from_row).transpose()
     }
 
     pub async fn api_key_by_hash(&self, key_hash: &str) -> Result<Option<ApiKey>, RepositoryError> {
@@ -408,24 +386,16 @@ impl PostgresOrganizationStore {
         &self,
         preference: &ConsoleContextPreference,
     ) -> Result<(), RepositoryError> {
-        sqlx::query(
-            "INSERT INTO organization_service.console_context_preferences (
-                id,user_id,last_view_mode,last_active_org_id,created_at,updated_at
-             ) VALUES ($1,$2,$3,$4,$5,$6)
-             ON CONFLICT (user_id) DO UPDATE SET
-                last_view_mode=EXCLUDED.last_view_mode,
-                last_active_org_id=EXCLUDED.last_active_org_id,
-                updated_at=EXCLUDED.updated_at",
-        )
-        .bind(preference.id)
-        .bind(&preference.user_id)
-        .bind(preference.last_view_mode.as_str())
-        .bind(preference.last_active_org_id)
-        .bind(preference.created_at)
-        .bind(preference.updated_at)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        let mut connection = self.pool.acquire().await?;
+        save_preference_on(&mut connection, preference).await
+    }
+
+    pub async fn save_preference_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        preference: &ConsoleContextPreference,
+    ) -> Result<(), RepositoryError> {
+        save_preference_on(&mut *transaction, preference).await
     }
 
     pub async fn preference_by_user(
@@ -437,6 +407,21 @@ impl PostgresOrganizationStore {
         )
         .bind(user_id)
         .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(preference_from_row).transpose()
+    }
+
+    pub async fn preference_by_user_for_update_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        user_id: &str,
+    ) -> Result<Option<ConsoleContextPreference>, RepositoryError> {
+        let row = sqlx::query(
+            "SELECT * FROM organization_service.console_context_preferences
+             WHERE user_id=$1 FOR UPDATE",
+        )
+        .bind(user_id)
+        .fetch_optional(&mut **transaction)
         .await?;
         row.as_ref().map(preference_from_row).transpose()
     }
@@ -1026,6 +1011,80 @@ async fn save_member_on(
     .bind(member.joined_at)
     .bind(member.created_at)
     .bind(member.updated_at)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+async fn save_api_key_on(
+    connection: &mut PgConnection,
+    api_key: &ApiKey,
+) -> Result<(), RepositoryError> {
+    let rate_limit = api_key
+        .rate_limit
+        .map(i32::try_from)
+        .transpose()
+        .map_err(|_| {
+            invalid(
+                "api_keys.rate_limit",
+                api_key.rate_limit.unwrap().to_string(),
+            )
+        })?;
+    sqlx::query(
+        "INSERT INTO organization_service.api_keys (
+            id,organization_id,name,description,key_prefix,key_hash,scopes,scope_type,
+            deployment_profile_id,status,enabled,rate_limit,created_by,last_used_at,
+            last_used_ip,expires_at,created_at,updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+         ON CONFLICT (id) DO UPDATE SET
+            name=EXCLUDED.name,description=EXCLUDED.description,scopes=EXCLUDED.scopes,
+            scope_type=EXCLUDED.scope_type,deployment_profile_id=EXCLUDED.deployment_profile_id,
+            status=EXCLUDED.status,enabled=EXCLUDED.enabled,rate_limit=EXCLUDED.rate_limit,
+            last_used_at=EXCLUDED.last_used_at,last_used_ip=EXCLUDED.last_used_ip,
+            expires_at=EXCLUDED.expires_at,updated_at=EXCLUDED.updated_at",
+    )
+    .bind(api_key.id)
+    .bind(api_key.organization_id)
+    .bind(&api_key.name)
+    .bind(&api_key.description)
+    .bind(&api_key.key_prefix)
+    .bind(&api_key.key_hash)
+    .bind(&api_key.scopes)
+    .bind(&api_key.scope_type)
+    .bind(api_key.deployment_profile_id)
+    .bind(api_key.status.as_str())
+    .bind(api_key.enabled)
+    .bind(rate_limit)
+    .bind(&api_key.created_by)
+    .bind(api_key.last_used_at)
+    .bind(&api_key.last_used_ip)
+    .bind(api_key.expires_at)
+    .bind(api_key.created_at)
+    .bind(api_key.updated_at)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+async fn save_preference_on(
+    connection: &mut PgConnection,
+    preference: &ConsoleContextPreference,
+) -> Result<(), RepositoryError> {
+    sqlx::query(
+        "INSERT INTO organization_service.console_context_preferences (
+            id,user_id,last_view_mode,last_active_org_id,created_at,updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (user_id) DO UPDATE SET
+            last_view_mode=EXCLUDED.last_view_mode,
+            last_active_org_id=EXCLUDED.last_active_org_id,
+            updated_at=EXCLUDED.updated_at",
+    )
+    .bind(preference.id)
+    .bind(&preference.user_id)
+    .bind(preference.last_view_mode.as_str())
+    .bind(preference.last_active_org_id)
+    .bind(preference.created_at)
+    .bind(preference.updated_at)
     .execute(connection)
     .await?;
     Ok(())

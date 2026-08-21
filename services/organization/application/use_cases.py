@@ -700,11 +700,22 @@ class ApiKeyUseCase:
                     f"Must be one of: {', '.join(sorted(_MIP_VALID_SCOPES))}"
                 )
             # admin:full restricted to ORGANIZATION scope_type
-            scope_type = getattr(command, "scope_type", "ORGANIZATION")
+            scope_type = command.scope_type
             if "admin:full" in command.scopes and scope_type != "ORGANIZATION":
                 raise ValueError(
                     "admin:full scope is restricted to ORGANIZATION scope_type keys"
                 )
+
+        if command.scope_type not in {"ORGANIZATION", "DEPLOYMENT_PROFILE"}:
+            raise ValueError(f"Invalid API key scope type: {command.scope_type}")
+        if command.scope_type == "ORGANIZATION" and command.deployment_profile_id:
+            raise ValueError("Organization API keys cannot bind a deployment profile")
+        if command.scope_type == "DEPLOYMENT_PROFILE" and not command.deployment_profile_id:
+            raise ValueError("Deployment-profile API keys require deployment_profile_id")
+        if command.rate_limit is not None and command.rate_limit <= 0:
+            raise ValueError("API key rate_limit must be greater than zero")
+        if command.expires_at is not None and command.expires_at <= datetime.now(timezone.utc):
+            raise ValueError("API key expires_at must be in the future")
 
         # Create API key
         api_key, raw_key = ApiKey.create(
@@ -714,7 +725,12 @@ class ApiKeyUseCase:
             scopes=command.scopes,
             description=command.description,
             is_test=command.is_test,
+            expires_at=command.expires_at,
         )
+
+        api_key.scope_type = command.scope_type
+        api_key.deployment_profile_id = command.deployment_profile_id
+        api_key.rate_limit = command.rate_limit
 
         await self.api_key_repo.save(api_key)
 
@@ -808,7 +824,7 @@ class ConsoleContextPreferenceUseCase:
             preference.last_view_mode = command.last_view_mode
 
         # Explicit None handling for last_active_org_id
-        if hasattr(command, "last_active_org_id"):
+        if command.last_active_org_id_set:
             preference.last_active_org_id = command.last_active_org_id
 
         # Save
