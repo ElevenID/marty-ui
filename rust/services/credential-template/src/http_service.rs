@@ -219,6 +219,7 @@ struct CreateTemplateRequest {
     compliance_profile_id: String,
     issuer_did: Option<String>,
     credential_payload_format: Option<String>,
+    issuance_protocol: Option<String>,
     #[serde(default, rename = "schema_uri")]
     _schema_uri: Option<Value>,
 }
@@ -241,6 +242,7 @@ struct UpdateTemplateRequest {
     revocation_profile_id: Option<String>,
     issuer_did: Option<String>,
     credential_payload_format: Option<String>,
+    issuance_protocol: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -462,6 +464,7 @@ async fn create_template(
             compliance_profile_id: input.compliance_profile_id,
             issuer_did: input.issuer_did,
             credential_payload_format: input.credential_payload_format,
+            issuance_protocol: input.issuance_protocol,
             now: Utc::now(),
         })
         .await
@@ -555,6 +558,7 @@ async fn update_template(
         revocation_profile_id: input.revocation_profile_id,
         issuer_did: input.issuer_did,
         credential_payload_format: input.credential_payload_format,
+        issuance_protocol: input.issuance_protocol,
     };
     let template = state
         .application

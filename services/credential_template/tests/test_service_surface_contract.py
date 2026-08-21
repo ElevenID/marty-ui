@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURE = ROOT / "contracts" / "credential-template-service-surface.json"
+GRPC_FIXTURE = ROOT / "contracts" / "credential-template-grpc-behavior.json"
 MAIN = ROOT / "services" / "credential_template" / "main.py"
 PROTO = ROOT / "proto" / "v1" / "credential_template_service.proto"
 
@@ -56,3 +57,8 @@ def test_python_http_surface_matches_the_language_neutral_contract() -> None:
 def test_proto_surface_matches_the_language_neutral_contract() -> None:
     methods = set(re.findall(r"\brpc\s+(\w+)\s*\(", PROTO.read_text(encoding="utf-8")))
     assert methods == set(_contract()["grpc_methods"])
+
+
+def test_grpc_behavior_oracle_covers_every_declared_method() -> None:
+    behavior = json.loads(GRPC_FIXTURE.read_text(encoding="utf-8"))
+    assert set(behavior["methods"]) == set(_contract()["grpc_methods"])

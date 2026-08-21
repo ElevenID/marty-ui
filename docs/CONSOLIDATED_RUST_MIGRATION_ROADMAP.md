@@ -1526,13 +1526,32 @@ formats, fail-closed repository behavior and optional display lookup. Rust
 black-box and application tests and the surviving Python configuration kernel
 consume the same cases.
 
-The Rust crate now passes 27 HTTP, application, wallet, domain, lifecycle,
+All 12 frozen gRPC methods are now implemented by one native Tonic service over
+the same template and registry applications as HTTP. The former Python adapter
+implemented only get/list/configuration/wallet/health queries and deliberately
+left six declared mutations absent; Rust now executes create, update, activate,
+deprecate, version and delete as authenticated, tenant-authorized operations.
+Every call requires the shared MMF service token, and tenant operations also
+require trusted forwarded user identity. Repository/control-plane failures map
+to unavailable, authorization failures map to permission denied and malformed
+requests fail as invalid arguments.
+
+The pre-v1 protobuf now carries the already-intended compliance, trust,
+revocation, derived-attribute, full-validity, wallet-override and routing state,
+plus an update mask so empty collections can be distinguished from omitted
+fields. Removed custody selectors remain reserved and absent. The native
+configuration method reuses the exact HTTP metadata kernel instead of the
+legacy gRPC adapter's JWT-only approximation and empty-on-error fallback.
+`credential-template-grpc-behavior.json` language-neutrally covers the complete
+method inventory, authentication failures, lifecycle sequence, wire format,
+wallet lookup, health and forbidden private fields.
+
+The Rust crate now passes 29 HTTP, gRPC, application, wallet, domain, lifecycle,
 catalog, surface, migration, persistence and configured-PostgreSQL contract
-tests; the surviving Python oracle passes all 175 tests; formatting and strict
+tests; the surviving Python oracle passes all 176 tests; formatting and strict
 Clippy pass. The configured PostgreSQL tests run when
-`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is supplied. Remaining work is all 12
-intended gRPC handlers over the frozen operations, then MMF runtime/outbox
-composition, packaging, configured
+`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is supplied. Remaining work is MMF
+runtime/outbox composition, executable and container packaging, configured
 acceptance and immediate Python deletion. No beta deployment has occurred.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18

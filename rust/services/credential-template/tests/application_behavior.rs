@@ -219,6 +219,7 @@ fn command() -> CreateTemplateCommand {
         compliance_profile_id: "compliance-1".to_owned(),
         issuer_did: None,
         credential_payload_format: Some("w3c_vcdm_v2_sd_jwt".to_owned()),
+        issuance_protocol: Some("oid4vci".to_owned()),
         now: Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap(),
     }
 }

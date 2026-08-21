@@ -10,8 +10,9 @@ use crate::{
     normalize_payload_format, resolve_validity_rules, validate_claim_definitions,
     validate_credential_type, validate_protocol_requirements, ClaimDefinition, CredentialFormat,
     CredentialTemplate, CredentialTemplateError, CredentialTemplateRepositoryError,
-    DerivedAttribute, DisplayStyle, IssuerRequirements, PostgresCredentialTemplateStore,
-    PrivacyPosture, TemplateStatus, ValidityRules, ValidityRulesInput, WalletConfig,
+    DerivedAttribute, DisplayStyle, IssuanceProtocol, IssuerRequirements,
+    PostgresCredentialTemplateStore, PrivacyPosture, TemplateStatus, ValidityRules,
+    ValidityRulesInput, WalletConfig,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -166,6 +167,7 @@ pub struct CreateTemplateCommand {
     pub compliance_profile_id: String,
     pub issuer_did: Option<String>,
     pub credential_payload_format: Option<String>,
+    pub issuance_protocol: Option<String>,
     pub now: DateTime<Utc>,
 }
 
@@ -186,6 +188,7 @@ pub struct UpdateTemplatePatch {
     pub revocation_profile_id: Option<String>,
     pub issuer_did: Option<String>,
     pub credential_payload_format: Option<String>,
+    pub issuance_protocol: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -273,7 +276,9 @@ impl CredentialTemplateApplication {
             revocation_profile_id: command.revocation_profile_id,
             issuer_algorithm: Some(issuer.issuer_algorithm),
             issuer_did: Some(issuer.issuer_did),
-            issuance_protocol: "oid4vci".to_owned(),
+            issuance_protocol: IssuanceProtocol::parse(command.issuance_protocol.as_deref())?
+                .wire()
+                .to_owned(),
             version: 1,
             created_at: command.now,
             updated_at: command.now,
@@ -711,6 +716,9 @@ fn apply_update(
     }
     if let Some(value) = patch.credential_payload_format {
         template.credential_payload_format = value;
+    }
+    if let Some(value) = patch.issuance_protocol {
+        template.issuance_protocol = IssuanceProtocol::parse(Some(&value))?.wire().to_owned();
     }
     template.updated_at = now;
     Ok(template)
