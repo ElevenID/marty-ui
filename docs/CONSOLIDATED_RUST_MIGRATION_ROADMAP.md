@@ -1293,12 +1293,40 @@ bounded transport and container URL normalization. Thirty-three Rust
 behavioral tests, the focused Python oracle suites, formatting and strict
 Clippy pass.
 
-Remaining Auth work is the credential-login HTTP/wallet callback and Canvas LTI
-state machines, PostgreSQL applicant/audit adapters and migration,
-organization/applicant/event-stream transports, HTTP/gRPC adapters, MMF
-runtime/outbox composition, executable packaging, configured acceptance, and
-immediate deletion of the Python service after the aggregate gate passes. No
-beta deployment has occurred.
+Commit `c281dec2` ports Auth persistence. Auth now owns a non-destructive,
+advisory-lock-protected schema migration and strict owned/shared schema
+validation; the shared `public.applicants` table remains externally owned.
+The PostgreSQL repository serializes both applicant natural keys, fails closed
+when account and email identify different records, preserves existing names
+when later claims are incomplete, merges JIT metadata, and writes each
+authentication/logout audit pair with its session-history mutation in one
+transaction. Audit and session-history query behavior remains available. The
+language-neutral persistence contract and optional
+`AUTH_POSTGRES_TEST_URL` round trip cover migration idempotency, JIT updates,
+the four event families and revocation history. No configured test database is
+available locally, so the live gate compiled and skipped without claiming
+external acceptance.
+
+Commit `adf28056` ports the Canvas learner-identity and credential callback
+state kernels. The callback is bound to the canonical MMF event signature,
+decision digest, audience, event ID, timestamp window, pending flow, policy and
+organization. Completion/failure polling, crash-safe claims, deterministic
+retry session IDs and final session-cookie handoff are single-use and
+replica-safe. Canvas identities preserve stable issuer/subject derivation,
+fallback email and username, LTI LIS name precedence, constrained applicant
+roles and tenant context. `contracts/auth-login-state-behavior.json` runs
+against both Python and Rust. MMF commit `1ab07f1` adds the required expiring
+atomic `set_if_absent` lease once to `mmf-data`, with memory and Redis contract
+coverage, rather than embedding a service-specific Redis command. Thirty-nine
+Rust Auth tests, 51 focused Python callback/Canvas tests with one optional Redis
+skip, formatting and strict Clippy pass.
+
+Remaining Auth work is wallet-link/page behavior and the credential callback
+business orchestrator, Canvas and organization/applicant/event-stream bounded
+transports, HTTP/gRPC adapters, MMF runtime/outbox composition, executable
+packaging, configured PostgreSQL/Redis/transport acceptance, immutable MMF
+pinning, and immediate deletion of the Python service after the aggregate gate
+passes. No beta deployment has occurred.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
