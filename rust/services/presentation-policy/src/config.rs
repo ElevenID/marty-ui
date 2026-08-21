@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    net::SocketAddr,
+    path::PathBuf,
+    time::Duration,
+};
 
 use thiserror::Error;
 use url::Url;
@@ -174,7 +180,7 @@ fn environment(value: &str) -> Result<RuntimeEnvironment, PresentationPolicyConf
 }
 
 fn managed_issuers(values: &BTreeMap<String, String>) -> Vec<String> {
-    [
+    let mut issuers = [
         "MIP_MANAGED_ISSUER_IDENTIFIERS",
         "MIP_MANAGED_ISSUER_DIDS",
         "MARTY_ISSUER_DID",
@@ -187,7 +193,31 @@ fn managed_issuers(values: &BTreeMap<String, String>) -> Vec<String> {
     .map(str::trim)
     .filter(|value| !value.is_empty())
     .map(str::to_owned)
-    .collect()
+    .collect::<BTreeSet<_>>();
+
+    let organization_slug = value(values, "MARTY_ORG_SLUG").unwrap_or("marty");
+    if let Some(public_domain) = value(values, "PUBLIC_DOMAIN") {
+        issuers.insert(format!("did:web:{public_domain}:orgs:{organization_slug}"));
+    }
+    for name in ["PUBLIC_BASE_URL", "ISSUER_BASE_URL", "PUBLIC_API_URL"] {
+        let Some(base_url) = value(values, name) else {
+            continue;
+        };
+        let Ok(parsed) = Url::parse(base_url) else {
+            continue;
+        };
+        let Some(host) = parsed.host_str() else {
+            continue;
+        };
+        if !matches!(
+            host,
+            "localhost" | "127.0.0.1" | "gateway" | "marty-gateway"
+        ) {
+            issuers.insert(format!("did:web:{host}:orgs:{organization_slug}"));
+        }
+    }
+
+    issuers.into_iter().collect()
 }
 
 fn workload_server_tls(

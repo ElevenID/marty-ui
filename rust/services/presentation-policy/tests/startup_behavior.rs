@@ -62,6 +62,26 @@ fn deployed_configuration_requires_secrets_issuer_scope_and_complete_mtls() {
 }
 
 #[test]
+fn deployed_configuration_preserves_public_issuer_identity_derivation() {
+    let mut configured = values("beta");
+    configured.extend([
+        ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
+        ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
+        ("PUBLIC_BASE_URL".into(), "https://beta.example.test".into()),
+        ("MARTY_ORG_SLUG".into(), "member-services".into()),
+        ("GRPC_WORKLOAD_TLS_SERVER_CERT".into(), "/cert.pem".into()),
+        ("GRPC_WORKLOAD_TLS_SERVER_KEY".into(), "/key.pem".into()),
+        ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/ca.pem".into()),
+    ]);
+
+    let config = PresentationPolicyServiceConfig::from_values(configured).unwrap();
+    assert_eq!(
+        config.managed_issuers,
+        ["did:web:beta.example.test:orgs:member-services"]
+    );
+}
+
+#[test]
 fn readiness_requires_every_native_runtime_dependency() {
     let config = PresentationPolicyServiceConfig::from_values(values("test")).unwrap();
     let runtime = PresentationPolicyRuntime::new(&config).unwrap();
