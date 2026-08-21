@@ -569,6 +569,17 @@
         "binding_paths": []
       },
       "legacy": []
+    },
+    {
+      "id": "credential-template-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/credential-template"],
+        "binding_paths": []
+      },
+      "legacy": []
     }
   ],
   "guardrails": {
@@ -587,6 +598,10 @@
       {
         "capability_id": "organization-service",
         "forbidden_globs": ["services/organization/**/*.py"]
+      },
+      {
+        "capability_id": "credential-template-service",
+        "forbidden_globs": ["services/credential_template/**/*.py"]
       }
     ],
     "approved_imports": [

@@ -394,6 +394,18 @@ jobs:
             exit 1
           fi
           credential_template_relative="${credential_template_executable#"$PWD/"}"
+          credential_template_migration_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "migration_contract")
+            | select(.package_id | contains("marty-credential-template"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$credential_template_migration_executable" || ! -x "$credential_template_migration_executable" ]]; then
+            echo "Unable to locate the compiled Credential Template migration contract executable." >&2
+            exit 1
+          fi
+          cp "$credential_template_migration_executable" target/debug/credential-template-migration-contract
           presentation_policy_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "postgres_integration")
@@ -461,6 +473,7 @@ jobs:
             "$document_relative" \
             "$issuer_profile_relative" \
             "$credential_template_relative" \
+            target/debug/credential-template-migration-contract \
             "$presentation_policy_relative" \
             "$trust_profile_relative" \
             target/debug/organization-migration-contract \
@@ -581,6 +594,8 @@ jobs:
           for contract in "${service_postgres_contracts[@]}"; do
             "$contract" --test-threads=1
           done
+          test -x target/debug/credential-template-migration-contract
+          target/debug/credential-template-migration-contract --test-threads=1
           mapfile -t trust_profile_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'migration_contract-*' -perm -u+x)
           if (( ${#trust_profile_contracts[@]} != 1 )); then
             printf 'Expected one Trust Profile PostgreSQL contract executable, found %s.\n' "${#trust_profile_contracts[@]}" >&2
@@ -945,6 +960,61 @@ jobs:
             sleep 0.5
           done
           docker logs "$organization"
+          exit 1
+      - name: Smoke-test credential-template image with PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          network="credential-template-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          postgres="credential-template-postgres-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          service="credential-template-service-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm --force "$service" "$postgres" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker network create "$network" >/dev/null
+          docker run --detach \
+            --name "$postgres" \
+            --network "$network" \
+            --network-alias credential-template-postgres \
+            --env POSTGRES_USER=marty \
+            --env POSTGRES_PASSWORD=marty-test \
+            --env POSTGRES_DB=marty \
+            postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f \
+            >/dev/null
+          for attempt in {1..60}; do
+            if docker exec "$postgres" pg_isready --username marty --dbname marty >/dev/null; then
+              break
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              docker logs "$postgres"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          docker run --detach \
+            --name "$service" \
+            --network "$network" \
+            --env ENVIRONMENT=test \
+            --env DATABASE_URL=postgresql://marty:marty-test@credential-template-postgres/marty \
+            --env PUBLIC_API_URL=https://issuer.example \
+            --env MARTY_MIGRATION_PROFILE=test \
+            --env CREDENTIAL_TEMPLATE_DEPENDENCY_TIMEOUT_SECONDS=1 \
+            --publish 127.0.0.1::8003 \
+            marty-credential-template:ci \
+            >/dev/null
+          port="$(docker inspect \
+            --format '{{(index (index .NetworkSettings.Ports "8003/tcp") 0).HostPort}}' \
+            "$service")"
+          for attempt in {1..60}; do
+            if curl --fail --silent "http://127.0.0.1:${port}/health" \
+              | grep --fixed-strings --quiet '"service":"credential-template"'; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          docker logs "$service"
           exit 1
 
   public-protocol-contract:

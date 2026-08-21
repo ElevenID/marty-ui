@@ -51,7 +51,6 @@ from common.oid4vp_native import (
     credential_requirement_input,
     initialize_native_oid4vp_backend,
     parse_policy_requirements,
-    wallet_registry_format_names,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -1193,6 +1192,39 @@ async def _resolve_policy_template_references(
     return resolved
 
 
+async def _wallet_registry_format_names() -> list[str]:
+    """Read the authoritative native wallet catalog through its service API."""
+    from marty_proto.v1 import (
+        credential_template_service_pb2,
+        credential_template_service_pb2_grpc,
+    )
+
+    try:
+        async with create_grpc_channel(
+            CT_GRPC_TARGET,
+            service_name="verification",
+            require_workload_identity=True,
+        ) as channel:
+            stub = credential_template_service_pb2_grpc.CredentialTemplateServiceStub(
+                channel
+            )
+            response = await stub.ListWallets(
+                credential_template_service_pb2.ListWalletsRequest(active_only=True)
+            )
+    except Exception as exc:
+        raise NativeOperationError("Wallet registry is unavailable") from exc
+
+    formats: list[str] = []
+    for wallet in response.wallets:
+        for value in wallet.supported_formats:
+            normalized = str(value or "").strip()
+            if normalized and normalized not in formats:
+                formats.append(normalized)
+    if not formats:
+        raise NativeOperationError("Wallet registry has no supported OID4VP formats")
+    return formats
+
+
 def _protocol_status_for_session(session: VerificationSession) -> str:
     if session.status == SessionStatus.EXPIRED:
         return "EXPIRED"
@@ -1455,7 +1487,7 @@ async def _build_presentation_request_artifacts(
         {
             "id": str(uuid.uuid4()),
             "requirements": native_requirements,
-            "wallet_formats": wallet_registry_format_names(),
+            "wallet_formats": await _wallet_registry_format_names(),
         }
     )
 

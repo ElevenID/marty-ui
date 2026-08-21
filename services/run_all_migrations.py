@@ -49,10 +49,6 @@ from marty_common.system_ids import (  # noqa: E402 - services path is bootstrap
 # Service configurations
 SERVICES = [
     {
-        "name": "credential_template",
-        "module": "credential_template.infrastructure.models",
-    },
-    {
         "name": "issuance",
         "module": "issuance.infrastructure.models",
     },

@@ -159,24 +159,6 @@ def credential_requirement_input(
     }
 
 
-def wallet_registry_format_names() -> list[str]:
-    """Load exact wallet format identifiers; no locally maintained fallback exists."""
-    try:
-        from credential_template.main import SYSTEM_WALLET_CATALOG
-    except Exception as error:
-        raise NativeOperationError("Wallet registry is unavailable") from error
-
-    formats: list[str] = []
-    for entry in SYSTEM_WALLET_CATALOG:
-        for value in entry.supported_formats:
-            normalized = str(value or "").strip()
-            if normalized and normalized not in formats:
-                formats.append(normalized)
-    if not formats:
-        raise NativeOperationError("Wallet registry has no supported OID4VP formats")
-    return formats
-
-
 def _native_backend() -> ModuleType | Any:
     if _backend is None:
         initialize_native_oid4vp_backend()
@@ -231,5 +213,4 @@ __all__ = [
     "initialize_native_oid4vp_backend",
     "native_oid4vp_diagnostics",
     "parse_policy_requirements",
-    "wallet_registry_format_names",
 ]

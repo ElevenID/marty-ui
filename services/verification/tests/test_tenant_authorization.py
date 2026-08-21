@@ -492,6 +492,49 @@ async def test_inactive_nested_template_reference_is_rejected(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
+async def test_wallet_formats_come_from_native_credential_template_service(
+    monkeypatch,
+) -> None:
+    from marty_proto.v1 import credential_template_service_pb2_grpc
+
+    class _ChannelContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    stub = SimpleNamespace(
+        ListWallets=AsyncMock(
+            return_value=SimpleNamespace(
+                wallets=[
+                    SimpleNamespace(supported_formats=["dc+sd-jwt", "mso_mdoc"]),
+                    SimpleNamespace(supported_formats=["dc+sd-jwt", "jwt_vc"]),
+                ]
+            )
+        )
+    )
+    monkeypatch.setattr(
+        verification,
+        "create_grpc_channel",
+        lambda *_args, **_kwargs: _ChannelContext(),
+    )
+    monkeypatch.setattr(
+        credential_template_service_pb2_grpc,
+        "CredentialTemplateServiceStub",
+        lambda _channel: stub,
+    )
+
+    assert await verification._wallet_registry_format_names() == [
+        "dc+sd-jwt",
+        "mso_mdoc",
+        "jwt_vc",
+    ]
+    request = stub.ListWallets.await_args.args[0]
+    assert request.active_only is True
+
+
+@pytest.mark.asyncio
 async def test_submission_revalidates_nested_references_before_claim(
     monkeypatch,
 ) -> None:

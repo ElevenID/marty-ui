@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -10,28 +11,41 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def contract() -> dict[str, object]:
+    return json.loads(text("contracts/credential-template-rust-cutover.json"))
+
+
 def test_shared_service_image_dispatches_credential_template_to_rust() -> None:
+    behavior = contract()
+    binary = str(behavior["required_binary"])
     dockerfile = text("services/Dockerfile")
     entrypoint = text("services/entrypoint.sh")
     assert (
-        "cargo build --locked --release -p marty-credential-template --bin marty-credential-template"
+        f"cargo build --locked --release -p marty-credential-template --bin {binary}"
         in dockerfile
     )
-    assert (
-        "/build/rust/target/release/marty-credential-template "
-        "/usr/local/bin/marty-credential-template"
-    ) in dockerfile
+    assert f"/build/rust/target/release/{binary} /usr/local/bin/{binary}" in dockerfile
     assert 'if [ "$MODULE_NAME" = "credential_template" ]' in entrypoint
-    assert "exec /usr/local/bin/marty-credential-template" in entrypoint
+    assert f"exec /usr/local/bin/{binary}" in entrypoint
 
 
 def test_native_image_and_ci_target_preserve_both_service_ports() -> None:
+    behavior = contract()
+    target = str(behavior["required_ci_target"])
     dockerfile = text("rust/services/Dockerfile.ci")
     workflow = text(".github/workflows/ci.yml")
-    assert "FROM runtime AS credential_template" in dockerfile
+    assert f"FROM runtime AS {target}" in dockerfile
     assert "EXPOSE 8003 9003" in dockerfile
-    assert "target: credential_template" in workflow
+    assert f"target: {target}" in workflow
     assert "tags: marty-credential-template:ci" in workflow
+    assert "Smoke-test credential-template image with PostgreSQL" in workflow
+
+
+def test_native_migration_and_repository_contracts_run_against_postgresql_in_ci() -> None:
+    workflow = text(".github/workflows/ci.yml")
+    assert "CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL:" in workflow
+    assert "target/debug/credential-template-migration-contract" in workflow
+    assert 'contains("marty-credential-template")' in workflow
 
 
 def test_compose_supplies_every_fail_closed_native_dependency() -> None:
@@ -61,3 +75,32 @@ def test_kubernetes_supplies_native_secrets_and_checks_readiness() -> None:
     assert "key: SIGNING_KEYS_INTERNAL_API_KEY" in credential
     assert "path: /health" in credential
     assert "path: /ready" in credential
+
+
+def test_only_the_native_credential_template_runtime_remains() -> None:
+    behavior = contract()
+    assert (ROOT / str(behavior["runtime_owner"])).is_dir()
+    assert (ROOT / str(behavior["migration_owner"])).is_file()
+    assert (ROOT / str(behavior["surface_contract"])).is_file()
+    assert (ROOT / str(behavior["migration_history_contract"])).is_file()
+    assert not (ROOT / str(behavior["python_runtime_removed"])).exists()
+    assert behavior["python_runtime_fallback"] is False
+
+
+def test_python_migration_runner_does_not_import_deleted_credential_template() -> None:
+    migration_runner = text("services/run_all_migrations.py")
+    assert '"name": "credential_template"' not in migration_runner
+    assert '"module": "credential_template.infrastructure.models"' not in migration_runner
+
+
+def test_deleted_python_credential_template_cannot_reenter_ownership_inventory() -> None:
+    ownership = json.loads(text("docs/rust-migration-ownership.json"))
+    capability = next(
+        item
+        for item in ownership["capabilities"]
+        if item["id"] == "credential-template-service"
+    )
+
+    assert capability["status"] == "native-active"
+    assert capability["canonical"]["paths"] == ["rust/services/credential-template"]
+    assert capability["legacy"] == []
