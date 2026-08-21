@@ -57,10 +57,6 @@ SERVICES = [
         "module": "credential_template.infrastructure.models",
     },
     {
-        "name": "trust_profile",
-        "module": "trust_profile.infrastructure.models",
-    },
-    {
         "name": "issuance",
         "module": "issuance.infrastructure.models",
     },
@@ -1071,7 +1067,6 @@ def ensure_schemas(database_url: str) -> None:
         "organization_service",
         "auth_service",
         "credential_template_service",
-        "trust_profile_service",
         "issuance_service",
         "presentation_policy_service",
         "deployment_profile_service",

@@ -1,7 +1,7 @@
 {
   "schema": "marty.rust-ownership/v1",
   "roadmap": "docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md",
-  "updated": "2026-08-20",
+  "updated": "2026-08-21",
   "policy": {
     "canonical_rule": "Each deterministic protocol, policy, validation, cryptographic, or state-machine capability has one Rust implementation.",
     "fallback_rule": "Required native capabilities fail closed; runtime fallback to Python or Dart is prohibited.",
@@ -501,14 +501,18 @@
         "paths": ["marty-verification/src/trust_sync.rs", "marty-verification/src/trust_anchor", "marty-crypto/src/certificate.rs"],
         "binding_paths": ["marty-verification/src/bindings/mod.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/trust_profile/registry_sync.py"],
-          "language": "python",
-          "disposition": "retain-fetch-storage-scheduling-delete-kernel"
-        }
-      ]
+      "legacy": []
+    },
+    {
+      "id": "trust-profile-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/trust-profile"],
+        "binding_paths": []
+      },
+      "legacy": []
     },
     {
       "id": "wallet-status-and-liveness",

@@ -1,6 +1,9 @@
 {
   "service": "trust-profile",
   "port": 8004,
+  "runtime_owner": "rust/services/trust-profile",
+  "migration_owner": "rust/services/trust-profile/src/migration.rs",
+  "python_runtime_removed": "services/trust_profile",
   "native_owner": {
     "service_crate": "marty-trust-profile",
     "registry_kernel": "marty_verification::trust_sync",

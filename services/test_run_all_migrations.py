@@ -27,7 +27,7 @@ def test_revocation_schema_is_removed_from_the_python_migration_graph() -> None:
     order = [service["name"] for service in migrations.SERVICES]
 
     assert "revocation_profile" not in order
-    assert order.index("credential_template") < order.index("trust_profile")
+    assert "trust_profile" not in order
 
 
 def test_notification_schema_is_removed_from_the_python_migration_graph() -> None:

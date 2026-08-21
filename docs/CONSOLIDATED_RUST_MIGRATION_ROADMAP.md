@@ -1755,39 +1755,52 @@ aggregate wave-three beta deployment after every service slice lands.
 
 ### Trust-profile port status
 
-Trust Profile is active as the next-largest removable service while the tested
-Presentation Policy branch awaits external publication and configured gates.
-The dedicated `marty-ui-rust-trust-profile-wave3` worktree and
-`agent/marty-ui-rust-trust-profile-wave3` branch are stacked on the complete
-Presentation Policy state. The target contains 8,618 tracked Python lines,
-including approximately 6,248 production and migration lines across the service,
-registry transport, PostgreSQL adapter and ten historical Alembic revisions.
+Trust Profile has completed its local native cutover on the dedicated
+`marty-ui-rust-trust-profile-wave3` worktree and
+`agent/marty-ui-rust-trust-profile-wave3` branch, stacked on the complete
+Presentation Policy state. Rust now owns the service runtime, application,
+domain, PostgreSQL repository, additive schema migration, system catalog,
+control-plane authorization, all HTTP adapters, internal decision projection,
+registry transport, scheduled refresh and lifecycle diagnostics.
 
 `trust-profile-service-behavior.json` is now the implementation-neutral oracle.
 It freezes all 32 public and internal HTTP operations, twelve enum families,
 three system frameworks, eight durable tables, the complete ten-revision chain,
 registry synchronization bounds and atomicity, destination/TLS/redirect policy,
+80%-of-interval scheduled refresh, per-profile scheduler failure isolation,
 decision-time certificate revalidation, tenant permissions, internal service
-authentication, issuer uniqueness, cascade deletion and custody-metadata
-scrubbing. Four Python inventory tests execute the contract without requiring a
-working native wheel.
+authentication, issuer uniqueness, cascade behavior and custody-metadata
+scrubbing. Rust tests execute the oracle directly; no Python behavior oracle or
+native wheel is required.
 
-The new `marty-trust-profile` crate owns that domain and surface inventory. It
+The `marty-trust-profile` crate owns that domain and surface inventory. It
 does not copy trust-registry synchronization: protocol constants, catalog,
 URL/destination policy, import decisions, feed validation, sequence handling and
 certificate-state revalidation remain in the existing
-`marty_verification::trust_sync` kernel. The initial two Rust contract tests pass
-with strict Clippy and formatting.
+`marty_verification::trust_sync` kernel. Generic guarded outbound HTTP, DNS/IP
+classification, redirect suppression, body bounds and operator CA handling live
+once in `mmf-platform`. The parity audit found and closed two pre-deletion gaps:
+scheduled registry refresh and legacy-compatible fail-closed 503 decisions for
+unsynchronized, stale, malformed or unsupported registry state.
 
-The installed Python `_marty_rs` wheel on this workstation predates the required
-`trust_registry_sync` capability. Consequently, 50 legacy service tests pass,
-33 correctly fail closed on native unavailability and two cannot acquire the
-host pytest temporary directory. The direct Rust kernel and new shared-contract
-tests are green; no Python fallback will be restored. Next work is the complete
-native application/repository/schema layer, system and Marty catalog
-reconciliation, all HTTP adapters, scheduled bounded registry transport, shared
-MMF runtime/security, native packaging and configured parity gates. The Python
-service and ten revisions are deleted immediately after those gates pass.
+Commits `8c2282a9` and `cbb35827` add the scheduler/decision parity and native
+packaging. The shared service image, dedicated CI image, development, beta,
+self-host and Kubernetes manifests now select the Rust binary and supply its
+fail-closed configuration. CI packages and executes the real PostgreSQL
+migration contract. The full Rust suite, strict Clippy, 16 cutover/migration
+tests, 90 stack/Compose/release tests, nine entrypoint tests and rendered base
+and beta Compose models pass locally.
+
+The superseded `services/trust_profile` runtime, adapter, native bridge,
+scheduler, implementation-specific tests and all ten Alembic revisions have
+been deleted immediately after those checks: 10,241 tracked lines were removed.
+The Python migration runner no longer claims the schema, and anti-reintroduction
+tests require the Rust runtime and migration owner. Remaining external gates are
+publication and immutable pinning of the clean MMF branch, the configured CI
+PostgreSQL execution, and a built-container health check; Docker is unavailable
+on this workstation. No beta deployment has occurred, and production remains
+unchanged. These gates join the aggregate wave-three landing before the single
+permitted beta deployment and acceptance soak.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

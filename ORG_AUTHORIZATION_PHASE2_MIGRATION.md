@@ -364,7 +364,7 @@ Extend [marty-integration-tests/tests/integration/test_org_authorization.py](../
 - `marty_common` from the released package - exports already present
 
 ### Phase 2 Services
-1. [services/trust_profile/main.py](services/trust_profile/main.py) - **327 lines total**, 11 endpoints secured
+1. Historical `services/trust_profile/main.py` - **removed after the canonical [Rust Trust Profile service](rust/services/trust-profile) cutover**, with the secured surface preserved
 2. [services/flow/main.py](services/flow/main.py) - **1788 lines total**, 14 endpoints secured
 3. [services/compliance_profile/main.py](services/compliance_profile/main.py) - **592 lines total**, 7 endpoints secured
 4. [services/presentation_policy/main.py](services/presentation_policy/main.py) - **1147 lines total**, 8 endpoints secured
