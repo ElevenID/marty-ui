@@ -4137,6 +4137,7 @@ dependencies = [
 name = "marty-credential-template"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "regex",
  "serde",

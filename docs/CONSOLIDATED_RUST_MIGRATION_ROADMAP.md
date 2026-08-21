@@ -1460,9 +1460,19 @@ Sphereon, DC4EU, Google Credential Manager, Apple Wallet and DIDComm V2
 capabilities plus both wallet and Canvas delivery modes. Startup seeding inserts
 only missing IDs so operator-managed existing rows are not overwritten.
 
-The Rust crate now passes 15 domain, lifecycle, catalog, surface, migration, persistence
-and configured-PostgreSQL contract tests; the surviving Python oracle passes
-all 171 tests; formatting and strict Clippy pass. The
+The template application layer now owns all ten template use cases behind one
+repository and one fail-closed control-plane boundary: create, tenant-scoped
+list/get, draft update, activate, deprecate, new version, delete, add claim and
+internal active-template listing. Membership is enforced inside every public
+use case. Create/update resolve the active issuer live; activation additionally
+requires an active revocation profile and an accepting trust profile. Provider
+failure occurs before persistence. The update plan now preserves claims,
+derived attributes and display style exposed by the released request model but
+previously left unwired by the Python handler.
+
+The Rust crate now passes 19 application, domain, lifecycle, catalog, surface,
+migration, persistence and configured-PostgreSQL contract tests; the surviving
+Python oracle passes all 171 tests; formatting and strict Clippy pass. The
 configured PostgreSQL tests run when `CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL`
 is supplied. Remaining work is all 24 HTTP and 12 intended gRPC handlers over
 the frozen operations, MMF authorization/runtime/outbox
