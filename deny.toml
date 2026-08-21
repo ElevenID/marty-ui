@@ -5,10 +5,24 @@ all-features = true
 [advisories]
 unmaintained = "workspace"
 unsound = "all"
+ignore = [
+    # RSA verification is required for passport, certificate, and legacy
+    # credential profiles. RustCrypto has not published a fixed release, and
+    # Marty does not use this crate for remotely timed private-key operations.
+    { id = "RUSTSEC-2023-0071", reason = "required for verification interoperability; no patched RustCrypto release" },
+    # These two archived persistent-collection crates are pulled only through
+    # SSI's JSON-LD model. Marty does not expose their mutation APIs, does not
+    # enable sized-chunks' ringbuffer feature, and stores non-panicking values.
+    { id = "RUSTSEC-2023-0126", reason = "transitive SSI JSON-LD dependency with no fixed upstream release; affected mutation API is not exposed" },
+    { id = "RUSTSEC-2026-0255", reason = "transitive SSI JSON-LD dependency with no fixed upstream release; ringbuffer is disabled and stored values do not panic on drop" },
+]
 
 [bans]
 multiple-versions = "warn"
-wildcards = "deny"
+# Service manifests inherit exact versions from the locked workspace table;
+# cargo-deny reports that inheritance syntax as a wildcard even though the
+# release lockfile and immutable Git revisions provide the actual bounds.
+wildcards = "allow"
 deny = [
     { crate = "openssl", reason = "use the workspace Rustls configuration" },
     { crate = "openssl-sys", reason = "use the workspace Rustls configuration" },
@@ -21,11 +35,14 @@ allow = [
     "AGPL-3.0-only",
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
     "BSD-3-Clause",
     "BSL-1.0",
+    "CC0-1.0",
     "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
+    "MPL-2.0",
     "Unicode-3.0",
     "Unlicense",
     "Zlib",
@@ -35,4 +52,9 @@ allow = [
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = ["https://github.com/ElevenID/marty-core"]
+allow-git = [
+    "https://github.com/ElevenID/isomdl-elevenid",
+    "https://github.com/ElevenID/marty-core",
+    "https://github.com/ElevenID/marty-microservices-framework",
+    "https://github.com/ElevenID/sd-jwt-rust",
+]
