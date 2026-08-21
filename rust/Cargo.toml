@@ -71,3 +71,4 @@ debug = "line-tables-only"
 
 [patch.crates-io]
 isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "7a443cf6c37c8d7f11e9a767c1002684842ab5d0" }
+ssi-jwt = { path = "third_party/ssi-jwt" }

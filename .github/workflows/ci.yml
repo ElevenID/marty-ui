@@ -964,7 +964,7 @@ jobs:
           port="$(docker inspect \
             --format '{{(index (index .NetworkSettings.Ports "8000/tcp") 0).HostPort}}' \
             "$container")"
-          for attempt in {1..40}; do
+          for _ in {1..40}; do
             if curl --fail --silent "http://127.0.0.1:${port}/health" \
               | grep --fixed-strings --quiet '"service":"gateway"'; then
               exit 0
