@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .compile_protos(
             &[
                 "../../../proto/v1/auth_service.proto",
+                "../../../proto/v1/event_stream_service.proto",
                 "../../../proto/v1/flow_service.proto",
                 "../../../proto/v1/organization_service.proto",
             ],
@@ -16,6 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for source in [
         "auth_service.proto",
+        "event_stream_service.proto",
         "flow_service.proto",
         "organization_service.proto",
         "google/api/annotations.proto",

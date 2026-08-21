@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "implementation_owner": "marty-auth",
+  "required_configuration": [
+    "KEYCLOAK_REALM",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "CREDENTIAL_LOGIN_POLICY_ID",
+    "CREDENTIAL_LOGIN_ORGANIZATION_ID",
+    "CREDENTIAL_LOGIN_ISSUER_DID",
+    "FLOW_WEBHOOK_SECRET"
+  ],
+  "minimum_secret_bytes": 32,
+  "listeners": {
+    "http": "AUTH_HTTP_ADDR_or_AUTH_SERVICE_PORT",
+    "grpc": "AUTH_GRPC_ADDR_or_AUTH_GRPC_PORT",
+    "addresses_must_differ": true,
+    "both_required": true
+  },
+  "required_runtime_components": [
+    "database",
+    "session_cache",
+    "oidc",
+    "flow_grpc",
+    "organization_grpc",
+    "applicant_http",
+    "event_outbox",
+    "event_stream_grpc",
+    "http_listener",
+    "grpc_listener"
+  ],
+  "readiness_only_while_active": true,
+  "production_plaintext_grpc": false,
+  "python_fallback": false,
+  "deployment_during_slice": false
+}

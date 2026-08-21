@@ -371,9 +371,21 @@ pub fn auth_event_message(event: &AuthEvent) -> Result<Message, PortError> {
             organization_id,
             ..
         } => ("user_authenticated", user_id, organization_id.clone()),
-        AuthEvent::SessionCreated { session_id, .. } => ("session_created", session_id, None),
-        AuthEvent::UserLoggedOut { user_id, .. } => ("logout", user_id, None),
-        AuthEvent::SessionRevoked { user_id, .. } => ("session_revoked", user_id, None),
+        AuthEvent::SessionCreated {
+            session_id,
+            organization_id,
+            ..
+        } => ("session_created", session_id, organization_id.clone()),
+        AuthEvent::UserLoggedOut {
+            user_id,
+            organization_id,
+            ..
+        } => ("logout", user_id, organization_id.clone()),
+        AuthEvent::SessionRevoked {
+            user_id,
+            organization_id,
+            ..
+        } => ("session_revoked", user_id, organization_id.clone()),
     };
     if aggregate_id.trim().is_empty() {
         return Err(PortError::new(

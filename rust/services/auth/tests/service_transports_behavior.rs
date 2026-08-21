@@ -3,8 +3,8 @@ use std::{collections::BTreeMap, sync::Arc};
 use async_trait::async_trait;
 use chrono::{TimeZone as _, Utc};
 use marty_auth::{
-    auth_event_message, credential_verification_flow, credential_verification_request, AuthEvent,
-    AuthEventPublisher, AuthGrpcChannelFactories, AuthenticatedUser,
+    auth_event_message, credential_verification_flow, credential_verification_request,
+    domain_event, AuthEvent, AuthEventPublisher, AuthGrpcChannelFactories, AuthenticatedUser,
     CanvasApplicantProfileProvisioner, MmfApplicantProfileProvisioner, MmfAuthEventPublisher,
     StartCredentialVerification, UserType,
 };
@@ -144,18 +144,21 @@ async fn auth_events_use_one_mmf_envelope_and_transport() {
         AuthEvent::SessionCreated {
             session_id: "session-1".into(),
             user_id: "user-1".into(),
+            organization_id: Some("org-1".into()),
             expires_at: Utc.with_ymd_and_hms(2026, 8, 22, 0, 0, 0).unwrap(),
         },
         AuthEvent::UserLoggedOut {
             user_id: "user-1".into(),
             session_id: "session-1".into(),
             logout_type: "user_initiated".into(),
+            organization_id: Some("org-1".into()),
         },
         AuthEvent::SessionRevoked {
             session_id: "session-1".into(),
             user_id: "user-1".into(),
             revoked_by: "user-1".into(),
             reason: "logout".into(),
+            organization_id: Some("org-1".into()),
         },
     ];
     for event in &events {
@@ -177,6 +180,9 @@ async fn auth_events_use_one_mmf_envelope_and_transport() {
     assert!(messages
         .iter()
         .all(|message| message.topic == "auth.events"));
+    assert!(messages
+        .iter()
+        .all(|message| message.metadata.tenant_id.as_deref() == Some("org-1")));
     assert_eq!(
         auth_event_message(&events[0])
             .unwrap()
@@ -185,6 +191,12 @@ async fn auth_events_use_one_mmf_envelope_and_transport() {
             .as_deref(),
         Some("org-1")
     );
+    let event = domain_event(auth_event_message(&events[0]).unwrap()).unwrap();
+    assert_eq!(event.event_type, "user_authenticated");
+    assert_eq!(event.aggregate_id, "user-1");
+    assert_eq!(event.aggregate_type, "auth");
+    assert_eq!(event.organization_id, "org-1");
+    assert_eq!(event.data["email"], "alice@example.com");
 }
 
 fn user() -> AuthenticatedUser {

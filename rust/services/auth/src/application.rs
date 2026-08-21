@@ -126,18 +126,21 @@ pub enum AuthEvent {
     SessionCreated {
         session_id: String,
         user_id: String,
+        organization_id: Option<String>,
         expires_at: DateTime<Utc>,
     },
     UserLoggedOut {
         user_id: String,
         session_id: String,
         logout_type: String,
+        organization_id: Option<String>,
     },
     SessionRevoked {
         session_id: String,
         user_id: String,
         revoked_by: String,
         reason: String,
+        organization_id: Option<String>,
     },
 }
 
@@ -373,6 +376,7 @@ impl AuthApplication {
             .publish(&AuthEvent::SessionCreated {
                 session_id: session.session_id.clone(),
                 user_id: session.user.user_id.clone(),
+                organization_id: session.user.organization_id.clone(),
                 expires_at: session.expires_at,
             })
             .await
@@ -467,6 +471,7 @@ impl AuthApplication {
                 user_id: session.user.user_id.clone(),
                 session_id: session.session_id.clone(),
                 logout_type: "user_initiated".to_owned(),
+                organization_id: session.user.organization_id.clone(),
             })
             .await
             .map_err(|error| port("publish logout event", error))?;
@@ -476,6 +481,7 @@ impl AuthApplication {
                 user_id: session.user.user_id.clone(),
                 revoked_by: session.user.user_id.clone(),
                 reason: "User initiated logout".to_owned(),
+                organization_id: session.user.organization_id.clone(),
             })
             .await
             .map_err(|error| port("publish session-revoked event", error))
