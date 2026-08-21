@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "http_operations": [
+    {"method": "POST", "path": "/v1/presentation-policies"},
+    {"method": "GET", "path": "/v1/presentation-policies"},
+    {"method": "GET", "path": "/v1/presentation-policies/{policy_id}"},
+    {"method": "PATCH", "path": "/v1/presentation-policies/{policy_id}"},
+    {"method": "POST", "path": "/v1/presentation-policies/{policy_id}/activate"},
+    {"method": "POST", "path": "/v1/presentation-policies/{policy_id}/suspend"},
+    {"method": "POST", "path": "/v1/presentation-policies/{policy_id}/new-version"},
+    {"method": "DELETE", "path": "/v1/presentation-policies/{policy_id}"},
+    {"method": "POST", "path": "/v1/presentation-policies/{policy_id}/evaluate"},
+    {"method": "POST", "path": "/v1/presentation-policies/evaluate"}
+  ],
+  "grpc_methods": [
+    "GetPolicy",
+    "ListPolicies",
+    "CreatePolicy",
+    "UpdatePolicy",
+    "ActivatePolicy",
+    "SuspendPolicy",
+    "NewVersionPolicy",
+    "DeletePolicy",
+    "EvaluatePresentation",
+    "HealthCheck"
+  ],
+  "statuses": ["draft", "active", "suspended", "archived"],
+  "constraint_types": [
+    "equals",
+    "not_equals",
+    "greater_than",
+    "less_than",
+    "greater_or_equal",
+    "less_or_equal",
+    "in_set",
+    "not_in_set",
+    "presence",
+    "regex",
+    "age_over"
+  ],
+  "request_purposes": [
+    "identity_verification",
+    "age_verification",
+    "employment_verification",
+    "address_verification",
+    "qualification_verification",
+    "authorization",
+    "compliance",
+    "other"
+  ],
+  "holder_binding_vectors": [
+    {
+      "input": {"required": false, "binding_methods": ["NONCE", "BIOMETRIC", "DEVICE_KEY"], "proof_profiles": [], "proof_freshness": {}},
+      "expected": {"required": false, "binding_methods": ["SESSION_BINDING", "DEVICE_KEY"], "proof_profiles": [], "proof_freshness": {}}
+    },
+    {
+      "input": {"required": true, "binding_methods": [], "proof_profiles": [], "proof_freshness": {}},
+      "expected": {
+        "required": true,
+        "binding_methods": ["DEVICE_KEY"],
+        "proof_profiles": ["OID4VP_VERIFIABLE_PRESENTATION"],
+        "proof_freshness": {"challenge_required": true, "audience_binding_required": true, "replay_detection_required": true}
+      }
+    }
+  ],
+  "format_vectors": [
+    {"input": "sd_jwt_vc", "expected": "SD_JWT_VC"},
+    {"input": "dc+sd-jwt", "expected": "SD_JWT_VC"},
+    {"input": "JSON_LD", "expected": "W3C_VCDM_V2_DI"},
+    {"input": "ldp_vc", "expected": "W3C_VCDM_V2_DI"},
+    {"input": "w3c_vcdm_v2_jwt_vc", "expected": "VC_JWT"},
+    {"input": "jwt_vc_json", "expected": "VC_JWT"},
+    {"input": "mso_mdoc", "expected": "MDOC"},
+    {"input": "openbadge-v3", "expected": "OPENBADGE_V3"}
+  ],
+  "migration_revisions": [
+    "cd86d0505323",
+    "20260227_0001",
+    "20260322_0003",
+    "20260501_0004",
+    "20260505_0001",
+    "20260507_0001",
+    "20260507_0002",
+    "20260717_pp_0001",
+    "20260718_pp_0001"
+  ],
+  "failure_behavior": "fail_closed",
+  "decision_kernel": "marty_verification::policy::evaluate_service_policy"
+}

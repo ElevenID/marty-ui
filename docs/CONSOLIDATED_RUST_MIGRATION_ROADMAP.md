@@ -1636,6 +1636,36 @@ fixtures, and add anti-reintroduction ownership checks. No beta deployment has
 occurred; the only permitted beta update remains the single aggregate wave-three
 deployment after every service slice lands.
 
+### Presentation-policy port status
+
+Presentation Policy is the next unmigrated service by removable production
+Python size: approximately 6,982 tracked lines, ahead of Trust Profile at
+approximately 6,320. Work is isolated in
+`marty-ui-rust-presentation-policy-wave3` on branch
+`agent/marty-ui-rust-presentation-policy-wave3`, stacked on the complete
+Credential Template packaging slice while its external acceptance gates remain
+pending.
+
+The baseline is frozen before implementation. All 190 surviving Python service
+tests pass. `presentation-policy-service-behavior.json` records all ten HTTP
+operations, all ten gRPC methods, four lifecycle states, eleven claim
+constraints, eight request purposes, both legacy holder-binding normalization
+cases, every released credential-format alias and all nine Alembic revisions.
+Python executes the same contract rather than relying on a Rust-specific unit
+test inventory.
+
+The initial `marty-presentation-policy` crate owns the service domain and calls
+`marty_verification::policy::evaluate_service_policy` directly. It does not
+copy the decision engine currently reached through `_marty_rs`. The first Rust
+behavioral tests prove surface completeness, holder-binding normalization,
+format aliases, fail-closed lifecycle transitions, lossless new-version
+creation and the existing cross-language verified-fact golden vector. Next
+work is one PostgreSQL repository/migration owner, lossless HTTP/gRPC lifecycle
+use cases, and the verification/trust/status orchestration around the canonical
+Rust cryptographic and policy kernels. Python remains until those behaviors and
+configured acceptance pass, then the service and its nine revisions are
+deleted immediately.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

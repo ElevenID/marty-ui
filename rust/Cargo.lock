@@ -4469,6 +4469,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-presentation-policy"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "marty-verification",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
 name = "marty-revocation-profile"
 version = "0.1.0"
 dependencies = [
