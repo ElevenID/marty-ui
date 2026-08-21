@@ -1,5 +1,5 @@
 use serde_json::Value;
-use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row, Transaction};
+use sqlx::{postgres::PgRow, PgConnection, PgPool, Postgres, QueryBuilder, Row, Transaction};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -33,49 +33,24 @@ impl PostgresOrganizationStore {
         &self.pool
     }
 
+    pub async fn begin_transaction(&self) -> Result<Transaction<'_, Postgres>, RepositoryError> {
+        self.pool.begin().await.map_err(RepositoryError::from)
+    }
+
     pub async fn save_organization(
         &self,
         organization: &Organization,
     ) -> Result<(), RepositoryError> {
-        sqlx::query(
-            "INSERT INTO organization_service.organizations (
-                id,name,display_name,description,status,owner_id,slug,org_type,
-                contact_email,contact_phone,website,settings,plan,plan_expires_at,
-                join_mechanism,requires_approval,is_discoverable,created_at,updated_at
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
-             ON CONFLICT (id) DO UPDATE SET
-                name=EXCLUDED.name,display_name=EXCLUDED.display_name,
-                description=EXCLUDED.description,status=EXCLUDED.status,
-                owner_id=EXCLUDED.owner_id,slug=EXCLUDED.slug,org_type=EXCLUDED.org_type,
-                contact_email=EXCLUDED.contact_email,contact_phone=EXCLUDED.contact_phone,
-                website=EXCLUDED.website,settings=EXCLUDED.settings,plan=EXCLUDED.plan,
-                plan_expires_at=EXCLUDED.plan_expires_at,
-                join_mechanism=EXCLUDED.join_mechanism,
-                requires_approval=EXCLUDED.requires_approval,
-                is_discoverable=EXCLUDED.is_discoverable,updated_at=EXCLUDED.updated_at",
-        )
-        .bind(organization.id)
-        .bind(&organization.name)
-        .bind(&organization.display_name)
-        .bind(&organization.description)
-        .bind(organization.status.as_str())
-        .bind(&organization.owner_id)
-        .bind(&organization.slug)
-        .bind(organization.org_type.as_str())
-        .bind(&organization.contact_email)
-        .bind(&organization.contact_phone)
-        .bind(&organization.website)
-        .bind(Value::Object(organization.settings.clone()))
-        .bind(&organization.plan)
-        .bind(organization.plan_expires_at)
-        .bind(organization.join_mechanism.as_str())
-        .bind(organization.requires_approval)
-        .bind(organization.is_discoverable)
-        .bind(organization.created_at)
-        .bind(organization.updated_at)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        let mut connection = self.pool.acquire().await?;
+        save_organization_on(&mut connection, organization).await
+    }
+
+    pub async fn save_organization_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization: &Organization,
+    ) -> Result<(), RepositoryError> {
+        save_organization_on(&mut *transaction, organization).await
     }
 
     pub async fn organization_by_id(
@@ -86,6 +61,19 @@ impl PostgresOrganizationStore {
             .bind(organization_id)
             .fetch_optional(&self.pool)
             .await?;
+        row.as_ref().map(organization_from_row).transpose()
+    }
+
+    pub async fn organization_by_id_for_update_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        organization_id: Uuid,
+    ) -> Result<Option<Organization>, RepositoryError> {
+        let row =
+            sqlx::query("SELECT * FROM organization_service.organizations WHERE id=$1 FOR UPDATE")
+                .bind(organization_id)
+                .fetch_optional(&mut **transaction)
+                .await?;
         row.as_ref().map(organization_from_row).transpose()
     }
 
@@ -155,29 +143,16 @@ impl PostgresOrganizationStore {
     }
 
     pub async fn save_member(&self, member: &Member) -> Result<(), RepositoryError> {
-        sqlx::query(
-            "INSERT INTO organization_service.members (
-                id,organization_id,user_id,email,status,invited_by,invited_at,joined_at,
-                created_at,updated_at
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-             ON CONFLICT (id) DO UPDATE SET
-                user_id=EXCLUDED.user_id,email=EXCLUDED.email,status=EXCLUDED.status,
-                invited_by=EXCLUDED.invited_by,invited_at=EXCLUDED.invited_at,
-                joined_at=EXCLUDED.joined_at,updated_at=EXCLUDED.updated_at",
-        )
-        .bind(member.id)
-        .bind(member.organization_id)
-        .bind(&member.user_id)
-        .bind(&member.email)
-        .bind(member.status.as_str())
-        .bind(&member.invited_by)
-        .bind(member.invited_at)
-        .bind(member.joined_at)
-        .bind(member.created_at)
-        .bind(member.updated_at)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        let mut connection = self.pool.acquire().await?;
+        save_member_on(&mut connection, member).await
+    }
+
+    pub async fn save_member_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        member: &Member,
+    ) -> Result<(), RepositoryError> {
+        save_member_on(&mut *transaction, member).await
     }
 
     pub async fn member_by_id(&self, member_id: Uuid) -> Result<Option<Member>, RepositoryError> {
@@ -477,18 +452,24 @@ impl PostgresOrganizationStore {
     }
 
     pub async fn save_permission(&self, permission: &Permission) -> Result<(), RepositoryError> {
-        sqlx::query(
-            "INSERT INTO organization_service.permissions (id,resource,action,description)
-             VALUES ($1,$2,$3,$4)
-             ON CONFLICT (resource,action) DO UPDATE SET description=EXCLUDED.description",
-        )
-        .bind(permission.id)
-        .bind(&permission.resource)
-        .bind(&permission.action)
-        .bind(&permission.description)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        let mut connection = self.pool.acquire().await?;
+        save_permission_on(&mut connection, permission).await
+    }
+
+    pub async fn save_permission_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        permission: &Permission,
+    ) -> Result<(), RepositoryError> {
+        save_permission_on(&mut *transaction, permission).await
+    }
+
+    pub async fn upsert_permission_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        permission: &Permission,
+    ) -> Result<Permission, RepositoryError> {
+        upsert_permission_on(&mut *transaction, permission).await
     }
 
     pub async fn list_permissions(&self) -> Result<Vec<Permission>, RepositoryError> {
@@ -530,44 +511,26 @@ impl PostgresOrganizationStore {
 
     pub async fn save_role(&self, role: &Role) -> Result<(), RepositoryError> {
         let mut transaction = self.pool.begin().await?;
-        sqlx::query(
-            "INSERT INTO organization_service.roles (
-                id,organization_id,name,display_name,description,is_system,
-                is_default_for_new_members,created_at,updated_at
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-             ON CONFLICT (id) DO UPDATE SET
-                name=EXCLUDED.name,display_name=EXCLUDED.display_name,
-                description=EXCLUDED.description,is_system=EXCLUDED.is_system,
-                is_default_for_new_members=EXCLUDED.is_default_for_new_members,
-                updated_at=EXCLUDED.updated_at",
-        )
-        .bind(role.id)
-        .bind(role.organization_id)
-        .bind(&role.name)
-        .bind(&role.display_name)
-        .bind(&role.description)
-        .bind(role.is_system)
-        .bind(role.is_default_for_new_members)
-        .bind(role.created_at)
-        .bind(role.updated_at)
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query("DELETE FROM organization_service.role_permissions WHERE role_id=$1")
-            .bind(role.id)
-            .execute(&mut *transaction)
-            .await?;
-        for permission in &role.permissions {
-            sqlx::query(
-                "INSERT INTO organization_service.role_permissions(role_id,permission_id)
-                 VALUES ($1,$2) ON CONFLICT DO NOTHING",
-            )
-            .bind(role.id)
-            .bind(permission.id)
-            .execute(&mut *transaction)
-            .await?;
-        }
+        save_role_on(&mut transaction, role).await?;
         transaction.commit().await?;
         Ok(())
+    }
+
+    pub async fn save_role_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        role: &Role,
+    ) -> Result<(), RepositoryError> {
+        save_role_on(&mut *transaction, role).await
+    }
+
+    pub async fn add_member_role_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        member_id: Uuid,
+        role_id: Uuid,
+    ) -> Result<(), RepositoryError> {
+        add_member_role_on(&mut *transaction, member_id, role_id).await
     }
 
     pub async fn role_by_id(&self, role_id: Uuid) -> Result<Option<Role>, RepositoryError> {
@@ -666,7 +629,7 @@ impl PostgresOrganizationStore {
             .execute(&mut *transaction)
             .await?;
         for role_id in role_ids {
-            add_member_role_in_transaction(&mut transaction, member_id, *role_id).await?;
+            add_member_role_on(&mut transaction, member_id, *role_id).await?;
         }
         transaction.commit().await?;
         Ok(())
@@ -678,7 +641,7 @@ impl PostgresOrganizationStore {
         role_id: Uuid,
     ) -> Result<(), RepositoryError> {
         let mut transaction = self.pool.begin().await?;
-        add_member_role_in_transaction(&mut transaction, member_id, role_id).await?;
+        add_member_role_on(&mut transaction, member_id, role_id).await?;
         transaction.commit().await?;
         Ok(())
     }
@@ -815,31 +778,16 @@ impl PostgresOrganizationStore {
     }
 
     pub async fn save_audit_event(&self, event: &AuditEvent) -> Result<(), RepositoryError> {
-        sqlx::query(
-            "INSERT INTO organization_service.audit_events (
-                id,organization_id,event_type,action,category,resource_type,resource_id,
-                resource_name,actor_id,actor_type,severity,message,changes,metadata,created_at
-             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-             ON CONFLICT (id) DO NOTHING",
-        )
-        .bind(event.id)
-        .bind(event.organization_id)
-        .bind(&event.event_type)
-        .bind(&event.action)
-        .bind(&event.category)
-        .bind(&event.resource_type)
-        .bind(&event.resource_id)
-        .bind(&event.resource_name)
-        .bind(&event.actor_id)
-        .bind(&event.actor_type)
-        .bind(&event.severity)
-        .bind(&event.message)
-        .bind(&event.changes)
-        .bind(&event.metadata)
-        .bind(event.timestamp)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        let mut connection = self.pool.acquire().await?;
+        save_audit_event_on(&mut connection, event).await
+    }
+
+    pub async fn save_audit_event_in_transaction(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        event: &AuditEvent,
+    ) -> Result<(), RepositoryError> {
+        save_audit_event_on(&mut *transaction, event).await
     }
 
     pub async fn audit_event_by_id(
@@ -893,8 +841,180 @@ impl PostgresOrganizationStore {
     }
 }
 
-async fn add_member_role_in_transaction(
-    transaction: &mut Transaction<'_, Postgres>,
+async fn save_organization_on(
+    connection: &mut PgConnection,
+    organization: &Organization,
+) -> Result<(), RepositoryError> {
+    sqlx::query(
+        "INSERT INTO organization_service.organizations (
+            id,name,display_name,description,status,owner_id,slug,org_type,
+            contact_email,contact_phone,website,settings,plan,plan_expires_at,
+            join_mechanism,requires_approval,is_discoverable,created_at,updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+         ON CONFLICT (id) DO UPDATE SET
+            name=EXCLUDED.name,display_name=EXCLUDED.display_name,
+            description=EXCLUDED.description,status=EXCLUDED.status,
+            owner_id=EXCLUDED.owner_id,slug=EXCLUDED.slug,org_type=EXCLUDED.org_type,
+            contact_email=EXCLUDED.contact_email,contact_phone=EXCLUDED.contact_phone,
+            website=EXCLUDED.website,settings=EXCLUDED.settings,plan=EXCLUDED.plan,
+            plan_expires_at=EXCLUDED.plan_expires_at,
+            join_mechanism=EXCLUDED.join_mechanism,
+            requires_approval=EXCLUDED.requires_approval,
+            is_discoverable=EXCLUDED.is_discoverable,updated_at=EXCLUDED.updated_at",
+    )
+    .bind(organization.id)
+    .bind(&organization.name)
+    .bind(&organization.display_name)
+    .bind(&organization.description)
+    .bind(organization.status.as_str())
+    .bind(&organization.owner_id)
+    .bind(&organization.slug)
+    .bind(organization.org_type.as_str())
+    .bind(&organization.contact_email)
+    .bind(&organization.contact_phone)
+    .bind(&organization.website)
+    .bind(Value::Object(organization.settings.clone()))
+    .bind(&organization.plan)
+    .bind(organization.plan_expires_at)
+    .bind(organization.join_mechanism.as_str())
+    .bind(organization.requires_approval)
+    .bind(organization.is_discoverable)
+    .bind(organization.created_at)
+    .bind(organization.updated_at)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+async fn save_member_on(
+    connection: &mut PgConnection,
+    member: &Member,
+) -> Result<(), RepositoryError> {
+    sqlx::query(
+        "INSERT INTO organization_service.members (
+            id,organization_id,user_id,email,status,invited_by,invited_at,joined_at,
+            created_at,updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT (id) DO UPDATE SET
+            user_id=EXCLUDED.user_id,email=EXCLUDED.email,status=EXCLUDED.status,
+            invited_by=EXCLUDED.invited_by,invited_at=EXCLUDED.invited_at,
+            joined_at=EXCLUDED.joined_at,updated_at=EXCLUDED.updated_at",
+    )
+    .bind(member.id)
+    .bind(member.organization_id)
+    .bind(&member.user_id)
+    .bind(&member.email)
+    .bind(member.status.as_str())
+    .bind(&member.invited_by)
+    .bind(member.invited_at)
+    .bind(member.joined_at)
+    .bind(member.created_at)
+    .bind(member.updated_at)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+async fn save_permission_on(
+    connection: &mut PgConnection,
+    permission: &Permission,
+) -> Result<(), RepositoryError> {
+    upsert_permission_on(connection, permission).await?;
+    Ok(())
+}
+
+async fn upsert_permission_on(
+    connection: &mut PgConnection,
+    permission: &Permission,
+) -> Result<Permission, RepositoryError> {
+    let row = sqlx::query(
+        "INSERT INTO organization_service.permissions (id,resource,action,description)
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (resource,action) DO UPDATE SET description=EXCLUDED.description
+         RETURNING id,resource,action,description",
+    )
+    .bind(permission.id)
+    .bind(&permission.resource)
+    .bind(&permission.action)
+    .bind(&permission.description)
+    .fetch_one(connection)
+    .await?;
+    permission_from_row(&row)
+}
+
+async fn save_role_on(connection: &mut PgConnection, role: &Role) -> Result<(), RepositoryError> {
+    sqlx::query(
+        "INSERT INTO organization_service.roles (
+            id,organization_id,name,display_name,description,is_system,
+            is_default_for_new_members,created_at,updated_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         ON CONFLICT (id) DO UPDATE SET
+            name=EXCLUDED.name,display_name=EXCLUDED.display_name,
+            description=EXCLUDED.description,is_system=EXCLUDED.is_system,
+            is_default_for_new_members=EXCLUDED.is_default_for_new_members,
+            updated_at=EXCLUDED.updated_at",
+    )
+    .bind(role.id)
+    .bind(role.organization_id)
+    .bind(&role.name)
+    .bind(&role.display_name)
+    .bind(&role.description)
+    .bind(role.is_system)
+    .bind(role.is_default_for_new_members)
+    .bind(role.created_at)
+    .bind(role.updated_at)
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query("DELETE FROM organization_service.role_permissions WHERE role_id=$1")
+        .bind(role.id)
+        .execute(&mut *connection)
+        .await?;
+    for permission in &role.permissions {
+        sqlx::query(
+            "INSERT INTO organization_service.role_permissions(role_id,permission_id)
+             VALUES ($1,$2) ON CONFLICT DO NOTHING",
+        )
+        .bind(role.id)
+        .bind(permission.id)
+        .execute(&mut *connection)
+        .await?;
+    }
+    Ok(())
+}
+
+async fn save_audit_event_on(
+    connection: &mut PgConnection,
+    event: &AuditEvent,
+) -> Result<(), RepositoryError> {
+    sqlx::query(
+        "INSERT INTO organization_service.audit_events (
+            id,organization_id,event_type,action,category,resource_type,resource_id,
+            resource_name,actor_id,actor_type,severity,message,changes,metadata,created_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(event.id)
+    .bind(event.organization_id)
+    .bind(&event.event_type)
+    .bind(&event.action)
+    .bind(&event.category)
+    .bind(&event.resource_type)
+    .bind(&event.resource_id)
+    .bind(&event.resource_name)
+    .bind(&event.actor_id)
+    .bind(&event.actor_type)
+    .bind(&event.severity)
+    .bind(&event.message)
+    .bind(&event.changes)
+    .bind(&event.metadata)
+    .bind(event.timestamp)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
+async fn add_member_role_on(
+    connection: &mut PgConnection,
     member_id: Uuid,
     role_id: Uuid,
 ) -> Result<(), RepositoryError> {
@@ -904,7 +1024,7 @@ async fn add_member_role_in_transaction(
     )
     .bind(member_id)
     .bind(role_id)
-    .execute(&mut **transaction)
+    .execute(connection)
     .await?;
     Ok(())
 }

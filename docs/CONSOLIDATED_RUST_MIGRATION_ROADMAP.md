@@ -892,10 +892,30 @@ tenant partition, event deduplication identity, topic/routing key and bounded
 retry metadata. `OrganizationEventPublisher` persists the audit record before
 using the provider-neutral MMF transport and propagates audit, projection and
 transport failures instead of converting an unavailable live event path into
-success. Three Rust event groups, three Python audit groups, the full
-Organization suite and strict Clippy pass. The executable slice still must
-install the released event-stream gRPC transport and readiness policy before
-the Python publisher is deleted.
+success. Mutating application paths no longer use that non-atomic sequence:
+the native `OrganizationApplication` locks updates and commits organization,
+owner membership, the complete permission/role seed, owner-role assignment,
+audit projection and the canonical MMF PostgreSQL outbox message in one
+transaction. Existing permission IDs are resolved from the upsert before role
+links are written, preserving databases seeded by Python. Acknowledgement only
+occurs after the durable event is queued. Default-plan cache synchronization
+runs after commit as derived state and is returned as a typed warning when it
+fails, avoiding both silent drift and unsafe client retries after a successful
+database commit.
+
+`contracts/organization-application-behavior.json` now freezes create defaults,
+owner membership, the 104-entry catalog, partial-update ordering,
+explicit-null clearing, settings merge behavior and the open-join/public-only
+invariant across Python and Rust. Native reads cover get, bounded list,
+discoverable filtering and active user memberships. Twenty-two Rust tests,
+all 65 surviving Python Organization tests, formatting and strict Clippy pass;
+the atomic PostgreSQL acceptance test is compiled and runs when
+`ORGANIZATION_POSTGRES_TEST_URL` is available. The remaining Organization
+slices are member/join/API-key/preference/RBAC/policy/audit application
+mutations, Cedar authorization, all HTTP and gRPC adapters, event-outbox
+dispatch/readiness, executable/container packaging, acceptance gates and
+same-slice deletion of the Python service. No beta deployment occurs before
+those slices and the rest of wave three land.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

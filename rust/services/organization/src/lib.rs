@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod application;
 pub mod cache;
 pub mod catalog;
 pub mod domain;
@@ -8,6 +9,12 @@ pub mod migration;
 pub mod postgres;
 pub mod scim;
 
+pub use application::{
+    plan_organization_creation, plan_organization_update, ApplicationWarning,
+    ApplicationWarningCode, CreateOrganizationCommand, MutationResult, OrganizationApplication,
+    OrganizationApplicationError, OrganizationCreationPlan, UpdateOrganizationCommand,
+    UpdateOrganizationPatch,
+};
 pub use cache::{OrganizationCache, OrganizationCacheError, OrganizationCacheKeys};
 pub use domain::{
     ApiKey, ApiKeySpec, ApiKeyStatus, AuditEvent, AuditEventQuery, ConsoleContextPreference,

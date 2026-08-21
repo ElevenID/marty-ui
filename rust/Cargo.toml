@@ -33,7 +33,7 @@ mmf-core = { path = "../../mmf-rust-gateway-wave25/crates/mmf-core" }
 mmf-data = { path = "../../mmf-rust-gateway-wave25/crates/mmf-data" }
 mmf-runtime = { path = "../../mmf-rust-gateway-wave25/crates/mmf-runtime" }
 mmf-security = { path = "../../mmf-rust-gateway-wave25/crates/mmf-security" }
-mmf-messaging = { path = "../../mmf-rust-gateway-wave25/crates/mmf-messaging" }
+mmf-messaging = { path = "../../mmf-rust-gateway-wave25/crates/mmf-messaging", features = ["postgres"] }
 mmf-push = { path = "../../mmf-rust-gateway-wave25/crates/mmf-push" }
 mmf-workflow = { path = "../../mmf-rust-gateway-wave25/crates/mmf-workflow" }
 prost = "0.14"

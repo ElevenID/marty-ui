@@ -4658,6 +4658,7 @@ dependencies = [
  "mmf-resilience",
  "serde",
  "serde_json",
+ "sqlx",
  "thiserror 2.0.20",
  "tokio",
  "uuid",

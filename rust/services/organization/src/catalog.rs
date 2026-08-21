@@ -227,22 +227,12 @@ pub fn system_role_templates(catalog: &[PermissionDefinition]) -> Vec<SystemRole
 pub async fn seed_permission_catalog(
     store: &PostgresOrganizationStore,
 ) -> Result<BTreeMap<String, Permission>, SeedError> {
-    let catalog = permission_catalog()?;
+    let catalog = materialize_permission_catalog()?;
     let mut persisted = BTreeMap::new();
-    for definition in catalog {
-        let key = definition.key();
-        let permission = Permission {
-            id: Uuid::new_v5(
-                &Uuid::NAMESPACE_URL,
-                format!("marty:permission:{key}").as_bytes(),
-            ),
-            resource: definition.resource.clone(),
-            action: definition.action.clone(),
-            description: Some(definition.description),
-        };
+    for (key, permission) in catalog {
         store.save_permission(&permission).await?;
         let stored = store
-            .permission_by_key(&definition.resource, &definition.action)
+            .permission_by_key(&permission.resource, &permission.action)
             .await?
             .ok_or_else(|| SeedError::MissingPermission(key.clone()))?;
         persisted.insert(key, stored);
@@ -255,34 +245,70 @@ pub async fn seed_system_roles(
     organization_id: Uuid,
     now: DateTime<Utc>,
 ) -> Result<BTreeMap<String, Role>, SeedError> {
-    let catalog = permission_catalog()?;
     let permissions = seed_permission_catalog(store).await?;
-    let templates = system_role_templates(&catalog);
+    let mut roles = materialize_system_roles(organization_id, &permissions, now)?;
+    for role in roles.values_mut() {
+        let existing = store.role_by_name(organization_id, &role.name).await?;
+        if let Some(existing) = existing {
+            role.id = existing.id;
+            role.created_at = existing.created_at;
+        }
+        store.save_role(role).await?;
+    }
+    Ok(roles)
+}
+
+pub fn materialize_permission_catalog() -> Result<BTreeMap<String, Permission>, CatalogError> {
+    permission_catalog().map(|catalog| {
+        catalog
+            .into_iter()
+            .map(|definition| {
+                let key = definition.key();
+                let permission = Permission {
+                    id: Uuid::new_v5(
+                        &Uuid::NAMESPACE_URL,
+                        format!("marty:permission:{key}").as_bytes(),
+                    ),
+                    resource: definition.resource,
+                    action: definition.action,
+                    description: Some(definition.description),
+                };
+                (key, permission)
+            })
+            .collect()
+    })
+}
+
+pub fn materialize_system_roles(
+    organization_id: Uuid,
+    permissions: &BTreeMap<String, Permission>,
+    now: DateTime<Utc>,
+) -> Result<BTreeMap<String, Role>, SeedError> {
+    let catalog = permission_catalog()?;
     let mut roles = BTreeMap::new();
-    for role_template in templates {
-        let existing = store
-            .role_by_name(organization_id, role_template.name)
-            .await?;
+    for role_template in system_role_templates(&catalog) {
+        let role_permissions = role_template
+            .permission_keys
+            .iter()
+            .map(|key| {
+                permissions
+                    .get(key)
+                    .cloned()
+                    .ok_or_else(|| SeedError::MissingPermission(key.clone()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let role = Role {
-            id: existing.as_ref().map_or_else(
-                || Uuid::new_v5(&organization_id, role_template.name.as_bytes()),
-                |role| role.id,
-            ),
+            id: Uuid::new_v5(&organization_id, role_template.name.as_bytes()),
             organization_id,
             name: role_template.name.to_owned(),
             display_name: Some(role_template.display_name.to_owned()),
             description: Some(role_template.description.to_owned()),
             is_system: true,
             is_default_for_new_members: role_template.is_default_for_new_members,
-            permissions: role_template
-                .permission_keys
-                .iter()
-                .filter_map(|key| permissions.get(key).cloned())
-                .collect(),
-            created_at: existing.as_ref().map_or(now, |role| role.created_at),
+            permissions: role_permissions,
+            created_at: now,
             updated_at: now,
         };
-        store.save_role(&role).await?;
         roles.insert(role.name.clone(), role);
     }
     Ok(roles)
