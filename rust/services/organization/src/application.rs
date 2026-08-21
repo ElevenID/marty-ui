@@ -264,6 +264,14 @@ pub enum OrganizationApplicationError {
     InvalidPolicy(String),
     #[error("ORGANIZATION.APPLICATION_INVALID_AUDIT_FILTER: {0}")]
     InvalidAuditFilter(&'static str),
+    #[error("ORGANIZATION.AUTHENTICATION_REQUIRED")]
+    AuthenticationRequired,
+    #[error("ORGANIZATION.MEMBERSHIP_REQUIRED")]
+    MembershipRequired,
+    #[error("ORGANIZATION.MEMBERSHIP_INACTIVE")]
+    MembershipInactive,
+    #[error("ORGANIZATION.ACTION_NOT_AUTHORIZED")]
+    ActionNotAuthorized,
     #[error("ORGANIZATION.APPLICATION_MEMBER_CONFLICT: {0}")]
     MemberConflict(String),
     #[error("ORGANIZATION.APPLICATION_DEFAULT_ROLE_MISSING")]

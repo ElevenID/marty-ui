@@ -1023,6 +1023,27 @@ queries and cross-tenant detail denial; live execution still awaits
 `ORGANIZATION_POSTGRES_TEST_URL`. Organization authorization and HTTP/gRPC
 adapter/runtime packaging are next. No beta deployment has occurred.
 
+Organization authorization decisions are now native and shared rather than
+reimplemented in the service. MMF commit `707425d` extracts active,
+tenant-bound membership authentication from permission evaluation; both paths
+retain the same typed fail-closed outcomes for absent identity, missing or
+cross-tenant membership, inactive membership and denied actions. Organization
+projects persisted roles and effective permissions into that primitive and
+adds exact gateway-forwarded API-key binding: the synthetic principal, key ID,
+tenant and minimized route permission must agree, and API keys cannot satisfy
+owner-only actions. Membership-only routes preserve the released behavior
+without weakening permissioned routes.
+
+`contracts/organization-authorization-behavior.json` executes the same user,
+owner and API-key cases against Python and Rust, including missing identity,
+inactive membership, permission mismatch, tenant mismatch and owner-only
+denial. Stable application errors replace implicit `None` or permissive
+fallbacks. Thirty-one Rust tests, all 74 surviving Python Organization tests,
+all 69 MMF security tests, formatting and strict Clippy pass. The remaining
+Organization work is the trusted HTTP/gRPC adapter boundary, runtime and
+outbox composition, executable/container packaging, PostgreSQL acceptance and
+same-slice Python deletion. No beta deployment has occurred.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

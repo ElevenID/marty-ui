@@ -3,6 +3,7 @@
 pub mod api_keys;
 pub mod application;
 pub mod audit;
+pub mod authorization;
 pub mod cache;
 pub mod catalog;
 pub mod domain;
@@ -30,6 +31,10 @@ pub use application::{
 pub use audit::{
     normalize_audit_query, normalize_pagination, start_from_time_range, AuditEventPage,
     AuditQueryInput, NormalizedAuditQuery,
+};
+pub use authorization::{
+    authenticate_forwarded_principal, authorize_forwarded_principal, ForwardedPrincipal,
+    OrganizationAuthorizationContext, PrincipalSource,
 };
 pub use cache::{OrganizationCache, OrganizationCacheError, OrganizationCacheKeys};
 pub use domain::{
