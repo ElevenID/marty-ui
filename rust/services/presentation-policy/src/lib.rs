@@ -1,6 +1,10 @@
+pub mod application;
 pub mod domain;
 pub mod persistence;
 
+pub use application::{
+    PolicyApplication, PolicyApplicationError, PolicyAuthorization, PolicyRepository,
+};
 pub use domain::{
     evaluate_verified_facts_json, normalize_credential_format, AlternativeRequirement,
     ClaimConstraint, ConstraintType, CredentialRequirement, DisplayMetadata, FreshnessPolicy,
