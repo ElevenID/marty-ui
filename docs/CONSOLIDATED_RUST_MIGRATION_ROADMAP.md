@@ -303,16 +303,17 @@ and retention-scrubbing vectors against PostgreSQL. Compilation and all
 non-container tests pass locally; the real PostgreSQL execution remains a CI
 landing gate because the local Docker daemon is unavailable.
 
-The native verification HTTP compare-and-set adapters are complete. The
-remaining Flow gates are the other protocol-specific HTTP/gRPC operations,
-executable listeners, container startup/readiness and packaging parity.
-Provider, DTO, definition mutation, generic instance execution,
-start-side-effect, Request Object retrieval, OID4VP and SIOPv2 submission, and
-terminal persistence parity are complete. After those remaining executable
-gates pass, the Python Flow runtime and its service dependencies are deleted
-immediately; this pre-v1 migration has no compatibility waiting period. No
-deployment occurs during these slices; beta receives one aggregate update only
-after all wave-three work lands.
+The native HTTP and gRPC application adapters are complete. The remaining Flow
+gates are listener/lifecycle composition, container startup/readiness,
+packaging parity and the final executable acceptance suite. Provider, DTO,
+definition mutation, generic instance execution, start-side-effect, Request
+Object retrieval, OID4VP and SIOPv2 submission, application-event processing,
+terminal persistence and all 16 released gRPC operations now share the same
+Rust records and kernels. After those executable gates pass, the Python Flow
+runtime and its service dependencies are deleted immediately; this pre-v1
+migration has no compatibility waiting period. No deployment occurs during
+these slices; beta receives one aggregate update only after all wave-three work
+lands.
 
 The public request boundary is now also represented in Rust. Strict DTOs cover
 definition create/PATCH (including unset-versus-explicit-null semantics),
@@ -473,8 +474,8 @@ Auth or Applicant SPIFFE identity. A bearer value cannot replace certificate
 identity, partial server credentials fail startup, and missing versus wrong
 identities map to unauthenticated versus permission-denied status. Two focused
 security tests, the language-neutral contract test and strict Clippy pass. The
-next executable slice must attach the complete HTTP/gRPC operation surface and
-activate only after both listeners are serving.
+complete application surface is now attached in the crate; the next executable
+slice must bind both listeners and activate only after both are serving.
 
 The first executable HTTP operation slice is complete under
 `contracts/flow-http-read-behavior.json`. Axum now serves the public MIP 0.4.1
@@ -726,8 +727,8 @@ typed issuance provider. Offer completion is flow-idempotent and race-safe:
 an existing active artifact is reused, while concurrent first completion uses
 snapshot CAS and reloads the winner. Provider failures retain the released
 per-flow partial-failure response and remain retryable through the durable
-plan. The same route kernel is ready for the gRPC adapter; no Python fallback
-is permitted.
+plan. The gRPC adapter now consumes this exact kernel and security evidence; no
+Python fallback is permitted.
 
 The `/oid4vp/did.json` compatibility endpoint is native under
 `contracts/flow-did-http-behavior.json`. It resolves the exact configured
@@ -738,6 +739,26 @@ the released DID media type, no-store and CORS headers, and fails closed when
 the signing-identity provider is absent or invalid. The default organization
 UUID and application-event freshness/replay settings are now typed startup
 configuration; deployed environments require the dedicated 32-byte event key.
+
+All 16 released Flow gRPC operations are now implemented by one native adapter
+under `contracts/flow-grpc-behavior.json`. Legacy protobuf definition, instance,
+artifact and verification DTOs translate into the same PostgreSQL records,
+provider registry, graph/transition kernels, protocol side effects and atomic
+mutations used by HTTP. Ordinary RPCs require constant-time service-token
+authentication plus tenant membership and method-specific permission;
+verification start and application approval additionally require their exact
+mTLS SPIFFE identities. Application-event protobuf strings recover canonical
+JSON before the shared MMF HMAC check. Starts persist their optional artifact
+atomically, advances use snapshot compare-and-swap, cancellations fence terminal
+state, and verification/application starts preserve their existing idempotency
+units. Public projections redact private context. Streaming is tenant-bound,
+supports instance and flow-type filters, uses a bounded 256-event channel and
+terminates a lagging subscriber explicitly instead of silently losing events.
+Health probes the live database and requires service authentication. Four
+adapter unit vectors, two language-neutral contract tests, all-target compile
+and strict Clippy pass. Flow's remaining executable work is therefore limited
+to HTTP/gRPC listener composition, lifecycle activation/drain/shutdown,
+container packaging and the final deletion/acceptance gates.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
