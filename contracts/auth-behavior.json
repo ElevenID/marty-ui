@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "http_routes": [
+    {"method": "GET", "path": "/v1/auth/login"},
+    {"method": "GET", "path": "/v1/auth/register"},
+    {"method": "GET", "path": "/v1/auth/canvas-lti/finalize"},
+    {"method": "POST", "path": "/v1/auth/canvas-lti/finalize"},
+    {"method": "GET", "path": "/v1/auth/callback"},
+    {"method": "POST", "path": "/v1/auth/logout"},
+    {"method": "GET", "path": "/v1/auth/me"},
+    {"method": "PATCH", "path": "/v1/auth/me"},
+    {"method": "GET", "path": "/v1/auth/credential-login/assets/styles.css"},
+    {"method": "GET", "path": "/v1/auth/credential-login/assets/app.js"},
+    {"method": "GET", "path": "/v1/auth/credential-login"},
+    {"method": "GET", "path": "/v1/auth/credential-login/status"},
+    {"method": "GET", "path": "/v1/auth/credential-login/finalize"},
+    {"method": "POST", "path": "/internal/v1/auth/credential-verified"}
+  ],
+  "grpc_methods": [
+    {"name": "ValidateSession", "behavior": "active_session_or_invalid"},
+    {"name": "CreateSession", "behavior": "unimplemented_authoritative_login_required"},
+    {"name": "InvalidateSession", "behavior": "delete_if_present"},
+    {"name": "GetAuthStatus", "behavior": "authenticated_session_or_false"},
+    {"name": "CredentialVerified", "behavior": "unimplemented_authenticated_http_callback_required"},
+    {"name": "HealthCheck", "behavior": "serving"}
+  ],
+  "claim_cases": [
+    {
+      "name": "keycloak_roles_and_organizations",
+      "primary": {
+        "sub": "kc-user-1",
+        "email": "alice@example.com",
+        "given_name": "Alice",
+        "family_name": "Smith",
+        "preferred_username": "alice",
+        "organization": {
+          "org-1": {"name": "Acme"},
+          "org-2": {"name": "Beta"}
+        }
+      },
+      "secondary": {
+        "roles": ["administrator"],
+        "realm_access": {"roles": ["vendor", "administrator"]},
+        "resource_access": {
+          "marty-ui": {"roles": ["organization-admin"]},
+          "marty-api": {"roles": ["api-user"]}
+        }
+      },
+      "expected": {
+        "sub": "kc-user-1",
+        "email": "alice@example.com",
+        "organization_id": "org-1",
+        "organization_name": "Acme",
+        "roles": ["administrator", "vendor", "organization-admin", "api-user"]
+      }
+    },
+    {
+      "name": "primary_values_win",
+      "primary": {"sub": "primary", "email": "primary@example.com", "email_verified": false},
+      "secondary": {"sub": "secondary", "email": "secondary@example.com", "email_verified": true},
+      "expected": {
+        "sub": "primary",
+        "email": "primary@example.com",
+        "email_verified": false,
+        "organization_id": null,
+        "organization_name": null,
+        "roles": []
+      }
+    }
+  ],
+  "display_name_cases": [
+    {"given_name": "Alice", "family_name": "Smith", "username": "asmith", "email": "alice@example.com", "expected": "Alice Smith"},
+    {"given_name": "Alice", "family_name": null, "username": "asmith", "email": "alice@example.com", "expected": "Alice"},
+    {"given_name": null, "family_name": "Ignored", "username": "asmith", "email": "alice@example.com", "expected": "asmith"},
+    {"given_name": null, "family_name": null, "username": null, "email": "alice@example.com", "expected": "alice"}
+  ],
+  "session_validity_cases": [
+    {"status": "active", "expires_offset_seconds": 1, "valid": true, "remaining_ttl_seconds": 1},
+    {"status": "active", "expires_offset_seconds": 0, "valid": false, "remaining_ttl_seconds": 0},
+    {"status": "active", "expires_offset_seconds": -1, "valid": false, "remaining_ttl_seconds": 0},
+    {"status": "revoked", "expires_offset_seconds": 60, "valid": false, "remaining_ttl_seconds": 0},
+    {"status": "expired", "expires_offset_seconds": 60, "valid": false, "remaining_ttl_seconds": 0}
+  ],
+  "pkce_vectors": [
+    {
+      "verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+      "challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+    }
+  ]
+}
