@@ -1321,12 +1321,40 @@ coverage, rather than embedding a service-specific Redis command. Thirty-nine
 Rust Auth tests, 51 focused Python callback/Canvas tests with one optional Redis
 skip, formatting and strict Clippy pass.
 
-Remaining Auth work is wallet-link/page behavior and the credential callback
-business orchestrator, Canvas and organization/applicant/event-stream bounded
-transports, HTTP/gRPC adapters, MMF runtime/outbox composition, executable
-packaging, configured PostgreSQL/Redis/transport acceptance, immutable MMF
-pinning, and immediate deletion of the Python service after the aggregate gate
-passes. No beta deployment has occurred.
+Commit `17172606` ports the credential callback business orchestrator on top of
+that state machine. It preserves Keycloak account eligibility and optional
+creation, native-validated token context, provisioning fallback, deterministic
+retry sessions, denial normalization, revocation status and already-processed
+idempotency. Commit `41f40038` ports all SpruceKit and LISSI wallet-link
+behavior, including platform templates, Android intent packages, legacy LISSI
+compatibility, DID client-ID normalization and fail-closed duplicate or
+mismatched outer request parameters.
+
+MMF commit `8b79e82` adds one bounded no-redirect outbound HTTP client to
+`mmf-platform`. It validates URLs, methods, headers, timeouts and response
+limits; streams bodies under the configured bound; and normalizes timeout and
+transport failures. Auth consumes that shared primitive rather than adding a
+service-local client. Commit `58459daf` uses it for Canvas experience-session
+transport and ports Canvas session finalization, optional applicant profile
+enrichment, tenant shape, client context and positive TTL enforcement.
+
+Commit `c523851e` ports all six Auth gRPC methods from the frozen contract.
+Session validation, invalidation and status use the canonical Rust application;
+health remains serving; direct session minting and the retired gRPC credential
+callback fail explicitly with `UNIMPLEMENTED`. Commit `62fe4864` ports trusted
+UI-origin selection, post-auth redirect resolution, OIDC callback URLs and
+Keycloak/handoff impersonation context. One shared fixture executes in Python
+and Rust. Network-path redirects such as `//attacker.example` now fail closed
+instead of retaining an open-redirect interpretation.
+
+Fifty-four Rust Auth behavioral tests, strict Clippy, the focused 52-test HTTP
+oracle suite with one optional integration skip, and all nine legacy gRPC
+adapter tests pass. Remaining Auth work is credential-login HTML/CSS/JavaScript
+consolidation, applicant/organization/event-stream transports, the complete
+14-route Axum adapter, MMF runtime/outbox composition, executable packaging,
+configured PostgreSQL/Redis/transport acceptance, immutable MMF pinning, and
+immediate deletion of the Python service after the aggregate gate passes. No
+beta deployment has occurred.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
