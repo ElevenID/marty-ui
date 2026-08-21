@@ -1675,9 +1675,35 @@ or malformed verifier fails closed. All ten declared gRPC methods now use the
 same application and verification layers, require authenticated service and
 principal identities, preserve paging/filtering and expose complete nested
 policy data. The Rust gRPC create path also rebuilds credential and alternative
-requirements that the superseded Python adapter silently ignored. The complete
-crate now has 23 green behavioral and persistence tests and passes strict
-Clippy.
+requirements that the superseded Python adapter silently ignored.
+
+The native executable, fail-closed deployed configuration and shared MMF
+runtime are complete. Startup migrates and validates PostgreSQL, reconciles the
+canonical built-in catalog, connects the live organization/trust/status control
+plane, activates readiness only after every required dependency is healthy and
+serves both Axum HTTP and tonic gRPC with graceful shutdown. Sensitive Flow and
+Verification RPCs require exact workload mTLS URI identities. Managed issuer
+scope preserves all explicit deployment aliases and the released public-URL/
+organization-slug derivation rather than requiring a new beta-only setting.
+
+Rust owns the final catalog produced by all historical seed and repair
+revisions: the three email-only MemberLogin variants, conformant OpenBadgeLogin
+with trust/revocation/freshness requirements and the private online age-proof
+mDoc policy. Deterministic nested identifiers and repository-level
+reconciliation make repeated startup idempotent. The language-neutral
+`presentation-policy-catalog-behavior.json` freezes the final identities,
+formats, claims, versions and trust behavior.
+
+Native container packaging and entrypoint dispatch are wired for local and CI
+images, and CI has a dedicated Presentation Policy image build. The complete
+crate now has 28 green behavioral, startup, catalog and persistence tests and
+passes formatting and strict Clippy. All 195 surviving Python service and
+packaging tests pass, beta Compose renders with the complete immutable-artifact,
+secret and workload-mTLS contract, and the full locked Rust workspace passes.
+The workspace acceptance run also removed two unrelated nondeterministic gates:
+Auth credential HTML now renders canonical LF output from either checkout style,
+and Notification webhook JSON is recursively key-sorted before HMAC calculation
+regardless of Cargo feature unification.
 
 The verifier orchestration layer is now native and deterministic. It routes with
 the canonical `marty-verification` format detector, applies request/policy/
@@ -1713,15 +1739,19 @@ shared `marty-verification` crate on the dedicated
 Python extension delegates to that implementation and no longer directly owns
 COSE, ISO mdoc, PEM, time or test-certificate dependencies. Ten focused mdoc
 kernel tests, the complete 301-test verification suite and all 47 binding tests
-pass. Publication and the immutable Marty UI pin remain pending because the
-local GitHub proxy is refusing connections to `127.0.0.1:443`.
+pass. Publication and the immutable Marty UI pin remain pending. The forced
+loopback Git proxy is unavailable; bypassing it reaches GitHub but the local
+credential is invalid, while connected GitHub writes cannot be approved under
+the current session policy.
 
-Next work is to publish and pin the mdoc authentication revision, add the
-service runtime, configuration, mutual-TLS workload authorization and native
-packaging, then run configured PostgreSQL, container and external-provider
-acceptance. Those gates permit immediate deletion of the Python service and its
-nine revisions. No beta deployment has occurred; this remains part of the
-single aggregate wave-three beta update.
+Remaining work is narrowly gated: publish and pin the mdoc authentication
+revision, enable the now-tested native mdoc adapter, and run configured
+PostgreSQL, built-container and external-provider acceptance in CI. Once those
+gates pass, delete the approximately 6,982-line Python service, all nine Alembic
+revisions and implementation-specific Python tests immediately while retaining
+the language-neutral behavioral contracts and anti-reintroduction checks. No
+beta deployment has occurred; the only permitted update remains the single
+aggregate wave-three beta deployment after every service slice lands.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
