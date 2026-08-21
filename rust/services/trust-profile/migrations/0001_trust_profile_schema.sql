@@ -1,5 +1,10 @@
 CREATE SCHEMA IF NOT EXISTS trust_profile_service;
 
+CREATE TABLE IF NOT EXISTS trust_profile_service.native_migrations (
+    version TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS trust_profile_service.trust_profiles (
     id TEXT PRIMARY KEY,
     organization_id TEXT NOT NULL,

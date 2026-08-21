@@ -1,5 +1,6 @@
 pub mod application;
 pub mod domain;
+pub mod migration;
 pub mod persistence;
 pub mod policy;
 pub mod postgres;
@@ -18,6 +19,7 @@ pub use domain::{
     TrustProfileIssuer, TrustProfileStatus, TrustProfileType, TrustRegistryEntry,
     TrustRelationshipStatus, TrustSource, TrustSourceType, ValidationRules,
 };
+pub use migration::{run_migrations, TrustProfileMigrationError, TrustProfileMigrationSummary};
 pub use persistence::{TrustProfileRecord, TrustProfileRecordError, TRUST_PROFILE_MIGRATION};
 pub use policy::{
     allowed_issuers_after_request, normalize_accreditations, normalize_jurisdictions,
