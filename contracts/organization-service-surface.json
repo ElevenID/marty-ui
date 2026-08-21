@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source": "services/organization",
+  "source": "rust/services/organization",
   "http_routes": [
     "GET /api/onboarding/status",
     "GET /internal/v1/organizations/{org_id}/lifecycle",

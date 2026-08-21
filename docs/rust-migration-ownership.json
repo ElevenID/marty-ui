@@ -558,6 +558,17 @@
         "binding_paths": []
       },
       "legacy": []
+    },
+    {
+      "id": "organization-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/organization"],
+        "binding_paths": []
+      },
+      "legacy": []
     }
   ],
   "guardrails": {
@@ -572,6 +583,10 @@
       {
         "capability_id": "gateway-service",
         "forbidden_globs": ["services/gateway/**/*.py"]
+      },
+      {
+        "capability_id": "organization-service",
+        "forbidden_globs": ["services/organization/**/*.py"]
       }
     ],
     "approved_imports": [

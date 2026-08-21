@@ -404,6 +404,7 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
       ORG_GRPC_PORT: "9002"
+      ES_GRPC_TARGET: event-stream:9015
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
     secrets:
       - marty_db_password

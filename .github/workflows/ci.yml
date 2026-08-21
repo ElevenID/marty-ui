@@ -418,6 +418,42 @@ jobs:
             exit 1
           fi
           trust_profile_relative="${trust_profile_executable#"$PWD/"}"
+          organization_migration_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "migration_contract")
+            | select(.package_id | contains("marty-organization"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$organization_migration_executable" || ! -x "$organization_migration_executable" ]]; then
+            echo "Unable to locate the compiled Organization migration contract executable." >&2
+            exit 1
+          fi
+          organization_application_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "application_postgres_integration")
+            | select(.package_id | contains("marty-organization"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$organization_application_executable" || ! -x "$organization_application_executable" ]]; then
+            echo "Unable to locate the compiled Organization application PostgreSQL contract executable." >&2
+            exit 1
+          fi
+          organization_repository_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "postgres_integration")
+            | select(.package_id | contains("marty-organization"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$organization_repository_executable" || ! -x "$organization_repository_executable" ]]; then
+            echo "Unable to locate the compiled Organization repository PostgreSQL contract executable." >&2
+            exit 1
+          fi
+          cp "$organization_migration_executable" target/debug/organization-migration-contract
+          cp "$organization_application_executable" target/debug/organization-application-postgres-contract
+          cp "$organization_repository_executable" target/debug/organization-repository-postgres-contract
           test -x target/debug/marty-revocation-profile
           tar -cf "$RUNNER_TEMP/rust-db-test-bundle.tar" \
             "$contract_relative" \
@@ -427,6 +463,9 @@ jobs:
             "$credential_template_relative" \
             "$presentation_policy_relative" \
             "$trust_profile_relative" \
+            target/debug/organization-migration-contract \
+            target/debug/organization-application-postgres-contract \
+            target/debug/organization-repository-postgres-contract \
             target/debug/marty-revocation-profile
       - name: Publish reusable database contract executables
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -491,6 +530,7 @@ jobs:
       MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME: marty_revocation_test
       CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
       PRESENTATION_POLICY_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
+      ORGANIZATION_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
       TEST_POSTGRES_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -547,6 +587,12 @@ jobs:
             exit 1
           fi
           "${trust_profile_contracts[0]}" --test-threads=1
+          test -x target/debug/organization-migration-contract
+          test -x target/debug/organization-application-postgres-contract
+          test -x target/debug/organization-repository-postgres-contract
+          target/debug/organization-migration-contract --test-threads=1
+          target/debug/organization-application-postgres-contract --test-threads=1
+          target/debug/organization-repository-postgres-contract --test-threads=1
 
   rust-lint-policy:
     name: Rust Lint and Packaging
@@ -758,6 +804,20 @@ jobs:
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
           provenance: false
           cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Build organization image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: organization
+          load: true
+          push: false
+          tags: marty-organization:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
       - name: Build credential-template image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
@@ -821,6 +881,70 @@ jobs:
             sleep 0.25
           done
           docker logs "$container"
+          exit 1
+      - name: Smoke-test organization image with PostgreSQL and Redis
+        shell: bash
+        run: |
+          set -euo pipefail
+          network="organization-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          postgres="organization-postgres-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          redis="organization-redis-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          organization="organization-service-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          cleanup() {
+            docker rm --force "$organization" "$postgres" "$redis" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker network create "$network" >/dev/null
+          docker run --detach \
+            --name "$postgres" \
+            --network "$network" \
+            --network-alias organization-postgres \
+            --env POSTGRES_USER=marty \
+            --env POSTGRES_PASSWORD=marty-test \
+            --env POSTGRES_DB=marty \
+            postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f \
+            >/dev/null
+          docker run --detach \
+            --name "$redis" \
+            --network "$network" \
+            --network-alias organization-redis \
+            redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2 \
+            >/dev/null
+          for attempt in {1..60}; do
+            if docker exec "$postgres" pg_isready --username marty --dbname marty >/dev/null \
+              && docker exec "$redis" redis-cli ping | grep --fixed-strings --quiet PONG; then
+              break
+            fi
+            if [[ "$attempt" == 60 ]]; then
+              docker logs "$postgres"
+              docker logs "$redis"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          docker run --detach \
+            --name "$organization" \
+            --network "$network" \
+            --env ENVIRONMENT=test \
+            --env DATABASE_URL=postgresql://marty:marty-test@organization-postgres/marty \
+            --env REDIS_URL=redis://organization-redis:6379 \
+            --env ES_GRPC_TARGET=event-stream:9015 \
+            --env ES_GRPC_TIMEOUT_SECONDS=1 \
+            --publish 127.0.0.1::8002 \
+            marty-organization:ci \
+            >/dev/null
+          port="$(docker inspect \
+            --format '{{(index (index .NetworkSettings.Ports "8002/tcp") 0).HostPort}}' \
+            "$organization")"
+          for attempt in {1..60}; do
+            if curl --fail --silent "http://127.0.0.1:${port}/health" \
+              | grep --fixed-strings --quiet '"service":"organization"'; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          docker logs "$organization"
           exit 1
 
   public-protocol-contract:
