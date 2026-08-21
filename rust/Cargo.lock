@@ -4102,7 +4102,7 @@ dependencies = [
  "chrono",
  "hmac 0.12.1",
  "jsonwebtoken",
- "marty-oid4vci",
+ "marty-oid4vci 0.1.57",
  "mmf-core",
  "mmf-data",
  "mmf-messaging",
@@ -4213,6 +4213,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-crypto"
+version = "0.1.59"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "base64 0.22.1",
+ "cbc",
+ "chrono",
+ "cipher",
+ "cmac",
+ "const-oid 0.9.6",
+ "der",
+ "des",
+ "ecdsa",
+ "ed25519-dalek",
+ "ed448-goldilocks-plus",
+ "elliptic-curve",
+ "hex",
+ "hkdf 0.12.4",
+ "hmac 0.12.1",
+ "p12",
+ "p256",
+ "p384",
+ "p521",
+ "pbkdf2",
+ "pem-rfc7468",
+ "pkcs5",
+ "pkcs8",
+ "rand 0.8.7",
+ "rand_core 0.10.1",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha1 0.10.7",
+ "sha2 0.10.9",
+ "signature",
+ "spki",
+ "thiserror 2.0.20",
+ "x25519-dalek",
+ "x509-cert",
+ "x509-ocsp",
+]
+
+[[package]]
 name = "marty-didcomm"
 version = "0.1.57"
 source = "git+https://github.com/ElevenID/marty-core?rev=54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8#54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8"
@@ -4269,10 +4313,10 @@ dependencies = [
  "futures-core",
  "http 1.5.0",
  "jsonwebtoken",
- "marty-crypto",
+ "marty-crypto 0.1.57",
  "marty-didcomm",
  "marty-iso18013",
- "marty-oid4vci",
+ "marty-oid4vci 0.1.57",
  "marty-verification",
  "mmf-core",
  "mmf-messaging",
@@ -4316,7 +4360,7 @@ dependencies = [
  "chrono",
  "futures-core",
  "http 1.5.0",
- "marty-oid4vci",
+ "marty-oid4vci 0.1.57",
  "mmf-platform",
  "mmf-security",
  "percent-encoding",
@@ -4353,7 +4397,7 @@ dependencies = [
  "hex",
  "image",
  "isomdl",
- "marty-crypto",
+ "marty-crypto 0.1.57",
  "marty-types",
  "qrcode",
  "rand 0.8.7",
@@ -4416,7 +4460,35 @@ dependencies = [
  "ed25519-dalek",
  "isomdl",
  "jsonwebtoken",
- "marty-crypto",
+ "marty-crypto 0.1.57",
+ "p256",
+ "p384",
+ "rand 0.8.7",
+ "regex",
+ "sd-jwt-rs",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "ssi-crypto",
+ "ssi-jwk",
+ "thiserror 2.0.20",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "marty-oid4vci"
+version = "0.1.59"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "ciborium",
+ "coset",
+ "ed25519-dalek",
+ "isomdl",
+ "jsonwebtoken",
+ "marty-crypto 0.1.59",
  "p256",
  "p384",
  "rand 0.8.7",
@@ -4476,8 +4548,9 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
- "marty-crypto",
- "marty-oid4vci",
+ "hex",
+ "marty-crypto 0.1.57",
+ "marty-oid4vci 0.1.57",
  "marty-verification",
  "mmf-core",
  "mmf-platform",
@@ -4488,6 +4561,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "thiserror 2.0.20",
  "tokio",
@@ -4546,7 +4620,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "http 1.5.0",
- "marty-crypto",
+ "marty-crypto 0.1.57",
  "percent-encoding",
  "redis",
  "regex",
@@ -4620,8 +4694,7 @@ dependencies = [
 
 [[package]]
 name = "marty-verification"
-version = "0.1.57"
-source = "git+https://github.com/ElevenID/marty-core?rev=54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8#54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8"
+version = "0.1.59"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4631,6 +4704,7 @@ dependencies = [
  "ciborium",
  "cms",
  "const-oid 0.9.6",
+ "coset",
  "der",
  "ecdsa",
  "ed25519-dalek",
@@ -4641,8 +4715,8 @@ dependencies = [
  "hmac 0.12.1",
  "iref",
  "isomdl",
- "marty-crypto",
- "marty-oid4vci",
+ "marty-crypto 0.1.59",
+ "marty-oid4vci 0.1.59",
  "p256",
  "p384",
  "p521",
@@ -4665,6 +4739,7 @@ dependencies = [
  "ssi-jws",
  "ssi-verification-methods",
  "thiserror 2.0.20",
+ "time",
  "tracing",
  "tracing-error",
  "url",

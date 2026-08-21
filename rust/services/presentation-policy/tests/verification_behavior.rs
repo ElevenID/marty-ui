@@ -4,11 +4,12 @@ use async_trait::async_trait;
 use marty_presentation_policy::{
     ClaimConstraint, ConstraintType, CredentialRequirement, CredentialStatusEvidence,
     CredentialStatusResolver, CredentialVerificationContext, CredentialVerificationEvidence,
-    CredentialVerificationKernel, DisplayMetadata, HolderBinding, IssuerTrustEvidence,
-    PolicyStatus, PresentationPolicy, PresentationTrustResolver, PresentationVerificationError,
-    PresentationVerificationOrchestrator, RequestPurpose, RequestedClaim, ResolvedTrustProfile,
-    VerifiedFactsOrchestrator,
+    CredentialVerificationKernel, DisplayMetadata, FreshnessPolicy, HolderBinding,
+    IssuerTrustEvidence, PolicyStatus, PresentationPolicy, PresentationTrustResolver,
+    PresentationVerificationError, PresentationVerificationOrchestrator, RequestPurpose,
+    RequestedClaim, ResolvedTrustProfile, VerifiedFactsOrchestrator,
 };
+use marty_verification::credential_format::DetectedCredentialFormat;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -37,6 +38,7 @@ struct Trust {
     evidence: IssuerTrustEvidence,
     fail_load: bool,
     profile_organization_id: Option<Uuid>,
+    profile_document: Option<Value>,
     loads: Mutex<Vec<(Uuid, Uuid)>>,
 }
 
@@ -57,7 +59,10 @@ impl PresentationTrustResolver for Trust {
         Ok(ResolvedTrustProfile {
             id: profile_id,
             organization_id: self.profile_organization_id.unwrap_or(organization_id),
-            document: json!({"public_verification_material": true}),
+            document: self
+                .profile_document
+                .clone()
+                .unwrap_or_else(|| json!({"public_verification_material": true})),
         })
     }
 
@@ -65,6 +70,7 @@ impl PresentationTrustResolver for Trust {
         &self,
         _profile: &ResolvedTrustProfile,
         _issuer_id: &str,
+        _format: DetectedCredentialFormat,
     ) -> Result<IssuerTrustEvidence, PresentationVerificationError> {
         Ok(self.evidence.clone())
     }
@@ -189,6 +195,7 @@ async fn native_evidence_projects_to_the_language_neutral_verified_facts_contrac
         evidence: serde_json::from_value(vector["trust_evidence"].clone()).unwrap(),
         fail_load: false,
         profile_organization_id: None,
+        profile_document: None,
         loads: Mutex::new(Vec::new()),
     });
     let status = Arc::new(Status {
@@ -200,13 +207,15 @@ async fn native_evidence_projects_to_the_language_neutral_verified_facts_contrac
         trust.clone(),
         status.clone(),
         Arc::new(|| 1_787_240_300),
-    );
+    )
+    .unwrap();
     let request = marty_presentation_policy::EvaluatePresentationRequest {
         vp_token: vector["vp_token"].clone(),
         trust_profile_id: Some(REQUEST_PROFILE_ID.to_string()),
         nonce: Some("nonce-1".into()),
         audience: Some("verifier-1".into()),
         context: serde_json::Map::new(),
+        trusted_internal_context: false,
     };
 
     let actual = orchestrator.verify(&policy(), &request).await.unwrap();
@@ -234,6 +243,7 @@ async fn malformed_presentations_are_denied_without_invoking_any_format_kernel()
         evidence: IssuerTrustEvidence::default(),
         fail_load: false,
         profile_organization_id: None,
+        profile_document: None,
         loads: Mutex::new(Vec::new()),
     });
     let status = Arc::new(Status {
@@ -245,13 +255,15 @@ async fn malformed_presentations_are_denied_without_invoking_any_format_kernel()
         trust,
         status,
         Arc::new(|| 1_787_240_300),
-    );
+    )
+    .unwrap();
     let request = marty_presentation_policy::EvaluatePresentationRequest {
         vp_token: Value::String("not-a-credential".into()),
         trust_profile_id: None,
         nonce: None,
         audience: None,
         context: serde_json::Map::new(),
+        trusted_internal_context: false,
     };
 
     let result = orchestrator.verify(&policy(), &request).await.unwrap();
@@ -268,19 +280,21 @@ async fn unavailable_trust_backend_fails_closed_before_cryptographic_verificatio
         evidence: IssuerTrustEvidence::default(),
         fail_load: true,
         profile_organization_id: None,
+        profile_document: None,
         loads: Mutex::new(Vec::new()),
     });
     let status = Arc::new(Status {
         evidence: CredentialStatusEvidence::default(),
         calls: Mutex::new(Vec::new()),
     });
-    let orchestrator = VerifiedFactsOrchestrator::new(kernel.clone(), trust, status);
+    let orchestrator = VerifiedFactsOrchestrator::new(kernel.clone(), trust, status).unwrap();
     let request = marty_presentation_policy::EvaluatePresentationRequest {
         vp_token: fixture["valid_data_integrity"]["vp_token"].clone(),
         trust_profile_id: None,
         nonce: None,
         audience: None,
         context: serde_json::Map::new(),
+        trusted_internal_context: false,
     };
 
     let error = orchestrator.verify(&policy(), &request).await.unwrap_err();
@@ -296,22 +310,298 @@ async fn cross_tenant_trust_profile_evidence_is_rejected_before_kernel_use() {
         evidence: IssuerTrustEvidence::default(),
         fail_load: false,
         profile_organization_id: Some(Uuid::from_u128(999)),
+        profile_document: None,
         loads: Mutex::new(Vec::new()),
     });
     let status = Arc::new(Status {
         evidence: CredentialStatusEvidence::default(),
         calls: Mutex::new(Vec::new()),
     });
-    let orchestrator = VerifiedFactsOrchestrator::new(kernel.clone(), trust, status);
+    let orchestrator = VerifiedFactsOrchestrator::new(kernel.clone(), trust, status).unwrap();
     let request = marty_presentation_policy::EvaluatePresentationRequest {
         vp_token: fixture["valid_data_integrity"]["vp_token"].clone(),
         trust_profile_id: None,
         nonce: None,
         audience: None,
         context: serde_json::Map::new(),
+        trusted_internal_context: false,
     };
 
     let error = orchestrator.verify(&policy(), &request).await.unwrap_err();
     assert!(matches!(error, PresentationVerificationError::Failed(_)));
     assert!(kernel.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn only_authenticated_internal_oid4vp_context_can_project_replay_evidence() {
+    let fixture = fixture();
+    let vector = &fixture["valid_data_integrity"];
+    let context_vector = &fixture["trusted_oid4vp_context"];
+    let mut evidence: CredentialVerificationEvidence =
+        serde_json::from_value(vector["kernel_evidence"].clone()).unwrap();
+    evidence.holder_binding_method = context_vector["kernel_binding_method"]
+        .as_str()
+        .map(str::to_owned);
+    evidence.proof_profile = context_vector["kernel_proof_profile"]
+        .as_str()
+        .map(str::to_owned);
+    evidence.replay_check_verified = false;
+
+    let verify = |trusted_internal_context| {
+        let kernel = Arc::new(Kernel {
+            evidence: Mutex::new(evidence.clone()),
+            calls: Mutex::new(Vec::new()),
+        });
+        let orchestrator = VerifiedFactsOrchestrator::with_clock(
+            kernel,
+            Arc::new(Trust {
+                evidence: serde_json::from_value(vector["trust_evidence"].clone()).unwrap(),
+                fail_load: false,
+                profile_organization_id: None,
+                profile_document: None,
+                loads: Mutex::new(Vec::new()),
+            }),
+            Arc::new(Status {
+                evidence: CredentialStatusEvidence::default(),
+                calls: Mutex::new(Vec::new()),
+            }),
+            Arc::new(|| 1_787_240_300),
+        )
+        .unwrap();
+        let request = marty_presentation_policy::EvaluatePresentationRequest {
+            vp_token: vector["vp_token"].clone(),
+            trust_profile_id: None,
+            nonce: Some("nonce-1".into()),
+            audience: Some("verifier-1".into()),
+            context: context_vector["context"].as_object().unwrap().clone(),
+            trusted_internal_context,
+        };
+        (orchestrator, request)
+    };
+
+    let (orchestrator, request) = verify(true);
+    let trusted = orchestrator.verify(&policy(), &request).await.unwrap();
+    assert_eq!(
+        trusted["holder_binding_method"],
+        context_vector["expected_binding_method"]
+    );
+    assert_eq!(
+        trusted["proof_profile"],
+        context_vector["expected_proof_profile"]
+    );
+    assert_eq!(
+        trusted["replay_check_verified"],
+        context_vector["expected_replay_check_verified"]
+    );
+
+    let (orchestrator, request) = verify(false);
+    let untrusted = orchestrator.verify(&policy(), &request).await.unwrap();
+    assert_eq!(
+        untrusted["replay_check_verified"],
+        context_vector["untrusted_http_replay_check_verified"]
+    );
+    assert_eq!(
+        untrusted["holder_binding_method"],
+        context_vector["kernel_binding_method"]
+    );
+}
+
+#[tokio::test]
+async fn cedar_authorization_uses_only_complete_verified_evidence_and_denies_weak_algorithms() {
+    let fixture = fixture();
+    let vector = &fixture["valid_data_integrity"];
+    for (algorithm, expected_evaluated, expected_allowed) in [
+        (None, false, false),
+        (
+            fixture["cedar_evidence"]["weak_algorithm"].as_str(),
+            true,
+            fixture["cedar_evidence"]["weak_algorithm_allowed"]
+                .as_bool()
+                .unwrap(),
+        ),
+    ] {
+        let mut evidence: CredentialVerificationEvidence =
+            serde_json::from_value(vector["kernel_evidence"].clone()).unwrap();
+        evidence.algorithm = algorithm.map(str::to_owned);
+        let orchestrator = VerifiedFactsOrchestrator::with_clock(
+            Arc::new(Kernel {
+                evidence: Mutex::new(evidence),
+                calls: Mutex::new(Vec::new()),
+            }),
+            Arc::new(Trust {
+                evidence: serde_json::from_value(vector["trust_evidence"].clone()).unwrap(),
+                fail_load: false,
+                profile_organization_id: None,
+                profile_document: None,
+                loads: Mutex::new(Vec::new()),
+            }),
+            Arc::new(Status {
+                evidence: serde_json::from_value(vector["status_evidence"].clone()).unwrap(),
+                calls: Mutex::new(Vec::new()),
+            }),
+            Arc::new(|| 1_787_240_300),
+        )
+        .unwrap();
+        let request = marty_presentation_policy::EvaluatePresentationRequest {
+            vp_token: vector["vp_token"].clone(),
+            trust_profile_id: None,
+            nonce: None,
+            audience: None,
+            context: serde_json::Map::new(),
+            trusted_internal_context: false,
+        };
+
+        let facts = orchestrator.verify(&policy(), &request).await.unwrap();
+        assert_eq!(
+            facts["external_authorization"]["evaluated"],
+            expected_evaluated
+        );
+        assert_eq!(facts["external_authorization"]["allowed"], expected_allowed);
+        if algorithm.is_none() {
+            assert_eq!(
+                facts["external_authorization"]["errors"][0],
+                fixture["cedar_evidence"]["missing_algorithm_error"]
+            );
+        } else {
+            assert_eq!(
+                facts["external_authorization"]["reasons"][0],
+                "deny-weak-algorithms"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn presentation_only_verification_bypasses_credential_trust_status_and_cedar() {
+    let fixture = fixture();
+    let vector = &fixture["valid_data_integrity"];
+    let kernel = Arc::new(Kernel {
+        evidence: Mutex::new(serde_json::from_value(vector["kernel_evidence"].clone()).unwrap()),
+        calls: Mutex::new(Vec::new()),
+    });
+    let trust = Arc::new(Trust {
+        evidence: IssuerTrustEvidence::default(),
+        fail_load: true,
+        profile_organization_id: None,
+        profile_document: None,
+        loads: Mutex::new(Vec::new()),
+    });
+    let status = Arc::new(Status {
+        evidence: serde_json::from_value(vector["status_evidence"].clone()).unwrap(),
+        calls: Mutex::new(Vec::new()),
+    });
+    let orchestrator = VerifiedFactsOrchestrator::with_clock(
+        kernel,
+        trust.clone(),
+        status.clone(),
+        Arc::new(|| 1_787_240_300),
+    )
+    .unwrap();
+    let mut presentation_policy = policy();
+    presentation_policy.credential_requirements.clear();
+    let request = marty_presentation_policy::EvaluatePresentationRequest {
+        vp_token: vector["vp_token"].clone(),
+        trust_profile_id: Some(REQUEST_PROFILE_ID.to_string()),
+        nonce: Some("nonce-1".into()),
+        audience: Some("verifier-1".into()),
+        context: serde_json::Map::new(),
+        trusted_internal_context: false,
+    };
+
+    let facts = orchestrator
+        .verify(&presentation_policy, &request)
+        .await
+        .unwrap();
+    assert_eq!(facts["credentials"], json!([]));
+    assert_eq!(facts["external_authorization"], Value::Null);
+    assert!(trust.loads.lock().unwrap().is_empty());
+    assert!(status.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn exact_mdoc_direct_pin_relationship_supplies_governed_lifecycle_status() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/presentation-mdoc-lifecycle-behavior.json"
+    ))
+    .unwrap();
+    let fingerprint = contract["issuer_certificate_sha256"].as_str().unwrap();
+    let issuer_id = format!("x509-sha256:{fingerprint}");
+    let mut relationship = contract["relationship"].clone();
+    relationship["issuer_id"] = Value::String(issuer_id.clone());
+    let profile = json!({
+        "status": "active",
+        "trust_sources": [{
+            "source_type": "PINNED_ISSUER",
+            "enabled": true,
+            "certificate_pem": contract["certificate_pem"]
+        }],
+        "issuer_relationships": [relationship]
+    });
+    let kernel = Arc::new(Kernel {
+        evidence: Mutex::new(CredentialVerificationEvidence {
+            verified: true,
+            claims: serde_json::from_value(json!({"email": "holder@example.com"})).unwrap(),
+            issuer_id: Some(issuer_id),
+            issued_at_epoch_seconds: Some(1_787_240_270),
+            algorithm: Some("ES256".into()),
+            validity_checked: true,
+            is_expired: Some(false),
+            presentation_verified: true,
+            presentation_count: Some(1),
+            holder_binding_verified: true,
+            holder_binding_method: Some("DEVICE_KEY".into()),
+            proof_profile: Some("OID4VP_VERIFIABLE_PRESENTATION".into()),
+            challenge_verified: true,
+            audience_verified: true,
+            ..Default::default()
+        }),
+        calls: Mutex::new(Vec::new()),
+    });
+    let status = Arc::new(Status {
+        evidence: CredentialStatusEvidence::default(),
+        calls: Mutex::new(Vec::new()),
+    });
+    let orchestrator = VerifiedFactsOrchestrator::with_clock(
+        kernel,
+        Arc::new(Trust {
+            evidence: IssuerTrustEvidence {
+                verified: true,
+                trust_level: Some(87),
+                compliance_statuses: vec!["ACCREDITED".into()],
+                accreditations: vec!["ISO27001".into()],
+                ..Default::default()
+            },
+            fail_load: false,
+            profile_organization_id: None,
+            profile_document: Some(profile),
+            loads: Mutex::new(Vec::new()),
+        }),
+        status.clone(),
+        Arc::new(|| 1_787_240_300),
+    )
+    .unwrap();
+    let mut mdoc_policy = policy();
+    mdoc_policy.credential_requirements[0].credential_payload_format = "MDOC".into();
+    mdoc_policy.freshness = Some(FreshnessPolicy {
+        max_age_seconds: None,
+        require_not_revoked: true,
+        revocation_grace_seconds: None,
+    });
+    let request = marty_presentation_policy::EvaluatePresentationRequest {
+        vp_token: Value::String("\\x010203".into()),
+        trust_profile_id: None,
+        nonce: Some("nonce-1".into()),
+        audience: Some("verifier-1".into()),
+        context: serde_json::Map::new(),
+        trusted_internal_context: false,
+    };
+
+    let facts = orchestrator.verify(&mdoc_policy, &request).await.unwrap();
+    assert_eq!(
+        facts["credentials"][0]["revocation_checked_at_epoch_seconds"], 1_787_240_300_u64,
+        "{facts}"
+    );
+    assert_eq!(facts["credentials"][0]["not_revoked"], true);
+    assert_eq!(facts["external_authorization"]["allowed"], true);
+    assert!(status.calls.lock().unwrap().is_empty());
 }

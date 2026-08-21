@@ -3,13 +3,14 @@ use std::{collections::BTreeSet, sync::Arc};
 use async_trait::async_trait;
 use chrono::Utc;
 use marty_verification::credential_format::{detect_credential_format, DetectedCredentialFormat};
+use mmf_security::{CredentialVerificationAuthorizationFacts, CredentialVerificationPolicyEngine};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
 use crate::{
-    EvaluatePresentationRequest, PresentationPolicy, PresentationVerificationError,
-    PresentationVerificationOrchestrator,
+    control_plane::mdoc_direct_pin_lifecycle_verified, EvaluatePresentationRequest,
+    PresentationPolicy, PresentationVerificationError, PresentationVerificationOrchestrator,
 };
 
 /// Verifier-owned trust profile supplied to native credential kernels.
@@ -64,6 +65,9 @@ pub struct CredentialVerificationEvidence {
     pub claims: Map<String, Value>,
     pub issuer_id: Option<String>,
     pub issued_at_epoch_seconds: Option<u64>,
+    pub algorithm: Option<String>,
+    pub validity_checked: bool,
+    pub is_expired: Option<bool>,
     pub warnings: Vec<String>,
     pub presentation_verified: bool,
     pub presentation_count: Option<usize>,
@@ -97,6 +101,7 @@ pub trait PresentationTrustResolver: Send + Sync {
         &self,
         profile: &ResolvedTrustProfile,
         issuer_id: &str,
+        format: DetectedCredentialFormat,
     ) -> Result<IssuerTrustEvidence, PresentationVerificationError>;
 }
 
@@ -118,32 +123,36 @@ pub struct VerifiedFactsOrchestrator {
     kernel: Arc<dyn CredentialVerificationKernel>,
     trust: Arc<dyn PresentationTrustResolver>,
     status: Arc<dyn CredentialStatusResolver>,
+    credential_authorization: CredentialVerificationPolicyEngine,
     clock: Arc<EpochClock>,
 }
 
 impl VerifiedFactsOrchestrator {
-    #[must_use]
     pub fn new(
         kernel: Arc<dyn CredentialVerificationKernel>,
         trust: Arc<dyn PresentationTrustResolver>,
         status: Arc<dyn CredentialStatusResolver>,
-    ) -> Self {
+    ) -> Result<Self, PresentationVerificationError> {
         Self::with_clock(kernel, trust, status, Arc::new(system_epoch_seconds))
     }
 
-    #[must_use]
     pub fn with_clock(
         kernel: Arc<dyn CredentialVerificationKernel>,
         trust: Arc<dyn PresentationTrustResolver>,
         status: Arc<dyn CredentialStatusResolver>,
         clock: Arc<EpochClock>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, PresentationVerificationError> {
+        Ok(Self {
             kernel,
             trust,
             status,
+            credential_authorization: CredentialVerificationPolicyEngine::new().map_err(|_| {
+                PresentationVerificationError::Failed(
+                    "PRESENTATION_POLICY.NATIVE_AUTHORIZATION_UNAVAILABLE".into(),
+                )
+            })?,
             clock,
-        }
+        })
     }
 
     async fn verified_facts(
@@ -163,7 +172,12 @@ impl VerifiedFactsOrchestrator {
             ));
         }
 
-        let profile_id = selected_trust_profile(policy, request)?;
+        let presentation_only = is_presentation_only(policy);
+        let profile_id = if presentation_only {
+            None
+        } else {
+            selected_trust_profile(policy, request)?
+        };
         let trust_profile = match profile_id {
             Some(profile_id) => {
                 let profile = self
@@ -199,6 +213,7 @@ impl VerifiedFactsOrchestrator {
             trust_profile: trust_profile.clone(),
         };
         let mut evidence = self.kernel.verify(&context).await?;
+        apply_trusted_oid4vp_context(policy, request, &mut evidence);
         if !evidence.verified {
             evidence.claims.clear();
             evidence.issuer_id = None;
@@ -212,7 +227,7 @@ impl VerifiedFactsOrchestrator {
             .to_string();
         let trust = match (&trust_profile, evidence.verified, issuer_id.as_str()) {
             (Some(profile), true, issuer) if issuer != "unknown" => {
-                self.trust.evaluate_issuer(profile, issuer).await?
+                self.trust.evaluate_issuer(profile, issuer, format).await?
             }
             (Some(_), _, _) => IssuerTrustEvidence {
                 verified: false,
@@ -229,7 +244,33 @@ impl VerifiedFactsOrchestrator {
             },
         };
 
-        if evidence.verified
+        let evaluation_time = (self.clock)();
+        if !presentation_only
+            && format == DetectedCredentialFormat::Mdoc
+            && evidence.verified
+            && evidence.status.checked_at_epoch_seconds.is_none()
+            && trust_profile.as_ref().is_some_and(|profile| {
+                mdoc_direct_pin_lifecycle_verified(
+                    &profile.document,
+                    &issuer_id,
+                    chrono::DateTime::from_timestamp(
+                        i64::try_from(evaluation_time).unwrap_or(i64::MAX),
+                        0,
+                    )
+                    .unwrap_or_default(),
+                )
+            })
+        {
+            evidence.status = CredentialStatusEvidence {
+                checked_at_epoch_seconds: Some(evaluation_time),
+                not_revoked: Some(true),
+                credential_status: Some("active".into()),
+                warnings: Vec::new(),
+            };
+        }
+
+        if !presentation_only
+            && evidence.verified
             && evidence.status.checked_at_epoch_seconds.is_none()
             && !evidence.credential_status_ids.is_empty()
             && issuer_id != "unknown"
@@ -244,7 +285,19 @@ impl VerifiedFactsOrchestrator {
                 .await?;
         }
 
-        let evaluation_time = (self.clock)();
+        let external_authorization = if presentation_only {
+            Value::Null
+        } else {
+            credential_external_authorization(
+                &self.credential_authorization,
+                policy,
+                format,
+                &evidence,
+                &trust,
+                &issuer_id,
+                evaluation_time,
+            )
+        };
         let mut warnings = evidence.warnings;
         warnings.extend(evidence.status.warnings.clone());
         if !evidence.verified {
@@ -271,9 +324,10 @@ impl VerifiedFactsOrchestrator {
             .unwrap_or_else(|| "presented-credential".into());
         let templates = credential_template_ids(policy);
         let credential_status = normalized_status(evidence.status.credential_status.as_deref());
-
-        Ok(json!({
-            "credentials": [{
+        let credentials = if presentation_only {
+            json!([])
+        } else {
+            json!([{
                 "credential_id": credential_id,
                 "credential_template_ids": templates,
                 "credential_format": format.as_str(),
@@ -291,7 +345,11 @@ impl VerifiedFactsOrchestrator {
                 "not_revoked": evidence.status.not_revoked,
                 "credential_status": credential_status,
                 "warnings": warnings,
-            }],
+            }])
+        };
+
+        Ok(json!({
+            "credentials": credentials,
             "evaluation_time_epoch_seconds": evaluation_time,
             "presentation_verified": evidence.presentation_verified,
             "holder_binding_verified": evidence.holder_binding_verified,
@@ -301,10 +359,163 @@ impl VerifiedFactsOrchestrator {
             "audience_verified": evidence.audience_verified,
             "replay_check_verified": evidence.replay_check_verified,
             "proof_epoch_seconds": evidence.proof_epoch_seconds,
-            "external_authorization": Value::Null,
+            "external_authorization": external_authorization,
             "presentation_count": evidence.presentation_count.or(Some(1)),
         }))
     }
+}
+
+fn credential_external_authorization(
+    authorizer: &CredentialVerificationPolicyEngine,
+    policy: &PresentationPolicy,
+    format: DetectedCredentialFormat,
+    evidence: &CredentialVerificationEvidence,
+    trust: &IssuerTrustEvidence,
+    issuer_id: &str,
+    evaluation_time: u64,
+) -> Value {
+    let revocation_required = policy
+        .freshness
+        .as_ref()
+        .is_some_and(|freshness| freshness.require_not_revoked);
+    let credential_age_seconds = evidence
+        .issued_at_epoch_seconds
+        .filter(|issued_at| *issued_at <= evaluation_time)
+        .map(|issued_at| evaluation_time - issued_at);
+    let mut missing = Vec::new();
+    if trust.trust_level.is_none() {
+        missing.push("numeric issuer trust");
+    }
+    if revocation_required
+        && (evidence.status.checked_at_epoch_seconds.is_none()
+            || evidence.status.not_revoked != Some(true))
+    {
+        missing.push("non-revocation");
+    }
+    if !evidence.validity_checked || evidence.is_expired.is_none() {
+        missing.push("credential validity");
+    }
+    if credential_age_seconds.is_none() {
+        missing.push("credential issuance time");
+    }
+    if evidence
+        .algorithm
+        .as_deref()
+        .is_none_or(|algorithm| algorithm.trim().is_empty())
+    {
+        missing.push("signature algorithm");
+    }
+    if !missing.is_empty() {
+        return json!({
+            "evaluated": false,
+            "allowed": false,
+            "reasons": [],
+            "errors": [format!("Cedar policy evidence is incomplete: {}", missing.join(", "))],
+        });
+    }
+
+    let compliance_code = evidence
+        .claims
+        .get("_compliance_code")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("UNSPECIFIED");
+    let facts = CredentialVerificationAuthorizationFacts {
+        organization_id: policy.organization_id.to_string(),
+        credential_format: cedar_credential_format(format).into(),
+        compliance_code: compliance_code.into(),
+        issuer_id: issuer_id.into(),
+        issuer_trust_level: trust.trust_level.unwrap_or_default(),
+        credential_age_seconds: credential_age_seconds.unwrap_or_default(),
+        revocation_checked: evidence.status.checked_at_epoch_seconds.is_some(),
+        revocation_required,
+        is_revoked: evidence.status.not_revoked == Some(false),
+        is_expired: evidence.is_expired.unwrap_or(true),
+        holder_binding_present: evidence.holder_binding_verified,
+        algorithm: evidence.algorithm.clone().unwrap_or_default(),
+    };
+    match authorizer.authorize(&facts) {
+        Ok(decision) => json!({
+            "evaluated": true,
+            "allowed": decision.allowed,
+            "reasons": decision.determining_policies,
+            "errors": decision.errors,
+        }),
+        Err(_) => json!({
+            "evaluated": true,
+            "allowed": false,
+            "reasons": [],
+            "errors": ["Cedar policy evaluation failed: SecurityError"],
+        }),
+    }
+}
+
+fn cedar_credential_format(format: DetectedCredentialFormat) -> &'static str {
+    match format {
+        DetectedCredentialFormat::W3cVc => "VC_JWT",
+        DetectedCredentialFormat::W3cVcdmDi => "W3C_VCDM_V2_DI",
+        DetectedCredentialFormat::SdJwt => "SD_JWT_VC",
+        DetectedCredentialFormat::Mdoc => "MDOC",
+        DetectedCredentialFormat::OpenbadgeV2 => "OPEN_BADGES_V2",
+        DetectedCredentialFormat::OpenbadgeV3 => "OPEN_BADGES_V3",
+        DetectedCredentialFormat::Unknown => "UNKNOWN",
+    }
+}
+
+fn is_presentation_only(policy: &PresentationPolicy) -> bool {
+    policy.presentation_proof_required
+        && policy.credential_requirements.is_empty()
+        && policy.alternative_requirements.is_empty()
+}
+
+fn apply_trusted_oid4vp_context(
+    policy: &PresentationPolicy,
+    request: &EvaluatePresentationRequest,
+    evidence: &mut CredentialVerificationEvidence,
+) {
+    let trusted = request.trusted_internal_context
+        && request.context.get("oid4vp_verifier_context") == Some(&Value::Bool(true));
+    if !trusted {
+        return;
+    }
+    if evidence.holder_binding_verified {
+        if evidence
+            .holder_binding_method
+            .as_deref()
+            .is_none_or(|method| {
+                !policy.holder_binding.binding_methods.is_empty()
+                    && !policy
+                        .holder_binding
+                        .binding_methods
+                        .iter()
+                        .any(|allowed| allowed == method)
+                    && policy
+                        .holder_binding
+                        .binding_methods
+                        .iter()
+                        .any(|allowed| allowed == "DEVICE_KEY")
+            })
+        {
+            evidence.holder_binding_method = Some("DEVICE_KEY".into());
+        }
+        if evidence.proof_profile.as_deref().is_none_or(|profile| {
+            !policy.holder_binding.proof_profiles.is_empty()
+                && !policy
+                    .holder_binding
+                    .proof_profiles
+                    .iter()
+                    .any(|allowed| allowed == profile)
+                && policy
+                    .holder_binding
+                    .proof_profiles
+                    .iter()
+                    .any(|allowed| allowed == "OID4VP_VERIFIABLE_PRESENTATION")
+        }) {
+            evidence.proof_profile = Some("OID4VP_VERIFIABLE_PRESENTATION".into());
+        }
+    }
+    evidence.replay_check_verified =
+        request.context.get("replay_check_verified") == Some(&Value::Bool(true));
 }
 
 #[async_trait]

@@ -26,7 +26,7 @@ marty-crypto = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-c
 marty-didcomm = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false }
 marty-iso18013 = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false }
 marty-oid4vci = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false }
-marty-verification = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8", default-features = false }
+marty-verification = { path = "../../marty-core-presentation-verifier-wave3/marty-verification", default-features = false }
 marty-status = { version = "=0.1.57", git = "https://github.com/ElevenID/marty-core", rev = "54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8" }
 mmf-platform = { path = "../../mmf-rust-gateway-wave25/crates/mmf-platform" }
 mmf-core = { path = "../../mmf-rust-gateway-wave25/crates/mmf-core" }

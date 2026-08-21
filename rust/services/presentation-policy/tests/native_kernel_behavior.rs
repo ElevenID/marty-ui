@@ -1,9 +1,10 @@
 use marty_presentation_policy::{
     CredentialVerificationContext, CredentialVerificationKernel, PresentationVerificationError,
-    RustCredentialKernel,
+    ResolvedTrustProfile, RustCredentialKernel,
 };
 use marty_verification::credential_format::DetectedCredentialFormat;
 use serde_json::{json, Map, Value};
+use uuid::Uuid;
 
 fn context(format: DetectedCredentialFormat, token: Value) -> CredentialVerificationContext {
     CredentialVerificationContext {
@@ -54,14 +55,40 @@ async fn malformed_inputs_fail_closed_for_every_linked_native_format() {
 }
 
 #[tokio::test]
-async fn mdoc_fails_closed_until_the_native_authentication_revision_is_pinned() {
-    let error = RustCredentialKernel
-        .verify(&context(
-            DetectedCredentialFormat::Mdoc,
-            json!({"documents": []}),
-        ))
+async fn mdoc_is_linked_and_fails_closed_without_complete_verifier_state() {
+    let missing_state = RustCredentialKernel
+        .verify(&context(DetectedCredentialFormat::Mdoc, json!("mdoc:_w")))
         .await
-        .expect_err("mDoc must not use a compatibility implementation");
+        .expect("missing verifier state is a denied presentation");
+    assert!(!missing_state.verified);
+    assert!(missing_state.claims.is_empty());
+    assert!(missing_state.issuer_id.is_none());
+    assert!(missing_state
+        .failure_reason
+        .as_deref()
+        .is_some_and(|reason| reason.contains("session transcript")));
 
-    assert!(matches!(error, PresentationVerificationError::Unavailable));
+    let mut configured = context(DetectedCredentialFormat::Mdoc, json!("mdoc:_w"));
+    configured.verifier_context.insert(
+        "mdoc_session_transcript_b64url".into(),
+        json!("g_b2gnFPcGVuSUQ0VlBIYW5kb3Zlclg"),
+    );
+    configured.trust_profile = Some(ResolvedTrustProfile {
+        id: Uuid::from_u128(1),
+        organization_id: Uuid::from_u128(2),
+        document: json!({
+            "status": "active",
+            "trust_sources": [{
+                "source_type": "ROOT_CA",
+                "certificate_pem": "-----BEGIN CERTIFICATE-----\ncm9vdA==\n-----END CERTIFICATE-----\n"
+            }]
+        }),
+    });
+    let malformed = RustCredentialKernel
+        .verify(&configured)
+        .await
+        .expect("malformed native mdoc is denied without fallback");
+    assert!(!malformed.verified);
+    assert!(malformed.claims.is_empty());
+    assert!(malformed.issuer_id.is_none());
 }

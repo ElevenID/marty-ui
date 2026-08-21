@@ -299,6 +299,7 @@ impl PresentationPolicyService for PresentationPolicyGrpcService {
             nonce: optional_text(input.nonce),
             audience: optional_text(input.audience),
             context,
+            trusted_internal_context: true,
         };
         let result = evaluate_policy(self.verification.as_ref(), &policy, &evaluation)
             .await

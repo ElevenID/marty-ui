@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "issuer_certificate_sha256": "387b325dfba962af876194f5bde8ee011e874d656807c1241fa703647bac724f",
+  "certificate_pem": "-----BEGIN CERTIFICATE-----\nMIIBQjCB6aADAgECAgEBMAoGCCqGSM49BAMCMCIxIDAeBgNVBAMMF01hcnR5IEtN\nUyBHb2xkZW4gVmVjdG9yMB4XDTI1MDEwMTAwMDAwMFoXDTM1MDEwMTAwMDAwMFow\nIjEgMB4GA1UEAwwXTWFydHkgS01TIEdvbGRlbiBWZWN0b3IwWTATBgcqhkjOPQIB\nBggqhkjOPQMBBwNCAARrF9Hy4SxCR/i85uVjpEDydwN9gS3rM6D0oTlF2JjClk/j\nQuL+Gn+bjufrSnwPnhYrzjNXazFezsu2QGg3v1H1oxAwDjAMBgNVHRMBAf8EAjAA\nMAoGCCqGSM49BAMCA0gAMEUCIQDxRJ9WyO6FqNuj5grveoi+YUVMMT2897b63u2+\npKzB+QIgMdUrlzNpWgptWJdIfevUBxxxjrYhAluinK1azgaqfYQ=\n-----END CERTIFICATE-----\n",
+  "relationship": {
+    "relationship_status": "TRUSTED",
+    "compliance_status": "ACCREDITED",
+    "trust_level": 87,
+    "accreditations": ["ISO27001"],
+    "valid_from": "2026-01-01T00:00:00Z",
+    "valid_until": "2027-01-01T00:00:00Z",
+    "revoked_at": null
+  },
+  "expected": {
+    "relationship_trust_level": 87,
+    "relationship_compliance_statuses": ["ACCREDITED"],
+    "relationship_accreditations": ["ISO27001"],
+    "direct_pin_lifecycle_verified": true,
+    "root_only_lifecycle_verified": false,
+    "ambiguous_pin_lifecycle_verified": false,
+    "revoked_relationship_lifecycle_verified": false
+  }
+}

@@ -10,6 +10,7 @@ use marty_presentation_policy::{
     CredentialStatusResolver, NativePresentationControlPlane, PresentationTrustResolver,
     PresentationVerificationError,
 };
+use marty_verification::credential_format::DetectedCredentialFormat;
 use serde_json::Value;
 use tokio::net::TcpListener;
 use uuid::Uuid;
@@ -98,7 +99,10 @@ async fn fresh_trust_and_status_reads_match_the_language_neutral_contract() {
             .len(),
         1
     );
-    let trust = control.evaluate_issuer(&profile, issuer).await.unwrap();
+    let trust = control
+        .evaluate_issuer(&profile, issuer, DetectedCredentialFormat::W3cVc)
+        .await
+        .unwrap();
     assert!(trust.verified);
     assert_eq!(trust.trust_level, Some(90));
     assert_eq!(trust.compliance_statuses, ["ACCREDITED"]);

@@ -2,6 +2,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use marty_verification::credential_format::DetectedCredentialFormat;
 use reqwest::{Client, StatusCode};
 use serde_json::{Map, Value};
 use tonic::{
@@ -218,10 +219,12 @@ impl PresentationTrustResolver for NativePresentationControlPlane {
         &self,
         profile: &ResolvedTrustProfile,
         issuer_id: &str,
+        format: DetectedCredentialFormat,
     ) -> Result<IssuerTrustEvidence, PresentationVerificationError> {
         Ok(evaluate_issuer_document(
             &profile.document,
             issuer_id,
+            format,
             Utc::now(),
         ))
     }
@@ -296,6 +299,7 @@ impl CredentialStatusResolver for NativePresentationControlPlane {
 fn evaluate_issuer_document(
     document: &Value,
     issuer_id: &str,
+    format: DetectedCredentialFormat,
     now: DateTime<Utc>,
 ) -> IssuerTrustEvidence {
     let Some(profile) = document.as_object() else {
@@ -313,14 +317,40 @@ fn evaluate_issuer_document(
         return denied("Issuer is explicitly denied by Trust Profile");
     }
     let relationships = match profile.get("issuer_relationships") {
-        None => return evaluate_legacy_trust(profile, &candidates),
+        None => &[][..],
         Some(Value::Array(relationships)) => relationships,
         Some(_) => return denied("Trust Profile contains invalid issuer relationship data"),
     };
-    if relationships.is_empty() {
-        return evaluate_legacy_trust(profile, &candidates);
+    if !relationships.is_empty() {
+        let matches = matching_relationships(relationships, issuer_id);
+        if matches.len() != 1 {
+            return denied(if matches.is_empty() {
+                "Issuer has no trusted issuer relationship"
+            } else {
+                "Issuer has ambiguous issuer relationships"
+            });
+        }
+        return evaluate_relationship(matches[0], now);
     }
-    let matches = relationships
+    if format == DetectedCredentialFormat::Mdoc && is_mdoc_certificate_issuer(issuer_id) {
+        return if has_enabled_mdoc_anchor(profile) {
+            IssuerTrustEvidence {
+                verified: true,
+                trust_level: Some(100),
+                ..Default::default()
+            }
+        } else {
+            denied("Trust Profile has no enabled mdoc certificate anchor")
+        };
+    }
+    evaluate_legacy_trust(profile, &candidates)
+}
+
+fn matching_relationships<'a>(
+    relationships: &'a [Value],
+    issuer_id: &str,
+) -> Vec<&'a Map<String, Value>> {
+    relationships
         .iter()
         .filter_map(Value::as_object)
         .filter(|relationship| {
@@ -329,15 +359,116 @@ fn evaluate_issuer_document(
                 .and_then(Value::as_str)
                 .is_some_and(|value| normalize_issuer(value) == normalize_issuer(issuer_id))
         })
-        .collect::<Vec<_>>();
-    if matches.len() != 1 {
-        return denied(if matches.is_empty() {
-            "Issuer has no trusted issuer relationship"
-        } else {
-            "Issuer has ambiguous issuer relationships"
-        });
+        .collect()
+}
+
+pub(crate) fn mdoc_direct_pin_lifecycle_verified(
+    document: &Value,
+    issuer_id: &str,
+    now: DateTime<Utc>,
+) -> bool {
+    let Some(profile) = document.as_object() else {
+        return false;
+    };
+    if profile
+        .get("status")
+        .and_then(Value::as_str)
+        .is_none_or(|status| !status.eq_ignore_ascii_case("active"))
+    {
+        return false;
     }
-    evaluate_relationship(matches[0], now)
+    let Some(fingerprint) = issuer_id.strip_prefix("x509-sha256:") else {
+        return false;
+    };
+    if !is_mdoc_certificate_issuer(issuer_id) {
+        return false;
+    }
+    let matching_pins = profile
+        .get("trust_sources")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .filter(|source| source.get("enabled") != Some(&Value::Bool(false)))
+        .filter(|source| {
+            source
+                .get("source_type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("PINNED_ISSUER"))
+        })
+        .filter(|source| {
+            source
+                .get("certificate_pem")
+                .into_iter()
+                .chain(
+                    source
+                        .get("pinned_certificates")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten(),
+                )
+                .filter_map(Value::as_str)
+                .filter_map(|pem| marty_crypto::certificate::pem_to_der(pem).ok())
+                .map(|der| hex::encode(marty_crypto::hashing::hash_sha256(&der)))
+                .any(|candidate| candidate == fingerprint)
+        })
+        .count();
+    if matching_pins != 1 {
+        return false;
+    }
+    let Some(relationships) = profile
+        .get("issuer_relationships")
+        .and_then(Value::as_array)
+        .filter(|relationships| !relationships.is_empty())
+    else {
+        return false;
+    };
+    let matches = matching_relationships(relationships, issuer_id);
+    matches.len() == 1 && evaluate_relationship(matches[0], now).verified
+}
+
+fn is_mdoc_certificate_issuer(issuer_id: &str) -> bool {
+    issuer_id
+        .strip_prefix("x509-sha256:")
+        .is_some_and(|fingerprint| {
+            fingerprint.len() == 64
+                && fingerprint
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+}
+
+fn has_enabled_mdoc_anchor(profile: &Map<String, Value>) -> bool {
+    profile
+        .get("trust_sources")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+        .filter(|source| source.get("enabled") != Some(&Value::Bool(false)))
+        .filter(|source| {
+            source
+                .get("source_type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| {
+                    kind.eq_ignore_ascii_case("ROOT_CA")
+                        || kind.eq_ignore_ascii_case("PINNED_ISSUER")
+                })
+        })
+        .any(|source| {
+            source
+                .get("certificate_pem")
+                .into_iter()
+                .chain(
+                    source
+                        .get("pinned_certificates")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten(),
+                )
+                .filter_map(Value::as_str)
+                .any(|pem| pem.contains("-----BEGIN CERTIFICATE-----"))
+        })
 }
 
 fn evaluate_relationship(
@@ -634,4 +765,139 @@ fn channel(target: &str, timeout: Duration) -> Result<Channel, PresentationVerif
 
 fn failed(detail: &str) -> PresentationVerificationError {
     PresentationVerificationError::Failed(detail.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn authenticated_mdoc_direct_anchors_are_explicit_and_format_scoped() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/presentation-mdoc-verification-behavior.json"
+        ))
+        .unwrap();
+        let issuer = contract["expected_evidence"]["issuer_id"].as_str().unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-08-21T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let trust = evaluate_issuer_document(
+            &contract["trust_profile"],
+            issuer,
+            DetectedCredentialFormat::Mdoc,
+            now,
+        );
+        let expected = &contract["expected_direct_anchor"];
+        assert_eq!(trust.verified, expected["verified"].as_bool().unwrap());
+        assert_eq!(
+            trust.trust_level,
+            expected["trust_level"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+        );
+        assert!(trust.compliance_statuses.is_empty());
+        assert!(trust.accreditations.is_empty());
+
+        let non_mdoc = evaluate_issuer_document(
+            &contract["trust_profile"],
+            issuer,
+            DetectedCredentialFormat::W3cVc,
+            now,
+        );
+        assert_ne!(non_mdoc.trust_level, Some(100));
+
+        let malformed = evaluate_issuer_document(
+            &contract["trust_profile"],
+            "x509-sha256:NOT-A-FINGERPRINT",
+            DetectedCredentialFormat::Mdoc,
+            now,
+        );
+        assert_ne!(malformed.trust_level, Some(100));
+    }
+
+    #[test]
+    fn normalized_relationship_and_exact_direct_pin_preserve_mdoc_lifecycle_semantics() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/presentation-mdoc-lifecycle-behavior.json"
+        ))
+        .unwrap();
+        let fingerprint = contract["issuer_certificate_sha256"].as_str().unwrap();
+        let issuer_id = format!("x509-sha256:{fingerprint}");
+        let mut relationship = contract["relationship"].clone();
+        relationship["issuer_id"] = Value::String(issuer_id.clone());
+        let profile = json!({
+            "status": "active",
+            "trust_sources": [{
+                "source_type": "PINNED_ISSUER",
+                "enabled": true,
+                "certificate_pem": contract["certificate_pem"]
+            }],
+            "issuer_relationships": [relationship]
+        });
+        let now = DateTime::parse_from_rfc3339("2026-08-21T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let trust =
+            evaluate_issuer_document(&profile, &issuer_id, DetectedCredentialFormat::Mdoc, now);
+        assert_eq!(
+            trust.trust_level,
+            contract["expected"]["relationship_trust_level"]
+                .as_u64()
+                .and_then(|value| u32::try_from(value).ok())
+        );
+        assert_eq!(
+            trust.compliance_statuses,
+            serde_json::from_value::<Vec<String>>(
+                contract["expected"]["relationship_compliance_statuses"].clone()
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            trust.accreditations,
+            serde_json::from_value::<Vec<String>>(
+                contract["expected"]["relationship_accreditations"].clone()
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            mdoc_direct_pin_lifecycle_verified(&profile, &issuer_id, now),
+            contract["expected"]["direct_pin_lifecycle_verified"]
+                .as_bool()
+                .unwrap()
+        );
+
+        let mut root_only = profile.clone();
+        root_only["trust_sources"][0]["source_type"] = Value::String("ROOT_CA".into());
+        assert_eq!(
+            mdoc_direct_pin_lifecycle_verified(&root_only, &issuer_id, now),
+            contract["expected"]["root_only_lifecycle_verified"]
+                .as_bool()
+                .unwrap()
+        );
+
+        let mut ambiguous = profile.clone();
+        let duplicate = ambiguous["trust_sources"][0].clone();
+        ambiguous["trust_sources"]
+            .as_array_mut()
+            .unwrap()
+            .push(duplicate);
+        assert_eq!(
+            mdoc_direct_pin_lifecycle_verified(&ambiguous, &issuer_id, now),
+            contract["expected"]["ambiguous_pin_lifecycle_verified"]
+                .as_bool()
+                .unwrap()
+        );
+
+        let mut revoked = profile;
+        revoked["issuer_relationships"][0]["revoked_at"] =
+            Value::String("2026-08-20T00:00:00Z".into());
+        assert_eq!(
+            mdoc_direct_pin_lifecycle_verified(&revoked, &issuer_id, now),
+            contract["expected"]["revoked_relationship_lifecycle_verified"]
+                .as_bool()
+                .unwrap()
+        );
+    }
 }

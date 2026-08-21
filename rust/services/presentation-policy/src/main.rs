@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let kernel: Arc<dyn CredentialVerificationKernel> = Arc::new(RustCredentialKernel);
     let trust: Arc<dyn PresentationTrustResolver> = control.clone();
     let status: Arc<dyn CredentialStatusResolver> = control;
-    let verification = Arc::new(VerifiedFactsOrchestrator::new(kernel, trust, status));
+    let verification = Arc::new(VerifiedFactsOrchestrator::new(kernel, trust, status)?);
     runtime.mark_healthy(PresentationPolicyDependency::NativeVerification)?;
 
     let service_authenticator = Arc::new(ServiceTokenAuthenticator::new(

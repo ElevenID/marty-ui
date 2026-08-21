@@ -2,7 +2,12 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::DateTime;
 use marty_verification::credential_format::DetectedCredentialFormat;
+use marty_verification::mdoc::{
+    disclosed_claims, verify_mdoc_presentation, MdocDocumentVerificationEvidence,
+    MdocPresentationVerificationResult,
+};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 
 use crate::{
     CredentialStatusEvidence, CredentialVerificationContext, CredentialVerificationEvidence,
@@ -29,11 +34,249 @@ impl CredentialVerificationKernel for RustCredentialKernel {
             DetectedCredentialFormat::SdJwt => verify_sd_jwt(context),
             DetectedCredentialFormat::OpenbadgeV2 => verify_open_badge(context, 2).await,
             DetectedCredentialFormat::OpenbadgeV3 => verify_open_badge(context, 3).await,
-            DetectedCredentialFormat::Mdoc => Err(PresentationVerificationError::Unavailable),
+            DetectedCredentialFormat::Mdoc => verify_mdoc(context),
             DetectedCredentialFormat::Unknown => {
                 Ok(rejected("Unsupported or malformed credential presentation"))
             }
         }
+    }
+}
+
+fn verify_mdoc(
+    context: &CredentialVerificationContext,
+) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+    let mdoc_bytes = match decode_mdoc_token(token_string(&context.token)?) {
+        Ok(bytes) => bytes,
+        Err(reason) => return Ok(rejected_mdoc(reason)),
+    };
+    let session_transcript = match context
+        .verifier_context
+        .get("mdoc_session_transcript_b64url")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| decode_base64url(value).ok())
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => value,
+        None => {
+            return Ok(rejected_mdoc(
+                "Verifier-owned mdoc session transcript is required",
+            ))
+        }
+    };
+    if context.audience.as_deref().is_some_and(|audience| {
+        context
+            .verifier_context
+            .get("oid4vp_client_id")
+            .and_then(Value::as_str)
+            .filter(|client_id| !client_id.is_empty())
+            .is_some_and(|client_id| client_id != audience)
+    }) {
+        return Ok(rejected_mdoc(
+            "mdoc verifier audience does not match request state",
+        ));
+    }
+    let (roots, pinned_issuers) = mdoc_trust_certificates(context);
+    if roots.is_empty() && pinned_issuers.is_empty() {
+        return Ok(rejected_mdoc(
+            "No trusted mdoc issuer certificates are configured",
+        ));
+    }
+
+    let result =
+        verify_mdoc_presentation(&mdoc_bytes, &session_transcript, &roots, &pinned_issuers);
+    let error_kind = classify_mdoc_error(result.error.as_deref());
+    tracing::info!(
+        transcript_sha256 = %hex::encode(Sha256::digest(&session_transcript)),
+        device_response_sha256 = %hex::encode(Sha256::digest(&mdoc_bytes)),
+        issuer_signature_valid = result.issuer_signature_valid,
+        issuer_trusted = result.issuer_trusted,
+        device_authentication_valid = result.device_authentication_valid,
+        device_auth_error_kind = error_kind,
+        "mDoc verification completed"
+    );
+    project_mdoc_result(&mdoc_bytes, result, context)
+}
+
+fn project_mdoc_result(
+    mdoc_bytes: &[u8],
+    result: MdocPresentationVerificationResult,
+    context: &CredentialVerificationContext,
+) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+    let authentication_valid = result.issuer_signature_valid
+        && result.issuer_trusted
+        && result.device_authentication_valid;
+    let Some(document) = authenticated_mdoc_document(&result) else {
+        return Ok(rejected_mdoc(result.error.as_deref().unwrap_or(
+            if authentication_valid {
+                "Authenticated mdoc evidence is incomplete"
+            } else {
+                "mDoc authentication failed"
+            },
+        )));
+    };
+    if !authentication_valid {
+        return Ok(rejected_mdoc(
+            result
+                .error
+                .as_deref()
+                .unwrap_or("mDoc authentication failed"),
+        ));
+    }
+    let claims = disclosed_claims(mdoc_bytes)
+        .map_err(|_| invalid_native("mDoc claim extraction rejected authenticated CBOR"))?
+        .as_object()
+        .cloned()
+        .ok_or_else(|| invalid_native("mDoc claims were not a JSON object"))?;
+    Ok(project_authenticated_mdoc(document, claims, context))
+}
+
+fn project_authenticated_mdoc(
+    document: &MdocDocumentVerificationEvidence,
+    claims: Map<String, Value>,
+    context: &CredentialVerificationContext,
+) -> CredentialVerificationEvidence {
+    let issued_at_epoch_seconds = parse_epoch(&document.signed_at);
+    let issuer_id = format!("x509-sha256:{}", document.issuer_certificate_sha256);
+    CredentialVerificationEvidence {
+        verified: true,
+        claims,
+        issuer_id: Some(issuer_id),
+        issued_at_epoch_seconds,
+        algorithm: Some(document.signature_algorithm.clone()),
+        validity_checked: true,
+        is_expired: Some(false),
+        presentation_verified: true,
+        presentation_count: Some(1),
+        holder_binding_verified: true,
+        holder_binding_method: Some("DEVICE_KEY".into()),
+        proof_profile: Some("OID4VP_VERIFIABLE_PRESENTATION".into()),
+        challenge_verified: context.nonce.is_some(),
+        audience_verified: context.audience.is_some(),
+        ..Default::default()
+    }
+}
+
+fn authenticated_mdoc_document(
+    result: &MdocPresentationVerificationResult,
+) -> Option<&MdocDocumentVerificationEvidence> {
+    if result.document_types.len() != 1
+        || result.document_evidence.len() != 1
+        || result.revocation_checked
+        || result.not_revoked.is_some()
+    {
+        return None;
+    }
+    let document = &result.document_evidence[0];
+    (result.document_types[0] == document.document_type
+        && !document.document_type.is_empty()
+        && !document.signature_algorithm.is_empty()
+        && !document.digest_algorithm.is_empty()
+        && parse_epoch(&document.signed_at).is_some()
+        && parse_epoch(&document.valid_from).is_some()
+        && parse_epoch(&document.valid_until).is_some()
+        && document.issuer_certificate_sha256.len() == 64
+        && document
+            .issuer_certificate_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && document.validity_checked
+        && document.valid_at_verification_time
+        && !document.revocation_checked
+        && document.not_revoked.is_none())
+    .then_some(document)
+}
+
+fn mdoc_trust_certificates(context: &CredentialVerificationContext) -> (Vec<String>, Vec<String>) {
+    let Some(sources) = context
+        .trust_profile
+        .as_ref()
+        .and_then(|profile| profile.document.get("trust_sources"))
+        .and_then(Value::as_array)
+    else {
+        return (Vec::new(), Vec::new());
+    };
+    let mut roots = Vec::new();
+    let mut pinned_issuers = Vec::new();
+    for source in sources.iter().filter_map(Value::as_object) {
+        if source.get("enabled") == Some(&Value::Bool(false)) {
+            continue;
+        }
+        let target = match source
+            .get("source_type")
+            .and_then(Value::as_str)
+            .map(str::to_ascii_uppercase)
+            .as_deref()
+        {
+            Some("ROOT_CA") => &mut roots,
+            Some("PINNED_ISSUER") => &mut pinned_issuers,
+            _ => continue,
+        };
+        for candidate in source
+            .get("certificate_pem")
+            .into_iter()
+            .chain(
+                source
+                    .get("pinned_certificates")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten(),
+            )
+            .filter_map(Value::as_str)
+            .filter(|pem| pem.contains("-----BEGIN CERTIFICATE-----"))
+        {
+            if !target.iter().any(|existing| existing == candidate) {
+                target.push(candidate.to_owned());
+            }
+        }
+    }
+    (roots, pinned_issuers)
+}
+
+fn decode_mdoc_token(token: &str) -> Result<Vec<u8>, &'static str> {
+    let encoded = token.trim();
+    if let Some(value) = encoded.strip_prefix("\\x") {
+        return hex::decode(value).map_err(|_| "mDoc token is not valid hexadecimal CBOR");
+    }
+    let encoded = encoded
+        .strip_prefix("mso_mdoc:")
+        .or_else(|| encoded.strip_prefix("mdoc:"))
+        .unwrap_or(encoded);
+    decode_base64url(encoded).map_err(|_| "mDoc token is not valid base64url CBOR")
+}
+
+fn decode_base64url(value: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    URL_SAFE_NO_PAD.decode(value.trim_end_matches('='))
+}
+
+fn classify_mdoc_error(error: Option<&str>) -> &'static str {
+    let Some(error) = error else {
+        return "none";
+    };
+    let normalized = error.to_ascii_lowercase();
+    [
+        ("unsupported", "device-auth-method-unsupported"),
+        ("missing coordinates", "device-key-coordinates-missing"),
+        ("algorithm", "device-signature-algorithm-mismatch"),
+        ("digest mismatch", "issuer-disclosure-digest-mismatch"),
+        ("signature", "device-signature-invalid"),
+        ("mso is expired", "mso-expired"),
+        ("cryptographic", "device-key-invalid"),
+        ("cbor", "device-auth-cbor-error"),
+    ]
+    .into_iter()
+    .find_map(|(marker, category)| normalized.contains(marker).then_some(category))
+    .unwrap_or("unclassified")
+}
+
+fn rejected_mdoc(reason: &str) -> CredentialVerificationEvidence {
+    CredentialVerificationEvidence {
+        verified: false,
+        failure_reason: Some(reason.into()),
+        presentation_count: Some(1),
+        holder_binding_method: Some("DEVICE_KEY".into()),
+        proof_profile: Some("OID4VP_VERIFIABLE_PRESENTATION".into()),
+        ..Default::default()
     }
 }
 
@@ -82,15 +325,16 @@ async fn verify_vc_jwt_material(
         .get("vc")
         .and_then(Value::as_object)
         .ok_or_else(|| invalid_native("VC-JWT verifier omitted the credential object"))?;
-    Ok((
-        credential_evidence(
-            credential,
-            result.get("issuer").and_then(Value::as_str),
-            false,
-            1,
-        ),
-        Some(credential.clone()),
-    ))
+    let mut evidence = credential_evidence(
+        credential,
+        result.get("issuer").and_then(Value::as_str),
+        false,
+        1,
+    );
+    evidence.algorithm = jwt_algorithm(token);
+    evidence.validity_checked = true;
+    evidence.is_expired = Some(false);
+    Ok((evidence, Some(credential.clone())))
 }
 
 async fn verify_data_integrity(
@@ -150,6 +394,13 @@ async fn verify_data_integrity(
     evidence.proof_profile = is_presentation.then(|| "OID4VP_VERIFIABLE_PRESENTATION".into());
     evidence.challenge_verified = is_presentation && context.nonce.is_some();
     evidence.audience_verified = is_presentation && context.audience.is_some();
+    evidence.algorithm = result
+        .get("algorithm")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| proof_algorithm(credential));
+    evidence.validity_checked = true;
+    evidence.is_expired = Some(false);
     Ok(evidence)
 }
 
@@ -210,6 +461,9 @@ fn verify_sd_jwt(
         claims: disclosed,
         issuer_id: issuer,
         issued_at_epoch_seconds: issued_at,
+        algorithm: jwt_algorithm(token),
+        validity_checked: true,
+        is_expired: Some(false),
         presentation_verified: bound,
         presentation_count: Some(1),
         holder_binding_verified: bound,
@@ -318,6 +572,17 @@ async fn verify_open_badge_document(
         evidence.credential_id = jwt.credential_id;
         evidence.issuer_id = jwt.issuer_id;
         evidence.issued_at_epoch_seconds = jwt.issued_at_epoch_seconds;
+        evidence.algorithm = jwt.algorithm;
+        evidence.validity_checked = jwt.validity_checked;
+        evidence.is_expired = jwt.is_expired;
+    } else {
+        evidence.algorithm = result
+            .get("algorithm")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| proof_algorithm(&credential));
+        evidence.validity_checked = true;
+        evidence.is_expired = Some(false);
     }
     apply_open_badge_status(&mut evidence, &result);
     Ok(evidence)
@@ -561,6 +826,35 @@ fn decode_jwt_object(segment: &str) -> Option<Map<String, Value>> {
         .and_then(|value| value.as_object().cloned())
 }
 
+fn jwt_algorithm(token: &str) -> Option<String> {
+    let jwt = token.split('~').next()?;
+    let header = decode_jwt_object(jwt.split('.').next()?)?;
+    header
+        .get("alg")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+}
+
+fn proof_algorithm(document: &Map<String, Value>) -> Option<String> {
+    let proofs = match document.get("proof") {
+        Some(Value::Array(proofs)) => proofs.as_slice(),
+        Some(proof) => std::slice::from_ref(proof),
+        None => return None,
+    };
+    proofs
+        .iter()
+        .filter_map(Value::as_object)
+        .find_map(|proof| {
+            proof
+                .get("cryptosuite")
+                .or_else(|| proof.get("type"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+        })
+}
+
 fn public_jwk(jwk: &Map<String, Value>) -> bool {
     jwk.get("kty")
         .and_then(Value::as_str)
@@ -660,6 +954,13 @@ mod tests {
     use crate::ResolvedTrustProfile;
     use uuid::Uuid;
 
+    fn mdoc_contract() -> Value {
+        serde_json::from_str(include_str!(
+            "../../../../contracts/presentation-mdoc-verification-behavior.json"
+        ))
+        .unwrap()
+    }
+
     fn compact_jwt(issuer: &str, kid: &str) -> String {
         let header = URL_SAFE_NO_PAD.encode(json!({"alg": "EdDSA", "kid": kid}).to_string());
         let payload = URL_SAFE_NO_PAD.encode(json!({"iss": issuer}).to_string());
@@ -706,5 +1007,80 @@ mod tests {
         let mut private = profile;
         private["issuer_relationships"][0]["verification_keys"][0]["d"] = json!("secret");
         assert!(governed_public_jwk(&context(private), &token).is_none());
+    }
+
+    #[test]
+    fn mdoc_adapter_projects_only_complete_authenticated_evidence() {
+        let contract = mdoc_contract();
+        let result: MdocPresentationVerificationResult =
+            serde_json::from_value(contract["authenticated_result"].clone()).unwrap();
+        let document = authenticated_mdoc_document(&result).unwrap();
+        let claims = contract["claims"].as_object().unwrap().clone();
+        let mut verification_context = context(contract["trust_profile"].clone());
+        verification_context.format = DetectedCredentialFormat::Mdoc;
+        verification_context.nonce = Some("behavioral-challenge".into());
+        verification_context.audience = Some("https://verifier.example".into());
+
+        let evidence = project_authenticated_mdoc(document, claims.clone(), &verification_context);
+        let expected = &contract["expected_evidence"];
+        assert!(evidence.verified);
+        assert_eq!(evidence.claims, claims);
+        assert_eq!(
+            evidence.issuer_id.as_deref(),
+            expected["issuer_id"].as_str()
+        );
+        assert_eq!(
+            evidence.issued_at_epoch_seconds,
+            expected["issued_at_epoch_seconds"].as_u64()
+        );
+        assert!(evidence.presentation_verified);
+        assert_eq!(
+            evidence.presentation_count,
+            expected["presentation_count"]
+                .as_u64()
+                .and_then(|value| usize::try_from(value).ok())
+        );
+        assert!(evidence.holder_binding_verified);
+        assert_eq!(
+            evidence.holder_binding_method.as_deref(),
+            expected["holder_binding_method"].as_str()
+        );
+        assert_eq!(
+            evidence.proof_profile.as_deref(),
+            expected["proof_profile"].as_str()
+        );
+        assert!(evidence.challenge_verified);
+        assert!(evidence.audience_verified);
+
+        let mut incomplete = result;
+        incomplete.document_evidence.clear();
+        assert!(authenticated_mdoc_document(&incomplete).is_none());
+    }
+
+    #[test]
+    fn mdoc_trust_material_preserves_root_and_direct_pin_semantics() {
+        let contract = mdoc_contract();
+        let mut verification_context = context(contract["trust_profile"].clone());
+        verification_context.format = DetectedCredentialFormat::Mdoc;
+        let (roots, pinned) = mdoc_trust_certificates(&verification_context);
+        assert_eq!(roots.len(), 1);
+        assert!(roots[0].contains("cm9vdA=="));
+        assert_eq!(pinned.len(), 1);
+        assert!(pinned[0].contains("cGlubmVk"));
+    }
+
+    #[test]
+    fn mdoc_token_encodings_and_error_categories_match_the_contract() {
+        assert_eq!(decode_mdoc_token("mdoc:AQID").unwrap(), [1, 2, 3]);
+        assert_eq!(decode_mdoc_token("mso_mdoc:AQID=").unwrap(), [1, 2, 3]);
+        assert_eq!(decode_mdoc_token("\\x010203").unwrap(), [1, 2, 3]);
+        assert!(decode_mdoc_token("mdoc:***").is_err());
+
+        for case in mdoc_contract()["error_categories"].as_array().unwrap() {
+            assert_eq!(
+                classify_mdoc_error(case["error"].as_str()),
+                case["expected"].as_str().unwrap()
+            );
+        }
     }
 }

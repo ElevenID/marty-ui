@@ -14,6 +14,9 @@
       "claims": {"email": "holder@example.com"},
       "issuer_id": "did:example:issuer",
       "issued_at_epoch_seconds": 1787240000,
+      "algorithm": "eddsa-rdfc-2022",
+      "validity_checked": true,
+      "is_expired": false,
       "warnings": ["kernel-warning"],
       "presentation_verified": true,
       "presentation_count": 1,
@@ -67,9 +70,31 @@
       "audience_verified": true,
       "replay_check_verified": true,
       "proof_epoch_seconds": 1787240100,
-      "external_authorization": null,
+      "external_authorization": {
+        "evaluated": true,
+        "allowed": true,
+        "reasons": ["permit-valid-credentials"],
+        "errors": []
+      },
       "presentation_count": 1
     }
+  },
+  "cedar_evidence": {
+    "missing_algorithm_error": "Cedar policy evidence is incomplete: signature algorithm",
+    "weak_algorithm": "RS256",
+    "weak_algorithm_allowed": false
+  },
+  "trusted_oid4vp_context": {
+    "context": {
+      "oid4vp_verifier_context": true,
+      "replay_check_verified": true
+    },
+    "kernel_binding_method": "SESSION_BINDING",
+    "kernel_proof_profile": "JWT_KEY_BINDING",
+    "expected_binding_method": "DEVICE_KEY",
+    "expected_proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+    "expected_replay_check_verified": true,
+    "untrusted_http_replay_check_verified": false
   },
   "failure_behavior": "fail_closed"
 }
