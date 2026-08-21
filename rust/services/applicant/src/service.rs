@@ -1,9 +1,9 @@
 use crate::{
     issuance::{apply_offer, mark_no_active_flow, reserve_attempt, IssuanceError, IssuanceOffer},
     store::StoreDocument,
-    validate_form_data, Applicant, ApplicantError, Application, CheckStatus, CheckType, ClaimState,
-    Evidence, EvidenceStatus, EvidenceUpload, FieldDefinition, LifecycleStatus, ReviewerLock,
-    ReviewerLocks, VettingCheck,
+    validate_form_data, Applicant, ApplicantError, Application, Biometric, CheckStatus, CheckType,
+    ClaimState, Evidence, EvidenceStatus, EvidenceUpload, FieldDefinition, LifecycleStatus,
+    ReviewerLock, ReviewerLocks, VettingCheck,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -273,6 +273,183 @@ impl ApplicantService {
         &self.store
     }
 
+    pub async fn profile(&self, identity: &Identity) -> Result<Applicant, ServiceError> {
+        identity.validate()?;
+        self.store
+            .read()
+            .await
+            .applicant_for_user(&identity.user_id, &identity.organization_id)
+            .cloned()
+            .ok_or(ServiceError::ApplicantNotFound)
+    }
+
+    pub async fn profiles_for_user(&self, user_id: &str) -> Result<Vec<Applicant>, ServiceError> {
+        if user_id.trim().is_empty() {
+            return Err(ServiceError::AuthenticationRequired);
+        }
+        Ok(self
+            .store
+            .read()
+            .await
+            .applicants
+            .iter()
+            .filter(|item| {
+                item.user_id.as_deref() == Some(user_id)
+                    || item.oidc_subject.as_deref() == Some(user_id)
+            })
+            .cloned()
+            .collect())
+    }
+
+    pub async fn applications_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<Application>, ServiceError> {
+        let profiles = self.profiles_for_user(user_id).await?;
+        let applicant_ids = profiles
+            .iter()
+            .map(|profile| profile.id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut applications = self
+            .store
+            .read()
+            .await
+            .applications
+            .iter()
+            .filter(|application| applicant_ids.contains(application.applicant_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        applications.sort_by_key(|application| std::cmp::Reverse(application.updated_at));
+        Ok(applications)
+    }
+
+    pub async fn self_application(
+        &self,
+        user_id: &str,
+        application_id: &str,
+    ) -> Result<(Application, Applicant), ServiceError> {
+        if user_id.trim().is_empty() {
+            return Err(ServiceError::AuthenticationRequired);
+        }
+        let store = self.store.read().await;
+        let application = store
+            .application(application_id)
+            .cloned()
+            .ok_or(ServiceError::ApplicationNotFound)?;
+        let applicant = store
+            .applicant(&application.applicant_id)
+            .cloned()
+            .ok_or(ServiceError::ApplicantNotFound)?;
+        if applicant.user_id.as_deref() != Some(user_id)
+            && applicant.oidc_subject.as_deref() != Some(user_id)
+        {
+            return Err(ServiceError::NotAuthorized);
+        }
+        Ok((application, applicant))
+    }
+
+    pub async fn organization_application(
+        &self,
+        organization_id: &str,
+        application_id: &str,
+    ) -> Result<(Application, Applicant), ServiceError> {
+        let store = self.store.read().await;
+        let application = store
+            .application(application_id)
+            .filter(|application| application.organization_id == organization_id)
+            .cloned()
+            .ok_or(ServiceError::ApplicationNotFound)?;
+        let applicant = store
+            .applicant(&application.applicant_id)
+            .cloned()
+            .ok_or(ServiceError::ApplicantNotFound)?;
+        Ok((application, applicant))
+    }
+
+    pub async fn applications_for_organization(&self, organization_id: &str) -> Vec<Application> {
+        let mut applications = self
+            .store
+            .read()
+            .await
+            .applications_for_organization(organization_id)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        applications.sort_by_key(|application| std::cmp::Reverse(application.updated_at));
+        applications
+    }
+
+    pub async fn enroll_biometric(
+        &self,
+        identity: &Identity,
+        mut biometric: Biometric,
+    ) -> Result<Biometric, ServiceError> {
+        let profile = self.profile(identity).await?;
+        if biometric.applicant_id != profile.id {
+            return Err(ServiceError::TenantMismatch);
+        }
+        biometric.id = Uuid::new_v4().to_string();
+        let mut store = self.store.write().await;
+        store.save_biometric(biometric.clone());
+        self.persistence.persist(&store)?;
+        Ok(biometric)
+    }
+
+    pub async fn biometrics(&self, applicant_id: &str) -> Vec<Biometric> {
+        self.store
+            .read()
+            .await
+            .biometrics
+            .get(applicant_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub async fn evidence_for_application(&self, application_id: &str) -> Vec<Evidence> {
+        self.store
+            .read()
+            .await
+            .evidence_for_application(application_id, false)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    pub async fn evidence(
+        &self,
+        application_id: &str,
+        evidence_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Evidence, ServiceError> {
+        let mut store = self.store.write().await;
+        let evidence = store
+            .evidence
+            .iter_mut()
+            .find(|item| {
+                item.id == evidence_id
+                    && item.application_id == application_id
+                    && item.status != EvidenceStatus::Deleted
+            })
+            .ok_or(ServiceError::EvidenceNotFound)?;
+        let before = evidence.status;
+        evidence.refresh_expiry(now);
+        let evidence = evidence.clone();
+        if evidence.status != before {
+            self.persistence.persist(&store)?;
+        }
+        Ok(evidence)
+    }
+
+    pub async fn checks(&self, application_id: &str) -> Vec<VettingCheck> {
+        self.store
+            .read()
+            .await
+            .checks_for_application(application_id)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
     pub async fn upsert_profile(
         &self,
         identity: &Identity,
@@ -312,6 +489,25 @@ impl ApplicantService {
         applicant.family_name = family_name;
         applicant.phone = phone;
         store.save_applicant(applicant.clone());
+        self.persistence.persist(&store)?;
+        Ok(applicant)
+    }
+
+    pub async fn set_profile_vetting_data(
+        &self,
+        applicant_id: &str,
+        vetting_data: Value,
+        now: DateTime<Utc>,
+    ) -> Result<Applicant, ServiceError> {
+        let mut store = self.store.write().await;
+        let applicant = store
+            .applicants
+            .iter_mut()
+            .find(|applicant| applicant.id == applicant_id)
+            .ok_or(ServiceError::ApplicantNotFound)?;
+        applicant.vetting_data = vetting_data;
+        applicant.updated_at = now;
+        let applicant = applicant.clone();
         self.persistence.persist(&store)?;
         Ok(applicant)
     }
@@ -493,6 +689,12 @@ impl ApplicantService {
         {
             return Err(ServiceError::TenantMismatch);
         }
+        if !matches!(
+            application.status,
+            LifecycleStatus::Draft | LifecycleStatus::PendingInformation
+        ) {
+            return Err(ServiceError::InvalidApplicationState(application.status));
+        }
         let requirement = application
             .evidence_requirements
             .iter()
@@ -508,10 +710,125 @@ impl ApplicantService {
         if !expected_type.eq_ignore_ascii_case(&input.evidence_type) {
             return Err(ServiceError::EvidenceTypeMismatch);
         }
+        for current in store.evidence.iter_mut().filter(|item| {
+            item.application_id == input.application_id
+                && item.evidence_requirement_id == input.evidence_requirement_id
+                && item.status == EvidenceStatus::Active
+        }) {
+            current.status = EvidenceStatus::Revoked;
+            current.revoked_at = Some(now);
+            current.revocation_reason = Some("Superseded by a newer applicant submission".into());
+            current.updated_at = now;
+        }
         let evidence = Evidence::from_upload(input, maximum, now)?;
         store.save_evidence(evidence.clone());
         self.persistence.persist(&store)?;
         Ok(evidence)
+    }
+
+    pub async fn delete_evidence(
+        &self,
+        application_id: &str,
+        evidence_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), ServiceError> {
+        let mut store = self.store.write().await;
+        let application = store
+            .application(application_id)
+            .ok_or(ServiceError::ApplicationNotFound)?;
+        if !matches!(
+            application.status,
+            LifecycleStatus::Draft | LifecycleStatus::PendingInformation
+        ) {
+            return Err(ServiceError::InvalidApplicationState(application.status));
+        }
+        let evidence = store
+            .evidence
+            .iter_mut()
+            .find(|item| item.id == evidence_id && item.application_id == application_id)
+            .ok_or(ServiceError::EvidenceNotFound)?;
+        evidence.status = EvidenceStatus::Deleted;
+        evidence.content.clear();
+        evidence.updated_at = now;
+        self.persistence.persist(&store)?;
+        Ok(())
+    }
+
+    pub async fn revoke_evidence(
+        &self,
+        application_id: &str,
+        evidence_id: &str,
+        reason: String,
+        now: DateTime<Utc>,
+    ) -> Result<Evidence, ServiceError> {
+        let mut store = self.store.write().await;
+        let evidence = store
+            .evidence
+            .iter_mut()
+            .find(|item| item.id == evidence_id && item.application_id == application_id)
+            .ok_or(ServiceError::EvidenceNotFound)?;
+        if evidence.status != EvidenceStatus::Active {
+            return Err(ServiceError::InactiveEvidence);
+        }
+        evidence.status = EvidenceStatus::Revoked;
+        evidence.revoked_at = Some(now);
+        evidence.revocation_reason = Some(reason);
+        evidence.updated_at = now;
+        let evidence = evidence.clone();
+        self.persistence.persist(&store)?;
+        Ok(evidence)
+    }
+
+    pub async fn start_check(
+        &self,
+        application_id: &str,
+        check_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<VettingCheck, ServiceError> {
+        let mut store = self.store.write().await;
+        let check = store
+            .checks
+            .iter_mut()
+            .find(|check| check.id == check_id && check.application_id == application_id)
+            .ok_or(ServiceError::CheckNotFound)?;
+        check.start(now);
+        let check = check.clone();
+        self.persistence.persist(&store)?;
+        Ok(check)
+    }
+
+    pub async fn withdraw(
+        &self,
+        application_id: &str,
+        reason: Option<String>,
+        now: DateTime<Utc>,
+    ) -> Result<Application, ServiceError> {
+        let mut store = self.store.write().await;
+        let index = application_index(&store, application_id)?;
+        let mut application = store.applications[index].clone();
+        application.status = application.status.transition(LifecycleStatus::Withdrawn)?;
+        application.updated_at = now;
+        application.system_data.insert(
+            "withdrawal_reason".into(),
+            reason.map(Value::String).unwrap_or(Value::Null),
+        );
+        if let Some(applicant) = store
+            .applicants
+            .iter_mut()
+            .find(|applicant| applicant.id == application.applicant_id)
+        {
+            if applicant
+                .status
+                .transition(LifecycleStatus::Withdrawn)
+                .is_ok()
+            {
+                applicant.status = LifecycleStatus::Withdrawn;
+                applicant.updated_at = now;
+            }
+        }
+        store.applications[index] = application.clone();
+        self.persistence.persist(&store)?;
+        Ok(application)
     }
 
     pub async fn acquire_lock(
@@ -550,6 +867,14 @@ impl ApplicantService {
             .lock()
             .await
             .release(application_id, reviewer_id, now)
+    }
+
+    pub async fn lock_status(
+        &self,
+        application_id: &str,
+        now: DateTime<Utc>,
+    ) -> Option<ReviewerLock> {
+        self.locks.lock().await.active(application_id, now).cloned()
     }
 
     pub async fn review(
@@ -1107,8 +1432,12 @@ pub enum ServiceError {
     EvidenceRequirementNotFound,
     #[error("evidence type does not match requirement")]
     EvidenceTypeMismatch,
+    #[error("only active evidence can be revoked")]
+    InactiveEvidence,
     #[error("tenant mismatch")]
     TenantMismatch,
+    #[error("not authorized")]
+    NotAuthorized,
     #[error("required evidence is missing or invalid: {0}")]
     RequiredEvidence(String),
     #[error("invalid evidence reference")]

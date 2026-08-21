@@ -8,8 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod http;
 pub mod issuance;
 pub mod migration;
+pub mod providers;
 pub mod service;
 pub mod store;
 
@@ -477,6 +479,12 @@ impl ReviewerLocks {
         self.0
             .get(application_id)
             .is_some_and(|lock| lock.expires_at > now && lock.reviewer_id == reviewer_id)
+    }
+
+    pub fn active(&self, application_id: &str, now: DateTime<Utc>) -> Option<&ReviewerLock> {
+        self.0
+            .get(application_id)
+            .filter(|lock| lock.expires_at > now)
     }
 }
 

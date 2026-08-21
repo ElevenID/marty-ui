@@ -110,6 +110,7 @@ pub fn migrate_payload(
             "integration_context": integration_context,
             "system_data": system_data,
             "required_checks": row.get("required_checks").cloned().unwrap_or_else(|| json!([])),
+            "evidence_requirements": row.get("evidence_requirements").cloned().unwrap_or_else(|| json!([])),
             "claim_state": claim_state,
             "claim_blocker": Value::Null,
             "created_at": row.get("created_at").cloned().unwrap_or(Value::Null),
