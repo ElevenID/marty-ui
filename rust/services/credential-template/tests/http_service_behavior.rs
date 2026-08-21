@@ -36,6 +36,12 @@ fn registry_contract() -> Value {
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }
 
+fn internal_contract() -> Value {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../contracts/credential-template-internal-behavior.json");
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
 #[derive(Default)]
 struct Repository {
     templates: Mutex<BTreeMap<String, CredentialTemplate>>,
@@ -230,6 +236,13 @@ impl CredentialTemplateControlPlane for ControlPlane {
         organization_id: &str,
     ) -> Result<(), ControlPlaneError> {
         self.require_membership(user_id, organization_id).await
+    }
+
+    async fn organization_display_name(
+        &self,
+        organization_id: &str,
+    ) -> Result<Option<String>, ControlPlaneError> {
+        Ok((organization_id == "org-1").then(|| "Example Organization".to_owned()))
     }
 
     async fn resolve_active_issuer(
@@ -726,4 +739,95 @@ async fn template_compatibility_and_delivery_destination_routes_are_complete() {
         .await
         .unwrap();
     assert_eq!(json_body(response).await, contract["http"]["success_body"]);
+}
+
+#[tokio::test]
+async fn internal_routes_expose_safe_issuance_context_and_active_oid4vci_metadata() {
+    let contract = internal_contract();
+    let app = router();
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/credential-templates",
+            create_body(),
+            true,
+        ))
+        .await
+        .unwrap();
+    let template_id = json_body(response).await["id"].as_str().unwrap().to_owned();
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("/internal/credential-templates/{template_id}/issuance-context"),
+            json!({}),
+            false,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let context = json_body(response).await;
+    for field in contract["issuance_context"]["private_fields"]
+        .as_array()
+        .unwrap()
+    {
+        assert!(context.get(field.as_str().unwrap()).is_some());
+    }
+    for field in contract["issuance_context"]["forbidden_cached_routing_fields"]
+        .as_array()
+        .unwrap()
+    {
+        assert!(context.get(field.as_str().unwrap()).is_none());
+    }
+    assert_eq!(context["issuer_algorithm"], "ES256");
+    assert_eq!(context["supported_formats"], json!(["SD_JWT_VC"]));
+    assert_eq!(context["validity_rules"]["default_validity_days"], 365);
+
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/internal/credential-configurations",
+            json!({}),
+            false,
+        ))
+        .await
+        .unwrap();
+    assert!(
+        json_body(response).await["credential_configurations_supported"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
+
+    app.clone()
+        .oneshot(request(
+            "POST",
+            &format!("/v1/credential-templates/{template_id}/activate"),
+            json!({}),
+            true,
+        ))
+        .await
+        .unwrap();
+    let response = app
+        .oneshot(request(
+            "GET",
+            "/internal/credential-configurations",
+            json!({}),
+            false,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let metadata = json_body(response).await;
+    let configuration = &metadata["credential_configurations_supported"]["EmployeeBadge"];
+    let sd_jwt_case = &contract["credential_configurations"][0];
+    assert_eq!(configuration["format"], sd_jwt_case["expected_format"]);
+    assert_eq!(
+        configuration["credential_signing_alg_values_supported"],
+        json!(["ES256"])
+    );
+    assert_eq!(metadata["issuer_display_name"], "Example Organization");
 }

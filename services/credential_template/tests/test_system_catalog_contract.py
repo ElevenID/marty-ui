@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[3]
 FIXTURE = ROOT / "contracts" / "credential-template-system-catalog.json"
 WALLET_FIXTURE = ROOT / "contracts" / "credential-template-wallet-compatibility.json"
 REGISTRY_FIXTURE = ROOT / "contracts" / "credential-template-registry-behavior.json"
+INTERNAL_FIXTURE = ROOT / "contracts" / "credential-template-internal-behavior.json"
 MAIN = ROOT / "services" / "credential_template" / "main.py"
 
 
@@ -88,3 +89,33 @@ def test_python_registry_behavior_matches_the_language_neutral_contract() -> Non
         contract["normalization"]["pre_authorized_protocol"],
     ):
         assert credential_template._normalize_issuance_protocol(source) == expected
+
+
+def test_python_internal_oid4vci_behavior_matches_the_language_neutral_contract() -> None:
+    from services.credential_template import main as credential_template
+
+    contract = json.loads(INTERNAL_FIXTURE.read_text(encoding="utf-8"))
+    for case in contract["credential_configurations"]:
+        template = credential_template.CredentialTemplate(
+            name=case["credential_type"],
+            credential_type=case["credential_type"],
+            credential_payload_format=case["credential_format"],
+            supported_formats=[credential_template.CredentialFormat(case["credential_format"])],
+            vct=case.get("vct", ""),
+            doctype=case.get("doctype"),
+            issuer_did="did:web:issuer.example",
+            issuer_algorithm="ES256",
+        )
+        configuration = credential_template._oid4vci_configuration(template)
+        assert configuration is not None
+        assert configuration["format"] == case["expected_format"]
+        assert case["expected_identifier_field"] in configuration
+
+    for credential_format in contract["skipped_formats"]:
+        template = credential_template.CredentialTemplate(
+            credential_type="UnsupportedCredential",
+            credential_payload_format=credential_format,
+            supported_formats=[credential_template.CredentialFormat(credential_format)],
+            issuer_did="did:web:issuer.example",
+        )
+        assert credential_template._oid4vci_configuration(template) is None

@@ -18,6 +18,7 @@ use marty_credential_template::{
 #[derive(Default)]
 struct MemoryRepository {
     templates: Mutex<BTreeMap<String, CredentialTemplate>>,
+    fail_internal: bool,
 }
 
 #[async_trait]
@@ -62,6 +63,12 @@ impl CredentialTemplateRepository for MemoryRepository {
         &self,
         status: Option<TemplateStatus>,
     ) -> Result<Vec<CredentialTemplate>, CredentialTemplateRepositoryError> {
+        if self.fail_internal {
+            return Err(CredentialTemplateRepositoryError::InvalidData {
+                field: "forced",
+                value: "repository unavailable".to_owned(),
+            });
+        }
         Ok(self
             .templates
             .lock()
@@ -111,6 +118,13 @@ impl CredentialTemplateControlPlane for ControlPlane {
         organization_id: &str,
     ) -> Result<(), ControlPlaneError> {
         self.require_membership(user_id, organization_id).await
+    }
+
+    async fn organization_display_name(
+        &self,
+        organization_id: &str,
+    ) -> Result<Option<String>, ControlPlaneError> {
+        Ok((organization_id == "org-1").then(|| "Example Organization".to_owned()))
     }
 
     async fn resolve_active_issuer(
@@ -355,4 +369,28 @@ async fn provider_failures_never_persist_a_template() {
     });
     assert!(application.create_template(command()).await.is_err());
     assert!(repository.templates.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn internal_metadata_fails_closed_when_the_repository_is_unavailable() {
+    let repository = Arc::new(MemoryRepository {
+        templates: Mutex::new(BTreeMap::new()),
+        fail_internal: true,
+    });
+    let application = CredentialTemplateApplication::new(
+        repository,
+        Arc::new(ControlPlane {
+            deny_membership: false,
+            deny_revocation: false,
+            deny_trust: false,
+        }),
+    );
+    let error = application
+        .credential_configurations_internal()
+        .await
+        .expect_err("repository failure must not become an empty metadata success");
+    assert!(matches!(
+        error,
+        marty_credential_template::application::CredentialTemplateApplicationError::Repository(_)
+    ));
 }

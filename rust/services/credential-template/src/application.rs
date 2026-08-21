@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -57,6 +57,11 @@ pub trait CredentialTemplateControlPlane: Send + Sync {
         user_id: &str,
         organization_id: &str,
     ) -> Result<(), ControlPlaneError>;
+
+    async fn organization_display_name(
+        &self,
+        organization_id: &str,
+    ) -> Result<Option<String>, ControlPlaneError>;
 
     async fn resolve_active_issuer(
         &self,
@@ -189,6 +194,12 @@ pub struct UpdateTemplateCommand {
     pub template_id: String,
     pub patch: UpdateTemplatePatch,
     pub now: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CredentialConfigurations {
+    pub configurations: BTreeMap<String, Value>,
+    pub issuer_display_name: Option<String>,
 }
 
 #[derive(Clone)]
@@ -452,6 +463,43 @@ impl CredentialTemplateApplication {
             .await?)
     }
 
+    pub async fn template_internal(
+        &self,
+        template_id: &str,
+    ) -> Result<CredentialTemplate, CredentialTemplateApplicationError> {
+        self.load(template_id).await
+    }
+
+    pub async fn credential_configurations_internal(
+        &self,
+    ) -> Result<CredentialConfigurations, CredentialTemplateApplicationError> {
+        let templates = self.active_templates_internal().await?;
+        let mut configurations = BTreeMap::new();
+        let mut first_organization_id = None;
+        for template in templates {
+            if managed_issuer_did(&template).is_none() {
+                continue;
+            }
+            let Some((credential_type, configuration)) = oid4vci_configuration(&template)? else {
+                continue;
+            };
+            first_organization_id.get_or_insert_with(|| template.organization_id.clone());
+            configurations.insert(credential_type, configuration);
+        }
+        let issuer_display_name = if let Some(organization_id) = first_organization_id {
+            self.control_plane
+                .organization_display_name(&organization_id)
+                .await
+                .unwrap_or(None)
+        } else {
+            None
+        };
+        Ok(CredentialConfigurations {
+            configurations,
+            issuer_display_name,
+        })
+    }
+
     async fn load(
         &self,
         template_id: &str,
@@ -527,6 +575,77 @@ fn validate_create_command(
     }
     validate_claim_definitions(&command.claims)?;
     Ok(())
+}
+
+fn oid4vci_configuration(
+    template: &CredentialTemplate,
+) -> Result<Option<(String, Value)>, CredentialTemplateApplicationError> {
+    let credential_type = template.credential_type.trim();
+    if credential_type.is_empty() {
+        return Ok(None);
+    }
+    let format = normalize_payload_format(
+        Some(&template.credential_payload_format),
+        &template.supported_formats,
+    )?;
+    let algorithm = template
+        .issuer_algorithm
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("ES256");
+    let mut configuration = json_object(serde_json::json!({
+        "scope":format!("{credential_type}_credential"),
+        "cryptographic_binding_methods_supported":["jwk"],
+        "credential_signing_alg_values_supported":[algorithm],
+        "proof_types_supported":{
+            "jwt":{"proof_signing_alg_values_supported":["ES256"]}
+        },
+        "credential_metadata":{
+            "display":[{"name":non_empty_value(&template.name).unwrap_or(credential_type),"locale":"en-US"}]
+        }
+    }));
+    match format {
+        CredentialFormat::SdJwtVc => {
+            let Some(vct) = non_empty_value(&template.vct) else {
+                return Ok(None);
+            };
+            configuration.insert("format".to_owned(), Value::String("dc+sd-jwt".to_owned()));
+            configuration.insert("vct".to_owned(), Value::String(vct.to_owned()));
+        }
+        CredentialFormat::Mdoc => {
+            let doctype = template
+                .doctype
+                .as_deref()
+                .and_then(non_empty_value)
+                .unwrap_or(credential_type);
+            configuration.insert("format".to_owned(), Value::String("mso_mdoc".to_owned()));
+            configuration.insert("doctype".to_owned(), Value::String(doctype.to_owned()));
+        }
+        CredentialFormat::VcJwt => {
+            configuration.insert("format".to_owned(), Value::String("jwt_vc_json".to_owned()));
+            configuration.insert(
+                "credential_definition".to_owned(),
+                serde_json::json!({"type":["VerifiableCredential",credential_type]}),
+            );
+        }
+        CredentialFormat::JsonLd | CredentialFormat::ZkMdoc | CredentialFormat::VdsNc => {
+            return Ok(None);
+        }
+    }
+    Ok(Some((
+        credential_type.to_owned(),
+        Value::Object(configuration),
+    )))
+}
+
+fn json_object(value: Value) -> serde_json::Map<String, Value> {
+    value.as_object().cloned().unwrap_or_default()
+}
+
+fn non_empty_value(value: &str) -> Option<&str> {
+    let value = value.trim();
+    (!value.is_empty()).then_some(value)
 }
 
 fn apply_update(

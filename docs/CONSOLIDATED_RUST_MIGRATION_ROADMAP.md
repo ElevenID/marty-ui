@@ -1508,13 +1508,31 @@ wallet and destination CRUD plus compatibility and open-link behavior against
 it; the surviving Python catalog and normalization oracle consumes the same
 fixture, and its route suite proves the corrected unscoped destination rule.
 
-The Rust crate now passes 25 HTTP, application, wallet, domain, lifecycle,
+The final two internal HTTP operations are now native as well, completing all
+24 frozen routes. The issuance-context route preserves the public projection
+and adds only the signing algorithm, supported formats, issuance protocol,
+selective-disclosure fields, predicates, wallet configurations and full
+validity rules needed by trusted issuance callers; retired cached profile,
+provider, service and KMS coordinates remain absent. Dynamic OID4VCI metadata
+advertises active DID-backed SD-JWT, mdoc and VC-JWT templates in their actual
+production formats, skips unsupported or incomplete entries and treats the
+issuer display-name lookup as optional. Unlike the legacy Python endpoint, a
+repository failure now returns a dependency error instead of silently
+publishing an empty successful configuration set.
+
+`credential-template-internal-behavior.json` is the shared behavioral oracle
+for the safe issuance snapshot, three advertised OID4VCI formats, skipped
+formats, fail-closed repository behavior and optional display lookup. Rust
+black-box and application tests and the surviving Python configuration kernel
+consume the same cases.
+
+The Rust crate now passes 27 HTTP, application, wallet, domain, lifecycle,
 catalog, surface, migration, persistence and configured-PostgreSQL contract
-tests; the surviving Python oracle passes all 174 tests; formatting and strict
+tests; the surviving Python oracle passes all 175 tests; formatting and strict
 Clippy pass. The configured PostgreSQL tests run when
-`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is supplied. Remaining work is the two
-internal HTTP operations and all 12 intended gRPC handlers over the frozen
-operations, then MMF runtime/outbox composition, packaging, configured
+`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is supplied. Remaining work is all 12
+intended gRPC handlers over the frozen operations, then MMF runtime/outbox
+composition, packaging, configured
 acceptance and immediate Python deletion. No beta deployment has occurred.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18

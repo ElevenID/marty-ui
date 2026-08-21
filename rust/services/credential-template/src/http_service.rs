@@ -96,6 +96,14 @@ pub fn credential_template_router(state: CredentialTemplateHttpState) -> Router 
                 .patch(update_delivery_destination)
                 .delete(delete_delivery_destination),
         )
+        .route(
+            "/internal/credential-templates/{template_id}/issuance-context",
+            get(get_internal_issuance_context),
+        )
+        .route(
+            "/internal/credential-configurations",
+            get(get_internal_credential_configurations),
+        )
         .with_state(state)
 }
 
@@ -968,6 +976,98 @@ async fn delete_delivery_destination(
         .await
         .map_err(application_error)?;
     Ok(Json(json!({"success":true})))
+}
+
+async fn get_internal_issuance_context(
+    State(state): State<CredentialTemplateHttpState>,
+    Path(template_id): Path<String>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    let template = state
+        .application
+        .template_internal(&template_id)
+        .await
+        .map_err(application_error)?;
+    Ok(Json(internal_issuance_context(&template)?))
+}
+
+async fn get_internal_credential_configurations(
+    State(state): State<CredentialTemplateHttpState>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    let result = state
+        .application
+        .credential_configurations_internal()
+        .await
+        .map_err(application_error)?;
+    Ok(Json(json!({
+        "credential_configurations_supported":result.configurations,
+        "issuer_display_name":result.issuer_display_name
+    })))
+}
+
+fn internal_issuance_context(
+    template: &CredentialTemplate,
+) -> Result<Value, CredentialTemplateHttpError> {
+    let mut response = template_response(template)?;
+    let object = response
+        .as_object_mut()
+        .expect("template response is an object");
+    object.insert(
+        "issuer_algorithm".to_owned(),
+        json!(template
+            .issuer_algorithm
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or_default()),
+    );
+    object.insert(
+        "supported_formats".to_owned(),
+        json!(template
+            .supported_formats
+            .iter()
+            .map(|format| format.canonical())
+            .collect::<Vec<_>>()),
+    );
+    object.insert(
+        "issuance_protocol".to_owned(),
+        json!(template.issuance_protocol),
+    );
+    object.insert(
+        "selective_disclosure_fields".to_owned(),
+        json!(template.selective_disclosure_fields),
+    );
+    object.insert(
+        "zk_predicate_claims".to_owned(),
+        json!(template.zk_predicate_claims),
+    );
+    object.insert(
+        "wallet_configs".to_owned(),
+        Value::Array(
+            template
+                .wallet_configs
+                .iter()
+                .map(|config| {
+                    without_nulls(json!({
+                        "wallet_id":config.wallet_id,
+                        "deep_link_scheme":config.deep_link_scheme,
+                        "format_variant":config.format_variant
+                    }))
+                })
+                .collect(),
+        ),
+    );
+    object.insert(
+        "validity_rules".to_owned(),
+        json!({
+            "default_validity_days":template.validity_rules.default_validity_days,
+            "max_validity_days":template.validity_rules.max_validity_days,
+            "renewable":template.validity_rules.renewable,
+            "renewal_window_days":template.validity_rules.renewal_window_days,
+            "not_before_offset_seconds":template.validity_rules.not_before_offset_seconds,
+            "require_revalidation":template.validity_rules.require_revalidation,
+            "revalidation_interval_days":template.validity_rules.revalidation_interval_days
+        }),
+    );
+    Ok(response)
 }
 
 fn wallet_response(wallet: &WalletRegistryEntry) -> Value {
