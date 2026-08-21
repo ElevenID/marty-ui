@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod migration;
+
 pub const MAX_EVIDENCE_BYTES: usize = 10 * 1024 * 1024;
 pub const LOCK_TTL_SECONDS: i64 = 300;
 
