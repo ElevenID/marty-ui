@@ -761,6 +761,18 @@ impl OrganizationApplication {
         Ok(self.store.members_by_organization(organization_id).await?)
     }
 
+    pub async fn get_member(
+        &self,
+        organization_id: Uuid,
+        member_id: Uuid,
+    ) -> Result<Option<Member>, OrganizationApplicationError> {
+        Ok(self
+            .store
+            .member_by_id(member_id)
+            .await?
+            .filter(|member| member.organization_id == organization_id))
+    }
+
     pub async fn get_membership(
         &self,
         user_id: &str,

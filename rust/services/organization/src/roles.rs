@@ -455,6 +455,31 @@ impl OrganizationApplication {
         Ok(self.store.member_ids_with_role(role_id).await?.len())
     }
 
+    pub async fn members_with_role(
+        &self,
+        organization_id: Uuid,
+        role_id: Uuid,
+    ) -> Result<Vec<Member>, OrganizationApplicationError> {
+        self.store
+            .role_by_id(role_id)
+            .await?
+            .filter(|role| role.organization_id == organization_id)
+            .ok_or(OrganizationApplicationError::RoleNotFound(role_id))?;
+        let member_ids = self.store.member_ids_with_role(role_id).await?;
+        let mut members = Vec::with_capacity(member_ids.len());
+        for member_id in member_ids {
+            if let Some(member) = self
+                .store
+                .member_by_id(member_id)
+                .await?
+                .filter(|member| member.organization_id == organization_id)
+            {
+                members.push(member);
+            }
+        }
+        Ok(members)
+    }
+
     async fn permissions_in_transaction(
         &self,
         transaction: &mut Transaction<'_, Postgres>,

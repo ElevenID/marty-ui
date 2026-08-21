@@ -18,6 +18,7 @@ pub mod preferences;
 pub mod rbac_http;
 pub mod roles;
 pub mod scim;
+pub mod scim_http;
 
 pub mod organization_proto {
     tonic::include_proto!("marty.ui.organization.v1");
@@ -70,3 +71,4 @@ pub use roles::{
     resolve_replacement_role, AddMemberRoleCommand, CreateRoleCommand, DeleteRoleCommand,
     RemoveMemberRoleCommand, UpdateRoleCommand, UpdateRolePatch,
 };
+pub use scim_http::*;

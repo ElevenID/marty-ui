@@ -1148,6 +1148,28 @@ all 74 surviving Python tests, formatting and strict Clippy pass. The remaining
 outbox worker, gateway credential injection, packaging, full PostgreSQL
 acceptance and same-slice Python deletion. No beta deployment has occurred.
 
+Forty-two of the 62 frozen HTTP contracts now execute natively. Because the
+1,012-line Python SCIM adapter is the largest remaining deletion target, its
+discovery/read half moved next: service-provider configuration, schemas,
+resource types, paginated/filterable/sortable Users and Groups collections,
+and tenant-bound User/Group detail. The Rust adapter reuses the canonical SCIM
+parsers and pagination helpers, emits the registered core and MIP extension
+URNs, preserves metadata locations and timestamps, projects effective role
+membership, and returns typed SCIM `invalidFilter` and 404 envelopes.
+Discovery requires the trusted gateway service credential even though it is
+storage-independent; resource reads additionally require an active
+organization membership.
+
+Black-box tests freeze trust-first discovery and the expanded 42-route subset,
+while language-neutral projection/filter tests cover extension keys, email,
+external-ID and active-state behavior. The optional PostgreSQL HTTP scenario
+now traverses SCIM User and Group collection projections through Axum. Forty-
+seven Rust Organization tests, all 74 surviving Python tests, formatting and
+strict Clippy pass. The remaining 20 HTTP contracts are eight SCIM User/Group
+provisioning mutations and twelve policy/audit routes, followed by runtime,
+outbox worker, gateway credential injection, packaging, full PostgreSQL
+acceptance and same-slice Python deletion. No beta deployment has occurred.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

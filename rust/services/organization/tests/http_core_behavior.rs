@@ -8,6 +8,7 @@ use marty_organization::postgres::PostgresOrganizationStore;
 use marty_organization::{
     organization_core_router, OrganizationApplication, OrganizationCache, OrganizationHttpState,
     CORE_ORGANIZATION_HTTP_ROUTES, MEMBERSHIP_API_HTTP_ROUTES, RBAC_HTTP_ROUTES,
+    SCIM_READ_HTTP_ROUTES,
 };
 use mmf_data::MemoryCache;
 use mmf_security::ServiceTokenAuthenticator;
@@ -56,6 +57,7 @@ fn implemented_routes_are_unique_members_of_the_frozen_http_surface() {
         .iter()
         .chain(MEMBERSHIP_API_HTTP_ROUTES)
         .chain(RBAC_HTTP_ROUTES)
+        .chain(SCIM_READ_HTTP_ROUTES)
         .copied()
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
@@ -63,6 +65,7 @@ fn implemented_routes_are_unique_members_of_the_frozen_http_surface() {
         CORE_ORGANIZATION_HTTP_ROUTES.len()
             + MEMBERSHIP_API_HTTP_ROUTES.len()
             + RBAC_HTTP_ROUTES.len()
+            + SCIM_READ_HTTP_ROUTES.len()
     );
     assert!(implemented.is_subset(&frozen));
 }
@@ -180,6 +183,47 @@ async fn onboarding_projection_preserves_the_public_behavior_without_storage() {
 }
 
 #[tokio::test]
+async fn scim_discovery_is_service_authenticated_and_storage_independent() {
+    let missing = router()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/organizations/{}/scim/v2/ServiceProviderConfig",
+                    Uuid::nil()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+    let response = router()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/organizations/{}/scim/v2/ServiceProviderConfig",
+                    Uuid::nil()
+                ))
+                .header("x-service-token", TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(
+        &to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("bounded SCIM discovery response"),
+    )
+    .expect("SCIM discovery JSON");
+    assert_eq!(body["patch"]["supported"], true);
+    assert_eq!(body["filter"]["maxResults"], 200);
+    assert_eq!(body["bulk"]["supported"], false);
+}
+
+#[tokio::test]
 async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configured() {
     let Some(database_url) = std::env::var("ORGANIZATION_POSTGRES_TEST_URL")
         .ok()
@@ -287,6 +331,29 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
     .await;
     assert_eq!(team.0, StatusCode::OK);
     assert_eq!(team.1["members"].as_array().unwrap().len(), 2);
+
+    let scim_users = request_json(
+        &router,
+        "GET",
+        &format!("/v1/organizations/{organization_id}/scim/v2/Users?startIndex=1&count=200"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(scim_users.0, StatusCode::OK);
+    assert_eq!(scim_users.1["totalResults"], 2);
+    assert_eq!(scim_users.1["itemsPerPage"], 2);
+
+    let scim_groups = request_json(
+        &router,
+        "GET",
+        &format!("/v1/organizations/{organization_id}/scim/v2/Groups?sortBy=displayName"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(scim_groups.0, StatusCode::OK);
+    assert!(scim_groups.1["totalResults"].as_u64().unwrap() >= 3);
 
     let permissions = request_json(
         &router,

@@ -127,6 +127,7 @@ pub fn organization_core_router(state: OrganizationHttpState) -> Router {
             axum::routing::delete(revoke_api_key),
         )
         .merge(crate::rbac_http::organization_rbac_router())
+        .merge(crate::scim_http::organization_scim_read_router())
         .with_state(state)
 }
 
@@ -993,7 +994,7 @@ async fn revoke_api_key(
     Ok(Json(json!({"success": true})))
 }
 
-fn authenticate_service(
+pub(crate) fn authenticate_service(
     state: &OrganizationHttpState,
     headers: &HeaderMap,
 ) -> Result<(), OrganizationHttpError> {
