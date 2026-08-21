@@ -31,15 +31,19 @@ fn policy() -> CredentialCallbackPolicy {
     }
 }
 
-fn pending() -> PendingCredentialLogin {
+fn pending(nonce: &str) -> PendingCredentialLogin {
     PendingCredentialLogin {
-        nonce: "nonce-1".into(),
+        nonce: nonce.into(),
         flow_instance_id: "flow-1".into(),
         presentation_policy_id: "policy-1".into(),
         organization_id: "org-1".into(),
         status: "pending".into(),
         revocation_checked: false,
     }
+}
+
+fn test_nonce() -> String {
+    format!("test-{}", uuid::Uuid::new_v4())
 }
 
 fn payload() -> CredentialVerifiedPayload {
@@ -141,58 +145,60 @@ fn callback_authentication_is_digest_event_signature_and_time_bound() {
 #[tokio::test]
 async fn callback_claim_completion_poll_and_finalize_are_single_use() {
     let store = CredentialLoginStateStore::new(Arc::new(MemoryCache::default()), policy()).unwrap();
-    store.save_pending(&pending(), 1_000).await.unwrap();
+    let nonce = test_nonce();
+    store.save_pending(&pending(&nonce), 1_000).await.unwrap();
     assert_eq!(
-        store.poll("nonce-1", 1_000).await.unwrap(),
+        store.poll(&nonce, 1_000).await.unwrap(),
         CredentialLoginPoll::Pending
     );
     assert!(matches!(
         store
-            .claim_callback("nonce-1", &payload(), 1_000)
+            .claim_callback(&nonce, &payload(), 1_000)
             .await
             .unwrap(),
         CallbackClaim::Claimed(_)
     ));
     assert_eq!(
-        store.claim_callback("nonce-1", &payload(), 1_000).await,
+        store.claim_callback(&nonce, &payload(), 1_000).await,
         Err(CredentialStateError::AlreadyClaimed)
     );
     store
-        .complete("nonce-1", "flow-1", "session-1", true, "valid", 1_000)
+        .complete(&nonce, "flow-1", "session-1", true, "valid", 1_000)
         .await
         .unwrap();
     assert_eq!(
         store
-            .claim_callback("nonce-1", &payload(), 1_000)
+            .claim_callback(&nonce, &payload(), 1_000)
             .await
             .unwrap(),
         CallbackClaim::AlreadyProcessed
     );
     assert!(matches!(
-        store.poll("nonce-1", 1_000).await.unwrap(),
+        store.poll(&nonce, 1_000).await.unwrap(),
         CredentialLoginPoll::Completed {
             revocation_checked: true,
             ..
         }
     ));
-    let completion = store.finalize("nonce-1", 1_000).await.unwrap().unwrap();
+    let completion = store.finalize(&nonce, 1_000).await.unwrap().unwrap();
     assert_eq!(completion.session_id.as_deref(), Some("session-1"));
-    assert!(store.finalize("nonce-1", 1_000).await.unwrap().is_none());
+    assert!(store.finalize(&nonce, 1_000).await.unwrap().is_none());
 }
 
 #[tokio::test]
 async fn mismatched_callbacks_fail_before_acquiring_the_lease() {
     let store = CredentialLoginStateStore::new(Arc::new(MemoryCache::default()), policy()).unwrap();
-    store.save_pending(&pending(), 1_000).await.unwrap();
+    let nonce = test_nonce();
+    store.save_pending(&pending(&nonce), 1_000).await.unwrap();
     let mut wrong = payload();
     wrong.presentation_policy_id = "policy-2".into();
     assert_eq!(
-        store.claim_callback("nonce-1", &wrong, 1_000).await,
+        store.claim_callback(&nonce, &wrong, 1_000).await,
         Err(CredentialStateError::Mismatch)
     );
     assert!(matches!(
         store
-            .claim_callback("nonce-1", &payload(), 1_000)
+            .claim_callback(&nonce, &payload(), 1_000)
             .await
             .unwrap(),
         CallbackClaim::Claimed(_)

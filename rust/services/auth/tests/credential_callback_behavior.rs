@@ -180,9 +180,14 @@ fn context(nonce: &str) -> CredentialCallbackContext {
     }
 }
 
+fn test_nonce() -> String {
+    format!("test-{}", uuid::Uuid::new_v4())
+}
+
 #[tokio::test]
 async fn claim_only_login_sanitizes_authorization_and_is_retry_idempotent() {
-    let (application, sessions) = build_application("nonce-1", None, config()).await;
+    let nonce = test_nonce();
+    let (application, sessions) = build_application(&nonce, None, config()).await;
     let (payload, headers) = signed_payload(json!({
         "email": "alice@example.com",
         "given_name": "Alice",
@@ -193,7 +198,7 @@ async fn claim_only_login_sanitizes_authorization_and_is_retry_idempotent() {
         "revocation_status": "valid"
     }));
     let result = application
-        .handle(&payload, &headers, &context("nonce-1"), now())
+        .handle(&payload, &headers, &context(&nonce), now())
         .await
         .unwrap();
     let session_id = match result {
@@ -202,7 +207,7 @@ async fn claim_only_login_sanitizes_authorization_and_is_retry_idempotent() {
     };
     assert_eq!(
         application
-            .handle(&payload, &headers, &context("nonce-1"), now())
+            .handle(&payload, &headers, &context(&nonce), now())
             .await
             .unwrap(),
         CredentialCallbackResult::AlreadyProcessed
@@ -219,11 +224,12 @@ async fn claim_only_login_sanitizes_authorization_and_is_retry_idempotent() {
 async fn required_account_policy_denies_missing_resolver_or_user() {
     let mut required = config();
     required.require_existing_keycloak_user = true;
-    let (without_admin, sessions) = build_application("nonce-admin", None, required).await;
+    let admin_nonce = test_nonce();
+    let (without_admin, sessions) = build_application(&admin_nonce, None, required).await;
     let (payload, headers) = signed_payload(json!({"email": "alice@example.com"}));
     assert_eq!(
         without_admin
-            .handle(&payload, &headers, &context("nonce-admin"), now())
+            .handle(&payload, &headers, &context(&admin_nonce), now())
             .await
             .unwrap(),
         CredentialCallbackResult::Denied {
@@ -232,11 +238,12 @@ async fn required_account_policy_denies_missing_resolver_or_user() {
     );
     assert!(sessions.0.lock().unwrap().is_empty());
 
+    let user_nonce = test_nonce();
     let (missing_user, sessions) =
-        build_application("nonce-user", Some(Arc::new(NoAccount)), config()).await;
+        build_application(&user_nonce, Some(Arc::new(NoAccount)), config()).await;
     assert_eq!(
         missing_user
-            .handle(&payload, &headers, &context("nonce-user"), now())
+            .handle(&payload, &headers, &context(&user_nonce), now())
             .await
             .unwrap(),
         CredentialCallbackResult::Denied {
@@ -248,7 +255,8 @@ async fn required_account_policy_denies_missing_resolver_or_user() {
 
 #[tokio::test]
 async fn failed_verification_and_missing_email_complete_as_denials() {
-    let (application, sessions) = build_application("nonce-denied", None, config()).await;
+    let denied_nonce = test_nonce();
+    let (application, sessions) = build_application(&denied_nonce, None, config()).await;
     let (mut payload, _) = signed_payload(json!({"email": "alice@example.com"}));
     payload.result = "failed".into();
     payload.decision = "deny".into();
@@ -256,7 +264,7 @@ async fn failed_verification_and_missing_email_complete_as_denials() {
     let (payload, headers) = signed_payload_from(payload);
     assert_eq!(
         application
-            .handle(&payload, &headers, &context("nonce-denied"), now())
+            .handle(&payload, &headers, &context(&denied_nonce), now())
             .await
             .unwrap(),
         CredentialCallbackResult::Denied {
@@ -265,11 +273,12 @@ async fn failed_verification_and_missing_email_complete_as_denials() {
     );
     assert!(sessions.0.lock().unwrap().is_empty());
 
-    let (application, sessions) = build_application("nonce-email", None, config()).await;
+    let email_nonce = test_nonce();
+    let (application, sessions) = build_application(&email_nonce, None, config()).await;
     let (payload, headers) = signed_payload(json!({"given_name": "Alice"}));
     assert_eq!(
         application
-            .handle(&payload, &headers, &context("nonce-email"), now())
+            .handle(&payload, &headers, &context(&email_nonce), now())
             .await
             .unwrap(),
         CredentialCallbackResult::Denied {
