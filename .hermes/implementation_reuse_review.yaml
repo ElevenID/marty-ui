@@ -1,45 +1,47 @@
 status: complete
 search_scope:
-  - current immutable Marty UI stack release manifest
-  - merged revocation-profile HTTP cutover and owned route tests
-  - merged zero-downtime Kubernetes rollout policy and owned manifest tests
-  - released Credentials v0.1.67 and Integration v1.2.69 artifact evidence
-  - existing stack release contract and immutable CD workflow
+  - current immutable Marty UI stack release manifest and owned pin assertions
+  - independently audited Core v0.1.59 release evidence
+  - independently audited Credentials v0.1.68 image, SBOM, and provenance evidence
+  - released Integration v1.2.70 source, SBOM, and provenance evidence
+  - existing immutable CD and artifact-only Marty acceptance workflow
 search_queries:
-  - "marty-ui immutable stack release identity v1.1.198"
-  - "retired allocate-index HTTP endpoint reserve-index caller cutover"
-  - "revocation-profile RollingUpdate maxUnavailable zero maxSurge one"
-  - "marty-credentials v0.1.67 issuance digest SBOM provenance"
-  - "marty-integration-tests v1.2.69 released topology"
-  - "release contract exact tag stack lock public stack smoke"
+  - "marty-ui immutable component pin and stack release v1.1.199"
+  - "marty-core v0.1.59 Python wheel digest SBOM provenance"
+  - "marty-credentials v0.1.68 issuance OCI digest SBOM provenance"
+  - "marty-integration-tests v1.2.70 source digest SBOM provenance"
+  - "owned stack release exact pin regression"
 candidate_implementations:
   - path: release/stack-lock.json
     language: JSON
     disposition: reuse_existing_release_manifest_and_advance_release_identity
   - path: tests/test_stack_release_contract.py
     language: Python
-    disposition: reuse_existing_owned_release_contract_without_modification
+    disposition: extend_existing_owned_exact_pin_assertions
   - path: .github/workflows/cd.yml
     language: YAML
     disposition: reuse_existing_immutable_release_and_public_stack_smoke_pipeline
-  - path: rust/services/revocation-profile/src/http.rs
-    language: Rust
-    disposition: release_already_merged_retired_http_surface
-  - path: k8s/oracle/07-microservices.yaml
-    language: Kubernetes_YAML
-    disposition: release_already_merged_rolling_update_policy
+  - path: https://github.com/ElevenID/marty-core/releases/tag/v0.1.59
+    language: GitHub_release_evidence
+    disposition: pin_verified_immutable_dependency_release
+  - path: https://github.com/ElevenID/marty-credentials/releases/tag/v0.1.68
+    language: GitHub_release_evidence
+    disposition: pin_verified_immutable_dependency_release
+  - path: https://github.com/ElevenID/marty-integration-tests/releases/tag/v1.2.70
+    language: GitHub_release_evidence
+    disposition: pin_verified_immutable_dependency_release
 no_match_statement: ""
-decision: reuse_existing
+decision: extend_existing
 canonical_implementation:
   path: release/stack-lock.json
   language: JSON
-rust_disposition: reuse_existing_rust_owner
+rust_disposition: reuse_existing_rust_owner_unchanged
 non_rust_rationale: >-
-  This release-only change advances the immutable stack identity after the
-  reviewed Rust HTTP cutover and Kubernetes rollout policy merged with the full
-  queue suite green. It changes no implementation or tests; the existing CD
-  workflow will verify the released stack against pinned Marty integration
-  artifacts before publishing the manifest.
+  This dependency-only release change advances the immutable stack identity and
+  exact owned pin assertions to releases already validated by their source
+  repositories. No implementation or imported compliance material changes; the
+  existing CD workflow verifies HTTP and OCI artifacts, provenance, and the
+  released Marty Integration suite before publication.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
