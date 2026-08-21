@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 pub mod issuance;
 pub mod migration;
+pub mod service;
 pub mod store;
 
 pub const MAX_EVIDENCE_BYTES: usize = 10 * 1024 * 1024;
@@ -470,6 +471,12 @@ impl ReviewerLocks {
             self.0.remove(application_id);
         }
         removable
+    }
+
+    pub fn held_by(&self, application_id: &str, reviewer_id: &str, now: DateTime<Utc>) -> bool {
+        self.0
+            .get(application_id)
+            .is_some_and(|lock| lock.expires_at > now && lock.reviewer_id == reviewer_id)
     }
 }
 
