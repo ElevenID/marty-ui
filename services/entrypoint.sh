@@ -64,6 +64,11 @@ if [ "$MODULE_NAME" = "trust_profile" ]; then
 	exec /usr/local/bin/marty-trust-profile
 fi
 
+if [ "$MODULE_NAME" = "applicant" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-applicant
+fi
+
 echo "Starting service: $SERVICE_NAME (module: $MODULE_NAME)"
 echo "Working directory: $(pwd)"
 echo "Python version: $(python --version)"
@@ -72,7 +77,4 @@ echo "Python version: $(python --version)"
 # Running `${MODULE_NAME}.main` directly with `python -m` would execute it as
 # `__main__`; later adapter imports could then load a second copy of the module.
 cd /app/services
-if [ "$MODULE_NAME" = "applicant" ]; then
-	python -m applicant.migrate_store_v03
-fi
 exec python -m service_runner

@@ -16,6 +16,7 @@ RUN cargo build --locked --release -p marty-auth --bin marty-auth
 RUN cargo build --locked --release -p marty-credential-template --bin marty-credential-template
 RUN cargo build --locked --release -p marty-presentation-policy --bin marty-presentation-policy
 RUN cargo build --locked --release -p marty-trust-profile --bin marty-trust-profile
+RUN cargo build --locked --release -p marty-applicant --bin marty-applicant
 
 FROM python:3.12-slim
 
@@ -89,6 +90,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-auth /usr/loca
 COPY --from=rust-service-builder /build/rust/target/release/marty-credential-template /usr/local/bin/marty-credential-template
 COPY --from=rust-service-builder /build/rust/target/release/marty-presentation-policy /usr/local/bin/marty-presentation-policy
 COPY --from=rust-service-builder /build/rust/target/release/marty-trust-profile /usr/local/bin/marty-trust-profile
+COPY --from=rust-service-builder /build/rust/target/release/marty-applicant /usr/local/bin/marty-applicant
 RUN chmod +x /app/services/entrypoint.sh /app/load-secrets-env.sh \
     && adduser --disabled-password --gecos '' appuser \
     && install -d -o appuser -g appuser -m 0700 /app/data

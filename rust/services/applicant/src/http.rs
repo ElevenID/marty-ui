@@ -13,11 +13,12 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
+use regex::Regex;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, path::Path as FilePath, sync::Arc};
 use tower_http::trace::TraceLayer;
 
 #[derive(Clone)]
@@ -442,10 +443,13 @@ async fn my_applications(
     headers: HeaderMap,
     Query(page): Query<Page>,
 ) -> Result<Json<Value>, ApiError> {
-    let applications = state
+    let mut applications = state
         .service
         .applications_for_user(&user(&headers)?)
         .await?;
+    for application in &mut applications {
+        *application = sync_issuance(&state, application).await?;
+    }
     Ok(Json(page_values(
         applications.iter().map(application_json).collect(),
         &page,
@@ -480,6 +484,7 @@ async fn my_application(
         .service
         .self_application(&user(&headers)?, &application_id)
         .await?;
+    let application = sync_issuance(&state, &application).await?;
     Ok(Json(enriched_application_json(&application, &applicant)))
 }
 
@@ -516,6 +521,44 @@ async fn upload_evidence(
             "This requirement must be satisfied by its verified external evidence source",
         ));
     }
+    let media_type = body.media_type.trim().to_ascii_lowercase();
+    let media_pattern = Regex::new(r"^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$")
+        .expect("static media type expression");
+    if !media_pattern.is_match(&media_type) {
+        return Err(ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Evidence media type is invalid",
+        ));
+    }
+    let accepted = requirement
+        .get("accepted_formats")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !accepted.is_empty() {
+        let suffix = FilePath::new(&body.filename)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| format!(".{value}").to_ascii_lowercase())
+            .unwrap_or_default();
+        let accepted = accepted.iter().filter_map(Value::as_str).any(|value| {
+            let value = value.trim().to_ascii_lowercase();
+            value == media_type
+                || (!value.contains('/')
+                    && suffix
+                        == if value.starts_with('.') {
+                            value
+                        } else {
+                            format!(".{value}")
+                        })
+        });
+        if !accepted {
+            return Err(ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Evidence format is not accepted",
+            ));
+        }
+    }
     let maximum = requirement
         .get("max_file_size_bytes")
         .and_then(Value::as_u64)
@@ -544,7 +587,7 @@ async fn upload_evidence(
                 organization_id: application.organization_id,
                 evidence_requirement_id: body.evidence_requirement_id,
                 evidence_type,
-                media_type: body.media_type.to_ascii_lowercase(),
+                media_type,
                 filename: body.filename,
                 content_base64: body.content_base64,
                 submitted_by: user,
@@ -670,10 +713,30 @@ async fn claim(
     headers: HeaderMap,
     Path(application_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    state
+    let (application, _) = state
         .service
         .self_application(&user(&headers)?, &application_id)
         .await?;
+    let application = sync_issuance(&state, &application).await?;
+    let has_offer = application
+        .system_data
+        .get("credential_offer_uri")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty())
+        || application
+            .system_data
+            .get("credential_offer_uris")
+            .and_then(Value::as_object)
+            .is_some_and(|value| !value.is_empty());
+    let valid_expiry = application
+        .system_data
+        .get("offer_expires_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .is_some_and(|expiry| expiry > Utc::now());
+    if application.claim_state == crate::ClaimState::OfferReady && has_offer && valid_expiry {
+        return Ok(Json(application_json(&application)));
+    }
     Ok(Json(application_json(
         &state.service.issue(&application_id, Utc::now()).await?,
     )))
@@ -686,10 +749,18 @@ async fn organization_queue(
     Query(page): Query<Page>,
 ) -> Result<Json<Value>, ApiError> {
     organization_identity(&headers, &organization_id, "application:review")?;
-    let values = state
+    let mut values = state
         .service
         .applications_for_organization(&organization_id)
         .await;
+    if let Some(expected) = &page.status {
+        values.retain(|application| {
+            serde_json::to_value(application.status)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .is_some_and(|status| status.eq_ignore_ascii_case(expected))
+        });
+    }
     Ok(Json(page_values(
         values.iter().map(application_json).collect(),
         &page,
@@ -1019,7 +1090,7 @@ async fn withdraw_organization(
     Ok(Json(application_json(
         &state
             .service
-            .withdraw(
+            .withdraw_by_organization(
                 &application_id,
                 body.and_then(|Json(value)| value.reason),
                 Utc::now(),
@@ -1105,6 +1176,68 @@ async fn issued_credentials(
         )
     });
     Ok(Json(page_values(records, &page)))
+}
+
+async fn sync_issuance(
+    state: &HttpState,
+    application: &Application,
+) -> Result<Application, ApiError> {
+    let transaction_id = application
+        .system_data
+        .get("issuance_transaction_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && !value.starts_with("local-"));
+    let Some(transaction_id) = transaction_id else {
+        return state
+            .service
+            .reconcile_issuance(&application.id, None, None, Utc::now())
+            .await
+            .map_err(Into::into);
+    };
+    let mut request = state.client.get(format!(
+        "{}/v1/issuance/transactions/{transaction_id}",
+        state.issuance_url.trim_end_matches('/')
+    ));
+    request = request.header("x-organization-id", &application.organization_id);
+    if let Some(api_key) = &state.issuance_api_key {
+        request = request.header("x-api-key", api_key);
+    }
+    let response = request.send().await.map_err(|_| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuance transaction reconciliation is temporarily unavailable",
+        )
+    })?;
+    if response.status() == StatusCode::NOT_FOUND {
+        return state
+            .service
+            .reconcile_issuance(&application.id, None, None, Utc::now())
+            .await
+            .map_err(Into::into);
+    }
+    if !response.status().is_success() {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuance transaction reconciliation is temporarily unavailable",
+        ));
+    }
+    let transaction = response.json::<Value>().await.map_err(|_| {
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuance transaction response is malformed",
+        )
+    })?;
+    let status = transaction.get("status").and_then(Value::as_str);
+    let issued_at = transaction
+        .get("issued_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc));
+    state
+        .service
+        .reconcile_issuance(&application.id, status, issued_at, Utc::now())
+        .await
+        .map_err(Into::into)
 }
 
 async fn require_lock(

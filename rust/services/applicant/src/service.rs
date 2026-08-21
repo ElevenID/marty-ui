@@ -1,5 +1,8 @@
 use crate::{
-    issuance::{apply_offer, mark_no_active_flow, reserve_attempt, IssuanceError, IssuanceOffer},
+    issuance::{
+        apply_offer, mark_no_active_flow, reconcile_transaction, reserve_attempt, IssuanceError,
+        IssuanceOffer,
+    },
     store::StoreDocument,
     validate_form_data, Applicant, ApplicantError, Application, Biometric, CheckStatus, CheckType,
     ClaimState, Evidence, EvidenceStatus, EvidenceUpload, FieldDefinition, LifecycleStatus,
@@ -826,6 +829,67 @@ impl ApplicantService {
                 applicant.updated_at = now;
             }
         }
+        store.applications[index] = application.clone();
+        self.persistence.persist(&store)?;
+        Ok(application)
+    }
+
+    pub async fn withdraw_by_organization(
+        &self,
+        application_id: &str,
+        reason: Option<String>,
+        now: DateTime<Utc>,
+    ) -> Result<Application, ServiceError> {
+        let mut store = self.store.write().await;
+        let index = application_index(&store, application_id)?;
+        let mut application = store.applications[index].clone();
+        application.status = LifecycleStatus::Withdrawn;
+        application.updated_at = now;
+        application.system_data.insert(
+            "withdrawal_reason".into(),
+            reason.map(Value::String).unwrap_or(Value::Null),
+        );
+        store.applications[index] = application.clone();
+        self.persistence.persist(&store)?;
+        Ok(application)
+    }
+
+    pub async fn reconcile_issuance(
+        &self,
+        application_id: &str,
+        transaction_status: Option<&str>,
+        issued_at: Option<DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) -> Result<Application, ServiceError> {
+        let mut store = self.store.write().await;
+        let index = application_index(&store, application_id)?;
+        let mut application = store.applications[index].clone();
+        if application.claim_state == ClaimState::OfferReady
+            && application
+                .system_data
+                .get("offer_expires_at")
+                .and_then(Value::as_str)
+                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                .is_some_and(|expiry| expiry <= now)
+        {
+            application.claim_state = ClaimState::Expired;
+            application.claim_blocker = Some(json!({
+                "code": "OFFER_EXPIRED",
+                "owner": "APPLICANT",
+                "message": "This credential offer has expired. Request a new offer."
+            }));
+        }
+        if let Some(status) = transaction_status {
+            let applicant_index = store
+                .applicants
+                .iter()
+                .position(|applicant| applicant.id == application.applicant_id)
+                .ok_or(ServiceError::ApplicantNotFound)?;
+            let mut applicant = store.applicants[applicant_index].clone();
+            reconcile_transaction(&mut application, &mut applicant, status, issued_at, now)?;
+            store.applicants[applicant_index] = applicant;
+        }
+        application.updated_at = now;
         store.applications[index] = application.clone();
         self.persistence.persist(&store)?;
         Ok(application)

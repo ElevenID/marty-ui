@@ -591,6 +591,17 @@
         "binding_paths": []
       },
       "legacy": []
+    },
+    {
+      "id": "applicant-service",
+      "phase": 10,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/applicant"],
+        "binding_paths": []
+      },
+      "legacy": []
     }
   ],
   "guardrails": {
@@ -617,6 +628,10 @@
       {
         "capability_id": "presentation-policy-service",
         "forbidden_globs": ["services/presentation_policy/**/*.py"]
+      },
+      {
+        "capability_id": "applicant-service",
+        "forbidden_globs": ["services/applicant/**/*.py"]
       }
     ],
     "approved_imports": [
