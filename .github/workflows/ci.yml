@@ -1031,7 +1031,9 @@ jobs:
             "$organization")"
           for attempt in {1..60}; do
             if curl --fail --silent "http://127.0.0.1:${port}/health" \
-              | grep --fixed-strings --quiet '"service":"organization"'; then
+                | grep --extended-regexp --quiet '"status":"(healthy|degraded)"' \
+              && curl --fail --silent "http://127.0.0.1:${port}/version" \
+                | grep --fixed-strings --quiet '"service":"organization"'; then
               exit 0
             fi
             sleep 0.5
@@ -1086,7 +1088,9 @@ jobs:
             "$service")"
           for attempt in {1..60}; do
             if curl --fail --silent "http://127.0.0.1:${port}/health" \
-              | grep --fixed-strings --quiet '"service":"credential-template"'; then
+                | grep --extended-regexp --quiet '"status":"(healthy|degraded)"' \
+              && curl --fail --silent "http://127.0.0.1:${port}/version" \
+                | grep --fixed-strings --quiet '"service":"credential-template"'; then
               exit 0
             fi
             sleep 0.5
