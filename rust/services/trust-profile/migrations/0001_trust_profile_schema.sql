@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS trust_profile_service.trust_registry_entries (
     not_after TIMESTAMPTZ,
     source TEXT NOT NULL,
     framework_code TEXT,
-    sequence BIGINT NOT NULL DEFAULT 0,
+    sequence INTEGER NOT NULL DEFAULT 0,
     is_current BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()

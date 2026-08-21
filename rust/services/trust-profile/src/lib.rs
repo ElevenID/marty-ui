@@ -1,6 +1,7 @@
 pub mod domain;
 pub mod persistence;
 pub mod policy;
+pub mod postgres;
 pub mod repository;
 
 pub use domain::{
@@ -16,6 +17,7 @@ pub use policy::{
     reject_private_custody_metadata, require_issuer_status_transition,
     sanitize_private_custody_metadata, TrustDomainError,
 };
+pub use postgres::PostgresTrustProfileRepository;
 pub use repository::{
     MemoryTrustProfileRepository, RegistryStatus, TrustProfileRepository,
     TrustProfileRepositoryError,
