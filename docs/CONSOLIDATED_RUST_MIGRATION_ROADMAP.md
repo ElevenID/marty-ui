@@ -1546,13 +1546,43 @@ legacy gRPC adapter's JWT-only approximation and empty-on-error fallback.
 method inventory, authentication failures, lifecycle sequence, wire format,
 wallet lookup, health and forbidden private fields.
 
-The Rust crate now passes 29 HTTP, gRPC, application, wallet, domain, lifecycle,
-catalog, surface, migration, persistence and configured-PostgreSQL contract
-tests; the surviving Python oracle passes all 176 tests; formatting and strict
-Clippy pass. The configured PostgreSQL tests run when
-`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is supplied. Remaining work is MMF
-runtime/outbox composition, executable and container packaging, configured
-acceptance and immediate Python deletion. No beta deployment has occurred.
+The service now has its native executable and MMF lifecycle composition as
+well. Fail-closed configuration normalizes the legacy asyncpg URL, rejects
+invalid listener and dependency endpoints, and requires both the shared
+service token and signing-key internal credential in beta and production. MMF
+owns `/health`, `/ready`, `/version`, lifecycle transitions and required
+component gating; the service adds explicit native-backend/version/capability
+diagnostics. Startup connects PostgreSQL, applies and validates the Rust schema,
+reconciles the system wallet/destination catalog, constructs the real control
+plane, and binds Axum and Tonic with coordinated graceful shutdown.
+
+One native control-plane adapter now consolidates organization membership and
+administration, organization display names, active revocation profiles,
+managed issuer DID resolution and trust-profile issuer acceptance. It preserves
+the existing gRPC and internal HTTP protocols, forwards service credentials,
+checks exact tenant/resource identities, rejects inactive or cross-tenant
+responses, and refuses signing responses with incomplete identity state or
+private JWK fields. `credential-template-control-plane-behavior.json` is the
+shared language-neutral oracle for key-purpose selection, DID/method
+normalization, disabled trust sources and fail-closed signing identity rules.
+
+Credential Template did not previously publish domain events, so this port
+does not invent a non-atomic event contract merely to enable an idle outbox.
+The MMF transactional-outbox implementation remains the single shared Rust
+implementation for services that own event behavior; Credential Template will
+adopt it only with a documented event schema and atomic repository operation.
+
+The Rust crate now passes 38 HTTP, gRPC, application, control-plane, runtime,
+configuration, wallet, domain, lifecycle, catalog, surface, migration,
+persistence and configured-PostgreSQL tests. The focused surviving Python
+control-plane/service oracle passes 75 tests; formatting and strict Clippy
+pass. The configured PostgreSQL tests run when
+`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is supplied. Remaining work is to
+translate all final-state guarantees from the 45 historical Python Alembic
+revisions into idempotent Rust data reconciliation, add the native container
+and deployment packaging without deploying it, run configured acceptance and
+workspace consumer gates, then immediately delete the Python implementation,
+migrations and implementation-specific tests. No beta deployment has occurred.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
