@@ -1,6 +1,7 @@
 pub mod application;
 pub mod domain;
 pub mod persistence;
+pub mod postgres;
 
 pub use application::{
     PolicyApplication, PolicyApplicationError, PolicyAuthorization, PolicyRepository,
@@ -12,6 +13,10 @@ pub use domain::{
     RequestPurpose, RequestedClaim,
 };
 pub use persistence::{PolicyRecord, PolicyRecordError, PRESENTATION_POLICY_MIGRATION};
+pub use postgres::{
+    migrate_presentation_policy_schema, validate_presentation_policy_schema, PostgresPolicyStore,
+    PostgresPolicyStoreError,
+};
 
 pub const HTTP_OPERATIONS: [(&str, &str); 10] = [
     ("POST", "/v1/presentation-policies"),
