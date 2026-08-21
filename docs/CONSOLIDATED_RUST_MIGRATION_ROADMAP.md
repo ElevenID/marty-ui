@@ -1646,7 +1646,7 @@ approximately 6,320. Work is isolated in
 Credential Template packaging slice while its external acceptance gates remain
 pending.
 
-The baseline is frozen before implementation. All 190 surviving Python service
+The baseline is frozen before implementation. All 193 surviving Python service
 tests pass. `presentation-policy-service-behavior.json` records all ten HTTP
 operations, all ten gRPC methods, four lifecycle states, eleven claim
 constraints, eight request purposes, both legacy holder-binding normalization
@@ -1654,17 +1654,31 @@ cases, every released credential-format alias and all nine Alembic revisions.
 Python executes the same contract rather than relying on a Rust-specific unit
 test inventory.
 
-The initial `marty-presentation-policy` crate owns the service domain and calls
+The `marty-presentation-policy` crate owns the service domain and calls
 `marty_verification::policy::evaluate_service_policy` directly. It does not
 copy the decision engine currently reached through `_marty_rs`. The first Rust
 behavioral tests prove surface completeness, holder-binding normalization,
 format aliases, fail-closed lifecycle transitions, lossless new-version
-creation and the existing cross-language verified-fact golden vector. Next
-work is one PostgreSQL repository/migration owner, lossless HTTP/gRPC lifecycle
-use cases, and the verification/trust/status orchestration around the canonical
-Rust cryptographic and policy kernels. Python remains until those behaviors and
-configured acceptance pass, then the service and its nine revisions are
-deleted immediately.
+creation and the existing cross-language verified-fact golden vector.
+
+Rust now also owns the lossless PostgreSQL record, canonical policy document,
+legacy-row upgrade, idempotent schema migration and tenant-scoped repository.
+CI bundles and executes its configured PostgreSQL integration contract. The
+shared application layer owns every lifecycle mutation and all authorization
+actions. All ten frozen HTTP operations execute through that layer, including
+saved and inline evaluation. Public DTO conversion preserves generated nested
+identities, protocol-first required-claim bridging, holder-binding
+normalization, paging and response projections without exposing internal IDs.
+Raw tokens can enter the decision kernel only through a required verification
+orchestrator that supplies cryptographically verified facts; an unavailable
+or malformed verifier fails closed. The complete crate currently has 12 green
+behavioral and persistence tests and passes strict Clippy.
+
+Next work is the concrete Rust verification/trust/status orchestrator, the ten
+gRPC methods, service runtime/configuration and packaging. Configured
+PostgreSQL, container and external-provider acceptance then gate immediate
+deletion of the Python service and its nine revisions. No beta deployment has
+occurred; this remains part of the single aggregate wave-three beta update.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

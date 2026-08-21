@@ -10,8 +10,10 @@ publish = false
 
 [dependencies]
 async-trait.workspace = true
+axum.workspace = true
 chrono.workspace = true
 marty-verification.workspace = true
+mmf-security.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
@@ -21,3 +23,4 @@ uuid.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+tower.workspace = true

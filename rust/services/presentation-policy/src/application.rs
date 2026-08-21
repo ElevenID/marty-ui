@@ -94,6 +94,37 @@ impl PolicyApplication {
         Ok(policy)
     }
 
+    pub async fn get_for_evaluation(
+        &self,
+        principal_id: &str,
+        policy_id: Uuid,
+    ) -> Result<PresentationPolicy, PolicyApplicationError> {
+        let policy = self.load(policy_id).await?;
+        self.require(principal_id, policy.organization_id, "evaluate")
+            .await?;
+        Ok(policy)
+    }
+
+    pub async fn get_for_update(
+        &self,
+        principal_id: &str,
+        policy_id: Uuid,
+    ) -> Result<PresentationPolicy, PolicyApplicationError> {
+        let policy = self.load(policy_id).await?;
+        self.require(principal_id, policy.organization_id, "edit")
+            .await?;
+        Ok(policy)
+    }
+
+    pub async fn authorize_inline_evaluation(
+        &self,
+        principal_id: &str,
+        organization_id: Uuid,
+    ) -> Result<(), PolicyApplicationError> {
+        self.require(principal_id, organization_id, "evaluate")
+            .await
+    }
+
     pub async fn list(
         &self,
         principal_id: &str,
@@ -120,7 +151,7 @@ impl PolicyApplication {
         replacement: PresentationPolicy,
     ) -> Result<PresentationPolicy, PolicyApplicationError> {
         let existing = self.load(replacement.id).await?;
-        self.require(principal_id, existing.organization_id, "update")
+        self.require(principal_id, existing.organization_id, "edit")
             .await?;
         if existing.status != PolicyStatus::Draft {
             return Err(PolicyApplicationError::Conflict(

@@ -4473,13 +4473,16 @@ name = "marty-presentation-policy"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "chrono",
  "marty-verification",
+ "mmf-security",
  "serde",
  "serde_json",
  "sqlx",
  "thiserror 2.0.20",
  "tokio",
+ "tower",
  "uuid",
 ]
 

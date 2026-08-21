@@ -1,5 +1,6 @@
 pub mod application;
 pub mod domain;
+pub mod http_service;
 pub mod persistence;
 pub mod postgres;
 
@@ -11,6 +12,10 @@ pub use domain::{
     ClaimConstraint, ConstraintType, CredentialRequirement, DisplayMetadata, FreshnessPolicy,
     HolderBinding, IssuerConstraints, PolicyDomainError, PolicyStatus, PresentationPolicy,
     RequestPurpose, RequestedClaim,
+};
+pub use http_service::{
+    presentation_policy_router, EvaluatePresentationRequest, PresentationPolicyHttpState,
+    PresentationVerificationError, PresentationVerificationOrchestrator,
 };
 pub use persistence::{PolicyRecord, PolicyRecordError, PRESENTATION_POLICY_MIGRATION};
 pub use postgres::{
