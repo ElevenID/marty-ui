@@ -768,6 +768,7 @@ services:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: flow
     environment:
+      ENVIRONMENT: development
       FLOW_SERVICE_PORT: "8011"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}

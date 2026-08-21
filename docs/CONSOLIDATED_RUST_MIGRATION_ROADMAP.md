@@ -781,11 +781,30 @@ packaging is now complete: the shared service image builds and contains
 `marty-flow`, the production-equivalent Rust service image has a dedicated
 non-Python `flow` target with HTTP and gRPC ports plus a native health check,
 and CI builds that target as `marty-flow:ci`. The language-neutral packaging
-contract verifies all three boundaries. The shared service entrypoint still
-dispatches Flow to the Python parity oracle until complete executable,
-PostgreSQL and container acceptance pass. Flow's remaining work is that final
-acceptance gate followed immediately by entrypoint cutover, migration-runner
-cleanup and deletion of the superseded Python package and dependencies.
+contract verifies all three boundaries. The source cutover is now complete:
+the shared image dispatches Flow only to `marty-flow`, the shared Python
+migration runner no longer owns the Flow schema, and Rust startup runs the
+advisory-locked schema and seed migrations. The complete `services/flow`
+package and its obsolete Python-only PostgreSQL contract image are deleted,
+removing 19,935 Python, migration, fixture and image-contract lines while
+retaining the language-neutral contracts and native tests. The Rust
+PostgreSQL integration gate now explicitly owns event-plan races, payload and
+semantic conflicts, artifact idempotency, callback leases, migration and seed
+behavior in CI.
+
+Development is explicitly configured as development. Beta is explicitly
+deployed and fail closed: Flow receives distinct inbound and outbound workload
+certificates, presentation-policy receives its server identity, and auth,
+applicant and verification receive separate client identities. A beta-only
+provisioning helper creates short-lived identities with exact DNS and SPIFFE
+URI SANs without printing keys; the release runner validates every required
+secret, file, chain and expiry before stack mutation. The three documented
+legacy downstream gRPC channels retain their explicit beta plaintext decision,
+but sensitive Flow RPC authorization still derives only from verified client
+certificates. Local full-suite, strict Clippy, optimized binary, packaging,
+Compose and anti-reintroduction gates pass. Remaining Flow work is external CI
+container/PostgreSQL execution and branch landing; no beta deployment has
+occurred.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

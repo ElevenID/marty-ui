@@ -25,13 +25,13 @@ def test_runner_imports_the_canonical_service_module(
     def run(app: object, **kwargs: object) -> None:
         uvicorn_calls.append((app, kwargs))
 
-    monkeypatch.setenv("SERVICE_NAME", "flow")
+    monkeypatch.setenv("SERVICE_NAME", "auth")
     monkeypatch.setattr(service_runner.importlib, "import_module", import_module)
     monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(run=run))
 
     service_runner.main()
 
-    assert imported == ["flow.main"]
+    assert imported == ["auth.main"]
     assert uvicorn_calls == [
         (
             application,

@@ -308,6 +308,58 @@ $grpcServiceToken = Get-DotEnvValue -Path $GeneratedEnvFile -Name "GRPC_SERVICE_
 if ($grpcServiceToken.Length -lt 32 -or $grpcServiceToken -match '^(?i:change[-_]?me|changeme|replace[-_]?me)') {
     throw "GRPC_SERVICE_TOKEN must be a non-placeholder value of at least 32 characters"
 }
+$requiredFlowSecrets = @(
+    "FLOW_WEBHOOK_SECRET",
+    "FLOW_APPLICATION_EVENT_HMAC_KEY",
+    "ISSUANCE_API_KEY",
+    "SIGNING_KEYS_INTERNAL_API_KEY"
+)
+foreach ($name in $requiredFlowSecrets) {
+    $secret = Get-DotEnvValue -Path $GeneratedEnvFile -Name $name
+    if ($secret.Length -lt 32 -or $secret -match '^(?i:change[-_]?me|changeme|replace[-_]?me)') {
+        throw "$name must be a non-placeholder value of at least 32 characters"
+    }
+}
+$workloadIdentityPathNames = @(
+    "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE",
+    "PP_WORKLOAD_SERVER_CERT_FILE",
+    "PP_WORKLOAD_SERVER_KEY_FILE",
+    "FLOW_WORKLOAD_CLIENT_CERT_FILE",
+    "FLOW_WORKLOAD_CLIENT_KEY_FILE",
+    "FLOW_WORKLOAD_SERVER_CERT_FILE",
+    "FLOW_WORKLOAD_SERVER_KEY_FILE",
+    "AUTH_WORKLOAD_CLIENT_CERT_FILE",
+    "AUTH_WORKLOAD_CLIENT_KEY_FILE",
+    "APPLICANT_WORKLOAD_CLIENT_CERT_FILE",
+    "APPLICANT_WORKLOAD_CLIENT_KEY_FILE",
+    "VERIFICATION_WORKLOAD_CLIENT_CERT_FILE",
+    "VERIFICATION_WORKLOAD_CLIENT_KEY_FILE"
+)
+$workloadIdentityPaths = @{}
+foreach ($name in $workloadIdentityPathNames) {
+    $path = Get-DotEnvValue -Path $GeneratedEnvFile -Name $name
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "$name does not identify a readable workload identity file"
+    }
+    $workloadIdentityPaths[$name] = (Resolve-Path -LiteralPath $path).Path
+}
+if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
+    throw "OpenSSL is required to validate beta workload identity certificates"
+}
+$workloadCa = $workloadIdentityPaths["MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE"]
+$workloadLeafNames = @(
+    "PP_WORKLOAD_SERVER_CERT_FILE",
+    "FLOW_WORKLOAD_CLIENT_CERT_FILE",
+    "FLOW_WORKLOAD_SERVER_CERT_FILE",
+    "AUTH_WORKLOAD_CLIENT_CERT_FILE",
+    "APPLICANT_WORKLOAD_CLIENT_CERT_FILE",
+    "VERIFICATION_WORKLOAD_CLIENT_CERT_FILE"
+)
+foreach ($name in $workloadLeafNames) {
+    $certificate = $workloadIdentityPaths[$name]
+    Invoke-Checked -FilePath openssl -Arguments @("x509", "-checkend", "3600", "-noout", "-in", $certificate)
+    Invoke-Checked -FilePath openssl -Arguments @("verify", "-CAfile", $workloadCa, $certificate)
+}
 if (-not (Test-Path -LiteralPath $sourceManifestPath -PathType Leaf)) {
     throw "Missing source manifest: $sourceManifestPath"
 }

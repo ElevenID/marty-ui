@@ -183,9 +183,9 @@
       "legacy": [
         {
           "repository": "ElevenID/marty-ui",
-          "paths": ["services/flow/main.py", "services/common/did_resolution.py"],
+          "paths": ["services/common/did_resolution.py"],
           "language": "python",
-          "disposition": "retain-flow-api-storage-did-adapter-only"
+          "disposition": "did-adapter-only"
         }
       ]
     },
@@ -201,9 +201,9 @@
       "legacy": [
         {
           "repository": "ElevenID/marty-ui",
-          "paths": ["services/flow/main.py", "services/verification/main.py"],
+          "paths": ["services/verification/main.py"],
           "language": "python",
-          "disposition": "policy-template-dto-adapters-only"
+          "disposition": "verification-api-adapter-only"
         }
       ]
     },
@@ -216,14 +216,7 @@
         "paths": ["marty-iso18013/src/openid4vp.rs"],
         "binding_paths": ["marty-bindings/src/mdoc.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/flow/native.py", "services/flow/main.py"],
-          "language": "python",
-          "disposition": "adapter-and-orchestration-only"
-        }
-      ]
+      "legacy": []
     },
     {
       "id": "haip-response-encryption",
@@ -234,14 +227,7 @@
         "paths": ["marty-crypto/src/kdf.rs", "marty-verification/src/jwk/jwe.rs"],
         "binding_paths": ["marty-bindings/src/haip.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/flow/main.py", "services/flow/native.py"],
-          "language": "python",
-          "disposition": "kms-and-http-adapter-only"
-        }
-      ]
+      "legacy": []
     },
     {
       "id": "wallet-oid4vc",
@@ -285,14 +271,7 @@
         "paths": ["marty-verification/src/oid4vp.rs"],
         "binding_paths": ["marty-bindings/src/oid4vp_identity.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/flow/main.py", "services/flow/native.py"],
-          "language": "python",
-          "disposition": "configuration-and-native-adapter-only"
-        }
-      ]
+      "legacy": []
     },
     {
       "id": "siop-jwk-id-token-verification",
@@ -303,14 +282,7 @@
         "paths": ["marty-oid4vci/src/siop.rs", "marty-oid4vci/src/jose.rs"],
         "binding_paths": ["marty-bindings/src/siop.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/flow/main.py", "services/flow/native.py"],
-          "language": "python",
-          "disposition": "transaction-policy-and-native-adapter-only"
-        }
-      ]
+      "legacy": []
     },
     {
       "id": "license-entitlements",
@@ -637,24 +609,6 @@
         "expected_matches": {}
       },
       {
-        "id": "no-python-flow-transition-table",
-        "glob": "services/flow/**/*.py",
-        "pattern": "\\b(?:VALID_TRANSITIONS|TERMINAL_STATES)\\b",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-direct-flow-status-assignment",
-        "glob": "services/flow/**/*.py",
-        "pattern": "instance\\.status\\s*=(?!=)",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-direct-flow-native-imports",
-        "glob": "services/flow/**/*.py",
-        "pattern": "(?:from|import)\\s+(?:marty_rs|_marty_rs)",
-        "expected_matches": {}
-      },
-      {
         "id": "no-python-did-resolution-kernel",
         "glob": "services/common/did_resolution.py",
         "pattern": "(?:import\\s+(?:base64|httpx|ipaddress|socket)|getaddrinfo|_resolve_did_jwk|_validate_document|AsyncClient)",
@@ -667,33 +621,9 @@
         "expected_matches": {}
       },
       {
-        "id": "no-python-did-identifier-kernel",
-        "glob": "services/flow/**/*.py",
-        "pattern": "(?:def\\s+_(?:base58_encode|ec_public_key_from_jwk)\\s*\\(|EllipticCurvePublicNumbers|multicodec_bytes)",
-        "expected_matches": {}
-      },
-      {
         "id": "no-python-oid4vp-request-builder",
         "glob": "services/**/*.py",
         "pattern": "(?:_WALLET_FORMATS_FALLBACK|_oid4vp_wallet_registry_formats|_oid4vp_format_alg|_oid4vp_presentation_formats|_is_sd_jwt_format|_is_mdoc_format|_string_filter_for_values|_sd_jwt_vct_values|_dcql_format_name|_json_schema_const_values|_dcql_meta_for_descriptor|_dcql_claims_for_descriptor|default-credential|default_requirement)",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-python-haip-jwe-kernel",
-        "glob": "services/flow/main.py",
-        "pattern": "(?:jwcrypto\\s+import\\s+jwe|JWK\\.generate\\(kty=[\"']EC[\"'])",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-python-oid4vp-x509-kernel",
-        "glob": "services/flow/main.py",
-        "pattern": "(?:x509\\.load_pem_x509_certificate|hashes\\.Hash\\(hashes\\.SHA256\\(\\)\\)|public_bytes\\(serialization\\.Encoding\\.DER\\))",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-python-siop-jose-kernel",
-        "glob": "services/flow/main.py",
-        "pattern": "(?:_decode_siop_jwt_object|verification_key\\.thumbprint\\(\\)|jwcrypto_jwt\\.JWT\\()",
         "expected_matches": {}
       },
       {

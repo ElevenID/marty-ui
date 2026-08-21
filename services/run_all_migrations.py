@@ -77,10 +77,6 @@ SERVICES = [
         "module": "deployment_profile.infrastructure.models",
     },
     {
-        "name": "flow",
-        "module": "flow.infrastructure.models",
-    },
-    {
         "name": "device_registration",
         "module": "device_registration.infrastructure.models",
     },
@@ -1083,7 +1079,6 @@ def ensure_schemas(database_url: str) -> None:
         "issuance_service",
         "presentation_policy_service",
         "deployment_profile_service",
-        "flow_service",
         "notification_service",
         "device_registration_service",
         "revocation_profile_service",
