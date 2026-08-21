@@ -163,12 +163,6 @@
         "binding_paths": ["marty-bindings/src/device_auth.rs"]
       },
       "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/device_registration/keys.py", "services/device_registration/challenges.py", "services/device_registration/native.py"],
-          "language": "python",
-          "disposition": "adapter-only"
-        }
       ]
     },
     {
@@ -602,6 +596,17 @@
         "binding_paths": []
       },
       "legacy": []
+    },
+    {
+      "id": "device-registration-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/device-registration"],
+        "binding_paths": ["contracts/device-registration-service-behavior.json"]
+      },
+      "legacy": []
     }
   ],
   "guardrails": {
@@ -632,6 +637,10 @@
       {
         "capability_id": "applicant-service",
         "forbidden_globs": ["services/applicant/**/*.py"]
+      },
+      {
+        "capability_id": "device-registration-service",
+        "forbidden_globs": ["services/device_registration/**/*.py"]
       }
     ],
     "approved_imports": [

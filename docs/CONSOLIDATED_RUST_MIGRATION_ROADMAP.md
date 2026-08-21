@@ -62,11 +62,11 @@ generated protobufs and caches remain excluded.
 | 5 | Credential template | 13,418 | CRUD/versioning, issuance context, wallet registry and routing, delivery destinations, validation, seeds and storage |
 | 6 | Presentation policy | 11,631 | CRUD/versioning, trust resolution, credential-format dispatch, status lookup, native evaluation adaptation and exact decision responses |
 | 7 | Trust profile | 8,618 | CRUD/versioning, registry synchronization orchestration, trust material, scheduling, storage and authorization |
-| 8 | Applicant | 3,692 | Applicant/application state transitions, vetting, evidence, biometrics, reviewer locks, issuance orchestration and storage |
-| 9 | Verification | 1,867 | Session APIs, OID4VP construction, provider/service integration, persistence and canonical results |
-| 10 | Device registration | 1,845 | Registration lifecycle, challenge consumption, key rotation, preferences, organization checks and storage |
-| 11 | Deployment profile | 1,558 | CRUD, validation, versioning, authorization and storage |
-| 12 | Compliance profile | 857 | CRUD, policy metadata, authorization and storage |
+| 8 | Applicant | 5,652 deleted | Applicant/application state transitions, vetting, evidence, biometrics, reviewer locks, issuance orchestration and storage |
+| 9 | Device registration | 3,220 at cutover | Registration lifecycle, atomic challenge consumption, versioned key rotation, preferences, organization checks, legacy adoption and storage |
+| 10 | Verification | 3,057 current | Session APIs, OID4VP construction, provider/service integration, persistence and canonical results |
+| 11 | Deployment profile | 2,588 current | CRUD, validation, versioning, authorization and storage |
+| 12 | Compliance profile | 1,054 current | CRUD, policy metadata, authorization and storage |
 
 ### Gateway port status
 
@@ -1858,6 +1858,51 @@ configured live service stack are unavailable, so the dedicated image build,
 health smoke and cross-service acceptance remain CI landing gates. No beta
 deployment has occurred; Applicant will ship only in the single aggregate
 wave-three beta update after every remaining service slice lands.
+
+### Device Registration port status
+
+Device Registration has completed its implementation and pre-deletion gates
+on the dedicated `marty-ui-rust-device-registration-cutover-wave3` worktree and
+`agent/marty-ui-rust-device-registration-cutover-wave3` branch. The
+`marty-device-registration` crate is the single service implementation: Axum
+owns all six released HTTP routes and stable response models; SQLx owns the
+registration, immutable key-history and transition repositories; Redis owns
+atomic one-time challenge allocation and compare-and-delete consumption; and
+tonic preserves fail-closed active organization-membership checks.
+
+The service does not duplicate cryptography. Canonical PKCS#1 RSA parsing, RFC
+7638 thumbprints, PS256 proof verification, challenge message construction and
+expiry/binding decisions, plus current/retiring key eligibility remain in
+`marty-verification::device_auth`. The service crate adds only durable
+allocation and lifecycle concerns. Key rotation is an exact PostgreSQL
+compare-and-swap that moves the old key to bounded `RETIRING`, creates exactly
+one next `CURRENT` version, updates the current-key projection and records the
+transition in one transaction. Deletion is an idempotent, audit-preserving
+deactivation that revokes current and retiring keys; re-registration receives
+a new identity and history.
+
+`contracts/device-registration-service-behavior.json` freezes the complete
+route, challenge, failure, lifecycle and deployment contract independently of
+either language. Rust also executes the shared `device_auth.json` challenge
+golden vectors. The native migration uses an advisory lock, creates the same
+schema constraints and partial indexes, rejects incomplete legacy key
+projections, losslessly adopts complete legacy projections as version one and
+never exposes a downgrade that could discard key history. The shared Python
+migration runner no longer imports or owns this schema; native startup applies
+and verifies it before binding the service listener.
+
+The pre-deletion evidence is 27 passing Python-oracle tests (two configured
+PostgreSQL/Redis tests skipped), nine Rust language-neutral/domain/HTTP/
+migration tests, formatting, strict all-target Clippy, a locked native binary
+build, Compose rendering and the dedicated non-Python image/CI target. The
+remaining local limitation is the unavailable Docker daemon and PostgreSQL
+test URL, so live image health, migration races and Redis replica acceptance
+remain configured CI gates. After the ownership and packaging checks pass, all
+21 tracked files under `services/device_registration` (3,220 lines) are deleted
+in this same cutover; no Python fallback remains. No beta deployment occurs at
+this stage. Device Registration joins the one aggregate wave-three beta update
+after Verification, Deployment Profile and Compliance Profile have also
+landed; production remains unchanged.
 
 ### Trust-profile port status
 
