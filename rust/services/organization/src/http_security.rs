@@ -19,9 +19,7 @@ pub fn authenticate_forwarded_http_request(
     headers: &HeaderMap,
     service_authenticator: &ServiceTokenAuthenticator,
 ) -> Result<ForwardedPrincipal, HttpTrustError> {
-    service_authenticator
-        .authenticate(header(headers, "x-service-token"))
-        .map_err(|_| HttpTrustError::ServiceAuthenticationRequired)?;
+    authenticate_http_service(headers, service_authenticator)?;
     let user_id = header(headers, "x-user-id")
         .ok_or(HttpTrustError::UserAuthenticationRequired)?
         .to_owned();
@@ -40,6 +38,15 @@ pub fn authenticate_forwarded_http_request(
         organization_id,
         authorized_permission,
     })
+}
+
+pub fn authenticate_http_service(
+    headers: &HeaderMap,
+    service_authenticator: &ServiceTokenAuthenticator,
+) -> Result<(), HttpTrustError> {
+    service_authenticator
+        .authenticate(header(headers, "x-service-token"))
+        .map_err(|_| HttpTrustError::ServiceAuthenticationRequired)
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {

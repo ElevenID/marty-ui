@@ -10,6 +10,7 @@ pub mod domain;
 pub mod events;
 pub mod grpc_service;
 pub mod http_security;
+pub mod http_service;
 pub mod migration;
 pub mod policy_sets;
 pub mod postgres;
@@ -55,6 +56,7 @@ pub use events::{
 };
 pub use grpc_service::*;
 pub use http_security::*;
+pub use http_service::*;
 pub use policy_sets::{
     deserialize_policy_documents, policy_set_ids_to_archive, validate_policy_documents,
     CedarPolicyDocument, CreatePolicySetCommand, UpdatePolicySetCommand, UpdatePolicySetPatch,

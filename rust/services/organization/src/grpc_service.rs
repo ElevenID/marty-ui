@@ -400,29 +400,15 @@ fn parse_optional_uuids(
 }
 
 fn parse_organization_type(value: &str) -> Result<OrganizationType, Status> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "enterprise" => Ok(OrganizationType::Enterprise),
-        "startup" => Ok(OrganizationType::Startup),
-        "individual" => Ok(OrganizationType::Individual),
-        "government" => Ok(OrganizationType::Government),
-        "education" => Ok(OrganizationType::Education),
-        "healthcare" => Ok(OrganizationType::Healthcare),
-        "financial" => Ok(OrganizationType::Financial),
-        "other" => Ok(OrganizationType::Other),
-        _ => Err(Status::invalid_argument("ORGANIZATION.INVALID_ORG_TYPE")),
-    }
+    value
+        .parse()
+        .map_err(|_| Status::invalid_argument("ORGANIZATION.INVALID_ORG_TYPE"))
 }
 
 fn parse_join_mechanism(value: &str) -> Result<JoinMechanism, Status> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "open" => Ok(JoinMechanism::Open),
-        "code" => Ok(JoinMechanism::Code),
-        "invite" => Ok(JoinMechanism::Invite),
-        "domain" => Ok(JoinMechanism::Domain),
-        _ => Err(Status::invalid_argument(
-            "ORGANIZATION.INVALID_JOIN_MECHANISM",
-        )),
-    }
+    value
+        .parse()
+        .map_err(|_| Status::invalid_argument("ORGANIZATION.INVALID_JOIN_MECHANISM"))
 }
 
 fn optional_text(value: String) -> Option<String> {

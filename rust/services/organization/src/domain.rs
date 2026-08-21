@@ -27,6 +27,12 @@ pub enum DomainError {
     InvalidOrganizationName,
     #[error("join-code usage counter overflow")]
     JoinCodeUsageOverflow,
+    #[error("invalid organization type: {0}")]
+    InvalidOrganizationType(String),
+    #[error("invalid join mechanism: {0}")]
+    InvalidJoinMechanism(String),
+    #[error("invalid view mode: {0}")]
+    InvalidViewMode(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +154,24 @@ impl OrganizationType {
     }
 }
 
+impl std::str::FromStr for OrganizationType {
+    type Err = DomainError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "enterprise" | "vendor" => Ok(Self::Enterprise),
+            "startup" => Ok(Self::Startup),
+            "individual" | "nonprofit" => Ok(Self::Individual),
+            "government" => Ok(Self::Government),
+            "education" => Ok(Self::Education),
+            "healthcare" => Ok(Self::Healthcare),
+            "financial" => Ok(Self::Financial),
+            "other" => Ok(Self::Other),
+            _ => Err(DomainError::InvalidOrganizationType(value.into())),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MemberStatus {
@@ -205,6 +229,18 @@ impl ViewMode {
     }
 }
 
+impl std::str::FromStr for ViewMode {
+    type Err = DomainError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "applicant" => Ok(Self::Applicant),
+            "org_admin" => Ok(Self::OrgAdmin),
+            _ => Err(DomainError::InvalidViewMode(value.into())),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum JoinMechanism {
@@ -222,6 +258,20 @@ impl JoinMechanism {
             Self::Code => "code",
             Self::Invite => "invite",
             Self::Domain => "domain",
+        }
+    }
+}
+
+impl std::str::FromStr for JoinMechanism {
+    type Err = DomainError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "open" => Ok(Self::Open),
+            "code" => Ok(Self::Code),
+            "invite" => Ok(Self::Invite),
+            "domain" => Ok(Self::Domain),
+            _ => Err(DomainError::InvalidJoinMechanism(value.into())),
         }
     }
 }

@@ -1080,6 +1080,28 @@ requests before the deployed Organization runtime can require it; that wiring
 is part of the remaining executable cutover, not a fallback. No beta
 deployment has occurred.
 
+Fourteen of the 62 frozen HTTP contracts now execute through Axum:
+organization create/list/discovery/mine/get/update, public and internal
+lifecycle reads, public environment read/update, trusted internal settings,
+console preferences and onboarding status. The adapters preserve creation
+defaults and disablement, strict unknown-field rejection, explicit
+omit/null/replace update semantics, membership and exact permission checks,
+owner membership projection, no-store preferences, Hosted Pilot retention
+projection and stable error envelopes. Organization type, join mechanism and
+view-mode parsing now live in the domain and are shared with gRPC rather than
+being duplicated per adapter.
+
+Black-box Axum tests prove missing gateway credentials and malformed/private
+bodies fail before storage access and preserve the released onboarding
+projection. The optional `ORGANIZATION_POSTGRES_TEST_URL` gate exercises
+creation, owner membership, authenticated reads, permissioned updates,
+preferences, internal settings, lifecycle projection and cleanup through the
+actual HTTP router. Forty Rust Organization tests, all 74 surviving Python
+tests, formatting and strict Clippy pass. The remaining 48 HTTP contracts are
+join/member/API-key, RBAC, policy/audit and SCIM families, followed by runtime,
+outbox worker, gateway credential injection, packaging and deletion. No beta
+deployment has occurred.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
