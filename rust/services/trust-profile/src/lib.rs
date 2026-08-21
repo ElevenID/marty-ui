@@ -1,4 +1,5 @@
 pub mod domain;
+pub mod persistence;
 pub mod policy;
 
 pub use domain::{
@@ -8,6 +9,7 @@ pub use domain::{
     TrustProfile, TrustProfileIssuer, TrustProfileStatus, TrustProfileType, TrustRegistryEntry,
     TrustRelationshipStatus, TrustSource, TrustSourceType, ValidationRules,
 };
+pub use persistence::{TrustProfileRecord, TrustProfileRecordError, TRUST_PROFILE_MIGRATION};
 pub use policy::{
     allowed_issuers_after_request, normalize_accreditations, normalize_jurisdictions,
     reject_private_custody_metadata, require_issuer_status_transition,
