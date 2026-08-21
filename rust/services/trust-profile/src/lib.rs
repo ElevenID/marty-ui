@@ -1,11 +1,18 @@
 pub mod application;
 pub mod catalog;
+pub mod config;
+pub mod control_plane;
 pub mod domain;
 pub mod migration;
 pub mod persistence;
 pub mod policy;
 pub mod postgres;
 pub mod repository;
+pub mod runtime;
+
+pub mod organization_proto {
+    tonic::include_proto!("marty.ui.organization.v1");
+}
 
 pub use application::{
     Change, CreateProfileInput, IssuerEntityPatch, OrganizationProfilePatch, ProfilePatch,
@@ -15,6 +22,8 @@ pub use application::{
 pub use catalog::{
     bootstrap_system_catalog, system_frameworks, MartyBootstrapConfig, TrustCatalogError,
 };
+pub use config::{RuntimeEnvironment, TrustProfileConfigError, TrustProfileServiceConfig};
+pub use control_plane::NativeTrustProfileControlPlane;
 pub use domain::{
     CascadeRevocationPolicy, ComplianceStatus, IssuerEntity, IssuerEntityComplianceStatus,
     IssuerEntityType, OrganizationTrustProfile, RegistryImportSource, RegistryImportType,
@@ -35,6 +44,7 @@ pub use repository::{
     MemoryTrustProfileRepository, RegistryStatus, TrustProfileRepository,
     TrustProfileRepositoryError,
 };
+pub use runtime::{TrustProfileDependency, TrustProfileRuntime};
 
 pub const HTTP_OPERATIONS: [(&str, &str); 32] = [
     ("POST", "/v1/organizations/{organization_id}/trust-profiles"),

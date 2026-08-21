@@ -4581,13 +4581,27 @@ name = "marty-trust-profile"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "chrono",
  "marty-verification",
+ "mmf-core",
+ "mmf-runtime",
+ "mmf-security",
+ "prost",
+ "protoc-bin-vendored",
  "serde",
  "serde_json",
  "sqlx",
  "thiserror 2.0.20",
  "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
