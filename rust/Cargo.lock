@@ -4476,6 +4476,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "marty-crypto",
  "marty-oid4vci",
  "marty-verification",
  "mmf-core",

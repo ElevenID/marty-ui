@@ -7,6 +7,7 @@ use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
 use crate::{
+    grpc_security::{PresentationGrpcSecurity, EVALUATE_PRESENTATION_METHOD, GET_POLICY_METHOD},
     http_service::{
         apply_update_from_transport, build_policy_from_transport, evaluate_policy,
         PresentationPolicyHttpError,
@@ -27,6 +28,7 @@ pub struct PresentationPolicyGrpcService {
     application: Arc<PolicyApplication>,
     verification: Arc<dyn PresentationVerificationOrchestrator>,
     service_authenticator: Arc<ServiceTokenAuthenticator>,
+    workload_security: Option<Arc<PresentationGrpcSecurity>>,
 }
 
 impl PresentationPolicyGrpcService {
@@ -43,7 +45,13 @@ impl PresentationPolicyGrpcService {
                 service_token,
                 service_authentication_required,
             )?),
+            workload_security: None,
         })
+    }
+
+    pub fn with_workload_security(mut self, security: Arc<PresentationGrpcSecurity>) -> Self {
+        self.workload_security = Some(security);
+        self
     }
 
     fn authenticate<T>(&self, request: &Request<T>) -> Result<(), Status> {
@@ -52,6 +60,14 @@ impl PresentationPolicyGrpcService {
             .map_err(|_| {
                 Status::unauthenticated("PRESENTATION_POLICY.GRPC_SERVICE_AUTHENTICATION_REQUIRED")
             })
+    }
+
+    fn authenticate_workload<T>(&self, request: &Request<T>, method: &str) -> Result<(), Status> {
+        self.authenticate(request)?;
+        self.workload_security
+            .as_ref()
+            .ok_or_else(|| Status::unavailable("workload authorization is unavailable"))?
+            .authorize(request, method)
     }
 
     fn principal<T>(&self, request: &Request<T>) -> Result<String, Status> {
@@ -67,7 +83,11 @@ impl PresentationPolicyService for PresentationPolicyGrpcService {
         &self,
         request: Request<GetPolicyRequest>,
     ) -> Result<Response<PolicyResponse>, Status> {
-        self.authenticate(&request)?;
+        if self.workload_security.is_some() {
+            self.authenticate_workload(&request, GET_POLICY_METHOD)?;
+        } else {
+            self.authenticate(&request)?;
+        }
         let principal = self.principal(&request)?;
         let policy = self
             .application
@@ -252,7 +272,11 @@ impl PresentationPolicyService for PresentationPolicyGrpcService {
         &self,
         request: Request<EvaluatePresentationMessage>,
     ) -> Result<Response<PolicyEvaluationResponse>, Status> {
-        self.authenticate(&request)?;
+        if self.workload_security.is_some() {
+            self.authenticate_workload(&request, EVALUATE_PRESENTATION_METHOD)?;
+        } else {
+            self.authenticate(&request)?;
+        }
         let principal = self.principal(&request)?;
         let input = request.into_inner();
         let policy = self

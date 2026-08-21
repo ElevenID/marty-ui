@@ -2,6 +2,7 @@ pub mod application;
 pub mod config;
 pub mod control_plane;
 pub mod domain;
+pub mod grpc_security;
 pub mod grpc_service;
 pub mod http_service;
 pub mod native_kernel;
@@ -24,6 +25,7 @@ pub use domain::{
     HolderBinding, IssuerConstraints, PolicyDomainError, PolicyStatus, PresentationPolicy,
     RequestPurpose, RequestedClaim,
 };
+pub use grpc_security::PresentationGrpcSecurity;
 pub use grpc_service::PresentationPolicyGrpcService;
 pub use http_service::{
     presentation_policy_router, EvaluatePresentationRequest, PresentationPolicyHttpState,
