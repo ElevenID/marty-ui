@@ -1256,6 +1256,28 @@ shared-database mutation was used to manufacture live acceptance evidence.
 Python deletion therefore remains pending the immutable MMF pin, image build,
 and configured executable acceptance. No beta deployment has occurred.
 
+The Organization source cutover is complete in commit `ce882181`. The native
+crate is now the sole runtime and migration owner; the Python migration runner
+no longer imports the deleted service, and the ownership manifest marks
+`organization-service` as `native-active` with an anti-reintroduction guard.
+The cutover removed all 86 tracked files below `services/organization`,
+including 8,145 production Python lines and 16,437 tracked service lines in
+total, while retaining the frozen 62-route HTTP surface, all 12 intended gRPC
+methods, PostgreSQL schema, Redis state, Cedar policy behavior, SCIM, audit,
+startup reconciliation and durable MMF outbox delivery in Rust.
+
+The final local gate is 61 passing Rust tests, including two executable
+fail-closed tests, formatting and strict Clippy under Rust 1.95. Thirty-five
+focused ownership, packaging, release and migration-history checks pass;
+base-plus-beta Compose and the Kubernetes/self-host YAML models validate. CI
+now builds a dedicated Organization image, smoke-tests it against pinned
+PostgreSQL and Redis containers, and runs the migration, application and
+repository PostgreSQL executables with a required database URL. Those live
+gates cannot execute on this host because its Docker daemon and test database
+are unavailable, so merge remains contingent on the configured CI jobs rather
+than weakening or silently skipping them. MMF publication and immutable pinning
+remain aggregate landing work. No beta deployment has occurred.
+
 ### Auth port status
 
 Auth is active in dependent worktree `marty-ui-rust-auth-wave3` on branch
