@@ -67,6 +67,7 @@ fn router() -> axum::Router {
         providers: Arc::new(FlowProviderRegistry::default()),
         public_base_url: "http://localhost:8000".into(),
         verification: FlowHttpVerificationOptions::default(),
+        application_approval: marty_flow::FlowHttpApplicationApprovalOptions::default(),
     })
 }
 

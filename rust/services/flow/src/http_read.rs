@@ -13,8 +13,8 @@ use serde_json::{json, Value};
 
 use crate::{
     advance_instance_record, apply_physical_advance_side_effect, create_definition_record,
-    definition_references, flow_verification_routes, parse_request, prepare_instance_start,
-    prepare_oid4vci_retry, start_instance_record, update_definition_record,
+    definition_references, flow_application_routes, flow_verification_routes, parse_request,
+    prepare_instance_start, prepare_oid4vci_retry, start_instance_record, update_definition_record,
     validate_definition_record, AdvanceFlowRequest, CreateFlowDefinitionRequest, DefinitionStatus,
     FlowDefinitionMutationError, FlowInstanceExecutionError, FlowInstanceSideEffectError,
     FlowProviderError, FlowProviderRegistry, FlowRecordError, FlowType, PostgresFlowRepository,
@@ -31,6 +31,7 @@ pub struct FlowHttpState {
     pub providers: Arc<FlowProviderRegistry>,
     pub public_base_url: String,
     pub verification: crate::FlowHttpVerificationOptions,
+    pub application_approval: crate::FlowHttpApplicationApprovalOptions,
 }
 
 pub fn flow_read_router(state: FlowHttpState) -> Router {
@@ -84,6 +85,7 @@ pub fn flow_read_router(state: FlowHttpState) -> Router {
             "/v1/flows/instances/{instance_id}/generate-qr",
             post(generate_qr),
         )
+        .merge(flow_application_routes())
         .merge(flow_verification_routes())
         .with_state(state)
 }
@@ -992,6 +994,7 @@ mod tests {
             providers: Arc::new(FlowProviderRegistry::default()),
             public_base_url: "http://localhost:8000".into(),
             verification: crate::FlowHttpVerificationOptions::default(),
+            application_approval: crate::FlowHttpApplicationApprovalOptions::default(),
         })
     }
 

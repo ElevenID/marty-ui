@@ -18,6 +18,7 @@ fn router() -> axum::Router {
         providers: Arc::new(FlowProviderRegistry::default()),
         public_base_url: "https://verifier.example".into(),
         verification: FlowHttpVerificationOptions::default(),
+        application_approval: marty_flow::FlowHttpApplicationApprovalOptions::default(),
     })
 }
 

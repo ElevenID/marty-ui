@@ -35,6 +35,7 @@ pub struct FlowHttpVerificationOptions {
     pub request_object: RequestObjectOptions,
     pub verification_start: VerificationStartOptions,
     pub default_issuer_did: String,
+    pub default_organization_id: String,
     pub allow_http_loopback: bool,
     pub nonce_ttl_seconds: u64,
 }
@@ -47,6 +48,7 @@ impl Default for FlowHttpVerificationOptions {
             request_object: RequestObjectOptions::default(),
             verification_start: VerificationStartOptions::default(),
             default_issuer_did: "did:web:localhost:orgs:marty".into(),
+            default_organization_id: "00000000-0000-0000-0000-000000000001".into(),
             allow_http_loopback: true,
             nonce_ttl_seconds: NONCE_TTL_SECONDS,
         }
@@ -62,6 +64,7 @@ impl FlowHttpVerificationOptions {
             request_object: config.request_object_options(),
             verification_start: config.verification_start_options(),
             default_issuer_did: config.oid4vp_issuer_did.clone(),
+            default_organization_id: config.marty_organization_id.clone(),
             allow_http_loopback: !config.environment.is_deployed(),
             nonce_ttl_seconds: NONCE_TTL_SECONDS,
         }
@@ -73,6 +76,7 @@ pub(crate) fn flow_verification_routes() -> Router<FlowHttpState> {
         .route("/v1/flows/verify", post(start_verification))
         .route("/v1/flows/siop", post(start_siop))
         .route("/v1/flows/siop/submit", post(submit_siop))
+        .route("/oid4vp/did.json", get(oid4vp_did_document))
         .route(
             "/v1/flows/instances/{instance_id}/request",
             get(get_request_object).post(post_request_object),
@@ -85,6 +89,54 @@ pub(crate) fn flow_verification_routes() -> Router<FlowHttpState> {
             "/v1/flows/instances/{instance_id}/submit/dc-api",
             post(submit_dc_api),
         )
+}
+
+async fn oid4vp_did_document(
+    State(state): State<FlowHttpState>,
+) -> Result<Response, FlowHttpError> {
+    let options = &state.verification;
+    let signing =
+        state
+            .providers
+            .signing_identity
+            .as_ref()
+            .ok_or(crate::FlowProviderError::Unavailable {
+                provider: "signing_identity",
+            })?;
+    let identity = signing
+        .resolve(
+            &options.default_organization_id,
+            &options.default_issuer_did,
+            "oid4vp_request_signing",
+            "oauth-authz-req+jwt",
+            Some("ES256"),
+        )
+        .await?;
+    let document = json!({
+        "@context": [
+            "https://www.w3.org/ns/did/v1",
+            "https://w3id.org/security/suites/jws-2020/v1"
+        ],
+        "id": identity.issuer_did,
+        "verificationMethod": [{
+            "id": identity.verification_method_id,
+            "type": "JsonWebKey2020",
+            "controller": identity.issuer_did,
+            "publicKeyJwk": identity.public_jwk
+        }],
+        "authentication": [identity.verification_method_id],
+        "assertionMethod": [identity.verification_method_id]
+    });
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/did+json"),
+            (header::CACHE_CONTROL, "no-store"),
+            (header::PRAGMA, "no-cache"),
+            (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
+        ],
+        Json(document),
+    )
+        .into_response())
 }
 
 async fn start_verification(

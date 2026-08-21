@@ -411,7 +411,10 @@ async fn run_crud_contract(
         .reserve_application_event_plan(receipt.clone(), std::slice::from_ref(&planned))
         .await?;
     assert!(created);
-    assert_eq!(reserved.flow_plan[0]["instance_id"], application_instance.id);
+    assert_eq!(
+        reserved.flow_plan[0]["instance_id"],
+        application_instance.id
+    );
     let (replayed, created) = repository
         .reserve_application_event_plan(receipt.clone(), std::slice::from_ref(&planned))
         .await?;

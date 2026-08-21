@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fmt, fs, net::SocketAddr, path::PathBuf};
 use mmf_push::WebhookDestinationRegistry;
 use thiserror::Error;
 use url::Url;
+use uuid::Uuid;
 
 use crate::{
     Oid4vpClientIdScheme, RequestObjectOptions, VerificationStartOptions, VerifierDidMethod,
@@ -34,6 +35,7 @@ pub struct FlowServiceConfig {
     pub grpc_addr: SocketAddr,
     pub public_base_url: String,
     pub oid4vp_issuer_did: String,
+    pub marty_organization_id: String,
     pub callback_destinations: WebhookDestinationRegistry,
     pub oid4vp_client_id_scheme: Oid4vpClientIdScheme,
     pub verifier_did_method: VerifierDidMethod,
@@ -63,6 +65,9 @@ pub struct FlowServiceConfig {
     pub issuance_api_key: Option<String>,
     pub service_token: Option<String>,
     pub webhook_secret: Option<String>,
+    pub application_event_hmac_key: Option<String>,
+    pub application_event_max_age_seconds: u32,
+    pub application_event_replay_ttl_seconds: u32,
     pub allow_plaintext_grpc: bool,
     pub workload_client_tls: Option<WorkloadClientTlsFiles>,
     pub workload_server_tls: Option<WorkloadServerTlsFiles>,
@@ -107,6 +112,7 @@ impl fmt::Debug for FlowServiceConfig {
             .field("grpc_addr", &self.grpc_addr)
             .field("public_base_url", &self.public_base_url)
             .field("oid4vp_issuer_did", &self.oid4vp_issuer_did)
+            .field("marty_organization_id", &self.marty_organization_id)
             .field(
                 "callback_destinations",
                 &if self.callback_destinations.is_empty() {
@@ -168,6 +174,18 @@ impl fmt::Debug for FlowServiceConfig {
             .field("issuance_api_key", &redacted(&self.issuance_api_key))
             .field("service_token", &redacted(&self.service_token))
             .field("webhook_secret", &redacted(&self.webhook_secret))
+            .field(
+                "application_event_hmac_key",
+                &redacted(&self.application_event_hmac_key),
+            )
+            .field(
+                "application_event_max_age_seconds",
+                &self.application_event_max_age_seconds,
+            )
+            .field(
+                "application_event_replay_ttl_seconds",
+                &self.application_event_replay_ttl_seconds,
+            )
             .field("allow_plaintext_grpc", &self.allow_plaintext_grpc)
             .field(
                 "workload_client_tls",
@@ -191,6 +209,7 @@ impl FlowServiceConfig {
             &[
                 "GRPC_SERVICE_TOKEN",
                 "FLOW_WEBHOOK_SECRET",
+                "FLOW_APPLICATION_EVENT_HMAC_KEY",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
                 "ISSUANCE_API_KEY",
             ],
@@ -239,6 +258,10 @@ impl FlowServiceConfig {
         if !oid4vp_issuer_did.starts_with("did:") || oid4vp_issuer_did.len() > 2_048 {
             return Err(invalid("OID4VP_ISSUER_DID"));
         }
+        let marty_organization_id = value(&values, "MARTY_ORG_ID")
+            .unwrap_or("00000000-0000-0000-0000-000000000001")
+            .to_owned();
+        Uuid::parse_str(&marty_organization_id).map_err(|_| invalid("MARTY_ORG_ID"))?;
         let callback_destinations = match value(&values, "FLOW_CALLBACK_DESTINATIONS") {
             Some(configuration) => {
                 let registry = WebhookDestinationRegistry::parse(configuration)
@@ -391,6 +414,20 @@ impl FlowServiceConfig {
 
         let service_token = optional_secret(&values, "GRPC_SERVICE_TOKEN", environment)?;
         let webhook_secret = optional_secret(&values, "FLOW_WEBHOOK_SECRET", environment)?;
+        let application_event_hmac_key =
+            optional_secret(&values, "FLOW_APPLICATION_EVENT_HMAC_KEY", environment)?;
+        let application_event_max_age_seconds = parse_bounded(
+            value(&values, "FLOW_APPLICATION_EVENT_MAX_AGE_SECONDS").unwrap_or("60"),
+            "FLOW_APPLICATION_EVENT_MAX_AGE_SECONDS",
+            1,
+            86_400,
+        )?;
+        let application_event_replay_ttl_seconds = parse_bounded(
+            value(&values, "FLOW_APPLICATION_EVENT_REPLAY_TTL_SECONDS").unwrap_or("300"),
+            "FLOW_APPLICATION_EVENT_REPLAY_TTL_SECONDS",
+            application_event_max_age_seconds,
+            604_800,
+        )?;
         let signing_keys_api_key =
             optional_secret(&values, "SIGNING_KEYS_INTERNAL_API_KEY", environment)?;
         let issuance_api_key = optional_secret(&values, "ISSUANCE_API_KEY", environment)?;
@@ -419,6 +456,7 @@ impl FlowServiceConfig {
             grpc_addr,
             public_base_url,
             oid4vp_issuer_did,
+            marty_organization_id,
             callback_destinations,
             oid4vp_client_id_scheme,
             verifier_did_method,
@@ -448,6 +486,9 @@ impl FlowServiceConfig {
             issuance_api_key,
             service_token,
             webhook_secret,
+            application_event_hmac_key,
+            application_event_max_age_seconds,
+            application_event_replay_ttl_seconds,
             allow_plaintext_grpc,
             workload_client_tls,
             workload_server_tls,

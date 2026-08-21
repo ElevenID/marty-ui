@@ -719,9 +719,25 @@ with changed semantics conflicts. PostgreSQL now reserves the authenticated
 event receipt and all selected instances in one transaction, recovers an exact
 replay plan, and rejects changed event payloads or changed offer semantics.
 Focused language-neutral planning, trusted-precondition, PostgreSQL contract
-and strict Clippy gates pass. The remaining application-event work is the
-shared Redis replay adapter, issuance side-effect completion and HTTP/gRPC
-transport adapters; no Python fallback is permitted.
+and strict Clippy gates pass. The HTTP adapter now authenticates before plan
+reservation, consumes the shared Redis replay key only after durable planning,
+recovers exact planned replays, and completes each OID4VCI offer through the
+typed issuance provider. Offer completion is flow-idempotent and race-safe:
+an existing active artifact is reused, while concurrent first completion uses
+snapshot CAS and reloads the winner. Provider failures retain the released
+per-flow partial-failure response and remain retryable through the durable
+plan. The same route kernel is ready for the gRPC adapter; no Python fallback
+is permitted.
+
+The `/oid4vp/did.json` compatibility endpoint is native under
+`contracts/flow-did-http-behavior.json`. It resolves the exact configured
+organization + issuer DID + `oid4vp_request_signing` +
+`oauth-authz-req+jwt` + ES256 identity, publishes only the sanitized public
+JWK as `JsonWebKey2020`, preserves authentication/assertion relationships and
+the released DID media type, no-store and CORS headers, and fails closed when
+the signing-identity provider is absent or invalid. The default organization
+UUID and application-event freshness/replay settings are now typed startup
+configuration; deployed environments require the dedicated 32-byte event key.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

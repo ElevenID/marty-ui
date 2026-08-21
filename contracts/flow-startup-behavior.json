@@ -16,6 +16,7 @@
     "ISSUANCE_SERVICE_URL",
     "GRPC_SERVICE_TOKEN",
     "FLOW_WEBHOOK_SECRET",
+    "FLOW_APPLICATION_EVENT_HMAC_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY",
     "ISSUANCE_API_KEY",
     "GRPC_WORKLOAD_TLS_CLIENT_CERT",
@@ -36,6 +37,13 @@
   "partial_tls_behavior": "fail_closed",
   "database_connection_bounds": [1, 100],
   "redis_database_bounds": [0, 255],
+  "application_event_auth": {
+    "owner": "mmf-security.application_event",
+    "max_age_default_seconds": 60,
+    "replay_ttl_default_seconds": 300,
+    "replay_ttl_must_cover_max_age": true,
+    "organization_id_default": "00000000-0000-0000-0000-000000000001"
+  },
   "verifier_profiles": {
     "client_id_schemes": ["redirect_uri", "decentralized_identifier", "x509_hash"],
     "did_methods": ["did:web", "did:jwk", "did:key"],
@@ -66,6 +74,8 @@
     "invalid_request_length_bound",
     "insecure_deployed_logo_uri",
     "invalid_dc_api_expected_origin",
-    "invalid_oid4vp_issuer_did"
+    "invalid_oid4vp_issuer_did",
+    "invalid_marty_organization_id",
+    "undersized_application_event_replay_ttl"
   ]
 }

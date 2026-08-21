@@ -20,8 +20,18 @@ struct Contract {
     partial_tls_behavior: String,
     database_connection_bounds: Vec<u32>,
     redis_database_bounds: Vec<u32>,
+    application_event_auth: ApplicationEventAuth,
     verifier_profiles: VerifierProfiles,
     fail_closed_cases: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ApplicationEventAuth {
+    owner: String,
+    max_age_default_seconds: u32,
+    replay_ttl_default_seconds: u32,
+    replay_ttl_must_cover_max_age: bool,
+    organization_id_default: String,
 }
 
 #[derive(Deserialize)]
@@ -69,6 +79,7 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
         ("ISSUANCE_SERVICE_URL".into(), "http://issuance:8006".into()),
         ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
         ("FLOW_WEBHOOK_SECRET".into(), "w".repeat(32)),
+        ("FLOW_APPLICATION_EVENT_HMAC_KEY".into(), "a".repeat(32)),
         ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "k".repeat(32)),
         ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
         ("GRPC_INSECURE_ALLOWED".into(), "true".into()),
@@ -104,7 +115,7 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.schema_version, 1);
     assert_eq!(contract.deployed_environments, ["beta", "production"]);
     assert_eq!(contract.required_always, ["DATABASE_URL", "REDIS_URL"]);
-    assert_eq!(contract.required_when_deployed.len(), 21);
+    assert_eq!(contract.required_when_deployed.len(), 22);
     assert_eq!(contract.minimum_secret_bytes, 32);
     assert_eq!(contract.secret_file_suffix, "_FILE");
     assert_eq!(
@@ -119,6 +130,14 @@ fn language_neutral_startup_contract_is_frozen() {
     assert_eq!(contract.partial_tls_behavior, "fail_closed");
     assert_eq!(contract.database_connection_bounds, [1, 100]);
     assert_eq!(contract.redis_database_bounds, [0, 255]);
+    assert_eq!(contract.application_event_auth.owner, "mmf-security.application_event");
+    assert_eq!(contract.application_event_auth.max_age_default_seconds, 60);
+    assert_eq!(contract.application_event_auth.replay_ttl_default_seconds, 300);
+    assert!(contract.application_event_auth.replay_ttl_must_cover_max_age);
+    assert_eq!(
+        contract.application_event_auth.organization_id_default,
+        "00000000-0000-0000-0000-000000000001"
+    );
     assert_eq!(contract.verifier_profiles.client_id_schemes.len(), 3);
     assert_eq!(contract.verifier_profiles.did_methods.len(), 3);
     assert_eq!(contract.verifier_profiles.issuer_did_sources.len(), 3);
@@ -136,7 +155,7 @@ fn language_neutral_startup_contract_is_frozen() {
         contract.verifier_profiles.dc_api_expected_origins,
         "configured_origins_or_public_origin"
     );
-    assert_eq!(contract.fail_closed_cases.len(), 20);
+    assert_eq!(contract.fail_closed_cases.len(), 22);
 }
 
 #[test]
@@ -146,6 +165,12 @@ fn deployed_configuration_is_complete_and_normalized() {
     assert_eq!(config.http_addr.to_string(), "0.0.0.0:8011");
     assert_eq!(config.grpc_addr.to_string(), "0.0.0.0:9011");
     assert_eq!(config.public_base_url, "https://issuer.example");
+    assert_eq!(
+        config.marty_organization_id,
+        "00000000-0000-0000-0000-000000000001"
+    );
+    assert_eq!(config.application_event_max_age_seconds, 60);
+    assert_eq!(config.application_event_replay_ttl_seconds, 300);
     assert_eq!(
         config.oid4vp_issuer_did,
         "did:web:issuer.example:orgs:marty"
@@ -289,6 +314,7 @@ fn deployed_configuration_fails_closed() {
         ("OID4VP_CLIENT_ID_PREFIX", "unknown"),
         ("VERIFIER_DID_METHOD", "did:peer"),
         ("OID4VP_ISSUER_DID", "https://not-a-did.example"),
+        ("MARTY_ORG_ID", "not-a-uuid"),
         ("OID4VP_REQUEST_OBJECT_MAX_LENGTH", "1023"),
         ("OID4VP_URL_QUERY_MAX_LENGTH", "1048577"),
     ] {
@@ -299,6 +325,16 @@ fn deployed_configuration_fails_closed() {
             Err(FlowConfigError::Invalid { name })
         );
     }
+    let mut invalid_replay_ttl = baseline("beta");
+    invalid_replay_ttl.insert(
+        "FLOW_APPLICATION_EVENT_MAX_AGE_SECONDS".into(),
+        "120".into(),
+    );
+    invalid_replay_ttl.insert(
+        "FLOW_APPLICATION_EVENT_REPLAY_TTL_SECONDS".into(),
+        "60".into(),
+    );
+    assert!(FlowServiceConfig::from_values(invalid_replay_ttl).is_err());
 
     let mut x509_without_certificate = baseline("production");
     x509_without_certificate.insert("OID4VP_CLIENT_ID_PREFIX".into(), "x509_hash".into());
