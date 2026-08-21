@@ -4099,13 +4099,18 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "jsonwebtoken",
+ "marty-oid4vci",
  "mmf-data",
+ "p256",
  "rand 0.9.5",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.20",
  "tokio",
+ "url",
  "uuid",
 ]
 
