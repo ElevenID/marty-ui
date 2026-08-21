@@ -1,0 +1,22 @@
+[package]
+name = "marty-applicant"
+version = "0.1.0"
+description = "Canonical Rust applicant and credential-application service"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+base64.workspace = true
+chrono.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
