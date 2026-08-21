@@ -1239,6 +1239,19 @@ PostgreSQL/Redis/event-stream executable acceptance, then delete the Python
 service and its Python-only dependencies in the same passing slice. No beta
 deployment has occurred.
 
+Commit `9ab00486` adds the native Organization binary to the shared service
+image, dispatches `SERVICE_NAME=organization` directly to that binary, and
+marks the beta overlay as a deployed environment so missing service
+credentials fail closed. Twelve focused packaging/entrypoint tests pass. The
+image build remains gated by publication of the MMF branch because the Marty
+UI workspace still intentionally points at its clean MMF worktree; GitHub CLI
+authentication is invalid and connector writes are prohibited by the current
+execution policy. A PostgreSQL listener is available locally but its test
+credential is not, and Docker API access is denied, so no unsafe guess or
+shared-database mutation was used to manufacture live acceptance evidence.
+Python deletion therefore remains pending the immutable MMF pin, image build,
+and configured executable acceptance. No beta deployment has occurred.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
