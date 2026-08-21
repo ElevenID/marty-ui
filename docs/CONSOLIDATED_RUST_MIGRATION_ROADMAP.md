@@ -825,12 +825,20 @@ error envelopes and role-name normalization. Both languages consume the same
 `contracts/organization-domain-behavior.json`; the complete route, RPC and
 event inventory is frozen in `contracts/organization-service-surface.json`.
 Six Rust vector groups, three Python parity groups, locked tests, formatting
-and strict Clippy pass. The next slices add SQLx repositories and Rust-owned
-migrations over the released `organization_service` schema, shared MMF event
-publication/cache invalidation, authorization and audit policy, all HTTP and
-gRPC adapters, executable composition, packaging, PostgreSQL acceptance and
-same-slice deletion of `services/organization` after those gates pass. No beta
-deployment occurs during these slices.
+and strict Clippy pass. Rust migration ownership is also established over the
+released `organization_service` schema: an advisory-locked, idempotent final
+schema creates or validates all 11 tenant, membership, key, preference, join,
+RBAC, policy and audit tables and records an independent Rust migration head.
+It preserves existing Alembic installations while adding the intended API-key
+`scope_type`, `deployment_profile_id`, `enabled` and `updated_at` fields that
+the Python entity exposed but did not persist. A language-neutral persistence
+contract and Rust source gate pass; live PostgreSQL execution is configured as
+a CI gate because no local Organization database URL is present. The next
+slices add SQLx repositories, shared MMF event publication/cache invalidation,
+authorization and audit policy, all HTTP and gRPC adapters, executable
+composition, packaging, PostgreSQL acceptance and same-slice deletion of
+`services/organization` after those gates pass. No beta deployment occurs
+during these slices.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

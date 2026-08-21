@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod domain;
+pub mod migration;
 pub mod scim;
 
 pub use domain::{
