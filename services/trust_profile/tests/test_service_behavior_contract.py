@@ -2,6 +2,9 @@ import ast
 import json
 from pathlib import Path
 
+import pytest
+from fastapi import HTTPException
+
 from trust_profile import main as trust_profile
 from trust_profile.infrastructure import models
 
@@ -94,3 +97,25 @@ def test_registry_transport_and_security_obligations_are_frozen() -> None:
         "protocol", "max_response_bytes", "max_pages"
     })
     assert all(CONTRACT["security"].values())
+
+
+def test_security_domain_vectors_match_the_surviving_python_oracle() -> None:
+    domain = CONTRACT["domain_cases"]
+    for case in domain["accreditations"]:
+        if "error" in case:
+            with pytest.raises(ValueError):
+                trust_profile._normalize_accreditations(case["input"])
+        else:
+            assert trust_profile._normalize_accreditations(case["input"]) == case["expected"]
+
+    for case in domain["jurisdictions"]:
+        if "error" in case:
+            with pytest.raises(HTTPException):
+                trust_profile._normalize_jurisdiction_filter(case["input"])
+        else:
+            assert trust_profile._normalize_jurisdiction_filter(case["input"]) == case["expected"]
+
+    for case in domain["custody_metadata"]:
+        with pytest.raises(ValueError, match=case["rejected_field"]):
+            trust_profile._reject_private_custody_metadata(case["input"])
+        assert trust_profile._sanitize_private_custody_metadata(case["input"]) == case["sanitized"]

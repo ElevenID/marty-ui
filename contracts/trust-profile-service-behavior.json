@@ -101,5 +101,37 @@
     "issuer_identifier_is_unique_per_organization": true,
     "profile_delete_rejects_attached_issuers": true,
     "native_backend_absence_fails_closed": true
+  },
+  "domain_cases": {
+    "accreditations": [
+      {"input": [" ISO27001 ", "SOC 2"], "expected": ["ISO27001", "SOC 2"]},
+      {"input": ["ISO27001", "iso27001"], "error": "duplicate"},
+      {"input": ["  "], "error": "blank"}
+    ],
+    "jurisdictions": [
+      {"input": ["us", "ca-bc", "de-be"], "expected": ["US", "CA-BC", "DE-BE"]},
+      {"input": ["USA"], "error": "invalid"},
+      {"input": ["US-CALI"], "error": "invalid"}
+    ],
+    "allowed_issuers": [
+      {"current": null, "trust_source_count": 0, "allowed_was_provided": false, "requested": null, "expected": []},
+      {"current": null, "trust_source_count": 1, "allowed_was_provided": false, "requested": null, "expected": null},
+      {"current": [], "trust_source_count": 0, "allowed_was_provided": true, "requested": null, "expected": null},
+      {"current": null, "trust_source_count": 0, "allowed_was_provided": true, "requested": ["did:web:issuer.example"], "expected": ["did:web:issuer.example"]},
+      {"current": null, "trust_source_count": 0, "allowed_was_provided": false, "requested": null, "is_update": true, "expected": []},
+      {"current": ["did:web:issuer.example"], "trust_source_count": 0, "allowed_was_provided": false, "requested": null, "is_update": true, "expected": ["did:web:issuer.example"]}
+    ],
+    "custody_metadata": [
+      {
+        "input": {"public": "ok", "nested": {"kms_provider": "vault", "jwk": {"kty": "EC", "crv": "P-256", "x": "x", "d": "private"}}},
+        "sanitized": {"public": "ok", "nested": {"jwk": {"kty": "EC", "crv": "P-256", "x": "x"}}},
+        "rejected_field": "kms_provider"
+      }
+    ],
+    "issuer_status_transitions": [
+      {"current": "COMPLIANT", "requested": "REVOKED", "allowed": true},
+      {"current": "REVOKED", "requested": "REVOKED", "allowed": true},
+      {"current": "REVOKED", "requested": "COMPLIANT", "allowed": false}
+    ]
   }
 }
