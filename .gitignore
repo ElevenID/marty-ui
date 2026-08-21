@@ -30,6 +30,7 @@ venv/
 env/
 ENV/
 .pytest_cache/
+pytest-cache-files-*/
 .coverage
 .coverage.*
 htmlcov/
