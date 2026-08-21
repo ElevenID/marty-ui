@@ -1452,12 +1452,20 @@ rounding, canonical not-before precedence, draft-only mutation/deletion,
 activation, deprecation and lossless new-version creation under
 `credential-template-lifecycle-behavior.json`.
 
-The Rust crate now passes 14 domain, lifecycle, surface, migration, persistence
+Rust now also owns all ten intended system wallet profiles and all four system
+delivery destinations under `credential-template-system-catalog.json`, not
+only the profiles currently used by a caller. One DRY catalog builder preserves
+SpruceKit, Marty, generic OID4VCI, LISSI, disabled walt.id interoperability,
+Sphereon, DC4EU, Google Credential Manager, Apple Wallet and DIDComm V2
+capabilities plus both wallet and Canvas delivery modes. Startup seeding inserts
+only missing IDs so operator-managed existing rows are not overwritten.
+
+The Rust crate now passes 15 domain, lifecycle, catalog, surface, migration, persistence
 and configured-PostgreSQL contract tests; the surviving Python oracle passes
-all 169 tests; formatting and strict Clippy pass. The
+all 171 tests; formatting and strict Clippy pass. The
 configured PostgreSQL tests run when `CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL`
-is supplied. Remaining work is Rust-owned seeds, all 24 HTTP and 12 intended
-gRPC handlers over the frozen operations, MMF authorization/runtime/outbox
+is supplied. Remaining work is all 24 HTTP and 12 intended gRPC handlers over
+the frozen operations, MMF authorization/runtime/outbox
 composition, packaging,
 configured acceptance and immediate Python deletion. No beta deployment has
 occurred.

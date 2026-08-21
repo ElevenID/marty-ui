@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod catalog;
 mod domain;
 pub mod migration;
 pub mod persistence;
