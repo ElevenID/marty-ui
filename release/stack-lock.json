@@ -1,6 +1,6 @@
 {
   "schema": "marty.stack-lock/v1",
-  "release": "marty-ui@1.1.199",
+  "release": "marty-ui@1.1.200",
   "components": [
     {
       "name": "marty-api-core",
@@ -83,13 +83,13 @@
     {
       "name": "marty-common",
       "repository": "ElevenID/Marty",
-      "version": "0.2.15",
-      "commit": "ece0d653d2686fd0957278cd36ad40925c35ad7f",
+      "version": "0.2.16",
+      "commit": "36bb2aac65759edc2ccdce120e16a61391a7ce32",
       "artifacts": [{
         "type": "python",
-        "uri": "https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.15/marty_common-0.2.15-py3-none-any.whl",
-        "digest": "sha256:b7e6ce2e8992440333622be24aa558ae556675ecbeab14bd9ea36a841eb1ef34",
-        "sbom": "https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.15/marty-common-sbom.cdx.json",
+        "uri": "https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.16/marty_common-0.2.16-py3-none-any.whl",
+        "digest": "sha256:e39d77ebcdd47e301fff6933d19929e19bb92f2ef6fb5f3e15d9e10e184f13b4",
+        "sbom": "https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.16/marty-common-sbom.cdx.json",
         "provenance": "https://github.com/ElevenID/Marty/attestations"
       }]
     },

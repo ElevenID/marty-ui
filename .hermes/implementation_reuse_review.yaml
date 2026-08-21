@@ -1,16 +1,16 @@
 status: complete
 search_scope:
   - current immutable Marty UI stack release manifest and owned pin assertions
-  - independently audited Core v0.1.59 release evidence
-  - independently audited Credentials v0.1.68 image, SBOM, and provenance evidence
-  - released Integration v1.2.70 source, SBOM, and provenance evidence
+  - UI v1.1.199 immutable failed-candidate startup evidence
+  - merged marty-common verifier-profile compatibility correction
+  - independently audited marty-common v0.2.16 wheel, SBOM, and provenance evidence
   - existing immutable CD and artifact-only Marty acceptance workflow
 search_queries:
-  - "marty-ui immutable component pin and stack release v1.1.199"
-  - "marty-core v0.1.59 Python wheel digest SBOM provenance"
-  - "marty-credentials v0.1.68 issuance OCI digest SBOM provenance"
-  - "marty-integration-tests v1.2.70 source digest SBOM provenance"
-  - "owned stack release exact pin regression"
+  - "marty-ui immutable component pin and stack release v1.1.200"
+  - "marty-common v0.2.16 Python wheel digest SBOM provenance"
+  - "marty-common certificate builder operation-scoped verifier capability"
+  - "UI v1.1.199 public-stack-smoke NativeBackendUnavailable"
+  - "owned stack common-release exact pin regression"
 candidate_implementations:
   - path: release/stack-lock.json
     language: JSON
@@ -21,13 +21,7 @@ candidate_implementations:
   - path: .github/workflows/cd.yml
     language: YAML
     disposition: reuse_existing_immutable_release_and_public_stack_smoke_pipeline
-  - path: https://github.com/ElevenID/marty-core/releases/tag/v0.1.59
-    language: GitHub_release_evidence
-    disposition: pin_verified_immutable_dependency_release
-  - path: https://github.com/ElevenID/marty-credentials/releases/tag/v0.1.68
-    language: GitHub_release_evidence
-    disposition: pin_verified_immutable_dependency_release
-  - path: https://github.com/ElevenID/marty-integration-tests/releases/tag/v1.2.70
+  - path: https://github.com/ElevenID/Marty/releases/tag/marty-common-v0.2.16
     language: GitHub_release_evidence
     disposition: pin_verified_immutable_dependency_release
 no_match_statement: ""
@@ -38,10 +32,10 @@ canonical_implementation:
 rust_disposition: reuse_existing_rust_owner_unchanged
 non_rust_rationale: >-
   This dependency-only release change advances the immutable stack identity and
-  exact owned pin assertions to releases already validated by their source
-  repositories. No implementation or imported compliance material changes; the
-  existing CD workflow verifies HTTP and OCI artifacts, provenance, and the
-  released Marty Integration suite before publication.
+  exact owned pin assertions to the corrected common release already validated
+  by its source repository. No implementation or imported compliance material
+  changes; the existing CD workflow verifies HTTP and OCI artifacts, provenance,
+  and the released Marty Integration suite before publication.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
