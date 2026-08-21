@@ -7,11 +7,12 @@ use axum::{
 use marty_organization::postgres::PostgresOrganizationStore;
 use marty_organization::{
     organization_core_router, OrganizationApplication, OrganizationCache, OrganizationHttpState,
-    CORE_ORGANIZATION_HTTP_ROUTES, MEMBERSHIP_API_HTTP_ROUTES, RBAC_HTTP_ROUTES,
-    SCIM_GROUP_MUTATION_HTTP_ROUTES, SCIM_READ_HTTP_ROUTES, SCIM_USER_MUTATION_HTTP_ROUTES,
+    AUDIT_HTTP_ROUTES, CORE_ORGANIZATION_HTTP_ROUTES, MEMBERSHIP_API_HTTP_ROUTES,
+    POLICY_HTTP_ROUTES, RBAC_HTTP_ROUTES, SCIM_GROUP_MUTATION_HTTP_ROUTES, SCIM_READ_HTTP_ROUTES,
+    SCIM_USER_MUTATION_HTTP_ROUTES,
 };
 use mmf_data::MemoryCache;
-use mmf_security::ServiceTokenAuthenticator;
+use mmf_security::{CedarConfig, CedarPolicyValidator, ServiceTokenAuthenticator};
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
@@ -60,6 +61,8 @@ fn implemented_routes_are_unique_members_of_the_frozen_http_surface() {
         .chain(SCIM_READ_HTTP_ROUTES)
         .chain(SCIM_USER_MUTATION_HTTP_ROUTES)
         .chain(SCIM_GROUP_MUTATION_HTTP_ROUTES)
+        .chain(POLICY_HTTP_ROUTES)
+        .chain(AUDIT_HTTP_ROUTES)
         .copied()
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
@@ -70,8 +73,10 @@ fn implemented_routes_are_unique_members_of_the_frozen_http_surface() {
             + SCIM_READ_HTTP_ROUTES.len()
             + SCIM_USER_MUTATION_HTTP_ROUTES.len()
             + SCIM_GROUP_MUTATION_HTTP_ROUTES.len()
+            + POLICY_HTTP_ROUTES.len()
+            + AUDIT_HTTP_ROUTES.len()
     );
-    assert!(implemented.is_subset(&frozen));
+    assert_eq!(implemented, frozen);
 }
 
 #[tokio::test]
@@ -245,9 +250,22 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
         Arc::new(MemoryCache::default()),
         Arc::new(MemoryCache::default()),
     );
+    let policy_fixture: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../contracts/organization-policy-audit-behavior.json"
+    )))
+    .expect("policy behavior fixture");
+    let policy_validator = Arc::new(
+        CedarPolicyValidator::from_human_schema(
+            policy_fixture["cedar_schema"].as_str().unwrap(),
+            CedarConfig::default(),
+        )
+        .expect("native Cedar validator"),
+    );
     let application = Arc::new(
         OrganizationApplication::new(PostgresOrganizationStore::new(pool), cache)
-            .expect("application composition"),
+            .expect("application composition")
+            .with_policy_validator(policy_validator),
     );
     application.initialize().await.expect("native migrations");
     let router = organization_core_router(OrganizationHttpState {
@@ -535,6 +553,82 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
         .unwrap()
         .iter()
         .any(|permission| permission == "role:assign"));
+
+    let policy = request_json(
+        &router,
+        "POST",
+        &format!("/v1/organizations/{organization_id}/policy-sets"),
+        Some(&user_id),
+        Some(serde_json::json!({
+            "name": "HTTP approval policy",
+            "policy_type": "APPROVAL_RULES",
+            "cedar_policies": [{
+                "policy_id": "approve_http",
+                "effect": "permit",
+                "cedar_text": "permit(principal, action == MIP::Action::\"applications:approve\", resource);",
+                "enabled": true
+            }]
+        })),
+    )
+    .await;
+    assert_eq!(policy.0, StatusCode::CREATED);
+    let policy_id = policy.1["id"].as_str().unwrap().to_owned();
+
+    let archived_policy = request_json(
+        &router,
+        "POST",
+        &format!("/v1/organizations/{organization_id}/policy-sets/{policy_id}/archive"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(archived_policy.0, StatusCode::OK);
+    assert_eq!(archived_policy.1["status"], "ARCHIVED");
+
+    let active_policy = request_json(
+        &router,
+        "POST",
+        &format!("/v1/organizations/{organization_id}/policy-sets/{policy_id}/activate"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(active_policy.0, StatusCode::OK);
+    assert_eq!(active_policy.1["status"], "ACTIVE");
+
+    let audit = request_json(
+        &router,
+        "GET",
+        &format!("/v1/organizations/audit/events?organization_id={organization_id}&limit=1000"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(audit.0, StatusCode::OK);
+    assert!(audit.1["total"].as_u64().unwrap() > 0);
+
+    let audit_export = request_json(
+        &router,
+        "GET",
+        &format!(
+            "/v1/organizations/audit/events/export?organization_id={organization_id}&format=json"
+        ),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(audit_export.0, StatusCode::OK);
+    assert_eq!(audit_export.1["format"], "json");
+
+    let deleted_policy = request_json(
+        &router,
+        "DELETE",
+        &format!("/v1/organizations/{organization_id}/policy-sets/{policy_id}"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(deleted_policy.0, StatusCode::NO_CONTENT);
 
     let created_key = request_json(
         &router,

@@ -51,6 +51,17 @@ pub struct UpdatePolicySetCommand {
 }
 
 impl OrganizationApplication {
+    pub fn policy_validation_errors(
+        &self,
+        policies: &[CedarPolicyDocument],
+    ) -> Result<Vec<String>, OrganizationApplicationError> {
+        let validator = self
+            .policy_validator
+            .as_deref()
+            .ok_or(OrganizationApplicationError::PolicyValidatorUnavailable)?;
+        Ok(validate_policy_documents(policies, validator))
+    }
+
     pub async fn create_policy_set(
         &self,
         command: CreatePolicySetCommand,
@@ -255,11 +266,7 @@ impl OrganizationApplication {
         &self,
         policies: &[CedarPolicyDocument],
     ) -> Result<(), OrganizationApplicationError> {
-        let validator = self
-            .policy_validator
-            .as_deref()
-            .ok_or(OrganizationApplicationError::PolicyValidatorUnavailable)?;
-        let errors = validate_policy_documents(policies, validator);
+        let errors = self.policy_validation_errors(policies)?;
         if errors.is_empty() {
             Ok(())
         } else {

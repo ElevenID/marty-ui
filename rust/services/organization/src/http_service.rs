@@ -128,6 +128,7 @@ pub fn organization_core_router(state: OrganizationHttpState) -> Router {
         )
         .merge(crate::rbac_http::organization_rbac_router())
         .merge(crate::scim_http::organization_scim_read_router())
+        .merge(crate::policy_audit_http::organization_policy_router())
         .with_state(state)
 }
 

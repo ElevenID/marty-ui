@@ -1192,6 +1192,27 @@ and three audit routes, followed by runtime, outbox worker, gateway credential
 injection, packaging, full PostgreSQL acceptance and same-slice Python
 deletion. No beta deployment has occurred.
 
+All 62 frozen Organization HTTP contracts now execute through the native Axum
+router. The final slice adds policy-set list/create/templates/validate/get/
+update/archive/activate/delete and audit list/export/detail. Policy requests
+preserve strict document shapes, omit/null/replace updates, status/type
+projection, starter templates, active-set replacement and 201/204 semantics;
+all Cedar decisions use the shared MMF validator and fail closed when it is
+unavailable. Audit requests preserve exact `audit:view`/`audit:export`
+authorization, modern and legacy pagination, category/event/resource/action/
+actor/severity/search/IP/date/time-range filters, tenant-bound detail lookup,
+JSON export and correctly escaped CSV export.
+
+The router contract now asserts exact set equality—not merely subset
+membership—against all 62 frozen routes. The optional PostgreSQL HTTP scenario
+adds policy create/archive/activate/delete and audit list/export to the full
+native lifecycle. Fifty-two Rust Organization tests, all 74 surviving Python
+tests, formatting and strict Clippy pass. The remaining Organization work is
+runtime and outbox-worker composition, gateway credential injection,
+executable/container packaging, configured live PostgreSQL acceptance and
+same-slice deletion of the superseded Python service. No beta deployment has
+occurred.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3
