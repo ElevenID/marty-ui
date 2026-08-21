@@ -4480,6 +4480,7 @@ dependencies = [
  "mmf-security",
  "prost",
  "protoc-bin-vendored",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",
@@ -4489,6 +4490,7 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "tower",
+ "url",
  "uuid",
 ]
 

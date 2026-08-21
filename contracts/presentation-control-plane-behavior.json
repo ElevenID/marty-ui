@@ -1,0 +1,42 @@
+{
+  "profile_id": "00000000-0000-0000-0000-000000000101",
+  "organization_id": "00000000-0000-0000-0000-000000000102",
+  "issuer_id": "did:web:issuer.example",
+  "credential_id": "urn:uuid:credential-1",
+  "trust_profile": {
+    "id": "00000000-0000-0000-0000-000000000101",
+    "organization_id": "00000000-0000-0000-0000-000000000102",
+    "status": "ACTIVE",
+    "issuer_relationships": [
+      {
+        "issuer_id": "did:web:issuer.example",
+        "trust_level": 90,
+        "relationship_status": "TRUSTED",
+        "compliance_status": "ACCREDITED",
+        "accreditations": ["example-accreditation"],
+        "valid_from": "2025-01-01T00:00:00Z",
+        "valid_until": "2035-01-01T00:00:00Z",
+        "revoked_at": null,
+        "verification_keys": [
+          {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "kid": "did:web:issuer.example#key-1",
+            "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+          }
+        ]
+      }
+    ]
+  },
+  "status_response": {
+    "issuer_did": "did:web:issuer.example",
+    "status": "active"
+  },
+  "expected": {
+    "trust_level": 90,
+    "compliance_status": "ACCREDITED",
+    "accreditation": "example-accreditation",
+    "not_revoked": true,
+    "credential_status": "active"
+  }
+}

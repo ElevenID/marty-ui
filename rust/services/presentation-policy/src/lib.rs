@@ -1,4 +1,5 @@
 pub mod application;
+pub mod control_plane;
 pub mod domain;
 pub mod grpc_service;
 pub mod http_service;
@@ -10,6 +11,7 @@ pub mod verification;
 pub use application::{
     PolicyApplication, PolicyApplicationError, PolicyAuthorization, PolicyRepository,
 };
+pub use control_plane::NativePresentationControlPlane;
 pub use domain::{
     evaluate_verified_facts_json, normalize_credential_format, AlternativeRequirement,
     ClaimConstraint, ConstraintType, CredentialRequirement, DisplayMetadata, FreshnessPolicy,
@@ -35,6 +37,10 @@ pub use verification::{
 
 pub mod presentation_policy_proto {
     tonic::include_proto!("marty.ui.presentation_policy.v1");
+}
+
+pub mod organization_proto {
+    tonic::include_proto!("marty.ui.organization.v1");
 }
 
 pub const HTTP_OPERATIONS: [(&str, &str); 10] = [

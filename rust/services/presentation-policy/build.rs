@@ -5,11 +5,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_server(true)
         .build_client(true)
         .compile_protos(
-            &["../../../proto/v1/presentation_policy_service.proto"],
+            &[
+                "../../../proto/v1/presentation_policy_service.proto",
+                "../../../proto/v1/organization_service.proto",
+            ],
             &["../../../proto/v1"],
         )?;
     for source in [
         "presentation_policy_service.proto",
+        "organization_service.proto",
         "google/api/annotations.proto",
         "google/api/http.proto",
     ] {
