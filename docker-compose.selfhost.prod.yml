@@ -702,9 +702,11 @@ services:
   compliance-profile:
     build:
       context: .
-      dockerfile: services/Dockerfile
+      dockerfile: rust/services/Dockerfile.ci
+      target: compliance_profile
       args:
-        SERVICE_NAME: compliance-profile
+        MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+        MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
@@ -712,9 +714,16 @@ services:
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/compliance_profile_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/compliance_profile_workload_client_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      RUST_LOG: ${COMPLIANCE_PROFILE_RUST_LOG:-info}
     secrets:
       - marty_db_password
       - grpc_service_token
+      - compliance_profile_workload_client_cert
+      - compliance_profile_workload_client_key
+      - workload_identity_ca_cert
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1166,6 +1175,10 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/deployment_profile_workload_client_cert
   deployment_profile_workload_client_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/deployment_profile_workload_client_key
+  compliance_profile_workload_client_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/compliance_profile_workload_client_cert
+  compliance_profile_workload_client_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/compliance_profile_workload_client_key
   flow_webhook_secret:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_webhook_secret
   flow_application_event_hmac_key:

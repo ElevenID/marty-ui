@@ -678,6 +678,10 @@ jobs:
           APPLICANT_WORKLOAD_CLIENT_KEY_FILE: /dev/null
           VERIFICATION_WORKLOAD_CLIENT_CERT_FILE: /dev/null
           VERIFICATION_WORKLOAD_CLIENT_KEY_FILE: /dev/null
+          DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE: /dev/null
+          DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE: /dev/null
+          COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE: /dev/null
+          COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE: /dev/null
         run: |
           set -euo pipefail
           rendered="$(docker compose \
@@ -699,12 +703,14 @@ jobs:
           rendered="$(docker compose \
             --file docker-compose.base.yml \
             --file docker-compose.beta.yml \
-            config flow auth applicant presentation-policy verification)"
+            config flow auth applicant presentation-policy verification deployment-profile compliance-profile)"
           grep -F 'ENVIRONMENT: beta' <<<"$rendered"
           grep -F 'GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert' <<<"$rendered"
           grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert' <<<"$rendered"
           grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/applicant_workload_client_cert' <<<"$rendered"
           grep -F 'GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert' <<<"$rendered"
+          grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/deployment_profile_workload_client_cert' <<<"$rendered"
+          grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/compliance_profile_workload_client_cert' <<<"$rendered"
           rendered="$(docker compose \
             --file docker-compose.base.yml \
             --file docker-compose.beta.yml \
@@ -926,6 +932,20 @@ jobs:
           load: true
           push: false
           tags: marty-deployment-profile:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Build compliance-profile image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: compliance_profile
+          load: true
+          push: false
+          tags: marty-compliance-profile:ci
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}

@@ -498,7 +498,6 @@ def test_all_shared_service_builds_receive_the_verified_bootstrap_artifacts() ->
         "trust-profile",
         "applicant",
         "notification",
-        "compliance-profile",
         "presentation-policy",
         "flow",
         "revocation-profile",
@@ -512,6 +511,7 @@ def test_all_shared_service_builds_receive_the_verified_bootstrap_artifacts() ->
         assert "<<: *marty_service_build_artifacts" in section.group(1)
 
     for service, target in (
+        ("compliance-profile", "compliance_profile"),
         ("deployment-profile", "deployment_profile"),
         ("verification", "verification"),
     ):

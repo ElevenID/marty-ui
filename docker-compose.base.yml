@@ -655,14 +655,17 @@ services:
   compliance-profile:
     build:
       context: .
-      dockerfile: services/Dockerfile
+      dockerfile: rust/services/Dockerfile.ci
+      target: compliance_profile
       args:
-        <<: *marty_service_build_artifacts
-        SERVICE_NAME: compliance-profile
+        MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+        MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
+      ENVIRONMENT: development
       COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
+      RUST_LOG: ${COMPLIANCE_PROFILE_RUST_LOG:-info}
     ports:
       - "127.0.0.1:8008:8008"
     depends_on:

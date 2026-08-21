@@ -1347,6 +1347,12 @@ spec:
                   key: GRPC_SERVICE_TOKEN
             - name: COMPLIANCE_PROFILE_SERVICE_PORT
               value: "8008"
+            - name: GRPC_WORKLOAD_TLS_CLIENT_CERT
+              value: /var/run/secrets/marty/workload/tls.crt
+            - name: GRPC_WORKLOAD_TLS_CLIENT_KEY
+              value: /var/run/secrets/marty/workload/tls.key
+            - name: GRPC_WORKLOAD_TLS_CA_CERT
+              value: /var/run/secrets/marty/workload/ca.crt
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -1357,6 +1363,10 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: RABBITMQ_URL
+          volumeMounts:
+            - name: compliance-profile-workload-tls
+              mountPath: /var/run/secrets/marty/workload
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -1376,6 +1386,10 @@ spec:
               port: 8008
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: compliance-profile-workload-tls
+          secret:
+            secretName: compliance-profile-workload-tls
 ---
 apiVersion: v1
 kind: Service

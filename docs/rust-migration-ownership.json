@@ -622,6 +622,17 @@
         "binding_paths": ["contracts/deployment-profile-service-behavior.json"]
       },
       "legacy": []
+    },
+    {
+      "id": "compliance-profile-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/compliance-profile"],
+        "binding_paths": ["contracts/compliance-profile-service-behavior.json"]
+      },
+      "legacy": []
     }
   ],
   "guardrails": {
@@ -664,6 +675,10 @@
       {
         "capability_id": "deployment-profile-service",
         "forbidden_globs": ["services/deployment_profile/**/*.py"]
+      },
+      {
+        "capability_id": "compliance-profile-service",
+        "forbidden_globs": ["services/compliance_profile/**/*.py"]
       }
     ],
     "approved_imports": [
