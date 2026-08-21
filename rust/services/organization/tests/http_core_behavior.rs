@@ -7,7 +7,7 @@ use axum::{
 use marty_organization::postgres::PostgresOrganizationStore;
 use marty_organization::{
     organization_core_router, OrganizationApplication, OrganizationCache, OrganizationHttpState,
-    CORE_ORGANIZATION_HTTP_ROUTES, MEMBERSHIP_API_HTTP_ROUTES,
+    CORE_ORGANIZATION_HTTP_ROUTES, MEMBERSHIP_API_HTTP_ROUTES, RBAC_HTTP_ROUTES,
 };
 use mmf_data::MemoryCache;
 use mmf_security::ServiceTokenAuthenticator;
@@ -55,11 +55,14 @@ fn implemented_routes_are_unique_members_of_the_frozen_http_surface() {
     let implemented = CORE_ORGANIZATION_HTTP_ROUTES
         .iter()
         .chain(MEMBERSHIP_API_HTTP_ROUTES)
+        .chain(RBAC_HTTP_ROUTES)
         .copied()
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(
         implemented.len(),
-        CORE_ORGANIZATION_HTTP_ROUTES.len() + MEMBERSHIP_API_HTTP_ROUTES.len()
+        CORE_ORGANIZATION_HTTP_ROUTES.len()
+            + MEMBERSHIP_API_HTTP_ROUTES.len()
+            + RBAC_HTTP_ROUTES.len()
     );
     assert!(implemented.is_subset(&frozen));
 }
@@ -134,6 +137,17 @@ async fn untrusted_requests_and_malformed_bodies_fail_before_database_access() {
         .await
         .unwrap();
     assert_eq!(api_key_without_trust.status(), StatusCode::UNAUTHORIZED);
+
+    let rbac_without_trust = router()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/organizations/{}/roles", Uuid::nil()))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rbac_without_trust.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -274,6 +288,65 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
     assert_eq!(team.0, StatusCode::OK);
     assert_eq!(team.1["members"].as_array().unwrap().len(), 2);
 
+    let permissions = request_json(
+        &router,
+        "GET",
+        &format!("/v1/organizations/{organization_id}/permissions"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(permissions.0, StatusCode::OK);
+    assert!(permissions
+        .1
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|group| group["resource"] == "role"));
+
+    let created_role = request_json(
+        &router,
+        "POST",
+        &format!("/v1/organizations/{organization_id}/roles"),
+        Some(&user_id),
+        Some(serde_json::json!({
+            "name": format!("http-reviewer-{}", &suffix[..8]),
+            "display_name": "HTTP Reviewer",
+            "permission_keys": ["organization:view"]
+        })),
+    )
+    .await;
+    assert_eq!(created_role.0, StatusCode::CREATED);
+    assert_eq!(created_role.1["member_count"], 0);
+    let role_id = created_role.1["id"].as_str().unwrap().to_owned();
+
+    let updated_role = request_json(
+        &router,
+        "PATCH",
+        &format!("/v1/organizations/{organization_id}/roles/{role_id}"),
+        Some(&user_id),
+        Some(serde_json::json!({"display_name": "Updated Reviewer"})),
+    )
+    .await;
+    assert_eq!(updated_role.0, StatusCode::OK);
+    assert_eq!(updated_role.1["display_name"], "Updated Reviewer");
+
+    let my_permissions = request_json(
+        &router,
+        "GET",
+        &format!("/v1/organizations/{organization_id}/members/me/permissions"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(my_permissions.0, StatusCode::OK);
+    assert_eq!(my_permissions.1["is_owner"], true);
+    assert!(my_permissions.1["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|permission| permission == "role:assign"));
+
     let created_key = request_json(
         &router,
         "POST",
@@ -329,6 +402,17 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
     .await;
     assert_eq!(removed.0, StatusCode::OK);
     assert_eq!(removed.1["success"], true);
+
+    let deleted_role = request_json(
+        &router,
+        "DELETE",
+        &format!("/v1/organizations/{organization_id}/roles/{role_id}"),
+        Some(&user_id),
+        None,
+    )
+    .await;
+    assert_eq!(deleted_role.0, StatusCode::NO_CONTENT);
+    assert_eq!(deleted_role.1, Value::Null);
 
     let preferences = request_json(
         &router,

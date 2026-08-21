@@ -126,6 +126,7 @@ pub fn organization_core_router(state: OrganizationHttpState) -> Router {
             "/v1/organizations/{organization_id}/api-keys/{key_id}",
             axum::routing::delete(revoke_api_key),
         )
+        .merge(crate::rbac_http::organization_rbac_router())
         .with_state(state)
 }
 
@@ -1021,7 +1022,7 @@ fn authenticated_user_email(headers: &HeaderMap) -> Result<String, OrganizationH
         .ok_or_else(invalid_request)
 }
 
-async fn authorize_membership(
+pub(crate) async fn authorize_membership(
     state: &OrganizationHttpState,
     headers: &HeaderMap,
     organization_id: Uuid,
@@ -1035,7 +1036,7 @@ async fn authorize_membership(
         .map_err(application_error)
 }
 
-async fn authorize_action(
+pub(crate) async fn authorize_action(
     state: &OrganizationHttpState,
     headers: &HeaderMap,
     organization_id: Uuid,
@@ -1526,7 +1527,7 @@ fn trust_error(error: HttpTrustError) -> OrganizationHttpError {
     }
 }
 
-fn application_error(error: OrganizationApplicationError) -> OrganizationHttpError {
+pub(crate) fn application_error(error: OrganizationApplicationError) -> OrganizationHttpError {
     match error {
         OrganizationApplicationError::NotFound(_)
         | OrganizationApplicationError::MemberNotFound(_)
@@ -1557,7 +1558,7 @@ fn application_error(error: OrganizationApplicationError) -> OrganizationHttpErr
     }
 }
 
-const fn invalid_request() -> OrganizationHttpError {
+pub(crate) const fn invalid_request() -> OrganizationHttpError {
     OrganizationHttpError {
         status: StatusCode::BAD_REQUEST,
         detail: "ORGANIZATION.INVALID_REQUEST",
@@ -1571,7 +1572,7 @@ const fn forbidden(detail: &'static str) -> OrganizationHttpError {
     }
 }
 
-const fn not_found(detail: &'static str) -> OrganizationHttpError {
+pub(crate) const fn not_found(detail: &'static str) -> OrganizationHttpError {
     OrganizationHttpError {
         status: StatusCode::NOT_FOUND,
         detail,

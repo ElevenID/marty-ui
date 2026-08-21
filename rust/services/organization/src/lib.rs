@@ -15,6 +15,7 @@ pub mod migration;
 pub mod policy_sets;
 pub mod postgres;
 pub mod preferences;
+pub mod rbac_http;
 pub mod roles;
 pub mod scim;
 
@@ -64,6 +65,7 @@ pub use policy_sets::{
 pub use preferences::{
     apply_console_preference_patch, UpdateConsolePreferenceCommand, UpdateConsolePreferencePatch,
 };
+pub use rbac_http::*;
 pub use roles::{
     resolve_replacement_role, AddMemberRoleCommand, CreateRoleCommand, DeleteRoleCommand,
     RemoveMemberRoleCommand, UpdateRoleCommand, UpdateRolePatch,

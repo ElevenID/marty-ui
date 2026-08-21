@@ -1126,6 +1126,28 @@ SCIM families, followed by runtime, outbox worker, gateway credential
 injection, packaging, full PostgreSQL acceptance and same-slice Python
 deletion. No beta deployment has occurred.
 
+Thirty-five of the 62 frozen HTTP contracts now execute natively. The third
+adapter slice exposes the complete intended RBAC surface: grouped permission
+catalog, role list/create/get/update/delete, replace/add/remove member-role
+assignments and current-member permissions. It preserves permission ID and
+legacy `resource:action` key inputs, deterministic de-duplication, role member
+counts, default-role behavior, response projections and 201/204 status
+semantics. Every read and mutation is tenant-bound and requires its exact
+`role:view`, `role:create`, `role:edit`, `role:delete` or `role:assign`
+permission after gateway service authentication; missing memberships,
+cross-tenant IDs, system-role deletion, owner-role removal, empty final role
+sets and unknown permissions fail closed.
+
+The shared frozen-route assertion now covers all 35 native HTTP declarations,
+and black-box requests prove RBAC routes reject missing trust before storage.
+The optional PostgreSQL HTTP scenario now includes grouped catalog reads,
+permission-key resolution, custom-role create/update, owner permission
+projection and role deletion through Axum. Forty-four Rust Organization tests,
+all 74 surviving Python tests, formatting and strict Clippy pass. The remaining
+27 HTTP contracts are the policy/audit and SCIM families, followed by runtime,
+outbox worker, gateway credential injection, packaging, full PostgreSQL
+acceptance and same-slice Python deletion. No beta deployment has occurred.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

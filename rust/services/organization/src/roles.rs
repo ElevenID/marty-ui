@@ -442,6 +442,19 @@ impl OrganizationApplication {
         Ok(self.store.member_permissions(member_id).await?)
     }
 
+    pub async fn count_members_with_role(
+        &self,
+        organization_id: Uuid,
+        role_id: Uuid,
+    ) -> Result<usize, OrganizationApplicationError> {
+        self.store
+            .role_by_id(role_id)
+            .await?
+            .filter(|role| role.organization_id == organization_id)
+            .ok_or(OrganizationApplicationError::RoleNotFound(role_id))?;
+        Ok(self.store.member_ids_with_role(role_id).await?.len())
+    }
+
     async fn permissions_in_transaction(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
