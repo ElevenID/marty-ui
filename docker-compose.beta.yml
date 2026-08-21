@@ -109,6 +109,14 @@ services:
   deployment-profile:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/deployment_profile_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/deployment_profile_workload_client_key
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+    secrets:
+      - deployment_profile_workload_client_cert
+      - deployment_profile_workload_client_key
+      - workload_identity_ca_cert
 
   signing-keys:
     environment:
@@ -203,3 +211,7 @@ secrets:
     file: ${VERIFICATION_WORKLOAD_CLIENT_CERT_FILE:?VERIFICATION_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
   verification_workload_client_key:
     file: ${VERIFICATION_WORKLOAD_CLIENT_KEY_FILE:?VERIFICATION_WORKLOAD_CLIENT_KEY_FILE must be set for beta}
+  deployment_profile_workload_client_cert:
+    file: ${DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE:?DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
+  deployment_profile_workload_client_key:
+    file: ${DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE:?DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE must be set for beta}

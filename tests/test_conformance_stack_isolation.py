@@ -500,11 +500,9 @@ def test_all_shared_service_builds_receive_the_verified_bootstrap_artifacts() ->
         "notification",
         "compliance-profile",
         "presentation-policy",
-        "deployment-profile",
         "flow",
         "revocation-profile",
         "event-stream",
-        "verification",
     ):
         section = re.search(
             rf"(?ms)^  {re.escape(service)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
@@ -512,6 +510,18 @@ def test_all_shared_service_builds_receive_the_verified_bootstrap_artifacts() ->
         )
         assert section is not None
         assert "<<: *marty_service_build_artifacts" in section.group(1)
+
+    for service, target in (
+        ("deployment-profile", "deployment_profile"),
+        ("verification", "verification"),
+    ):
+        native = re.search(
+            rf"(?ms)^  {re.escape(service)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
+            compose,
+        )
+        assert native is not None
+        assert "dockerfile: rust/services/Dockerfile.ci" in native.group(1)
+        assert f"target: {target}" in native.group(1)
 
     native_device = re.search(
         r"(?ms)^  device-registration:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",

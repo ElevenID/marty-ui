@@ -52,10 +52,6 @@ SERVICES = [
         "name": "issuance",
         "module": "issuance.infrastructure.models",
     },
-    {
-        "name": "deployment_profile",
-        "module": "deployment_profile.infrastructure.models",
-    },
 ]
 
 MANAGED_OPENBAO_SERVICE_ID = "managed-openbao-transit"
@@ -1053,7 +1049,6 @@ def ensure_schemas(database_url: str) -> None:
         "credential_template_service",
         "issuance_service",
         "presentation_policy_service",
-        "deployment_profile_service",
         "notification_service",
         "device_registration_service",
         "revocation_profile_service",

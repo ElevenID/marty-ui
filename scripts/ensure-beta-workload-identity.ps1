@@ -110,6 +110,13 @@ $leafCertificates = @(
         CommonName = "marty-verification-client"
         SubjectAlternativeName = "URI:spiffe://marty.internal/service/verification"
         ExtendedKeyUsage = "clientAuth"
+    },
+    [pscustomobject]@{
+        Certificate = "deployment_profile_workload_client_cert"
+        Key = "deployment_profile_workload_client_key"
+        CommonName = "marty-deployment-profile-client"
+        SubjectAlternativeName = "URI:spiffe://marty.internal/service/deployment-profile"
+        ExtendedKeyUsage = "clientAuth"
     }
 )
 
@@ -220,6 +227,8 @@ $environmentNames = [ordered]@{
     APPLICANT_WORKLOAD_CLIENT_KEY_FILE = "applicant_workload_client_key"
     VERIFICATION_WORKLOAD_CLIENT_CERT_FILE = "verification_workload_client_cert"
     VERIFICATION_WORKLOAD_CLIENT_KEY_FILE = "verification_workload_client_key"
+    DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE = "deployment_profile_workload_client_cert"
+    DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE = "deployment_profile_workload_client_key"
 }
 $lines = @(Get-Content -LiteralPath $resolvedEnvFile)
 foreach ($entry in $environmentNames.GetEnumerator()) {

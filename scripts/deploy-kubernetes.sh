@@ -233,6 +233,7 @@ cmd_setup_secrets() {
   local auth_workload_client_cert auth_workload_client_key
   local applicant_workload_client_cert applicant_workload_client_key
   local verification_workload_client_cert verification_workload_client_key
+  local deployment_profile_workload_client_cert deployment_profile_workload_client_key
   local session_secret_key
   local cloudflare_tunnel_token
 
@@ -265,6 +266,8 @@ cmd_setup_secrets() {
   applicant_workload_client_key="$(resolve_secret_input APPLICANT_WORKLOAD_CLIENT_KEY)"
   verification_workload_client_cert="$(resolve_secret_input VERIFICATION_WORKLOAD_CLIENT_CERT)"
   verification_workload_client_key="$(resolve_secret_input VERIFICATION_WORKLOAD_CLIENT_KEY)"
+  deployment_profile_workload_client_cert="$(resolve_secret_input DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT)"
+  deployment_profile_workload_client_key="$(resolve_secret_input DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY)"
   flow_webhook_secret="$(resolve_secret_input FLOW_WEBHOOK_SECRET)"
   flow_application_event_hmac_key="$(resolve_secret_input FLOW_APPLICATION_EVENT_HMAC_KEY)"
   integration_secret_master_key="$(resolve_secret_input INTEGRATION_SECRET_MASTER_KEY)"
@@ -350,7 +353,13 @@ cmd_setup_secrets() {
     --from-literal=tls.crt="$verification_workload_client_cert" \
     --from-literal=tls.key="$verification_workload_client_key" \
     --dry-run=client -o yaml | kubectl apply -f -
-  success "Verification workload identity secrets created/updated"
+  kubectl create secret generic deployment-profile-workload-tls \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$workload_identity_ca_cert" \
+    --from-literal=tls.crt="$deployment_profile_workload_client_cert" \
+    --from-literal=tls.key="$deployment_profile_workload_client_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  success "Workload identity secrets created/updated"
 
   if ! is_placeholder_secret "$cloudflare_tunnel_token"; then
     kubectl create secret generic cloudflared-secret \

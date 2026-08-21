@@ -47,7 +47,8 @@ RUN --mount=type=cache,id=marty-cargo-registry,target=/usr/local/cargo/registry,
     -p marty-trust-profile --bin marty-trust-profile \
     -p marty-applicant --bin marty-applicant \
     -p marty-device-registration --bin marty-device-registration \
-    -p marty-verification-service --bin marty-verification-service
+    -p marty-verification-service --bin marty-verification-service \
+    -p marty-deployment-profile --bin marty-deployment-profile
 
 FROM debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241 AS runtime
 
@@ -288,3 +289,20 @@ EXPOSE 8012 9017
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
     CMD ["curl", "--fail", "http://127.0.0.1:8012/health"]
 ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-verification-service"]
+
+FROM runtime AS deployment_profile
+ARG MARTY_RELEASE_VERSION=development
+ARG MARTY_UI_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
+      org.opencontainers.image.revision="${MARTY_UI_SHA}" \
+      org.opencontainers.image.version="${MARTY_RELEASE_VERSION}"
+COPY --from=builder /build/rust/target/release/marty-deployment-profile /usr/local/bin/marty-deployment-profile
+COPY --chown=10001:10001 scripts/load-secrets-env.sh /usr/local/bin/load-secrets-env.sh
+ENV DEPLOYMENT_PROFILE_SERVICE_PORT=8010 \
+    MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
+    MARTY_UI_SHA=${MARTY_UI_SHA} \
+    RUST_LOG=info
+EXPOSE 8010
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD ["curl", "--fail", "http://127.0.0.1:8010/health"]
+ENTRYPOINT ["/bin/sh", "-c", ". /usr/local/bin/load-secrets-env.sh && exec /usr/local/bin/marty-deployment-profile"]
