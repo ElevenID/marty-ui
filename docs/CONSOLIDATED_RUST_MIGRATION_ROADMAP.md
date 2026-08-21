@@ -806,6 +806,32 @@ Compose and anti-reintroduction gates pass. Remaining Flow work is external CI
 container/PostgreSQL execution and branch landing; no beta deployment has
 occurred.
 
+### Organization port status
+
+The Organization whole-service port is active on its own worktree and branch
+from the completed Flow cutover. The authoritative source scan freezes 62
+unique HTTP method/path contracts spanning organization CRUD, membership,
+join flows, API keys, preferences, lifecycle, audit, RBAC, Cedar policy sets,
+onboarding and SCIM 2.0. It also freezes all 12 intended protobuf RPCs and
+records the four RPCs declared by the protocol but never implemented by the
+Python server (`CreateOrganization`, `UpdateOrganization`,
+`ListOrganizations` and `RemoveMember`). Rust must implement the full intended
+12-method surface rather than preserve that omission.
+
+The first implementation slice establishes `marty-organization` and ports the
+organization, membership, role, permission, API-key, join-code and policy-set
+domain behavior plus deterministic SCIM pagination, equality-filter parsing,
+error envelopes and role-name normalization. Both languages consume the same
+`contracts/organization-domain-behavior.json`; the complete route, RPC and
+event inventory is frozen in `contracts/organization-service-surface.json`.
+Six Rust vector groups, three Python parity groups, locked tests, formatting
+and strict Clippy pass. The next slices add SQLx repositories and Rust-owned
+migrations over the released `organization_service` schema, shared MMF event
+publication/cache invalidation, authorization and audit policy, all HTTP and
+gRPC adapters, executable composition, packaging, PostgreSQL acceptance and
+same-slice deletion of `services/organization` after those gates pass. No beta
+deployment occurs during these slices.
+
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
 9 organization-scoped discovery/DID routes, 6 credential metadata routes, 3

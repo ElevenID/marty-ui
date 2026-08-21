@@ -4361,6 +4361,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-organization"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rand 0.9.5",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "subtle",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
 name = "marty-revocation-profile"
 version = "0.1.0"
 dependencies = [

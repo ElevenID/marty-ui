@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "slug_cases": [
+    {"name": "words_and_punctuation", "input": "Marty Health & Identity", "expected_prefix": "marty-health-identity-"},
+    {"name": "trim_separators", "input": "---Example Org---", "expected_prefix": "example-org-"}
+  ],
+  "join_code": {
+    "length": 8,
+    "alphabet": "ABCDEFGHJKLMNPQRSTUVWXYZ23456789",
+    "validity_cases": [
+      {"name": "active_unbounded", "active": true, "expires_offset_seconds": null, "max_uses": null, "use_count": 0, "valid": true},
+      {"name": "inactive", "active": false, "expires_offset_seconds": null, "max_uses": null, "use_count": 0, "valid": false},
+      {"name": "expired", "active": true, "expires_offset_seconds": -1, "max_uses": null, "use_count": 0, "valid": false},
+      {"name": "at_expiration", "active": true, "expires_offset_seconds": 0, "max_uses": null, "use_count": 0, "valid": true},
+      {"name": "usage_remaining", "active": true, "expires_offset_seconds": null, "max_uses": 2, "use_count": 1, "valid": true},
+      {"name": "usage_exhausted", "active": true, "expires_offset_seconds": null, "max_uses": 2, "use_count": 2, "valid": false}
+    ]
+  },
+  "member_cases": [
+    {"name": "applicant_only", "roles": [{"name": "applicant", "permissions": ["organization:view", "credential-template:view", "wallet:view", "application-template:view", "application:view", "issuance:view"]}], "has_console_access": false, "is_owner": false},
+    {"name": "viewer_console", "roles": [{"name": "viewer", "permissions": ["organization:view", "audit:view"]}], "has_console_access": true, "is_owner": false},
+    {"name": "owner", "roles": [{"name": "owner", "permissions": ["organization:view"]}], "has_console_access": false, "is_owner": true}
+  ],
+  "api_key_cases": [
+    {"name": "canonical_scope", "stored_scopes": ["credentials:read"], "query": "credentials:read", "allowed": true},
+    {"name": "legacy_scope_flip", "stored_scopes": ["credentials:read"], "query": "read:credentials", "allowed": true},
+    {"name": "wildcard_scope", "stored_scopes": ["*"], "query": "anything:execute", "allowed": true},
+    {"name": "missing_scope", "stored_scopes": ["credentials:read"], "query": "credentials:issue", "allowed": false}
+  ],
+  "scim": {
+    "pagination_cases": [
+      {"name": "first_page", "total": 5, "start_index": 1, "count": 2, "start_offset": 0, "end_offset": 2, "normalized_start": 1},
+      {"name": "normalize_start", "total": 5, "start_index": 0, "count": 2, "start_offset": 0, "end_offset": 2, "normalized_start": 1},
+      {"name": "zero_count_means_remaining", "total": 5, "start_index": 3, "count": 0, "start_offset": 2, "end_offset": 5, "normalized_start": 3},
+      {"name": "past_end", "total": 5, "start_index": 9, "count": 2, "start_offset": 5, "end_offset": 5, "normalized_start": 9}
+    ],
+    "valid_user_filters": ["userName eq \"person@example.com\"", "active eq true", "externalId eq \"subject-1\""],
+    "invalid_user_filters": ["userName co \"person\"", "unknown eq \"value\""],
+    "role_slugs": [
+      {"input": "Credential Reviewer", "expected": "credential-reviewer"},
+      {"input": "***", "expected": "role"}
+    ]
+  }
+}
