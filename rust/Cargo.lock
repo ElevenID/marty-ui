@@ -4159,6 +4159,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-compliance-profile"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "chrono",
+ "marty-credential-template",
+ "marty-flow",
+ "mmf-core",
+ "mmf-platform",
+ "mmf-runtime",
+ "mmf-security",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.20",
+ "tokio",
+ "tonic",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "marty-credential-template"
 version = "0.1.0"
 dependencies = [
