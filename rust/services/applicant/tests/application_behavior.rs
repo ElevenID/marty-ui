@@ -4,7 +4,8 @@ use marty_applicant::{
     issuance::IssuanceOffer,
     service::{
         ApplicantService, ApplicationEvent, ApplicationTemplate, ApprovalAuthorizer, ApprovalFacts,
-        EventPublisher, FlowProvider, Identity, ProviderError, ServiceError, TemplateProvider,
+        EventPublisher, FlowProvider, Identity, ProviderError, ServiceError, StorePersistence,
+        TemplateProvider,
     },
     store::StoreDocument,
     Application, ClaimState, LifecycleStatus,
@@ -12,7 +13,7 @@ use marty_applicant::{
 use serde_json::{json, Map, Value};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex as StdMutex,
 };
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
@@ -82,6 +83,16 @@ impl EventPublisher for EventsMock {
     }
 }
 
+#[derive(Default)]
+struct PersistenceMock(StdMutex<Vec<StoreDocument>>);
+
+impl StorePersistence for PersistenceMock {
+    fn persist(&self, store: &StoreDocument) -> Result<(), ProviderError> {
+        self.0.lock().unwrap().push(store.clone());
+        Ok(())
+    }
+}
+
 fn template() -> ApplicationTemplate {
     serde_json::from_value(json!({
         "id":"application-template-1",
@@ -105,23 +116,27 @@ type Harness = (
     Arc<FlowMock>,
     Arc<AuthorizerMock>,
     Arc<EventsMock>,
+    Arc<PersistenceMock>,
 );
 
 fn service() -> Harness {
     let flow = Arc::new(FlowMock::default());
     let authorizer = Arc::new(AuthorizerMock::default());
     let events = Arc::new(EventsMock::default());
+    let persistence = Arc::new(PersistenceMock::default());
     (
-        ApplicantService::new(
+        ApplicantService::with_persistence(
             Arc::new(RwLock::new(StoreDocument::default())),
             Arc::new(TemplateMock(template())),
             flow.clone(),
             authorizer.clone(),
             events.clone(),
+            persistence.clone(),
         ),
         flow,
         authorizer,
         events,
+        persistence,
     )
 }
 
@@ -169,7 +184,7 @@ async fn draft(service: &ApplicantService) -> Application {
 
 #[tokio::test]
 async fn creation_is_profile_bound_duplicate_safe_and_submission_creates_checks() {
-    let (service, _, _, _) = service();
+    let (service, _, _, _, _) = service();
     let application = draft(&service).await;
     assert_eq!(application.organization_id, "issuer-org");
     assert!(matches!(
@@ -195,7 +210,7 @@ async fn creation_is_profile_bound_duplicate_safe_and_submission_creates_checks(
 
 #[tokio::test]
 async fn approval_requires_lock_and_uses_persisted_issuer_scope() {
-    let (service, _, authorizer, events) = service();
+    let (service, _, authorizer, events, _) = service();
     let application = draft(&service).await;
     service
         .submit(&application.id, application.created_at)
@@ -241,7 +256,7 @@ async fn approval_requires_lock_and_uses_persisted_issuer_scope() {
 
 #[tokio::test]
 async fn uncertain_flow_retry_reuses_attempt_and_complete_claim_snapshot() {
-    let (service, flow, _, _) = service();
+    let (service, flow, _, _, persistence) = service();
     let application = draft(&service).await;
     service
         .submit(&application.id, application.created_at)
@@ -271,6 +286,16 @@ async fn uncertain_flow_retry_reuses_attempt_and_complete_claim_snapshot() {
         service.issue(&application.id, application.created_at).await,
         Err(ServiceError::Provider(ProviderError::Unavailable(_)))
     ));
+    {
+        let persisted = persistence.0.lock().unwrap();
+        let active = &persisted
+            .last()
+            .unwrap()
+            .application(&application.id)
+            .unwrap()
+            .system_data["active_issuance_attempt"];
+        assert!(active["id"].as_str().is_some());
+    }
     let offered = service
         .issue(&application.id, application.created_at)
         .await
@@ -281,4 +306,14 @@ async fn uncertain_flow_retry_reuses_attempt_and_complete_claim_snapshot() {
     assert_eq!(calls[0], calls[1]);
     assert_eq!(calls[0].1["subject_email"], "ada@example.com");
     assert_eq!(calls[0].1["application_id"], application.id);
+    drop(calls);
+    let persisted = persistence.0.lock().unwrap();
+    assert!(persisted
+        .last()
+        .unwrap()
+        .application(&application.id)
+        .unwrap()
+        .system_data
+        .get("active_issuance_attempt")
+        .is_none());
 }

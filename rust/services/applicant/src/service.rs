@@ -10,7 +10,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use thiserror::Error;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
@@ -115,6 +119,56 @@ pub trait EventPublisher: Send + Sync {
     async fn publish(&self, event: &ApplicationEvent) -> Result<(), ProviderError>;
 }
 
+pub trait StorePersistence: Send + Sync {
+    fn persist(&self, store: &StoreDocument) -> Result<(), ProviderError>;
+}
+
+#[derive(Default)]
+pub struct MemoryPersistence;
+
+impl StorePersistence for MemoryPersistence {
+    fn persist(&self, _: &StoreDocument) -> Result<(), ProviderError> {
+        Ok(())
+    }
+}
+
+pub struct FilePersistence {
+    path: PathBuf,
+}
+
+impl FilePersistence {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn load(path: impl AsRef<Path>) -> Result<StoreDocument, ProviderError> {
+        let path = path.as_ref();
+        if !path.exists() {
+            return Ok(StoreDocument::default());
+        }
+        let bytes =
+            fs::read(path).map_err(|error| ProviderError::Persistence(error.to_string()))?;
+        StoreDocument::decode(&bytes).map_err(|error| ProviderError::Persistence(error.to_string()))
+    }
+}
+
+impl StorePersistence for FilePersistence {
+    fn persist(&self, store: &StoreDocument) -> Result<(), ProviderError> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| ProviderError::Persistence(error.to_string()))?;
+        }
+        let temporary = self.path.with_extension("tmp");
+        let bytes = store
+            .encode()
+            .map_err(|error| ProviderError::Persistence(error.to_string()))?;
+        fs::write(&temporary, bytes)
+            .map_err(|error| ProviderError::Persistence(error.to_string()))?;
+        fs::rename(&temporary, &self.path)
+            .map_err(|error| ProviderError::Persistence(error.to_string()))
+    }
+}
+
 pub struct ApplicantService {
     store: Arc<RwLock<StoreDocument>>,
     locks: Mutex<ReviewerLocks>,
@@ -122,6 +176,7 @@ pub struct ApplicantService {
     flow: Arc<dyn FlowProvider>,
     authorizer: Arc<dyn ApprovalAuthorizer>,
     events: Arc<dyn EventPublisher>,
+    persistence: Arc<dyn StorePersistence>,
 }
 
 impl ApplicantService {
@@ -132,6 +187,24 @@ impl ApplicantService {
         authorizer: Arc<dyn ApprovalAuthorizer>,
         events: Arc<dyn EventPublisher>,
     ) -> Self {
+        Self::with_persistence(
+            store,
+            templates,
+            flow,
+            authorizer,
+            events,
+            Arc::new(MemoryPersistence),
+        )
+    }
+
+    pub fn with_persistence(
+        store: Arc<RwLock<StoreDocument>>,
+        templates: Arc<dyn TemplateProvider>,
+        flow: Arc<dyn FlowProvider>,
+        authorizer: Arc<dyn ApprovalAuthorizer>,
+        events: Arc<dyn EventPublisher>,
+        persistence: Arc<dyn StorePersistence>,
+    ) -> Self {
         Self {
             store,
             locks: Mutex::new(ReviewerLocks::default()),
@@ -139,6 +212,7 @@ impl ApplicantService {
             flow,
             authorizer,
             events,
+            persistence,
         }
     }
 
@@ -174,7 +248,9 @@ impl ApplicantService {
                 existing.phone = phone;
             }
             existing.updated_at = now;
-            return Ok(existing.clone());
+            let updated = existing.clone();
+            self.persistence.persist(&store)?;
+            return Ok(updated);
         }
         let mut applicant = Applicant::new(identity.organization_id.clone(), email.into(), now);
         applicant.user_id = Some(identity.user_id.clone());
@@ -183,6 +259,7 @@ impl ApplicantService {
         applicant.family_name = family_name;
         applicant.phone = phone;
         store.save_applicant(applicant.clone());
+        self.persistence.persist(&store)?;
         Ok(applicant)
     }
 
@@ -268,6 +345,7 @@ impl ApplicantService {
             issued_at: None,
         };
         store.save_application(application.clone());
+        self.persistence.persist(&store)?;
         Ok(application)
     }
 
@@ -343,6 +421,7 @@ impl ApplicantService {
             }
         }
         store.applications[index] = application.clone();
+        self.persistence.persist(&store)?;
         Ok(application)
     }
 
@@ -378,6 +457,7 @@ impl ApplicantService {
         }
         let evidence = Evidence::from_upload(input, maximum, now)?;
         store.save_evidence(evidence.clone());
+        self.persistence.persist(&store)?;
         Ok(evidence)
     }
 
@@ -496,6 +576,7 @@ impl ApplicantService {
             applicant.set_status(target, now)?;
         }
         store.applications[index] = application.clone();
+        self.persistence.persist(&store)?;
         drop(store);
 
         let event = ApplicationEvent {
@@ -566,6 +647,7 @@ impl ApplicantService {
             applicant.set_status(LifecycleStatus::PendingInformation, now)?;
         }
         store.applications[index] = application.clone();
+        self.persistence.persist(&store)?;
         Ok(application)
     }
 
@@ -615,6 +697,7 @@ impl ApplicantService {
                 .ok_or(ServiceError::ApplicantNotFound)?;
             let (attempt_id, reserved_claims) = reserve_attempt(&mut application, claims, now)?;
             store.applications[index] = application.clone();
+            self.persistence.persist(&store)?;
             (application, applicant, attempt_id, reserved_claims)
         };
 
@@ -628,6 +711,7 @@ impl ApplicantService {
                 let mut store = self.store.write().await;
                 let index = application_index(&store, application_id)?;
                 mark_no_active_flow(&mut store.applications[index], now);
+                self.persistence.persist(&store)?;
                 return Err(ServiceError::NoActiveFlow);
             }
             Err(error) => return Err(error.into()),
@@ -645,6 +729,7 @@ impl ApplicantService {
         apply_offer(&mut application, &mut applicant, attempt_id, &offer, now)?;
         store.applications[index] = application.clone();
         store.applicants[applicant_index] = applicant;
+        self.persistence.persist(&store)?;
         Ok(application)
     }
 
@@ -685,6 +770,7 @@ impl ApplicantService {
         let mut check = store.checks[index].clone();
         check.complete(passed, None, performed_by, result, evidence_ids, now);
         store.checks[index] = check.clone();
+        self.persistence.persist(&store)?;
         Ok(check)
     }
 }
@@ -936,6 +1022,8 @@ pub enum ProviderError {
     NoActiveFlow,
     #[error("authorization denied: {0}")]
     Denied(String),
+    #[error("applicant persistence failed: {0}")]
+    Persistence(String),
 }
 
 #[derive(Debug, Error)]
