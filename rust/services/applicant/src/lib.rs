@@ -110,6 +110,42 @@ pub enum EvidenceStatus {
     Deleted,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckStatus {
+    NotStarted,
+    Pending,
+    InProgress,
+    Passed,
+    Failed,
+    RequiresManualReview,
+    CompletedPassed,
+    CompletedFailed,
+    CompletedConditional,
+    Expired,
+    Waived,
+    Skipped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckType {
+    CriminalHistory,
+    EmploymentVerification,
+    IdentityVerification,
+    SecurityClearance,
+    AviationExperience,
+    SanctionsScreening,
+    WatchlistCheck,
+    ReferenceCheck,
+    EducationVerification,
+    AddressVerification,
+    BiometricEnrollment,
+    DocumentVerification,
+    FinancialCheck,
+    Custom,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Applicant {
     pub id: String,
@@ -213,6 +249,84 @@ pub struct Application {
     pub reviewed_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub issued_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Biometric {
+    pub id: String,
+    pub applicant_id: String,
+    pub biometric_type: String,
+    pub template_data_base64: String,
+    #[serde(default)]
+    pub image_data_base64: Option<String>,
+    pub is_live_capture: bool,
+    #[serde(default)]
+    pub capture_device_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VettingCheck {
+    pub id: String,
+    pub application_id: String,
+    pub check_type: CheckType,
+    #[serde(default)]
+    pub custom_name: Option<String>,
+    pub is_required: bool,
+    pub order: i32,
+    pub status: CheckStatus,
+    #[serde(default)]
+    pub config: Map<String, Value>,
+    #[serde(default)]
+    pub result: Map<String, Value>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub performed_by: Option<String>,
+    #[serde(default)]
+    pub external_provider: Option<String>,
+    #[serde(default)]
+    pub webhook_url: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default)]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+impl VettingCheck {
+    pub fn start(&mut self, now: DateTime<Utc>) {
+        self.status = CheckStatus::InProgress;
+        self.started_at = Some(now);
+        self.updated_at = now;
+    }
+
+    pub fn complete(
+        &mut self,
+        passed: bool,
+        notes: Option<String>,
+        performed_by: Option<String>,
+        mut result: Map<String, Value>,
+        evidence_submission_ids: Vec<String>,
+        now: DateTime<Utc>,
+    ) {
+        let unique: BTreeSet<_> = evidence_submission_ids.into_iter().collect();
+        result.insert(
+            "evidence_submission_ids".into(),
+            Value::Array(unique.into_iter().map(Value::String).collect()),
+        );
+        self.status = if passed {
+            CheckStatus::CompletedPassed
+        } else {
+            CheckStatus::CompletedFailed
+        };
+        self.notes = notes;
+        self.performed_by = performed_by;
+        self.result = result;
+        self.completed_at = Some(now);
+        self.updated_at = now;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

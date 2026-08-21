@@ -1,6 +1,7 @@
-use crate::{Applicant, Application, Evidence, EvidenceStatus};
+use crate::{
+    Applicant, Application, Biometric, CheckStatus, Evidence, EvidenceStatus, VettingCheck,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::BTreeMap;
 use thiserror::Error;
 
@@ -13,9 +14,9 @@ pub struct StoreDocument {
     #[serde(default)]
     pub applications: Vec<Application>,
     #[serde(default)]
-    pub biometrics: BTreeMap<String, Vec<Value>>,
+    pub biometrics: BTreeMap<String, Vec<Biometric>>,
     #[serde(default)]
-    pub checks: Vec<Value>,
+    pub checks: Vec<VettingCheck>,
     #[serde(default)]
     pub evidence: Vec<Evidence>,
 }
@@ -93,6 +94,43 @@ impl StoreDocument {
 
     pub fn save_evidence(&mut self, evidence: Evidence) {
         replace_or_insert(&mut self.evidence, evidence, |item| &item.id);
+    }
+
+    pub fn save_biometric(&mut self, biometric: Biometric) {
+        let items = self
+            .biometrics
+            .entry(biometric.applicant_id.clone())
+            .or_default();
+        replace_or_insert(items, biometric, |item| &item.id);
+    }
+
+    pub fn save_check(&mut self, check: VettingCheck) {
+        replace_or_insert(&mut self.checks, check, |item| &item.id);
+    }
+
+    pub fn checks_for_application(&self, application_id: &str) -> Vec<&VettingCheck> {
+        let mut checks: Vec<_> = self
+            .checks
+            .iter()
+            .filter(|item| item.application_id == application_id)
+            .collect();
+        checks.sort_by_key(|item| item.order);
+        checks
+    }
+
+    pub fn pending_checks(&self, check_type: Option<crate::CheckType>) -> Vec<&VettingCheck> {
+        self.checks
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item.status,
+                    CheckStatus::NotStarted
+                        | CheckStatus::Pending
+                        | CheckStatus::InProgress
+                        | CheckStatus::RequiresManualReview
+                ) && check_type.is_none_or(|expected| item.check_type == expected)
+            })
+            .collect()
     }
 }
 
