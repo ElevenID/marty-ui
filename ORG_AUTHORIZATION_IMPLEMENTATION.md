@@ -4,6 +4,12 @@
 
 All phases of the organization-scoped authorization system have been implemented to fix the critical cross-organization privilege escalation vulnerability.
 
+> Runtime ownership update (2026-08-21): this document preserves the original
+> Python implementation history. Gateway authorization and middleware now run
+> in `rust/services/gateway`, using the shared MMF security/platform crates and
+> the same language-neutral authorization contracts. The Python Gateway runtime
+> was deleted after parity and fail-closed tests passed.
+
 ---
 
 ## What Was Built

@@ -24,7 +24,7 @@ The Console Context Switching feature enables users to seamlessly switch between
 
 ### Backend Components
 
-#### Gateway Service (`services/gateway/`)
+#### Gateway Service (`rust/services/gateway/`)
 - **SessionCache**: In-memory cache for Keycloak session validation (60s TTL)
 - **AuthMiddleware**: Validates sessions and injects user context headers
   - `X-User-Id`: User's unique identifier

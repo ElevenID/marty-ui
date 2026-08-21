@@ -55,7 +55,7 @@ generated protobufs and caches remain excluded.
 
 | Order | Service | Approximate removable Python | Required preservation |
 |---|---|---:|---|
-| 1 | Gateway | 16,961 | Every public/internal route, proxy behavior, auth context, tenancy, signing/KMS orchestration, provider routing, limits, errors and observability |
+| 1 | Gateway (cut over) | 16,962 | Complete: every public/internal route, proxy behavior, auth context, tenancy, signing/KMS orchestration, provider routing, limits, errors and observability now execute in Rust |
 | 2 | Flow | 9,154 | OID4VCI/OID4VP/SIOP/mDoc/DIDComm transaction orchestration, persistence, callbacks, outbox, idempotency and expiry |
 | 3 | Organization | 7,952 | Organization, membership, RBAC, SCIM, invitations, tenant boundaries, events and storage |
 | 4 | Auth | 6,498 | OIDC, Keycloak administration, provisioning, sessions, claims, tenancy, errors and audit behavior |
@@ -102,22 +102,23 @@ optional gRPC CA validation, graceful shutdown, readiness checks and release
 identity are composed at startup. The real binary starts and serves health in
 an executable smoke test. `/ready` and `/health/ready`, which the original AST
 extractor missed because FastAPI registered them dynamically, are now explicit
-members of the language-neutral route contract. The shared service image is
-prepared to dispatch `gateway` to `marty-gateway`; the image cannot be built or
-published until the temporary MMF path dependencies are replaced by the
-landed MMF revision.
+members of the language-neutral route contract. The shared service image
+dispatches `gateway` directly to `marty-gateway`, and the dedicated CI image
+has a non-Python Gateway target plus an executable health smoke test.
+Publication still requires the temporary MMF worktree paths to be replaced by
+the landed immutable MMF revision.
 
-The complete 688-test Python gateway suite and the Rust gateway's 79 unit and
-black-box tests plus three executable health/fail-closed tests are green. The post-executable
+The complete 688-test Python gateway suite passed as the final baseline before
+deletion. Post-deletion, the Rust gateway's 80 unit and black-box tests plus
+three executable health/fail-closed tests and strict Clippy are green. The post-executable
 adapter audit is now closed: service-credential injection, route-bound tenant
 projection, request DTO canonicalization, response privacy projection,
 dependency preflight, organization composition, Hosted Pilot purge
 orchestration and scheduling, and the tenant-filtered gRPC-to-SSE bridge all
-execute in Rust under shared behavioral contracts. The Python package remains
-only as the parity oracle until the final Redis, executable/container,
-immutable-dependency and anti-reintroduction cutover gates pass; it is never a
-runtime fallback for an enabled Rust path. No deployment has occurred, and
-beta will not be updated until all wave-three slices land.
+execute in Rust under shared behavioral contracts. The superseded Python
+runtime and implementation-specific suite have been deleted, and production
+has no Python fallback. No deployment has occurred, and beta will not be
+updated until all wave-three slices land.
 
 The proxy trust-boundary slice now has executable parity for issuance service
 credentials and public Canvas exceptions, trusted identity forwarding,
@@ -1818,9 +1819,8 @@ redemption, nonce issuance, and credential production to the canonical
 issuance service; its holder proof comes directly from the pinned
 `marty-oid4vci` crate, and the adapter fails closed unless exactly one native
 `ldp_vc` Data Integrity credential is returned for the requested issuer DID.
-The Python VC-API module remains until the disabled Rust gateway binary passes
-its complete executable/packaging cutover gate, at which point this now-ported
-module is deleted in the same change.
+The superseded Python VC-API module was deleted with the Gateway runtime after
+the executable, packaging and language-neutral behavioral gates passed.
 
 Rust also owns the exact Marty and Canvas credential badge metadata, criteria,
 well-known VCT aliases, and SVG assets. Shared fixtures compare complete JSON
@@ -1881,10 +1881,10 @@ as soon as the full gate passes.
 | 2 | Public DTO and privacy adapters | Complete: the route-by-route audit covers organization, issuance creation/lifecycle, credential templates, trust/issuer/registry sync, presentation policies, OID4VP flow start, flow definitions/instances/results, deployment profiles/lanes, VC-API and all corresponding privacy projections |
 | 3 | Cross-service composition | Complete: organization dashboard counts, runtime readiness, integration metadata, lifecycle/retention aggregation, dependency preflight, manual Hosted Pilot purge and the paginated scheduled sweep execute in Rust |
 | 4 | Streaming transport | Complete: tenant-filtered event-stream gRPC subscription is exposed as bounded SSE with exact frames, disconnect cancellation, backend-failure handling, ETag bypass and cross-tenant rejection |
-| 5 | Cutover and deletion | Active: full Rust and legacy behavioral suites, Redis-backed integration tests, executable/container health, immutable MMF pin, image build, Python gateway deletion and anti-reintroduction checks |
+| 5 | Cutover and deletion | Complete locally: final 688-test Python baseline, 80 Rust tests, three executable tests, strict Clippy, ownership/stack/Compose gates, Python deletion and anti-reintroduction checks pass; remote Redis/container CI and immutable MMF publication remain aggregate landing gates |
 
 The gateway branch currently uses temporary local paths for the unpublished
-MMF platform/security commits through local commit `c3a378e`. It must be
+MMF platform/security commits through local commit `498fb39`. It must be
 repinned to the landed MMF commit
 before publication; no branch with local worktree dependencies may merge.
 
@@ -1900,14 +1900,14 @@ all four strategies plus idempotency lease ownership, in-flight repetition,
 payload conflict, completion and exact replay through the production provider
 composition.
 
-The CI-only native service image now has a dedicated non-Python gateway target
-and container health smoke test. The ownership manifest records the gateway as
-`cutover-in-progress`; when the final dependency and public-contract gates pass,
-the same deletion change flips it to `native-active`, after which the ownership
-guard rejects every Python source reintroduced below `services/gateway`. The
-remaining cutover blockers are publication of MMF commit `c3a378e` at an
-immutable remote revision and execution of the new Redis and container gates
-in CI. The public-protocol gate no longer imports the Python gateway: it freezes
+The CI-only native service image has a dedicated non-Python gateway target and
+container health smoke test. The ownership manifest records the gateway as
+`native-active`, and its guard rejects every Python source reintroduced below
+`services/gateway`. The deletion removed 37,048 tracked lines across the
+Python runtime, implementation-specific tests and obsolete Python AST route
+extractor. The remaining aggregate landing gates are publication of MMF commit
+`498fb39` at an immutable remote revision and execution of the Redis and
+container gates in CI. The public-protocol gate no longer imports the Python gateway: it freezes
 all 40 exact DTO field/required sets, compares them with the pinned protocol,
 rejects recursively exposed private state, and requires every gateway behavior
 vector to execute in Rust. The superseded 1,306-line Python-runtime checker was

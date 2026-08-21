@@ -341,6 +341,8 @@ def test_beta_compose_requires_credential_login_issuer_identity() -> None:
         "CREDENTIAL_LOGIN_ORGANIZATION_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}"
         in beta_compose
     )
-    assert beta_compose.count(
+    assert (
+        "CREDENTIAL_LOGIN_ISSUER_DID: "
         "${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}"
-    ) == 2
+        in beta_compose
+    )

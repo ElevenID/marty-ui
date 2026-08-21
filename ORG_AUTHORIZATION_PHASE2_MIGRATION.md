@@ -483,7 +483,7 @@ Before deploying Phase 2 services to production:
 - [Phase 1 Implementation Summary](ORG_AUTHORIZATION_IMPLEMENTATION.md)
 - `marty_common.org_authorization` in `ElevenID/Marty`
 - [Integration Tests](../marty-integration-tests/tests/integration/test_org_authorization.py)
-- [Gateway Middleware](services/gateway/main.py#L232-L337)
+- [Canonical Rust Gateway Middleware](rust/services/gateway/src/middleware.rs)
 
 ---
 

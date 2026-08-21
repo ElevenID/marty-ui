@@ -360,8 +360,6 @@
         {
           "repository": "ElevenID/marty-ui",
           "paths": [
-            "services/gateway/routes/signing_keys.py",
-            "services/gateway/kms_adapters/__init__.py",
             "services/signing_keys/main.py",
             "services/run_all_migrations.py",
             "scripts/export_canvas_lti_public_jwks.py"
@@ -378,16 +376,9 @@
       "canonical": {
         "repository": "ElevenID/marty-ui",
         "paths": ["rust/services/signing-keys/src/profiles.rs", "rust/services/signing-keys/src/registry.rs"],
-        "binding_paths": ["rust/services/signing-keys/src/http.rs", "services/gateway/native_signing_keys.py"]
+        "binding_paths": ["rust/services/signing-keys/src/http.rs", "rust/services/gateway/src/signing_compat.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/gateway/routes/signing_keys.py"],
-          "language": "python",
-          "disposition": "authorization-kms-did-orchestration-only"
-        }
-      ]
+      "legacy": []
     },
     {
       "id": "native-cli",
@@ -560,20 +551,13 @@
     {
       "id": "gateway-service",
       "phase": 9,
-      "status": "cutover-in-progress",
+      "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-ui",
         "paths": ["rust/services/gateway"],
         "binding_paths": []
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/gateway"],
-          "language": "python",
-          "disposition": "delete-after-immutable-mmf-redis-image-and-public-contract-gates"
-        }
-      ]
+      "legacy": []
     }
   ],
   "guardrails": {
@@ -591,14 +575,6 @@
       }
     ],
     "approved_imports": [
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography import x509", "count": 2},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.backends import default_backend"},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.primitives import serialization"},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey, SECP256R1, SECP384R1"},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey"},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey"},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_der_public_key, load_pem_public_key"},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.x509.oid import NameOID"},
       {"path": "services/presentation_policy/main.py", "statement": "from jwcrypto import jwk"},
       {"path": "services/run_all_migrations.py", "statement": "from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey"},
       {"path": "services/run_all_migrations.py", "statement": "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey"},
@@ -702,12 +678,6 @@
         "id": "no-python-openid4vp-mdoc-handover-kernel",
         "glob": "services/**/*.py",
         "pattern": "def\\s+_(?:cbor_length|cbor_encode_handover_value|openid4vp_response_key_thumbprint|build_openid4vp_mdoc_session_transcript|openid4vp_mdoc_binding_digests)\\s*\\(",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-python-issuer-profile-kernel",
-        "glob": "services/gateway/routes/signing_keys.py",
-        "pattern": "(?:_issuer_profiles_storage_key|_normalize_key_attestation_policy|_assert_issuer_profile_(?:service|key)_compatible|KEY_PURPOSE_CREDENTIAL_FORMATS|PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE)",
         "expected_matches": {}
       }
     ]

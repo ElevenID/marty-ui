@@ -44,6 +44,11 @@ def test_guard_rejects_unrecorded_unsigned_token_decoder(tmp_path: Path) -> None
             "expected_matches": {},
         }
     ]
+    next(
+        capability
+        for capability in manifest["capabilities"]
+        if capability["id"] == "auth-service"
+    )["status"] = "cutover-in-progress"
     manifest_path = tmp_path / "ownership.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     source = tmp_path / "services" / "auth" / "adapter.py"
@@ -89,6 +94,11 @@ def test_native_service_guard_allows_sources_only_during_cutover(tmp_path: Path)
     )
     manifest["guardrails"]["approved_imports"] = []
     manifest["guardrails"]["text_rules"] = []
+    next(
+        capability
+        for capability in manifest["capabilities"]
+        if capability["id"] == "gateway-service"
+    )["status"] = "cutover-in-progress"
     manifest_path = tmp_path / "ownership.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     source = tmp_path / "services" / "gateway" / "reference.py"

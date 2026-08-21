@@ -3,6 +3,12 @@
 **Date:** 2026-04-17  
 **Scope:** Full-format and full-type KMS support across `jwt_vc_json`, `dc+sd-jwt`, `mso_mdoc`, `zk_mdoc`, X.509, JWKS, holder-binding, and regulated travel-document credential flows.
 
+> Migration note (2026-08-21): paths below `services/gateway` describe the
+> historical Python implementation used during this audit. The canonical
+> implementations are now `rust/services/gateway` and
+> `rust/services/signing-keys`; the Python Gateway runtime has been deleted
+> after behavioral parity and fail-closed cutover gates passed.
+
 ---
 
 ## Legend

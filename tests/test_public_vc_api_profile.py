@@ -13,11 +13,10 @@ def test_legacy_w3c_test_overlay_is_removed() -> None:
 
 
 def test_gateway_has_no_test_only_vc_api_switch() -> None:
-    gateway = ROOT / "services" / "gateway"
+    gateway = ROOT / "rust" / "services" / "gateway"
     sources = "\n".join(
         path.read_text(encoding="utf-8")
-        for path in gateway.rglob("*.py")
-        if "__pycache__" not in path.parts
+        for path in gateway.rglob("*.rs")
     )
     assert "W3C_VC_TEST_ADAPTER" not in sources
     assert "/__test__/vc-api" not in sources

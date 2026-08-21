@@ -69,7 +69,7 @@ Implemented a comprehensive organization switching and view mode toggle system t
 ### Backend
 
 #### Gateway Service
-1. **services/gateway/main.py**
+1. **Historical `services/gateway/main.py` (now `rust/services/gateway`)**
    - Added SessionCache class for Keycloak session caching (60s TTL)
    - Implemented AuthMiddleware for session validation
    - Injects X-User-Id, X-User-Email, X-User-Domain headers
