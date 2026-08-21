@@ -2,14 +2,19 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::{body::Body, http::Request};
+use chrono::{Duration, Utc};
 use marty_trust_profile::{
-    trust_profile_router, MemoryTrustProfileRepository, TrustAuthorizationError,
-    TrustProfileApplication, TrustProfileControlPlane, TrustProfileHttpState,
-    TrustProfileRepository, TrustRegistrySyncError, TrustRegistrySynchronizer,
+    trust_profile_router, CascadeRevocationPolicy, ComplianceStatus, IssuerEntity,
+    IssuerEntityComplianceStatus, IssuerEntityType, MemoryTrustProfileRepository,
+    TrustAuthorizationError, TrustProfile, TrustProfileApplication, TrustProfileControlPlane,
+    TrustProfileHttpState, TrustProfileIssuer, TrustProfileRepository, TrustProfileStatus,
+    TrustProfileType, TrustRegistrySyncError, TrustRegistrySynchronizer, TrustRelationshipStatus,
+    TrustSource, TrustSourceType,
 };
 use mmf_security::ServiceTokenAuthenticator;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use tower::ServiceExt;
+use uuid::Uuid;
 
 #[derive(Debug)]
 struct AllowControlPlane;
@@ -52,8 +57,11 @@ impl TrustRegistrySynchronizer for EchoSynchronizer {
 }
 
 fn service() -> axum::Router {
-    let repository: Arc<dyn TrustProfileRepository> =
-        Arc::new(MemoryTrustProfileRepository::default());
+    service_with_repository(Arc::new(MemoryTrustProfileRepository::default()))
+}
+
+fn service_with_repository(repository: Arc<MemoryTrustProfileRepository>) -> axum::Router {
+    let repository: Arc<dyn TrustProfileRepository> = repository;
     let application = Arc::new(TrustProfileApplication::new(
         Arc::clone(&repository),
         Arc::new(AllowControlPlane),
@@ -65,6 +73,33 @@ fn service() -> axum::Router {
         internal_api_key: Some(Arc::from("internal-test-key")),
         registry_synchronizer: Arc::new(EchoSynchronizer),
     })
+}
+
+fn profile(name: &str) -> TrustProfile {
+    let now = Utc::now();
+    TrustProfile {
+        id: Uuid::new_v4(),
+        organization_id: "org-1".into(),
+        name: name.into(),
+        description: None,
+        status: TrustProfileStatus::Draft,
+        profile_type: TrustProfileType::Custom,
+        compliance_status: ComplianceStatus::SetupRequired,
+        trust_sources: vec![],
+        validation_rules: Default::default(),
+        allowed_issuers: None,
+        denied_issuers: None,
+        system_issuer_overrides: Map::new(),
+        compatible_compliance_codes: vec![],
+        verification_policy_set_id: None,
+        auto_generated: false,
+        revocation_policy: Default::default(),
+        revocation_profile_id: None,
+        time_policy: Default::default(),
+        supported_formats: vec!["MDOC".into()],
+        created_at: now,
+        updated_at: now,
+    }
 }
 
 async fn request(
@@ -163,6 +198,184 @@ async fn internal_owner_routes_require_the_distinct_constant_time_api_key() {
     )
     .await;
     assert_eq!(response.status(), 401);
+}
+
+#[tokio::test]
+async fn internal_decisions_fail_closed_with_the_legacy_service_contract() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let mut unsynchronized = profile("Unsynchronized");
+    unsynchronized.trust_sources.push(TrustSource {
+        id: Uuid::new_v4(),
+        name: "Registry".into(),
+        source_type: TrustSourceType::TrustList,
+        url: Some("https://registry.example/sync".into()),
+        certificate_pem: None,
+        issuer_did: None,
+        description: None,
+        pinned_certificates: vec![],
+        refresh_interval_hours: 24,
+        enabled: true,
+        registry_sync: Some(json!({
+            "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+            "refresh_interval_hours": 24
+        })),
+        registry_sync_token: None,
+        registry_sequence: 0,
+        registry_entries: Map::new(),
+        registry_last_synced_at: None,
+        extensions: Map::new(),
+    });
+    repository
+        .save_profile(&unsynchronized, None)
+        .await
+        .unwrap();
+    let service = service_with_repository(Arc::clone(&repository));
+    let response = request(
+        service,
+        "GET",
+        &format!("/internal/v1/trust-profiles/{}", unsynchronized.id),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), 503);
+    assert_eq!(
+        body(response).await["detail"],
+        "Trust Profile registry source has never synchronized"
+    );
+
+    let mut stale = profile("Stale");
+    let mut source = unsynchronized.trust_sources[0].clone();
+    source.registry_sync = Some(json!({
+        "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+        "refresh_interval_hours": 1
+    }));
+    source.registry_last_synced_at = Some(Utc::now() - Duration::hours(2));
+    stale.trust_sources.push(source);
+    repository.save_profile(&stale, None).await.unwrap();
+    let response = request(
+        service_with_repository(Arc::clone(&repository)),
+        "GET",
+        &format!("/internal/v1/trust-profiles/{}", stale.id),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), 503);
+    assert_eq!(
+        body(response).await["detail"],
+        "Trust Profile registry source is stale"
+    );
+
+    let mut legacy = profile("Legacy URL");
+    let mut source = unsynchronized.trust_sources[0].clone();
+    source.registry_sync = None;
+    legacy.trust_sources.push(source);
+    repository.save_profile(&legacy, None).await.unwrap();
+    let response = request(
+        service_with_repository(repository),
+        "GET",
+        &format!("/internal/v1/trust-profiles/{}", legacy.id),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), 503);
+    assert_eq!(
+        body(response).await["detail"],
+        "Trust Profile registry source has no supported sync protocol"
+    );
+}
+
+#[tokio::test]
+async fn internal_decisions_reject_cross_tenant_and_private_key_relationships() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let cross_tenant = profile("Cross tenant");
+    repository.save_profile(&cross_tenant, None).await.unwrap();
+    let now = Utc::now();
+    let foreign = IssuerEntity {
+        id: Uuid::new_v4(),
+        organization_id: Some("org-other".into()),
+        issuer_id: "did:web:foreign.example".into(),
+        issuer_type: IssuerEntityType::Organization,
+        display_name: "Foreign".into(),
+        description: None,
+        is_system_issuer: false,
+        compliance_status: IssuerEntityComplianceStatus::Compliant,
+        accreditation_body: None,
+        accreditations: vec![],
+        accreditation_date: None,
+        valid_from: now,
+        valid_until: None,
+        trust_anchor_id: None,
+        metadata: json!({}),
+        revoked_at: None,
+        revocation_reason: None,
+        revoked_by: None,
+        created_at: now,
+        updated_at: now,
+    };
+    repository.save_issuer_entity(&foreign).await.unwrap();
+    repository
+        .save_profile_issuer(&TrustProfileIssuer {
+            id: Uuid::new_v4(),
+            trust_profile_id: cross_tenant.id,
+            issuer_id: foreign.id,
+            trust_level: 100,
+            relationship_status: TrustRelationshipStatus::Trusted,
+            cascade_revocation_policy: CascadeRevocationPolicy::NotifyOnly,
+            metadata: json!({}),
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    let response = request(
+        service_with_repository(Arc::clone(&repository)),
+        "GET",
+        &format!("/internal/v1/trust-profiles/{}", cross_tenant.id),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), 503);
+    assert_eq!(
+        body(response).await["detail"],
+        "Trust Profile contains a cross-organization issuer relationship"
+    );
+
+    let private_key = profile("Private key");
+    repository.save_profile(&private_key, None).await.unwrap();
+    let mut malformed = foreign;
+    malformed.id = Uuid::new_v4();
+    malformed.organization_id = Some("org-1".into());
+    malformed.issuer_id = "did:web:malformed.example".into();
+    malformed.metadata = json!({
+        "verification_keys": [{"kty": "EC", "d": "private"}]
+    });
+    repository.save_issuer_entity(&malformed).await.unwrap();
+    repository
+        .save_profile_issuer(&TrustProfileIssuer {
+            id: Uuid::new_v4(),
+            trust_profile_id: private_key.id,
+            issuer_id: malformed.id,
+            trust_level: 100,
+            relationship_status: TrustRelationshipStatus::Trusted,
+            cascade_revocation_policy: CascadeRevocationPolicy::NotifyOnly,
+            metadata: json!({}),
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    let response = request(
+        service_with_repository(repository),
+        "GET",
+        &format!("/internal/v1/trust-profiles/{}", private_key.id),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), 503);
+    assert_eq!(
+        body(response).await["detail"],
+        "Trust Profile contains invalid issuer verification keys"
+    );
 }
 
 #[tokio::test]

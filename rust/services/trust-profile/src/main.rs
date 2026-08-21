@@ -5,6 +5,7 @@ use marty_trust_profile::{
     NativeTrustProfileControlPlane, NativeTrustRegistrySynchronizer,
     PostgresTrustProfileRepository, TrustProfileApplication, TrustProfileDependency,
     TrustProfileHttpState, TrustProfileRepository, TrustProfileRuntime, TrustProfileServiceConfig,
+    TrustRegistryScheduler,
 };
 use mmf_security::ServiceTokenAuthenticator;
 use sqlx::postgres::PgPoolOptions;
@@ -70,12 +71,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.service_token.clone(),
         config.service_authentication_required(),
     )?);
+    let scheduler_repository = Arc::clone(&repository);
     let state = TrustProfileHttpState {
         application,
         repository,
         service_authenticator,
         internal_api_key: config.internal_api_key.clone().map(Arc::from),
-        registry_synchronizer,
+        registry_synchronizer: registry_synchronizer.clone(),
     };
 
     let listener = TcpListener::bind(config.http_addr).await?;
@@ -85,6 +87,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .merge(trust_profile_router(state))
         .layer(TraceLayer::new_for_http());
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
+    let scheduler = TrustRegistryScheduler::new(
+        scheduler_repository,
+        registry_synchronizer,
+        config.registry_sync_poll_interval,
+    );
+    let scheduler_task = tokio::spawn(scheduler.run(shutdown_rx.clone()));
     let server = axum::serve(listener, app).with_graceful_shutdown(async move {
         while !*shutdown_rx.borrow() && shutdown_rx.changed().await.is_ok() {}
     });
@@ -103,6 +111,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     let _ = shutdown_tx.send(true);
+    let _ = scheduler_task.await;
     runtime.stop()?;
     Ok(())
 }

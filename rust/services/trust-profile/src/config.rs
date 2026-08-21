@@ -32,6 +32,7 @@ pub struct TrustProfileServiceConfig {
     pub service_token: Option<String>,
     pub internal_api_key: Option<String>,
     pub dependency_timeout: Duration,
+    pub registry_sync_poll_interval: Duration,
     pub registry_private_hosts: Vec<String>,
     pub registry_ca_bundle: Option<Vec<u8>>,
     pub marty_organization_id: Uuid,
@@ -133,6 +134,10 @@ impl TrustProfileServiceConfig {
         if dependency_timeout.is_zero() {
             return Err(invalid("TRUST_PROFILE_DEPENDENCY_TIMEOUT_SECONDS"));
         }
+        let registry_sync_poll_seconds =
+            number(&values, "TRUST_REGISTRY_SYNC_POLL_SECONDS", 300_u64)?;
+        let registry_sync_poll_interval =
+            Duration::from_secs(registry_sync_poll_seconds.clamp(60, 86_400));
         let private_host_allowlist =
             value(&values, "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST").unwrap_or_default();
         let registry_private_hosts =
@@ -156,6 +161,7 @@ impl TrustProfileServiceConfig {
             service_token,
             internal_api_key,
             dependency_timeout,
+            registry_sync_poll_interval,
             registry_private_hosts,
             registry_ca_bundle,
             marty_organization_id,
@@ -344,6 +350,27 @@ mod tests {
             Err(TrustProfileConfigError::Invalid {
                 name: "MARTY_ISSUER_BASE_URL"
             })
+        );
+    }
+
+    #[test]
+    fn registry_scheduler_interval_preserves_the_bounded_runtime_contract() {
+        let mut minimum = values("development");
+        minimum.insert("TRUST_REGISTRY_SYNC_POLL_SECONDS".into(), "1".into());
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(minimum)
+                .unwrap()
+                .registry_sync_poll_interval,
+            Duration::from_secs(60)
+        );
+
+        let mut maximum = values("development");
+        maximum.insert("TRUST_REGISTRY_SYNC_POLL_SECONDS".into(), "100000".into());
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(maximum)
+                .unwrap()
+                .registry_sync_poll_interval,
+            Duration::from_secs(86_400)
         );
     }
 }

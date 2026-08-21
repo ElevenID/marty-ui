@@ -9,8 +9,8 @@ use mmf_platform::{
 use serde_json::{json, Map, Value};
 
 use crate::{
-    TrustProfile, TrustProfileRepository, TrustRegistrySyncError, TrustRegistrySynchronizer,
-    TrustSourceType,
+    application::validate_registry_sync_config, TrustProfile, TrustProfileRepository,
+    TrustRegistrySyncError, TrustRegistrySynchronizer, TrustSource, TrustSourceType,
 };
 
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
@@ -151,16 +151,14 @@ impl NativeTrustRegistrySynchronizer {
             "synchronized_at": source.registry_last_synced_at,
         }))
     }
-}
 
-#[async_trait]
-impl TrustRegistrySynchronizer for NativeTrustRegistrySynchronizer {
-    async fn synchronize(
+    async fn synchronize_selected(
         &self,
         mut profile: TrustProfile,
-    ) -> Result<Value, TrustRegistrySyncError> {
+        now: chrono::DateTime<Utc>,
+        due_only: bool,
+    ) -> Result<Option<Value>, TrustRegistrySyncError> {
         let expected_updated_at = profile.updated_at;
-        let now = Utc::now();
         let mut summaries = Vec::new();
         for source in profile.trust_sources.iter_mut().filter(|source| {
             source.enabled
@@ -170,12 +168,13 @@ impl TrustRegistrySynchronizer for NativeTrustRegistrySynchronizer {
                     TrustSourceType::TrustList | TrustSourceType::PkdUrl
                 )
         }) {
+            if due_only && !registry_source_is_due(source, now)? {
+                continue;
+            }
             summaries.push(self.synchronize_source(source, now).await?);
         }
         if summaries.is_empty() {
-            return Err(failed(
-                "Trust Profile has no enabled native registry sources",
-            ));
+            return Ok(None);
         }
         profile.updated_at = now;
         let saved = self
@@ -186,12 +185,44 @@ impl TrustRegistrySynchronizer for NativeTrustRegistrySynchronizer {
         if !saved {
             return Err(failed("Trust Profile changed during registry sync"));
         }
-        Ok(json!({
+        Ok(Some(json!({
             "trust_profile_id": profile.id,
             "sources": summaries,
             "synchronized_at": now,
-        }))
+        })))
     }
+
+    pub async fn synchronize_due(
+        &self,
+        profile: TrustProfile,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<Option<Value>, TrustRegistrySyncError> {
+        self.synchronize_selected(profile, now, true).await
+    }
+}
+
+#[async_trait]
+impl TrustRegistrySynchronizer for NativeTrustRegistrySynchronizer {
+    async fn synchronize(&self, profile: TrustProfile) -> Result<Value, TrustRegistrySyncError> {
+        let now = Utc::now();
+        self.synchronize_selected(profile, now, false)
+            .await?
+            .ok_or_else(|| failed("Trust Profile has no enabled native registry sources"))
+    }
+}
+
+pub(crate) fn registry_source_is_due(
+    source: &TrustSource,
+    now: chrono::DateTime<Utc>,
+) -> Result<bool, TrustRegistrySyncError> {
+    let config = source
+        .registry_sync
+        .as_ref()
+        .ok_or_else(|| failed("registry source has no sync configuration"))?;
+    let interval =
+        validate_registry_sync_config(config).map_err(|error| failed(error.to_string()))?;
+    marty_verification::trust_sync::sync_is_due(source.registry_last_synced_at, interval, now)
+        .map_err(|error| failed(error.to_string()))
 }
 
 fn state(

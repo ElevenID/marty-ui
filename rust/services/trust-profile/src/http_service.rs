@@ -1082,7 +1082,7 @@ async fn internal_profile(
         .await
         .map_err(repository_error)?
         .ok_or_else(|| not_found("Trust Profile not found"))?;
-    validate_registry_sources_for_decision(&profile, Utc::now()).map_err(application_error)?;
+    validate_registry_sources_for_decision(&profile, Utc::now()).map_err(decision_error)?;
     let relationships = state
         .repository
         .profile_issuers(profile.id)
@@ -1464,6 +1464,27 @@ fn application_error(error: TrustProfileApplicationError) -> TrustProfileHttpErr
         }
         TrustProfileApplicationError::Domain(error) => unprocessable(error.to_string()),
         TrustProfileApplicationError::Repository(error) => repository_error(error),
+    }
+}
+
+fn decision_error(error: TrustProfileApplicationError) -> TrustProfileHttpError {
+    match error {
+        TrustProfileApplicationError::Conflict("registry_sync_protocol_missing")
+        | TrustProfileApplicationError::Invalid("registry_sync_config")
+        | TrustProfileApplicationError::Invalid("registry_sync_protocol")
+        | TrustProfileApplicationError::Invalid("registry_sync_interval") => {
+            unavailable("Trust Profile registry source has no supported sync protocol")
+        }
+        TrustProfileApplicationError::Conflict("registry_never_synchronized") => {
+            unavailable("Trust Profile registry source has never synchronized")
+        }
+        TrustProfileApplicationError::Conflict("registry_stale") => {
+            unavailable("Trust Profile registry source is stale")
+        }
+        TrustProfileApplicationError::Conflict("registry_state_invalid") => {
+            unavailable("Trust Profile registry state is invalid")
+        }
+        other => application_error(other),
     }
 }
 

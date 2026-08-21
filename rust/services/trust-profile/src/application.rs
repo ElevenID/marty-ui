@@ -1006,7 +1006,9 @@ fn validate_trust_source(source: &TrustSource) -> Result<(), TrustProfileApplica
     Ok(())
 }
 
-fn validate_registry_sync_config(value: &Value) -> Result<u16, TrustProfileApplicationError> {
+pub(crate) fn validate_registry_sync_config(
+    value: &Value,
+) -> Result<u16, TrustProfileApplicationError> {
     let config = value
         .as_object()
         .ok_or(TrustProfileApplicationError::Invalid(

@@ -90,6 +90,8 @@
     "resolve_and_pin_destination": true,
     "reject_loopback_and_unapproved_private_addresses": true,
     "operator_ca_bundle": true,
+    "scheduled_refresh_starts_at_eighty_percent_of_interval": true,
+    "scheduled_profile_failures_are_isolated": true,
     "initial_and_delta_updates_are_atomic": true,
     "reject_sequence_rollback_unknown_removal_duplicate_entries_and_repeated_tokens": true,
     "revalidate_imported_certificates_at_decision_time": true

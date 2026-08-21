@@ -8,6 +8,7 @@ pub mod migration;
 pub mod persistence;
 pub mod policy;
 pub mod postgres;
+pub mod registry_scheduler;
 pub mod registry_sync;
 pub mod repository;
 pub mod runtime;
@@ -46,6 +47,7 @@ pub use policy::{
     sanitize_private_custody_metadata, TrustDomainError,
 };
 pub use postgres::PostgresTrustProfileRepository;
+pub use registry_scheduler::{ScheduledRegistrySyncReport, TrustRegistryScheduler};
 pub use registry_sync::NativeTrustRegistrySynchronizer;
 pub use repository::{
     MemoryTrustProfileRepository, RegistryStatus, TrustProfileRepository,
