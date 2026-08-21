@@ -4,7 +4,10 @@ use async_trait::async_trait;
 use serde_json::{json, Map, Value};
 use url::Url;
 
-use crate::{ExchangedTokenValidator, OidcUserInfo, OidcValidatedIdentity, PortError};
+use crate::{
+    CredentialAccount, CredentialAccountResolver, ExchangedTokenValidator, OidcUserInfo,
+    OidcValidatedIdentity, PortError, ResolveCredentialAccount,
+};
 
 pub const KEYCLOAK_ADMIN_RESPONSE_MAX_BYTES: usize = 1024 * 1024;
 
@@ -624,6 +627,56 @@ impl KeycloakAdminAdapter {
                 json: None,
             })
             .await
+    }
+}
+
+#[async_trait]
+impl CredentialAccountResolver for KeycloakAdminAdapter {
+    async fn resolve(
+        &self,
+        request: &ResolveCredentialAccount,
+    ) -> Result<Option<CredentialAccount>, PortError> {
+        let mut user_id = self
+            .get_existing_verified_user_id(&request.email, Some(&request.preferred_username))
+            .await?;
+        if user_id.is_none() && request.create_user {
+            user_id = self
+                .get_or_create_user(&KeycloakUserCreate {
+                    email: request.email.clone(),
+                    given_name: request.given_name.clone(),
+                    family_name: request.family_name.clone(),
+                    role: "applicant".into(),
+                    username: Some(request.preferred_username.clone()),
+                })
+                .await?;
+        }
+        let Some(user_id) = user_id else {
+            return Ok(None);
+        };
+        let admin_user = self.get_user_info(&user_id).await?;
+        let exchange = self
+            .exchange_token_for_user(&user_id, &self.config.client_id)
+            .await?;
+        let exchanged_user = exchange
+            .as_ref()
+            .map(|exchange| &exchange.identity.user_info);
+        let user = merge_oidc_user_info(exchanged_user, Some(&admin_user));
+        Ok(Some(CredentialAccount {
+            user,
+            id_token: exchange
+                .as_ref()
+                .and_then(|exchange| exchange.id_token.clone()),
+            refresh_token: exchange
+                .as_ref()
+                .and_then(|exchange| exchange.refresh_token.clone()),
+            validated_claims: exchange.map(|exchange| {
+                if exchange.identity.id_token_claims.is_null() {
+                    exchange.identity.access_token_claims
+                } else {
+                    exchange.identity.id_token_claims
+                }
+            }),
+        }))
     }
 }
 

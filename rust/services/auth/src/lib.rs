@@ -3,6 +3,7 @@
 pub mod application;
 pub mod cache_repository;
 pub mod canvas;
+pub mod credential_callback;
 pub mod credential_login;
 pub mod credential_state;
 pub mod domain;
@@ -15,6 +16,7 @@ pub mod provisioning;
 pub use application::*;
 pub use cache_repository::*;
 pub use canvas::*;
+pub use credential_callback::*;
 pub use credential_login::*;
 pub use credential_state::*;
 pub use domain::{

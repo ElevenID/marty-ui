@@ -184,6 +184,26 @@ impl CredentialLoginStateStore {
             .map_err(store_error)
     }
 
+    pub fn verify_callback(
+        &self,
+        payload: &CredentialVerifiedPayload,
+        headers: &CredentialCallbackHeaders,
+        now: DateTime<Utc>,
+    ) -> Result<(), CredentialStateError> {
+        verify_credential_callback(
+            payload,
+            headers,
+            &self.policy.secret,
+            now,
+            self.policy.maximum_timestamp_skew_seconds,
+        )
+    }
+
+    #[must_use]
+    pub fn callback_session_id(&self, flow_instance_id: &str, nonce: &str) -> Uuid {
+        credential_callback_session_id(&self.policy.secret, flow_instance_id, nonce)
+    }
+
     pub async fn poll(
         &self,
         nonce: &str,
