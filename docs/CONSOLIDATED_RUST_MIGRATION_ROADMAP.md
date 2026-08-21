@@ -6,7 +6,7 @@
 
 **Initial rollout environment:** Beta only
 
-**Last updated:** 2026-08-20
+**Last updated:** 2026-08-21
 
 ## Objective
 
@@ -1347,14 +1347,36 @@ Keycloak/handoff impersonation context. One shared fixture executes in Python
 and Rust. Network-path redirects such as `//attacker.example` now fail closed
 instead of retaining an open-redirect interpretation.
 
-Fifty-four Rust Auth behavioral tests, strict Clippy, the focused 52-test HTTP
-oracle suite with one optional integration skip, and all nine legacy gRPC
-adapter tests pass. Remaining Auth work is credential-login HTML/CSS/JavaScript
-consolidation, applicant/organization/event-stream transports, the complete
-14-route Axum adapter, MMF runtime/outbox composition, executable packaging,
-configured PostgreSQL/Redis/transport acceptance, immutable MMF pinning, and
-immediate deletion of the Python service after the aggregate gate passes. No
-beta deployment has occurred.
+Commits `16aae0d0`, `c52579b7` and `16a31cfd` now expose all 14 frozen HTTP
+routes through one Axum service, including the six credential-login asset,
+start, poll, finalize and callback routes. Commit `18a82ba1` moves credential
+page and error rendering into Rust, preserves every SpruceKit/LISSI operator
+override, and compiles four shared assets from one source. Exact Python/Rust
+page hashes pass, and 710 embedded Python asset lines were deleted immediately
+after that gate.
+
+Commit `b7ad9c03` ports the remaining Flow verification, Organization
+provisioning, Applicant profile and event provider boundaries. Flow and
+Organization channels are created only through the shared MMF gRPC factory;
+Applicant requests use the bounded no-redirect MMF HTTP client; Auth events use
+the canonical MMF envelope. `contracts/auth-service-transport-behavior.json`
+freezes request defaults, incomplete-response rejection, organization
+degradation behavior, exact Applicant headers/bounds and all four event types.
+
+Commit `e665f9b7` establishes fail-closed Auth configuration, MMF lifecycle and
+readiness, organization-scoped events, a PostgreSQL MMF outbox publisher and a
+bounded event-stream gRPC transport. `contracts/auth-executable-behavior.json`
+requires every database, cache, OIDC, provider, outbox, event-stream and
+listener component to be healthy before activation; it explicitly forbids a
+Python fallback and any per-slice beta deployment. The complete Rust Auth
+suite, strict Clippy and the focused Python parity suite (71 passed, one
+optional configured integration skipped) are green.
+
+Remaining Auth work is concrete executable connection composition, gRPC
+workload TLS/server security, outbox dispatcher startup and shutdown, binary
+and container dispatch, configured PostgreSQL/Redis/provider acceptance,
+immutable MMF pinning, and immediate deletion of the Python service plus an
+anti-reintroduction gate. No beta deployment has occurred.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,
