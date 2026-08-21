@@ -1,0 +1,18 @@
+[package]
+name = "marty-credential-template"
+version = "0.1.0"
+description = "Marty Rust credential-template, wallet-registry, and delivery-destination service"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+regex.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

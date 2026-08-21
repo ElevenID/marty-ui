@@ -47,8 +47,11 @@ cryptographic kernels.
 ### Ordered `marty-ui` ports
 
 Work proceeds in descending removable Python size after the MMF foundation is
-available. Counts are current physical source estimates excluding tests,
-migrations, generated protobufs and caches.
+available. Completed services retain their historical production-source
+estimates. Remaining services are remeasured from all tracked Python below the
+service boundary, including implementation-specific tests and migrations that
+will be replaced by language-neutral contracts and Rust-owned schema history;
+generated protobufs and caches remain excluded.
 
 | Order | Service | Approximate removable Python | Required preservation |
 |---|---|---:|---|
@@ -56,9 +59,9 @@ migrations, generated protobufs and caches.
 | 2 | Flow | 9,154 | OID4VCI/OID4VP/SIOP/mDoc/DIDComm transaction orchestration, persistence, callbacks, outbox, idempotency and expiry |
 | 3 | Organization | 7,952 | Organization, membership, RBAC, SCIM, invitations, tenant boundaries, events and storage |
 | 4 | Auth | 6,498 | OIDC, Keycloak administration, provisioning, sessions, claims, tenancy, errors and audit behavior |
-| 5 | Presentation policy | 5,673 | CRUD/versioning, trust resolution, credential-format dispatch, status lookup, native evaluation adaptation and exact decision responses |
-| 6 | Trust profile | 4,685 | CRUD/versioning, registry synchronization orchestration, trust material, scheduling, storage and authorization |
-| 7 | Credential template | 4,085 | CRUD/versioning, issuance context, wallet metadata, custody routing, validation, seeds and storage |
+| 5 | Credential template | 13,418 | CRUD/versioning, issuance context, wallet registry and routing, delivery destinations, validation, seeds and storage |
+| 6 | Presentation policy | 11,631 | CRUD/versioning, trust resolution, credential-format dispatch, status lookup, native evaluation adaptation and exact decision responses |
+| 7 | Trust profile | 8,618 | CRUD/versioning, registry synchronization orchestration, trust material, scheduling, storage and authorization |
 | 8 | Applicant | 3,692 | Applicant/application state transitions, vetting, evidence, biometrics, reviewer locks, issuance orchestration and storage |
 | 9 | Verification | 1,867 | Session APIs, OID4VP construction, provider/service integration, persistence and canonical results |
 | 10 | Device registration | 1,845 | Registration lifecycle, challenge consumption, key rotation, preferences, organization checks and storage |
@@ -1399,6 +1402,32 @@ checks.
 Auth source migration is complete. Its remaining release gates are the shared
 wave-three immutable MMF pin plus configured PostgreSQL/Redis/provider and
 container acceptance in the aggregate landing branch. No beta deployment has
+occurred.
+
+### Credential-template port status
+
+Credential Template is now the largest remaining source-deletion target after
+Organization when tracked Python migrations and implementation-specific tests
+are included. Work is active in dedicated worktree
+`marty-ui-rust-credential-template-wave3` on branch
+`agent/marty-ui-rust-credential-template-wave3`, based on the completed Auth
+source cutover. The first slice establishes `marty-credential-template` and
+moves credential-format aliases, public and signing wire names, payload-format
+defaults, issuance-protocol aliases, SD-JWT VCT and mdoc doctype requirements,
+wallet inner-URI policy, wallet route rendering, and delivery-destination
+tenant invariants into one Rust domain implementation.
+
+`contracts/credential-template-domain-behavior.json` is the language-neutral
+oracle for canonical, legacy and invalid format names—including the retained
+VDS-NC family—registered and HTTPS VCTs, placeholder-origin rejection,
+environment-specific URI schemes, encoded and inline credential offers, and
+system versus organization delivery destinations. The surviving Python oracle
+and Rust execute the same fixture; four tests pass in each language, and strict
+Clippy passes. This parity pass caught and closed an initial VDS-NC inventory
+omission before any caller or data was moved. Remaining work is complete domain
+and persistence parity, Rust-owned schema/seeds, all 24 HTTP and 12 intended
+gRPC methods, MMF authorization/runtime/outbox composition, packaging,
+configured acceptance and immediate Python deletion. No beta deployment has
 occurred.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18

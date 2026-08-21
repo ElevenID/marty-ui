@@ -4134,6 +4134,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-credential-template"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "url",
+]
+
+[[package]]
 name = "marty-crypto"
 version = "0.1.57"
 source = "git+https://github.com/ElevenID/marty-core?rev=54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8#54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8"
