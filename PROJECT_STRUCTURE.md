@@ -28,7 +28,6 @@ marty-ui/
 │   ├── auth/
 │   ├── organization/
 │   ├── trust_profile/
-│   ├── flow/
 │   ├── notification/
 │   ├── presentation_policy/
 │   ├── deployment_profile/
@@ -38,6 +37,9 @@ marty-ui/
 │   ├── verification/
 │   ├── device_registration/
 │   └── ...
+├── rust/
+│   └── services/
+│       └── flow/       # canonical Flow HTTP, gRPC, persistence and migrations
 ├── packages/
 │   ├── marty_common/
 │   └── marty_proto/
@@ -57,7 +59,8 @@ marty-ui/
 
 ### Key areas
 
-- `services/` - active Python microservices and migrations
+- `services/` - Python services still awaiting whole-service Rust cutover
+- `rust/services/` - canonical Rust service executables, including Flow
 - `marty-common` - released shared Python infrastructure maintained in `ElevenID/Marty`
 - `packages/marty_proto/` + `proto/` - gRPC definitions and generated stubs
 - `ui/` - Vite/React frontend
@@ -74,7 +77,7 @@ Use the Makefile targets instead of retired one-off build or Kind deployment scr
 
 ### Technologies used
 
-- **Backend**: Python, FastAPI, gRPC, SQLAlchemy, PostgreSQL, Redis
+- **Backend**: Rust/Axum/Tonic/SQLx plus remaining Python/FastAPI services, PostgreSQL, Redis
 - **Frontend**: React, Vite, TypeScript, Material UI
 - **Local orchestration**: Docker Compose
 - **Identity/Auth**: Keycloak + OIDC

@@ -1,0 +1,175 @@
+{
+  "schema_version": 1,
+  "request_cases": [
+    {
+      "name": "issuer_create_defaults_and_normalizes_accreditations",
+      "method": "POST",
+      "path": "/v1/issuer-entities",
+      "input": {
+        "organization_id": "org-1",
+        "issuer_id": "did:web:issuer.example",
+        "display_name": "Example Issuer",
+        "accreditations": [" ISO27001 ", "FIPS140-2"]
+      },
+      "expected": {
+        "organization_id": "org-1",
+        "issuer_id": "did:web:issuer.example",
+        "issuer_type": "ORGANIZATION",
+        "display_name": "Example Issuer",
+        "description": null,
+        "compliance_status": "COMPLIANT",
+        "accreditation_body": null,
+        "accreditations": ["ISO27001", "FIPS140-2"],
+        "accreditation_date": null,
+        "valid_from": null,
+        "valid_until": null,
+        "trust_anchor_id": null,
+        "metadata": {}
+      }
+    },
+    {
+      "name": "issuer_partial_update_preserves_explicit_null",
+      "method": "PATCH",
+      "path": "/v1/issuer-entities/10000000-0000-4000-8000-000000000001",
+      "input": {"organization_id": "org-1", "description": null},
+      "expected": {"organization_id": "org-1", "description": null}
+    },
+    {
+      "name": "relationship_create_defaults",
+      "method": "POST",
+      "path": "/v1/trust-profiles/40000000-0000-4000-8000-000000000001/issuers",
+      "input": {"issuer_id": "10000000-0000-4000-8000-000000000001"},
+      "expected": {
+        "issuer_id": "10000000-0000-4000-8000-000000000001",
+        "trust_level": 100,
+        "relationship_status": "TRUSTED",
+        "cascade_revocation_policy": "NOTIFY_ONLY",
+        "metadata": {}
+      }
+    },
+    {
+      "name": "relationship_partial_update",
+      "method": "PATCH",
+      "path": "/v1/trust-profiles/40000000-0000-4000-8000-000000000001/issuers/10000000-0000-4000-8000-000000000001",
+      "input": {"trust_level": 80},
+      "expected": {"trust_level": 80}
+    },
+    {
+      "name": "trust_profile_create_defaults_and_registry_policy",
+      "method": "POST",
+      "path": "/v1/trust-profiles",
+      "input": {
+        "organization_id":"org-1",
+        "name":"Registry profile",
+        "trust_sources":[{"source_type":"trust_list","url":"https://registry.example/sync","registry_sync":{"protocol":"MARTY_TRUST_REGISTRY_SYNC_V1","refresh_interval_hours":24}}],
+        "validation_rules":{},
+        "revocation_policy":{},
+        "time_policy":{"clock_skew_seconds":900,"require_freshness":true,"freshness_window_seconds":21600}
+      },
+      "expected": {
+        "organization_id":"org-1","name":"Registry profile","description":null,
+        "profile_type":"CUSTOM","compliance_status":"SETUP_REQUIRED",
+        "trust_sources":[{"source_type":"TRUST_LIST","url":"https://registry.example/sync","certificate_pem":null,"issuer_did":null,"description":null,"registry_sync":{"protocol":"MARTY_TRUST_REGISTRY_SYNC_V1","refresh_interval_hours":24}}],
+        "validation_rules":{"allowed_algorithms":["ES256","ES384","EdDSA"],"min_key_size_rsa":2048,"min_key_size_ec":256,"require_key_usage":true,"max_chain_depth":5,"allow_self_signed":false},
+        "allowed_algorithms":null,"min_key_size_rsa":null,"min_key_size_ec":null,"require_key_usage":null,"max_chain_depth":null,"allow_self_signed":null,
+        "revocation_policy":{"check_mode":"HARD_FAIL"},"revocation_profile_id":null,
+        "time_policy":{"clock_skew_seconds":900,"require_freshness":true,"freshness_window_seconds":21600},
+        "supported_formats":["SD_JWT_VC","MDOC"],"allowed_issuers":null,"denied_issuers":null,
+        "system_issuer_overrides":{},"compatible_compliance_codes":[],"verification_policy_set_id":null,"auto_generated":false
+      }
+    },
+    {
+      "name":"trust_profile_partial_update",
+      "method":"PATCH",
+      "path":"/v1/trust-profiles/40000000-0000-4000-8000-000000000001",
+      "input":{"description":null,"revocation_policy":{"check_mode":"SOFT_FAIL"}},
+      "expected":{"description":null,"revocation_policy":{"check_mode":"SOFT_FAIL"}}
+    }
+  ],
+  "invalid_requests": [
+    {
+      "name": "issuer_private_custody_metadata",
+      "method": "POST",
+      "path": "/v1/issuer-entities",
+      "input": {"organization_id":"org-1","issuer_id":"did:web:issuer.example","display_name":"Example Issuer","metadata":{"nested":{"key_reference":"private"}}}
+    },
+    {
+      "name": "issuer_private_jwk",
+      "method": "POST",
+      "path": "/v1/issuer-entities",
+      "input": {"organization_id":"org-1","issuer_id":"did:web:issuer.example","display_name":"Example Issuer","metadata":{"jwk":{"kty":"OKP","x":"public","d":"private"}}}
+    },
+    {
+      "name": "issuer_duplicate_accreditation",
+      "method": "POST",
+      "path": "/v1/issuer-entities",
+      "input": {"organization_id":"org-1","issuer_id":"did:web:issuer.example","display_name":"Example Issuer","accreditations":["ISO27001","iso27001"]}
+    },
+    {
+      "name": "issuer_revocation_requires_reason",
+      "method": "PATCH",
+      "path": "/v1/issuer-entities/10000000-0000-4000-8000-000000000001",
+      "input": {"organization_id":"org-1","compliance_status":"REVOKED"}
+    },
+    {
+      "name": "relationship_rejects_legacy_issuer_did",
+      "method": "POST",
+      "path": "/v1/trust-profiles/40000000-0000-4000-8000-000000000001/issuers",
+      "input": {"issuer_id":"10000000-0000-4000-8000-000000000001","issuer_did":"did:example:legacy"}
+    },
+    {
+      "name":"trust_profile_rejects_unsafe_registry_url",
+      "method":"POST","path":"/v1/trust-profiles",
+      "input":{"organization_id":"org-1","name":"Unsafe","trust_sources":[{"source_type":"TRUST_LIST","url":"http://127.0.0.1/internal","registry_sync":{"protocol":"MARTY_TRUST_REGISTRY_SYNC_V1","refresh_interval_hours":24}}]}
+    },
+    {
+      "name":"trust_profile_rejects_fractional_freshness_hours",
+      "method":"POST","path":"/v1/trust-profiles",
+      "input":{"organization_id":"org-1","name":"Bad time","time_policy":{"require_freshness":true,"freshness_window_seconds":3601}}
+    }
+  ],
+  "response_cases": [
+    {
+      "name": "issuer_entity_omits_null_optionals",
+      "kind": "issuer_entity",
+      "many": false,
+      "input": {
+        "id":"10000000-0000-4000-8000-000000000001","organization_id":"org-1","issuer_id":"did:web:issuer.example","issuer_type":"ORGANIZATION","display_name":"Example Issuer","description":null,"is_system_issuer":false,"compliance_status":"COMPLIANT","accreditation_body":null,"accreditations":["ISO27001"],"accreditation_date":null,"valid_from":"2026-08-01T00:00:00Z","valid_until":null,"trust_anchor_id":null,"revoked_at":null,"revocation_reason":null,"revoked_by":null,"metadata":{"jurisdiction":"US"},"created_at":"2026-08-01T00:00:00Z","updated_at":"2026-08-01T00:00:00Z"
+      },
+      "expected": {
+        "id":"10000000-0000-4000-8000-000000000001","organization_id":"org-1","issuer_id":"did:web:issuer.example","issuer_type":"ORGANIZATION","display_name":"Example Issuer","is_system_issuer":false,"compliance_status":"COMPLIANT","accreditations":["ISO27001"],"valid_from":"2026-08-01T00:00:00Z","metadata":{"jurisdiction":"US"},"created_at":"2026-08-01T00:00:00Z","updated_at":"2026-08-01T00:00:00Z"
+      }
+    },
+    {
+      "name": "relationship_list_omits_null_updated_at",
+      "kind": "trust_profile_issuer",
+      "many": true,
+      "input": [{
+        "id":"30000000-0000-4000-8000-000000000001","trust_profile_id":"40000000-0000-4000-8000-000000000001","issuer_id":"10000000-0000-4000-8000-000000000001","trust_level":100,"relationship_status":"TRUSTED","cascade_revocation_policy":"NOTIFY_ONLY","metadata":{"credential_template_ids":["template-1"]},"created_at":"2026-08-01T00:00:00Z","updated_at":null
+      }],
+      "expected": [{
+        "id":"30000000-0000-4000-8000-000000000001","trust_profile_id":"40000000-0000-4000-8000-000000000001","issuer_id":"10000000-0000-4000-8000-000000000001","trust_level":100,"relationship_status":"TRUSTED","cascade_revocation_policy":"NOTIFY_ONLY","metadata":{"credential_template_ids":["template-1"]},"created_at":"2026-08-01T00:00:00Z"
+      }]
+    },
+    {
+      "name":"trust_profile_strict_public_projection",
+      "kind":"trust_profile","many":false,
+      "input":{"id":"40000000-0000-4000-8000-000000000001","organization_id":"org-1","name":"Registry profile","description":null,"status":"active","profile_type":"CUSTOM","compliance_status":"COMPLIANT","trust_sources":[],"allowed_algorithms":["ES256"],"revocation_policy":null,"revocation_services":null,"revocation_profile_id":null,"time_policy":null,"supported_formats":["SD_JWT_VC"],"allowed_issuers":null,"denied_issuers":null,"verification_policy_set_id":null,"created_at":"2026-08-07T00:00:00Z","updated_at":null},
+      "expected":{"id":"40000000-0000-4000-8000-000000000001","organization_id":"org-1","name":"Registry profile","status":"active","profile_type":"CUSTOM","compliance_status":"COMPLIANT","trust_sources":[],"allowed_algorithms":["ES256"],"supported_formats":["SD_JWT_VC"],"system_issuer_overrides":{},"compatible_compliance_codes":[],"auto_generated":false,"created_at":"2026-08-07T00:00:00Z"}
+    },
+    {
+      "name":"registry_sync_strict_projection",
+      "kind":"registry_sync","many":false,
+      "input":{"trust_profile_id":"40000000-0000-4000-8000-000000000001","sources":[{"url":"https://registry.example/sync","protocol":"MARTY_TRUST_REGISTRY_SYNC_V1","sequence":1,"csca_entries":2,"dsc_entries":3,"synchronized_at":"2026-08-07T12:00:00Z"}],"synchronized_at":"2026-08-07T12:00:00Z"},
+      "expected":{"trust_profile_id":"40000000-0000-4000-8000-000000000001","sources":[{"url":"https://registry.example/sync","protocol":"MARTY_TRUST_REGISTRY_SYNC_V1","sequence":1,"csca_entries":2,"dsc_entries":3,"synchronized_at":"2026-08-07T12:00:00Z"}],"synchronized_at":"2026-08-07T12:00:00Z"}
+    }
+  ],
+  "private_metadata_response": {
+    "name": "issuer_response_rejects_private_metadata",
+    "kind": "issuer_entity",
+    "many": false,
+    "input": {
+      "id":"10000000-0000-4000-8000-000000000001","organization_id":"org-1","issuer_id":"did:web:issuer.example","issuer_type":"ORGANIZATION","display_name":"Example Issuer","is_system_issuer":false,"compliance_status":"COMPLIANT","accreditations":[],"valid_from":"2026-08-01T00:00:00Z","metadata":{"key_reference":"private"},"created_at":"2026-08-01T00:00:00Z","updated_at":"2026-08-01T00:00:00Z"
+    }
+  }
+}

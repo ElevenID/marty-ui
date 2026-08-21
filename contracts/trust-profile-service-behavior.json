@@ -1,0 +1,177 @@
+{
+  "service": "trust-profile",
+  "port": 8004,
+  "runtime_owner": "rust/services/trust-profile",
+  "migration_owner": "rust/services/trust-profile/src/migration.rs",
+  "python_runtime_removed": "services/trust_profile",
+  "native_owner": {
+    "service_crate": "marty-trust-profile",
+    "registry_kernel": "marty_verification::trust_sync",
+    "runtime_crates": ["mmf-core", "mmf-data", "mmf-platform", "mmf-runtime", "mmf-security"]
+  },
+  "http_operations": [
+    ["POST", "/v1/organizations/{organization_id}/trust-profiles"],
+    ["GET", "/v1/organizations/{organization_id}/trust-profiles"],
+    ["GET", "/v1/organizations/{organization_id}/trust-profiles/{profile_id}"],
+    ["PUT", "/v1/organizations/{organization_id}/trust-profiles/{profile_id}"],
+    ["POST", "/v1/trust-profiles"],
+    ["GET", "/v1/trust-profiles"],
+    ["GET", "/v1/trust-profiles/{profile_id}"],
+    ["PATCH", "/v1/trust-profiles/{profile_id}"],
+    ["POST", "/v1/trust-profiles/{profile_id}/activate"],
+    ["POST", "/v1/trust-profiles/{profile_id}/suspend"],
+    ["DELETE", "/v1/trust-profiles/{profile_id}"],
+    ["POST", "/v1/trust-profiles/{profile_id}/registry-sync"],
+    ["POST", "/v1/trust-profiles/{profile_id}/issuers"],
+    ["GET", "/v1/trust-profiles/{profile_id}/issuers"],
+    ["GET", "/v1/trust-profiles/{profile_id}/issuers/{issuer_id}"],
+    ["PATCH", "/v1/trust-profiles/{profile_id}/issuers/{issuer_id}"],
+    ["DELETE", "/v1/trust-profiles/{profile_id}/issuers/{issuer_id}"],
+    ["GET", "/internal/v1/trust-profiles/{profile_id}"],
+    ["GET", "/internal/v1/resource-owners/trust-profiles/{profile_id}"],
+    ["GET", "/internal/v1/resource-owners/issuer-entities/{issuer_entity_id}"],
+    ["GET", "/v1/trust-frameworks"],
+    ["GET", "/v1/trust-frameworks/{framework_id}"],
+    ["GET", "/v1/trust-registry/sync"],
+    ["GET", "/v1/trust-registry/csca"],
+    ["GET", "/v1/trust-registry/dsc"],
+    ["GET", "/v1/trust-registry/csca/{country_code}"],
+    ["GET", "/v1/trust-registry/status"],
+    ["POST", "/v1/issuer-entities"],
+    ["GET", "/v1/issuer-entities"],
+    ["GET", "/v1/issuer-entities/{issuer_entity_id}"],
+    ["PATCH", "/v1/issuer-entities/{issuer_entity_id}"],
+    ["DELETE", "/v1/issuer-entities/{issuer_entity_id}"]
+  ],
+  "domain_enums": {
+    "trust_profile_status": ["draft", "active", "suspended", "archived"],
+    "trust_profile_type": ["ICAO", "AAMVA", "EUDI", "CUSTOM"],
+    "compliance_status": ["COMPLIANT", "NEEDS_ATTENTION", "SETUP_REQUIRED"],
+    "trust_source_type": ["TRUST_LIST", "PINNED_ISSUER", "ROOT_CA", "PKD_URL"],
+    "revocation_check_mode": ["HARD_FAIL", "SOFT_FAIL", "SKIP"],
+    "issuer_entity_type": ["ORGANIZATION", "GOVERNMENT", "DEVICE"],
+    "issuer_compliance_status": ["ACCREDITED", "COMPLIANT", "SUSPENDED", "REVOKED"],
+    "relationship_status": ["TRUSTED", "DENIED", "UNDER_REVIEW"],
+    "cascade_revocation_policy": ["AUTO_CASCADE", "MANUAL", "NOTIFY_ONLY"],
+    "trust_anchor_type": ["CSCA", "DSC"],
+    "registry_operation": ["ADD", "REMOVE"],
+    "registry_source": ["ICAO_PKD", "AAMVA", "EUDI_LOTL", "MANUAL"]
+  },
+  "system_frameworks": {
+    "ICAO": {"formats": ["MDOC"], "sync_mode": "PKD_DELTA"},
+    "AAMVA": {"formats": ["MDOC"], "sync_mode": "MANUAL"},
+    "EUDI": {"formats": ["MDOC", "SD_JWT_VC"], "sync_mode": "MANUAL"}
+  },
+  "persistence_tables": [
+    "trust_profiles",
+    "trust_frameworks",
+    "organization_trust_profiles",
+    "trust_registry_entries",
+    "issuer_entities",
+    "trust_registry_sources",
+    "trust_registry_issuers",
+    "trust_profile_issuers"
+  ],
+  "migration_chain": [
+    ["33f047612e9b", null],
+    ["7d8b4b4ef634", "33f047612e9b"],
+    ["registry_001", "7d8b4b4ef634"],
+    ["marty_trust_seed_001", "registry_001"],
+    ["marty_trust_seed_002", "marty_trust_seed_001"],
+    ["marty_trust_seed_003", "marty_trust_seed_002"],
+    ["marty_trust_seed_004", "marty_trust_seed_003"],
+    ["marty_trust_seed_005", "marty_trust_seed_004"],
+    ["trust_kms_cleanup_001", "marty_trust_seed_005"],
+    ["issuer_accreditations_001", "trust_kms_cleanup_001"]
+  ],
+  "registry_sync": {
+    "protocol": "MARTY_TRUST_REGISTRY_SYNC_V1",
+    "max_response_bytes": 2097152,
+    "max_pages": 100,
+    "https_only": true,
+    "reject_credentials_ports_queries_fragments_redirects": true,
+    "resolve_and_pin_destination": true,
+    "reject_loopback_and_unapproved_private_addresses": true,
+    "operator_ca_bundle": true,
+    "scheduled_refresh_starts_at_eighty_percent_of_interval": true,
+    "scheduled_profile_failures_are_isolated": true,
+    "initial_and_delta_updates_are_atomic": true,
+    "reject_sequence_rollback_unknown_removal_duplicate_entries_and_repeated_tokens": true,
+    "revalidate_imported_certificates_at_decision_time": true
+  },
+  "security": {
+    "tenant_membership_and_action_permissions": true,
+    "internal_service_authentication": true,
+    "private_custody_metadata_is_rejected_and_scrubbed": true,
+    "issuer_identifier_is_unique_per_organization": true,
+    "profile_delete_rejects_attached_issuers": true,
+    "native_backend_absence_fails_closed": true
+  },
+  "domain_cases": {
+    "accreditations": [
+      {"input": [" ISO27001 ", "SOC 2"], "expected": ["ISO27001", "SOC 2"]},
+      {"input": ["ISO27001", "iso27001"], "error": "duplicate"},
+      {"input": ["  "], "error": "blank"}
+    ],
+    "jurisdictions": [
+      {"input": ["us", "ca-bc", "de-be"], "expected": ["US", "CA-BC", "DE-BE"]},
+      {"input": ["USA"], "error": "invalid"},
+      {"input": ["US-CALI"], "error": "invalid"}
+    ],
+    "allowed_issuers": [
+      {"current": null, "trust_source_count": 0, "allowed_was_provided": false, "requested": null, "expected": []},
+      {"current": null, "trust_source_count": 1, "allowed_was_provided": false, "requested": null, "expected": null},
+      {"current": [], "trust_source_count": 0, "allowed_was_provided": true, "requested": null, "expected": null},
+      {"current": null, "trust_source_count": 0, "allowed_was_provided": true, "requested": ["did:web:issuer.example"], "expected": ["did:web:issuer.example"]},
+      {"current": null, "trust_source_count": 0, "allowed_was_provided": false, "requested": null, "is_update": true, "expected": []},
+      {"current": ["did:web:issuer.example"], "trust_source_count": 0, "allowed_was_provided": false, "requested": null, "is_update": true, "expected": ["did:web:issuer.example"]}
+    ],
+    "custody_metadata": [
+      {
+        "input": {"public": "ok", "nested": {"kms_provider": "vault", "jwk": {"kty": "EC", "crv": "P-256", "x": "x", "d": "private"}}},
+        "sanitized": {"public": "ok", "nested": {"jwk": {"kty": "EC", "crv": "P-256", "x": "x"}}},
+        "rejected_field": "kms_provider"
+      }
+    ],
+    "issuer_status_transitions": [
+      {"current": "COMPLIANT", "requested": "REVOKED", "allowed": true},
+      {"current": "REVOKED", "requested": "REVOKED", "allowed": true},
+      {"current": "REVOKED", "requested": "COMPLIANT", "allowed": false}
+    ]
+  },
+  "repository_cases": {
+    "framework_order": ["AAMVA", "ICAO", "CUSTOM"],
+    "registry": {
+      "current_country_after_sequence": ["33333333-3333-4333-8333-333333333333"],
+      "status": {
+        "total_entries": 3,
+        "current_entries": 2,
+        "csca_entries": 1,
+        "dsc_entries": 1,
+        "current_sequence": 3
+      }
+    },
+    "organization_visibility": [
+      "55555555-5555-4555-8555-555555555555",
+      "66666666-6666-4666-8666-666666666666",
+      "77777777-7777-4777-8777-777777777777"
+    ],
+    "optimistic_update_conflict": false,
+    "profile_delete_cascades_relationships": true,
+    "issuer_delete_cascades_relationships": true
+  },
+  "registry_import_storage_capabilities": {
+    "registry_types": ["ICAO_PKD", "EU_TRUST_LIST", "AAMVA"],
+    "source_fields": [
+      "id", "trust_profile_id", "registry_type", "registry_name", "registry_url",
+      "enabled", "sync_enabled", "last_synced_at", "next_sync_at", "sync_interval_hours",
+      "credential_format_filter", "metadata", "created_at", "updated_at"
+    ],
+    "issuer_fields": [
+      "id", "registry_source_id", "trust_profile_id", "issuer_did", "issuer_name",
+      "country_code", "issuer_type", "verification_keys", "credential_templates", "status",
+      "imported_at", "valid_from", "valid_until", "created_at", "updated_at"
+    ],
+    "source_delete_cascades_imported_issuers": true
+  }
+}

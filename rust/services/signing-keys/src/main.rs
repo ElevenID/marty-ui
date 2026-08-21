@@ -1,5 +1,6 @@
 use marty_signing_keys::{
-    config::Config, documents::DocumentStore, http, profiles::ProfileStore, registry::RegistryStore,
+    config::Config, documents::DocumentStore, flow_envelope::OpenBaoEnvelopeProvider, http,
+    profiles::ProfileStore, registry::RegistryStore,
 };
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -21,6 +22,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let registry_store = RegistryStore::connect(&config.registry_redis_url).await?;
     let document_store = DocumentStore::from_connection(registry_store.connection());
     let profile_store = ProfileStore::from_connection(registry_store.connection());
+    let flow_envelopes = match (config.bao_addr, config.bao_token) {
+        (Some(address), Some(token)) => Some(OpenBaoEnvelopeProvider::new(address, token)?),
+        (None, None) => None,
+        _ => unreachable!("configuration validates paired OpenBao values"),
+    };
     let listener = TcpListener::bind(config.http_addr).await?;
     info!(
         address = %config.http_addr,
@@ -35,6 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(registry_store),
             Some(document_store),
             Some(profile_store),
+            flow_envelopes,
+            config.public_domain,
         ),
     )
     .with_graceful_shutdown(shutdown_signal())

@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "definition": {
+    "input": {
+      "id": "flow-1",
+      "organization_id": "org-1",
+      "name": "Presentation",
+      "description": "Verify a credential",
+      "status": "ACTIVE",
+      "flow_type": "oid4vp_presentation",
+      "extension": null,
+      "references": {
+        "presentation_policy_id": "policy-1",
+        "trust_profile_id": "trust-1",
+        "deployment_profile_ids": "[\"deployment-1\",\"deployment-2\"]"
+      },
+      "approval_strategy": "MANUAL",
+      "hooks": {
+        "verify_presentation": [
+          {"hook_type": "WEBHOOK", "url": "https://hooks.example/complete", "config": {}}
+        ]
+      },
+      "trigger": {"trigger_type": "API_CALL", "config": {"event_type": "VERIFY"}},
+      "version": 3,
+      "created_at": "2026-08-20T12:00:00+00:00",
+      "updated_at": "2026-08-20T12:01:00+00:00"
+    },
+    "expected": {
+      "id": "flow-1",
+      "organization_id": "org-1",
+      "name": "Presentation",
+      "description": "Verify a credential",
+      "flow_type": "oid4vp_presentation",
+      "flow_category": "VERIFICATION",
+      "resolved_steps": ["create_request", "wallet_selection", "presentation_submission", "verify_presentation"],
+      "trust_profile_id": "trust-1",
+      "presentation_policy_id": "policy-1",
+      "deployment_profile_ids": ["deployment-1", "deployment-2"],
+      "approval_strategy": "MANUAL",
+      "hooks": {
+        "verify_presentation": [
+          {"hook_type": "WEBHOOK", "url": "https://hooks.example/complete", "config": {}}
+        ]
+      },
+      "trigger": {"trigger_type": "API_CALL", "config": {"event_type": "VERIFY"}},
+      "version": 3,
+      "status": "ACTIVE",
+      "created_at": "2026-08-20T12:00:00+00:00",
+      "updated_at": "2026-08-20T12:01:00+00:00"
+    }
+  },
+  "instance": {
+    "input": {
+      "id": "instance-1",
+      "flow_definition_id": "flow-1",
+      "organization_id": "org-1",
+      "status": "awaiting_wallet",
+      "context": {
+        "protocol_flow_type": "oid4vp_presentation",
+        "current_step_name": "presentation_submission",
+        "current_step_index": 2,
+        "step_results": {
+          "create_request": {"result": "success", "private_key": "remove"}
+        },
+        "issued_credential_id": "credential-1",
+        "error_code": "WAITING_FOR_WALLET",
+        "nested": {"safe": true, "api_key": "remove"},
+        "_marty_response_key": "remove"
+      },
+      "subject_id": "holder-1",
+      "subject_type": "holder",
+      "external_reference": "case-1",
+      "started_at": "2026-08-20T12:02:00+00:00",
+      "completed_at": "2026-08-20T12:03:00+00:00",
+      "expires_at": "2026-08-20T12:17:00+00:00",
+      "result": {
+        "evaluation_result": "passed",
+        "decision": "allow",
+        "decision_reason": "policy_satisfied",
+        "verified_claims": {"given_name": "Alice", "private_key_jwk": {"d": "remove"}},
+        "credential_results": [{"valid": true, "provider": "remove"}],
+        "error_codes": [],
+        "warnings": ["credential_expires_soon"]
+      },
+      "error": null,
+      "state_history": [
+        {"prior_state": "in_progress", "new_state": "awaiting_wallet", "api_key": "remove"}
+      ],
+      "created_at": "2026-08-20T12:00:00+00:00",
+      "updated_at": "2026-08-20T12:03:00+00:00"
+    },
+    "expected": {
+      "id": "instance-1",
+      "flow_id": "flow-1",
+      "flow_type": "oid4vp_presentation",
+      "organization_id": "org-1",
+      "status": "AWAITING_WALLET",
+      "current_step": "presentation_submission",
+      "current_step_index": 2,
+      "context_data": {
+        "protocol_flow_type": "oid4vp_presentation",
+        "current_step_name": "presentation_submission",
+        "current_step_index": 2,
+        "step_results": {"create_request": {"result": "success"}},
+        "issued_credential_id": "credential-1",
+        "error_code": "WAITING_FOR_WALLET",
+        "nested": {"safe": true}
+      },
+      "step_results": {"create_request": {"result": "success"}},
+      "issued_credential_id": "credential-1",
+      "started_at": "2026-08-20T12:02:00+00:00",
+      "completed_at": "2026-08-20T12:03:00+00:00",
+      "expires_at": "2026-08-20T12:17:00+00:00",
+      "error_code": "WAITING_FOR_WALLET",
+      "metadata": {
+        "runtime_status": "awaiting_wallet",
+        "flow_definition_reference": "flow-1",
+        "subject_type": "holder",
+        "subject_id": "holder-1",
+        "external_reference": "case-1"
+      },
+      "state_history": [{"prior_state": "in_progress", "new_state": "awaiting_wallet"}],
+      "created_at": "2026-08-20T12:00:00+00:00",
+      "updated_at": "2026-08-20T12:03:00+00:00"
+    },
+    "verification_expected": {
+      "instance_id": "instance-1",
+      "status": "AWAITING_WALLET",
+      "result": "passed",
+      "decision": "allow",
+      "decision_reason": "policy_satisfied",
+      "verified_claims": {"given_name": "Alice"},
+      "credential_results": [{"valid": true}],
+      "error_codes": [],
+      "warnings": ["credential_expires_soon"],
+      "evaluation_timestamp": "2026-08-20T12:03:00+00:00"
+    }
+  },
+  "artifact": {
+    "input": {
+      "id": "artifact-1",
+      "flow_instance_id": "instance-1",
+      "credential_offer_uri": "openid-credential-offer://offer",
+      "qr_payload": "data:image/png;base64,AA",
+      "pre_authorized_code": "pre-auth-1",
+      "expires_at": "2026-08-20T12:17:00+00:00",
+      "scanned_at": null,
+      "status": "active",
+      "state": "state-1",
+      "wallet_metadata": {"wallet": "Example", "api_key": "remove"},
+      "attempt_number": 1,
+      "created_at": "2026-08-20T12:02:00+00:00",
+      "updated_at": "2026-08-20T12:02:00+00:00"
+    },
+    "expected": {
+      "id": "artifact-1",
+      "flow_instance_id": "instance-1",
+      "credential_offer_uri": "openid-credential-offer://offer",
+      "qr_payload": "data:image/png;base64,AA",
+      "pre_authorized_code": "pre-auth-1",
+      "expires_at": "2026-08-20T12:17:00+00:00",
+      "status": "active",
+      "state": "state-1",
+      "wallet_metadata": {"wallet": "Example"},
+      "attempt_number": 1,
+      "created_at": "2026-08-20T12:02:00+00:00",
+      "updated_at": "2026-08-20T12:02:00+00:00"
+    }
+  },
+  "invalid_mutations": [
+    "invalid_definition_timestamp",
+    "invalid_custom_extension",
+    "non_object_instance_context",
+    "invalid_protocol_flow_type",
+    "invalid_current_step_index",
+    "non_object_artifact_metadata"
+  ]
+}

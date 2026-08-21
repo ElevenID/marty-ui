@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "valid_request": {"organization_id":"org_123","transaction_id":"tx-123","holder_did":"did:peer:2.EzExample"},
+  "expected_request": {"organization_id":"org_123","transaction_id":"tx-123","holder_did":"did:peer:2.EzExample"},
+  "invalid_requests": [
+    {"organization_id":"","transaction_id":"tx-123","holder_did":"did:peer:2.EzExample"},
+    {"organization_id":"org_123","transaction_id":"","holder_did":"did:peer:2.EzExample"},
+    {"organization_id":"org_123","transaction_id":"tx-123","holder_did":"https://holder.example"},
+    {"organization_id":"org_123","transaction_id":"tx-123","holder_did":"did:peer:2.EzExample","universal_resolver_url":"https://attacker.example/resolve"}
+  ],
+  "internal_response": {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","didcomm_message_id":"message-123","status":"delivered","error":null,"provider_delivery_receipt":"must-not-leak"},
+  "expected_response": {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","didcomm_message_id":"message-123","status":"delivered","error":null},
+  "invalid_responses": [
+    {"transaction_id":"tx-123","credential_id":"credential-123","holder_did":"did:peer:2.EzExample","service_endpoint":"https://holder.example/didcomm","status":"delivered"},
+    ["not","an","object"]
+  ]
+}

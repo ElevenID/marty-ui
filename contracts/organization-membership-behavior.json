@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "direct_role_cases": [
+    {
+      "name": "regular_new_member_gets_default",
+      "grants_marty_admin": false,
+      "requested": null,
+      "current": [],
+      "defaults": ["applicant"],
+      "expected": ["applicant"]
+    },
+    {
+      "name": "existing_roles_are_preserved",
+      "grants_marty_admin": false,
+      "requested": null,
+      "current": ["reviewer"],
+      "defaults": ["applicant"],
+      "expected": ["reviewer"]
+    },
+    {
+      "name": "marty_admin_replaces_applicant_only",
+      "grants_marty_admin": true,
+      "requested": null,
+      "current": ["applicant"],
+      "defaults": ["applicant"],
+      "expected": ["admin"]
+    },
+    {
+      "name": "marty_admin_supplements_non_applicant_roles",
+      "grants_marty_admin": true,
+      "requested": null,
+      "current": ["reviewer"],
+      "defaults": ["applicant"],
+      "expected": ["reviewer", "admin"]
+    },
+    {
+      "name": "explicit_roles_are_deduplicated_and_admin_is_retained",
+      "grants_marty_admin": true,
+      "requested": ["viewer", "viewer"],
+      "current": [],
+      "defaults": ["applicant"],
+      "expected": ["viewer", "admin"]
+    }
+  ],
+  "join_code_cases": [
+    {
+      "name": "valid",
+      "is_active": true,
+      "expires_at": "2099-01-01T00:00:00Z",
+      "max_uses": 2,
+      "use_count": 1,
+      "state": "valid",
+      "message": "valid",
+      "expired": false
+    },
+    {
+      "name": "inactive_precedes_other_failures",
+      "is_active": false,
+      "expires_at": "2020-01-01T00:00:00Z",
+      "max_uses": 1,
+      "use_count": 1,
+      "state": "inactive",
+      "message": "This invitation is no longer active",
+      "expired": false
+    },
+    {
+      "name": "expired",
+      "is_active": true,
+      "expires_at": "2020-01-01T00:00:00Z",
+      "max_uses": 5,
+      "use_count": 1,
+      "state": "expired",
+      "message": "This invitation has expired",
+      "expired": true
+    },
+    {
+      "name": "exhausted_with_future_expiry",
+      "is_active": true,
+      "expires_at": "2099-01-01T00:00:00Z",
+      "max_uses": 1,
+      "use_count": 1,
+      "state": "exhausted",
+      "message": "This invitation has reached its maximum uses",
+      "expired": false
+    }
+  ]
+}

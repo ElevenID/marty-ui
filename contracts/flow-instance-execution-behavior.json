@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "start_definition_status": "active_only",
+  "start_tenant_behavior": "exact_match_or_not_found",
+  "initial_status_with_entry_step": "in_progress",
+  "initial_state_history": {"prior_state": null, "event": "flow_instance_created"},
+  "expiry_source": "definition.default_timeout_seconds",
+  "protocol_context_fields": ["protocol_flow_type", "current_step_name", "current_step_index", "step_results"],
+  "public_context_private_keys": "reject_recursively",
+  "advance_statuses": ["in_progress", "awaiting_wallet"],
+  "next_step_selection": "marty_verification.select_next_step",
+  "awaiting_wallet_event": "wallet_step_response_received",
+  "terminal_without_transition": {"success": "completed", "failure": "failed"},
+  "application_approved_precondition": "authenticated_server_evidence_only",
+  "unknown_precondition": "fail_closed",
+  "failure_behavior": "fail_closed"
+}

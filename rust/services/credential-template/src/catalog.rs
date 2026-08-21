@@ -1,0 +1,653 @@
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Utc};
+use serde_json::json;
+
+use crate::{
+    ClaimDefinition, ClaimType, CredentialFormat, CredentialTemplate,
+    CredentialTemplateRepositoryError, DeliveryDestinationEntry, DisplayStyle, IssuerRequirements,
+    MergeStrategy, PostgresCredentialTemplateStore, PrivacyPosture, TemplateStatus, ValidityRules,
+    WalletRegistryEntry,
+};
+
+const MARTY_LOGIN_BADGE_ID: &str = "50000000-0000-0000-0000-000000000040";
+const OPEN_BADGES_PROFILE_ID: &str = "10000000-0000-0000-0000-000000000003";
+const MARTY_LOGIN_TRUST_PROFILE_ID: &str = "60000000-0000-0000-0000-000000000001";
+const MARTY_REVOCATION_PROFILE_ID: &str = "70000000-0000-0000-0000-000000000001";
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CatalogSeedSummary {
+    pub wallets_inserted: usize,
+    pub wallets_reconciled: usize,
+    pub destinations_inserted: usize,
+    pub destinations_reconciled: usize,
+    pub login_badge_inserted: bool,
+}
+
+pub fn system_wallet_catalog(now: DateTime<Utc>) -> Vec<WalletRegistryEntry> {
+    vec![
+        WalletRegistryEntry {
+            logo_url: Some("https://spruceid.com/favicon.ico".to_owned()),
+            supported_formats: strings(&["dc+sd-jwt", "mso_mdoc"]),
+            platforms: strings(&["ios", "android"]),
+            routing_templates: string_map(&[
+                ("generic", "openid-credential-offer://?{credential_offer_param}={offer_encoded}"),
+                ("ios", "openid-credential-offer://?{credential_offer_param}={offer_encoded}"),
+                ("android", "intent://?{credential_offer_param}={offer_encoded}#Intent;scheme=openid-credential-offer;package=com.spruceid.mobilesdkexample;end"),
+            ]),
+            install_urls: string_map(&[
+                ("ios", "https://apps.apple.com/search?term=SpruceKit"),
+                ("android", "https://play.google.com/store/search?q=SpruceKit&c=apps"),
+            ]),
+            docs_url: Some("https://spruceid.com/products/sprucekit".to_owned()),
+            ..wallet(
+                "wr-spruce-001",
+                "SpruceKit",
+                "SpruceID mobile wallet for OID4VCI delivery.",
+                &["SpruceKit"],
+                &["OID4VCI"],
+                now,
+            )
+        },
+        WalletRegistryEntry {
+            supported_formats: strings(&["dc+sd-jwt", "mso_mdoc"]),
+            platforms: strings(&["ios", "android"]),
+            routing_templates: string_map(&[
+                ("generic", "marty-authenticator://open?inner={inner_uri_encoded}"),
+                ("ios", "marty-authenticator://open?inner={inner_uri_encoded}"),
+                ("android", "marty-authenticator://open?inner={inner_uri_encoded}"),
+            ]),
+            ios_scheme: Some("marty-authenticator".to_owned()),
+            ..wallet(
+                "wr-marty-001",
+                "Marty Authenticator",
+                "Marty-branded authenticator wallet.",
+                &["Marty Authenticator"],
+                &["OID4VCI"],
+                now,
+            )
+        },
+        WalletRegistryEntry {
+            description: Some("Generic OID4VCI handoff for configured and tested SD-JWT VC or JWT VC wallets; this entry does not assert compatibility with every wallet or mdoc profile.".to_owned()),
+            supported_formats: strings(&["sd_jwt_vc", "jwt_vc"]),
+            platforms: strings(&["ios", "android", "web"]),
+            ..wallet(
+                "wr-default",
+                "Any OID4VCI Wallet",
+                "Generic OID4VCI-compatible wallet entry.",
+                &["Any OID4VCI Wallet"],
+                &["OID4VCI"],
+                now,
+            )
+        },
+        WalletRegistryEntry {
+            logo_url: Some("https://lissi.id/favicon.ico".to_owned()),
+            supported_formats: strings(&["sd_jwt_vc", "jwt_vc"]),
+            platforms: strings(&["ios", "android"]),
+            docs_url: Some("https://lissi.id".to_owned()),
+            ..wallet(
+                "wr-lissi-001",
+                "LISSI Wallet",
+                "LISSI mobile wallet.",
+                &["LISSI Wallet"],
+                &["OID4VCI"],
+                now,
+            )
+        },
+        WalletRegistryEntry {
+            logo_url: Some("https://walt.id/favicon.ico".to_owned()),
+            deep_link_template:
+                "openid-credential-offer://?{credential_offer_param}={offer_encoded}".to_owned(),
+            routing_templates: string_map(&[
+                ("generic", "openid-credential-offer://?{credential_offer_param}={offer_encoded}"),
+                ("web", "https://wallet.demo.walt.id/api/siop/initiateIssuance?{credential_offer_param}={offer_encoded}"),
+                ("desktop", "https://wallet.demo.walt.id/api/siop/initiateIssuance?{credential_offer_param}={offer_encoded}"),
+            ]),
+            supported_formats: strings(&["sd_jwt_vc", "jwt_vc", "mdoc"]),
+            platforms: strings(&["ios", "android", "web"]),
+            docs_url: Some("https://docs.walt.id".to_owned()),
+            is_active: false,
+            ..wallet(
+                "wr-waltid-001",
+                "walt.id Wallet",
+                "walt.id community wallet retained for interoperability tracking.",
+                &["walt.id Wallet"],
+                &["OID4VCI", "OID4VP"],
+                now,
+            )
+        },
+        WalletRegistryEntry {
+            logo_url: Some("https://sphereon.com/favicon.ico".to_owned()),
+            supported_formats: strings(&["sd_jwt_vc", "jwt_vc"]),
+            platforms: strings(&["ios", "android"]),
+            docs_url: Some("https://sphereon.com".to_owned()),
+            ..wallet(
+                "wr-sphereon-001",
+                "Sphereon Wallet",
+                "Sphereon mobile wallet.",
+                &["Sphereon Wallet"],
+                &["OID4VCI"],
+                now,
+            )
+        },
+        WalletRegistryEntry {
+            supported_formats: strings(&["sd_jwt_vc", "mdoc"]),
+            platforms: strings(&["ios", "android"]),
+            ..wallet(
+                "wr-dc4eu-001",
+                "DC4EU Wallet",
+                "DC4EU and EUDI ecosystem wallet.",
+                &["DC4EU Wallet"],
+                &["OID4VCI", "eIDAS"],
+                now,
+            )
+        },
+        WalletRegistryEntry {
+            logo_url: Some("https://wallet.google/favicon.ico".to_owned()),
+            supported_formats: strings(&["dc+sd-jwt"]),
+            supported_protocols: strings(&["CREDENTIAL_MANAGER"]),
+            platforms: strings(&["android"]),
+            deep_link_template: "openid-credential-offer://?credential_offer={offer}".to_owned(),
+            routing_templates: string_map(&[
+                ("generic", "openid-credential-offer://?credential_offer={offer_encoded}"),
+                ("android", "openid-credential-offer://?credential_offer={offer_encoded}"),
+            ]),
+            android_package: Some("com.google.android.gms".to_owned()),
+            supports_digital_credentials: true,
+            docs_url: Some(
+                "https://developer.android.com/identity/digital-credentials".to_owned(),
+            ),
+            ..wallet(
+                "wr-google-001",
+                "Google Wallet",
+                "Google Wallet via Android CredentialManager API.",
+                &["Google Wallet"],
+                &["OID4VCI", "CredentialManager"],
+                now,
+            )
+        },
+        WalletRegistryEntry {
+            logo_url: Some("https://www.apple.com/favicon.ico".to_owned()),
+            supported_formats: strings(&["mso_mdoc"]),
+            specifications: strings(&["ISO 18013-5", "Verify with Wallet"]),
+            supported_protocols: strings(&["APPLE_WALLET"]),
+            platforms: strings(&["ios"]),
+            deep_link_template: String::new(),
+            routing_templates: BTreeMap::new(),
+            supports_deeplink: false,
+            supports_digital_credentials: true,
+            is_active: false,
+            description: Some("Inactive compatibility placeholder. Apple Wallet identity provisioning and Verify with Wallet presentation are program-specific paths and are not generic OID4VCI compatibility.".to_owned()),
+            docs_url: Some("https://developer.apple.com/documentation/passkit/wallet".to_owned()),
+            ..wallet(
+                "wr-apple-001",
+                "Apple Wallet",
+                "Apple Wallet via Verify with Wallet / ISO 18013-5 issuance.",
+                &["Apple Wallet"],
+                &["OID4VCI", "ISO 18013-5"],
+                now,
+            )
+        },
+        WalletRegistryEntry {
+            supported_formats: strings(&["sd_jwt_vc", "jwt_vc", "mso_mdoc"]),
+            supported_protocols: strings(&["DIDCOMM_V2"]),
+            platforms: strings(&["any"]),
+            supports_qr: false,
+            supports_deeplink: false,
+            deep_link_template: String::new(),
+            docs_url: Some(
+                "https://identity.foundation/didcomm-messaging/spec/v2.1/".to_owned(),
+            ),
+            ..wallet(
+                "wr-didcomm-001",
+                "DIDComm V2 Agent",
+                "Push credential delivery via DIDComm v2 messaging. Resolves holder DID to find service endpoint.",
+                &["DIDComm V2 Agent"],
+                &["DIDComm v2", "DIF DIDComm Messaging"],
+                now,
+            )
+        },
+    ]
+}
+
+pub fn system_delivery_destination_catalog(now: DateTime<Utc>) -> Vec<DeliveryDestinationEntry> {
+    vec![
+        DeliveryDestinationEntry {
+            wallet_profile_id: Some("wr-marty-001".to_owned()),
+            issuance_protocol: Some("OID4VCI_PRE_AUTH".to_owned()),
+            claim_projection_policy: json!({"mode":"full_credential_reference"}),
+            capabilities: bool_map(&[
+                ("holder_wallet", true),
+                ("oid4vci", true),
+                ("post_issuance_publish", false),
+            ]),
+            ..destination(
+                "dd-elevenid-wallet",
+                "ElevenID Wallet",
+                "Add the credential to the holder's ElevenID-compatible wallet using OID4VCI.",
+                "elevenid_wallet",
+                "holder_wallet",
+                "learner",
+                "wallet",
+                now,
+            )
+        },
+        DeliveryDestinationEntry {
+            wallet_profile_id: Some("wr-default".to_owned()),
+            issuance_protocol: Some("OID4VCI_PRE_AUTH".to_owned()),
+            claim_projection_policy: json!({"mode":"full_credential_reference"}),
+            capabilities: bool_map(&[
+                ("holder_wallet", true),
+                ("oid4vci", true),
+                ("post_issuance_publish", false),
+            ]),
+            ..destination(
+                "dd-oid4vci-compatible-wallet",
+                "Compatible Wallet",
+                "Open the standards-based credential offer in any compatible OID4VCI wallet.",
+                "oid4vci_wallet",
+                "holder_wallet",
+                "learner",
+                "wallet",
+                now,
+            )
+        },
+        DeliveryDestinationEntry {
+            credential_format: Some("VC_JWT".to_owned()),
+            issuance_protocol: Some("DIRECT".to_owned()),
+            compliance_profile_code: Some("OB3_JWT".to_owned()),
+            connector_type: Some("canvas_platform".to_owned()),
+            requires_consent: true,
+            claim_projection_policy: json!({
+                "mode":"public_badge",
+                "allowed_claims":["achievement","result","learning_context","issuer","credentialSubject","credentialStatus","provenance"]
+            }),
+            setup_requirements: strings(&[
+                "Canvas Credentials issuer/API access configured by an organization admin",
+                "Canvas Credentials API token referenced from an org-scoped secret or issuance secret layer",
+                "Canvas Credentials badgeclass/entity ID mapped to the credential template, program binding, or delivery destination",
+                "Canvas program binding enabled for Canvas mirror delivery",
+            ]),
+            capabilities: bool_map(&[
+                ("holder_wallet", false),
+                ("org_managed", true),
+                ("post_issuance_publish", true),
+                ("status_sync", true),
+                ("provenance", true),
+                ("badgr_api", true),
+            ]),
+            docs_url: Some(
+                "https://developerdocs.instructure.com/services/credentials".to_owned(),
+            ),
+            ..destination(
+                "dd-canvas-credentials-institutional",
+                "Canvas Credentials",
+                "Publish a public Open Badge view to Canvas Credentials after canonical ElevenID issuance. Requires organization-managed Canvas Credentials setup.",
+                "canvas_credentials",
+                "organization_mirror",
+                "org_admin",
+                "canvas_credentials",
+                now,
+            )
+        },
+        DeliveryDestinationEntry {
+            connector_type: Some("canvas_credentials_oauth".to_owned()),
+            requires_consent: true,
+            claim_projection_policy: json!({"mode":"public_badge"}),
+            setup_requirements: strings(&[
+                "Learner authorizes their own backpack account",
+                "Organization enables backpack import as an allowed destination",
+            ]),
+            capabilities: bool_map(&[
+                ("holder_wallet", false),
+                ("learner_owned", true),
+                ("oauth_required", true),
+                ("post_issuance_publish", true),
+            ]),
+            docs_url: Some(
+                "https://developerdocs.instructure.com/services/credentials".to_owned(),
+            ),
+            ..destination(
+                "dd-canvas-credentials-backpack",
+                "Canvas Credentials Backpack",
+                "Let a learner connect a personal Canvas/Parchment backpack when OAuth setup is available.",
+                "canvas_credentials_backpack",
+                "learner_backpack",
+                "learner",
+                "external_api",
+                now,
+            )
+        },
+    ]
+}
+
+pub async fn seed_system_catalog(
+    store: &PostgresCredentialTemplateStore,
+    now: DateTime<Utc>,
+    marty_organization_id: &str,
+    public_api_origin: &str,
+) -> Result<CatalogSeedSummary, CredentialTemplateRepositoryError> {
+    let mut summary = CatalogSeedSummary::default();
+    for wallet in system_wallet_catalog(now) {
+        if store.wallet_by_id(&wallet.id).await?.is_none() {
+            summary.wallets_inserted += 1;
+        } else {
+            summary.wallets_reconciled += 1;
+        }
+        store.save_wallet(&wallet).await?;
+    }
+    for destination in system_delivery_destination_catalog(now) {
+        if store.destination_by_id(&destination.id).await?.is_none() {
+            summary.destinations_inserted += 1;
+        } else {
+            summary.destinations_reconciled += 1;
+        }
+        store.save_destination(&destination).await?;
+    }
+    if store.template_by_id(MARTY_LOGIN_BADGE_ID).await?.is_none() {
+        store
+            .save_template(&marty_login_badge(
+                now,
+                marty_organization_id,
+                public_api_origin,
+            ))
+            .await?;
+        summary.login_badge_inserted = true;
+    }
+    Ok(summary)
+}
+
+pub fn marty_login_badge(
+    now: DateTime<Utc>,
+    marty_organization_id: &str,
+    public_api_origin: &str,
+) -> CredentialTemplate {
+    let public_api_origin = public_api_origin.trim_end_matches('/');
+    let vct = format!("{public_api_origin}/credentials/marty-verified-member-badge");
+    let issuer_host = url::Url::parse(public_api_origin)
+        .ok()
+        .and_then(|origin| origin.host_str().map(str::to_owned))
+        .unwrap_or_default();
+    let claims = vec![
+        claim(
+            "marty-ob-member-id",
+            "member_id",
+            "Member ID",
+            "Opaque member identifier issued by the organization",
+            true,
+            true,
+            None,
+        ),
+        claim(
+            "marty-ob-email",
+            "email",
+            "Email Address",
+            "Holder email address used to resolve the account during login",
+            true,
+            true,
+            None,
+        ),
+        claim(
+            "marty-ob-given-name",
+            "given_name",
+            "Given Name",
+            "Holder first name",
+            false,
+            true,
+            None,
+        ),
+        claim(
+            "marty-ob-family-name",
+            "family_name",
+            "Family Name",
+            "Holder last name",
+            false,
+            true,
+            None,
+        ),
+        claim(
+            "marty-ob-organization-id",
+            "organization_id",
+            "Organization ID",
+            "UUID of the issuing organization",
+            true,
+            true,
+            None,
+        ),
+        claim(
+            "marty-ob-organization-name",
+            "organization_name",
+            "Organization",
+            "Human-readable name of the issuing organization",
+            false,
+            true,
+            None,
+        ),
+        claim(
+            "marty-ob-role",
+            "role",
+            "Role",
+            "Organization role conveyed during credential-based login",
+            true,
+            true,
+            Some(strings(&["applicant", "vendor", "administrator"])),
+        ),
+        claim(
+            "marty-ob-achievement-name",
+            "achievement_name",
+            "Badge Name",
+            "Official badge title displayed to the holder",
+            true,
+            false,
+            None,
+        ),
+        claim(
+            "marty-ob-achievement-description",
+            "achievement_description",
+            "Badge Description",
+            "Description of the verified membership represented by this badge",
+            false,
+            false,
+            None,
+        ),
+        date_claim(
+            "marty-ob-issued-at",
+            "issued_at",
+            "Issued At",
+            "ISO-8601 timestamp when the badge was issued",
+            true,
+        ),
+        claim(
+            "marty-ob-badge-image-url",
+            "badge_image_url",
+            "Badge Image",
+            "Public image associated with the badge",
+            false,
+            false,
+            None,
+        ),
+    ];
+    CredentialTemplate {
+        id: MARTY_LOGIN_BADGE_ID.to_owned(),
+        organization_id: marty_organization_id.to_owned(),
+        name: "Marty Verified Member Badge".to_owned(),
+        description: Some("Open Badge 3.0 membership badge issued by Marty Identity Platform; presents verified membership for wallet-based passwordless login/sign-in.".to_owned()),
+        status: TemplateStatus::Active,
+        credential_type: "open_badge".to_owned(),
+        vct: vct.clone(),
+        doctype: Some("org.openbadges.v3".to_owned()),
+        claims,
+        privacy_posture: PrivacyPosture::SelectiveDisclosure,
+        selective_disclosure_fields: Vec::new(),
+        zk_predicate_claims: Vec::new(),
+        derived_attributes: Vec::new(),
+        display_style: DisplayStyle {
+            background_color: "#3B1C8F".to_owned(),
+            text_color: "#FFFFFF".to_owned(),
+            logo_url: Some(format!("{vct}/image.svg")),
+            background_image_url: None,
+            icon: None,
+        },
+        validity_rules: ValidityRules::default(),
+        issuer_requirements: IssuerRequirements::default(),
+        supported_formats: vec![CredentialFormat::VcJwt],
+        credential_payload_format: "jwt_vc".to_owned(),
+        wallet_configs: Vec::new(),
+        compliance_profile: Some(json!({
+            "compliance_code":"OPEN_BADGES_3",
+            "credential_format":"vc_jwt"
+        })),
+        compliance_profile_id: Some(OPEN_BADGES_PROFILE_ID.to_owned()),
+        application_template_id: None,
+        trust_profile_id: Some(MARTY_LOGIN_TRUST_PROFILE_ID.to_owned()),
+        revocation_profile_id: Some(MARTY_REVOCATION_PROFILE_ID.to_owned()),
+        issuer_algorithm: Some("ES256".to_owned()),
+        issuer_did: Some(format!("did:web:{issuer_host}:orgs:marty")),
+        issuance_protocol: "OID4VCI_PRE_AUTH".to_owned(),
+        version: 4,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn claim(
+    id: &str,
+    name: &str,
+    display_name: &str,
+    description: &str,
+    required: bool,
+    selectively_disclosable: bool,
+    enum_values: Option<Vec<String>>,
+) -> ClaimDefinition {
+    ClaimDefinition {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        display_name: display_name.to_owned(),
+        description: Some(description.to_owned()),
+        claim_type: ClaimType::String,
+        required,
+        selectively_disclosable,
+        derivable: false,
+        derived_from: None,
+        pattern: None,
+        enum_values,
+        min_value: None,
+        max_value: None,
+        mdoc_namespace: None,
+        mdoc_element_identifier: None,
+        display_icon: None,
+    }
+}
+
+fn date_claim(
+    id: &str,
+    name: &str,
+    display_name: &str,
+    description: &str,
+    required: bool,
+) -> ClaimDefinition {
+    ClaimDefinition {
+        claim_type: ClaimType::Date,
+        ..claim(id, name, display_name, description, required, false, None)
+    }
+}
+
+fn wallet(
+    id: &str,
+    name: &str,
+    description: &str,
+    wallet_apps: &[&str],
+    specifications: &[&str],
+    now: DateTime<Utc>,
+) -> WalletRegistryEntry {
+    WalletRegistryEntry {
+        id: id.to_owned(),
+        organization_id: None,
+        is_override: false,
+        override_precedence: 50,
+        merge_strategy: MergeStrategy::Append,
+        credential_format: None,
+        issuance_protocol: None,
+        compliance_profile_code: None,
+        name: name.to_owned(),
+        description: Some(description.to_owned()),
+        wallet_apps: strings(wallet_apps),
+        specifications: strings(specifications),
+        logo_url: None,
+        deep_link_template: "openid-credential-offer://?credential_offer_uri={offer_uri}"
+            .to_owned(),
+        routing_templates: BTreeMap::new(),
+        install_urls: BTreeMap::new(),
+        ios_scheme: None,
+        universal_link_template: None,
+        android_package: None,
+        supported_formats: Vec::new(),
+        supported_protocols: strings(&["OID4VCI_PRE_AUTH"]),
+        platforms: Vec::new(),
+        supports_qr: true,
+        supports_deeplink: true,
+        supports_digital_credentials: false,
+        supports_haip: false,
+        docs_url: None,
+        is_active: true,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn destination(
+    id: &str,
+    name: &str,
+    description: &str,
+    provider: &str,
+    mode: &str,
+    setup_actor: &str,
+    delivery_target: &str,
+    now: DateTime<Utc>,
+) -> DeliveryDestinationEntry {
+    DeliveryDestinationEntry {
+        id: id.to_owned(),
+        organization_id: None,
+        is_system: true,
+        name: name.to_owned(),
+        description: Some(description.to_owned()),
+        provider: provider.to_owned(),
+        mode: mode.to_owned(),
+        setup_actor: setup_actor.to_owned(),
+        delivery_target: delivery_target.to_owned(),
+        wallet_profile_id: None,
+        credential_format: None,
+        issuance_protocol: None,
+        compliance_profile_code: None,
+        connector_type: None,
+        connector_id: None,
+        requires_consent: false,
+        claim_projection_policy: json!({}),
+        setup_requirements: Vec::new(),
+        capabilities: BTreeMap::new(),
+        docs_url: None,
+        is_enabled: true,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+fn string_map(values: &[(&str, &str)]) -> BTreeMap<String, String> {
+    values
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+        .collect()
+}
+
+fn bool_map(values: &[(&str, bool)]) -> BTreeMap<String, bool> {
+    values
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), *value))
+        .collect()
+}

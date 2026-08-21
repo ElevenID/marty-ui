@@ -23,6 +23,10 @@ CERTIFICATE_SECRETS = {
     "applicant_workload_client_key",
     "verification_workload_client_cert",
     "verification_workload_client_key",
+    "deployment_profile_workload_client_cert",
+    "deployment_profile_workload_client_key",
+    "compliance_profile_workload_client_cert",
+    "compliance_profile_workload_client_key",
 }
 
 
@@ -47,6 +51,8 @@ def test_selfhost_mounts_only_each_workloads_private_key() -> None:
     verification_secrets = set(services["verification"]["secrets"])
     auth_secrets = set(services["auth"]["secrets"])
     applicant_secrets = set(services["applicant"]["secrets"])
+    deployment_profile_secrets = set(services["deployment-profile"]["secrets"])
+    compliance_profile_secrets = set(services["compliance-profile"]["secrets"])
 
     assert {"pp_workload_server_cert", "pp_workload_server_key"} <= (
         presentation_secrets
@@ -62,6 +68,14 @@ def test_selfhost_mounts_only_each_workloads_private_key() -> None:
         "verification_workload_client_cert",
         "verification_workload_client_key",
     } <= verification_secrets
+    assert {
+        "deployment_profile_workload_client_cert",
+        "deployment_profile_workload_client_key",
+    } <= deployment_profile_secrets
+    assert {
+        "compliance_profile_workload_client_cert",
+        "compliance_profile_workload_client_key",
+    } <= compliance_profile_secrets
     assert "flow_workload_client_key" not in presentation_secrets
     assert "verification_workload_client_key" not in flow_secrets
     assert "pp_workload_server_key" not in verification_secrets
@@ -74,6 +88,8 @@ def test_selfhost_mounts_only_each_workloads_private_key() -> None:
     verification_env = services["verification"]["environment"]
     auth_env = services["auth"]["environment"]
     applicant_env = services["applicant"]["environment"]
+    deployment_profile_env = services["deployment-profile"]["environment"]
+    compliance_profile_env = services["compliance-profile"]["environment"]
     assert "GRPC_WORKLOAD_TLS_SERVER_CERT" in presentation_env
     assert "GRPC_WORKLOAD_TLS_CLIENT_CERT" not in presentation_env
     assert "GRPC_WORKLOAD_TLS_CLIENT_CERT" in flow_env
@@ -84,6 +100,10 @@ def test_selfhost_mounts_only_each_workloads_private_key() -> None:
     assert "GRPC_WORKLOAD_TLS_SERVER_CERT" not in auth_env
     assert "GRPC_WORKLOAD_TLS_CLIENT_CERT" in applicant_env
     assert "GRPC_WORKLOAD_TLS_SERVER_CERT" not in applicant_env
+    assert "GRPC_WORKLOAD_TLS_CLIENT_CERT" in deployment_profile_env
+    assert "GRPC_WORKLOAD_TLS_SERVER_CERT" not in deployment_profile_env
+    assert "GRPC_WORKLOAD_TLS_CLIENT_CERT" in compliance_profile_env
+    assert "GRPC_WORKLOAD_TLS_SERVER_CERT" not in compliance_profile_env
 
 
 def test_kubernetes_mounts_separate_workload_tls_secrets() -> None:
@@ -109,6 +129,12 @@ def test_kubernetes_mounts_separate_workload_tls_secrets() -> None:
         },
         "auth": {"auth-workload-tls": "/var/run/secrets/marty/workload"},
         "applicant": {"applicant-workload-tls": "/var/run/secrets/marty/workload"},
+        "deployment-profile": {
+            "deployment-profile-workload-tls": "/var/run/secrets/marty/workload"
+        },
+        "compliance-profile": {
+            "compliance-profile-workload-tls": "/var/run/secrets/marty/workload"
+        },
     }
     for service, expected_mounts in expected.items():
         pod_spec = deployments[service]["spec"]["template"]["spec"]
@@ -153,5 +179,7 @@ def test_kubernetes_helper_creates_service_scoped_tls_secrets() -> None:
         "auth-workload-tls",
         "applicant-workload-tls",
         "verification-workload-tls",
+        "deployment-profile-workload-tls",
+        "compliance-profile-workload-tls",
     ):
         assert f"kubectl create secret generic {secret_name}" in deploy_script

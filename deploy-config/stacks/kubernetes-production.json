@@ -33,6 +33,10 @@
     "applicant_workload_client_key",
     "verification_workload_client_cert",
     "verification_workload_client_key",
+    "deployment_profile_workload_client_cert",
+    "deployment_profile_workload_client_key",
+    "compliance_profile_workload_client_cert",
+    "compliance_profile_workload_client_key",
     "flow_application_event_hmac_key",
     "integration_secret_master_key",
     "openbao_service_token"

@@ -240,6 +240,24 @@ def test_beta_rust_cutover_requires_a_persistent_shared_service_token() -> None:
     assert "its value was not displayed" in initializer
 
 
+def test_beta_flow_cutover_requires_distinct_workload_identity() -> None:
+    deploy = text("scripts/deploy-local-beta-release.ps1")
+    initializer = text("scripts/ensure-beta-workload-identity.ps1")
+    beta = text("docker-compose.beta.yml")
+
+    assert '"FLOW_APPLICATION_EVENT_HMAC_KEY"' in deploy
+    assert '"FLOW_WEBHOOK_SECRET"' in deploy
+    assert 'Invoke-Checked -FilePath openssl -Arguments @("verify"' in deploy
+    assert "spiffe://marty.internal/service/auth" in initializer
+    assert "spiffe://marty.internal/service/applicant" in initializer
+    assert "spiffe://marty.internal/service/flow" in initializer
+    assert "private keys and certificate contents were not displayed" in initializer
+    assert "GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert" in beta
+    assert "GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert" in beta
+    assert "GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/applicant_workload_client_cert" in beta
+    assert "GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert" in beta
+
+
 def test_beta_runner_resolves_all_required_immutable_compose_inputs() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
@@ -323,6 +341,8 @@ def test_beta_compose_requires_credential_login_issuer_identity() -> None:
         "CREDENTIAL_LOGIN_ORGANIZATION_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}"
         in beta_compose
     )
-    assert beta_compose.count(
+    assert (
+        "CREDENTIAL_LOGIN_ISSUER_DID: "
         "${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}"
-    ) == 2
+        in beta_compose
+    )

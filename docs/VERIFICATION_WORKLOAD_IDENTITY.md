@@ -69,6 +69,10 @@ Docker self-host installations place these files in `SELFHOST_SECRET_DIR`:
 - `applicant_workload_client_cert` and `applicant_workload_client_key`
 - `verification_workload_client_cert` and
   `verification_workload_client_key`
+- `deployment_profile_workload_client_cert` and
+  `deployment_profile_workload_client_key`
+- `compliance_profile_workload_client_cert` and
+  `compliance_profile_workload_client_key`
 
 Kubernetes installations provide the equivalent values through either the
 value or `_FILE` form of these variables before running `setup-secrets`:
@@ -81,6 +85,10 @@ value or `_FILE` form of these variables before running `setup-secrets`:
 - `APPLICANT_WORKLOAD_CLIENT_CERT` and `APPLICANT_WORKLOAD_CLIENT_KEY`
 - `VERIFICATION_WORKLOAD_CLIENT_CERT` and
   `VERIFICATION_WORKLOAD_CLIENT_KEY`
+- `DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT` and
+  `DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY`
+- `COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT` and
+  `COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY`
 
 The deployment helper creates separate Kubernetes Secrets and each pod mounts
 only its own private key. Certificate material is mandatory outside development;

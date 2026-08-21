@@ -4,10 +4,23 @@ FROM rust:1.95-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92e
 WORKDIR /build/rust
 COPY rust /build/rust
 COPY proto /build/proto
+COPY contracts /build/contracts
+COPY services/auth/assets /build/services/auth/assets
 RUN cargo build --locked --release -p marty-event-stream --bin marty-event-stream
+RUN cargo build --locked --release -p marty-gateway --bin marty-gateway
 RUN cargo build --locked --release -p marty-revocation-profile --bin marty-revocation-profile
 RUN cargo build --locked --release -p marty-signing-keys --bin marty-signing-keys
 RUN cargo build --locked --release -p marty-notification --bin marty-notification
+RUN cargo build --locked --release -p marty-flow --bin marty-flow
+RUN cargo build --locked --release -p marty-organization --bin marty-organization
+RUN cargo build --locked --release -p marty-auth --bin marty-auth
+RUN cargo build --locked --release -p marty-credential-template --bin marty-credential-template
+RUN cargo build --locked --release -p marty-presentation-policy --bin marty-presentation-policy
+RUN cargo build --locked --release -p marty-trust-profile --bin marty-trust-profile
+RUN cargo build --locked --release -p marty-applicant --bin marty-applicant
+RUN cargo build --locked --release -p marty-device-registration --bin marty-device-registration
+RUN cargo build --locked --release -p marty-verification-service --bin marty-verification-service
+RUN cargo build --locked --release -p marty-deployment-profile --bin marty-deployment-profile
 
 FROM python:3.12-slim
 
@@ -71,9 +84,20 @@ COPY packages/marty_proto /app/packages/marty_proto
 COPY services /app/services
 COPY scripts/load-secrets-env.sh /app/load-secrets-env.sh
 COPY --from=rust-service-builder /build/rust/target/release/marty-event-stream /usr/local/bin/marty-event-stream
+COPY --from=rust-service-builder /build/rust/target/release/marty-gateway /usr/local/bin/marty-gateway
 COPY --from=rust-service-builder /build/rust/target/release/marty-revocation-profile /usr/local/bin/marty-revocation-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-signing-keys /usr/local/bin/marty-signing-keys
 COPY --from=rust-service-builder /build/rust/target/release/marty-notification /usr/local/bin/marty-notification
+COPY --from=rust-service-builder /build/rust/target/release/marty-flow /usr/local/bin/marty-flow
+COPY --from=rust-service-builder /build/rust/target/release/marty-organization /usr/local/bin/marty-organization
+COPY --from=rust-service-builder /build/rust/target/release/marty-auth /usr/local/bin/marty-auth
+COPY --from=rust-service-builder /build/rust/target/release/marty-credential-template /usr/local/bin/marty-credential-template
+COPY --from=rust-service-builder /build/rust/target/release/marty-presentation-policy /usr/local/bin/marty-presentation-policy
+COPY --from=rust-service-builder /build/rust/target/release/marty-trust-profile /usr/local/bin/marty-trust-profile
+COPY --from=rust-service-builder /build/rust/target/release/marty-applicant /usr/local/bin/marty-applicant
+COPY --from=rust-service-builder /build/rust/target/release/marty-device-registration /usr/local/bin/marty-device-registration
+COPY --from=rust-service-builder /build/rust/target/release/marty-verification-service /usr/local/bin/marty-verification-service
+COPY --from=rust-service-builder /build/rust/target/release/marty-deployment-profile /usr/local/bin/marty-deployment-profile
 RUN chmod +x /app/services/entrypoint.sh /app/load-secrets-env.sh \
     && adduser --disabled-password --gecos '' appuser \
     && install -d -o appuser -g appuser -m 0700 /app/data

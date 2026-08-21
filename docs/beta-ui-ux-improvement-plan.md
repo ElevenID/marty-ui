@@ -630,7 +630,7 @@ Likely repo files:
 - `ui/src/components/console/flows/FlowDefinitionWizard.jsx`
 - `ui/src/components/console/flows/steps/ReviewStep.jsx`
 - `ui/src/components/console/flows/__tests__/FlowDefinitionWizard.test.tsx`
-- Potential backend validation in `services/flow/main.py` if custom advanced flows need stricter activation checks.
+- Native backend validation in `rust/services/flow` if custom advanced flows need stricter activation checks.
 
 Acceptance criteria:
 

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "legacy_compatibility": {
+    "user_id": "subject-1",
+    "organization_id": "20000000-0000-4000-8000-000000000001",
+    "membership_namespace": "org_membership",
+    "membership_key": "org_membership:subject-1:20000000-0000-4000-8000-000000000001",
+    "permissions_namespace": "member_permissions",
+    "permissions_key": "member_permissions:subject-1:20000000-0000-4000-8000-000000000001",
+    "plan_namespace": "org",
+    "plan_key": "org:20000000-0000-4000-8000-000000000001:plan",
+    "default_plan": "free"
+  },
+  "requirements": {
+    "invalidate_membership_and_permissions_together": true,
+    "reject_empty_user_id": true,
+    "reject_empty_plan": true,
+    "backend_failures_are_errors": true
+  }
+}

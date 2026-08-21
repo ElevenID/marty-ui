@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "redirect_cases": [
+    {
+      "name": "missing_target_enters_console",
+      "ui_base_url": "https://elevenidllc.com",
+      "redirect_uri": null,
+      "sanitized": "/",
+      "resolved": "/console",
+      "absolute": "https://elevenidllc.com/console"
+    },
+    {
+      "name": "relative_console_path_is_preserved",
+      "ui_base_url": "https://elevenidllc.com",
+      "redirect_uri": "/console/org-1?tab=members",
+      "sanitized": "/console/org-1?tab=members",
+      "resolved": "/console/org-1?tab=members",
+      "absolute": "https://elevenidllc.com/console/org-1?tab=members"
+    },
+    {
+      "name": "same_origin_root_enters_console",
+      "ui_base_url": "https://elevenidllc.com",
+      "redirect_uri": "https://elevenidllc.com/",
+      "sanitized": "https://elevenidllc.com/",
+      "resolved": "/console",
+      "absolute": "https://elevenidllc.com/console"
+    },
+    {
+      "name": "same_origin_absolute_target_is_preserved",
+      "ui_base_url": "https://elevenidllc.com",
+      "redirect_uri": "https://elevenidllc.com/console/profile?mode=edit#name",
+      "sanitized": "https://elevenidllc.com/console/profile?mode=edit#name",
+      "resolved": "https://elevenidllc.com/console/profile?mode=edit#name",
+      "absolute": "https://elevenidllc.com/console/profile?mode=edit#name"
+    },
+    {
+      "name": "foreign_origin_is_reduced_to_path",
+      "ui_base_url": "https://elevenidllc.com",
+      "redirect_uri": "http://localhost:5173/console/applications?private=true#fragment",
+      "sanitized": "/console/applications",
+      "resolved": "/console/applications",
+      "absolute": "https://elevenidllc.com/console/applications"
+    },
+    {
+      "name": "network_path_reference_fails_closed",
+      "ui_base_url": "https://elevenidllc.com",
+      "redirect_uri": "//attacker.example/steal",
+      "sanitized": "/",
+      "resolved": "/console",
+      "absolute": "https://elevenidllc.com/console"
+    }
+  ],
+  "origin_cases": [
+    {
+      "name": "configured_beta_origin",
+      "primary": "https://elevenidllc.com",
+      "additional": ["https://beta.elevenidllc.com"],
+      "forwarded_host": "beta.elevenidllc.com",
+      "forwarded_proto": "https",
+      "selected": "https://beta.elevenidllc.com"
+    },
+    {
+      "name": "trusted_host_normalizes_proxy_proto",
+      "primary": "https://elevenidllc.com",
+      "additional": ["https://beta.elevenidllc.com"],
+      "forwarded_host": "beta.elevenidllc.com",
+      "forwarded_proto": "http",
+      "selected": "https://beta.elevenidllc.com"
+    },
+    {
+      "name": "untrusted_forwarded_host_uses_primary",
+      "primary": "https://elevenidllc.com",
+      "additional": [],
+      "forwarded_host": "attacker.example",
+      "forwarded_proto": "https",
+      "selected": "https://elevenidllc.com"
+    },
+    {
+      "name": "first_forwarded_hop_is_authoritative",
+      "primary": "https://elevenidllc.com",
+      "additional": ["https://beta.elevenidllc.com"],
+      "forwarded_host": "beta.elevenidllc.com, internal-proxy",
+      "forwarded_proto": "https, http",
+      "selected": "https://beta.elevenidllc.com"
+    }
+  ],
+  "impersonation_cases": [
+    {
+      "name": "matching_handoff",
+      "user_id": "vendor-1",
+      "email": "vendor@example.com",
+      "organization_id": "org-1",
+      "organization_name": "Vendor Org",
+      "claims": {},
+      "handoff": {
+        "admin_user_id": "admin-1",
+        "admin_username": "admin",
+        "admin_email": "admin@example.com",
+        "admin_display_name": "Admin User",
+        "target_user_id": "vendor-1",
+        "target_email": "vendor@example.com",
+        "organization_id": "org-1",
+        "organization_name": "Vendor Org",
+        "launch_mode": "new-tab",
+        "started_at": "2026-04-16T02:00:00.000Z"
+      },
+      "expected": {
+        "admin_user_id": "admin-1",
+        "admin_username": "admin",
+        "admin_email": "admin@example.com",
+        "target_user_id": "vendor-1",
+        "target_email": "vendor@example.com",
+        "organization_id": "org-1",
+        "organization_name": "Vendor Org",
+        "launch_mode": "new-tab"
+      }
+    },
+    {
+      "name": "native_keycloak_claims",
+      "user_id": "vendor-1",
+      "email": "vendor@example.com",
+      "organization_id": "org-1",
+      "organization_name": "Vendor Org",
+      "claims": {
+        "IMPERSONATOR_ID": "admin-2",
+        "IMPERSONATOR_USERNAME": "support.admin"
+      },
+      "handoff": null,
+      "expected": {
+        "admin_user_id": "admin-2",
+        "admin_username": "support.admin",
+        "admin_email": null,
+        "target_user_id": "vendor-1",
+        "target_email": "vendor@example.com",
+        "organization_id": "org-1",
+        "organization_name": "Vendor Org",
+        "launch_mode": null
+      }
+    },
+    {
+      "name": "mismatched_unsigned_handoff_is_ignored",
+      "user_id": "vendor-1",
+      "email": "vendor@example.com",
+      "organization_id": "org-1",
+      "organization_name": "Vendor Org",
+      "claims": {},
+      "handoff": {
+        "admin_user_id": "attacker",
+        "target_user_id": "different-user"
+      },
+      "expected": null
+    }
+  ]
+}

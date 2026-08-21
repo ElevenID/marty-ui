@@ -9,7 +9,10 @@ Run these checks before opening a pull request:
 
 ```bash
 python scripts/check_oss_boundary.py
-python -m pytest tests packages/tests services/gateway/tests
+python -m pytest tests packages/tests
+cd rust
+cargo test --locked -p marty-gateway
+cd ..
 cd ui
 npm install
 npm test

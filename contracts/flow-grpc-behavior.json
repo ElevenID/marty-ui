@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "package": "marty.ui.flow.v1",
+  "implementation_owner": "marty-flow.grpc_service",
+  "operation_count": 16,
+  "operations": [
+    "CreateFlowDefinition",
+    "GetFlowDefinition",
+    "ListFlowDefinitions",
+    "ActivateFlowDefinition",
+    "DeleteFlowDefinition",
+    "StartFlowInstance",
+    "GetFlowInstance",
+    "ListFlowInstances",
+    "AdvanceFlowInstance",
+    "CancelFlowInstance",
+    "GetFlowResult",
+    "ListFlowArtifacts",
+    "StartVerification",
+    "ApplicationApproved",
+    "StreamFlowUpdates",
+    "HealthCheck"
+  ],
+  "ordinary_authentication": {
+    "service_token_header": "x-service-token",
+    "principal_header": "x-user-id",
+    "tenant_membership_required": true,
+    "failure_behavior": "fail_closed"
+  },
+  "workload_authenticated_operations": {
+    "StartVerification": "spiffe://marty.internal/service/auth",
+    "ApplicationApproved": "spiffe://marty.internal/service/applicant"
+  },
+  "application_event_authentication": {
+    "owner": "mmf-security.application_event",
+    "metadata_matches_http_headers": true,
+    "protobuf_string_values": "decode_json_then_preserve_legacy_string",
+    "durable_reservation_before_replay_consumption": true,
+    "duplicate_status": "already_exists"
+  },
+  "mutation_atomicity": {
+    "start_instance_and_artifact": "single_transaction",
+    "advance_instance": "compare_and_swap",
+    "cancel_instance": "terminal_state_fenced",
+    "verification_start": "insert_once",
+    "application_approved": "durable_plan_and_idempotent_offer_completion"
+  },
+  "projection": {
+    "private_context": "redacted",
+    "complex_map_values": "compact_json",
+    "definition_status": "SCREAMING_SNAKE_CASE",
+    "instance_status": "SCREAMING_SNAKE_CASE",
+    "timestamps": "RFC3339"
+  },
+  "streaming": {
+    "capacity": 256,
+    "tenant_filter_required": true,
+    "instance_filter_supported": true,
+    "flow_type_filter_supported": true,
+    "slow_subscriber_status": "resource_exhausted",
+    "disconnect_cleanup": "automatic"
+  },
+  "health": {
+    "service_token_required": true,
+    "database_probe_required": true,
+    "healthy_status": "serving"
+  },
+  "failure_behavior": {
+    "malformed_input": "invalid_argument",
+    "missing_resource": "not_found",
+    "invalid_state": "failed_precondition",
+    "concurrent_mutation": "aborted",
+    "provider_unavailable": "unavailable",
+    "repository_unavailable": "unavailable"
+  },
+  "python_fallback": false
+}

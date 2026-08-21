@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "organization_id": "org-1",
+  "flow_instance_id": "flow-1",
+  "plaintext_b64": "cHJpdmF0ZS1qd2s",
+  "ciphertext": "vault:v1:test",
+  "schema": "marty.flow-key-envelope/v1",
+  "purpose": "oid4vp_response_decryption",
+  "wrap_response": {
+    "schema": "marty.flow-key-envelope/v1",
+    "flow_instance_id": "flow-1",
+    "ciphertext": "vault:v1:test"
+  },
+  "unwrap_response": {
+    "schema": "marty.flow-key-envelope/v1",
+    "flow_instance_id": "flow-1",
+    "plaintext_b64": "cHJpdmF0ZS1qd2s"
+  },
+  "binding_mismatch_status": 409,
+  "maximum_plaintext_bytes": 16384,
+  "invalid_plaintext_status": 422
+}

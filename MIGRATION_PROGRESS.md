@@ -69,21 +69,26 @@ Migrating services from in-memory storage to PostgreSQL with Alembic migrations.
 - **Key Points**: Complex nested structures (6 dataclasses) stored as JSON, similar to trust-profile pattern
 
 #### 5. Flow Service
-- **Status**: ✅ Complete
-- **Migration Location**: `services/flow/infrastructure/migrations/`
-- **Tables**: 2
+- **Status**: Native Rust source cutover complete; beta rollout queued
+- **Migration Location**: `rust/services/flow/migrations/`
+- **Tables**: 8 including internal schema/seed ownership records
   - flow_definitions (workflow blueprints)
   - flow_instances (runtime state)
+  - flow_nonce_consumptions
+  - flow_callback_outbox
+  - flow_application_event_receipts
+  - flow_instance_artifacts
+  - rust_schema_versions
+  - rust_seed_versions
 - **Schema**: flow_service
 - **Indexes**:
   - flow_definitions: organization_id, status, flow_type, composite (organization_id, status)
   - flow_instances: organization_id, flow_definition_id, status, subject_id, external_reference
-- **Adapter**: PostgresFlowRepository
-- **Migrations Applied**:
-  - 20260203_0248_1854c4083445 - Initial flow schema
-- **Service**: Running and healthy on port 8011
-- **API**: Tested successfully - POST /v1/flows/definitions working, data persisted
-- **Key Points**: Manages workflow orchestration with steps/transitions as JSON, dual-entity pattern (definitions + instances)
+- **Adapter**: Rust SQLx `PostgresFlowRepository`
+- **Migration ownership**: Rust schema and built-in seed migrations execute under an advisory lock before readiness
+- **Service**: Native HTTP 8011 and gRPC 9011 executable; aggregate beta deployment pending
+- **API**: All 28 HTTP and 16 gRPC operations execute through one Rust domain/persistence implementation
+- **Key Points**: Python Flow runtime, Alembic migrations and Python-only idempotency image are deleted; behavioral contracts, atomicity, callbacks, protocol orchestration and private-state redaction remain covered in Rust
 
 #### 6. Credential-Template Service
 - **Status**: ✅ Complete

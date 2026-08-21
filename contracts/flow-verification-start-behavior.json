@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "nonce_entropy_bytes": 32,
+  "initial_status": "awaiting_wallet",
+  "callback_policy": "mmf_tenant_registered_destination",
+  "policy_binding": ["id", "organization_id", "active", "nonempty_requirements"],
+  "signing_identity_binding": [
+    "organization_id",
+    "issuer_did",
+    "oid4vp_request_signing",
+    "oauth-authz-req+jwt",
+    "ES256"
+  ],
+  "request_uri_transport": "openid4vp_request_uri",
+  "request_object_transport": "openid4vp_signed_by_value",
+  "url_query_transport": "openid4vp_unsigned_bounded_dcql",
+  "siop_transport": "openid_request_uri",
+  "persistence": "single_atomic_insert_after_side_effects",
+  "failure_behavior": "no_instance_insert"
+}

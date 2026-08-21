@@ -1,7 +1,7 @@
 {
   "schema": "marty.rust-ownership/v1",
   "roadmap": "docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md",
-  "updated": "2026-08-14",
+  "updated": "2026-08-21",
   "policy": {
     "canonical_rule": "Each deterministic protocol, policy, validation, cryptographic, or state-machine capability has one Rust implementation.",
     "fallback_rule": "Required native capabilities fail closed; runtime fallback to Python or Dart is prohibited.",
@@ -102,7 +102,7 @@
           "repository": "ElevenID/marty-ui",
           "paths": ["services/auth/infrastructure/adapters/oidc_adapter.py"],
           "language": "python",
-          "disposition": "thin-adapter-delete-decoder"
+          "disposition": "deleted-after-native-auth-cutover"
         }
       ]
     },
@@ -163,12 +163,6 @@
         "binding_paths": ["marty-bindings/src/device_auth.rs"]
       },
       "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/device_registration/keys.py", "services/device_registration/challenges.py", "services/device_registration/native.py"],
-          "language": "python",
-          "disposition": "adapter-only"
-        }
       ]
     },
     {
@@ -183,9 +177,9 @@
       "legacy": [
         {
           "repository": "ElevenID/marty-ui",
-          "paths": ["services/flow/main.py", "services/common/did_resolution.py"],
+          "paths": ["services/common/did_resolution.py"],
           "language": "python",
-          "disposition": "retain-flow-api-storage-did-adapter-only"
+          "disposition": "did-adapter-only"
         }
       ]
     },
@@ -198,14 +192,7 @@
         "paths": ["marty-oid4vci/src/presentation_request.rs"],
         "binding_paths": ["marty-bindings/src/lib.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/flow/main.py", "services/verification/main.py"],
-          "language": "python",
-          "disposition": "policy-template-dto-adapters-only"
-        }
-      ]
+      "legacy": []
     },
     {
       "id": "openid4vp-mdoc-handover",
@@ -216,14 +203,7 @@
         "paths": ["marty-iso18013/src/openid4vp.rs"],
         "binding_paths": ["marty-bindings/src/mdoc.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/flow/native.py", "services/flow/main.py"],
-          "language": "python",
-          "disposition": "adapter-and-orchestration-only"
-        }
-      ]
+      "legacy": []
     },
     {
       "id": "haip-response-encryption",
@@ -234,14 +214,7 @@
         "paths": ["marty-crypto/src/kdf.rs", "marty-verification/src/jwk/jwe.rs"],
         "binding_paths": ["marty-bindings/src/haip.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/flow/main.py", "services/flow/native.py"],
-          "language": "python",
-          "disposition": "kms-and-http-adapter-only"
-        }
-      ]
+      "legacy": []
     },
     {
       "id": "wallet-oid4vc",
@@ -285,14 +258,7 @@
         "paths": ["marty-verification/src/oid4vp.rs"],
         "binding_paths": ["marty-bindings/src/oid4vp_identity.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/flow/main.py", "services/flow/native.py"],
-          "language": "python",
-          "disposition": "configuration-and-native-adapter-only"
-        }
-      ]
+      "legacy": []
     },
     {
       "id": "siop-jwk-id-token-verification",
@@ -303,14 +269,7 @@
         "paths": ["marty-oid4vci/src/siop.rs", "marty-oid4vci/src/jose.rs"],
         "binding_paths": ["marty-bindings/src/siop.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/flow/main.py", "services/flow/native.py"],
-          "language": "python",
-          "disposition": "transaction-policy-and-native-adapter-only"
-        }
-      ]
+      "legacy": []
     },
     {
       "id": "license-entitlements",
@@ -388,8 +347,6 @@
         {
           "repository": "ElevenID/marty-ui",
           "paths": [
-            "services/gateway/routes/signing_keys.py",
-            "services/gateway/kms_adapters/__init__.py",
             "services/signing_keys/main.py",
             "services/run_all_migrations.py",
             "scripts/export_canvas_lti_public_jwks.py"
@@ -406,16 +363,9 @@
       "canonical": {
         "repository": "ElevenID/marty-ui",
         "paths": ["rust/services/signing-keys/src/profiles.rs", "rust/services/signing-keys/src/registry.rs"],
-        "binding_paths": ["rust/services/signing-keys/src/http.rs", "services/gateway/native_signing_keys.py"]
+        "binding_paths": ["rust/services/signing-keys/src/http.rs", "rust/services/gateway/src/signing_compat.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/gateway/routes/signing_keys.py"],
-          "language": "python",
-          "disposition": "authorization-kms-did-orchestration-only"
-        }
-      ]
+      "legacy": []
     },
     {
       "id": "native-cli",
@@ -529,14 +479,18 @@
         "paths": ["marty-verification/src/trust_sync.rs", "marty-verification/src/trust_anchor", "marty-crypto/src/certificate.rs"],
         "binding_paths": ["marty-verification/src/bindings/mod.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/trust_profile/registry_sync.py"],
-          "language": "python",
-          "disposition": "retain-fetch-storage-scheduling-delete-kernel"
-        }
-      ]
+      "legacy": []
+    },
+    {
+      "id": "trust-profile-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/trust-profile"],
+        "binding_paths": []
+      },
+      "legacy": []
     },
     {
       "id": "wallet-status-and-liveness",
@@ -562,22 +516,172 @@
           "disposition": "retain-http-cache-ui-delete-decisions"
         }
       ]
+    },
+    {
+      "id": "auth-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/auth"],
+        "binding_paths": []
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-ui",
+          "paths": ["services/auth"],
+          "language": "python",
+          "disposition": "deleted-after-language-neutral-behavioral-and-executable-gates"
+        }
+      ]
+    },
+    {
+      "id": "gateway-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/gateway"],
+        "binding_paths": []
+      },
+      "legacy": []
+    },
+    {
+      "id": "organization-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/organization"],
+        "binding_paths": []
+      },
+      "legacy": []
+    },
+    {
+      "id": "credential-template-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/credential-template"],
+        "binding_paths": []
+      },
+      "legacy": []
+    },
+    {
+      "id": "presentation-policy-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/presentation-policy"],
+        "binding_paths": []
+      },
+      "legacy": []
+    },
+    {
+      "id": "applicant-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/applicant"],
+        "binding_paths": []
+      },
+      "legacy": []
+    },
+    {
+      "id": "device-registration-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/device-registration"],
+        "binding_paths": ["contracts/device-registration-service-behavior.json"]
+      },
+      "legacy": []
+    },
+    {
+      "id": "verification-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/verification"],
+        "binding_paths": ["contracts/verification-service-behavior.json"]
+      },
+      "legacy": []
+    },
+    {
+      "id": "deployment-profile-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/deployment-profile"],
+        "binding_paths": ["contracts/deployment-profile-service-behavior.json"]
+      },
+      "legacy": []
+    },
+    {
+      "id": "compliance-profile-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/compliance-profile"],
+        "binding_paths": ["contracts/compliance-profile-service-behavior.json"]
+      },
+      "legacy": []
     }
   ],
   "guardrails": {
     "python_scan_roots": ["services", "scripts"],
     "excluded_path_parts": ["tests", "migrations", "__pycache__"],
     "restricted_import_roots": ["Crypto", "OpenSSL", "cryptography", "jose", "jwcrypto", "jwt", "nacl"],
+    "native_service_guards": [
+      {
+        "capability_id": "auth-service",
+        "forbidden_globs": ["services/auth/**/*.py"]
+      },
+      {
+        "capability_id": "gateway-service",
+        "forbidden_globs": ["services/gateway/**/*.py"]
+      },
+      {
+        "capability_id": "organization-service",
+        "forbidden_globs": ["services/organization/**/*.py"]
+      },
+      {
+        "capability_id": "credential-template-service",
+        "forbidden_globs": ["services/credential_template/**/*.py"]
+      },
+      {
+        "capability_id": "presentation-policy-service",
+        "forbidden_globs": ["services/presentation_policy/**/*.py"]
+      },
+      {
+        "capability_id": "applicant-service",
+        "forbidden_globs": ["services/applicant/**/*.py"]
+      },
+      {
+        "capability_id": "device-registration-service",
+        "forbidden_globs": ["services/device_registration/**/*.py"]
+      },
+      {
+        "capability_id": "verification-service",
+        "forbidden_globs": ["services/verification/**/*.py"]
+      },
+      {
+        "capability_id": "deployment-profile-service",
+        "forbidden_globs": ["services/deployment_profile/**/*.py"]
+      },
+      {
+        "capability_id": "compliance-profile-service",
+        "forbidden_globs": ["services/compliance_profile/**/*.py"]
+      }
+    ],
     "approved_imports": [
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography import x509", "count": 2},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.backends import default_backend"},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.primitives import serialization"},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey, SECP256R1, SECP384R1"},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey"},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey"},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat, load_der_public_key, load_pem_public_key"},
-      {"path": "services/gateway/routes/signing_keys.py", "statement": "from cryptography.x509.oid import NameOID"},
-      {"path": "services/presentation_policy/main.py", "statement": "from jwcrypto import jwk"},
       {"path": "services/run_all_migrations.py", "statement": "from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey"},
       {"path": "services/run_all_migrations.py", "statement": "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey"},
       {"path": "services/run_all_migrations.py", "statement": "from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey"},
@@ -602,31 +706,11 @@
         "id": "auth-base64url-decode-baseline",
         "glob": "services/auth/**/*.py",
         "pattern": "urlsafe_b64decode",
-        "expected_matches": {
-          "services/auth/infrastructure/adapters/http_adapter.py": 1
-        }
+        "expected_matches": {}
       },
       {
         "id": "no-direct-auth-native-imports",
         "glob": "services/auth/**/*.py",
-        "pattern": "(?:from|import)\\s+(?:marty_rs|_marty_rs)",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-python-flow-transition-table",
-        "glob": "services/flow/**/*.py",
-        "pattern": "\\b(?:VALID_TRANSITIONS|TERMINAL_STATES)\\b",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-direct-flow-status-assignment",
-        "glob": "services/flow/**/*.py",
-        "pattern": "instance\\.status\\s*=(?!=)",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-direct-flow-native-imports",
-        "glob": "services/flow/**/*.py",
         "pattern": "(?:from|import)\\s+(?:marty_rs|_marty_rs)",
         "expected_matches": {}
       },
@@ -643,69 +727,15 @@
         "expected_matches": {}
       },
       {
-        "id": "no-python-did-identifier-kernel",
-        "glob": "services/flow/**/*.py",
-        "pattern": "(?:def\\s+_(?:base58_encode|ec_public_key_from_jwk)\\s*\\(|EllipticCurvePublicNumbers|multicodec_bytes)",
-        "expected_matches": {}
-      },
-      {
         "id": "no-python-oid4vp-request-builder",
         "glob": "services/**/*.py",
         "pattern": "(?:_WALLET_FORMATS_FALLBACK|_oid4vp_wallet_registry_formats|_oid4vp_format_alg|_oid4vp_presentation_formats|_is_sd_jwt_format|_is_mdoc_format|_string_filter_for_values|_sd_jwt_vct_values|_dcql_format_name|_json_schema_const_values|_dcql_meta_for_descriptor|_dcql_claims_for_descriptor|default-credential|default_requirement)",
         "expected_matches": {}
       },
       {
-        "id": "no-python-haip-jwe-kernel",
-        "glob": "services/flow/main.py",
-        "pattern": "(?:jwcrypto\\s+import\\s+jwe|JWK\\.generate\\(kty=[\"']EC[\"'])",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-python-oid4vp-x509-kernel",
-        "glob": "services/flow/main.py",
-        "pattern": "(?:x509\\.load_pem_x509_certificate|hashes\\.Hash\\(hashes\\.SHA256\\(\\)\\)|public_bytes\\(serialization\\.Encoding\\.DER\\))",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-python-siop-jose-kernel",
-        "glob": "services/flow/main.py",
-        "pattern": "(?:_decode_siop_jwt_object|verification_key\\.thumbprint\\(\\)|jwcrypto_jwt\\.JWT\\()",
-        "expected_matches": {}
-      },
-      {
         "id": "no-disabled-signature-verification",
         "glob": "services/**/*.py",
         "pattern": "verify_signature[\\\"']?\\s*[:=]\\s*False",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-python-presentation-policy-evaluator",
-        "glob": "services/presentation_policy/*.py",
-        "pattern": "(?:_evaluate_constraint|_detected_format_to_canonical|_required_format_to_canonical|_credential_format_satisfies_requirement)",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-direct-presentation-policy-native-imports",
-        "glob": "services/presentation_policy/*.py",
-        "pattern": "(?:from|import)\\s+(?:marty_rs|_marty_rs)",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-presentation-native-none-fallback",
-        "glob": "services/presentation_policy/*.py",
-        "pattern": "(?:_marty_rs|marty_rs)\\s+is\\s+None",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-python-sd-jwt-disclosure-reconstruction",
-        "glob": "services/presentation_policy/*.py",
-        "pattern": "(?:disclosure_parts|Skipping malformed disclosure)",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-presentation-policy-default-engine-fallback",
-        "glob": "services/presentation_policy/*.py",
-        "pattern": "CedarEngine\\.with_defaults",
         "expected_matches": {}
       },
       {
@@ -724,12 +754,6 @@
         "id": "no-python-openid4vp-mdoc-handover-kernel",
         "glob": "services/**/*.py",
         "pattern": "def\\s+_(?:cbor_length|cbor_encode_handover_value|openid4vp_response_key_thumbprint|build_openid4vp_mdoc_session_transcript|openid4vp_mdoc_binding_digests)\\s*\\(",
-        "expected_matches": {}
-      },
-      {
-        "id": "no-python-issuer-profile-kernel",
-        "glob": "services/gateway/routes/signing_keys.py",
-        "pattern": "(?:_issuer_profiles_storage_key|_normalize_key_attestation_policy|_assert_issuer_profile_(?:service|key)_compatible|KEY_PURPOSE_CREDENTIAL_FORMATS|PROTOCOL_CREDENTIAL_FORMAT_TO_WIRE)",
         "expected_matches": {}
       }
     ]

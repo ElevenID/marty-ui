@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "request": {
+    "organization_id": "org-1",
+    "issuer_did": "did:web:issuer.example:orgs:acme",
+    "issuer_mode": "org_managed",
+    "credential_format": "dc+sd-jwt",
+    "key_purpose": "vc_jwt_issuer",
+    "algorithm": "ES256"
+  },
+  "profile_document": {
+    "profiles": [{
+      "id": "profile-1",
+      "organization_id": "org-1",
+      "issuer_mode": "elevenid_managed",
+      "issuer_did": "did:web:issuer.example:orgs:acme",
+      "signing_service_id": "service-1",
+      "signing_key_reference": "issuer-key",
+      "key_purpose": "vc_jwt_issuer",
+      "credential_format": "dc+sd-jwt",
+      "algorithm": "ES256",
+      "status": "active"
+    }]
+  },
+  "registry": {
+    "services": [{
+      "id": "service-1",
+      "service_type": "custom-transit-compatible",
+      "key_reference": "issuer-key",
+      "key_purposes": ["vc_jwt_issuer"],
+      "credential_formats": ["dc+sd-jwt"],
+      "algorithms": ["ES256"]
+    }],
+    "default_service_id": "service-1",
+    "format_defaults": {"dc+sd-jwt": "service-1"},
+    "type_defaults": {"vc_jwt_issuer": "service-1"},
+    "key_reference_purposes": {"service-1": {"issuer-key": ["vc_jwt_issuer"]}}
+  },
+  "certificates": {"services": {"service-1": {"x5c": ["leaf", "root"]}}},
+  "expected": {
+    "ok": true,
+    "organization_id": "org-1",
+    "issuer_profile_id": "profile-1",
+    "issuer_mode": "elevenid_managed",
+    "issuer_did": "did:web:issuer.example:orgs:acme",
+    "signing_service_id": "service-1",
+    "signing_key_reference": "issuer-key",
+    "verification_method_id": "did:web:issuer.example:orgs:acme#issuer-key",
+    "key_purpose": "vc_jwt_issuer",
+    "issuer_x5c": ["leaf", "root"],
+    "issuer_profile": {
+      "id": "profile-1",
+      "organization_id": "org-1",
+      "issuer_mode": "elevenid_managed",
+      "issuer_did": "did:web:issuer.example:orgs:acme",
+      "signing_service_id": "service-1",
+      "signing_key_reference": "issuer-key",
+      "key_purpose": "vc_jwt_issuer",
+      "credential_format": "dc+sd-jwt",
+      "algorithm": "ES256",
+      "status": "active"
+    },
+    "service": {
+      "id": "service-1",
+      "service_type": "custom-transit-compatible",
+      "key_reference": "issuer-key",
+      "key_purposes": ["vc_jwt_issuer"],
+      "credential_formats": ["dc+sd-jwt"],
+      "algorithms": ["ES256"],
+      "x5c": ["leaf", "root"]
+    }
+  },
+  "errors": {
+    "no_profile_status": 404,
+    "ambiguous_profile_status": 409,
+    "removed_profile_selector_status": 422
+  }
+}

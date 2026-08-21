@@ -14,6 +14,11 @@ if [ "$MODULE_NAME" = "event_stream" ]; then
 	exec /usr/local/bin/marty-event-stream
 fi
 
+if [ "$MODULE_NAME" = "gateway" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-gateway
+fi
+
 if [ "$MODULE_NAME" = "revocation_profile" ]; then
 	echo "Starting canonical Rust service: $SERVICE_NAME"
 	exec /usr/local/bin/marty-revocation-profile
@@ -29,6 +34,56 @@ if [ "$MODULE_NAME" = "notification" ]; then
 	exec /usr/local/bin/marty-notification
 fi
 
+if [ "$MODULE_NAME" = "flow" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-flow
+fi
+
+if [ "$MODULE_NAME" = "organization" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-organization
+fi
+
+if [ "$MODULE_NAME" = "auth" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-auth
+fi
+
+if [ "$MODULE_NAME" = "credential_template" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-credential-template
+fi
+
+if [ "$MODULE_NAME" = "presentation_policy" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-presentation-policy
+fi
+
+if [ "$MODULE_NAME" = "trust_profile" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-trust-profile
+fi
+
+if [ "$MODULE_NAME" = "applicant" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-applicant
+fi
+
+if [ "$MODULE_NAME" = "device_registration" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-device-registration
+fi
+
+if [ "$MODULE_NAME" = "verification" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-verification-service
+fi
+
+if [ "$MODULE_NAME" = "deployment_profile" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-deployment-profile
+fi
+
 echo "Starting service: $SERVICE_NAME (module: $MODULE_NAME)"
 echo "Working directory: $(pwd)"
 echo "Python version: $(python --version)"
@@ -37,7 +92,4 @@ echo "Python version: $(python --version)"
 # Running `${MODULE_NAME}.main` directly with `python -m` would execute it as
 # `__main__`; later adapter imports could then load a second copy of the module.
 cd /app/services
-if [ "$MODULE_NAME" = "applicant" ]; then
-	python -m applicant.migrate_store_v03
-fi
 exec python -m service_runner

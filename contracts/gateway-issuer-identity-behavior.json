@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "request": {
+    "organization_id": "org-1",
+    "issuer_did": "did:web:issuer.example:orgs:acme",
+    "verification_method_id": "did:web:issuer.example:orgs:acme#issuer-key",
+    "credential_format": "dc+sd-jwt",
+    "key_purpose": "vc_jwt_issuer",
+    "algorithm": "ES256"
+  },
+  "profile_document": {
+    "profiles": [{
+      "id": "profile-1",
+      "organization_id": "org-1",
+      "issuer_did": "did:web:issuer.example:orgs:acme",
+      "signing_service_id": "service-1",
+      "signing_key_reference": "issuer-key",
+      "verification_method_id": "did:web:issuer.example:orgs:acme#issuer-key",
+      "key_purpose": "vc_jwt_issuer",
+      "credential_format": "SD_JWT_VC",
+      "algorithm": "ES256",
+      "status": "active"
+    }]
+  },
+  "registry": {
+    "services": [{
+      "id": "service-1",
+      "name": "Acme issuer signer",
+      "service_type": "custom-transit-compatible",
+      "endpoint": "https://private.example",
+      "auth_reference": "secret-token",
+      "key_reference": "issuer-key",
+      "key_purposes": ["vc_jwt_issuer"],
+      "credential_formats": ["dc+sd-jwt"],
+      "algorithms": ["ES256"]
+    }],
+    "default_service_id": "service-1",
+    "format_defaults": {"dc+sd-jwt": "service-1"},
+    "type_defaults": {"vc_jwt_issuer": "service-1"},
+    "key_reference_purposes": {"service-1": {"issuer-key": ["vc_jwt_issuer"]}}
+  },
+  "certificates": {
+    "services": {
+      "service-1": {
+        "x5c": ["leaf", "root"],
+        "cert_expires_at": "2027-01-01T00:00:00Z"
+      }
+    }
+  },
+  "did_document": {
+    "id": "did:web:issuer.example:orgs:acme",
+    "controller": "did:web:issuer.example:orgs:acme",
+    "verificationMethod": [{
+      "id": "did:web:issuer.example:orgs:acme#issuer-key",
+      "type": "JsonWebKey",
+      "controller": "did:web:issuer.example:orgs:acme",
+      "publicKeyJwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "public-x",
+        "y": "public-y"
+      }
+    }],
+    "assertionMethod": ["did:web:issuer.example:orgs:acme#issuer-key"]
+  },
+  "expected_without_resolved_at": {
+    "ok": true,
+    "organization_id": "org-1",
+    "issuer_did": "did:web:issuer.example:orgs:acme",
+    "verification_method_id": "did:web:issuer.example:orgs:acme#issuer-key",
+    "public_jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "public-x",
+      "y": "public-y",
+      "kid": "did:web:issuer.example:orgs:acme#issuer-key"
+    },
+    "verification_method": {
+      "id": "did:web:issuer.example:orgs:acme#issuer-key",
+      "type": "JsonWebKey",
+      "controller": "did:web:issuer.example:orgs:acme",
+      "publicKeyJwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "public-x",
+        "y": "public-y"
+      }
+    },
+    "did_document": {
+      "id": "did:web:issuer.example:orgs:acme",
+      "controller": "did:web:issuer.example:orgs:acme",
+      "verificationMethod": [{
+        "id": "did:web:issuer.example:orgs:acme#issuer-key",
+        "type": "JsonWebKey",
+        "controller": "did:web:issuer.example:orgs:acme",
+        "publicKeyJwk": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "public-x",
+          "y": "public-y"
+        }
+      }],
+      "assertionMethod": ["did:web:issuer.example:orgs:acme#issuer-key"]
+    },
+    "key_purpose": "vc_jwt_issuer",
+    "algorithm": "ES256",
+    "issuer_profile": {
+      "id": "profile-1",
+      "organization_id": "org-1",
+      "issuer_did": "did:web:issuer.example:orgs:acme",
+      "signing_service_id": "service-1",
+      "signing_key_reference": "issuer-key",
+      "verification_method_id": "did:web:issuer.example:orgs:acme#issuer-key",
+      "key_purpose": "vc_jwt_issuer",
+      "credential_format": "SD_JWT_VC",
+      "algorithm": "ES256",
+      "status": "active"
+    },
+    "issuer_x5c": ["leaf", "root"],
+    "signing_service": {
+      "id": "service-1",
+      "name": "Acme issuer signer",
+      "service_type": "custom-transit-compatible",
+      "key_reference": "issuer-key",
+      "key_purposes": ["vc_jwt_issuer"],
+      "credential_formats": ["dc+sd-jwt"],
+      "algorithms": ["ES256"]
+    },
+    "resolver": {
+      "type": "organization_issuer_profile",
+      "source": "gateway_signing_key_registry",
+      "public_fallback_used": false
+    }
+  }
+}

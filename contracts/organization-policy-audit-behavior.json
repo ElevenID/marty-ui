@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "cedar_schema": "namespace MIP {\n  type ApprovalContext = { all_required_evidence_satisfied: Bool };\n  entity User;\n  entity Application;\n  action \"applications:approve\" appliesTo {\n    principal: [User],\n    resource: [Application],\n    context: ApprovalContext\n  };\n}",
+  "policy_cases": [
+    {
+      "name": "valid enabled policy",
+      "policies": [
+        {
+          "policy_id": "approve_verified",
+          "effect": "permit",
+          "cedar_text": "permit(principal, action == MIP::Action::\"applications:approve\", resource);",
+          "enabled": true
+        }
+      ],
+      "expected_error": null
+    },
+    {
+      "name": "effect must match statement",
+      "policies": [
+        {
+          "policy_id": "effect_mismatch",
+          "effect": "forbid",
+          "cedar_text": "permit(principal, action == MIP::Action::\"applications:approve\", resource);",
+          "enabled": true
+        }
+      ],
+      "expected_error": "effect_mismatch"
+    },
+    {
+      "name": "policy identifiers are unique",
+      "policies": [
+        {
+          "policy_id": "duplicate",
+          "effect": "permit",
+          "cedar_text": "permit(principal, action == MIP::Action::\"applications:approve\", resource);",
+          "enabled": true
+        },
+        {
+          "policy_id": "duplicate",
+          "effect": "forbid",
+          "cedar_text": "forbid(principal, action == MIP::Action::\"applications:approve\", resource);",
+          "enabled": true
+        }
+      ],
+      "expected_error": "duplicate_policy_id"
+    },
+    {
+      "name": "at least one policy is enabled",
+      "policies": [
+        {
+          "policy_id": "disabled",
+          "effect": "permit",
+          "cedar_text": "permit(principal, action == MIP::Action::\"applications:approve\", resource);",
+          "enabled": false
+        }
+      ],
+      "expected_error": "no_enabled_policy"
+    },
+    {
+      "name": "unknown actions fail schema validation",
+      "policies": [
+        {
+          "policy_id": "unknown_action",
+          "effect": "permit",
+          "cedar_text": "permit(principal, action == MIP::Action::\"applications:destroy\", resource);",
+          "enabled": true
+        }
+      ],
+      "expected_error": "invalid_cedar"
+    }
+  ],
+  "legacy_policy": {
+    "source": "forbid(principal, action, resource);",
+    "expected_policy_id": "legacy_policy",
+    "expected_effect": "forbid"
+  },
+  "activation_case": {
+    "target_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "target_type": "APPROVAL_RULES",
+    "policy_sets": [
+      {
+        "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "policy_type": "APPROVAL_RULES",
+        "status": "DRAFT"
+      },
+      {
+        "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "policy_type": "APPROVAL_RULES",
+        "status": "ACTIVE"
+      },
+      {
+        "id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        "policy_type": "ACCESS_CONTROL",
+        "status": "ACTIVE"
+      },
+      {
+        "id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        "policy_type": "APPROVAL_RULES",
+        "status": "ARCHIVED"
+      }
+    ],
+    "expected_archived_ids": [
+      "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    ]
+  },
+  "audit_now": "2026-08-20T12:00:00Z",
+  "audit_pagination_cases": [
+    {
+      "name": "ordinary pagination",
+      "page": 2,
+      "per_page": 50,
+      "legacy_limit": null,
+      "legacy_offset": 0,
+      "expected_page": 2,
+      "expected_per_page": 50,
+      "expected_offset": 50
+    },
+    {
+      "name": "legacy limit and offset",
+      "page": 1,
+      "per_page": 50,
+      "legacy_limit": 25,
+      "legacy_offset": 50,
+      "expected_page": 3,
+      "expected_per_page": 25,
+      "expected_offset": 50
+    },
+    {
+      "name": "pagination clamps fail closed bounds",
+      "page": -4,
+      "per_page": 5000,
+      "legacy_limit": null,
+      "legacy_offset": 0,
+      "expected_page": 1,
+      "expected_per_page": 1000,
+      "expected_offset": 0
+    },
+    {
+      "name": "zero legacy limit becomes one item",
+      "page": 9,
+      "per_page": 99,
+      "legacy_limit": 0,
+      "legacy_offset": 50,
+      "expected_page": 1,
+      "expected_per_page": 1,
+      "expected_offset": 0
+    }
+  ],
+  "audit_time_range_cases": [
+    {
+      "name": "all time",
+      "time_range": "all-time",
+      "expected_start": null,
+      "expected_error": null
+    },
+    {
+      "name": "hours",
+      "time_range": "24h",
+      "expected_start": "2026-08-19T12:00:00Z",
+      "expected_error": null
+    },
+    {
+      "name": "days",
+      "time_range": "2d",
+      "expected_start": "2026-08-18T12:00:00Z",
+      "expected_error": null
+    },
+    {
+      "name": "weeks",
+      "time_range": "1w",
+      "expected_start": "2026-08-13T12:00:00Z",
+      "expected_error": null
+    },
+    {
+      "name": "unsupported units",
+      "time_range": "recently",
+      "expected_start": null,
+      "expected_error": "invalid_unit"
+    },
+    {
+      "name": "nonpositive ranges",
+      "time_range": "0h",
+      "expected_start": null,
+      "expected_error": "nonpositive"
+    },
+    {
+      "name": "amount must be numeric",
+      "time_range": "abch",
+      "expected_start": null,
+      "expected_error": "invalid_amount"
+    }
+  ]
+}

@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "valid_requests": [
+    {
+      "kind": "create_definition",
+      "payload": {
+        "organization_id": "org-1",
+        "name": "OID4VP",
+        "flow_type": "oid4vp_presentation",
+        "presentation_policy_id": "policy-1"
+      }
+    },
+    {
+      "kind": "create_definition",
+      "payload": {
+        "organization_id": "org-1",
+        "name": "Custom",
+        "flow_type": "custom",
+        "extension": {
+          "extension_uri": "urn:marty:flow:proofing",
+          "extension_version": "1",
+          "extends_flow_type": "oid4vp_presentation",
+          "entry_step_id": "collect",
+          "steps": [
+            {"step_id": "collect", "action": "proofing.collect"},
+            {"step_id": "verify", "action": "proofing.verify", "timeout_seconds": 30}
+          ],
+          "transitions": [
+            {"from_step_id": "collect", "to_step_id": "verify", "outcome": "SUCCESS"}
+          ]
+        }
+      }
+    },
+    {
+      "kind": "patch_definition",
+      "payload": {"organization_id": "org-1", "description": null}
+    },
+    {
+      "kind": "start_flow",
+      "payload": {
+        "organization_id": "org-1",
+        "flow_definition_id": "flow-1",
+        "initial_context": {"application": {"id": "application-1"}}
+      }
+    },
+    {
+      "kind": "advance_flow",
+      "payload": {"step_result": "success", "data": {"evidence": {"valid": true}}}
+    },
+    {
+      "kind": "start_verification",
+      "payload": {
+        "organization_id": "org-1",
+        "issuer_did": "did:web:verifier.example",
+        "presentation_policy_id": "policy-1",
+        "callback_url": "https://callbacks.example/flows/abc"
+      }
+    },
+    {
+      "kind": "start_verification",
+      "payload": {
+        "organization_id": "org-1",
+        "issuer_did": "did:web:verifier.example",
+        "response_type": "id_token",
+        "request_transport": "request_object"
+      }
+    },
+    {
+      "kind": "start_siop",
+      "payload": {"organization_id": "org-1", "expiry_minutes": 15}
+    },
+    {
+      "kind": "siop_submit",
+      "payload": {"id_token": "header.payload.signature", "instance_id": "instance-1"}
+    },
+    {
+      "kind": "submit_verification",
+      "payload": {"vp_token": "credential", "presentation_submission": {"id": "submission-1"}}
+    },
+    {
+      "kind": "digital_credential_submit",
+      "payload": {"protocol": "openid4vp", "origin": "https://wallet.example", "data": {"response": "token"}}
+    },
+    {
+      "kind": "application_approved",
+      "payload": {
+        "event_type": "application.approved",
+        "aggregate_id": "application-1",
+        "aggregate_type": "application",
+        "organization_id": "org-1",
+        "data": {"applicant_id": "applicant-1"},
+        "timestamp": "2026-08-20T12:00:00Z"
+      }
+    }
+  ],
+  "invalid_requests": [
+    {
+      "kind": "create_definition",
+      "payload": {"organization_id": "org-1", "name": "OID4VP", "flow_type": "oid4vp_presentation"},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "presentation_policy_id"
+    },
+    {
+      "kind": "create_definition",
+      "payload": {"organization_id": "org-1", "name": "Issuance", "flow_type": "oid4vci_pre_authorized", "credential_template_id": "template-1", "extension": {"bad": true}},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "body"
+    },
+    {
+      "kind": "patch_definition",
+      "payload": {"organization_id": "org-1"},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "body"
+    },
+    {
+      "kind": "start_flow",
+      "payload": {"organization_id": "org-1", "flow_definition_id": "flow-1", "initial_context": {"nested": {"private_key": "secret"}}},
+      "code": "FLOW.PRIVATE_CONTEXT",
+      "field": "initial_context"
+    },
+    {
+      "kind": "advance_flow",
+      "payload": {"data": {"items": [{"access_token": "secret"}]}},
+      "code": "FLOW.PRIVATE_CONTEXT",
+      "field": "data"
+    },
+    {
+      "kind": "start_verification",
+      "payload": {"organization_id": "org-1", "issuer_did": "did:web:verifier.example"},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "presentation_policy_id"
+    },
+    {
+      "kind": "start_verification",
+      "payload": {"organization_id": "org-1", "issuer_did": "did:web:verifier.example", "presentation_policy_id": "policy-1", "request_transport": "url_query", "oid4vp_profile": "haip"},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "request_transport"
+    },
+    {
+      "kind": "start_verification",
+      "payload": {"organization_id": "org-1", "issuer_did": "did:web:verifier.example", "response_type": "id_token", "request_transport": "url_query"},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "request_transport"
+    },
+    {
+      "kind": "start_verification",
+      "payload": {"organization_id": "org-1", "issuer_did": "did:web:verifier.example", "presentation_policy_id": "policy-1", "callback_url": "https://127.0.0.1/callback"},
+      "code": "FLOW.UNSAFE_CALLBACK",
+      "field": "callback_url"
+    },
+    {
+      "kind": "start_siop",
+      "payload": {"organization_id": ""},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "organization_id"
+    },
+    {
+      "kind": "siop_submit",
+      "payload": {"id_token": "", "instance_id": "instance-1"},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "id_token"
+    },
+    {
+      "kind": "application_approved",
+      "payload": {"event_type": "application.rejected", "aggregate_id": "application-1", "aggregate_type": "application", "organization_id": "org-1", "data": {}, "timestamp": "2026-08-20T12:00:00Z"},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "event_type"
+    },
+    {
+      "kind": "start_flow",
+      "payload": {"organization_id": "org-1", "flow_definition_id": "flow-1", "unexpected": true},
+      "code": "FLOW.INVALID_REQUEST",
+      "field": "body"
+    }
+  ]
+}

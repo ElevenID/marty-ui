@@ -1,0 +1,525 @@
+{
+  "schema_version": 1,
+  "permissions": [
+    {
+      "resource": "trust-profile",
+      "action": "view",
+      "description": "View trust profiles"
+    },
+    {
+      "resource": "trust-profile",
+      "action": "create",
+      "description": "Create trust profiles"
+    },
+    {
+      "resource": "trust-profile",
+      "action": "edit",
+      "description": "Edit trust profiles"
+    },
+    {
+      "resource": "trust-profile",
+      "action": "delete",
+      "description": "Delete trust profiles"
+    },
+    {
+      "resource": "trust-profile",
+      "action": "activate",
+      "description": "Activate trust profiles"
+    },
+    {
+      "resource": "trust-profile",
+      "action": "suspend",
+      "description": "Suspend trust profiles"
+    },
+    {
+      "resource": "policy-set",
+      "action": "view",
+      "description": "View Cedar policy sets"
+    },
+    {
+      "resource": "policy-set",
+      "action": "create",
+      "description": "Create Cedar policy sets"
+    },
+    {
+      "resource": "policy-set",
+      "action": "edit",
+      "description": "Edit Cedar policy sets"
+    },
+    {
+      "resource": "policy-set",
+      "action": "delete",
+      "description": "Delete Cedar policy sets"
+    },
+    {
+      "resource": "policy-set",
+      "action": "activate",
+      "description": "Activate Cedar policy sets"
+    },
+    {
+      "resource": "policy-set",
+      "action": "archive",
+      "description": "Archive Cedar policy sets"
+    },
+    {
+      "resource": "policy-set",
+      "action": "validate",
+      "description": "Validate Cedar policy sets"
+    },
+    {
+      "resource": "trusted-issuer",
+      "action": "view",
+      "description": "View trusted issuers"
+    },
+    {
+      "resource": "trusted-issuer",
+      "action": "create",
+      "description": "Create trusted issuers"
+    },
+    {
+      "resource": "trusted-issuer",
+      "action": "edit",
+      "description": "Edit trusted issuers"
+    },
+    {
+      "resource": "trusted-issuer",
+      "action": "delete",
+      "description": "Delete trusted issuers"
+    },
+    {
+      "resource": "credential-template",
+      "action": "view",
+      "description": "View credential templates"
+    },
+    {
+      "resource": "credential-template",
+      "action": "create",
+      "description": "Create credential templates"
+    },
+    {
+      "resource": "credential-template",
+      "action": "edit",
+      "description": "Edit credential templates"
+    },
+    {
+      "resource": "credential-template",
+      "action": "delete",
+      "description": "Delete credential templates"
+    },
+    {
+      "resource": "credential-template",
+      "action": "activate",
+      "description": "Activate credential templates"
+    },
+    {
+      "resource": "credential-template",
+      "action": "deprecate",
+      "description": "Deprecate credential templates"
+    },
+    {
+      "resource": "credential-template",
+      "action": "version",
+      "description": "Create new version of credential templates"
+    },
+    {
+      "resource": "wallet",
+      "action": "view",
+      "description": "View wallet registry and compatibility entries"
+    },
+    {
+      "resource": "wallet",
+      "action": "write",
+      "description": "Create and manage organization wallet registry overrides"
+    },
+    {
+      "resource": "compliance-profile",
+      "action": "view",
+      "description": "View compliance profiles"
+    },
+    {
+      "resource": "compliance-profile",
+      "action": "create",
+      "description": "Create compliance profiles"
+    },
+    {
+      "resource": "compliance-profile",
+      "action": "edit",
+      "description": "Edit compliance profiles"
+    },
+    {
+      "resource": "compliance-profile",
+      "action": "delete",
+      "description": "Delete compliance profiles"
+    },
+    {
+      "resource": "compliance-profile",
+      "action": "activate",
+      "description": "Activate compliance profiles"
+    },
+    {
+      "resource": "compliance-profile",
+      "action": "suspend",
+      "description": "Suspend compliance profiles"
+    },
+    {
+      "resource": "presentation-policy",
+      "action": "view",
+      "description": "View presentation policies"
+    },
+    {
+      "resource": "presentation-policy",
+      "action": "create",
+      "description": "Create presentation policies"
+    },
+    {
+      "resource": "presentation-policy",
+      "action": "edit",
+      "description": "Edit presentation policies"
+    },
+    {
+      "resource": "presentation-policy",
+      "action": "delete",
+      "description": "Delete presentation policies"
+    },
+    {
+      "resource": "presentation-policy",
+      "action": "activate",
+      "description": "Activate presentation policies"
+    },
+    {
+      "resource": "presentation-policy",
+      "action": "suspend",
+      "description": "Suspend presentation policies"
+    },
+    {
+      "resource": "presentation-policy",
+      "action": "version",
+      "description": "Create new version of presentation policies"
+    },
+    {
+      "resource": "presentation-policy",
+      "action": "evaluate",
+      "description": "Evaluate presentation policies"
+    },
+    {
+      "resource": "revocation-profile",
+      "action": "view",
+      "description": "View revocation profiles"
+    },
+    {
+      "resource": "revocation-profile",
+      "action": "create",
+      "description": "Create revocation profiles"
+    },
+    {
+      "resource": "revocation-profile",
+      "action": "delete",
+      "description": "Delete revocation profiles"
+    },
+    {
+      "resource": "revocation-profile",
+      "action": "activate",
+      "description": "Activate revocation profiles"
+    },
+    {
+      "resource": "deployment-profile",
+      "action": "view",
+      "description": "View deployment profiles"
+    },
+    {
+      "resource": "deployment-profile",
+      "action": "create",
+      "description": "Create deployment profiles"
+    },
+    {
+      "resource": "deployment-profile",
+      "action": "edit",
+      "description": "Edit deployment profiles"
+    },
+    {
+      "resource": "deployment-profile",
+      "action": "delete",
+      "description": "Delete deployment profiles"
+    },
+    {
+      "resource": "deployment-profile",
+      "action": "activate",
+      "description": "Activate deployment profiles"
+    },
+    {
+      "resource": "deployment-profile",
+      "action": "suspend",
+      "description": "Suspend deployment profiles"
+    },
+    {
+      "resource": "flow-definition",
+      "action": "view",
+      "description": "View flow definitions"
+    },
+    {
+      "resource": "flow-definition",
+      "action": "create",
+      "description": "Create flow definitions"
+    },
+    {
+      "resource": "flow-definition",
+      "action": "edit",
+      "description": "Edit flow definitions"
+    },
+    {
+      "resource": "flow-definition",
+      "action": "delete",
+      "description": "Delete flow definitions"
+    },
+    {
+      "resource": "flow-definition",
+      "action": "activate",
+      "description": "Activate flow definitions"
+    },
+    {
+      "resource": "flow-instance",
+      "action": "view",
+      "description": "View flow instances"
+    },
+    {
+      "resource": "flow-instance",
+      "action": "start",
+      "description": "Start flow instances"
+    },
+    {
+      "resource": "flow-instance",
+      "action": "advance",
+      "description": "Advance flow instances"
+    },
+    {
+      "resource": "flow-instance",
+      "action": "cancel",
+      "description": "Cancel flow instances"
+    },
+    {
+      "resource": "issuance",
+      "action": "view",
+      "description": "View issuance transactions"
+    },
+    {
+      "resource": "issuance",
+      "action": "initiate",
+      "description": "Initiate credential issuance"
+    },
+    {
+      "resource": "issuance",
+      "action": "revoke",
+      "description": "Revoke, suspend, and reinstate issued credentials"
+    },
+    {
+      "resource": "application-template",
+      "action": "view",
+      "description": "View application templates"
+    },
+    {
+      "resource": "application-template",
+      "action": "create",
+      "description": "Create application templates"
+    },
+    {
+      "resource": "application-template",
+      "action": "edit",
+      "description": "Edit application templates"
+    },
+    {
+      "resource": "application-template",
+      "action": "delete",
+      "description": "Delete application templates"
+    },
+    {
+      "resource": "application-template",
+      "action": "activate",
+      "description": "Activate application templates"
+    },
+    {
+      "resource": "application",
+      "action": "view",
+      "description": "View applications"
+    },
+    {
+      "resource": "application",
+      "action": "review",
+      "description": "Review applications, checks, and reviewer locks"
+    },
+    {
+      "resource": "application",
+      "action": "approve",
+      "description": "Approve applications"
+    },
+    {
+      "resource": "application",
+      "action": "reject",
+      "description": "Reject applications"
+    },
+    {
+      "resource": "organization",
+      "action": "view",
+      "description": "View organization details"
+    },
+    {
+      "resource": "organization",
+      "action": "edit",
+      "description": "Edit organization settings"
+    },
+    {
+      "resource": "team",
+      "action": "view",
+      "description": "View team members"
+    },
+    {
+      "resource": "team",
+      "action": "invite",
+      "description": "Invite team members"
+    },
+    {
+      "resource": "team",
+      "action": "manage",
+      "description": "Change member roles and remove members"
+    },
+    {
+      "resource": "role",
+      "action": "view",
+      "description": "View roles"
+    },
+    {
+      "resource": "role",
+      "action": "create",
+      "description": "Create custom roles"
+    },
+    {
+      "resource": "role",
+      "action": "edit",
+      "description": "Edit roles and their permissions"
+    },
+    {
+      "resource": "role",
+      "action": "delete",
+      "description": "Delete custom roles"
+    },
+    {
+      "resource": "role",
+      "action": "assign",
+      "description": "Assign or remove roles from members"
+    },
+    {
+      "resource": "api-key",
+      "action": "view",
+      "description": "View API keys"
+    },
+    {
+      "resource": "api-key",
+      "action": "create",
+      "description": "Create API keys"
+    },
+    {
+      "resource": "api-key",
+      "action": "edit",
+      "description": "Edit API keys"
+    },
+    {
+      "resource": "api-key",
+      "action": "revoke",
+      "description": "Revoke API keys"
+    },
+    {
+      "resource": "api-key",
+      "action": "delete",
+      "description": "Delete API keys"
+    },
+    {
+      "resource": "signing-key",
+      "action": "view",
+      "description": "View signing keys"
+    },
+    {
+      "resource": "signing-key",
+      "action": "create",
+      "description": "Create signing keys"
+    },
+    {
+      "resource": "signing-key",
+      "action": "delete",
+      "description": "Delete signing keys"
+    },
+    {
+      "resource": "webhook",
+      "action": "view",
+      "description": "View webhooks"
+    },
+    {
+      "resource": "webhook",
+      "action": "create",
+      "description": "Create webhooks"
+    },
+    {
+      "resource": "webhook",
+      "action": "edit",
+      "description": "Edit webhooks"
+    },
+    {
+      "resource": "webhook",
+      "action": "delete",
+      "description": "Delete webhooks"
+    },
+    {
+      "resource": "webhook",
+      "action": "test",
+      "description": "Test webhooks"
+    },
+    {
+      "resource": "integration-connector",
+      "action": "view",
+      "description": "View external protocol connectors"
+    },
+    {
+      "resource": "integration-connector",
+      "action": "create",
+      "description": "Create external protocol connectors"
+    },
+    {
+      "resource": "integration-connector",
+      "action": "edit",
+      "description": "Edit external protocol connectors"
+    },
+    {
+      "resource": "integration-connector",
+      "action": "delete",
+      "description": "Delete external protocol connectors"
+    },
+    {
+      "resource": "notification",
+      "action": "view",
+      "description": "View notifications"
+    },
+    {
+      "resource": "notification",
+      "action": "send",
+      "description": "Send notifications"
+    },
+    {
+      "resource": "audit",
+      "action": "view",
+      "description": "View audit logs"
+    },
+    {
+      "resource": "audit",
+      "action": "export",
+      "description": "Export audit logs"
+    },
+    {
+      "resource": "verification",
+      "action": "view",
+      "description": "View verification results"
+    },
+    {
+      "resource": "verification",
+      "action": "execute",
+      "description": "Execute verification flows"
+    }
+  ]
+}

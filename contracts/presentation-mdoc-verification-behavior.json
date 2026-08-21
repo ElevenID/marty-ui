@@ -1,0 +1,81 @@
+{
+  "schema": "marty.presentation-mdoc-verification-behavior/v1",
+  "trust_profile": {
+    "status": "active",
+    "trust_sources": [
+      {
+        "source_type": "ROOT_CA",
+        "certificate_pem": "-----BEGIN CERTIFICATE-----\ncm9vdA==\n-----END CERTIFICATE-----\n",
+        "pinned_certificates": [
+          "-----BEGIN CERTIFICATE-----\ncm9vdA==\n-----END CERTIFICATE-----\n"
+        ]
+      },
+      {
+        "source_type": "PINNED_ISSUER",
+        "certificate_pem": "-----BEGIN CERTIFICATE-----\ncGlubmVk\n-----END CERTIFICATE-----\n"
+      },
+      {
+        "source_type": "TRUST_LIST",
+        "certificate_pem": "-----BEGIN CERTIFICATE-----\naWdub3JlZA==\n-----END CERTIFICATE-----\n"
+      },
+      {
+        "source_type": "ROOT_CA",
+        "certificate_pem": "-----BEGIN CERTIFICATE-----\nZGlzYWJsZWQ=\n-----END CERTIFICATE-----\n",
+        "enabled": false
+      }
+    ]
+  },
+  "authenticated_result": {
+    "issuer_signature_valid": true,
+    "issuer_trusted": true,
+    "device_authentication_valid": true,
+    "document_types": ["org.iso.18013.5.1.mDL"],
+    "document_evidence": [
+      {
+        "document_type": "org.iso.18013.5.1.mDL",
+        "signature_algorithm": "ES256",
+        "digest_algorithm": "SHA-256",
+        "signed_at": "2026-08-09T06:00:00Z",
+        "valid_from": "2026-08-09T06:00:00Z",
+        "valid_until": "2027-08-09T06:00:00Z",
+        "issuer_certificate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "validity_checked": true,
+        "valid_at_verification_time": true,
+        "revocation_checked": false,
+        "not_revoked": null
+      }
+    ],
+    "revocation_checked": false,
+    "not_revoked": null,
+    "error": null
+  },
+  "claims": {
+    "given_name": "Ada",
+    "family_name": "Lovelace"
+  },
+  "expected_evidence": {
+    "issuer_id": "x509-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "issued_at_epoch_seconds": 1786255200,
+    "presentation_count": 1,
+    "holder_binding_method": "DEVICE_KEY",
+    "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION"
+  },
+  "expected_direct_anchor": {
+    "verified": true,
+    "trust_level": 100,
+    "compliance_statuses": [],
+    "accreditations": []
+  },
+  "error_categories": [
+    {"error": null, "expected": "none"},
+    {"error": "Currently unsupported format", "expected": "device-auth-method-unsupported"},
+    {"error": "device key jwk is missing coordinates", "expected": "device-key-coordinates-missing"},
+    {"error": "algorithm in protected headers did not match", "expected": "device-signature-algorithm-mismatch"},
+    {"error": "issuer-signed value digest mismatch for family_name", "expected": "issuer-disclosure-digest-mismatch"},
+    {"error": "failed verifying device signature", "expected": "device-signature-invalid"},
+    {"error": "MSO is expired", "expected": "mso-expired"},
+    {"error": "cryptographic error", "expected": "device-key-invalid"},
+    {"error": "CBOR parse error", "expected": "device-auth-cbor-error"},
+    {"error": "an unfamiliar internal failure", "expected": "unclassified"}
+  ]
+}

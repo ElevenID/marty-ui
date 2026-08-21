@@ -256,11 +256,29 @@ pub async fn resolve_webhook_destination(
 }
 
 pub fn canonical_signature(secret: &str, payload: &Map<String, Value>) -> String {
-    let canonical = serde_json::to_vec(payload).expect("JSON map serialization cannot fail");
+    let canonical = serde_json::to_vec(&canonical_json(&Value::Object(payload.clone())))
+        .expect("JSON map serialization cannot fail");
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes())
         .expect("HMAC accepts arbitrary key sizes");
     mac.update(&canonical);
     format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+}
+
+fn canonical_json(value: &Value) -> Value {
+    match value {
+        Value::Object(values) => {
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_unstable_by_key(|(name, _)| *name);
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(name, value)| (name.clone(), canonical_json(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(values) => Value::Array(values.iter().map(canonical_json).collect()),
+        _ => value.clone(),
+    }
 }
 
 pub fn encode_bound_webhook_secret(

@@ -1,4 +1,5 @@
 import json
+import inspect
 import sys
 import types
 
@@ -27,7 +28,7 @@ def test_revocation_schema_is_removed_from_the_python_migration_graph() -> None:
     order = [service["name"] for service in migrations.SERVICES]
 
     assert "revocation_profile" not in order
-    assert order.index("credential_template") < order.index("trust_profile")
+    assert "trust_profile" not in order
 
 
 def test_notification_schema_is_removed_from_the_python_migration_graph() -> None:
@@ -84,10 +85,11 @@ def test_notification_webhook_envelope_preparation_fails_without_kms(
     assert migrations.prepare_notification_webhook_envelope_key() is False
 
 
-def test_device_registration_schema_is_owned_by_the_deployment_migration_runner() -> None:
+def test_device_registration_schema_is_owned_by_its_native_runtime() -> None:
     services = {service["name"]: service["module"] for service in migrations.SERVICES}
 
-    assert services["device_registration"] == "device_registration.infrastructure.models"
+    assert "device_registration" not in services
+    assert "device_registration_service" in inspect.getsource(migrations.ensure_schemas)
 
 
 def test_seed_signing_registry_binds_lti_key_inside_multi_key_service() -> None:

@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "valid_data_integrity": {
+    "vp_token": {
+      "@context": ["https://www.w3.org/ns/credentials/v2"],
+      "type": ["VerifiableCredential"],
+      "credentialSubject": {"email": "holder@example.com"},
+      "proof": {"type": "DataIntegrityProof"}
+    },
+    "kernel_evidence": {
+      "verified": true,
+      "credential_id": "urn:uuid:credential-1",
+      "credential_status_ids": ["urn:uuid:credential-1"],
+      "claims": {"email": "holder@example.com"},
+      "issuer_id": "did:example:issuer",
+      "issued_at_epoch_seconds": 1787240000,
+      "algorithm": "eddsa-rdfc-2022",
+      "validity_checked": true,
+      "is_expired": false,
+      "warnings": ["kernel-warning"],
+      "presentation_verified": true,
+      "presentation_count": 1,
+      "holder_binding_verified": true,
+      "holder_binding_method": "DEVICE_KEY",
+      "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+      "challenge_verified": true,
+      "audience_verified": true,
+      "replay_check_verified": true,
+      "proof_epoch_seconds": 1787240100,
+      "status": {}
+    },
+    "trust_evidence": {
+      "verified": true,
+      "trust_level": 80,
+      "compliance_statuses": ["accredited", "ACCREDITED"],
+      "accreditations": ["Member", "member"]
+    },
+    "status_evidence": {
+      "checked_at_epoch_seconds": 1787240200,
+      "not_revoked": true,
+      "credential_status": "good",
+      "warnings": ["status-warning"]
+    },
+    "expected": {
+      "credentials": [{
+        "credential_id": "urn:uuid:credential-1",
+        "credential_template_ids": ["template-email"],
+        "credential_format": "w3c-vcdm-di",
+        "claims": {"email": "holder@example.com"},
+        "issuer_id": "did:example:issuer",
+        "signature_verified": true,
+        "signature_failure_reason": null,
+        "trust_profile_verified": true,
+        "trust_failure_reason": null,
+        "trust_level": 80,
+        "compliance_statuses": ["ACCREDITED"],
+        "accreditations": ["member"],
+        "issued_at_epoch_seconds": 1787240000,
+        "revocation_checked_at_epoch_seconds": 1787240200,
+        "not_revoked": true,
+        "credential_status": "active",
+        "warnings": ["kernel-warning", "status-warning"]
+      }],
+      "evaluation_time_epoch_seconds": 1787240300,
+      "presentation_verified": true,
+      "holder_binding_verified": true,
+      "holder_binding_method": "DEVICE_KEY",
+      "proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+      "challenge_verified": true,
+      "audience_verified": true,
+      "replay_check_verified": true,
+      "proof_epoch_seconds": 1787240100,
+      "external_authorization": {
+        "evaluated": true,
+        "allowed": true,
+        "reasons": ["permit-valid-credentials"],
+        "errors": []
+      },
+      "presentation_count": 1
+    }
+  },
+  "cedar_evidence": {
+    "missing_algorithm_error": "Cedar policy evidence is incomplete: signature algorithm",
+    "weak_algorithm": "RS256",
+    "weak_algorithm_allowed": false
+  },
+  "trusted_oid4vp_context": {
+    "context": {
+      "oid4vp_verifier_context": true,
+      "replay_check_verified": true
+    },
+    "kernel_binding_method": "SESSION_BINDING",
+    "kernel_proof_profile": "JWT_KEY_BINDING",
+    "expected_binding_method": "DEVICE_KEY",
+    "expected_proof_profile": "OID4VP_VERIFIABLE_PRESENTATION",
+    "expected_replay_check_verified": true,
+    "untrusted_http_replay_check_verified": false
+  },
+  "failure_behavior": "fail_closed"
+}

@@ -106,7 +106,16 @@ impl DocumentStore {
         let services = services.as_object_mut().ok_or_else(|| {
             DocumentError::Corrupt("certificate services must be an object".to_string())
         })?;
-        services.insert(service_id.to_string(), json!(attachment));
+        services.insert(
+            service_id.to_string(),
+            json!({
+                "cert_pem": attachment.cert_pem,
+                "cert_chain_pem": attachment.cert_chain_pem,
+                "cert_expires_at": attachment.cert_expires_at,
+                "updated_at": attachment.updated_at,
+                "x5c": attachment.x5c,
+            }),
+        );
         document["updated_at"] = Value::String(now_iso());
         self.save(&certificate_storage_key(organization_id), &document)
             .await?;
@@ -885,7 +894,7 @@ fn did_web_domain(did_id: &str) -> Option<String> {
         .flatten()
 }
 
-fn did_web_org_slug(did_id: &str, public_domain: Option<&str>) -> Option<String> {
+pub fn did_web_org_slug(did_id: &str, public_domain: Option<&str>) -> Option<String> {
     let parts = did_id.split(':').collect::<Vec<_>>();
     if parts.len() != 5 || parts[0] != "did" || parts[1] != "web" || parts[3] != "orgs" {
         return None;
@@ -899,7 +908,7 @@ fn did_web_org_slug(did_id: &str, public_domain: Option<&str>) -> Option<String>
     slug_pattern().is_match(&slug).then_some(slug)
 }
 
-fn did_fragment(service_id: &str, key_reference: Option<&str>) -> String {
+pub fn did_fragment(service_id: &str, key_reference: Option<&str>) -> String {
     let source = key_reference
         .map(str::to_string)
         .unwrap_or_else(|| format!("{service_id}-vm"));

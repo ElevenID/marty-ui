@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "valid_cases": [
+    {
+      "name": "direct_claims",
+      "input": {
+        "organization_id": "org-1",
+        "issuer_did": "did:web:issuer.example",
+        "claims": {"employee_id": "123"}
+      },
+      "resolved_issuer_did": "did:web:issuer.example",
+      "expected_downstream": {
+        "organization_id": "org-1",
+        "issuer_did": "did:web:issuer.example",
+        "claims": {"employee_id": "123"}
+      },
+      "expected_registration": null
+    },
+    {
+      "name": "authorized_wallet_public_key",
+      "input": {
+        "organization_id": "org-1",
+        "issuer_did": "did:web:issuer.example",
+        "authorized_client": {
+          "client_id": "official-wallet",
+          "jwks": {"keys": [{
+            "kty": "EC", "crv": "P-256", "kid": "wallet-key-1",
+            "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "y": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+            "alg": "ES256", "use": "sig", "key_ops": ["verify"]
+          }]}
+        }
+      },
+      "resolved_issuer_did": "did:web:issuer.example",
+      "expected_downstream": {
+        "organization_id": "org-1",
+        "issuer_did": "did:web:issuer.example",
+        "authorized_client_id": "official-wallet"
+      },
+      "expected_registration": {
+        "organization_id": "org-1",
+        "client_id": "official-wallet",
+        "jwks": {"keys": [{
+          "kty": "EC", "crv": "P-256", "kid": "wallet-key-1",
+          "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "y": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+          "alg": "ES256", "use": "sig", "key_ops": ["verify"]
+        }]},
+        "redirect_uris": [],
+        "active": true
+      }
+    }
+  ],
+  "invalid_cases": [
+    {
+      "name": "reserved_custody_selector",
+      "input": {"organization_id": "org-1", "issuer_did": "did:web:issuer.example", "claims": {"issuer_profile_id": "private"}}
+    },
+    {
+      "name": "private_wallet_key",
+      "input": {"organization_id": "org-1", "issuer_did": "did:web:issuer.example", "authorized_client": {"client_id": "wallet", "jwks": {"keys": [{"kty": "EC", "crv": "P-256", "kid": "key-1", "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "y": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "d": "private"}]}}}
+    },
+    {
+      "name": "signed_document",
+      "input": {"organization_id": "org-1", "issuer_did": "did:web:issuer.example", "credential_document": {"@context": ["https://www.w3.org/ns/credentials/v2"], "type": ["VerifiableCredential"], "credentialSubject": {"id": "did:example:holder"}, "proof": {"type": "DataIntegrityProof"}}}
+    }
+  ]
+}

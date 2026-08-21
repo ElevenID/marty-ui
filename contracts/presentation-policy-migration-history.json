@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "legacy_revision_count": 9,
+  "rust_owners": {
+    "schema_and_lossless_record_upgrade": [
+      "cd86d0505323"
+    ],
+    "authoritative_system_catalog": [
+      "20260227_0001",
+      "20260322_0003",
+      "20260501_0004",
+      "20260505_0001",
+      "20260507_0001",
+      "20260507_0002",
+      "20260717_pp_0001",
+      "20260718_pp_0001"
+    ]
+  },
+  "final_state_invariants": [
+    "the presentation policy schema is created idempotently",
+    "legacy rows are upgraded losslessly through the native policy document",
+    "the built-in catalog is reconciled idempotently at startup",
+    "MemberLogin variants require only email",
+    "OpenBadgeLogin uses conformant VC-JWT verification with trust and revocation",
+    "Private Online Age Proof uses mdoc age-over-21 disclosure",
+    "Python Alembic history is not a runtime or migration fallback"
+  ]
+}

@@ -416,6 +416,7 @@ services:
       AUTH_SERVICE_PORT: "8001"
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
       REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL_INTERNAL:-http://keycloak:8080/realms/${KEYCLOAK_REALM:-11id}}
       OIDC_EXTERNAL_ISSUER_URL: ${OIDC_ISSUER_URL_EXTERNAL:-http://localhost:8180/realms/${KEYCLOAK_REALM:-11id}}
@@ -514,12 +515,17 @@ services:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: credential-template
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       CREDENTIAL_TEMPLATE_SERVICE_PORT: "8003"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
       RP_GRPC_TARGET: revocation-profile:9013
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+      MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_MIGRATION_PROFILE: ${MARTY_MIGRATION_PROFILE:-dev}
       CT_GRPC_PORT: "9003"
     ports:
       - "127.0.0.1:8003:8003"
@@ -546,13 +552,16 @@ services:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: trust-profile
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       TRUST_PROFILE_SERVICE_PORT: "8004"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
-      # OpenBao KMS for certificate operations
-      BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
+      MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
+      MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:-}
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
     ports:
       - "127.0.0.1:8004:8004"
     depends_on:
@@ -646,14 +655,17 @@ services:
   compliance-profile:
     build:
       context: .
-      dockerfile: services/Dockerfile
+      dockerfile: rust/services/Dockerfile.ci
+      target: compliance_profile
       args:
-        <<: *marty_service_build_artifacts
-        SERVICE_NAME: compliance-profile
+        MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+        MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
+      ENVIRONMENT: development
       COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
+      RUST_LOG: ${COMPLIANCE_PROFILE_RUST_LOG:-info}
     ports:
       - "127.0.0.1:8008:8008"
     depends_on:
@@ -708,14 +720,17 @@ services:
   deployment-profile:
     build:
       context: .
-      dockerfile: services/Dockerfile
+      dockerfile: rust/services/Dockerfile.ci
+      target: deployment_profile
       args:
-        <<: *marty_service_build_artifacts
-        SERVICE_NAME: deployment-profile
+        MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+        MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
+      ENVIRONMENT: development
       DEPLOYMENT_PROFILE_SERVICE_PORT: "8010"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
+      RUST_LOG: ${DEPLOYMENT_PROFILE_RUST_LOG:-info}
     ports:
       - "127.0.0.1:8010:8010"
     depends_on:
@@ -768,6 +783,7 @@ services:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: flow
     environment:
+      ENVIRONMENT: development
       FLOW_SERVICE_PORT: "8011"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
@@ -776,6 +792,9 @@ services:
       CT_GRPC_TARGET: credential-template:9003
       ISSUANCE_GRPC_TARGET: issuance:9005
       ISSUANCE_SERVICE_URL: http://issuance:8005
+      CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
+      DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
       MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
@@ -1004,10 +1023,11 @@ services:
   device-registration:
     build:
       context: .
-      dockerfile: services/Dockerfile
+      dockerfile: rust/services/Dockerfile.ci
+      target: device_registration
       args:
-        <<: *marty_service_build_artifacts
-        SERVICE_NAME: device_registration
+        MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+        MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
@@ -1060,19 +1080,21 @@ services:
   verification:
     build:
       context: .
-      dockerfile: services/Dockerfile
+      dockerfile: rust/services/Dockerfile.ci
+      target: verification
       args:
-        <<: *marty_service_build_artifacts
-        SERVICE_NAME: verification
+        MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+        MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
+      ENVIRONMENT: development
       VERIFICATION_SERVICE_PORT: "8012"
+      ORG_GRPC_TARGET: organization:9002
+      CT_GRPC_TARGET: credential-template:9003
       PP_GRPC_TARGET: presentation-policy:9009
       VERIF_GRPC_PORT: "9017"
       VERIF_GRPC_ENABLED: "true"
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       REDIS_URL: redis://redis:6379/3
-      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
-      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4317
     ports:
       - "127.0.0.1:8012:8012"

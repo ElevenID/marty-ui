@@ -19,3 +19,19 @@ persistent self-host deployments are not updated by this configuration.
 non-placeholder `GRPC_SERVICE_TOKEN` of at least 32 characters. Missing native
 service authentication therefore fails startup rather than selecting a
 development mode.
+
+Before the one aggregate beta cutover, provision the beta-only workload CA and
+distinct service identities without changing the running stack:
+
+```powershell
+& .\scripts\ensure-beta-grpc-service-token.ps1
+& .\scripts\ensure-beta-workload-identity.ps1
+```
+
+The workload helper writes only ignored local files, records their paths in the
+generated beta environment file, reuses certificates while they remain valid,
+and never prints private keys. The beta release runner requires every Flow
+secret and workload file, verifies each certificate against the configured CA,
+and rejects certificates expiring within one hour before it mutates the beta
+stack. Flow, presentation-policy, auth, applicant and verification receive only
+their own private keys.

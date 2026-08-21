@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "postgres_schema": "organization_service",
+  "migration_head": "rust_organization_0001",
+  "tables": [
+    "organizations",
+    "members",
+    "api_keys",
+    "console_context_preferences",
+    "join_codes",
+    "permissions",
+    "roles",
+    "role_permissions",
+    "member_roles",
+    "policy_sets",
+    "audit_events"
+  ],
+  "required_compatibility_columns": [
+    "organizations.owner_id",
+    "organizations.join_mechanism",
+    "organizations.plan",
+    "members.user_id",
+    "api_keys.scope_type",
+    "api_keys.deployment_profile_id",
+    "api_keys.enabled",
+    "api_keys.updated_at",
+    "roles.is_default_for_new_members",
+    "policy_sets.cedar_schema_version",
+    "audit_events.metadata"
+  ],
+  "repository_operations": [
+    "organization CRUD and discoverable search",
+    "member CRUD by id, tenant, user, and case-insensitive email",
+    "API-key CRUD by id, tenant, and hash including MIP scope metadata",
+    "console-context preference upsert by user",
+    "join-code CRUD by code and tenant",
+    "permission lookup and role CRUD",
+    "atomic member-role replacement and idempotent assignment",
+    "tenant-bound policy-set CRUD and status filtering",
+    "tenant-bound audit persistence, filtering, and pagination"
+  ],
+  "invariants": [
+    "organization slugs are unique",
+    "one non-empty membership exists per organization and user identifier",
+    "API key hashes are unique SHA-256 hex values",
+    "join codes are unique eight-character values with non-negative counters",
+    "role and policy-set names are unique within an organization",
+    "tenant-owned children cascade when an organization is deleted",
+    "migration execution is advisory-locked and idempotent"
+  ]
+}
