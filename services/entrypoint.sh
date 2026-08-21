@@ -39,6 +39,11 @@ if [ "$MODULE_NAME" = "flow" ]; then
 	exec /usr/local/bin/marty-flow
 fi
 
+if [ "$MODULE_NAME" = "organization" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-organization
+fi
+
 echo "Starting service: $SERVICE_NAME (module: $MODULE_NAME)"
 echo "Working directory: $(pwd)"
 echo "Python version: $(python --version)"
