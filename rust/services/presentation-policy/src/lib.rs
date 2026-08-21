@@ -1,4 +1,5 @@
 pub mod application;
+pub mod config;
 pub mod control_plane;
 pub mod domain;
 pub mod grpc_service;
@@ -6,10 +7,15 @@ pub mod http_service;
 pub mod native_kernel;
 pub mod persistence;
 pub mod postgres;
+pub mod runtime;
 pub mod verification;
 
 pub use application::{
     PolicyApplication, PolicyApplicationError, PolicyAuthorization, PolicyRepository,
+};
+pub use config::{
+    PresentationPolicyConfigError, PresentationPolicyServiceConfig, RuntimeEnvironment,
+    WorkloadServerTlsFiles,
 };
 pub use control_plane::NativePresentationControlPlane;
 pub use domain::{
@@ -29,6 +35,7 @@ pub use postgres::{
     migrate_presentation_policy_schema, validate_presentation_policy_schema, PostgresPolicyStore,
     PostgresPolicyStoreError,
 };
+pub use runtime::{PresentationPolicyDependency, PresentationPolicyRuntime};
 pub use verification::{
     CredentialStatusEvidence, CredentialStatusResolver, CredentialVerificationContext,
     CredentialVerificationEvidence, CredentialVerificationKernel, IssuerTrustEvidence,
