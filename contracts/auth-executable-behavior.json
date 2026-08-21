@@ -31,6 +31,7 @@
   ],
   "readiness_only_while_active": true,
   "production_plaintext_grpc": false,
+  "production_workload_transport": "mutual_tls",
   "python_fallback": false,
   "deployment_during_slice": false
 }

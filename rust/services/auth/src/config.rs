@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
 
 use thiserror::Error;
 use url::Url;
@@ -35,6 +35,22 @@ pub struct AuthServiceConfig {
     pub default_organization_slug: String,
     pub default_organization_name: String,
     pub allow_plaintext_grpc: bool,
+    pub workload_client_tls: Option<AuthWorkloadClientTlsFiles>,
+    pub workload_server_tls: Option<AuthWorkloadServerTlsFiles>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthWorkloadClientTlsFiles {
+    pub ca_certificate: PathBuf,
+    pub certificate: PathBuf,
+    pub private_key: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthWorkloadServerTlsFiles {
+    pub ca_certificate: PathBuf,
+    pub certificate: PathBuf,
+    pub private_key: PathBuf,
 }
 
 #[derive(Debug, Error)]
@@ -100,6 +116,7 @@ impl AuthServiceConfig {
         }
         let allow_plaintext_grpc =
             boolean(get("ALLOW_PLAINTEXT_GRPC"), environment != "production")?;
+        let (workload_client_tls, workload_server_tls) = workload_tls(&values, &environment)?;
         let flow_grpc_target = grpc_target(
             get("FLOW_GRPC_TARGET").unwrap_or("flow:9011"),
             allow_plaintext_grpc,
@@ -185,6 +202,8 @@ impl AuthServiceConfig {
             default_organization_slug: get("MARTY_ORG_SLUG").unwrap_or("marty").into(),
             default_organization_name: get("MARTY_ORG_NAME").unwrap_or("Marty").into(),
             allow_plaintext_grpc,
+            workload_client_tls,
+            workload_server_tls,
         };
         if config.http_addr == config.grpc_addr || config.database_max_connections == 0 {
             return Err(invalid(
@@ -283,6 +302,54 @@ fn origin(value: &str, name: &str) -> Result<String, AuthConfigError> {
         )));
     }
     Ok(value.trim_end_matches('/').into())
+}
+
+fn workload_tls(
+    values: &HashMap<String, String>,
+    environment: &str,
+) -> Result<
+    (
+        Option<AuthWorkloadClientTlsFiles>,
+        Option<AuthWorkloadServerTlsFiles>,
+    ),
+    AuthConfigError,
+> {
+    let value = |name: &str| {
+        values
+            .get(name)
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let names = [
+        "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_CLIENT_CERT",
+        "GRPC_WORKLOAD_TLS_CLIENT_KEY",
+        "GRPC_WORKLOAD_TLS_SERVER_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KEY",
+    ];
+    let present = names.iter().filter(|name| value(name).is_some()).count();
+    if present == 0 && environment != "production" {
+        return Ok((None, None));
+    }
+    if present != names.len() {
+        return Err(invalid(
+            "workload TLS requires CA, client certificate/key and server certificate/key",
+        ));
+    }
+    let ca = PathBuf::from(value(names[0]).expect("all workload TLS values checked"));
+    Ok((
+        Some(AuthWorkloadClientTlsFiles {
+            ca_certificate: ca.clone(),
+            certificate: PathBuf::from(value(names[1]).expect("all workload TLS values checked")),
+            private_key: PathBuf::from(value(names[2]).expect("all workload TLS values checked")),
+        }),
+        Some(AuthWorkloadServerTlsFiles {
+            ca_certificate: ca,
+            certificate: PathBuf::from(value(names[3]).expect("all workload TLS values checked")),
+            private_key: PathBuf::from(value(names[4]).expect("all workload TLS values checked")),
+        }),
+    ))
 }
 
 fn invalid(message: impl Into<String>) -> AuthConfigError {

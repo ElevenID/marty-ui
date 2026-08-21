@@ -74,7 +74,30 @@ fn required_settings_secrets_and_production_transport_fail_closed() {
     production.insert("FLOW_GRPC_TARGET".into(), "https://flow:9011".into());
     production.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
     production.insert("ES_GRPC_TARGET".into(), "https://event-stream:9015".into());
+    production.extend([
+        ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/secrets/ca.pem".into()),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_CERT".into(),
+            "/secrets/client.pem".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KEY".into(),
+            "/secrets/client-key.pem".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_CERT".into(),
+            "/secrets/server.pem".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KEY".into(),
+            "/secrets/server-key.pem".into(),
+        ),
+    ]);
     assert!(AuthServiceConfig::from_values(production).is_ok());
+
+    let mut partial = baseline("beta");
+    partial.insert("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/secrets/ca.pem".into());
+    assert!(AuthServiceConfig::from_values(partial).is_err());
 }
 
 #[test]
