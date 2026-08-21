@@ -64,7 +64,11 @@ fn rust_catalog_preserves_every_intended_system_entry_and_capability() {
         .find(|item| item.id == "wr-apple-001")
         .unwrap();
     assert!(apple.supports_digital_credentials);
+    assert!(!apple.supports_deeplink);
+    assert!(!apple.is_active);
     assert_eq!(apple.supported_protocols, ["APPLE_WALLET"]);
+    let generic = wallets.iter().find(|item| item.id == "wr-default").unwrap();
+    assert_eq!(generic.supported_formats, ["sd_jwt_vc", "jwt_vc"]);
     let didcomm = wallets
         .iter()
         .find(|item| item.id == "wr-didcomm-001")
@@ -84,5 +88,8 @@ fn rust_catalog_preserves_every_intended_system_entry_and_capability() {
             expected["requires_consent"].as_bool().unwrap_or(false)
         );
     }
-    assert_eq!(fixture["seed_policy"], "insert_missing_preserve_existing");
+    assert_eq!(
+        fixture["seed_policy"],
+        "authoritative_system_reconcile_preserve_tenant_overrides"
+    );
 }

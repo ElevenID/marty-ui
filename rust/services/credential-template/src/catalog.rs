@@ -11,7 +11,9 @@ use crate::{
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CatalogSeedSummary {
     pub wallets_inserted: usize,
+    pub wallets_reconciled: usize,
     pub destinations_inserted: usize,
+    pub destinations_reconciled: usize,
 }
 
 pub fn system_wallet_catalog(now: DateTime<Utc>) -> Vec<WalletRegistryEntry> {
@@ -58,7 +60,8 @@ pub fn system_wallet_catalog(now: DateTime<Utc>) -> Vec<WalletRegistryEntry> {
             )
         },
         WalletRegistryEntry {
-            supported_formats: strings(&["sd_jwt_vc", "jwt_vc", "mdoc"]),
+            description: Some("Generic OID4VCI handoff for configured and tested SD-JWT VC or JWT VC wallets; this entry does not assert compatibility with every wallet or mdoc profile.".to_owned()),
+            supported_formats: strings(&["sd_jwt_vc", "jwt_vc"]),
             platforms: strings(&["ios", "android", "web"]),
             ..wallet(
                 "wr-default",
@@ -158,14 +161,15 @@ pub fn system_wallet_catalog(now: DateTime<Utc>) -> Vec<WalletRegistryEntry> {
         WalletRegistryEntry {
             logo_url: Some("https://www.apple.com/favicon.ico".to_owned()),
             supported_formats: strings(&["mso_mdoc"]),
+            specifications: strings(&["ISO 18013-5", "Verify with Wallet"]),
             supported_protocols: strings(&["APPLE_WALLET"]),
             platforms: strings(&["ios"]),
-            deep_link_template: "openid-credential-offer://?credential_offer={offer}".to_owned(),
-            routing_templates: string_map(&[
-                ("generic", "openid-credential-offer://?credential_offer={offer_encoded}"),
-                ("ios", "openid-credential-offer://?credential_offer={offer_encoded}"),
-            ]),
+            deep_link_template: String::new(),
+            routing_templates: BTreeMap::new(),
+            supports_deeplink: false,
             supports_digital_credentials: true,
+            is_active: false,
+            description: Some("Inactive compatibility placeholder. Apple Wallet identity provisioning and Verify with Wallet presentation are program-specific paths and are not generic OID4VCI compatibility.".to_owned()),
             docs_url: Some("https://developer.apple.com/documentation/passkit/wallet".to_owned()),
             ..wallet(
                 "wr-apple-001",
@@ -316,15 +320,19 @@ pub async fn seed_system_catalog(
     let mut summary = CatalogSeedSummary::default();
     for wallet in system_wallet_catalog(now) {
         if store.wallet_by_id(&wallet.id).await?.is_none() {
-            store.save_wallet(&wallet).await?;
             summary.wallets_inserted += 1;
+        } else {
+            summary.wallets_reconciled += 1;
         }
+        store.save_wallet(&wallet).await?;
     }
     for destination in system_delivery_destination_catalog(now) {
         if store.destination_by_id(&destination.id).await?.is_none() {
-            store.save_destination(&destination).await?;
             summary.destinations_inserted += 1;
+        } else {
+            summary.destinations_reconciled += 1;
         }
+        store.save_destination(&destination).await?;
     }
     Ok(summary)
 }

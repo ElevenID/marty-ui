@@ -24,7 +24,6 @@ fn migration_source_owns_the_complete_non_destructive_schema() {
     let uppercase = migration.to_uppercase();
     assert!(!uppercase.contains("DROP TABLE"));
     assert!(!uppercase.contains("DROP SCHEMA"));
-    assert!(!uppercase.contains("DROP COLUMN"));
     assert!(!migration.contains("pg_advisory"));
     assert!(
         include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/migration.rs"))
@@ -35,6 +34,25 @@ fn migration_source_owns_the_complete_non_destructive_schema() {
             .as_str()
             .expect("migration head must be a string")
     ));
+    let reconciliation = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/migrations/0002_legacy_data_reconciliation.sql"
+    ));
+    assert!(reconciliation.contains("rust_credential_template_0002"));
+    assert!(reconciliation.contains("Legacy mDL Issuance Prototype"));
+    assert!(reconciliation.contains("Legacy ePassport Prototype"));
+    assert!(reconciliation.contains("ALTER COLUMN compliance_profile_id SET NOT NULL"));
+    assert!(reconciliation.contains("OpenBadgeCredential#jwt-vc"));
+    for retired in [
+        "auto_generate_artifacts",
+        "issuer_certificate_chain_pem",
+        "remote_signing_config",
+        "issuer_key_id",
+        "key_access_mode",
+        "issuer_profile_id",
+    ] {
+        assert!(migration.contains(&format!("DROP COLUMN IF EXISTS {retired}")));
+    }
 
     let expected_tables: BTreeSet<_> = fixture["tables"]
         .as_array()

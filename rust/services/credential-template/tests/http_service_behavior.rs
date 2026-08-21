@@ -523,7 +523,13 @@ async fn wallet_registry_routes_preserve_catalog_tenancy_routing_and_crud_behavi
         ))
         .await
         .unwrap();
-    assert_eq!(json_body(response).await.as_array().unwrap().len(), 10);
+    assert_eq!(
+        json_body(response).await.as_array().unwrap().len(),
+        contract["catalog"]["active_global_wallets"]
+            .as_u64()
+            .unwrap() as usize
+            + 1
+    );
 
     let response = app
         .clone()

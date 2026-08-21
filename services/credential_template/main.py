@@ -517,10 +517,10 @@ SYSTEM_WALLET_CATALOG: tuple[WalletRegistryEntry, ...] = (
     WalletRegistryEntry(
         id="wr-default",
         name="Any OID4VCI Wallet",
-        description="Generic OID4VCI-compatible wallet entry.",
+        description="Generic OID4VCI handoff for configured and tested SD-JWT VC or JWT VC wallets; this entry does not assert compatibility with every wallet or mdoc profile.",
         wallet_apps=["Any OID4VCI Wallet"],
         specifications=["OID4VCI"],
-        supported_formats=["sd_jwt_vc", "jwt_vc", "mdoc"],
+        supported_formats=["sd_jwt_vc", "jwt_vc"],
         platforms=["ios", "android", "web"],
     ),
     WalletRegistryEntry(
@@ -594,19 +594,18 @@ SYSTEM_WALLET_CATALOG: tuple[WalletRegistryEntry, ...] = (
     WalletRegistryEntry(
         id="wr-apple-001",
         name="Apple Wallet",
-        description="Apple Wallet via Verify with Wallet / ISO 18013-5 issuance.",
+        description="Inactive compatibility placeholder. Apple Wallet identity provisioning and Verify with Wallet presentation are program-specific paths and are not generic OID4VCI compatibility.",
         wallet_apps=["Apple Wallet"],
-        specifications=["OID4VCI", "ISO 18013-5"],
+        specifications=["ISO 18013-5", "Verify with Wallet"],
         logo_url="https://www.apple.com/favicon.ico",
         supported_formats=["mso_mdoc"],
         supported_protocols=["APPLE_WALLET"],
         platforms=["ios"],
-        deep_link_template="openid-credential-offer://?credential_offer={offer}",
-        routing_templates={
-            "generic": "openid-credential-offer://?credential_offer={offer_encoded}",
-            "ios": "openid-credential-offer://?credential_offer={offer_encoded}",
-        },
+        deep_link_template="",
+        routing_templates={},
+        supports_deeplink=False,
         supports_digital_credentials=True,
+        is_active=False,
         docs_url="https://developer.apple.com/documentation/passkit/wallet",
     ),
     WalletRegistryEntry(

@@ -1572,17 +1572,41 @@ The MMF transactional-outbox implementation remains the single shared Rust
 implementation for services that own event behavior; Credential Template will
 adopt it only with a documented event schema and atomic repository operation.
 
-The Rust crate now passes 38 HTTP, gRPC, application, control-plane, runtime,
+The Rust crate now passes 37 HTTP, gRPC, application, control-plane, runtime,
 configuration, wallet, domain, lifecycle, catalog, surface, migration,
 persistence and configured-PostgreSQL tests. The focused surviving Python
 control-plane/service oracle passes 75 tests; formatting and strict Clippy
 pass. The configured PostgreSQL tests run when
-`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is supplied. Remaining work is to
-translate all final-state guarantees from the 45 historical Python Alembic
-revisions into idempotent Rust data reconciliation, add the native container
-and deployment packaging without deploying it, run configured acceptance and
-workspace consumer gates, then immediately delete the Python implementation,
-migrations and implementation-specific tests. No beta deployment has occurred.
+`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is supplied.
+
+The historical migration translation is now explicit rather than inferred.
+`credential-template-migration-history.json` assigns each of the 45 Python
+Alembic revisions to exactly one Rust owner: final schema/retired columns,
+authoritative system catalog, legacy template reconciliation or history-only
+merge. Rust migration head `rust_credential_template_0002` applies one-way,
+idempotent repairs for compliance references, conformant Open Badge VC-JWT,
+obsolete Spruce selectors and retired ICAO/mDL prototypes. Environment-aware
+Rust reconciliation preserves public VCT and issuer-DID backfills, sole-active
+revocation binding, fail-closed deprecation and the self-host login-only
+catalog. Schema validation rejects every retired cached custody column and a
+nullable compliance dependency.
+
+This audit caught stale in-memory catalog behavior that had diverged from the
+released safety migration: Apple is again an inactive compatibility
+placeholder with no generic deep link, and the generic OID4VCI wallet no longer
+claims unverified mdoc support. The Rust system catalog is authoritative for
+immutable system IDs on every startup while organization overrides remain
+untouched. Both surviving Python and Rust behavior now consume the corrected
+fixtures; all 178 Python service tests and all 37 Rust tests pass, as do strict
+Clippy and formatting. Docker/PostgreSQL configured execution is still gated
+because this workstation cannot access the Docker API and no
+`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is configured.
+
+Remaining work is to preserve fresh-install creation of the final Marty login
+badge, add native container/deployment packaging without deploying it, run
+configured database/container and workspace-consumer acceptance, then
+immediately delete the Python implementation, migration tree and
+implementation-specific tests. No beta deployment has occurred.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

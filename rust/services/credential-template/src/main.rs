@@ -10,7 +10,10 @@ use marty_credential_template::{
     credential_template_proto::credential_template_service_server::CredentialTemplateServiceServer,
     grpc_service::CredentialTemplateGrpcService,
     http_service::{credential_template_router, CredentialTemplateHttpState},
-    migration::migrate_credential_template_schema,
+    migration::{
+        migrate_credential_template_schema, reconcile_credential_template_data,
+        CredentialTemplateDataReconciliationConfig,
+    },
     registry_application::{
         CredentialTemplateRegistryApplication, CredentialTemplateRegistryRepository,
     },
@@ -48,12 +51,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
     runtime.mark_healthy(CredentialTemplateDependency::Database)?;
 
     migrate_credential_template_schema(&pool).await?;
+    let public_hostname = config
+        .public_api_origin
+        .host_str()
+        .ok_or("PUBLIC_API_URL must include a hostname")?
+        .to_owned();
+    let reconciliation = reconcile_credential_template_data(
+        &pool,
+        &CredentialTemplateDataReconciliationConfig {
+            marty_organization_id: config.marty_organization_id.to_string(),
+            public_api_origin: config.public_api_origin.to_string(),
+            public_hostname,
+            selfhost_production: config.migration_profile == "selfhost-production",
+        },
+    )
+    .await?;
+    info!(
+        public_vcts_repaired = reconciliation.public_vcts_repaired,
+        issuer_dids_repaired = reconciliation.issuer_dids_repaired,
+        revocation_profiles_repaired = reconciliation.revocation_profiles_repaired,
+        templates_deprecated = reconciliation.templates_deprecated,
+        selfhost_templates_archived = reconciliation.selfhost_templates_archived,
+        "Credential Template legacy data reconciled"
+    );
     runtime.mark_healthy(CredentialTemplateDependency::Schema)?;
     let store = Arc::new(PostgresCredentialTemplateStore::new(pool));
     let seeded = seed_system_catalog(&store, chrono::Utc::now()).await?;
     info!(
         wallets_inserted = seeded.wallets_inserted,
+        wallets_reconciled = seeded.wallets_reconciled,
         destinations_inserted = seeded.destinations_inserted,
+        destinations_reconciled = seeded.destinations_reconciled,
         "Credential Template system catalog reconciled"
     );
     runtime.mark_healthy(CredentialTemplateDependency::SystemCatalog)?;

@@ -46,6 +46,17 @@ ALTER TABLE credential_template_service.credential_templates
     ADD COLUMN IF NOT EXISTS issuer_did text,
     ADD COLUMN IF NOT EXISTS issuance_protocol varchar(64) NOT NULL DEFAULT 'oid4vci';
 
+-- Cached custody routing was retired before the Rust cutover.  A database that
+-- arrives from any older Python head must converge on the same live-DID-only
+-- model as a fresh Rust database.
+ALTER TABLE credential_template_service.credential_templates
+    DROP COLUMN IF EXISTS auto_generate_artifacts,
+    DROP COLUMN IF EXISTS issuer_certificate_chain_pem,
+    DROP COLUMN IF EXISTS remote_signing_config,
+    DROP COLUMN IF EXISTS issuer_key_id,
+    DROP COLUMN IF EXISTS key_access_mode,
+    DROP COLUMN IF EXISTS issuer_profile_id;
+
 CREATE INDEX IF NOT EXISTS ix_credential_template_service_credential_templates_organization_id
     ON credential_template_service.credential_templates(organization_id);
 CREATE INDEX IF NOT EXISTS ix_credential_template_service_credential_templates_status

@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, fs, net::SocketAddr, time::Duration};
 
 use thiserror::Error;
 use url::Url;
+use uuid::Uuid;
 
 use crate::RuntimeEnvironment;
 
@@ -18,6 +19,9 @@ pub struct CredentialTemplateServiceConfig {
     pub signing_keys_internal_url: String,
     pub signing_keys_internal_api_key: Option<String>,
     pub trust_profile_service_url: String,
+    pub public_api_origin: Url,
+    pub marty_organization_id: Uuid,
+    pub migration_profile: String,
     pub dependency_timeout: Duration,
     pub release_version: String,
     pub build_revision: String,
@@ -93,6 +97,20 @@ impl CredentialTemplateServiceConfig {
                 16,
             )?;
         }
+        let public_api_origin = public_origin(&values, environment)?;
+        let marty_organization_id = value(&values, "MARTY_ORG_ID")
+            .unwrap_or("00000000-0000-0000-0000-000000000001")
+            .parse()
+            .map_err(|_| invalid("MARTY_ORG_ID"))?;
+        let migration_profile = value(&values, "MARTY_MIGRATION_PROFILE")
+            .unwrap_or("dev")
+            .to_ascii_lowercase();
+        if !matches!(
+            migration_profile.as_str(),
+            "dev" | "beta" | "prod" | "production" | "selfhost-production" | "test"
+        ) {
+            return Err(invalid("MARTY_MIGRATION_PROFILE"));
+        }
 
         Ok(Self {
             environment,
@@ -114,6 +132,9 @@ impl CredentialTemplateServiceConfig {
                 "TRUST_PROFILE_SERVICE_URL",
                 "http://trust-profile:8004",
             )?,
+            public_api_origin,
+            marty_organization_id,
+            migration_profile,
             dependency_timeout: Duration::from_secs(number(
                 &values,
                 "CREDENTIAL_TEMPLATE_DEPENDENCY_TIMEOUT_SECONDS",
@@ -214,6 +235,36 @@ fn http_url(
     Ok(parsed.as_str().trim_end_matches('/').to_owned())
 }
 
+fn public_origin(
+    values: &BTreeMap<String, String>,
+    environment: RuntimeEnvironment,
+) -> Result<Url, CredentialTemplateConfigError> {
+    let configured = ["PUBLIC_API_URL", "ISSUER_BASE_URL", "PUBLIC_BASE_URL"]
+        .into_iter()
+        .find_map(|name| value(values, name));
+    let raw = match configured {
+        Some(value) => value,
+        None if environment_is_deployed(environment) => {
+            return Err(CredentialTemplateConfigError::Missing {
+                name: "PUBLIC_API_URL",
+            })
+        }
+        None => "http://localhost:8000",
+    };
+    let parsed = Url::parse(raw).map_err(|_| invalid("PUBLIC_API_URL"))?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || matches!(parsed.host_str(), Some("gateway" | "marty.example"))
+        || (environment_is_deployed(environment) && parsed.scheme() != "https")
+    {
+        return Err(invalid("PUBLIC_API_URL"));
+    }
+    Ok(parsed)
+}
+
 fn number<T>(
     values: &BTreeMap<String, String>,
     name: &'static str,
@@ -285,9 +336,16 @@ mod tests {
         let mut token_only = beta;
         token_only.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
         assert_eq!(
-            CredentialTemplateServiceConfig::from_values(token_only).unwrap_err(),
+            CredentialTemplateServiceConfig::from_values(token_only.clone()).unwrap_err(),
             CredentialTemplateConfigError::Missing {
                 name: "SIGNING_KEYS_INTERNAL_API_KEY"
+            }
+        );
+        token_only.insert("SIGNING_KEYS_INTERNAL_API_KEY".into(), "k".repeat(16));
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(token_only).unwrap_err(),
+            CredentialTemplateConfigError::Missing {
+                name: "PUBLIC_API_URL"
             }
         );
     }
@@ -304,5 +362,11 @@ mod tests {
         let mut shared = values("development");
         shared.insert("CREDENTIAL_TEMPLATE_SERVICE_PORT".into(), "9003".into());
         assert!(CredentialTemplateServiceConfig::from_values(shared).is_err());
+
+        let mut insecure_beta = values("beta");
+        insecure_beta.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+        insecure_beta.insert("SIGNING_KEYS_INTERNAL_API_KEY".into(), "k".repeat(16));
+        insecure_beta.insert("PUBLIC_API_URL".into(), "http://beta.example".into());
+        assert!(CredentialTemplateServiceConfig::from_values(insecure_beta).is_err());
     }
 }
