@@ -1671,11 +1671,16 @@ identities, protocol-first required-claim bridging, holder-binding
 normalization, paging and response projections without exposing internal IDs.
 Raw tokens can enter the decision kernel only through a required verification
 orchestrator that supplies cryptographically verified facts; an unavailable
-or malformed verifier fails closed. The complete crate currently has 12 green
-behavioral and persistence tests and passes strict Clippy.
+or malformed verifier fails closed. All ten declared gRPC methods now use the
+same application and verification layers, require authenticated service and
+principal identities, preserve paging/filtering and expose complete nested
+policy data. The Rust gRPC create path also rebuilds credential and alternative
+requirements that the superseded Python adapter silently ignored. The complete
+crate currently has 14 green behavioral and persistence tests and passes strict
+Clippy.
 
-Next work is the concrete Rust verification/trust/status orchestrator, the ten
-gRPC methods, service runtime/configuration and packaging. Configured
+Next work is the concrete Rust verification/trust/status orchestrator, service
+runtime/configuration and packaging. Configured
 PostgreSQL, container and external-provider acceptance then gate immediate
 deletion of the Python service and its nine revisions. No beta deployment has
 occurred; this remains part of the single aggregate wave-three beta update.

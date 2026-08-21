@@ -93,8 +93,8 @@ pub fn presentation_policy_router(state: PresentationPolicyHttpState) -> Router 
 
 #[derive(Debug)]
 pub struct PresentationPolicyHttpError {
-    status: StatusCode,
-    detail: String,
+    pub(crate) status: StatusCode,
+    pub(crate) detail: String,
 }
 
 impl IntoResponse for PresentationPolicyHttpError {
@@ -475,6 +475,14 @@ async fn evaluate(
     policy: &PresentationPolicy,
     request: &EvaluatePresentationRequest,
 ) -> Result<Value, PresentationPolicyHttpError> {
+    evaluate_policy(state.verification.as_ref(), policy, request).await
+}
+
+pub(crate) async fn evaluate_policy(
+    verification: &dyn PresentationVerificationOrchestrator,
+    policy: &PresentationPolicy,
+    request: &EvaluatePresentationRequest,
+) -> Result<Value, PresentationPolicyHttpError> {
     if policy.status != PolicyStatus::Active {
         return Err(bad_request(&format!(
             "Policy is not active (status: {})",
@@ -482,8 +490,7 @@ async fn evaluate(
         )));
     }
     validate_evaluation_request(request)?;
-    let mut verified = state
-        .verification
+    let mut verified = verification
         .verify(policy, request)
         .await
         .map_err(verification_error)?;
@@ -561,6 +568,15 @@ fn build_policy(
     Ok(policy)
 }
 
+pub(crate) fn build_policy_from_transport(
+    value: Value,
+    now: chrono::DateTime<Utc>,
+) -> Result<PresentationPolicy, PresentationPolicyHttpError> {
+    let input = serde_json::from_value(value)
+        .map_err(|error| unprocessable(&format!("invalid policy request: {error}")))?;
+    build_policy(input, now)
+}
+
 fn apply_update(
     policy: &mut PresentationPolicy,
     input: UpdatePolicyRequest,
@@ -631,6 +647,16 @@ fn apply_update(
         && policy.alternative_requirements.is_empty();
     policy.updated_at = now;
     policy.validate().map_err(domain_error)
+}
+
+pub(crate) fn apply_update_from_transport(
+    policy: &mut PresentationPolicy,
+    value: Value,
+    now: chrono::DateTime<Utc>,
+) -> Result<(), PresentationPolicyHttpError> {
+    let input = serde_json::from_value(value)
+        .map_err(|error| unprocessable(&format!("invalid policy update: {error}")))?;
+    apply_update(policy, input, now)
 }
 
 impl DisplayMetadataRequest {
@@ -781,7 +807,7 @@ fn synthetic_requirement(
     })
 }
 
-fn policy_response(policy: &PresentationPolicy) -> Value {
+pub(crate) fn policy_response(policy: &PresentationPolicy) -> Value {
     without_nulls(json!({
         "id": policy.id,
         "organization_id": policy.organization_id,

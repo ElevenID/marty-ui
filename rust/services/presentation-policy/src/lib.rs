@@ -1,5 +1,6 @@
 pub mod application;
 pub mod domain;
+pub mod grpc_service;
 pub mod http_service;
 pub mod persistence;
 pub mod postgres;
@@ -13,6 +14,7 @@ pub use domain::{
     HolderBinding, IssuerConstraints, PolicyDomainError, PolicyStatus, PresentationPolicy,
     RequestPurpose, RequestedClaim,
 };
+pub use grpc_service::PresentationPolicyGrpcService;
 pub use http_service::{
     presentation_policy_router, EvaluatePresentationRequest, PresentationPolicyHttpState,
     PresentationVerificationError, PresentationVerificationOrchestrator,
@@ -22,6 +24,10 @@ pub use postgres::{
     migrate_presentation_policy_schema, validate_presentation_policy_schema, PostgresPolicyStore,
     PostgresPolicyStoreError,
 };
+
+pub mod presentation_policy_proto {
+    tonic::include_proto!("marty.ui.presentation_policy.v1");
+}
 
 pub const HTTP_OPERATIONS: [(&str, &str); 10] = [
     ("POST", "/v1/presentation-policies"),
