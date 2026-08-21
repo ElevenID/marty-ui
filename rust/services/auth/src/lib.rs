@@ -4,6 +4,7 @@ pub mod application;
 pub mod cache_repository;
 pub mod credential_login;
 pub mod domain;
+pub mod keycloak;
 pub mod oidc;
 pub mod provisioning;
 
@@ -14,5 +15,6 @@ pub use domain::{
     generate_pkce_pair, pkce_s256_challenge, AuthenticatedUser, ImpersonationContext, OidcUserInfo,
     OidcValidatedIdentity, PkcePair, PkceState, Session, SessionSpec, SessionStatus, UserType,
 };
+pub use keycloak::*;
 pub use oidc::*;
 pub use provisioning::*;

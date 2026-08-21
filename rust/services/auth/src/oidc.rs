@@ -137,6 +137,15 @@ pub trait OidcHttpClient: Send + Sync {
     ) -> Result<Value, PortError>;
 }
 
+#[async_trait]
+pub trait ExchangedTokenValidator: Send + Sync {
+    async fn validate_exchanged_identity(
+        &self,
+        tokens: &Value,
+        expected_audience: &str,
+    ) -> Result<Option<OidcValidatedIdentity>, PortError>;
+}
+
 #[derive(Clone)]
 pub struct ReqwestOidcHttpClient {
     client: reqwest::Client,
@@ -569,5 +578,17 @@ impl OidcProvider for KeycloakOidcProvider {
             );
         }
         Ok(Some(url.into()))
+    }
+}
+
+#[async_trait]
+impl ExchangedTokenValidator for KeycloakOidcProvider {
+    async fn validate_exchanged_identity(
+        &self,
+        tokens: &Value,
+        expected_audience: &str,
+    ) -> Result<Option<OidcValidatedIdentity>, PortError> {
+        self.validate_exchanged_tokens(tokens, expected_audience)
+            .await
     }
 }
