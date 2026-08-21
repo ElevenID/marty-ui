@@ -1,5 +1,5 @@
 [workspace]
-members = ["services/applicant", "services/auth", "services/credential-template", "services/event-stream", "services/flow", "services/gateway", "services/notification", "services/organization", "services/presentation-policy", "services/revocation-profile", "services/signing-keys", "services/trust-profile"]
+members = ["services/applicant", "services/auth", "services/credential-template", "services/device-registration", "services/event-stream", "services/flow", "services/gateway", "services/notification", "services/organization", "services/presentation-policy", "services/revocation-profile", "services/signing-keys", "services/trust-profile"]
 resolver = "2"
 
 [workspace.package]

@@ -4282,6 +4282,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-device-registration"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "marty-verification",
+ "prost",
+ "protoc-bin-vendored",
+ "rand 0.8.7",
+ "rand 0.9.5",
+ "redis",
+ "rsa",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
+ "thiserror 2.0.20",
+ "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "marty-didcomm"
 version = "0.1.57"
 source = "git+https://github.com/ElevenID/marty-core?rev=54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8#54ff554906f5fa2791b7fcb6a5965d7e8db8b0e8"
