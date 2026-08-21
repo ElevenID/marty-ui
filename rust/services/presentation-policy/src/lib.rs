@@ -4,6 +4,7 @@ pub mod grpc_service;
 pub mod http_service;
 pub mod persistence;
 pub mod postgres;
+pub mod verification;
 
 pub use application::{
     PolicyApplication, PolicyApplicationError, PolicyAuthorization, PolicyRepository,
@@ -23,6 +24,11 @@ pub use persistence::{PolicyRecord, PolicyRecordError, PRESENTATION_POLICY_MIGRA
 pub use postgres::{
     migrate_presentation_policy_schema, validate_presentation_policy_schema, PostgresPolicyStore,
     PostgresPolicyStoreError,
+};
+pub use verification::{
+    CredentialStatusEvidence, CredentialStatusResolver, CredentialVerificationContext,
+    CredentialVerificationEvidence, CredentialVerificationKernel, IssuerTrustEvidence,
+    PresentationTrustResolver, ResolvedTrustProfile, VerifiedFactsOrchestrator,
 };
 
 pub mod presentation_policy_proto {
