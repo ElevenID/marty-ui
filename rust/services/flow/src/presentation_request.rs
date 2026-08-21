@@ -6,7 +6,10 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{CredentialTemplateReference, FlowProviderError, FlowProviderRegistry};
+use crate::{
+    CredentialTemplateReference, FlowProviderError, FlowProviderRegistry,
+    PresentationPolicyReference,
+};
 
 #[derive(Debug, Error)]
 pub enum FlowPresentationRequestError {
@@ -14,17 +17,31 @@ pub enum FlowPresentationRequestError {
     Provider(#[from] FlowProviderError),
     #[error("FLOW.PRESENTATION_REQUEST_INVALID_POLICY: {0}")]
     InvalidPolicy(String),
+    #[error("FLOW.PRESENTATION_REQUEST_POLICY_NOT_VISIBLE")]
+    PolicyNotVisible,
+    #[error("FLOW.PRESENTATION_REQUEST_POLICY_INACTIVE")]
+    PolicyInactive,
     #[error("FLOW.PRESENTATION_REQUEST_INVALID_TEMPLATE: {0}")]
     InvalidTemplate(String),
+    #[error("FLOW.PRESENTATION_REQUEST_TEMPLATE_NOT_VISIBLE")]
+    TemplateNotVisible,
+    #[error("FLOW.PRESENTATION_REQUEST_TEMPLATE_INACTIVE")]
+    TemplateInactive,
     #[error("FLOW.PRESENTATION_REQUEST_NATIVE: {0}")]
     Native(String),
 }
 
-pub async fn build_flow_presentation_request(
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedPresentationPolicy {
+    pub policy: PresentationPolicyReference,
+    pub requirements: Vec<(Value, CredentialTemplateReference)>,
+}
+
+pub async fn resolve_flow_presentation_policy(
     providers: &FlowProviderRegistry,
     presentation_policy_id: &str,
     organization_id: &str,
-) -> Result<PresentationRequestArtifacts, FlowPresentationRequestError> {
+) -> Result<ResolvedPresentationPolicy, FlowPresentationRequestError> {
     if presentation_policy_id.trim().is_empty() || organization_id.trim().is_empty() {
         return Err(FlowPresentationRequestError::InvalidPolicy(
             "policy and organization are required".into(),
@@ -45,13 +62,15 @@ pub async fn build_flow_presentation_request(
                 provider: "credential_template",
             })?;
     let policy = policy_provider.get_policy(presentation_policy_id).await?;
-    if policy.id != presentation_policy_id
-        || policy.organization_id != organization_id
-        || !policy.status.eq_ignore_ascii_case("active")
-        || policy.credential_requirements.is_empty()
-    {
+    if policy.id != presentation_policy_id || policy.organization_id != organization_id {
+        return Err(FlowPresentationRequestError::PolicyNotVisible);
+    }
+    if !policy.status.eq_ignore_ascii_case("active") {
+        return Err(FlowPresentationRequestError::PolicyInactive);
+    }
+    if policy.credential_requirements.is_empty() {
         return Err(FlowPresentationRequestError::InvalidPolicy(
-            "policy identity, tenant, status, or requirements are invalid".into(),
+            "policy has no credential requirements".into(),
         ));
     }
     let mut requirements = Vec::with_capacity(policy.credential_requirements.len());
@@ -72,6 +91,36 @@ pub async fn build_flow_presentation_request(
             })?;
         let template = template_provider.get_template(template_id).await?;
         validate_template(&template, template_id, organization_id)?;
+        requirements.push((requirement.clone(), template));
+    }
+    Ok(ResolvedPresentationPolicy {
+        policy,
+        requirements,
+    })
+}
+
+pub async fn build_flow_presentation_request(
+    providers: &FlowProviderRegistry,
+    presentation_policy_id: &str,
+    organization_id: &str,
+) -> Result<PresentationRequestArtifacts, FlowPresentationRequestError> {
+    let template_provider =
+        providers
+            .credential_template
+            .as_ref()
+            .ok_or(FlowProviderError::Unavailable {
+                provider: "credential_template",
+            })?;
+    let resolved =
+        resolve_flow_presentation_policy(providers, presentation_policy_id, organization_id)
+            .await?;
+    let mut requirements = Vec::with_capacity(resolved.requirements.len());
+    for (index, (requirement, template)) in resolved.requirements.iter().enumerate() {
+        let object = requirement.as_object().ok_or_else(|| {
+            FlowPresentationRequestError::InvalidPolicy(format!(
+                "requirement {index} must be an object"
+            ))
+        })?;
         requirements.push(PresentationRequirementInput {
             id: optional_string(object.get("id")),
             display_name: optional_string(object.get("display_name")),
@@ -111,11 +160,13 @@ fn validate_template(
     template_id: &str,
     organization_id: &str,
 ) -> Result<(), FlowPresentationRequestError> {
-    if template.id != template_id
-        || template.organization_id != organization_id
-        || !template.status.eq_ignore_ascii_case("active")
-        || template.supported_formats.is_empty()
-    {
+    if template.id != template_id || template.organization_id != organization_id {
+        return Err(FlowPresentationRequestError::TemplateNotVisible);
+    }
+    if !template.status.eq_ignore_ascii_case("active") {
+        return Err(FlowPresentationRequestError::TemplateInactive);
+    }
+    if template.supported_formats.is_empty() {
         return Err(FlowPresentationRequestError::InvalidTemplate(
             template_id.into(),
         ));
