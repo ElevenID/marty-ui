@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURE = ROOT / "contracts" / "credential-template-system-catalog.json"
 WALLET_FIXTURE = ROOT / "contracts" / "credential-template-wallet-compatibility.json"
+REGISTRY_FIXTURE = ROOT / "contracts" / "credential-template-registry-behavior.json"
 MAIN = ROOT / "services" / "credential_template" / "main.py"
 
 
@@ -64,3 +65,26 @@ def test_python_derived_wallet_profiles_match_the_language_neutral_contract() ->
         if profile["format"] != "VDS_NC"
     }
     assert actual_names == expected_names
+
+
+def test_python_registry_behavior_matches_the_language_neutral_contract() -> None:
+    from services.credential_template import main as credential_template
+
+    contract = json.loads(REGISTRY_FIXTURE.read_text(encoding="utf-8"))
+    active_wallets = [
+        wallet
+        for wallet in credential_template.SYSTEM_WALLET_CATALOG
+        if wallet.is_active
+    ]
+    assert len(credential_template.SYSTEM_WALLET_CATALOG) == contract["catalog"][
+        "total_global_wallets"
+    ]
+    assert len(active_wallets) == contract["catalog"]["active_global_wallets"]
+    assert len(credential_template.SYSTEM_DELIVERY_DESTINATION_CATALOG) == contract[
+        "catalog"
+    ]["system_delivery_destinations"]
+    for source, expected in (
+        contract["normalization"]["authorization_code_protocol"],
+        contract["normalization"]["pre_authorized_protocol"],
+    ):
+        assert credential_template._normalize_issuance_protocol(source) == expected

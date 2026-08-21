@@ -1489,15 +1489,32 @@ stable ID tie-breaker, and preserve exact unique APPEND versus component-wise
 REPLACE behavior. Both languages prove the complete profile inventory from the
 same fixture.
 
-The Rust crate now passes 23 HTTP, application, wallet, domain, lifecycle,
+The registry application and HTTP slice now makes all 22 external operations
+executable in Rust: ten template and compatibility operations, seven wallet
+registry operations and five delivery-destination operations. One DRY registry
+repository covers PostgreSQL wallets and destinations. Membership and explicit
+wallet/destination administration remain fail-closed control-plane decisions;
+system records are immutable; wallet ownership cannot be transferred; private
+overrides are tenant-bound; aliases, same-device routing, capabilities and open
+links use the shared Rust domain kernels. Unscoped wallet and destination lists
+now return only global/system records. This closes an unsafe legacy Python
+delivery-list behavior that could expose tenant entries when no organization
+scope was supplied.
+
+`credential-template-registry-behavior.json` is the shared route-level oracle
+for catalog sizes, canonical formats and protocols, iOS routing, write status
+codes, success bodies and tenancy rules. Rust black-box tests execute complete
+wallet and destination CRUD plus compatibility and open-link behavior against
+it; the surviving Python catalog and normalization oracle consumes the same
+fixture, and its route suite proves the corrected unscoped destination rule.
+
+The Rust crate now passes 25 HTTP, application, wallet, domain, lifecycle,
 catalog, surface, migration, persistence and configured-PostgreSQL contract
-tests; the surviving Python oracle passes all 172 tests; formatting and strict
+tests; the surviving Python oracle passes all 174 tests; formatting and strict
 Clippy pass. The configured PostgreSQL tests run when
-`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is supplied. Remaining work is to wire
-the completed wallet-compatibility kernel into its HTTP operation, implement
-the seven wallet-registry operations, five delivery-destination operations,
-two internal HTTP operations and all 12 intended gRPC handlers over the frozen
-operations, then finish MMF runtime/outbox composition, packaging, configured
+`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is supplied. Remaining work is the two
+internal HTTP operations and all 12 intended gRPC handlers over the frozen
+operations, then MMF runtime/outbox composition, packaging, configured
 acceptance and immediate Python deletion. No beta deployment has occurred.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18

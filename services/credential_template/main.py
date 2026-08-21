@@ -3106,6 +3106,8 @@ async def list_delivery_destinations(
         provider=provider,
         mode=mode,
     )
+    if organization_id is None:
+        entries = [entry for entry in entries if entry.is_system]
     return [_delivery_destination_to_response(entry) for entry in entries]
 
 

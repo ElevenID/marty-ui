@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +46,29 @@ pub struct DerivedFrom {
     pub credential_format: String,
     pub issuance_protocol: String,
     pub compliance_profile_code: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IosSameDeviceMode {
+    DigitalCredentials,
+    UniversalLink,
+    NestedLink,
+    ProtocolOnly,
+    Unsupported,
+}
+
+impl IosSameDeviceMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DigitalCredentials => "digital_credentials",
+            Self::UniversalLink => "universal_link",
+            Self::NestedLink => "nested_link",
+            Self::ProtocolOnly => "protocol_only",
+            Self::Unsupported => "unsupported",
+        }
+    }
 }
 
 #[must_use]
@@ -130,6 +155,23 @@ pub fn merge_wallet_profile(
     overrides: &[WalletRegistryEntry],
     template: &CredentialTemplate,
 ) -> WalletCompatibility {
+    merge_wallet_profile_parts(
+        derived,
+        overrides,
+        template.wallet_configs.clone(),
+        template.created_at,
+        template.updated_at,
+    )
+}
+
+#[must_use]
+pub fn merge_wallet_profile_parts(
+    derived: DerivedWalletProfile,
+    overrides: &[WalletRegistryEntry],
+    template_wallet_configs: Vec<WalletConfig>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+) -> WalletCompatibility {
     let mut name = derived.name.clone();
     let mut description = derived.description.clone();
     let mut wallet_apps = derived.wallet_apps.clone();
@@ -193,10 +235,195 @@ pub fn merge_wallet_profile(
         supported_platforms: platforms,
         deep_link_pattern,
         applied_override_ids,
-        template_wallet_configs: template.wallet_configs.clone(),
-        created_at: primary.map_or(template.created_at, |item| item.created_at),
-        updated_at: primary.map_or(template.updated_at, |item| item.updated_at),
+        template_wallet_configs,
+        created_at: primary.map_or(created_at, |item| item.created_at),
+        updated_at: primary.map_or(updated_at, |item| item.updated_at),
     }
+}
+
+#[must_use]
+pub fn wallet_routing_templates(entry: &WalletRegistryEntry) -> BTreeMap<String, String> {
+    if !entry.supports_deeplink {
+        return BTreeMap::new();
+    }
+    let mut templates = entry.routing_templates.clone();
+    if !entry.deep_link_template.is_empty() {
+        templates
+            .entry("generic".to_owned())
+            .or_insert_with(|| entry.deep_link_template.clone());
+    }
+    if let Some(template) = entry.universal_link_template.as_ref() {
+        templates
+            .entry("web".to_owned())
+            .or_insert_with(|| template.clone());
+        templates
+            .entry("ios".to_owned())
+            .or_insert_with(|| template.clone());
+    }
+    if let Some(scheme) = entry.ios_scheme.as_ref() {
+        templates
+            .entry("ios".to_owned())
+            .or_insert_with(|| format!("{scheme}://open?inner={{inner_uri_encoded}}"));
+    }
+    for platform in &entry.platforms {
+        if matches!(platform.as_str(), "ios" | "android" | "web" | "desktop")
+            && !entry.deep_link_template.is_empty()
+        {
+            templates
+                .entry(platform.clone())
+                .or_insert_with(|| entry.deep_link_template.clone());
+        }
+    }
+    templates
+}
+
+#[must_use]
+pub fn wallet_route_template(entry: &WalletRegistryEntry, platform: Option<&str>) -> String {
+    let templates = wallet_routing_templates(entry);
+    let normalized = match platform
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "desktop" => "web".to_owned(),
+        value => value.to_owned(),
+    };
+    if let Some(exact) = templates.get(&normalized).filter(|value| !value.is_empty()) {
+        return exact.clone();
+    }
+    if let Some(generic) = templates
+        .get("generic")
+        .or_else(|| templates.get("default"))
+        .filter(|value| !value.is_empty())
+    {
+        return generic.clone();
+    }
+    if !entry.deep_link_template.is_empty() {
+        return entry.deep_link_template.clone();
+    }
+    if !normalized.is_empty() {
+        return String::new();
+    }
+    ["ios", "android", "web", "desktop"]
+        .iter()
+        .filter_map(|key| templates.get(*key))
+        .chain(templates.values())
+        .find(|value| is_wallet_routing_template(value))
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[must_use]
+pub fn wallet_capabilities(entry: &WalletRegistryEntry) -> BTreeMap<String, bool> {
+    let tokens = entry
+        .specifications
+        .iter()
+        .chain(&entry.supported_protocols)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    let oid4vci = tokens.contains("oid4vci") || tokens.contains("oid4vci_pre_auth");
+    let oid4vp = tokens.contains("oid4vp");
+    let digital_credentials = entry.supports_digital_credentials
+        || ["credentialmanager", "digital_credentials", "dc_api"]
+            .iter()
+            .any(|marker| tokens.contains(marker));
+    let haip = entry.supports_haip || tokens.contains("haip");
+    BTreeMap::from([
+        ("digital_credentials".to_owned(), digital_credentials),
+        ("haip".to_owned(), haip),
+        ("oid4vci".to_owned(), oid4vci),
+        ("oid4vp".to_owned(), oid4vp),
+        (
+            "same_device".to_owned(),
+            entry.supports_deeplink || digital_credentials,
+        ),
+        ("qr".to_owned(), entry.supports_qr),
+    ])
+}
+
+#[must_use]
+pub fn derive_ios_same_device_mode(entry: &WalletRegistryEntry) -> IosSameDeviceMode {
+    if !targets_ios_same_device(entry) {
+        return IosSameDeviceMode::Unsupported;
+    }
+    if entry.supports_digital_credentials {
+        return IosSameDeviceMode::DigitalCredentials;
+    }
+    let template = wallet_route_template(entry, Some("ios"));
+    let scheme = template
+        .split_once(':')
+        .map(|(scheme, _)| scheme.to_ascii_lowercase());
+    if scheme
+        .as_deref()
+        .is_some_and(|value| matches!(value, "https" | "http"))
+    {
+        IosSameDeviceMode::UniversalLink
+    } else if is_wallet_routing_template(&template) {
+        IosSameDeviceMode::NestedLink
+    } else if scheme.as_deref().is_some_and(|value| {
+        matches!(
+            value,
+            "openid-credential-offer" | "openid4vp" | "haip-vci" | "haip-vp"
+        )
+    }) {
+        IosSameDeviceMode::ProtocolOnly
+    } else {
+        IosSameDeviceMode::Unsupported
+    }
+}
+
+fn targets_ios_same_device(entry: &WalletRegistryEntry) -> bool {
+    let platforms = entry
+        .platforms
+        .iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if platforms
+        .iter()
+        .any(|value| matches!(value.as_str(), "ios" | "any"))
+    {
+        return true;
+    }
+    let explicit = entry.universal_link_template.is_some()
+        || entry.ios_scheme.is_some()
+        || entry.routing_templates.contains_key("ios");
+    if !platforms.is_empty() {
+        return explicit;
+    }
+    entry.supports_digital_credentials || explicit || !entry.deep_link_template.is_empty()
+}
+
+fn is_wallet_routing_template(template: &str) -> bool {
+    let scheme = template
+        .split_once(':')
+        .map_or("", |(scheme, _)| scheme)
+        .to_ascii_lowercase();
+    if matches!(
+        scheme.as_str(),
+        "openid-credential-offer" | "openid4vp" | "haip-vci" | "haip-vp"
+    ) {
+        return false;
+    }
+    [
+        "{inner_uri}",
+        "{inner_uri_encoded}",
+        "{uri}",
+        "{uri_encoded}",
+        "{offer_uri}",
+        "{offer_uri_encoded}",
+        "{offer}",
+        "{offer_encoded}",
+        "{credential_offer_uri}",
+        "{credential_offer_uri_encoded}",
+        "{request_uri}",
+        "{request_uri_encoded}",
+    ]
+    .iter()
+    .any(|placeholder| template.contains(placeholder))
 }
 
 fn entry_matches(

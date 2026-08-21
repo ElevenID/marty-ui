@@ -26,6 +26,10 @@ pub enum ControlPlaneError {
     Unavailable(String),
     #[error("CREDENTIAL_TEMPLATE.MEMBERSHIP_REQUIRED")]
     MembershipRequired,
+    #[error("CREDENTIAL_TEMPLATE.WALLET_ADMIN_REQUIRED")]
+    WalletAdminRequired,
+    #[error("CREDENTIAL_TEMPLATE.DESTINATION_ADMIN_REQUIRED")]
+    DestinationAdminRequired,
     #[error("CREDENTIAL_TEMPLATE.ISSUER_DID_INVALID: {0}")]
     InvalidIssuer(String),
     #[error("CREDENTIAL_TEMPLATE.REVOCATION_PROFILE_INVALID: {0}")]
@@ -37,6 +41,18 @@ pub enum ControlPlaneError {
 #[async_trait]
 pub trait CredentialTemplateControlPlane: Send + Sync {
     async fn require_membership(
+        &self,
+        user_id: &str,
+        organization_id: &str,
+    ) -> Result<(), ControlPlaneError>;
+
+    async fn require_wallet_admin(
+        &self,
+        user_id: &str,
+        organization_id: &str,
+    ) -> Result<(), ControlPlaneError>;
+
+    async fn require_destination_admin(
         &self,
         user_id: &str,
         organization_id: &str,
@@ -464,6 +480,20 @@ pub enum CredentialTemplateApplicationError {
     InvalidCommand(&'static str),
     #[error("CREDENTIAL_TEMPLATE.NOT_FOUND: {0}")]
     NotFound(String),
+    #[error("CREDENTIAL_TEMPLATE.WALLET_NOT_FOUND: {0}")]
+    WalletNotFound(String),
+    #[error("CREDENTIAL_TEMPLATE.DESTINATION_NOT_FOUND: {0}")]
+    DestinationNotFound(String),
+    #[error("CREDENTIAL_TEMPLATE.SYSTEM_WALLET_READ_ONLY")]
+    SystemWalletReadOnly,
+    #[error("CREDENTIAL_TEMPLATE.SYSTEM_DESTINATION_READ_ONLY")]
+    SystemDestinationReadOnly,
+    #[error("CREDENTIAL_TEMPLATE.OWNERSHIP_TRANSFER_FORBIDDEN")]
+    OwnershipTransferForbidden,
+    #[error("CREDENTIAL_TEMPLATE.DEEP_LINKS_UNSUPPORTED")]
+    DeepLinksUnsupported,
+    #[error("CREDENTIAL_TEMPLATE.ALREADY_EXISTS: {0}")]
+    AlreadyExists(String),
     #[error("CREDENTIAL_TEMPLATE.MANAGED_ISSUER_REQUIRED")]
     ManagedIssuerRequired,
     #[error(transparent)]

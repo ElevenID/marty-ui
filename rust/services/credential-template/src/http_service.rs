@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
     extract::{Path, Query, State},
@@ -18,15 +18,27 @@ use crate::{
         ControlPlaneError, CreateTemplateCommand, CredentialTemplateApplication,
         CredentialTemplateApplicationError, UpdateTemplateCommand, UpdateTemplatePatch,
     },
-    normalize_payload_format, resolve_validity_rules, ClaimDefinition, ClaimType, CredentialFormat,
-    CredentialTemplate, CredentialTemplateError, DerivedAttribute, DisplayStyle, PrivacyPosture,
-    TemplateStatus, ValidityRulesInput,
+    normalize_payload_format,
+    registry_application::{
+        CreateDestinationCommand, CreateWalletCommand, CredentialTemplateRegistryApplication,
+        UpdateDestinationPatch, UpdateWalletPatch,
+    },
+    resolve_validity_rules,
+    wallet::{
+        derive_ios_same_device_mode, normalize_issuance_protocol, wallet_capabilities,
+        wallet_routing_templates, IosSameDeviceMode, WalletCompatibility,
+    },
+    ClaimDefinition, ClaimType, CredentialFormat, CredentialTemplate, CredentialTemplateError,
+    DeliveryDestinationEntry, DerivedAttribute, DisplayStyle, PrivacyPosture, RuntimeEnvironment,
+    TemplateStatus, ValidityRulesInput, WalletRegistryEntry,
 };
 
 #[derive(Clone)]
 pub struct CredentialTemplateHttpState {
     pub application: Arc<CredentialTemplateApplication>,
+    pub registry_application: Arc<CredentialTemplateRegistryApplication>,
     pub service_authenticator: Arc<ServiceTokenAuthenticator>,
+    pub environment: RuntimeEnvironment,
 }
 
 pub fn credential_template_router(state: CredentialTemplateHttpState) -> Router {
@@ -56,6 +68,33 @@ pub fn credential_template_router(state: CredentialTemplateHttpState) -> Router 
         .route(
             "/v1/credential-templates/{template_id}/claims",
             post(add_claim),
+        )
+        .route(
+            "/v1/credential-templates/{template_id}/wallet-compatibility",
+            get(get_wallet_compatibility),
+        )
+        .route("/v1/wallet-registry", get(list_wallets).post(create_wallet))
+        .route(
+            "/v1/wallet-registry/resolve/profile",
+            get(resolve_wallet_profile),
+        )
+        .route(
+            "/v1/wallet-registry/{wallet_id}/open-link",
+            get(build_wallet_open_link),
+        )
+        .route(
+            "/v1/wallet-registry/{wallet_id}",
+            get(get_wallet).patch(update_wallet).delete(delete_wallet),
+        )
+        .route(
+            "/v1/delivery-destinations",
+            get(list_delivery_destinations).post(create_delivery_destination),
+        )
+        .route(
+            "/v1/delivery-destinations/{destination_id}",
+            get(get_delivery_destination)
+                .patch(update_delivery_destination)
+                .delete(delete_delivery_destination),
         )
         .with_state(state)
 }
@@ -202,6 +241,172 @@ struct ListQuery {
     status: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WalletListQuery {
+    #[serde(default = "default_true")]
+    active_only: bool,
+    organization_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WalletOpenLinkQuery {
+    inner_uri: String,
+    platform: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolveWalletProfileQuery {
+    organization_id: String,
+    credential_format: String,
+    issuance_protocol: String,
+    compliance_profile_code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateWalletRequest {
+    organization_id: Option<String>,
+    credential_format: Option<String>,
+    issuance_protocol: Option<String>,
+    compliance_profile_code: Option<String>,
+    name: String,
+    description: Option<String>,
+    #[serde(default)]
+    wallet_apps: Vec<String>,
+    #[serde(default)]
+    specifications: Vec<String>,
+    logo_url: Option<String>,
+    #[serde(default = "default_wallet_deep_link")]
+    deep_link_template: String,
+    deep_link_pattern: Option<String>,
+    #[serde(default)]
+    routing_templates: BTreeMap<String, String>,
+    #[serde(default)]
+    install_urls: BTreeMap<String, String>,
+    ios_scheme: Option<String>,
+    universal_link_template: Option<String>,
+    android_package: Option<String>,
+    #[serde(default)]
+    supported_formats: Vec<String>,
+    #[serde(default = "default_wallet_protocols")]
+    supported_protocols: Vec<String>,
+    #[serde(default)]
+    platforms: Vec<String>,
+    supported_platforms: Option<Vec<String>>,
+    #[serde(default = "default_true")]
+    supports_qr: bool,
+    #[serde(default = "default_true")]
+    supports_deeplink: bool,
+    #[serde(default)]
+    supports_digital_credentials: bool,
+    #[serde(default)]
+    supports_haip: bool,
+    docs_url: Option<String>,
+    #[serde(default = "default_override_precedence")]
+    override_precedence: i32,
+    #[serde(default = "default_merge_strategy")]
+    merge_strategy: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct UpdateWalletRequest {
+    organization_id: Option<String>,
+    credential_format: Option<String>,
+    issuance_protocol: Option<String>,
+    compliance_profile_code: Option<String>,
+    name: Option<String>,
+    description: Option<String>,
+    wallet_apps: Option<Vec<String>>,
+    specifications: Option<Vec<String>>,
+    logo_url: Option<String>,
+    deep_link_template: Option<String>,
+    deep_link_pattern: Option<String>,
+    routing_templates: Option<BTreeMap<String, String>>,
+    install_urls: Option<BTreeMap<String, String>>,
+    ios_scheme: Option<String>,
+    universal_link_template: Option<String>,
+    android_package: Option<String>,
+    supported_formats: Option<Vec<String>>,
+    supported_protocols: Option<Vec<String>>,
+    platforms: Option<Vec<String>>,
+    supported_platforms: Option<Vec<String>>,
+    supports_qr: Option<bool>,
+    supports_deeplink: Option<bool>,
+    supports_digital_credentials: Option<bool>,
+    supports_haip: Option<bool>,
+    docs_url: Option<String>,
+    is_active: Option<bool>,
+    override_precedence: Option<i32>,
+    merge_strategy: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DestinationListQuery {
+    #[serde(default = "default_true")]
+    active_only: bool,
+    organization_id: Option<String>,
+    provider: Option<String>,
+    mode: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateDestinationRequest {
+    organization_id: String,
+    id: Option<String>,
+    name: String,
+    description: Option<String>,
+    #[serde(default = "default_destination_provider")]
+    provider: String,
+    #[serde(default = "default_destination_mode")]
+    mode: String,
+    #[serde(default = "default_destination_actor")]
+    setup_actor: String,
+    #[serde(default = "default_destination_target")]
+    delivery_target: String,
+    wallet_profile_id: Option<String>,
+    credential_format: Option<String>,
+    issuance_protocol: Option<String>,
+    compliance_profile_code: Option<String>,
+    connector_type: Option<String>,
+    connector_id: Option<String>,
+    #[serde(default)]
+    requires_consent: bool,
+    #[serde(default = "empty_object")]
+    claim_projection_policy: Value,
+    #[serde(default)]
+    setup_requirements: Vec<String>,
+    #[serde(default)]
+    capabilities: BTreeMap<String, bool>,
+    docs_url: Option<String>,
+    #[serde(default = "default_true")]
+    is_enabled: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct UpdateDestinationRequest {
+    name: Option<String>,
+    description: Option<String>,
+    provider: Option<String>,
+    mode: Option<String>,
+    setup_actor: Option<String>,
+    delivery_target: Option<String>,
+    wallet_profile_id: Option<String>,
+    credential_format: Option<String>,
+    issuance_protocol: Option<String>,
+    compliance_profile_code: Option<String>,
+    connector_type: Option<String>,
+    connector_id: Option<String>,
+    requires_consent: Option<bool>,
+    claim_projection_policy: Option<Value>,
+    setup_requirements: Option<Vec<String>>,
+    capabilities: Option<BTreeMap<String, bool>>,
+    docs_url: Option<String>,
+    is_enabled: Option<bool>,
 }
 
 async fn create_template(
@@ -427,6 +632,462 @@ async fn add_claim(
     Ok(Json(template_response(&template)?))
 }
 
+async fn list_wallets(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Query(query): Query<WalletListQuery>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    let user_id = trusted_user_id(&state, &headers)?;
+    let wallets = state
+        .registry_application
+        .list_wallets(
+            &user_id,
+            query.organization_id.as_deref(),
+            query.active_only,
+        )
+        .await
+        .map_err(application_error)?;
+    Ok(Json(Value::Array(
+        wallets.iter().map(wallet_response).collect(),
+    )))
+}
+
+async fn get_wallet(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Path(wallet_id): Path<String>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    let user_id = trusted_user_id(&state, &headers)?;
+    let wallet = state
+        .registry_application
+        .get_wallet(&user_id, &wallet_id)
+        .await
+        .map_err(application_error)?;
+    Ok(Json(wallet_response(&wallet)))
+}
+
+async fn build_wallet_open_link(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Path(wallet_id): Path<String>,
+    Query(query): Query<WalletOpenLinkQuery>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    let user_id = trusted_user_id(&state, &headers)?;
+    let link = state
+        .registry_application
+        .build_wallet_open_link(
+            &user_id,
+            &wallet_id,
+            &query.inner_uri,
+            query.platform.as_deref(),
+            state.environment,
+        )
+        .await
+        .map_err(application_error)?;
+    Ok(Json(json!({
+        "wallet_id":link.wallet_id,
+        "inner_uri":link.inner_uri,
+        "open_uri":link.open_uri,
+        "platform":link.platform,
+        "transport":"wallet_deeplink"
+    })))
+}
+
+async fn resolve_wallet_profile(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Query(query): Query<ResolveWalletProfileQuery>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    let user_id = trusted_user_id(&state, &headers)?;
+    let compatibility = state
+        .registry_application
+        .resolve_wallet_profile(
+            &user_id,
+            &query.organization_id,
+            &query.credential_format,
+            &query.issuance_protocol,
+            query.compliance_profile_code.as_deref(),
+            Utc::now(),
+        )
+        .await
+        .map_err(application_error)?;
+    Ok(Json(wallet_compatibility_response(&compatibility)))
+}
+
+async fn get_wallet_compatibility(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Path(template_id): Path<String>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    let user_id = trusted_user_id(&state, &headers)?;
+    let compatibility = state
+        .registry_application
+        .template_wallet_compatibility(&user_id, &template_id)
+        .await
+        .map_err(application_error)?;
+    Ok(Json(wallet_compatibility_response(&compatibility)))
+}
+
+async fn create_wallet(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Json(input): Json<CreateWalletRequest>,
+) -> Result<(StatusCode, Json<Value>), CredentialTemplateHttpError> {
+    let user_id = trusted_user_id(&state, &headers)?;
+    let organization_id = input
+        .organization_id
+        .ok_or_else(|| unprocessable("organization_id is required for wallet overrides"))?;
+    let platforms = input.supported_platforms.unwrap_or(input.platforms);
+    let deep_link_template = input
+        .deep_link_pattern
+        .filter(|value| !value.is_empty())
+        .unwrap_or(input.deep_link_template);
+    let wallet = state
+        .registry_application
+        .create_wallet(CreateWalletCommand {
+            user_id,
+            organization_id,
+            credential_format: input.credential_format,
+            issuance_protocol: input.issuance_protocol,
+            compliance_profile_code: input.compliance_profile_code,
+            name: input.name,
+            description: input.description,
+            wallet_apps: input.wallet_apps,
+            specifications: input.specifications,
+            logo_url: input.logo_url,
+            deep_link_template,
+            routing_templates: input.routing_templates,
+            install_urls: input.install_urls,
+            ios_scheme: input.ios_scheme,
+            universal_link_template: input.universal_link_template,
+            android_package: input.android_package,
+            supported_formats: input.supported_formats,
+            supported_protocols: input.supported_protocols,
+            platforms,
+            supports_qr: input.supports_qr,
+            supports_deeplink: input.supports_deeplink,
+            supports_digital_credentials: input.supports_digital_credentials,
+            supports_haip: input.supports_haip,
+            docs_url: input.docs_url,
+            override_precedence: input.override_precedence,
+            merge_strategy: input.merge_strategy,
+            now: Utc::now(),
+        })
+        .await
+        .map_err(application_error)?;
+    Ok((StatusCode::CREATED, Json(wallet_response(&wallet))))
+}
+
+async fn update_wallet(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Path(wallet_id): Path<String>,
+    Json(input): Json<UpdateWalletRequest>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    let user_id = trusted_user_id(&state, &headers)?;
+    let platforms = input.supported_platforms.or(input.platforms);
+    let deep_link_template = input
+        .deep_link_pattern
+        .filter(|value| !value.is_empty())
+        .or(input.deep_link_template.filter(|value| !value.is_empty()));
+    let wallet = state
+        .registry_application
+        .update_wallet(
+            &user_id,
+            &wallet_id,
+            UpdateWalletPatch {
+                organization_id: input.organization_id,
+                credential_format: input.credential_format,
+                issuance_protocol: input.issuance_protocol,
+                compliance_profile_code: input.compliance_profile_code,
+                name: input.name,
+                description: input.description,
+                wallet_apps: input.wallet_apps,
+                specifications: input.specifications,
+                logo_url: input.logo_url,
+                deep_link_template,
+                routing_templates: input.routing_templates,
+                install_urls: input.install_urls,
+                ios_scheme: input.ios_scheme,
+                universal_link_template: input.universal_link_template,
+                android_package: input.android_package,
+                supported_formats: input.supported_formats,
+                supported_protocols: input.supported_protocols,
+                platforms,
+                supports_qr: input.supports_qr,
+                supports_deeplink: input.supports_deeplink,
+                supports_digital_credentials: input.supports_digital_credentials,
+                supports_haip: input.supports_haip,
+                docs_url: input.docs_url,
+                is_active: input.is_active,
+                override_precedence: input.override_precedence,
+                merge_strategy: input.merge_strategy,
+            },
+            Utc::now(),
+        )
+        .await
+        .map_err(application_error)?;
+    Ok(Json(wallet_response(&wallet)))
+}
+
+async fn delete_wallet(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Path(wallet_id): Path<String>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    let user_id = trusted_user_id(&state, &headers)?;
+    state
+        .registry_application
+        .delete_wallet(&user_id, &wallet_id)
+        .await
+        .map_err(application_error)?;
+    Ok(Json(json!({"success":true})))
+}
+
+async fn list_delivery_destinations(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Query(query): Query<DestinationListQuery>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    let user_id = trusted_user_id(&state, &headers)?;
+    let entries = state
+        .registry_application
+        .list_destinations(
+            &user_id,
+            query.organization_id.as_deref(),
+            query.active_only,
+            query.provider.as_deref(),
+            query.mode.as_deref(),
+        )
+        .await
+        .map_err(application_error)?;
+    Ok(Json(Value::Array(
+        entries.iter().map(destination_response).collect(),
+    )))
+}
+
+async fn get_delivery_destination(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Path(destination_id): Path<String>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    let user_id = trusted_user_id(&state, &headers)?;
+    let entry = state
+        .registry_application
+        .get_destination(&user_id, &destination_id)
+        .await
+        .map_err(application_error)?;
+    Ok(Json(destination_response(&entry)))
+}
+
+async fn create_delivery_destination(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Json(input): Json<CreateDestinationRequest>,
+) -> Result<(StatusCode, Json<Value>), CredentialTemplateHttpError> {
+    let user_id = trusted_user_id(&state, &headers)?;
+    let entry = state
+        .registry_application
+        .create_destination(CreateDestinationCommand {
+            user_id,
+            organization_id: input.organization_id,
+            id: input.id,
+            name: input.name,
+            description: input.description,
+            provider: input.provider,
+            mode: input.mode,
+            setup_actor: input.setup_actor,
+            delivery_target: input.delivery_target,
+            wallet_profile_id: input.wallet_profile_id,
+            credential_format: input.credential_format,
+            issuance_protocol: input.issuance_protocol,
+            compliance_profile_code: input.compliance_profile_code,
+            connector_type: input.connector_type,
+            connector_id: input.connector_id,
+            requires_consent: input.requires_consent,
+            claim_projection_policy: input.claim_projection_policy,
+            setup_requirements: input.setup_requirements,
+            capabilities: input.capabilities,
+            docs_url: input.docs_url,
+            is_enabled: input.is_enabled,
+            now: Utc::now(),
+        })
+        .await
+        .map_err(application_error)?;
+    Ok((StatusCode::CREATED, Json(destination_response(&entry))))
+}
+
+async fn update_delivery_destination(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Path(destination_id): Path<String>,
+    Json(input): Json<UpdateDestinationRequest>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    let user_id = trusted_user_id(&state, &headers)?;
+    let entry = state
+        .registry_application
+        .update_destination(
+            &user_id,
+            &destination_id,
+            UpdateDestinationPatch {
+                name: input.name,
+                description: input.description,
+                provider: input.provider,
+                mode: input.mode,
+                setup_actor: input.setup_actor,
+                delivery_target: input.delivery_target,
+                wallet_profile_id: input.wallet_profile_id,
+                credential_format: input.credential_format,
+                issuance_protocol: input.issuance_protocol,
+                compliance_profile_code: input.compliance_profile_code,
+                connector_type: input.connector_type,
+                connector_id: input.connector_id,
+                requires_consent: input.requires_consent,
+                claim_projection_policy: input.claim_projection_policy,
+                setup_requirements: input.setup_requirements,
+                capabilities: input.capabilities,
+                docs_url: input.docs_url,
+                is_enabled: input.is_enabled,
+            },
+            Utc::now(),
+        )
+        .await
+        .map_err(application_error)?;
+    Ok(Json(destination_response(&entry)))
+}
+
+async fn delete_delivery_destination(
+    State(state): State<CredentialTemplateHttpState>,
+    headers: HeaderMap,
+    Path(destination_id): Path<String>,
+) -> Result<Json<Value>, CredentialTemplateHttpError> {
+    let user_id = trusted_user_id(&state, &headers)?;
+    state
+        .registry_application
+        .delete_destination(&user_id, &destination_id)
+        .await
+        .map_err(application_error)?;
+    Ok(Json(json!({"success":true})))
+}
+
+fn wallet_response(wallet: &WalletRegistryEntry) -> Value {
+    let ios_mode = derive_ios_same_device_mode(wallet);
+    let wallet_apps = if wallet.wallet_apps.is_empty() {
+        vec![wallet.name.clone()]
+    } else {
+        wallet.wallet_apps.clone()
+    };
+    without_nulls(json!({
+        "id":wallet.id,
+        "organization_id":wallet.organization_id,
+        "is_override":wallet.is_override,
+        "override_precedence":wallet.override_precedence,
+        "merge_strategy":wallet.merge_strategy.as_str(),
+        "credential_format":wallet.credential_format,
+        "issuance_protocol":wallet.issuance_protocol.as_deref().map(|value| normalize_issuance_protocol(Some(value))),
+        "compliance_profile_code":wallet.compliance_profile_code,
+        "name":wallet.name,
+        "description":wallet.description,
+        "wallet_apps":wallet_apps,
+        "specifications":wallet.specifications,
+        "logo_url":wallet.logo_url,
+        "deep_link_pattern":wallet.deep_link_template,
+        "routing_templates":wallet_routing_templates(wallet),
+        "install_urls":wallet.install_urls,
+        "ios_scheme":wallet.ios_scheme,
+        "universal_link_template":wallet.universal_link_template,
+        "android_package":wallet.android_package,
+        "supported_formats":wallet.supported_formats,
+        "supported_protocols":wallet.supported_protocols,
+        "supported_platforms":wallet.platforms,
+        "supports_qr":wallet.supports_qr,
+        "supports_deeplink":wallet.supports_deeplink,
+        "supports_digital_credentials":wallet.supports_digital_credentials,
+        "supports_haip":wallet.supports_haip,
+        "ios_same_device_mode":ios_mode.as_str(),
+        "ios_same_device_single_wallet_only":ios_mode == IosSameDeviceMode::ProtocolOnly,
+        "docs_url":wallet.docs_url,
+        "capabilities":wallet_capabilities(wallet),
+        "created_at":wallet.created_at.to_rfc3339(),
+        "updated_at":wallet.updated_at.to_rfc3339()
+    }))
+}
+
+fn wallet_compatibility_response(compatibility: &WalletCompatibility) -> Value {
+    let configs = compatibility
+        .template_wallet_configs
+        .iter()
+        .map(|config| {
+            without_nulls(json!({
+                "wallet_id":config.wallet_id,
+                "deep_link_scheme":config.deep_link_scheme,
+                "format_variant":config.format_variant
+            }))
+        })
+        .collect::<Vec<_>>();
+    let derived_from = without_nulls(json!({
+        "credential_format":compatibility.derived_from.credential_format,
+        "issuance_protocol":compatibility.derived_from.issuance_protocol,
+        "compliance_profile_code":compatibility.derived_from.compliance_profile_code
+    }));
+    without_nulls(json!({
+        "id":compatibility.id,
+        "organization_id":compatibility.organization_id,
+        "derived_from":derived_from,
+        "is_override":compatibility.is_override,
+        "override_precedence":compatibility.override_precedence,
+        "merge_strategy":compatibility.merge_strategy,
+        "name":compatibility.name,
+        "description":compatibility.description,
+        "credential_format":compatibility.credential_format,
+        "issuance_protocol":compatibility.issuance_protocol,
+        "compliance_profile_code":compatibility.compliance_profile_code,
+        "wallet_apps":compatibility.wallet_apps,
+        "specifications":compatibility.specifications,
+        "supported_platforms":compatibility.supported_platforms,
+        "deep_link_pattern":compatibility.deep_link_pattern,
+        "applied_override_ids":compatibility.applied_override_ids,
+        "template_wallet_configs":configs,
+        "created_at":compatibility.created_at.to_rfc3339(),
+        "updated_at":compatibility.updated_at.to_rfc3339()
+    }))
+}
+
+fn destination_response(entry: &DeliveryDestinationEntry) -> Value {
+    without_nulls(json!({
+        "id":entry.id,
+        "organization_id":entry.organization_id,
+        "is_system":entry.is_system,
+        "name":entry.name,
+        "description":entry.description,
+        "provider":entry.provider,
+        "mode":entry.mode,
+        "setup_actor":entry.setup_actor,
+        "delivery_target":entry.delivery_target,
+        "wallet_profile_id":entry.wallet_profile_id,
+        "credential_format":entry.credential_format,
+        "issuance_protocol":entry.issuance_protocol,
+        "compliance_profile_code":entry.compliance_profile_code,
+        "connector_type":entry.connector_type,
+        "connector_id":entry.connector_id,
+        "requires_consent":entry.requires_consent,
+        "claim_projection_policy":entry.claim_projection_policy,
+        "setup_requirements":entry.setup_requirements,
+        "capabilities":entry.capabilities,
+        "docs_url":entry.docs_url,
+        "is_enabled":entry.is_enabled,
+        "created_at":entry.created_at.to_rfc3339(),
+        "updated_at":entry.updated_at.to_rfc3339()
+    }))
+}
+
+fn without_nulls(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.retain(|_, value| !value.is_null());
+    }
+    value
+}
+
 fn mutation_response(
     result: Result<CredentialTemplate, CredentialTemplateApplicationError>,
 ) -> Result<Json<Value>, CredentialTemplateHttpError> {
@@ -590,9 +1251,19 @@ fn application_error(error: CredentialTemplateApplicationError) -> CredentialTem
         CredentialTemplateApplicationError::NotFound(_) => {
             not_found("Credential Template not found")
         }
+        CredentialTemplateApplicationError::WalletNotFound(_) => not_found("Wallet not found"),
+        CredentialTemplateApplicationError::DestinationNotFound(_) => {
+            not_found("Delivery destination not found")
+        }
         CredentialTemplateApplicationError::ControlPlane(ControlPlaneError::MembershipRequired) => {
             forbidden("CREDENTIAL_TEMPLATE.MEMBERSHIP_REQUIRED")
         }
+        CredentialTemplateApplicationError::ControlPlane(
+            ControlPlaneError::WalletAdminRequired,
+        ) => forbidden("Wallet management requires organization console access"),
+        CredentialTemplateApplicationError::ControlPlane(
+            ControlPlaneError::DestinationAdminRequired,
+        ) => forbidden("Organization destination management requires org console access"),
         CredentialTemplateApplicationError::ControlPlane(ControlPlaneError::Unavailable(_))
         | CredentialTemplateApplicationError::Repository(_) => {
             service_unavailable("CREDENTIAL_TEMPLATE.DEPENDENCY_UNAVAILABLE")
@@ -603,6 +1274,30 @@ fn application_error(error: CredentialTemplateApplicationError) -> CredentialTem
         CredentialTemplateApplicationError::Domain(
             CredentialTemplateError::TemplateNotDeletable,
         ) => conflict("Only draft templates can be deleted. Deprecate active templates instead."),
+        CredentialTemplateApplicationError::SystemWalletReadOnly => {
+            forbidden("System wallet entries are read-only")
+        }
+        CredentialTemplateApplicationError::SystemDestinationReadOnly => {
+            forbidden("System delivery destinations are read-only")
+        }
+        CredentialTemplateApplicationError::OwnershipTransferForbidden => {
+            conflict("Wallet ownership cannot be transferred")
+        }
+        CredentialTemplateApplicationError::DeepLinksUnsupported => {
+            bad_request("Wallet does not support deep links")
+        }
+        CredentialTemplateApplicationError::AlreadyExists(_) => {
+            conflict("Delivery destination already exists")
+        }
+        CredentialTemplateApplicationError::Domain(CredentialTemplateError::MissingInnerUri) => {
+            bad_request("inner_uri is required")
+        }
+        CredentialTemplateApplicationError::Domain(
+            CredentialTemplateError::DisallowedInnerUriScheme,
+        ) => bad_request("inner_uri scheme is not allowed"),
+        CredentialTemplateApplicationError::Domain(
+            CredentialTemplateError::InnerUriMissingHost,
+        ) => bad_request("inner_uri must include a host"),
         error => unprocessable(&error.to_string()),
     }
 }
@@ -665,6 +1360,38 @@ fn default_privacy_posture() -> String {
 
 fn default_supported_formats() -> Vec<String> {
     vec!["SD_JWT_VC".to_owned()]
+}
+
+fn default_wallet_deep_link() -> String {
+    "openid-credential-offer://?credential_offer_uri={offer_uri}".to_owned()
+}
+
+fn default_wallet_protocols() -> Vec<String> {
+    vec!["OID4VCI_PRE_AUTH".to_owned()]
+}
+
+fn default_override_precedence() -> i32 {
+    50
+}
+
+fn default_merge_strategy() -> String {
+    "APPEND".to_owned()
+}
+
+fn default_destination_provider() -> String {
+    "custom".to_owned()
+}
+
+fn default_destination_mode() -> String {
+    "holder_wallet".to_owned()
+}
+
+fn default_destination_actor() -> String {
+    "learner".to_owned()
+}
+
+fn default_destination_target() -> String {
+    "wallet".to_owned()
 }
 
 fn empty_object() -> Value {

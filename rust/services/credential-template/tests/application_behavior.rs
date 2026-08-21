@@ -97,6 +97,22 @@ impl CredentialTemplateControlPlane for ControlPlane {
         }
     }
 
+    async fn require_wallet_admin(
+        &self,
+        user_id: &str,
+        organization_id: &str,
+    ) -> Result<(), ControlPlaneError> {
+        self.require_membership(user_id, organization_id).await
+    }
+
+    async fn require_destination_admin(
+        &self,
+        user_id: &str,
+        organization_id: &str,
+    ) -> Result<(), ControlPlaneError> {
+        self.require_membership(user_id, organization_id).await
+    }
+
     async fn resolve_active_issuer(
         &self,
         organization_id: &str,

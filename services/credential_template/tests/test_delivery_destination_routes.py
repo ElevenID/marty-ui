@@ -131,6 +131,29 @@ def test_system_delivery_destinations_are_read_only():
     assert response.status_code == 403
 
 
+def test_unscoped_delivery_destination_list_never_exposes_tenant_entries():
+    repo = credential_template.InMemoryDeliveryDestinationRepository()
+    client, _ = _build_client(repo)
+    create = client.post(
+        "/v1/delivery-destinations",
+        headers={"x-user-id": "user-1"},
+        json={
+            "organization_id": "org-1",
+            "id": "dd-private",
+            "name": "Private Destination",
+        },
+    )
+    assert create.status_code == 201
+
+    response = client.get(
+        "/v1/delivery-destinations",
+        headers={"x-user-id": "user-1"},
+    )
+    assert response.status_code == 200
+    assert all(entry["is_system"] for entry in response.json())
+    assert "dd-private" not in {entry["id"] for entry in response.json()}
+
+
 def test_student_cannot_create_institutional_canvas_destination_from_learner_context():
     client, _ = _build_client(has_org_console_access=False)
 
