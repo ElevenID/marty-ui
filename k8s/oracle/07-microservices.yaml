@@ -1753,6 +1753,13 @@ metadata:
     app.kubernetes.io/part-of: marty-platform
 spec:
   replicas: 1
+  # Released callers use credential-aware, idempotent reservations, so old and
+  # new revocation-profile pods can overlap without competing allocations.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: revocation-profile

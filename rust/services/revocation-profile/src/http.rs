@@ -131,8 +131,8 @@ impl RevocationProfileHttp {
                 post(activate_profile),
             )
             .route(
-                "/internal/revocation-profiles/{profile_id}/allocate-index",
-                post(allocate_index),
+                "/internal/revocation-profiles/{profile_id}/reserve-index",
+                post(reserve_index),
             )
             .route(
                 "/internal/revocation-profiles/{profile_id}/process-revocation",
@@ -309,13 +309,14 @@ struct ListQuery {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AllocateIndexRequest {
+struct ReserveIndexRequest {
     organization_id: String,
     credential_format: String,
+    credential_id: String,
 }
 
 #[derive(Debug, Serialize)]
-struct AllocateIndexResponse {
+struct ReserveIndexResponse {
     organization_id: String,
     index: usize,
     status_list_url: String,
@@ -733,22 +734,23 @@ async fn delete_profile(
     Ok(Json(json!({"success": true})))
 }
 
-async fn allocate_index(
+async fn reserve_index(
     State(state): State<RevocationProfileHttp>,
     Path(profile_id): Path<String>,
     headers: HeaderMap,
-    Json(request): Json<AllocateIndexRequest>,
-) -> Result<Json<AllocateIndexResponse>, ApiError> {
+    Json(request): Json<ReserveIndexRequest>,
+) -> Result<Json<ReserveIndexResponse>, ApiError> {
     state.internal_auth.authorize(&headers)?;
     let result = state
         .service
-        .allocate_index(
+        .reserve_index(
             &profile_id,
             &request.organization_id,
             &request.credential_format,
+            &request.credential_id,
         )
         .await?;
-    Ok(Json(AllocateIndexResponse {
+    Ok(Json(ReserveIndexResponse {
         organization_id: result.organization_id,
         index: result.index,
         status_list_url: result.status_list_url,
@@ -1567,36 +1569,73 @@ mod tests {
         let body = json_response(response).await;
         let profile_id = body["id"].as_str().unwrap().to_string();
 
-        let allocate_uri = format!("/internal/revocation-profiles/{profile_id}/allocate-index");
+        let legacy_allocate_uri =
+            format!("/internal/revocation-profiles/{profile_id}/allocate-index");
         let allocation_body = json!({
             "organization_id": "org-1",
             "credential_format": "sd_jwt_vc"
         })
         .to_string();
-        let unauthorized = Request::builder()
+        let retired_allocate = Request::builder()
             .method("POST")
-            .uri(&allocate_uri)
-            .header("content-type", "application/json")
-            .body(Body::from(allocation_body.clone()))
-            .unwrap();
-        let response = app.clone().oneshot(unauthorized).await.unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(
-            json_response(response).await,
-            json!({"detail": "Missing or invalid service token"})
-        );
-
-        let allocate = Request::builder()
-            .method("POST")
-            .uri(&allocate_uri)
+            .uri(&legacy_allocate_uri)
             .header("content-type", "application/json")
             .header(SERVICE_TOKEN_HEADER, &token)
             .body(Body::from(allocation_body))
             .unwrap();
-        let response = app.clone().oneshot(allocate).await.unwrap();
+        let response = app.clone().oneshot(retired_allocate).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let reserve_uri = format!("/internal/revocation-profiles/{profile_id}/reserve-index");
+        let reservation_body = json!({
+            "organization_id": "org-1",
+            "credential_format": "sd_jwt_vc",
+            "credential_id": "credential-1"
+        })
+        .to_string();
+        let reserve = Request::builder()
+            .method("POST")
+            .uri(&reserve_uri)
+            .header("content-type", "application/json")
+            .header(SERVICE_TOKEN_HEADER, &token)
+            .body(Body::from(reservation_body.clone()))
+            .unwrap();
+        let response = app.clone().oneshot(reserve).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let allocation = json_response(response).await;
-        assert_eq!(allocation["index"], 0);
+        assert_eq!(json_response(response).await["index"], 0);
+
+        let retry = Request::builder()
+            .method("POST")
+            .uri(&reserve_uri)
+            .header("content-type", "application/json")
+            .header(SERVICE_TOKEN_HEADER, &token)
+            .body(Body::from(reservation_body))
+            .unwrap();
+        let response = app.clone().oneshot(retry).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_response(response).await["index"], 0);
+
+        let missing_credential_id = Request::builder()
+            .method("POST")
+            .uri(&reserve_uri)
+            .header("content-type", "application/json")
+            .header(SERVICE_TOKEN_HEADER, &token)
+            .body(Body::from(
+                json!({
+                    "organization_id": "org-1",
+                    "credential_format": "sd_jwt_vc"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        assert_eq!(
+            app.clone()
+                .oneshot(missing_credential_id)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
 
         let process_uri = format!("/internal/revocation-profiles/{profile_id}/process-revocation");
         let process_body = json!({

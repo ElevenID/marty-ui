@@ -1,66 +1,47 @@
 status: complete
 search_scope:
-  - current_module_or_crate
-  - current_repository
-  - workspace_crates_packages_and_services
-  - bindings_adapters_ffi_and_api_layers
-  - registered_sibling_repositories_when_the_capability_crosses_repo_boundaries
+  - current immutable Marty UI stack release manifest and owned pin assertions
+  - independently audited Core v0.1.59 release evidence
+  - independently audited Credentials v0.1.68 image, SBOM, and provenance evidence
+  - released Integration v1.2.70 source, SBOM, and provenance evidence
+  - existing immutable CD and artifact-only Marty acceptance workflow
 search_queries:
-  - "marty-ui immutable component pin and stack release"
-  - "marty-credentials v0.1.66 issuance image digest"
-  - "marty-core v0.1.58 Python wheel digests"
-  - "consolidated Rust migration aggregate beta release"
-  - "DIDComm authcrypt deployment policy contract"
-  - "Rust-backed DID document publication and tenant-bound issuer identity routes"
-  - "DIDCOMM_ENCRYPTION_POLICY_FILE authcrypt active issuer"
-  - "PublishDidRequest keyAgreement did:web issuer identity"
-  - "compose_command optional profile isolation last"
-  - "did:web PUBLIC_DOMAIN port authority encoding and public document retargeting"
-  - "W3C SD-JWT credentialSubject extraction for presentation policy claims"
+  - "marty-ui immutable component pin and stack release v1.1.199"
+  - "marty-core v0.1.59 Python wheel digest SBOM provenance"
+  - "marty-credentials v0.1.68 issuance OCI digest SBOM provenance"
+  - "marty-integration-tests v1.2.70 source digest SBOM provenance"
+  - "owned stack release exact pin regression"
 candidate_implementations:
   - path: release/stack-lock.json
     language: JSON
-    disposition: reuse_existing_release_manifest
+    disposition: reuse_existing_release_manifest_and_advance_release_identity
   - path: tests/test_stack_release_contract.py
     language: Python
-    disposition: reuse_existing_release_contract_gate
+    disposition: extend_existing_owned_exact_pin_assertions
   - path: .github/workflows/cd.yml
     language: YAML
-    disposition: reuse_existing_immutable_release_pipeline
-  - path: https://github.com/ElevenID/marty-credentials/releases/tag/v0.1.66
-    language: GitHub release evidence
+    disposition: reuse_existing_immutable_release_and_public_stack_smoke_pipeline
+  - path: https://github.com/ElevenID/marty-core/releases/tag/v0.1.59
+    language: GitHub_release_evidence
     disposition: pin_verified_immutable_dependency_release
-  - path: https://github.com/ElevenID/marty-core/releases/tag/v0.1.58
-    language: GitHub release evidence
+  - path: https://github.com/ElevenID/marty-credentials/releases/tag/v0.1.68
+    language: GitHub_release_evidence
     disposition: pin_verified_immutable_dependency_release
-  - path: marty-credentials/CONFIGURATION.md
-    language: Markdown
-    disposition: preserve_optional_policy_contract_for_controlled_integration_adoption
-  - path: rust/services/signing-keys/src/documents.rs
-    language: Rust
-    disposition: extend_canonical_did_document_owner
-  - path: services/gateway/routes/signing_keys.py
-    language: Python
-    disposition: reuse_existing_tenant_bound_public_identity_facade
-  - path: services/gateway/routes/signing_keys.py::_normalize_did_web_domain
-    language: Python
-    disposition: extend_existing_domain_validation_for_canonical_method_authority
-  - path: services/presentation_policy/main.py::_verify_w3c_vc
-    language: Python
-    disposition: reuse_existing_verified_credential_subject_policy_claim_shape
-  - path: scripts/conformance_stack.py
-    language: Python
-    disposition: reuse_existing_explicit_overlay_ordering
-  - path: docs/official-interoperability-docker.md
-    language: Markdown
-    disposition: extend_existing_operator_runbook
+  - path: https://github.com/ElevenID/marty-integration-tests/releases/tag/v1.2.70
+    language: GitHub_release_evidence
+    disposition: pin_verified_immutable_dependency_release
 no_match_statement: ""
-decision: reuse_existing
+decision: extend_existing
 canonical_implementation:
-  path: rust/services/signing-keys/src/documents.rs
-  language: Rust
-rust_disposition: extend_existing_rust_owner
-non_rust_rationale: ""
+  path: release/stack-lock.json
+  language: JSON
+rust_disposition: reuse_existing_rust_owner_unchanged
+non_rust_rationale: >-
+  This dependency-only release change advances the immutable stack identity and
+  exact owned pin assertions to releases already validated by their source
+  repositories. No implementation or imported compliance material changes; the
+  existing CD workflow verifies HTTP and OCI artifacts, provenance, and the
+  released Marty Integration suite before publication.
 non_rust_exception_approval: ""
 intentional_duplicate_exception:
   rationale: ""
