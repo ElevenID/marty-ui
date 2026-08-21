@@ -102,7 +102,7 @@
           "repository": "ElevenID/marty-ui",
           "paths": ["services/auth/infrastructure/adapters/oidc_adapter.py"],
           "language": "python",
-          "disposition": "thin-adapter-delete-decoder"
+          "disposition": "deleted-after-native-auth-cutover"
         }
       ]
     },
@@ -536,6 +536,24 @@
       ]
     },
     {
+      "id": "auth-service",
+      "phase": 9,
+      "status": "native-active",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/auth"],
+        "binding_paths": []
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-ui",
+          "paths": ["services/auth"],
+          "language": "python",
+          "disposition": "deleted-after-language-neutral-behavioral-and-executable-gates"
+        }
+      ]
+    },
+    {
       "id": "gateway-service",
       "phase": 9,
       "status": "cutover-in-progress",
@@ -559,6 +577,10 @@
     "excluded_path_parts": ["tests", "migrations", "__pycache__"],
     "restricted_import_roots": ["Crypto", "OpenSSL", "cryptography", "jose", "jwcrypto", "jwt", "nacl"],
     "native_service_guards": [
+      {
+        "capability_id": "auth-service",
+        "forbidden_globs": ["services/auth/**/*.py"]
+      },
       {
         "capability_id": "gateway-service",
         "forbidden_globs": ["services/gateway/**/*.py"]
@@ -598,9 +620,7 @@
         "id": "auth-base64url-decode-baseline",
         "glob": "services/auth/**/*.py",
         "pattern": "urlsafe_b64decode",
-        "expected_matches": {
-          "services/auth/infrastructure/adapters/http_adapter.py": 1
-        }
+        "expected_matches": {}
       },
       {
         "id": "no-direct-auth-native-imports",

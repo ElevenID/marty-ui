@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
-use marty_auth::{AuthDependency, AuthRuntime, AuthServiceConfig};
+use marty_auth::{is_rate_limited_auth_path, AuthDependency, AuthRuntime, AuthServiceConfig};
+use mmf_platform::{GrpcTransportSecurity, GrpcTrustMode};
 use serde_json::Value;
 
 fn baseline(environment: &str) -> BTreeMap<String, String> {
@@ -96,8 +97,25 @@ fn required_settings_secrets_and_production_transport_fail_closed() {
     assert!(AuthServiceConfig::from_values(production).is_ok());
 
     let mut partial = baseline("beta");
-    partial.insert("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/secrets/ca.pem".into());
+    partial.insert(
+        "GRPC_WORKLOAD_TLS_CLIENT_CERT".into(),
+        "/secrets/client.pem".into(),
+    );
     assert!(AuthServiceConfig::from_values(partial).is_err());
+
+    let mut outbound_only = baseline("beta");
+    outbound_only.extend([
+        ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/secrets/ca.pem".into()),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_CERT".into(),
+            "/secrets/client.pem".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KEY".into(),
+            "/secrets/client-key.pem".into(),
+        ),
+    ]);
+    assert!(AuthServiceConfig::from_values(outbound_only).is_ok());
 }
 
 #[test]
@@ -127,4 +145,35 @@ fn mmf_runtime_requires_every_declared_dependency_before_activation() {
     runtime.stop().unwrap();
     assert!(!behavior["python_fallback"].as_bool().unwrap());
     assert!(!behavior["deployment_during_slice"].as_bool().unwrap());
+}
+
+#[test]
+fn unauthenticated_rate_limit_paths_match_the_language_neutral_contract() {
+    let rate_limit = &contract()["rate_limit"];
+    for path in rate_limit["limited_paths"].as_array().unwrap() {
+        assert!(is_rate_limited_auth_path(path.as_str().unwrap()));
+    }
+    for path in rate_limit["excluded_paths"].as_array().unwrap() {
+        assert!(!is_rate_limited_auth_path(path.as_str().unwrap()));
+    }
+    assert_eq!(rate_limit["backend_failure_status"], 503);
+    assert_eq!(rate_limit["limit_status"], 429);
+}
+
+#[test]
+fn outbound_grpc_security_is_selected_by_the_shared_mmf_factory() {
+    let plaintext = marty_auth::workload_channel_factory("http://flow:9011", None).unwrap();
+    assert_eq!(
+        plaintext.config().security,
+        GrpcTransportSecurity::Plaintext
+    );
+    assert_eq!(plaintext.config().trust, GrpcTrustMode::NativeRoots);
+
+    let server_tls =
+        marty_auth::workload_channel_factory("https://flow.example:9011", None).unwrap();
+    assert_eq!(
+        server_tls.config().security,
+        GrpcTransportSecurity::ServerTls
+    );
+    assert_eq!(server_tls.config().trust, GrpcTrustMode::NativeRoots);
 }

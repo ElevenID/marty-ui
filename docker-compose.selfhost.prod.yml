@@ -326,6 +326,8 @@ services:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       AUTH_SERVICE_PORT: "8001"
+      DATABASE_URL_TEMPLATE: *database-url-sync-template
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       UI_BASE_URL: ${UI_BASE_URL:?UI_BASE_URL must be set}
       UI_ADDITIONAL_BASE_URLS: ${UI_ADDITIONAL_BASE_URLS:-}
       REDIS_URL: redis://redis:6379/0
@@ -365,6 +367,7 @@ services:
       FLOW_WEBHOOK_SECRET_FILE: /run/secrets/flow_webhook_secret
     secrets:
       - marty_api_client_secret
+      - marty_db_password
       - grpc_service_token
       - auth_workload_client_cert
       - auth_workload_client_key

@@ -25,13 +25,13 @@ def test_runner_imports_the_canonical_service_module(
     def run(app: object, **kwargs: object) -> None:
         uvicorn_calls.append((app, kwargs))
 
-    monkeypatch.setenv("SERVICE_NAME", "auth")
+    monkeypatch.setenv("SERVICE_NAME", "applicant")
     monkeypatch.setattr(service_runner.importlib, "import_module", import_module)
     monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(run=run))
 
     service_runner.main()
 
-    assert imported == ["auth.main"]
+    assert imported == ["applicant.main"]
     assert uvicorn_calls == [
         (
             application,
@@ -83,3 +83,18 @@ def test_event_stream_has_only_the_canonical_rust_server() -> None:
         "/build/rust/target/release/marty-event-stream "
         "/usr/local/bin/marty-event-stream"
     ) in dockerfile
+
+
+def test_auth_has_only_the_canonical_rust_server() -> None:
+    dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
+    entrypoint = (ROOT / "services" / "entrypoint.sh").read_text(encoding="utf-8")
+
+    assert not list((ROOT / "services" / "auth").rglob("*.py"))
+    assert "cargo build --locked --release -p marty-auth --bin marty-auth" in dockerfile
+    assert (
+        "COPY --from=rust-service-builder "
+        "/build/rust/target/release/marty-auth "
+        "/usr/local/bin/marty-auth"
+    ) in dockerfile
+    assert 'if [ "$MODULE_NAME" = "auth" ]; then' in entrypoint
+    assert "exec /usr/local/bin/marty-auth" in entrypoint

@@ -416,6 +416,7 @@ services:
       AUTH_SERVICE_PORT: "8001"
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
       REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-11id}
       OIDC_ISSUER_URL: ${OIDC_ISSUER_URL_INTERNAL:-http://keycloak:8080/realms/${KEYCLOAK_REALM:-11id}}
       OIDC_EXTERNAL_ISSUER_URL: ${OIDC_ISSUER_URL_EXTERNAL:-http://localhost:8180/realms/${KEYCLOAK_REALM:-11id}}

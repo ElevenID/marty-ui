@@ -53,10 +53,6 @@ SERVICES = [
         "module": "organization.infrastructure.models",
     },
     {
-        "name": "auth",
-        "module": "auth.infrastructure.models",
-    },
-    {
         "name": "credential_template",
         "module": "credential_template.infrastructure.models",
     },

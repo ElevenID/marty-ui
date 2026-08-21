@@ -287,6 +287,11 @@ impl KeycloakOidcProvider {
         Self::new(config, Arc::new(ReqwestOidcHttpClient::new()?))
     }
 
+    /// Resolve discovery and JWKS before the service becomes ready.
+    pub async fn health_check(&self) -> Result<(), PortError> {
+        self.provider_jwks(true).await.map(|_| ())
+    }
+
     async fn provider_jwks(&self, force_refresh: bool) -> Result<Value, PortError> {
         let mut cache = self.jwks.lock().await;
         if !force_refresh && cache.document.is_some() && Instant::now() < cache.expires_at {

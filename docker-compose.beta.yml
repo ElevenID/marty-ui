@@ -39,6 +39,8 @@ services:
   auth:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      ALLOW_PLAINTEXT_GRPC: "true"
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/0
       CREDENTIAL_LOGIN_ORGANIZATION_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}
       CREDENTIAL_LOGIN_ISSUER_DID: ${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}

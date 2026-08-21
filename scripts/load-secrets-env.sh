@@ -80,6 +80,7 @@ load_secret_env() {
     load_secret_var ISSUANCE_API_KEY
     load_secret_var SIGNING_KEYS_INTERNAL_API_KEY
     load_secret_var GRPC_SERVICE_TOKEN
+    load_secret_var FLOW_WEBHOOK_SECRET
     load_secret_var INTEGRATION_SECRET_MASTER_KEY
     load_secret_var CANVAS_CREDENTIALS_SHARED_SECRET
     load_secret_var BAO_TOKEN

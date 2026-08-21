@@ -3,7 +3,9 @@ use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
 use thiserror::Error;
 use url::Url;
 
-use crate::{OidcConfig, SessionCookieConfig, UiOriginPolicy};
+use mmf_messaging::OutboxDispatcherConfig;
+
+use crate::{KeycloakAdminConfig, OidcConfig, SessionCookieConfig, UiOriginPolicy};
 
 #[derive(Clone, Debug)]
 pub struct AuthServiceConfig {
@@ -27,7 +29,19 @@ pub struct AuthServiceConfig {
     pub credential_login_webhook_secret: String,
     pub auth_service_internal_url: String,
     pub applicant_service_url: String,
-    pub canvas_lti_service_url: String,
+    pub issuance_service_url: String,
+    pub canvas_lti_session_ttl_seconds: u64,
+    pub impersonation_handoff_cookie_name: String,
+    pub credential_login_require_existing_keycloak_user: bool,
+    pub credential_login_create_users: bool,
+    pub credential_callback_timestamp_skew_seconds: i64,
+    pub credential_login_pending_ttl_seconds: u64,
+    pub credential_login_completion_ttl_seconds: u64,
+    pub credential_login_claim_lease_seconds: u64,
+    pub keycloak_admin: Option<KeycloakAdminConfig>,
+    pub outbound_http_timeout_seconds: u64,
+    pub auth_rate_limit_rpm: u64,
+    pub outbox: OutboxDispatcherConfig,
     pub flow_grpc_target: String,
     pub organization_grpc_target: String,
     pub event_stream_grpc_target: String,
@@ -75,6 +89,7 @@ impl AuthServiceConfig {
         let realm = required(get("KEYCLOAK_REALM"), "KEYCLOAK_REALM")?;
         let ui_base = get("UI_BASE_URL").unwrap_or("http://localhost:3000");
         let ui_additional = get("UI_ALLOWED_ORIGINS")
+            .or_else(|| get("UI_ADDITIONAL_BASE_URLS"))
             .unwrap_or_default()
             .split(',')
             .map(str::trim)
@@ -143,6 +158,7 @@ impl AuthServiceConfig {
         cookie
             .validate()
             .map_err(|error| invalid(error.to_string()))?;
+        let keycloak_admin = keycloak_admin(&values, &realm)?;
         let credential_login_organization_id = required(
             get("CREDENTIAL_LOGIN_ORGANIZATION_ID").or_else(|| get("MARTY_ORG_ID")),
             "CREDENTIAL_LOGIN_ORGANIZATION_ID",
@@ -189,10 +205,75 @@ impl AuthServiceConfig {
                 get("APPLICANT_SERVICE_URL").unwrap_or("http://applicant:8006"),
                 "APPLICANT_SERVICE_URL",
             )?,
-            canvas_lti_service_url: origin(
-                get("CANVAS_LTI_SERVICE_URL").unwrap_or("http://canvas-lti:8027"),
-                "CANVAS_LTI_SERVICE_URL",
+            issuance_service_url: origin(
+                get("ISSUANCE_SERVICE_URL").unwrap_or("http://issuance:8005"),
+                "ISSUANCE_SERVICE_URL",
             )?,
+            canvas_lti_session_ttl_seconds: number(
+                get("CANVAS_LTI_SESSION_TTL_SECONDS"),
+                u64::try_from(session_ttl_seconds)
+                    .map_err(|_| invalid("SESSION_TTL_SECONDS is out of range"))?,
+                "CANVAS_LTI_SESSION_TTL_SECONDS",
+            )?,
+            impersonation_handoff_cookie_name: get("IMPERSONATION_HANDOFF_COOKIE_NAME")
+                .unwrap_or("marty_impersonation_handoff")
+                .into(),
+            credential_login_require_existing_keycloak_user: boolean(
+                get("CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER"),
+                false,
+            )?,
+            credential_login_create_users: boolean(get("CREDENTIAL_LOGIN_CREATE_USERS"), false)?,
+            credential_callback_timestamp_skew_seconds: number(
+                get("CREDENTIAL_CALLBACK_TIMESTAMP_SKEW_SECONDS"),
+                300,
+                "CREDENTIAL_CALLBACK_TIMESTAMP_SKEW_SECONDS",
+            )?,
+            credential_login_pending_ttl_seconds: number(
+                get("CREDENTIAL_LOGIN_PENDING_TTL_SECONDS"),
+                900,
+                "CREDENTIAL_LOGIN_PENDING_TTL_SECONDS",
+            )?,
+            credential_login_completion_ttl_seconds: number(
+                get("CREDENTIAL_LOGIN_COMPLETION_TTL_SECONDS"),
+                300,
+                "CREDENTIAL_LOGIN_COMPLETION_TTL_SECONDS",
+            )?,
+            credential_login_claim_lease_seconds: number(
+                get("CREDENTIAL_LOGIN_CLAIM_LEASE_SECONDS"),
+                30,
+                "CREDENTIAL_LOGIN_CLAIM_LEASE_SECONDS",
+            )?,
+            keycloak_admin,
+            outbound_http_timeout_seconds: number(
+                get("AUTH_OUTBOUND_HTTP_TIMEOUT_SECONDS"),
+                30,
+                "AUTH_OUTBOUND_HTTP_TIMEOUT_SECONDS",
+            )?,
+            auth_rate_limit_rpm: number(get("AUTH_RATE_LIMIT_RPM"), 30, "AUTH_RATE_LIMIT_RPM")?,
+            outbox: OutboxDispatcherConfig {
+                batch_size: number(get("AUTH_OUTBOX_BATCH_SIZE"), 100, "AUTH_OUTBOX_BATCH_SIZE")?,
+                lease_duration_ms: number(
+                    get("AUTH_OUTBOX_LEASE_DURATION_MS"),
+                    30_000,
+                    "AUTH_OUTBOX_LEASE_DURATION_MS",
+                )?,
+                poll_interval_ms: number(
+                    get("AUTH_OUTBOX_POLL_INTERVAL_MS"),
+                    250,
+                    "AUTH_OUTBOX_POLL_INTERVAL_MS",
+                )?,
+                retry_base_ms: number(
+                    get("AUTH_OUTBOX_RETRY_BASE_MS"),
+                    1_000,
+                    "AUTH_OUTBOX_RETRY_BASE_MS",
+                )?,
+                retry_max_ms: number(
+                    get("AUTH_OUTBOX_RETRY_MAX_MS"),
+                    60_000,
+                    "AUTH_OUTBOX_RETRY_MAX_MS",
+                )?,
+                partition: None,
+            },
             flow_grpc_target,
             organization_grpc_target,
             event_stream_grpc_target,
@@ -205,13 +286,73 @@ impl AuthServiceConfig {
             workload_client_tls,
             workload_server_tls,
         };
-        if config.http_addr == config.grpc_addr || config.database_max_connections == 0 {
+        if config.http_addr == config.grpc_addr
+            || config.database_max_connections == 0
+            || config.canvas_lti_session_ttl_seconds == 0
+            || config.impersonation_handoff_cookie_name.trim().is_empty()
+            || config.credential_callback_timestamp_skew_seconds <= 0
+            || config.credential_login_pending_ttl_seconds == 0
+            || config.credential_login_completion_ttl_seconds == 0
+            || config.credential_login_claim_lease_seconds == 0
+            || config.outbound_http_timeout_seconds == 0
+            || config.outbound_http_timeout_seconds > 300
+            || config.auth_rate_limit_rpm == 0
+            || config.outbox.validate().is_err()
+            || (config.credential_login_create_users && config.keycloak_admin.is_none())
+            || (config.credential_login_require_existing_keycloak_user
+                && config.keycloak_admin.is_none())
+        {
             return Err(invalid(
-                "Auth listeners must differ and database connections must be positive",
+                "Auth runtime limits, listeners, and provider settings are invalid",
             ));
         }
         Ok(config)
     }
+}
+
+fn keycloak_admin(
+    values: &HashMap<String, String>,
+    realm: &str,
+) -> Result<Option<KeycloakAdminConfig>, AuthConfigError> {
+    let value = |name: &str| {
+        values
+            .get(name)
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let admin_url = value("KEYCLOAK_ADMIN_URL");
+    let client_id = value("MARTY_API_CLIENT_ID");
+    let client_secret = value("MARTY_API_CLIENT_SECRET");
+    let present = [admin_url, client_id, client_secret]
+        .into_iter()
+        .flatten()
+        .count();
+    if present == 0 {
+        return Ok(None);
+    }
+    if present != 3 {
+        return Err(invalid(
+            "Keycloak admin integration requires KEYCLOAK_ADMIN_URL, MARTY_API_CLIENT_ID, and MARTY_API_CLIENT_SECRET",
+        ));
+    }
+    KeycloakAdminConfig {
+        admin_url: admin_url.expect("all Keycloak admin values checked").into(),
+        realm: realm.into(),
+        client_id: client_id.expect("all Keycloak admin values checked").into(),
+        client_secret: client_secret
+            .expect("all Keycloak admin values checked")
+            .into(),
+        timeout_seconds: number(
+            value("KEYCLOAK_ADMIN_TIMEOUT_SECONDS"),
+            8,
+            "KEYCLOAK_ADMIN_TIMEOUT_SECONDS",
+        )?,
+        token_exchange_enabled: boolean(value("KEYCLOAK_TOKEN_EXCHANGE_ENABLED"), false)?,
+    }
+    .validate()
+    .map(Some)
+    .map_err(|error| invalid(error.to_string()))
 }
 
 fn required(value: Option<&str>, name: &str) -> Result<String, AuthConfigError> {
@@ -321,35 +462,53 @@ fn workload_tls(
             .map(str::trim)
             .filter(|value| !value.is_empty())
     };
-    let names = [
+    let client_names = [
         "GRPC_WORKLOAD_TLS_CA_CERT",
         "GRPC_WORKLOAD_TLS_CLIENT_CERT",
         "GRPC_WORKLOAD_TLS_CLIENT_KEY",
+    ];
+    let server_names = [
         "GRPC_WORKLOAD_TLS_SERVER_CERT",
         "GRPC_WORKLOAD_TLS_SERVER_KEY",
     ];
-    let present = names.iter().filter(|name| value(name).is_some()).count();
-    if present == 0 && environment != "production" {
-        return Ok((None, None));
-    }
-    if present != names.len() {
+    let client_present = client_names
+        .iter()
+        .filter(|name| value(name).is_some())
+        .count();
+    let server_present = server_names
+        .iter()
+        .filter(|name| value(name).is_some())
+        .count();
+    if client_present != 0 && client_present != client_names.len() {
         return Err(invalid(
-            "workload TLS requires CA, client certificate/key and server certificate/key",
+            "workload client TLS requires CA and client certificate/key",
         ));
     }
-    let ca = PathBuf::from(value(names[0]).expect("all workload TLS values checked"));
-    Ok((
-        Some(AuthWorkloadClientTlsFiles {
-            ca_certificate: ca.clone(),
-            certificate: PathBuf::from(value(names[1]).expect("all workload TLS values checked")),
-            private_key: PathBuf::from(value(names[2]).expect("all workload TLS values checked")),
-        }),
-        Some(AuthWorkloadServerTlsFiles {
-            ca_certificate: ca,
-            certificate: PathBuf::from(value(names[3]).expect("all workload TLS values checked")),
-            private_key: PathBuf::from(value(names[4]).expect("all workload TLS values checked")),
-        }),
-    ))
+    if server_present != 0 && server_present != server_names.len() {
+        return Err(invalid(
+            "workload server TLS requires server certificate/key",
+        ));
+    }
+    if environment == "production"
+        && (client_present != client_names.len() || server_present != server_names.len())
+    {
+        return Err(invalid(
+            "production workload TLS requires outbound client identity and inbound server identity",
+        ));
+    }
+    let client = (client_present == client_names.len()).then(|| AuthWorkloadClientTlsFiles {
+        ca_certificate: PathBuf::from(value(client_names[0]).expect("client TLS values checked")),
+        certificate: PathBuf::from(value(client_names[1]).expect("client TLS values checked")),
+        private_key: PathBuf::from(value(client_names[2]).expect("client TLS values checked")),
+    });
+    let server = (server_present == server_names.len()).then(|| AuthWorkloadServerTlsFiles {
+        ca_certificate: PathBuf::from(
+            value(client_names[0]).expect("server TLS requires the workload CA"),
+        ),
+        certificate: PathBuf::from(value(server_names[0]).expect("server TLS values checked")),
+        private_key: PathBuf::from(value(server_names[1]).expect("server TLS values checked")),
+    });
+    Ok((client, server))
 }
 
 fn invalid(message: impl Into<String>) -> AuthConfigError {
