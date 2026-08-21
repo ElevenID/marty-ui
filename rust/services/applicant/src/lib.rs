@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod issuance;
 pub mod migration;
 pub mod store;
 
