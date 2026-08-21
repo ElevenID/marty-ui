@@ -64,7 +64,7 @@ generated protobufs and caches remain excluded.
 | 7 | Trust profile | 8,618 | CRUD/versioning, registry synchronization orchestration, trust material, scheduling, storage and authorization |
 | 8 | Applicant | 5,652 deleted | Applicant/application state transitions, vetting, evidence, biometrics, reviewer locks, issuance orchestration and storage |
 | 9 | Device registration | 3,220 at cutover | Registration lifecycle, atomic challenge consumption, versioned key rotation, preferences, organization checks, legacy adoption and storage |
-| 10 | Verification | 3,057 current | Session APIs, OID4VP construction, provider/service integration, persistence and canonical results |
+| 10 | Verification | 3,529 deleted | Complete: session APIs, OID4VP/SIOPv2 construction, provider/service integration, Redis coordination, HTTP/gRPC compatibility and canonical results now execute in Rust |
 | 11 | Deployment profile | 2,588 current | CRUD, validation, versioning, authorization and storage |
 | 12 | Compliance profile | 1,054 current | CRUD, policy metadata, authorization and storage |
 
@@ -1903,6 +1903,56 @@ in this same cutover; no Python fallback remains. No beta deployment occurs at
 this stage. Device Registration joins the one aggregate wave-three beta update
 after Verification, Deployment Profile and Compliance Profile have also
 landed; production remains unchanged.
+
+### Verification port status
+
+Verification has completed its native implementation, behavioral gates and
+same-slice Python deletion on the dedicated
+`marty-ui-rust-verification-cutover-wave3` worktree and
+`agent/marty-ui-rust-verification-cutover-wave3` branch. The
+`marty-verification-service` crate is the only standalone Verification service
+implementation. Axum owns all eight released HTTP operations, tonic preserves
+the seven-operation legacy gRPC contract for development/internal callers, and
+one shared application service owns both transports. Deployed inbound gRPC
+remains fail closed because the released protobuf has no authenticated tenant
+principal and has no production caller; beta and production configuration
+reject enabling that ingress.
+
+The port deliberately does not create another protocol implementation.
+Presentation-policy and credential-template visibility, active-state and
+tenant checks are resolved once through the public `marty-flow` presentation
+resolver. OID4VP/DCQL request artifacts come from the canonical Flow and
+`marty-core` implementation, while presentation evaluation remains in the
+native Presentation Policy service. The standalone crate owns only session
+orchestration: API-key and membership authorization through `mmf-security`,
+Redis-backed storage, shared Redis time, atomic digest claims, stale-lease
+recovery, fenced terminal commits, pagination and compatibility projections.
+SIOPv2 `id_token` sessions preserve the intended no-policy `scope=openid`
+path rather than manufacturing DCQL.
+
+`contracts/verification-service-behavior.json` is the language-neutral
+contract for routes, transport parity, stable protocol fields, status and
+failure mappings, submission outcomes, public-wallet boundaries, fail-closed
+dependencies and terminal-data minimization. Raw presentation tokens,
+disclosed values, inspection payloads and callback destinations are never
+retained in terminal records; only bounded decision evidence and digests
+remain. Optional inspection is still supported through an explicit configured
+gRPC method and remains non-fatal, without exposing its raw payload.
+
+Before deletion, the Python oracle passed 38 tests with its two live-Redis
+acceptance cases skipped because no local Redis service was configured. After
+deletion, 14 Rust configuration, contract, state-machine, HTTP and gRPC tests,
+the two shared Flow presentation-request tests, formatting, strict all-target
+Clippy, a locked native binary build, 20 focused packaging/regression tests,
+the ownership scanner and base/beta Compose rendering pass locally. All nine
+tracked Python files under `services/verification` were then removed, deleting
+3,529 lines with no fallback. The four ownership-guard self-tests that require
+pytest temporary directories remain blocked by the known Windows/OneDrive ACL;
+the scanner they exercise passes directly. Docker image execution and live
+Redis replica behavior remain configured CI gates because the local Docker
+daemon and service stack are unavailable. No beta deployment has occurred;
+Verification joins the one aggregate wave-three beta update after Deployment
+Profile and Compliance Profile land, and production remains unchanged.
 
 ### Trust-profile port status
 
