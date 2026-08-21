@@ -97,7 +97,7 @@ pub async fn build_flow_presentation_request(
                 .collect(),
         });
     }
-    let wallet_formats = template_provider.wallet_formats().await?;
+    let wallet_formats = template_provider.wallet_formats(organization_id).await?;
     build_presentation_request(PresentationRequestBuildInput {
         id: Uuid::new_v4().to_string(),
         requirements,

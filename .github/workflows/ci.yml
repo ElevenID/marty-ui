@@ -382,12 +382,25 @@ jobs:
             exit 1
           fi
           issuer_profile_relative="${issuer_profile_executable#"$PWD/"}"
+          credential_template_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "postgres_integration")
+            | select(.package_id | contains("marty-credential-template"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$credential_template_executable" || ! -x "$credential_template_executable" ]]; then
+            echo "Unable to locate the compiled Credential Template PostgreSQL contract executable." >&2
+            exit 1
+          fi
+          credential_template_relative="${credential_template_executable#"$PWD/"}"
           test -x target/debug/marty-revocation-profile
           tar -cf "$RUNNER_TEMP/rust-db-test-bundle.tar" \
             "$contract_relative" \
             "$registry_relative" \
             "$document_relative" \
             "$issuer_profile_relative" \
+            "$credential_template_relative" \
             target/debug/marty-revocation-profile
       - name: Publish reusable database contract executables
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -450,6 +463,7 @@ jobs:
       MARTY_TEST_REDIS_URL: redis://127.0.0.1:6379/0
       MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
       MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME: marty_revocation_test
+      CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -491,6 +505,12 @@ jobs:
             exit 1
           fi
           "${issuer_profile_contracts[0]}" --ignored --test-threads=1
+          mapfile -t credential_template_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'postgres_integration-*' -perm -u+x)
+          if (( ${#credential_template_contracts[@]} != 1 )); then
+            printf 'Expected one Credential Template PostgreSQL contract executable, found %s.\n' "${#credential_template_contracts[@]}" >&2
+            exit 1
+          fi
+          "${credential_template_contracts[0]}" --test-threads=1
 
   rust-lint-policy:
     name: Rust Lint and Packaging
@@ -697,6 +717,20 @@ jobs:
           load: true
           push: false
           tags: marty-flow:ci
+          build-args: |
+            MARTY_RELEASE_VERSION=ci
+            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-rust-service-images
+      - name: Build credential-template image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: .
+          file: rust/services/Dockerfile.ci
+          target: credential_template
+          load: true
+          push: false
+          tags: marty-credential-template:ci
           build-args: |
             MARTY_RELEASE_VERSION=ci
             MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}

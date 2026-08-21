@@ -76,12 +76,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     runtime.mark_healthy(CredentialTemplateDependency::Schema)?;
     let store = Arc::new(PostgresCredentialTemplateStore::new(pool));
-    let seeded = seed_system_catalog(&store, chrono::Utc::now()).await?;
+    let seeded = seed_system_catalog(
+        &store,
+        chrono::Utc::now(),
+        &config.marty_organization_id.to_string(),
+        config.public_api_origin.as_str(),
+    )
+    .await?;
     info!(
         wallets_inserted = seeded.wallets_inserted,
         wallets_reconciled = seeded.wallets_reconciled,
         destinations_inserted = seeded.destinations_inserted,
         destinations_reconciled = seeded.destinations_reconciled,
+        login_badge_inserted = seeded.login_badge_inserted,
         "Credential Template system catalog reconciled"
     );
     runtime.mark_healthy(CredentialTemplateDependency::SystemCatalog)?;

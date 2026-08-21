@@ -49,6 +49,11 @@ if [ "$MODULE_NAME" = "auth" ]; then
 	exec /usr/local/bin/marty-auth
 fi
 
+if [ "$MODULE_NAME" = "credential_template" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-credential-template
+fi
+
 echo "Starting service: $SERVICE_NAME (module: $MODULE_NAME)"
 echo "Working directory: $(pwd)"
 echo "Python version: $(python --version)"

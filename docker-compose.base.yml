@@ -515,12 +515,17 @@ services:
         <<: *marty_service_build_artifacts
         SERVICE_NAME: credential-template
     environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       CREDENTIAL_TEMPLATE_SERVICE_PORT: "8003"
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       ORG_GRPC_TARGET: organization:9002
       RP_GRPC_TARGET: revocation-profile:9013
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+      MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
+      MARTY_MIGRATION_PROFILE: ${MARTY_MIGRATION_PROFILE:-dev}
       CT_GRPC_PORT: "9003"
     ports:
       - "127.0.0.1:8003:8003"

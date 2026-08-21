@@ -1574,10 +1574,10 @@ adopt it only with a documented event schema and atomic repository operation.
 
 The Rust crate now passes 37 HTTP, gRPC, application, control-plane, runtime,
 configuration, wallet, domain, lifecycle, catalog, surface, migration,
-persistence and configured-PostgreSQL tests. The focused surviving Python
-control-plane/service oracle passes 75 tests; formatting and strict Clippy
-pass. The configured PostgreSQL tests run when
-`CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is supplied.
+persistence and configured-PostgreSQL tests. The complete surviving Python
+service oracle passes all 178 tests; formatting and strict Clippy pass. The
+configured PostgreSQL tests run when `CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL`
+is supplied.
 
 The historical migration translation is now explicit rather than inferred.
 `credential-template-migration-history.json` assigns each of the 45 Python
@@ -1602,11 +1602,39 @@ Clippy and formatting. Docker/PostgreSQL configured execution is still gated
 because this workstation cannot access the Docker API and no
 `CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL` is configured.
 
-Remaining work is to preserve fresh-install creation of the final Marty login
-badge, add native container/deployment packaging without deploying it, run
-configured database/container and workspace-consumer acceptance, then
-immediately delete the Python implementation, migration tree and
-implementation-specific tests. No beta deployment has occurred.
+Fresh-install ownership is now complete. The Rust catalog creates the final
+released Marty login badge with its stable identity, public issuer/VCT/image,
+eleven claims, compliance, trust and revocation dependencies, VC-JWT format and
+ES256 signing behavior. A language-neutral catalog contract proves the final
+shape on an empty store while startup remains idempotent and does not overwrite
+an existing operator-managed record.
+
+Native packaging is also wired without deployment. The shared service image
+builds and dispatches `credential_template` directly to
+`marty-credential-template`; the native CI image exposes ports 8003 and 9003;
+base, beta and Oracle Kubernetes configuration supply the fail-closed runtime
+dependencies; and readiness uses `/ready` rather than process-only health.
+The complete beta Compose overlay renders successfully, four static packaging
+contracts pass and an optimized release binary builds locally. CI now builds
+the native image and executes the configured PostgreSQL migration,
+reconciliation and repository contract against the database job.
+
+The workspace-wide all-target compatibility gate exposed and fixed one
+cross-service tenancy defect before cutover: Flow now passes the actual
+organization ID when querying the credential-template wallet registry. Three
+Flow behavioral suites assert that tenant propagation and all eight tests pass;
+`cargo check --workspace --all-targets` is green.
+
+Remaining Credential Template work is the aggregate immutable-MMF pin, a real
+configured PostgreSQL run, container build/health acceptance, and external
+provider acceptance. The local Docker daemon is unavailable and the Marty
+workspace still points to MMF crates in a sibling worktree that is outside the
+container build context, so an image result cannot yet be claimed. Once those
+gates pass, delete the Python implementation, all 45 Alembic revisions and
+implementation-specific Python tests immediately, retain the shared behavioral
+fixtures, and add anti-reintroduction ownership checks. No beta deployment has
+occurred; the only permitted beta update remains the single aggregate wave-three
+deployment after every service slice lands.
 
 The frozen contract contains 64 explicitly gateway-owned declarations: 18
 well-known discovery routes, 14 internal signing-key compatibility routes,

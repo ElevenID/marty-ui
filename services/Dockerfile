@@ -13,6 +13,7 @@ RUN cargo build --locked --release -p marty-notification --bin marty-notificatio
 RUN cargo build --locked --release -p marty-flow --bin marty-flow
 RUN cargo build --locked --release -p marty-organization --bin marty-organization
 RUN cargo build --locked --release -p marty-auth --bin marty-auth
+RUN cargo build --locked --release -p marty-credential-template --bin marty-credential-template
 
 FROM python:3.12-slim
 
@@ -83,6 +84,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-notification /
 COPY --from=rust-service-builder /build/rust/target/release/marty-flow /usr/local/bin/marty-flow
 COPY --from=rust-service-builder /build/rust/target/release/marty-organization /usr/local/bin/marty-organization
 COPY --from=rust-service-builder /build/rust/target/release/marty-auth /usr/local/bin/marty-auth
+COPY --from=rust-service-builder /build/rust/target/release/marty-credential-template /usr/local/bin/marty-credential-template
 RUN chmod +x /app/services/entrypoint.sh /app/load-secrets-env.sh \
     && adduser --disabled-password --gecos '' appuser \
     && install -d -o appuser -g appuser -m 0700 /app/data

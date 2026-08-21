@@ -325,10 +325,22 @@ impl CredentialTemplateProvider for GrpcCredentialTemplateProvider {
         })
     }
 
-    async fn wallet_formats(&self) -> Result<Vec<String>, FlowProviderError> {
+    async fn wallet_formats(
+        &self,
+        organization_id: &str,
+    ) -> Result<Vec<String>, FlowProviderError> {
+        if organization_id.trim().is_empty() {
+            return Err(invalid_response(
+                "credential_template",
+                "wallet registry organization is required",
+            ));
+        }
         let mut client = self.client.clone();
         let response = client
-            .list_wallets(self.auth.request(ListWalletsRequest { active_only: true }))
+            .list_wallets(self.auth.request(ListWalletsRequest {
+                active_only: true,
+                organization_id: organization_id.into(),
+            }))
             .await
             .map_err(|status| provider_status("credential_template", "wallets", status))?
             .into_inner();

@@ -498,6 +498,13 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: SIGNING_KEYS_INTERNAL_URL
+              value: "http://gateway:8000/internal/signing-keys"
+            - name: SIGNING_KEYS_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTERNAL_API_KEY
             - name: CREDENTIAL_TEMPLATE_SERVICE_PORT
               value: "8003"
             - name: DATABASE_URL
@@ -525,7 +532,7 @@ spec:
             periodSeconds: 15
           readinessProbe:
             httpGet:
-              path: /health
+              path: /ready
               port: 8003
             initialDelaySeconds: 10
             periodSeconds: 10

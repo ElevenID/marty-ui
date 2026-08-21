@@ -2,10 +2,13 @@ use std::collections::BTreeMap;
 
 use chrono::Utc;
 use marty_credential_template::{
-    migration::migrate_credential_template_schema, ClaimDefinition, ClaimType, CredentialFormat,
-    CredentialTemplate, DeliveryDestinationEntry, DisplayStyle, IssuerRequirements, MergeStrategy,
-    PostgresCredentialTemplateStore, PrivacyPosture, TemplateStatus, ValidityRules, WalletConfig,
-    WalletRegistryEntry,
+    migration::{
+        migrate_credential_template_schema, reconcile_credential_template_data,
+        CredentialTemplateDataReconciliationConfig,
+    },
+    ClaimDefinition, ClaimType, CredentialFormat, CredentialTemplate, DeliveryDestinationEntry,
+    DisplayStyle, IssuerRequirements, MergeStrategy, PostgresCredentialTemplateStore,
+    PrivacyPosture, TemplateStatus, ValidityRules, WalletConfig, WalletRegistryEntry,
 };
 use serde_json::json;
 use sqlx::postgres::PgPoolOptions;
@@ -23,6 +26,17 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
     migrate_credential_template_schema(&pool)
         .await
         .expect("Credential Template migration must pass");
+    reconcile_credential_template_data(
+        &pool,
+        &CredentialTemplateDataReconciliationConfig {
+            marty_organization_id: "00000000-0000-0000-0000-000000000001".into(),
+            public_api_origin: "https://issuer.example/".into(),
+            public_hostname: "issuer.example".into(),
+            selfhost_production: false,
+        },
+    )
+    .await
+    .expect("Credential Template data reconciliation must pass");
     let store = PostgresCredentialTemplateStore::new(pool);
     let now = Utc::now();
     let suffix = "rust-contract-fixed";

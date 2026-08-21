@@ -338,7 +338,10 @@ pub trait CredentialTemplateProvider: Send + Sync {
         template_id: &str,
     ) -> Result<CredentialTemplateReference, FlowProviderError>;
 
-    async fn wallet_formats(&self) -> Result<Vec<String>, FlowProviderError> {
+    async fn wallet_formats(
+        &self,
+        _organization_id: &str,
+    ) -> Result<Vec<String>, FlowProviderError> {
         Err(FlowProviderError::Unavailable {
             provider: "credential_template",
         })

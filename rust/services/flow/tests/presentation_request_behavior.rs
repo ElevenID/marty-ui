@@ -84,7 +84,11 @@ impl CredentialTemplateProvider for Templates {
         })
     }
 
-    async fn wallet_formats(&self) -> Result<Vec<String>, FlowProviderError> {
+    async fn wallet_formats(
+        &self,
+        organization_id: &str,
+    ) -> Result<Vec<String>, FlowProviderError> {
+        assert_eq!(organization_id, "org-1");
         Ok(vec!["dc+sd-jwt".into(), "mso_mdoc".into()])
     }
 }

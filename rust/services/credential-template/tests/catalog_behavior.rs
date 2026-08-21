@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use chrono::{TimeZone, Utc};
 use marty_credential_template::catalog::{
-    system_delivery_destination_catalog, system_wallet_catalog,
+    marty_login_badge, system_delivery_destination_catalog, system_wallet_catalog,
 };
 use serde_json::Value;
 
@@ -12,6 +12,42 @@ fn fixture() -> Value {
         "/../../../contracts/credential-template-system-catalog.json"
     )))
     .expect("valid system catalog fixture")
+}
+
+#[test]
+fn fresh_install_login_badge_preserves_the_final_released_behavior() {
+    let now = Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap();
+    let badge = marty_login_badge(
+        now,
+        "00000000-0000-0000-0000-000000000001",
+        "https://issuer.example/",
+    );
+    assert_eq!(badge.id, "50000000-0000-0000-0000-000000000040");
+    assert_eq!(badge.status.as_str(), "active");
+    assert_eq!(badge.credential_payload_format, "jwt_vc");
+    assert_eq!(badge.supported_formats[0].canonical(), "VC_JWT");
+    assert_eq!(
+        badge.vct,
+        "https://issuer.example/credentials/marty-verified-member-badge"
+    );
+    assert_eq!(badge.claims.len(), 11);
+    assert!(badge.selective_disclosure_fields.is_empty());
+    assert_eq!(
+        badge.compliance_profile_id.as_deref(),
+        Some("10000000-0000-0000-0000-000000000003")
+    );
+    assert_eq!(
+        badge.trust_profile_id.as_deref(),
+        Some("60000000-0000-0000-0000-000000000001")
+    );
+    assert_eq!(
+        badge.revocation_profile_id.as_deref(),
+        Some("70000000-0000-0000-0000-000000000001")
+    );
+    assert_eq!(
+        badge.issuer_did.as_deref(),
+        Some("did:web:issuer.example:orgs:marty")
+    );
 }
 
 #[test]

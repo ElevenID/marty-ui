@@ -4,9 +4,16 @@ use chrono::{DateTime, Utc};
 use serde_json::json;
 
 use crate::{
-    CredentialTemplateRepositoryError, DeliveryDestinationEntry, MergeStrategy,
-    PostgresCredentialTemplateStore, WalletRegistryEntry,
+    ClaimDefinition, ClaimType, CredentialFormat, CredentialTemplate,
+    CredentialTemplateRepositoryError, DeliveryDestinationEntry, DisplayStyle, IssuerRequirements,
+    MergeStrategy, PostgresCredentialTemplateStore, PrivacyPosture, TemplateStatus, ValidityRules,
+    WalletRegistryEntry,
 };
+
+const MARTY_LOGIN_BADGE_ID: &str = "50000000-0000-0000-0000-000000000040";
+const OPEN_BADGES_PROFILE_ID: &str = "10000000-0000-0000-0000-000000000003";
+const MARTY_LOGIN_TRUST_PROFILE_ID: &str = "60000000-0000-0000-0000-000000000001";
+const MARTY_REVOCATION_PROFILE_ID: &str = "70000000-0000-0000-0000-000000000001";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CatalogSeedSummary {
@@ -14,6 +21,7 @@ pub struct CatalogSeedSummary {
     pub wallets_reconciled: usize,
     pub destinations_inserted: usize,
     pub destinations_reconciled: usize,
+    pub login_badge_inserted: bool,
 }
 
 pub fn system_wallet_catalog(now: DateTime<Utc>) -> Vec<WalletRegistryEntry> {
@@ -316,6 +324,8 @@ pub fn system_delivery_destination_catalog(now: DateTime<Utc>) -> Vec<DeliveryDe
 pub async fn seed_system_catalog(
     store: &PostgresCredentialTemplateStore,
     now: DateTime<Utc>,
+    marty_organization_id: &str,
+    public_api_origin: &str,
 ) -> Result<CatalogSeedSummary, CredentialTemplateRepositoryError> {
     let mut summary = CatalogSeedSummary::default();
     for wallet in system_wallet_catalog(now) {
@@ -334,7 +344,213 @@ pub async fn seed_system_catalog(
         }
         store.save_destination(&destination).await?;
     }
+    if store.template_by_id(MARTY_LOGIN_BADGE_ID).await?.is_none() {
+        store
+            .save_template(&marty_login_badge(
+                now,
+                marty_organization_id,
+                public_api_origin,
+            ))
+            .await?;
+        summary.login_badge_inserted = true;
+    }
     Ok(summary)
+}
+
+pub fn marty_login_badge(
+    now: DateTime<Utc>,
+    marty_organization_id: &str,
+    public_api_origin: &str,
+) -> CredentialTemplate {
+    let public_api_origin = public_api_origin.trim_end_matches('/');
+    let vct = format!("{public_api_origin}/credentials/marty-verified-member-badge");
+    let issuer_host = url::Url::parse(public_api_origin)
+        .ok()
+        .and_then(|origin| origin.host_str().map(str::to_owned))
+        .unwrap_or_default();
+    let claims = vec![
+        claim(
+            "marty-ob-member-id",
+            "member_id",
+            "Member ID",
+            "Opaque member identifier issued by the organization",
+            true,
+            true,
+            None,
+        ),
+        claim(
+            "marty-ob-email",
+            "email",
+            "Email Address",
+            "Holder email address used to resolve the account during login",
+            true,
+            true,
+            None,
+        ),
+        claim(
+            "marty-ob-given-name",
+            "given_name",
+            "Given Name",
+            "Holder first name",
+            false,
+            true,
+            None,
+        ),
+        claim(
+            "marty-ob-family-name",
+            "family_name",
+            "Family Name",
+            "Holder last name",
+            false,
+            true,
+            None,
+        ),
+        claim(
+            "marty-ob-organization-id",
+            "organization_id",
+            "Organization ID",
+            "UUID of the issuing organization",
+            true,
+            true,
+            None,
+        ),
+        claim(
+            "marty-ob-organization-name",
+            "organization_name",
+            "Organization",
+            "Human-readable name of the issuing organization",
+            false,
+            true,
+            None,
+        ),
+        claim(
+            "marty-ob-role",
+            "role",
+            "Role",
+            "Organization role conveyed during credential-based login",
+            true,
+            true,
+            Some(strings(&["applicant", "vendor", "administrator"])),
+        ),
+        claim(
+            "marty-ob-achievement-name",
+            "achievement_name",
+            "Badge Name",
+            "Official badge title displayed to the holder",
+            true,
+            false,
+            None,
+        ),
+        claim(
+            "marty-ob-achievement-description",
+            "achievement_description",
+            "Badge Description",
+            "Description of the verified membership represented by this badge",
+            false,
+            false,
+            None,
+        ),
+        date_claim(
+            "marty-ob-issued-at",
+            "issued_at",
+            "Issued At",
+            "ISO-8601 timestamp when the badge was issued",
+            true,
+        ),
+        claim(
+            "marty-ob-badge-image-url",
+            "badge_image_url",
+            "Badge Image",
+            "Public image associated with the badge",
+            false,
+            false,
+            None,
+        ),
+    ];
+    CredentialTemplate {
+        id: MARTY_LOGIN_BADGE_ID.to_owned(),
+        organization_id: marty_organization_id.to_owned(),
+        name: "Marty Verified Member Badge".to_owned(),
+        description: Some("Open Badge 3.0 membership badge issued by Marty Identity Platform; presents verified membership for wallet-based passwordless login/sign-in.".to_owned()),
+        status: TemplateStatus::Active,
+        credential_type: "open_badge".to_owned(),
+        vct: vct.clone(),
+        doctype: Some("org.openbadges.v3".to_owned()),
+        claims,
+        privacy_posture: PrivacyPosture::SelectiveDisclosure,
+        selective_disclosure_fields: Vec::new(),
+        zk_predicate_claims: Vec::new(),
+        derived_attributes: Vec::new(),
+        display_style: DisplayStyle {
+            background_color: "#3B1C8F".to_owned(),
+            text_color: "#FFFFFF".to_owned(),
+            logo_url: Some(format!("{vct}/image.svg")),
+            background_image_url: None,
+            icon: None,
+        },
+        validity_rules: ValidityRules::default(),
+        issuer_requirements: IssuerRequirements::default(),
+        supported_formats: vec![CredentialFormat::VcJwt],
+        credential_payload_format: "jwt_vc".to_owned(),
+        wallet_configs: Vec::new(),
+        compliance_profile: Some(json!({
+            "compliance_code":"OPEN_BADGES_3",
+            "credential_format":"vc_jwt"
+        })),
+        compliance_profile_id: Some(OPEN_BADGES_PROFILE_ID.to_owned()),
+        application_template_id: None,
+        trust_profile_id: Some(MARTY_LOGIN_TRUST_PROFILE_ID.to_owned()),
+        revocation_profile_id: Some(MARTY_REVOCATION_PROFILE_ID.to_owned()),
+        issuer_algorithm: Some("ES256".to_owned()),
+        issuer_did: Some(format!("did:web:{issuer_host}:orgs:marty")),
+        issuance_protocol: "OID4VCI_PRE_AUTH".to_owned(),
+        version: 4,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn claim(
+    id: &str,
+    name: &str,
+    display_name: &str,
+    description: &str,
+    required: bool,
+    selectively_disclosable: bool,
+    enum_values: Option<Vec<String>>,
+) -> ClaimDefinition {
+    ClaimDefinition {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        display_name: display_name.to_owned(),
+        description: Some(description.to_owned()),
+        claim_type: ClaimType::String,
+        required,
+        selectively_disclosable,
+        derivable: false,
+        derived_from: None,
+        pattern: None,
+        enum_values,
+        min_value: None,
+        max_value: None,
+        mdoc_namespace: None,
+        mdoc_element_identifier: None,
+        display_icon: None,
+    }
+}
+
+fn date_claim(
+    id: &str,
+    name: &str,
+    display_name: &str,
+    description: &str,
+    required: bool,
+) -> ClaimDefinition {
+    ClaimDefinition {
+        claim_type: ClaimType::Date,
+        ..claim(id, name, display_name, description, required, false, None)
+    }
 }
 
 fn wallet(

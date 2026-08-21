@@ -61,6 +61,10 @@ services:
   credential-template:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
+      MARTY_ORG_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}
+      MARTY_MIGRATION_PROFILE: beta
 
   trust-profile:
     environment:
