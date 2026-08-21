@@ -133,5 +133,26 @@
       {"current": "REVOKED", "requested": "REVOKED", "allowed": true},
       {"current": "REVOKED", "requested": "COMPLIANT", "allowed": false}
     ]
+  },
+  "repository_cases": {
+    "framework_order": ["AAMVA", "ICAO", "CUSTOM"],
+    "registry": {
+      "current_country_after_sequence": ["33333333-3333-4333-8333-333333333333"],
+      "status": {
+        "total_entries": 3,
+        "current_entries": 2,
+        "csca_entries": 1,
+        "dsc_entries": 1,
+        "current_sequence": 3
+      }
+    },
+    "organization_visibility": [
+      "55555555-5555-4555-8555-555555555555",
+      "66666666-6666-4666-8666-666666666666",
+      "77777777-7777-4777-8777-777777777777"
+    ],
+    "optimistic_update_conflict": false,
+    "profile_delete_cascades_relationships": true,
+    "issuer_delete_cascades_relationships": true
   }
 }

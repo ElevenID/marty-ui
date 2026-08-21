@@ -1,6 +1,7 @@
 pub mod domain;
 pub mod persistence;
 pub mod policy;
+pub mod repository;
 
 pub use domain::{
     CascadeRevocationPolicy, ComplianceStatus, IssuerEntity, IssuerEntityComplianceStatus,
@@ -14,6 +15,10 @@ pub use policy::{
     allowed_issuers_after_request, normalize_accreditations, normalize_jurisdictions,
     reject_private_custody_metadata, require_issuer_status_transition,
     sanitize_private_custody_metadata, TrustDomainError,
+};
+pub use repository::{
+    MemoryTrustProfileRepository, RegistryStatus, TrustProfileRepository,
+    TrustProfileRepositoryError,
 };
 
 pub const HTTP_OPERATIONS: [(&str, &str); 32] = [
