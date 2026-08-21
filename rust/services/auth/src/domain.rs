@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use base64::Engine as _;
 use chrono::{DateTime, Duration, Utc};
-use rand::distr::{Alphanumeric, SampleString as _};
+use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest as _, Sha256};
@@ -211,12 +211,19 @@ pub struct PkcePair {
 
 #[must_use]
 pub fn generate_pkce_pair() -> PkcePair {
-    let verifier = Alphanumeric.sample_string(&mut rand::rng(), 86);
+    let verifier = random_urlsafe_token(64);
     let challenge = pkce_s256_challenge(&verifier);
     PkcePair {
         verifier,
         challenge,
     }
+}
+
+#[must_use]
+pub fn random_urlsafe_token(byte_count: usize) -> String {
+    let mut bytes = vec![0_u8; byte_count];
+    rand::rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 #[must_use]
@@ -242,6 +249,13 @@ pub struct OidcUserInfo {
     pub organization: Option<Value>,
     #[serde(default)]
     pub roles: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OidcValidatedIdentity {
+    pub user_info: OidcUserInfo,
+    pub id_token_claims: Value,
+    pub access_token_claims: Value,
 }
 
 impl OidcUserInfo {
