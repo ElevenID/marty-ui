@@ -36,6 +36,8 @@ pub enum TrustSourceType {
     PinnedIssuer,
     RootCa,
     PkdUrl,
+    #[serde(rename = "REGISTRY")]
+    LegacyRegistry,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -127,6 +129,8 @@ pub struct TrustSource {
     pub registry_sequence: u64,
     pub registry_entries: Map<String, Value>,
     pub registry_last_synced_at: Option<DateTime<Utc>>,
+    #[serde(flatten)]
+    pub extensions: Map<String, Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -137,6 +141,8 @@ pub struct ValidationRules {
     pub require_key_usage: bool,
     pub max_chain_depth: u8,
     pub allow_self_signed: bool,
+    #[serde(flatten)]
+    pub extensions: Map<String, Value>,
 }
 
 impl Default for ValidationRules {
@@ -148,6 +154,7 @@ impl Default for ValidationRules {
             require_key_usage: true,
             max_chain_depth: 5,
             allow_self_signed: false,
+            extensions: Map::new(),
         }
     }
 }

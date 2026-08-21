@@ -100,7 +100,7 @@ impl TryFrom<TrustProfileRecord> for TrustProfile {
     type Error = TrustProfileRecordError;
 
     fn try_from(record: TrustProfileRecord) -> Result<Self, Self::Error> {
-        let mut validation = record
+        let validation = record
             .validation_rules
             .as_object()
             .cloned()
@@ -119,8 +119,21 @@ impl TryFrom<TrustProfileRecord> for TrustProfile {
                 "system_issuer_overrides",
             ))?;
 
+        let mut validation_rule_fields = validation.clone();
+        for envelope_field in [
+            "profile_type",
+            "compliance_status",
+            "allowed_issuers",
+            "denied_issuers",
+            "system_issuer_overrides",
+            "compatible_compliance_codes",
+            "verification_policy_set_id",
+            "auto_generated",
+        ] {
+            validation_rule_fields.remove(envelope_field);
+        }
         apply_defaults(
-            &mut validation,
+            &mut validation_rule_fields,
             &ValidationRules::default(),
             "validation_rules",
         )?;
@@ -144,7 +157,7 @@ impl TryFrom<TrustProfileRecord> for TrustProfile {
             profile_type,
             compliance_status,
             trust_sources,
-            validation_rules: parse(Value::Object(validation.clone()), "validation_rules")?,
+            validation_rules: parse(Value::Object(validation_rule_fields), "validation_rules")?,
             allowed_issuers: optional(&validation, "allowed_issuers")?,
             denied_issuers: optional(&validation, "denied_issuers")?,
             system_issuer_overrides,
@@ -195,6 +208,17 @@ fn trust_sources(value: Value) -> Result<Vec<TrustSource>, TrustProfileRecordErr
                 .is_none_or(str::is_empty)
             {
                 source.insert("source_type".into(), Value::String("TRUST_LIST".into()));
+            } else if let Some(normalized) = source
+                .get("source_type")
+                .and_then(Value::as_str)
+                .and_then(normalize_legacy_source_type)
+            {
+                source.insert("source_type".into(), Value::String(normalized.into()));
+            }
+            if !source.contains_key("url") {
+                if let Some(registry_url) = source.get("registry_url").cloned() {
+                    source.insert("url".into(), registry_url);
+                }
             }
             source
                 .entry("pinned_certificates")
@@ -210,6 +234,17 @@ fn trust_sources(value: Value) -> Result<Vec<TrustSource>, TrustProfileRecordErr
             parse(Value::Object(source), "trust_sources")
         })
         .collect()
+}
+
+fn normalize_legacy_source_type(value: &str) -> Option<&'static str> {
+    match value.to_ascii_lowercase().as_str() {
+        "registry" => Some("REGISTRY"),
+        "trust_list" => Some("TRUST_LIST"),
+        "allowlist" | "pinned_issuer" => Some("PINNED_ISSUER"),
+        "pinned_root" | "root_ca" => Some("ROOT_CA"),
+        "pkd" | "pkd_url" => Some("PKD_URL"),
+        _ => None,
+    }
 }
 
 fn supported_formats(value: Value) -> Result<Vec<String>, TrustProfileRecordError> {

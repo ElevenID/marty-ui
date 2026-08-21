@@ -1,4 +1,5 @@
 pub mod application;
+pub mod catalog;
 pub mod domain;
 pub mod migration;
 pub mod persistence;
@@ -10,6 +11,9 @@ pub use application::{
     Change, CreateProfileInput, IssuerEntityPatch, OrganizationProfilePatch, ProfilePatch,
     RelationshipPatch, TrustAuthorizationError, TrustProfileApplication,
     TrustProfileApplicationError, TrustProfileControlPlane,
+};
+pub use catalog::{
+    bootstrap_system_catalog, system_frameworks, MartyBootstrapConfig, TrustCatalogError,
 };
 pub use domain::{
     CascadeRevocationPolicy, ComplianceStatus, IssuerEntity, IssuerEntityComplianceStatus,

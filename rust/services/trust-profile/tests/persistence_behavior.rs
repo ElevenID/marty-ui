@@ -36,6 +36,7 @@ fn complete_profile() -> TrustProfile {
             registry_sequence: 42,
             registry_entries: Map::from_iter([("entry-1".into(), json!({"active": true}))]),
             registry_last_synced_at: Some(timestamp()),
+            extensions: Map::from_iter([("registry_namespace".into(), json!("icao_pkd"))]),
         }],
         validation_rules: ValidationRules {
             allowed_algorithms: vec!["ES256".into()],
@@ -44,6 +45,7 @@ fn complete_profile() -> TrustProfile {
             require_key_usage: true,
             max_chain_depth: 4,
             allow_self_signed: false,
+            extensions: Map::from_iter([("require_icao_country_header".into(), json!(true))]),
         },
         allowed_issuers: Some(vec!["did:web:issuer.example".into()]),
         denied_issuers: Some(vec!["did:web:denied.example".into()]),
@@ -100,6 +102,11 @@ fn legacy_rows_receive_the_same_safe_defaults_as_the_python_adapter() {
             "source_type": "",
             "issuer_did": "did:web:legacy.example",
             "registry_entries": null
+        }, {
+            "id": "22222222-2222-4222-8222-222222222222",
+            "name": "Historical registry",
+            "source_type": "REGISTRY",
+            "registry_url": "https://registry.example.test/feed"
         }]),
         validation_rules: json!({}),
         revocation_policy: json!({}),
@@ -124,6 +131,14 @@ fn legacy_rows_receive_the_same_safe_defaults_as_the_python_adapter() {
         TrustSourceType::TrustList
     );
     assert!(profile.trust_sources[0].registry_entries.is_empty());
+    assert_eq!(
+        profile.trust_sources[1].source_type,
+        TrustSourceType::LegacyRegistry
+    );
+    assert_eq!(
+        profile.trust_sources[1].url.as_deref(),
+        Some("https://registry.example.test/feed")
+    );
 }
 
 #[test]

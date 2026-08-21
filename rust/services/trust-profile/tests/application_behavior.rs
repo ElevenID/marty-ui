@@ -80,6 +80,7 @@ fn registry_source(last_synced_at: Option<chrono::DateTime<Utc>>) -> TrustSource
         registry_sequence: 1,
         registry_entries: Map::new(),
         registry_last_synced_at: last_synced_at,
+        extensions: Map::new(),
     }
 }
 
