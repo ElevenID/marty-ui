@@ -184,6 +184,9 @@ fn render_template(template: &str, values: &HashMap<&str, String>) -> Result<Str
     let mut cursor = 0;
     while cursor < bytes.len() {
         match bytes[cursor] {
+            b'\r' if bytes.get(cursor + 1) == Some(&b'\n') => {
+                cursor += 1;
+            }
             b'{' if bytes.get(cursor + 1) == Some(&b'{') => {
                 rendered.push('{');
                 cursor += 2;
