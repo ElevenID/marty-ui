@@ -594,7 +594,7 @@
     },
     {
       "id": "applicant-service",
-      "phase": 10,
+      "phase": 9,
       "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-ui",

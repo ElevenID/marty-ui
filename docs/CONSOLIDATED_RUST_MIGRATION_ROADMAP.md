@@ -1806,6 +1806,59 @@ revision, then run the locked image, PostgreSQL and external-provider CI gates.
 No beta deployment has occurred; the only permitted update remains the single
 aggregate wave-three beta deployment after every service slice lands.
 
+### Applicant port status
+
+Applicant has completed its local source cutover on the dedicated
+`marty-ui-rust-applicant-cutover-wave3` worktree and
+`agent/marty-ui-rust-applicant-cutover-wave3` branch. Rust is now the only
+tracked runtime, domain, persistence, migration and protocol-orchestration
+implementation. The cutover deletes all ten tracked Python files under
+`services/applicant`, removing 5,652 lines immediately after the
+implementation-neutral behavior, native executable, packaging and ownership
+gates passed. There is no Python runtime or migration fallback.
+
+The language-neutral `applicant-service-behavior.json` contract freezes all 32
+canonical self-service and organization-review HTTP operations, the shared
+Applicant/Application lifecycle, claim and evidence states, upload limits,
+reviewer-lock TTL and all eleven intended capabilities. A second neutral vector
+freezes the lossless MIP 0.2-to-0.3 JSON-store migration, including metadata
+partitioning, template resolution, idempotency and fail-before-mutation
+behavior. Both the retired Python oracle and the Rust crate executed these
+contracts before deletion.
+
+The `marty-applicant` crate owns one DRY lifecycle state machine, strict
+template-derived field validation, tenant-bound profiles and applications,
+biometric metadata, bounded and digest-verified evidence, reviewer locks,
+vetting checks, request-information/review/withdrawal decisions and
+retry-stable Flow issuance. Issuance reservations and exact claim snapshots are
+persisted before external effects; a generated offer remains `OFFERED` until
+the issuance transaction reports `issued`; expired offers and missing active
+flows produce stable fail-closed claim blockers. Reads reconcile transaction
+state through the Issuance service without reimplementing the canonical Rust
+issuance transition kernel.
+
+Production adapters preserve every intended service integration. Application
+Templates and issued-credential inventory remain Issuance-owned; Flow offer
+creation uses the purpose-bound `ApplicationEventAuthenticator` from
+`mmf-security`; tenant-scoped domain events publish to the central Rust event
+stream and governed Notification ingestion; and approval uses the single MMF
+Cedar policy in `mmf-security` rather than an Applicant-local evaluator. The
+shared image and entrypoint dispatch directly to `marty-applicant`, the
+dedicated CI image owns its binary/health gate, startup runs the native
+one-way store migration, and health diagnostics report the required Rust
+backend and crate version.
+
+The post-cutover local gate passes all 21 Applicant Rust behavior tests,
+formatting, strict Clippy, the locked native binary build, 13 focused packaging,
+ownership and runner regressions, the ownership scanner and base Compose
+rendering. Four ownership-guard self-tests that require pytest temporary
+directories remain host-blocked by the existing Windows/OneDrive temporary
+ACL; the scanner they exercise passes directly. The local Docker daemon and a
+configured live service stack are unavailable, so the dedicated image build,
+health smoke and cross-service acceptance remain CI landing gates. No beta
+deployment has occurred; Applicant will ship only in the single aggregate
+wave-three beta update after every remaining service slice lands.
+
 ### Trust-profile port status
 
 Trust Profile has completed its local native cutover on the dedicated
