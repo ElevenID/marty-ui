@@ -48,7 +48,7 @@ cryptographic kernels.
 
 Work proceeds in descending removable Python size after the MMF foundation is
 available. Completed services retain their historical production-source
-estimates. Remaining services are remeasured from all tracked Python below the
+estimates. Services are remeasured from all tracked Python below the
 service boundary, including implementation-specific tests and migrations that
 will be replaced by language-neutral contracts and Rust-owned schema history;
 generated protobufs and caches remain excluded.
@@ -66,7 +66,7 @@ generated protobufs and caches remain excluded.
 | 9 | Device registration | 3,220 at cutover | Registration lifecycle, atomic challenge consumption, versioned key rotation, preferences, organization checks, legacy adoption and storage |
 | 10 | Verification | 3,529 deleted | Complete: session APIs, OID4VP/SIOPv2 construction, provider/service integration, Redis coordination, HTTP/gRPC compatibility and canonical results now execute in Rust |
 | 11 | Deployment profile | 3,010 deleted | Complete: all 14 profile/lane operations, complete runtime configuration, one-time API keys, tenant authorization, atomic device assignment, PostgreSQL migration/seed ownership and Gateway contract consolidation now execute in Rust |
-| 12 | Compliance profile | 1,054 current | CRUD, policy metadata, authorization and storage |
+| 12 | Compliance profile | 1,194 deleted | Complete: all eight profile operations, complete policy metadata, four-profile system catalog, exact tenant authorization, durable PostgreSQL ownership and native deployment now execute in Rust |
 
 ### Gateway port status
 
@@ -2005,6 +2005,63 @@ unavailable, so built-container health and live migration concurrency remain
 configured CI gates. No beta deployment has occurred. Deployment Profile joins
 the one aggregate wave-three beta update after Compliance Profile lands, and
 production remains unchanged.
+
+### Compliance-profile port status
+
+Compliance Profile has completed its native implementation, behavioral gates
+and same-slice Python deletion on the dedicated
+`marty-ui-rust-compliance-profile-cutover-wave3` worktree and
+`agent/marty-ui-rust-compliance-profile-cutover-wave3` branch. The new
+`marty-compliance-profile` crate is the single implementation for all eight
+released HTTP operations. It preserves DRAFT, ACTIVE, SUSPENDED and DEPRECATED
+status semantics; every credential format and issuance protocol; issuer
+artifact and trust-profile constraints; API-surface metadata; discovery;
+framework references; retention, consent and audit policy; data minimization;
+jurisdiction and residency constraints; age verification; lifecycle changes;
+pagination; and the four OID4VC, ISO 18013-5, Open Badges 3.0 and ICAO VDS-NC
+system profiles.
+
+The port reuses the canonical `CredentialFormat` parser from
+`marty-credential-template` rather than maintaining another format map. Generic
+lifecycle/readiness, bounded gRPC transport, service identity and exact tenant
+permission checks come from MMF crates. Seeded system profiles are now
+migration-owned and immutable: public discovery remains anonymous and returns
+only active discoverable profiles, while organization profiles require the
+exact action permission. This closes the Python path that allowed API callers
+to create or mutate system profiles through broad role aliases. The parity
+audit also caught and fixed an initial Rust seed coupling so ISO 18013-5
+correctly requires DID material without incorrectly requiring JWK material.
+
+`contracts/compliance-profile-service-behavior.json` freezes all routes, enum
+families, seven policy sections, system catalog and fail-closed invariants
+independently of either implementation language. The public response remains
+protocol-scoped and does not expose internal retention, consent, audit,
+minimization, jurisdiction, age or framework policy, while PostgreSQL stores
+the complete profile as a durable JSONB policy aggregate under indexed tenant,
+status and discovery projections. Native startup owns additive schema history,
+scope constraints, indexes and idempotent system seeds under an advisory lock;
+there is no process-local production repository or Python fallback.
+
+Before deletion, all five Python behavior-oracle tests passed. After deletion,
+11 Rust contract/config/domain/HTTP/migration tests, formatting, strict
+all-target Clippy, a locked native binary build, 62 focused packaging,
+ownership, Kubernetes and workload-identity tests, the direct ownership
+scanner, JSON and PowerShell syntax validation, and base/beta/self-host Compose
+rendering pass locally. The four ownership-guard self-tests that manufacture
+temporary repositories remain blocked by the known Windows/OneDrive temporary
+directory ACL; the real scanner they exercise passes directly and those tests
+remain configured in CI. Both tracked Python files under
+`services/compliance_profile` were removed, deleting 1,194 lines, and an
+ownership guard prevents reintroduction.
+
+The dedicated non-Python image, CI build target, beta and self-host Compose
+profiles, Kubernetes manifest and deployment helpers now provision the native
+binary with a service-scoped client certificate. The local Docker daemon and
+PostgreSQL URL remain unavailable, so executable container health and live
+migration concurrency are configured CI gates. No beta deployment has
+occurred. Compliance Profile completes the ordered wave-three service ports;
+publication/pinning, aggregate CI and one aggregate beta-only deployment and
+soak remain. Production remains unchanged.
 
 ### Trust-profile port status
 
