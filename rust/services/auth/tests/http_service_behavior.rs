@@ -11,9 +11,12 @@ use axum::{
 use chrono::Utc;
 use marty_auth::{
     auth_core_router, AuthHttpApplication, AuthHttpState, AuthenticatedUser, CanvasFinalizeContext,
-    CanvasHttpApplication, HandleCallbackCommand, HandleCallbackResult, PortError, Session,
+    CanvasHttpApplication, CredentialCallbackContext, CredentialCallbackHeaders,
+    CredentialCallbackResult, CredentialHttpError, CredentialLoginCompletion,
+    CredentialLoginHttpService, CredentialLoginPoll, CredentialLoginStartResult,
+    CredentialVerifiedPayload, HandleCallbackCommand, HandleCallbackResult, PortError, Session,
     SessionCookieConfig, SessionRepository, SessionSpec, UiOriginPolicy, UserType,
-    AUTH_CORE_HTTP_ROUTES,
+    AUTH_CORE_HTTP_ROUTES, AUTH_CREDENTIAL_HTTP_ROUTES,
 };
 use serde_json::Value;
 use tower::ServiceExt as _;
@@ -69,6 +72,76 @@ impl CanvasHttpApplication for CanvasStub {
     async fn finalize(&self, context: &CanvasFinalizeContext) -> Result<Session, PortError> {
         assert_eq!(context.bearer_token, "canvas-token");
         Ok(self.0.clone())
+    }
+}
+
+struct CredentialStub;
+
+#[async_trait]
+impl CredentialLoginHttpService for CredentialStub {
+    async fn start_login(&self) -> Result<CredentialLoginStartResult, CredentialHttpError> {
+        Ok(CredentialLoginStartResult {
+            nonce: "nonce-1".into(),
+            html: "<!doctype html><title>Credential login</title>".into(),
+        })
+    }
+
+    async fn poll_login(&self, nonce: &str) -> Result<CredentialLoginPoll, CredentialHttpError> {
+        Ok(match nonce {
+            "completed" => CredentialLoginPoll::Completed {
+                redirect_to: "/v1/auth/credential-login/finalize?nonce=completed".into(),
+                revocation_checked: true,
+                revocation_status: "valid".into(),
+            },
+            "expired" => CredentialLoginPoll::Expired,
+            _ => CredentialLoginPoll::Pending,
+        })
+    }
+
+    async fn finalize_login(
+        &self,
+        nonce: &str,
+    ) -> Result<Option<CredentialLoginCompletion>, CredentialHttpError> {
+        Ok(match nonce {
+            "completed" => Some(completion("completed", Some("session-1"))),
+            "failed" => Some(CredentialLoginCompletion {
+                status: "failed".into(),
+                session_id: None,
+                reason_code: Some("issuer_not_trusted".into()),
+                message: Some("Issuer is not trusted".into()),
+                reason: None,
+                detail: Some("trust profile mismatch".into()),
+                revocation_checked: false,
+                revocation_status: "unknown".into(),
+            }),
+            _ => None,
+        })
+    }
+
+    async fn verified_callback(
+        &self,
+        payload: &CredentialVerifiedPayload,
+        _: &CredentialCallbackHeaders,
+        context: &CredentialCallbackContext,
+    ) -> Result<CredentialCallbackResult, CredentialHttpError> {
+        assert_eq!(payload.flow_instance_id, "flow-1");
+        assert_eq!(context.nonce, "nonce-1");
+        Ok(CredentialCallbackResult::Completed {
+            session_id: "session-1".into(),
+        })
+    }
+}
+
+fn completion(status: &str, session_id: Option<&str>) -> CredentialLoginCompletion {
+    CredentialLoginCompletion {
+        status: status.into(),
+        session_id: session_id.map(str::to_owned),
+        reason_code: None,
+        message: None,
+        reason: None,
+        detail: None,
+        revocation_checked: true,
+        revocation_status: "valid".into(),
     }
 }
 
@@ -145,6 +218,7 @@ fn harness() -> (axum::Router, Arc<AppStub>, Arc<Sessions>) {
     let router = auth_core_router(AuthHttpState {
         application: app.clone(),
         canvas: Arc::new(CanvasStub(session())),
+        credential_login: Arc::new(CredentialStub),
         sessions: sessions.clone(),
         origins: UiOriginPolicy::new("https://elevenidllc.com", ["https://beta.elevenidllc.com"])
             .unwrap(),
@@ -157,6 +231,9 @@ fn harness() -> (axum::Router, Arc<AppStub>, Arc<Sessions>) {
         },
         canvas_session_ttl_seconds: 3_600,
         impersonation_handoff_cookie_name: "marty_impersonation_handoff".into(),
+        credential_login_css: "body { color: black; }".into(),
+        credential_login_javascript: "document.documentElement.dataset.ready = 'true';".into(),
+        credential_login_unavailable_html: "<!doctype html><title>Unavailable</title>".into(),
     })
     .unwrap();
     (router, app, sessions)
@@ -200,6 +277,124 @@ fn core_surface_is_the_exact_non_credential_route_subset() {
             .collect::<BTreeSet<_>>(),
         expected
     );
+}
+
+#[test]
+fn combined_surface_matches_all_fourteen_frozen_routes() {
+    let contract: Value =
+        serde_json::from_str(include_str!("../../../../contracts/auth-behavior.json")).unwrap();
+    let expected = contract["http_routes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|route| {
+            (
+                route["method"].as_str().unwrap(),
+                route["path"].as_str().unwrap(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let actual = AUTH_CORE_HTTP_ROUTES
+        .iter()
+        .chain(AUTH_CREDENTIAL_HTTP_ROUTES)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn credential_routes_preserve_assets_poll_finalize_and_callback_behavior() {
+    let (router, _, _) = harness();
+    for (path, content_type) in [
+        ("/v1/auth/credential-login/assets/styles.css", "text/css"),
+        (
+            "/v1/auth/credential-login/assets/app.js",
+            "application/javascript",
+        ),
+    ] {
+        let response = request(&router, Method::GET, path, &[], "").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers()[header::CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .starts_with(content_type));
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "no-store, max-age=0"
+        );
+    }
+
+    let page = request(&router, Method::GET, "/v1/auth/credential-login", &[], "").await;
+    assert_eq!(page.status(), StatusCode::OK);
+    assert!(page.headers()[header::CONTENT_TYPE]
+        .to_str()
+        .unwrap()
+        .starts_with("text/html"));
+
+    let poll = request(
+        &router,
+        Method::GET,
+        "/v1/auth/credential-login/status?nonce=completed",
+        &[],
+        "",
+    )
+    .await;
+    let poll: Value =
+        serde_json::from_slice(&to_bytes(poll.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(poll["status"], "completed");
+    assert_eq!(poll["revocation_status"], "valid");
+
+    let finalized = request(
+        &router,
+        Method::GET,
+        "/v1/auth/credential-login/finalize?nonce=completed",
+        &[],
+        "",
+    )
+    .await;
+    assert_eq!(finalized.status(), StatusCode::FOUND);
+    assert_eq!(
+        finalized.headers()[header::LOCATION],
+        "https://elevenidllc.com/console"
+    );
+    assert!(finalized.headers()[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .contains("sessionId=session-1"));
+
+    let failed = request(
+        &router,
+        Method::GET,
+        "/v1/auth/credential-login/finalize?nonce=failed",
+        &[],
+        "",
+    )
+    .await;
+    let location = failed.headers()[header::LOCATION].to_str().unwrap();
+    assert!(location.contains("auth_error=Issuer+is+not+trusted"));
+    assert!(location.contains("auth_error_code=issuer_not_trusted"));
+
+    let payload = serde_json::json!({
+        "flow_instance_id": "flow-1",
+        "result": "passed",
+        "decision": "allow",
+        "verified_claims": {"email": "alice@example.com"},
+        "evidence_digest": "a".repeat(64),
+        "decision_digest": "b".repeat(64)
+    });
+    let callback = request(
+        &router,
+        Method::POST,
+        "/internal/v1/auth/credential-verified?nonce=nonce-1",
+        &[("content-type", "application/json")],
+        &payload.to_string(),
+    )
+    .await;
+    assert_eq!(callback.status(), StatusCode::OK);
+    let callback: Value =
+        serde_json::from_slice(&to_bytes(callback.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(callback["status"], "completed");
+    assert_eq!(callback["session_id"], "session-1");
 }
 
 #[tokio::test]

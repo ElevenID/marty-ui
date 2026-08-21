@@ -116,6 +116,50 @@ pub struct CredentialLoginHttpApplication {
     config: CredentialLoginStartConfig,
 }
 
+#[async_trait]
+pub trait CredentialLoginHttpService: Send + Sync {
+    async fn start_login(&self) -> Result<CredentialLoginStartResult, CredentialHttpError>;
+    async fn poll_login(&self, nonce: &str) -> Result<CredentialLoginPoll, CredentialHttpError>;
+    async fn finalize_login(
+        &self,
+        nonce: &str,
+    ) -> Result<Option<CredentialLoginCompletion>, CredentialHttpError>;
+    async fn verified_callback(
+        &self,
+        payload: &CredentialVerifiedPayload,
+        headers: &CredentialCallbackHeaders,
+        context: &CredentialCallbackContext,
+    ) -> Result<CredentialCallbackResult, CredentialHttpError>;
+}
+
+#[async_trait]
+impl CredentialLoginHttpService for CredentialLoginHttpApplication {
+    async fn start_login(&self) -> Result<CredentialLoginStartResult, CredentialHttpError> {
+        self.start(Utc::now()).await
+    }
+
+    async fn poll_login(&self, nonce: &str) -> Result<CredentialLoginPoll, CredentialHttpError> {
+        self.poll(nonce, Utc::now()).await
+    }
+
+    async fn finalize_login(
+        &self,
+        nonce: &str,
+    ) -> Result<Option<CredentialLoginCompletion>, CredentialHttpError> {
+        self.finalize(nonce, Utc::now()).await
+    }
+
+    async fn verified_callback(
+        &self,
+        payload: &CredentialVerifiedPayload,
+        headers: &CredentialCallbackHeaders,
+        context: &CredentialCallbackContext,
+    ) -> Result<CredentialCallbackResult, CredentialHttpError> {
+        self.credential_verified(payload, headers, context, Utc::now())
+            .await
+    }
+}
+
 impl CredentialLoginHttpApplication {
     pub fn new(
         state: Arc<CredentialLoginStateStore>,

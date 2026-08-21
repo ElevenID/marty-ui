@@ -15,6 +15,9 @@ use serde_json::{json, Value};
 use crate::{
     build_session_impersonation, build_ui_redirect_url, oidc_callback_url, sanitize_redirect_uri,
     AuthApplication, AuthApplicationError, CanvasFinalizeContext, CanvasLtiApplication,
+    CredentialCallbackContext, CredentialCallbackError, CredentialCallbackHeaders,
+    CredentialCallbackResult, CredentialHttpError, CredentialLoginCompletion,
+    CredentialLoginHttpService, CredentialStateError, CredentialVerifiedPayload,
     HandleCallbackCommand, HandleCallbackResult, InitiateLoginCommand, PortError, Session,
     SessionRepository, UiOriginPolicy,
 };
@@ -28,6 +31,15 @@ pub const AUTH_CORE_HTTP_ROUTES: &[(&str, &str)] = &[
     ("POST", "/v1/auth/logout"),
     ("GET", "/v1/auth/me"),
     ("PATCH", "/v1/auth/me"),
+];
+
+pub const AUTH_CREDENTIAL_HTTP_ROUTES: &[(&str, &str)] = &[
+    ("GET", "/v1/auth/credential-login/assets/styles.css"),
+    ("GET", "/v1/auth/credential-login/assets/app.js"),
+    ("GET", "/v1/auth/credential-login"),
+    ("GET", "/v1/auth/credential-login/status"),
+    ("GET", "/v1/auth/credential-login/finalize"),
+    ("POST", "/internal/v1/auth/credential-verified"),
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -145,17 +157,25 @@ impl CanvasHttpApplication for CanvasLtiApplication {
 pub struct AuthHttpState {
     pub application: Arc<dyn AuthHttpApplication>,
     pub canvas: Arc<dyn CanvasHttpApplication>,
+    pub credential_login: Arc<dyn CredentialLoginHttpService>,
     pub sessions: Arc<dyn SessionRepository>,
     pub origins: UiOriginPolicy,
     pub cookie: SessionCookieConfig,
     pub canvas_session_ttl_seconds: u64,
     pub impersonation_handoff_cookie_name: String,
+    pub credential_login_css: Arc<str>,
+    pub credential_login_javascript: Arc<str>,
+    pub credential_login_unavailable_html: Arc<str>,
 }
 
 impl AuthHttpState {
     pub fn validate(&self) -> Result<(), PortError> {
         self.cookie.validate()?;
-        if self.canvas_session_ttl_seconds == 0 || self.impersonation_handoff_cookie_name.is_empty()
+        if self.canvas_session_ttl_seconds == 0
+            || self.impersonation_handoff_cookie_name.is_empty()
+            || self.credential_login_css.is_empty()
+            || self.credential_login_javascript.is_empty()
+            || self.credential_login_unavailable_html.is_empty()
         {
             return Err(PortError::new(
                 "auth_http_configuration_invalid",
@@ -178,6 +198,27 @@ pub fn auth_core_router(state: AuthHttpState) -> Result<Router, PortError> {
         .route("/v1/auth/callback", get(callback))
         .route("/v1/auth/logout", post(logout))
         .route("/v1/auth/me", get(me).patch(update_me))
+        .route(
+            "/v1/auth/credential-login/assets/styles.css",
+            get(credential_login_styles),
+        )
+        .route(
+            "/v1/auth/credential-login/assets/app.js",
+            get(credential_login_script),
+        )
+        .route("/v1/auth/credential-login", get(credential_login))
+        .route(
+            "/v1/auth/credential-login/status",
+            get(credential_login_status),
+        )
+        .route(
+            "/v1/auth/credential-login/finalize",
+            get(credential_login_finalize),
+        )
+        .route(
+            "/internal/v1/auth/credential-verified",
+            post(credential_verified),
+        )
         .with_state(state))
 }
 
@@ -415,6 +456,199 @@ async fn update_me(
     auth_status(Some(&session.user))
 }
 
+async fn credential_login_styles(State(state): State<AuthHttpState>) -> Response {
+    static_asset("text/css; charset=utf-8", state.credential_login_css)
+}
+
+async fn credential_login_script(State(state): State<AuthHttpState>) -> Response {
+    static_asset(
+        "application/javascript; charset=utf-8",
+        state.credential_login_javascript,
+    )
+}
+
+async fn credential_login(State(state): State<AuthHttpState>) -> Response {
+    match state.credential_login.start_login().await {
+        Ok(result) => html(StatusCode::OK, result.html),
+        Err(_) => {
+            let mut response = html(
+                StatusCode::SERVICE_UNAVAILABLE,
+                state.credential_login_unavailable_html.to_string(),
+            );
+            no_store(&mut response);
+            response
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct NonceQuery {
+    nonce: String,
+}
+
+async fn credential_login_status(
+    State(state): State<AuthHttpState>,
+    Query(query): Query<NonceQuery>,
+) -> Response {
+    match state.credential_login.poll_login(&query.nonce).await {
+        Ok(result) => Json(result).into_response(),
+        Err(error) => credential_error(error),
+    }
+}
+
+async fn credential_login_finalize(
+    State(state): State<AuthHttpState>,
+    Query(query): Query<NonceQuery>,
+) -> Response {
+    let completion = match state.credential_login.finalize_login(&query.nonce).await {
+        Ok(completion) => completion,
+        Err(error) => return credential_error(error),
+    };
+    let Some(completion) = completion else {
+        return redirect_response(&format!(
+            "{}/?auth_error=Login+session+expired",
+            state.origins.primary().trim_end_matches('/')
+        ));
+    };
+    if completion.status != "completed" {
+        return redirect_response(&credential_failure_redirect(
+            state.origins.primary(),
+            &completion,
+        ));
+    }
+    let Some(session_id) = completion.session_id.filter(|value| !value.is_empty()) else {
+        return redirect_response(&format!(
+            "{}/?auth_error=Session+creation+failed",
+            state.origins.primary().trim_end_matches('/')
+        ));
+    };
+    let mut response =
+        redirect_response(&build_ui_redirect_url(Some("/"), state.origins.primary()));
+    set_session_cookie(&mut response, &state.cookie, &session_id);
+    response
+}
+
+async fn credential_verified(
+    State(state): State<AuthHttpState>,
+    Query(query): Query<NonceQuery>,
+    headers: HeaderMap,
+    Json(payload): Json<CredentialVerifiedPayload>,
+) -> Response {
+    let callback_headers = CredentialCallbackHeaders {
+        event: header_text(&headers, "x-mip-event")
+            .unwrap_or_default()
+            .into(),
+        audience: header_text(&headers, "x-mip-audience")
+            .unwrap_or_default()
+            .into(),
+        event_id: header_text(&headers, "x-mip-event-id")
+            .unwrap_or_default()
+            .into(),
+        timestamp: header_text(&headers, "x-mip-timestamp")
+            .unwrap_or_default()
+            .into(),
+        signature: header_text(&headers, "x-mip-signature")
+            .unwrap_or_default()
+            .into(),
+    };
+    let context = CredentialCallbackContext {
+        nonce: query.nonce,
+        ip_address: client_ip(&headers),
+        user_agent: header_text(&headers, header::USER_AGENT).map(str::to_owned),
+    };
+    match state
+        .credential_login
+        .verified_callback(&payload, &callback_headers, &context)
+        .await
+    {
+        Ok(CredentialCallbackResult::Completed { session_id }) => Json(json!({
+            "ok": true,
+            "status": "completed",
+            "session_id": session_id,
+        }))
+        .into_response(),
+        Ok(CredentialCallbackResult::Denied { .. }) => {
+            Json(json!({"ok": true, "status": "denied"})).into_response()
+        }
+        Ok(CredentialCallbackResult::AlreadyProcessed) => {
+            Json(json!({"ok": true, "status": "already_processed"})).into_response()
+        }
+        Err(error) => credential_error(error),
+    }
+}
+
+fn credential_failure_redirect(ui_base: &str, completion: &CredentialLoginCompletion) -> String {
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair(
+        "auth_error",
+        completion
+            .message
+            .as_deref()
+            .unwrap_or("Verification failed"),
+    );
+    if let Some(reason_code) = completion.reason_code.as_deref() {
+        serializer.append_pair("auth_error_code", reason_code);
+    }
+    if let Some(detail) = completion.detail.as_deref() {
+        serializer.append_pair("auth_error_detail", detail);
+    }
+    format!("{}/?{}", ui_base.trim_end_matches('/'), serializer.finish())
+}
+
+fn credential_error(error: CredentialHttpError) -> Response {
+    let state_error = match &error {
+        CredentialHttpError::State(error)
+        | CredentialHttpError::Callback(CredentialCallbackError::State(error)) => Some(error),
+        _ => None,
+    };
+    match state_error {
+        Some(CredentialStateError::InvalidCallback(message)) if message.contains("expired") => {
+            detail(StatusCode::UNAUTHORIZED, "Expired verification callback")
+        }
+        Some(CredentialStateError::InvalidCallback(_)) => {
+            detail(StatusCode::UNAUTHORIZED, "Invalid verification callback")
+        }
+        Some(CredentialStateError::Expired) => {
+            detail(StatusCode::NOT_FOUND, "Login session expired or not found")
+        }
+        Some(
+            CredentialStateError::InvalidState
+            | CredentialStateError::Mismatch
+            | CredentialStateError::AlreadyClaimed
+            | CredentialStateError::Serialization(_),
+        ) => detail(StatusCode::CONFLICT, "Invalid credential login state"),
+        Some(CredentialStateError::Unavailable(_)) | None => detail(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Credential login service unavailable",
+        ),
+    }
+}
+
+fn static_asset(content_type: &'static str, body: Arc<str>) -> Response {
+    let mut response = body.to_string().into_response();
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
+    no_store(&mut response);
+    response
+}
+
+fn html(status: StatusCode, body: String) -> Response {
+    let mut response = (status, body).into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response
+}
+
+fn no_store(response: &mut Response) {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, max-age=0"),
+    );
+}
+
 fn auth_status(user: Option<&crate::AuthenticatedUser>) -> Response {
     let mut response = Json(if let Some(user) = user {
         json!({"authenticated": true, "user": user_response(user)})
@@ -422,10 +656,7 @@ fn auth_status(user: Option<&crate::AuthenticatedUser>) -> Response {
         json!({"authenticated": false})
     })
     .into_response();
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("no-store, max-age=0"),
-    );
+    no_store(&mut response);
     response
 }
 
