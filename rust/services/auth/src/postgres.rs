@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     ApplicantProfile, ApplicantProvisioningStore, ApplicantUpsert, AuthAuditSink, PortError,
-    Session, SessionStatus, UserType,
+    Session, SessionStatus,
 };
 
 const SELECT_APPLICANT: &str = "
@@ -238,7 +238,7 @@ impl AuthAuditSink for PostgresAuthRepository {
             None,
             json!({
                 "expires_at": session.expires_at.to_rfc3339(),
-                "user_type": user_type_name(session.user.user_type),
+                "user_type": session.user.user_type.as_str(),
             }),
             now,
         )
@@ -325,7 +325,7 @@ async fn upsert_session_history(
     .bind(&session.user.user_id)
     .bind(&session.user.email)
     .bind(&session.user.organization_id)
-    .bind(user_type_name(session.user.user_type))
+    .bind(session.user.user_type.as_str())
     .bind(session.created_at)
     .bind(session.expires_at)
     .bind(revoked_at)
@@ -460,14 +460,6 @@ const fn normalized_limit(limit: usize) -> i64 {
         1_000
     } else {
         limit as i64
-    }
-}
-
-const fn user_type_name(user_type: UserType) -> &'static str {
-    match user_type {
-        UserType::Applicant => "applicant",
-        UserType::Vendor => "vendor",
-        UserType::Administrator => "administrator",
     }
 }
 

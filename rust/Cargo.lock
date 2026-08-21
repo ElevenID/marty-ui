@@ -4106,6 +4106,8 @@ dependencies = [
  "mmf-platform",
  "mmf-push",
  "p256",
+ "prost",
+ "protoc-bin-vendored",
  "rand 0.9.5",
  "reqwest",
  "serde",
@@ -4114,6 +4116,9 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.20",
  "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
  "url",
  "uuid",
 ]

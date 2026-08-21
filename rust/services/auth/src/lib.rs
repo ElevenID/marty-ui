@@ -8,6 +8,7 @@ pub mod credential_callback;
 pub mod credential_login;
 pub mod credential_state;
 pub mod domain;
+pub mod grpc_service;
 pub mod keycloak;
 pub mod migration;
 pub mod oidc;
@@ -26,9 +27,14 @@ pub use domain::{
     generate_pkce_pair, pkce_s256_challenge, AuthenticatedUser, ImpersonationContext, OidcUserInfo,
     OidcValidatedIdentity, PkcePair, PkceState, Session, SessionSpec, SessionStatus, UserType,
 };
+pub use grpc_service::*;
 pub use keycloak::*;
 pub use migration::*;
 pub use oidc::*;
 pub use postgres::*;
 pub use provisioning::*;
 pub use wallet::*;
+
+pub mod auth_proto {
+    tonic::include_proto!("marty.ui.auth.v1");
+}

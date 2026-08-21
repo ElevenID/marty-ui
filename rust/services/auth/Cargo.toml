@@ -17,6 +17,7 @@ mmf-data.workspace = true
 mmf-platform.workspace = true
 mmf-push.workspace = true
 marty-oid4vci.workspace = true
+prost.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -25,6 +26,8 @@ sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tonic.workspace = true
+tonic-prost.workspace = true
 uuid.workspace = true
 url.workspace = true
 
@@ -32,3 +35,7 @@ url.workspace = true
 jsonwebtoken.workspace = true
 p256.workspace = true
 serde_json.workspace = true
+
+[build-dependencies]
+protoc-bin-vendored.workspace = true
+tonic-prost-build.workspace = true

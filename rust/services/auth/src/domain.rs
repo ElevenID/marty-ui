@@ -25,6 +25,17 @@ pub enum UserType {
     Administrator,
 }
 
+impl UserType {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Applicant => "applicant",
+            Self::Vendor => "vendor",
+            Self::Administrator => "administrator",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImpersonationContext {
     #[serde(default = "default_true")]
