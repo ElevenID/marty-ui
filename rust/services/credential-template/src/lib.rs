@@ -6,6 +6,7 @@ mod domain;
 pub mod migration;
 pub mod persistence;
 pub mod postgres;
+pub mod surface;
 
 pub use domain::*;
 pub use persistence::*;

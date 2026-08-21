@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -297,6 +298,184 @@ pub struct CredentialTemplate {
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl CredentialTemplate {
+    pub fn validate_definition(&self) -> Result<(), CredentialTemplateError> {
+        validate_credential_type(&self.credential_type)?;
+        if self.claims.is_empty() {
+            return Err(CredentialTemplateError::MissingClaims);
+        }
+        validate_claim_definitions(&self.claims)
+    }
+
+    pub fn activate(&mut self, now: DateTime<Utc>) -> Result<(), CredentialTemplateError> {
+        if self.claims.is_empty() {
+            return Err(CredentialTemplateError::MissingClaims);
+        }
+        self.status = TemplateStatus::Active;
+        self.updated_at = now;
+        Ok(())
+    }
+
+    pub fn deprecate(&mut self, now: DateTime<Utc>) {
+        self.status = TemplateStatus::Deprecated;
+        self.updated_at = now;
+    }
+
+    pub fn ensure_draft_mutation(&self) -> Result<(), CredentialTemplateError> {
+        if self.status == TemplateStatus::Draft {
+            Ok(())
+        } else {
+            Err(CredentialTemplateError::TemplateNotDraft)
+        }
+    }
+
+    pub fn ensure_deletable(&self) -> Result<(), CredentialTemplateError> {
+        if self.status == TemplateStatus::Draft {
+            Ok(())
+        } else {
+            Err(CredentialTemplateError::TemplateNotDeletable)
+        }
+    }
+
+    pub fn add_claim(
+        &mut self,
+        claim: ClaimDefinition,
+        now: DateTime<Utc>,
+    ) -> Result<(), CredentialTemplateError> {
+        self.ensure_draft_mutation()?;
+        let mut claims = self.claims.clone();
+        claims.push(claim);
+        validate_claim_definitions(&claims)?;
+        self.claims = claims;
+        self.updated_at = now;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn new_version(&self, id: String, now: DateTime<Utc>) -> Self {
+        let mut version = self.clone();
+        version.id = id;
+        version.status = TemplateStatus::Draft;
+        version.version += 1;
+        version.created_at = now;
+        version.updated_at = now;
+        version
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ValidityRulesInput {
+    pub default_validity_days: Option<i32>,
+    pub max_validity_days: Option<i32>,
+    pub renewable: Option<bool>,
+    pub renewal_window_days: Option<i32>,
+    pub ttl_seconds: Option<i64>,
+    pub reissue_within_seconds: Option<i64>,
+    pub not_before_offset_seconds: Option<i32>,
+    pub not_before_offset: Option<i32>,
+    pub max_validity_seconds: Option<i64>,
+    pub require_revalidation: Option<bool>,
+    pub revalidation_interval_days: Option<i32>,
+}
+
+pub fn resolve_validity_rules(
+    input: &ValidityRulesInput,
+    existing: Option<&ValidityRules>,
+) -> Result<ValidityRules, CredentialTemplateError> {
+    let base = existing.cloned().unwrap_or_default();
+    if input.ttl_seconds.is_some_and(|seconds| seconds <= 0) {
+        return Err(CredentialTemplateError::InvalidValidityRules(
+            "ttl_seconds must be > 0".to_owned(),
+        ));
+    }
+    let default_validity_days = input.ttl_seconds.map_or_else(
+        || {
+            input
+                .default_validity_days
+                .unwrap_or(base.default_validity_days)
+        },
+        days_from_seconds,
+    );
+    let max_validity_days = input.max_validity_seconds.map_or_else(
+        || input.max_validity_days.unwrap_or(base.max_validity_days),
+        days_from_seconds,
+    );
+    let renewal_window_days = input.reissue_within_seconds.map_or_else(
+        || {
+            input
+                .renewal_window_days
+                .unwrap_or(base.renewal_window_days)
+        },
+        days_from_seconds,
+    );
+    Ok(ValidityRules {
+        default_validity_days,
+        max_validity_days,
+        renewable: input.renewable.unwrap_or(base.renewable),
+        renewal_window_days,
+        not_before_offset_seconds: input
+            .not_before_offset_seconds
+            .or(input.not_before_offset)
+            .unwrap_or(base.not_before_offset_seconds),
+        require_revalidation: input
+            .require_revalidation
+            .unwrap_or(base.require_revalidation),
+        revalidation_interval_days: input
+            .revalidation_interval_days
+            .or(base.revalidation_interval_days),
+    })
+}
+
+pub fn validate_credential_type(value: &str) -> Result<(), CredentialTemplateError> {
+    let expression = Regex::new(r"^(?:[A-Z][a-zA-Z0-9]+|[a-z][a-zA-Z0-9]*(?:\.[a-zA-Z0-9]+)+)$")
+        .map_err(|_| {
+            CredentialTemplateError::InvalidConfiguration("credential type expression".to_owned())
+        })?;
+    if expression.is_match(value) {
+        Ok(())
+    } else {
+        Err(CredentialTemplateError::InvalidCredentialType(
+            value.to_owned(),
+        ))
+    }
+}
+
+pub fn validate_claim_definitions(
+    claims: &[ClaimDefinition],
+) -> Result<(), CredentialTemplateError> {
+    let names = claims
+        .iter()
+        .map(|claim| claim.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if names.len() != claims.len() {
+        return Err(CredentialTemplateError::DuplicateClaimNames);
+    }
+    for claim in claims {
+        if claim.derived_from.as_deref() == Some(claim.name.as_str()) {
+            return Err(CredentialTemplateError::SelfDerivedClaim(
+                claim.name.clone(),
+            ));
+        }
+        if let Some(source) = claim
+            .derived_from
+            .as_deref()
+            .filter(|source| !names.contains(source))
+        {
+            return Err(CredentialTemplateError::UnknownDerivedClaim {
+                claim: claim.name.clone(),
+                source_claim: source.to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn days_from_seconds(seconds: i64) -> i32 {
+    let days = seconds.saturating_add(86_399) / 86_400;
+    i32::try_from(days.max(1)).unwrap_or(i32::MAX)
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

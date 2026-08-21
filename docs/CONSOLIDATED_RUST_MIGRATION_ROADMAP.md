@@ -1442,12 +1442,23 @@ tenants and sort system-first by case-insensitive name without an application
 side re-sort or N+1 hydration.
 
 `contracts/credential-template-persistence-behavior.json` is the shared
-language-neutral persistence oracle. The Rust crate now passes 10 domain,
-migration, persistence and configured-PostgreSQL contract tests; the surviving
-Python oracle passes all 167 tests; formatting and strict Clippy pass. The
+language-neutral persistence oracle. `credential-template-service-surface.json`
+now freezes all 24 HTTP operations and all 12 intended gRPC methods against
+both Python decorators/protobuf and Rust-owned constants, preventing a partial
+port from being mistaken for a complete service. The first application kernel
+also owns PascalCase/reverse-domain credential-type validation, unique and
+referentially sound claims, released seconds-to-days validity aliases and
+rounding, canonical not-before precedence, draft-only mutation/deletion,
+activation, deprecation and lossless new-version creation under
+`credential-template-lifecycle-behavior.json`.
+
+The Rust crate now passes 14 domain, lifecycle, surface, migration, persistence
+and configured-PostgreSQL contract tests; the surviving Python oracle passes
+all 169 tests; formatting and strict Clippy pass. The
 configured PostgreSQL tests run when `CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL`
 is supplied. Remaining work is Rust-owned seeds, all 24 HTTP and 12 intended
-gRPC methods, MMF authorization/runtime/outbox composition, packaging,
+gRPC handlers over the frozen operations, MMF authorization/runtime/outbox
+composition, packaging,
 configured acceptance and immediate Python deletion. No beta deployment has
 occurred.
 

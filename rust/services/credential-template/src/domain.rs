@@ -430,4 +430,20 @@ pub enum CredentialTemplateError {
     MissingDestinationOrganization,
     #[error("invalid credential-template configuration: {0}")]
     InvalidConfiguration(String),
+    #[error("credential_type must be PascalCase or reverse-domain notation: {0}")]
+    InvalidCredentialType(String),
+    #[error("claims must contain at least one claim definition")]
+    MissingClaims,
+    #[error("claim names must be unique")]
+    DuplicateClaimNames,
+    #[error("claim {0} cannot derive from itself")]
+    SelfDerivedClaim(String),
+    #[error("claim {claim} derives from unknown claim {source_claim}")]
+    UnknownDerivedClaim { claim: String, source_claim: String },
+    #[error("only draft templates can be modified")]
+    TemplateNotDraft,
+    #[error("only draft templates can be deleted")]
+    TemplateNotDeletable,
+    #[error("invalid validity rules: {0}")]
+    InvalidValidityRules(String),
 }
