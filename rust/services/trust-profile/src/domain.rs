@@ -134,6 +134,7 @@ pub struct TrustSource {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
 pub struct ValidationRules {
     pub allowed_algorithms: Vec<String>,
     pub min_key_size_rsa: u16,
@@ -160,6 +161,7 @@ impl Default for ValidationRules {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
 pub struct RevocationPolicy {
     pub check_mode: RevocationCheckMode,
     pub check_ocsp: bool,
@@ -183,6 +185,7 @@ impl Default for RevocationPolicy {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
 pub struct TimePolicy {
     pub max_clock_skew_seconds: u32,
     pub credential_freshness_hours: Option<u32>,

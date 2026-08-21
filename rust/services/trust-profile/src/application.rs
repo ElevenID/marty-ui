@@ -104,6 +104,7 @@ pub struct ProfilePatch {
     pub compatible_compliance_codes: Change<Vec<String>>,
     pub verification_policy_set_id: Change<Option<String>>,
     pub auto_generated: Change<bool>,
+    pub revocation_policy: Change<crate::RevocationPolicy>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -403,6 +404,7 @@ impl TrustProfileApplication {
             patch.verification_policy_set_id,
         );
         apply(&mut profile.auto_generated, patch.auto_generated);
+        apply(&mut profile.revocation_policy, patch.revocation_policy);
         profile.updated_at = now;
         validate_profile(&profile)?;
         self.repository.save_profile(&profile, None).await?;
@@ -1029,7 +1031,7 @@ fn validate_registry_sync_config(value: &Value) -> Result<u16, TrustProfileAppli
     Ok(interval)
 }
 
-fn validate_registry_sources_for_decision(
+pub(crate) fn validate_registry_sources_for_decision(
     profile: &TrustProfile,
     now: DateTime<Utc>,
 ) -> Result<(), TrustProfileApplicationError> {

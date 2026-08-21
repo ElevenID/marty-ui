@@ -3,12 +3,15 @@ pub mod catalog;
 pub mod config;
 pub mod control_plane;
 pub mod domain;
+pub mod http_service;
 pub mod migration;
 pub mod persistence;
 pub mod policy;
 pub mod postgres;
+pub mod registry_sync;
 pub mod repository;
 pub mod runtime;
+pub mod surface;
 
 pub mod organization_proto {
     tonic::include_proto!("marty.ui.organization.v1");
@@ -32,6 +35,9 @@ pub use domain::{
     TrustProfileIssuer, TrustProfileStatus, TrustProfileType, TrustRegistryEntry,
     TrustRelationshipStatus, TrustSource, TrustSourceType, ValidationRules,
 };
+pub use http_service::{
+    trust_profile_router, TrustProfileHttpState, TrustRegistrySyncError, TrustRegistrySynchronizer,
+};
 pub use migration::{run_migrations, TrustProfileMigrationError, TrustProfileMigrationSummary};
 pub use persistence::{TrustProfileRecord, TrustProfileRecordError, TRUST_PROFILE_MIGRATION};
 pub use policy::{
@@ -40,11 +46,13 @@ pub use policy::{
     sanitize_private_custody_metadata, TrustDomainError,
 };
 pub use postgres::PostgresTrustProfileRepository;
+pub use registry_sync::NativeTrustRegistrySynchronizer;
 pub use repository::{
     MemoryTrustProfileRepository, RegistryStatus, TrustProfileRepository,
     TrustProfileRepositoryError,
 };
 pub use runtime::{TrustProfileDependency, TrustProfileRuntime};
+pub use surface::{HttpOperation, TRUST_PROFILE_HTTP_OPERATIONS};
 
 pub const HTTP_OPERATIONS: [(&str, &str); 32] = [
     ("POST", "/v1/organizations/{organization_id}/trust-profiles"),

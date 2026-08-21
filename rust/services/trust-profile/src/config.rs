@@ -32,6 +32,8 @@ pub struct TrustProfileServiceConfig {
     pub service_token: Option<String>,
     pub internal_api_key: Option<String>,
     pub dependency_timeout: Duration,
+    pub registry_private_hosts: Vec<String>,
+    pub registry_ca_bundle: Option<Vec<u8>>,
     pub marty_organization_id: Uuid,
     pub marty_issuer_did: String,
     pub marty_issuer_url: String,
@@ -49,6 +51,8 @@ pub enum TrustProfileConfigError {
     SecretTooShort { name: &'static str, minimum: usize },
     #[error("TRUST_PROFILE.CONFIGURATION: {name}_FILE could not be read")]
     SecretFile { name: &'static str },
+    #[error("TRUST_PROFILE.CONFIGURATION: {name} could not be read")]
+    File { name: &'static str },
 }
 
 impl TrustProfileServiceConfig {
@@ -129,6 +133,20 @@ impl TrustProfileServiceConfig {
         if dependency_timeout.is_zero() {
             return Err(invalid("TRUST_PROFILE_DEPENDENCY_TIMEOUT_SECONDS"));
         }
+        let private_host_allowlist =
+            value(&values, "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST").unwrap_or_default();
+        let registry_private_hosts =
+            marty_verification::trust_sync::parse_private_host_allowlist(private_host_allowlist)
+                .map_err(|_| invalid("TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST"))?
+                .into_iter()
+                .collect();
+        let registry_ca_bundle = value(&values, "TRUST_REGISTRY_TLS_CA_FILE")
+            .map(|path| {
+                fs::read(path).map_err(|_| TrustProfileConfigError::File {
+                    name: "TRUST_REGISTRY_TLS_CA_FILE",
+                })
+            })
+            .transpose()?;
         Ok(Self {
             environment,
             http_addr,
@@ -138,6 +156,8 @@ impl TrustProfileServiceConfig {
             service_token,
             internal_api_key,
             dependency_timeout,
+            registry_private_hosts,
+            registry_ca_bundle,
             marty_organization_id,
             marty_issuer_did,
             marty_issuer_url: marty_issuer_url.trim_end_matches('/').to_owned(),
