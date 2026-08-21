@@ -830,6 +830,8 @@ def _sanitize_redirect_uri(redirect_uri: str | None, ui_base_url: str) -> str:
     """
     if not redirect_uri:
         return "/"
+    if redirect_uri.startswith("//"):
+        return "/"
     if redirect_uri.startswith("/"):
         return redirect_uri
     # Absolute URL — only allow same origin as ui_base_url

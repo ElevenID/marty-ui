@@ -9,6 +9,7 @@ pub mod credential_login;
 pub mod credential_state;
 pub mod domain;
 pub mod grpc_service;
+pub mod http_kernel;
 pub mod keycloak;
 pub mod migration;
 pub mod oidc;
@@ -28,6 +29,7 @@ pub use domain::{
     OidcValidatedIdentity, PkcePair, PkceState, Session, SessionSpec, SessionStatus, UserType,
 };
 pub use grpc_service::*;
+pub use http_kernel::*;
 pub use keycloak::*;
 pub use migration::*;
 pub use oidc::*;
