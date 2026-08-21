@@ -59,6 +59,9 @@ credential_templates_table = Table(
     
     # SD-JWT payload structure: "ietf_sd_jwt" or "w3c_vcdm_v2_sd_jwt" (default)
     Column("credential_payload_format", String(30), nullable=False, server_default="w3c_vcdm_v2_sd_jwt"),
+    # Persist the protocol selected by the public domain model. Rust owns the
+    # final schema migration; this column keeps the transition adapter lossless.
+    Column("issuance_protocol", String(64), nullable=False, server_default="oid4vci"),
     
     # Per-wallet configuration: [{wallet_id, deep_link_scheme}, ...]
     Column("wallet_configs", JSON, nullable=True, server_default="[]"),

@@ -1424,8 +1424,29 @@ environment-specific URI schemes, encoded and inline credential offers, and
 system versus organization delivery destinations. The surviving Python oracle
 and Rust execute the same fixture; four tests pass in each language, and strict
 Clippy passes. This parity pass caught and closed an initial VDS-NC inventory
-omission before any caller or data was moved. Remaining work is complete domain
-and persistence parity, Rust-owned schema/seeds, all 24 HTTP and 12 intended
+omission before any caller or data was moved.
+
+The persistence slice now consolidates the three Python repository families
+into one `PostgresCredentialTemplateStore`. Rust owns a non-destructive,
+advisory-locked and idempotent schema migration for credential templates,
+wallet profiles and delivery destinations, including compatibility upgrades
+for every retained column. The final schema deliberately does not resurrect
+the cached issuer-profile/KMS routing columns retired in August 2026; live
+`issuer_did` plus `issuer_algorithm` remain the complete template-side signing
+selector. The Rust model closes two transition data-loss gaps by persisting the
+domain-level `issuance_protocol` and every validity field, including
+`not_before_offset_seconds`. Legacy claim rows retain Python-compatible UUIDv5
+identity, type aliases and display defaults, while malformed records fail
+closed. Tenant destination listings include system entries, exclude other
+tenants and sort system-first by case-insensitive name without an application
+side re-sort or N+1 hydration.
+
+`contracts/credential-template-persistence-behavior.json` is the shared
+language-neutral persistence oracle. The Rust crate now passes 10 domain,
+migration, persistence and configured-PostgreSQL contract tests; the surviving
+Python oracle passes all 167 tests; formatting and strict Clippy pass. The
+configured PostgreSQL tests run when `CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL`
+is supplied. Remaining work is Rust-owned seeds, all 24 HTTP and 12 intended
 gRPC methods, MMF authorization/runtime/outbox composition, packaging,
 configured acceptance and immediate Python deletion. No beta deployment has
 occurred.

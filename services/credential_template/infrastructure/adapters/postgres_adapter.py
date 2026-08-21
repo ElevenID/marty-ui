@@ -88,6 +88,7 @@ class PostgresCredentialTemplateRepository:
                 "max_validity_days": template.validity_rules.max_validity_days,
                 "renewable": template.validity_rules.renewable,
                 "renewal_window_days": template.validity_rules.renewal_window_days,
+                "not_before_offset_seconds": template.validity_rules.not_before_offset_seconds,
                 "require_revalidation": template.validity_rules.require_revalidation,
                 "revalidation_interval_days": template.validity_rules.revalidation_interval_days,
             }
@@ -136,6 +137,7 @@ class PostgresCredentialTemplateRepository:
                 "issuer_requirements": issuer_requirements_json,
                 "supported_formats": [fmt.value for fmt in template.supported_formats],
                 "credential_payload_format": template.credential_payload_format,
+                "issuance_protocol": template.issuance_protocol,
                 "wallet_configs": [{k: v for k, v in {"wallet_id": wc.wallet_id, "deep_link_scheme": wc.deep_link_scheme, "format_variant": wc.format_variant}.items() if v is not None} for wc in template.wallet_configs],
                 "compliance_profile": template.compliance_profile,
                 "compliance_profile_id": template.compliance_profile_id,
@@ -223,6 +225,7 @@ class PostgresCredentialTemplateRepository:
             max_validity_days=validity_rules_data.get("max_validity_days", 1095),
             renewable=validity_rules_data.get("renewable", True),
             renewal_window_days=validity_rules_data.get("renewal_window_days", 30),
+            not_before_offset_seconds=validity_rules_data.get("not_before_offset_seconds", 0),
             require_revalidation=validity_rules_data.get("require_revalidation", False),
             revalidation_interval_days=validity_rules_data.get("revalidation_interval_days"),
         )
@@ -269,6 +272,7 @@ class PostgresCredentialTemplateRepository:
             ],
             wallet_configs=[WalletConfig(wallet_id=wc.get("wallet_id", ""), deep_link_scheme=wc.get("deep_link_scheme", "openid-credential-offer://"), format_variant=wc.get("format_variant")) for wc in (row.wallet_configs or [])],
             credential_payload_format=row.credential_payload_format or "w3c_vcdm_v2_sd_jwt",
+            issuance_protocol=row.issuance_protocol or "oid4vci",
             compliance_profile=getattr(row, "compliance_profile", None),
             compliance_profile_id=getattr(row, "compliance_profile_id", None),
             application_template_id=getattr(row, "application_template_id", None),
