@@ -80,7 +80,7 @@ fn migration_source_owns_the_complete_non_destructive_schema() {
 }
 
 #[tokio::test]
-async fn live_postgres_migration_is_idempotent_when_configured() {
+async fn live_postgres_migration_supports_historical_json_columns_when_configured() {
     let Ok(database_url) = std::env::var("CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL") else {
         return;
     };
@@ -92,9 +92,36 @@ async fn live_postgres_migration_is_idempotent_when_configured() {
     migrate_credential_template_schema(&pool)
         .await
         .expect("first Credential Template migration must pass");
+    sqlx::query(
+        "ALTER TABLE credential_template_service.credential_templates
+         ALTER COLUMN wallet_configs TYPE json USING wallet_configs::json",
+    )
+    .execute(&pool)
+    .await
+    .expect("historical JSON wallet configuration schema must be reproducible");
     migrate_credential_template_schema(&pool)
         .await
-        .expect("second Credential Template migration must be idempotent");
+        .expect("migration must accept historical JSON wallet configuration columns");
+    let wallet_configs_type: String = sqlx::query_scalar(
+        "SELECT data_type FROM information_schema.columns
+         WHERE table_schema='credential_template_service'
+           AND table_name='credential_templates'
+           AND column_name='wallet_configs'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("wallet configuration column type must be inspectable");
+    assert_eq!(wallet_configs_type, "json");
+    sqlx::query(
+        "ALTER TABLE credential_template_service.credential_templates
+         ALTER COLUMN wallet_configs TYPE jsonb USING wallet_configs::jsonb",
+    )
+    .execute(&pool)
+    .await
+    .expect("test database wallet configuration type must be restored");
+    migrate_credential_template_schema(&pool)
+        .await
+        .expect("migration must remain idempotent after legacy compatibility");
     validate_credential_template_schema(&pool)
         .await
         .expect("Credential Template schema validation must pass");
