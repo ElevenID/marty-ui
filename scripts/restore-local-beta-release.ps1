@@ -10,8 +10,8 @@ production or demo-release-candidate resources.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$ArtifactDir,
-    [string]$TunnelEnvFile = (Join-Path (Split-Path -Parent $PSScriptRoot) ".env.tunnel.beta.local"),
-    [string]$GeneratedEnvFile = (Join-Path (Split-Path -Parent $PSScriptRoot) ".env.beta.generated.local"),
+    [string]$TunnelEnvFile,
+    [string]$GeneratedEnvFile,
     [Parameter(Mandatory = $true)][switch]$ConfirmBetaRestore
 )
 
@@ -20,6 +20,12 @@ $ErrorActionPreference = "Stop"
 if (-not $ConfirmBetaRestore) { throw "-ConfirmBetaRestore is required" }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+if ([string]::IsNullOrWhiteSpace($TunnelEnvFile)) {
+    $TunnelEnvFile = Join-Path $repoRoot ".env.tunnel.beta.local"
+}
+if ([string]::IsNullOrWhiteSpace($GeneratedEnvFile)) {
+    $GeneratedEnvFile = Join-Path $repoRoot ".env.beta.generated.local"
+}
 $artifactRoot = (Resolve-Path (Join-Path $repoRoot "tests\artifacts")).Path
 $resolvedArtifacts = (Resolve-Path $ArtifactDir).Path
 $allowedPrefix = $artifactRoot.TrimEnd('\') + '\'
