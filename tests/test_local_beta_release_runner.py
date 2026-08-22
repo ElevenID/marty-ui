@@ -110,6 +110,34 @@ def test_plan_only_exits_before_artifact_writes() -> None:
     assert script.index("exit 0", plan_exit) < write_start
 
 
+def test_beta_runner_resolves_default_env_paths_after_script_root_is_available() -> None:
+    deploy = text("scripts/deploy-local-beta-release.ps1")
+    restore = text("scripts/restore-local-beta-release.ps1")
+
+    for script in (deploy, restore):
+        param_block = script.split(")\n\nSet-StrictMode", 1)[0]
+        assert "Split-Path -Parent $PSScriptRoot" not in param_block
+        assert "[string]::IsNullOrWhiteSpace($TunnelEnvFile)" in script
+        assert "[string]::IsNullOrWhiteSpace($GeneratedEnvFile)" in script
+        assert '".env.tunnel.beta.local"' in script
+        assert '".env.beta.generated.local"' in script
+
+
+def test_beta_runner_builds_application_images_serially_before_maintenance() -> None:
+    script = text("scripts/deploy-local-beta-release.ps1")
+
+    build_step = script.index('Write-Step "Build marker-bearing application images"')
+    loop = script.index("foreach ($service in $script:ApplicationBuildServices)", build_step)
+    invoke = script.index(
+        "Invoke-Compose -Arguments ($applicationBuildArguments + @($service))", loop
+    )
+    ui_build = script.index('Write-Step "Build marker-bearing public UI image"')
+    maintenance = script.index('Write-Step "Enter maintenance window and apply live migration"')
+
+    assert build_step < loop < invoke < ui_build < maintenance
+    assert "($applicationBuildArguments + $script:ApplicationBuildServices)" not in script
+
+
 def test_direct_ui_proxy_uses_canonical_gateway() -> None:
     for config_path in ("ui/nginx.prod.conf", "ui/nginx.dev.conf"):
         config = text(config_path)
