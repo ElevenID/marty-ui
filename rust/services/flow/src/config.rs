@@ -381,7 +381,7 @@ impl FlowServiceConfig {
             Some("issuance:9006"),
             environment,
         )?;
-        let signing_keys_url = service_url(
+        let signing_keys_url = service_endpoint_url(
             &values,
             "SIGNING_KEYS_INTERNAL_URL",
             Some("http://signing-keys:8017"),
@@ -702,12 +702,32 @@ fn service_url(
     default: Option<&str>,
     environment: Environment,
 ) -> Result<String, FlowConfigError> {
-    let url = value(values, name)
-        .or_else(|| (!environment.is_deployed()).then_some(default).flatten())
-        .ok_or(FlowConfigError::Missing { name })?
-        .to_owned();
+    let url = configured_service_url(values, name, default, environment)?;
     validate_origin(&url, name)?;
     Ok(url)
+}
+
+fn service_endpoint_url(
+    values: &BTreeMap<String, String>,
+    name: &'static str,
+    default: Option<&str>,
+    environment: Environment,
+) -> Result<String, FlowConfigError> {
+    let url = configured_service_url(values, name, default, environment)?;
+    validate_service_endpoint(&url, name)?;
+    Ok(url)
+}
+
+fn configured_service_url(
+    values: &BTreeMap<String, String>,
+    name: &'static str,
+    default: Option<&str>,
+    environment: Environment,
+) -> Result<String, FlowConfigError> {
+    Ok(value(values, name)
+        .or_else(|| (!environment.is_deployed()).then_some(default).flatten())
+        .ok_or(FlowConfigError::Missing { name })?
+        .to_owned())
 }
 
 fn validate_origin(value: &str, name: &'static str) -> Result<(), FlowConfigError> {
@@ -718,6 +738,15 @@ fn validate_origin(value: &str, name: &'static str) -> Result<(), FlowConfigErro
         || !matches!(url.path(), "" | "/")
         || url.query().is_some()
     {
+        return Err(invalid(name));
+    }
+    Ok(())
+}
+
+fn validate_service_endpoint(value: &str, name: &'static str) -> Result<(), FlowConfigError> {
+    validate_url(value, name, &["http", "https"])?;
+    let url = Url::parse(value).map_err(|_| invalid(name))?;
+    if !url.username().is_empty() || url.password().is_some() || url.query().is_some() {
         return Err(invalid(name));
     }
     Ok(())
@@ -935,5 +964,23 @@ mod tests {
                 name: "VERIFIER_X509_CERT_FILE"
             }
         );
+    }
+
+    #[test]
+    fn service_endpoints_allow_paths_but_origins_remain_strict() {
+        let endpoint = "http://gateway:8000/internal/signing-keys";
+        assert!(validate_service_endpoint(endpoint, "SIGNING_KEYS_INTERNAL_URL").is_ok());
+        assert!(validate_origin(endpoint, "SIGNING_KEYS_INTERNAL_URL").is_err());
+
+        for invalid in [
+            "http://user@gateway:8000/internal/signing-keys",
+            "http://gateway:8000/internal/signing-keys?version=1",
+            "http://gateway:8000/internal/signing-keys#fragment",
+        ] {
+            assert!(
+                validate_service_endpoint(invalid, "SIGNING_KEYS_INTERNAL_URL").is_err(),
+                "{invalid} must fail closed"
+            );
+        }
     }
 }
