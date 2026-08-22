@@ -133,7 +133,13 @@ async fn rust_migrations_bootstrap_and_upgrade_the_released_schema() {
             '00000000-0000-0000-0000-000000000001',
             '70000000-0000-0000-0000-000000000001',
             '[{"type":"BitstringStatusListEntry","index":7,"status_purpose":"revocation"}]',
-            NOW()
+            '2026-01-01T00:00:00Z'
+        ), (
+            'credential-duplicate-historical-slot',
+            '00000000-0000-0000-0000-000000000001',
+            '70000000-0000-0000-0000-000000000001',
+            '[{"type":"BitstringStatusListEntry","index":7,"status_purpose":"revocation"}]',
+            '2026-01-02T00:00:00Z'
         );
         "#,
     )
@@ -171,6 +177,31 @@ async fn rust_migrations_bootstrap_and_upgrade_the_released_schema() {
     .await
     .unwrap();
     assert_eq!(backfilled, ("credential-before-rust-allocation".into(), 7));
+    let duplicate_slot_count = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM revocation_profile_service.status_list_allocations
+        WHERE organization_id = '00000000-0000-0000-0000-000000000001'
+          AND profile_id = '70000000-0000-0000-0000-000000000001'
+          AND status_list_format = 'bitstring'
+          AND status_list_index = 7
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(duplicate_slot_count, 1);
+    let skipped_duplicate = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT COUNT(*)
+        FROM revocation_profile_service.status_list_allocations
+        WHERE credential_id = 'credential-duplicate-historical-slot'
+        "#,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(skipped_duplicate, 0);
     let next_index = sqlx::query_scalar::<_, i64>(
         r#"
         SELECT next_index

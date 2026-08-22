@@ -180,6 +180,18 @@ def test_beta_restore_is_explicit_and_project_scoped() -> None:
     assert 'Invoke-Checked docker @("rm", "--force", $worker)' in script
     assert "$preDeployDocument | ForEach-Object { $_ }" in script
     assert "$preDeploy = @(Get-Content" not in script
+    assert 'PSObject.Properties["rollback_environment"]' in script
+    assert '"postgresql", "postgresql+asyncpg"' in script
+    assert '"GRPC_INSECURE_ALLOWED", "ALLOW_PLAINTEXT_GRPC"' in script
+
+
+def test_beta_inventory_records_only_non_secret_rollback_connection_metadata() -> None:
+    deploy = text("scripts/deploy-local-beta-release.ps1")
+
+    assert 'rollback_environment = $rollbackEnvironment' in deploy
+    assert '$rollbackEnvironment["DATABASE_DRIVER"] = $Matches[1]' in deploy
+    assert 'rollbackEnvironment[$parts[0]] = $parts[1]' in deploy
+    assert 'rollbackEnvironment["DATABASE_URL"]' not in deploy
 
 
 def test_beta_compose_uses_the_generated_database_password_without_source_overlays() -> None:
