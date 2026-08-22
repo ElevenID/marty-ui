@@ -266,17 +266,31 @@ fn deployed_configuration_fails_closed() {
         })
     );
 
-    let mut path = baseline("beta");
-    path.insert(
+    let mut endpoint = baseline("beta");
+    endpoint.insert(
         "SIGNING_KEYS_INTERNAL_URL".into(),
         "https://signing-keys/internal".into(),
     );
     assert_eq!(
-        FlowServiceConfig::from_values(path),
-        Err(FlowConfigError::Invalid {
-            name: "SIGNING_KEYS_INTERNAL_URL"
-        })
+        FlowServiceConfig::from_values(endpoint)
+            .expect("internal service endpoints may include a path")
+            .signing_keys_url,
+        "https://signing-keys/internal"
     );
+
+    for invalid in [
+        "https://signing-keys/internal?version=1",
+        "https://signing-keys/internal#fragment",
+    ] {
+        let mut values = baseline("beta");
+        values.insert("SIGNING_KEYS_INTERNAL_URL".into(), invalid.into());
+        assert_eq!(
+            FlowServiceConfig::from_values(values),
+            Err(FlowConfigError::Invalid {
+                name: "SIGNING_KEYS_INTERNAL_URL"
+            })
+        );
+    }
 
     let mut shared = baseline("beta");
     shared.insert("FLOW_GRPC_ADDR".into(), "0.0.0.0:8011".into());
