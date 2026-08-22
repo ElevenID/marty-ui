@@ -6,6 +6,7 @@ use rand::RngCore;
 use redis::{aio::ConnectionManager, AsyncCommands, Script};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
+use url::Url;
 
 use crate::DeviceError;
 
@@ -143,7 +144,8 @@ impl std::fmt::Debug for RedisChallengeRepository {
 
 impl RedisChallengeRepository {
     pub async fn connect(url: &str, ttl_seconds: u64) -> Result<Self, DeviceError> {
-        let client = redis::Client::open(url)
+        let url = redis_url_with_explicit_acl_user(url);
+        let client = redis::Client::open(url.as_str())
             .map_err(|error| DeviceError::ChallengeStore(error.to_string()))?;
         let mut connection = ConnectionManager::new(client)
             .await
@@ -157,6 +159,20 @@ impl RedisChallengeRepository {
             connection,
         })
     }
+}
+
+fn redis_url_with_explicit_acl_user(value: &str) -> String {
+    let Ok(mut parsed) = Url::parse(value) else {
+        return value.to_owned();
+    };
+    if matches!(parsed.scheme(), "redis" | "rediss")
+        && parsed.username().is_empty()
+        && parsed.password().is_some()
+        && parsed.set_username("default").is_ok()
+    {
+        return parsed.to_string();
+    }
+    value.to_owned()
 }
 
 #[async_trait]
@@ -211,5 +227,35 @@ impl ChallengeRepository for RedisChallengeRepository {
 
     fn ttl_seconds(&self) -> u64 {
         self.ttl_seconds
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_only_redis_urls_use_default_acl_user() {
+        for value in [
+            "redis://:secret@redis:6379/0",
+            "rediss://:secret@redis:6379/0",
+        ] {
+            let normalized = redis_url_with_explicit_acl_user(value);
+            let parsed = Url::parse(&normalized).expect("normalized Redis URL");
+            assert_eq!(parsed.username(), "default");
+            assert_eq!(parsed.password(), Some("secret"));
+        }
+    }
+
+    #[test]
+    fn explicit_users_and_non_redis_values_are_unchanged() {
+        for value in [
+            "redis://worker:secret@redis:6379/0",
+            "rediss://worker:secret@redis:6379/0",
+            "http://example.test/",
+            "not a url",
+        ] {
+            assert_eq!(redis_url_with_explicit_acl_user(value), value);
+        }
     }
 }
