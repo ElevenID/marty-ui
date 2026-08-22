@@ -66,7 +66,7 @@ SET credential_payload_format = 'jwt_vc',
             END
             ORDER BY ordinal
         )
-        FROM jsonb_array_elements(COALESCE(wallet_configs, '[]'::jsonb))
+        FROM jsonb_array_elements(COALESCE(wallet_configs::jsonb, '[]'::jsonb))
             WITH ORDINALITY AS config(entry, ordinal)
     ), '[]'::jsonb),
     version = greatest(version, 4),
@@ -87,7 +87,7 @@ WITH normalized AS (
             ORDER BY ordinal
         ) AS wallet_configs
     FROM credential_template_service.credential_templates AS template
-    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(template.wallet_configs, '[]'::jsonb))
+    CROSS JOIN LATERAL jsonb_array_elements(COALESCE(template.wallet_configs::jsonb, '[]'::jsonb))
         WITH ORDINALITY AS entry(config, ordinal)
     GROUP BY template.id
     HAVING bool_or(
