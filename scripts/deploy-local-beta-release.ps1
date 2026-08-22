@@ -11,9 +11,9 @@ param(
 
     [string]$PilotOrganizationId = "00000000-0000-0000-0000-000000000001",
 
-    [string]$TunnelEnvFile = (Join-Path (Split-Path -Parent $PSScriptRoot) ".env.tunnel.beta.local"),
+    [string]$TunnelEnvFile,
 
-    [string]$GeneratedEnvFile = (Join-Path (Split-Path -Parent $PSScriptRoot) ".env.beta.generated.local"),
+    [string]$GeneratedEnvFile,
 
     [switch]$PlanOnly
 )
@@ -30,6 +30,12 @@ $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $script:WorkspaceRoot = (Resolve-Path (Join-Path $script:RepoRoot "..")).Path
 $script:ArtifactRoot = (Resolve-Path (Join-Path $script:RepoRoot "tests\artifacts")).Path
 $script:ArtifactDir = (Resolve-Path $ArtifactDir).Path
+if ([string]::IsNullOrWhiteSpace($TunnelEnvFile)) {
+    $TunnelEnvFile = Join-Path $script:RepoRoot ".env.tunnel.beta.local"
+}
+if ([string]::IsNullOrWhiteSpace($GeneratedEnvFile)) {
+    $GeneratedEnvFile = Join-Path $script:RepoRoot ".env.beta.generated.local"
+}
 $script:BetaProject = "elevenid-beta"
 $script:BetaUiProject = "elevenid-beta-ui"
 $script:BetaNetwork = "elevenid-beta-network"
@@ -612,7 +618,7 @@ finally {
 Write-Step "Build marker-bearing application images"
 $env:MARTY_RELEASE_VERSION = $releaseVersion
 $env:MARTY_UI_SHA = $sourceId
-Invoke-Compose -Arguments (@(
+$applicationBuildArguments = @(
     "build", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId",
     "--build-arg", "MARTY_COMMON_VERSION=$($martyCommon.Version)", "--build-arg", "MARTY_COMMON_URI=$($martyCommon.Uri)",
     "--build-arg", "MARTY_COMMON_DIGEST=$($martyCommon.Digest)", "--build-arg", "MARTY_RS_VERSION=$($martyRs.Version)",
@@ -621,7 +627,14 @@ Invoke-Compose -Arguments (@(
     "--build-arg", "MARTY_VERIFICATION_DIGEST=$($martyVerification.Digest)",
     "--build-arg", "MARTY_ISO18013_VERSION=$($martyIso18013.Version)", "--build-arg", "MARTY_ISO18013_URI=$($martyIso18013.Uri)",
     "--build-arg", "MARTY_ISO18013_DIGEST=$($martyIso18013.Digest)"
-) + $script:ApplicationBuildServices)
+)
+# BuildKit bake can schedule every Compose target concurrently and exhaust the
+# local Docker Desktop VM. Build one immutable target at a time so a release
+# cannot take the currently healthy beta stack down through builder pressure.
+foreach ($service in $script:ApplicationBuildServices) {
+    Write-Host "Building release image: $service"
+    Invoke-Compose -Arguments ($applicationBuildArguments + @($service))
+}
 
 Write-Step "Build marker-bearing public UI image"
 $uiImage = "elevenid-local/ui:$releaseVersion"
