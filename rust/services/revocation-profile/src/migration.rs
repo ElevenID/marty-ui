@@ -150,36 +150,62 @@ DO $backfill$
 BEGIN
     IF to_regclass('issuance_service.issued_credentials') IS NOT NULL THEN
         EXECUTE $sql$
+            WITH candidates AS (
+                SELECT
+                    credential.id AS credential_id,
+                    credential.organization_id,
+                    credential.revocation_profile_id AS profile_id,
+                    CASE
+                        WHEN entry.value ->> 'type' = 'TokenStatusListEntry'
+                            THEN 'token_status_list'
+                        ELSE 'bitstring'
+                    END AS status_list_format,
+                    (entry.value ->> 'index')::BIGINT AS status_list_index,
+                    credential.issued_at,
+                    entry.ordinality AS entry_ordinality
+                FROM issuance_service.issued_credentials AS credential
+                JOIN revocation_profile_service.revocation_profiles AS profile
+                  ON profile.id = credential.revocation_profile_id
+                 AND profile.organization_id = credential.organization_id
+                CROSS JOIN LATERAL jsonb_array_elements(
+                    COALESCE(credential.status_list_entries::jsonb, '[]'::jsonb)
+                ) WITH ORDINALITY AS entry(value, ordinality)
+                WHERE credential.revocation_profile_id IS NOT NULL
+                  AND COALESCE(
+                        entry.value ->> 'status_purpose',
+                        entry.value ->> 'statusPurpose',
+                        'revocation'
+                      ) = 'revocation'
+                  AND entry.value ->> 'index' ~ '^[0-9]+$'
+            ),
+            credential_winners AS (
+                SELECT DISTINCT ON (credential_id)
+                    credential_id, organization_id, profile_id,
+                    status_list_format, status_list_index, issued_at
+                FROM candidates
+                ORDER BY credential_id, entry_ordinality
+            ),
+            slot_winners AS (
+                SELECT DISTINCT ON (
+                    organization_id, profile_id, status_list_format,
+                    status_list_index
+                )
+                    credential_id, organization_id, profile_id,
+                    status_list_format, status_list_index, issued_at
+                FROM credential_winners
+                ORDER BY
+                    organization_id, profile_id, status_list_format,
+                    status_list_index, issued_at NULLS LAST, credential_id
+            )
             INSERT INTO revocation_profile_service.status_list_allocations (
                 credential_id, organization_id, profile_id, status_list_format,
                 status_list_index, created_at
             )
             SELECT
-                credential.id,
-                credential.organization_id,
-                credential.revocation_profile_id,
-                CASE
-                    WHEN entry.value ->> 'type' = 'TokenStatusListEntry'
-                        THEN 'token_status_list'
-                    ELSE 'bitstring'
-                END,
-                (entry.value ->> 'index')::BIGINT,
-                COALESCE(credential.issued_at, NOW())
-            FROM issuance_service.issued_credentials AS credential
-            JOIN revocation_profile_service.revocation_profiles AS profile
-              ON profile.id = credential.revocation_profile_id
-             AND profile.organization_id = credential.organization_id
-            CROSS JOIN LATERAL jsonb_array_elements(
-                COALESCE(credential.status_list_entries::jsonb, '[]'::jsonb)
-            ) AS entry(value)
-            WHERE credential.revocation_profile_id IS NOT NULL
-              AND COALESCE(
-                    entry.value ->> 'status_purpose',
-                    entry.value ->> 'statusPurpose',
-                    'revocation'
-                  ) = 'revocation'
-              AND entry.value ->> 'index' ~ '^[0-9]+$'
-            ON CONFLICT (credential_id) DO NOTHING
+                credential_id, organization_id, profile_id, status_list_format,
+                status_list_index, COALESCE(issued_at, NOW())
+            FROM slot_winners
+            ON CONFLICT DO NOTHING
         $sql$;
     END IF;
 END

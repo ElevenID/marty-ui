@@ -191,6 +191,27 @@ foreach ($record in $preDeploy) {
         $restoreServices += [string]$record.service
         $yaml += "  $($record.service):"
         $yaml += "    image: $($record.image_id)"
+        $compatibility = $record.PSObject.Properties["rollback_environment"]
+        if ($null -ne $compatibility -and $null -ne $compatibility.Value) {
+            $environment = @($compatibility.Value.PSObject.Properties)
+            if ($environment.Count -gt 0) {
+                $yaml += "    environment:"
+            }
+            foreach ($property in $environment) {
+                if ($property.Name -eq "DATABASE_DRIVER") {
+                    $driver = [string]$property.Value
+                    if ($driver -notin @("postgresql", "postgresql+asyncpg")) {
+                        throw "Unsupported rollback database driver for $($record.service)"
+                    }
+                    $yaml += '      DATABASE_URL: ' + $driver + '://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty'
+                    continue
+                }
+                if ($property.Name -notin @("GRPC_INSECURE_ALLOWED", "ALLOW_PLAINTEXT_GRPC") -or [string]$property.Value -notin @("true", "false")) {
+                    throw "Unsupported rollback environment for $($record.service)"
+                }
+                $yaml += "      $($property.Name): `"$($property.Value)`""
+            }
+        }
     }
 }
 $yaml -join "`n" | Set-Content -LiteralPath $restoreImages -Encoding utf8

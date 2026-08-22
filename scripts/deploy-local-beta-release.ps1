@@ -207,10 +207,17 @@ function Get-ServiceRecords([string[]]$Services, [switch]$IncludeUi) {
             $health = $inspect.State.Health.Status
         }
         $markerEnvironment = [ordered]@{}
+        $rollbackEnvironment = [ordered]@{}
         foreach ($entry in @($inspect.Config.Env)) {
             $parts = $entry -split "=", 2
             if ($parts[0] -in @("MARTY_RELEASE_VERSION", "MARTY_UI_SHA", "ELEVENID_STACK_VERSION", "ELEVENID_IMAGE_DIGESTS_JSON")) {
                 $markerEnvironment[$parts[0]] = if ($parts.Count -gt 1) { $parts[1] } else { "" }
+            }
+            if ($parts.Count -gt 1 -and $parts[0] -in @("GRPC_INSECURE_ALLOWED", "ALLOW_PLAINTEXT_GRPC")) {
+                $rollbackEnvironment[$parts[0]] = $parts[1]
+            }
+            if ($parts.Count -gt 1 -and $parts[0] -eq "DATABASE_URL" -and $parts[1] -match '^([a-zA-Z][a-zA-Z0-9+.-]*)://') {
+                $rollbackEnvironment["DATABASE_DRIVER"] = $Matches[1]
             }
         }
         $records += [ordered]@{
@@ -226,6 +233,7 @@ function Get-ServiceRecords([string[]]$Services, [switch]$IncludeUi) {
             compose_project = $inspect.Config.Labels.'com.docker.compose.project'
             compose_service = $inspect.Config.Labels.'com.docker.compose.service'
             runtime_marker_environment = $markerEnvironment
+            rollback_environment = $rollbackEnvironment
         }
     }
     return $records
