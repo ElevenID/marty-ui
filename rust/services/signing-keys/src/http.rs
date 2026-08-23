@@ -97,6 +97,7 @@ pub fn router_with_dependencies(
         .route("/docs", get(docs))
         .route("/redoc", get(redoc))
         .route("/v1/signing-keys/service-status", get(service_status))
+        .route("/v1/signing-keys", get(list_public_signing_keys))
         .route(
             "/v1/signing-keys/config",
             get(public_config).patch(save_public_config),
@@ -275,6 +276,137 @@ struct IssuerIdentityRequest {
 struct PublicSigningError {
     status: StatusCode,
     detail: String,
+}
+
+async fn list_public_signing_keys(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+) -> Response {
+    let Some(registry_store) = state.registry_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        );
+    };
+    let registry = match registry_store.load(&scope.organization_id).await {
+        Ok(registry) => registry,
+        Err(error) => return public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+    };
+    let profiles = if let Some(profile_store) = state.profile_store.as_ref() {
+        match profile_store
+            .find(&scope.organization_id, FindProfilesRequest::default())
+            .await
+        {
+            Ok(profiles) => profiles,
+            Err(error) => return public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+        }
+    } else {
+        Vec::new()
+    };
+    let keys = public_signing_key_inventory(&registry, &profiles);
+    let key_count = keys.len();
+    Json(json!({
+        "keys": keys,
+        "provider_metadata": {
+            "provider": "configured-services",
+            "status": "configured",
+            "managed_by": "Marty signing service",
+            "key_count": key_count,
+        },
+        "domain_config": {"public_domain": state.public_domain},
+        "message": Value::Null,
+    }))
+    .into_response()
+}
+
+fn public_signing_key_inventory(registry: &Value, profiles: &[Value]) -> Vec<Value> {
+    let services = registry
+        .get("services")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let services_by_id = services
+        .iter()
+        .filter_map(|service| {
+            service
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| (id.to_owned(), service))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut keys = std::collections::BTreeMap::<String, Value>::new();
+
+    for profile in profiles {
+        let Some(reference) = profile
+            .get("signing_key_reference")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let service_id = profile
+            .get("signing_service_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let service = services_by_id.get(service_id).copied();
+        let key = format!("{service_id}\0{reference}");
+        keys.entry(key).or_insert_with(|| {
+            json!({
+                "id": reference,
+                "provider_key_name": reference,
+                "name": profile.get("name").and_then(Value::as_str).filter(|value| !value.is_empty()).unwrap_or(reference),
+                "algorithm": profile.get("algorithm").and_then(Value::as_str).unwrap_or_default(),
+                "status": profile.get("status").and_then(Value::as_str).unwrap_or("active"),
+                "created_at": profile.get("created_at").cloned().unwrap_or(Value::Null),
+                "expiry_date": Value::Null,
+                "service_id": service_id,
+                "provider": service.and_then(|value| value.get("provider")).cloned().unwrap_or(Value::Null),
+                "key_purpose": profile.get("key_purpose").cloned().unwrap_or(Value::Null),
+            })
+        });
+    }
+
+    for service in &services {
+        let service_id = service
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let mut references = service
+            .get("key_aliases")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if let Some(reference) = service.get("key_reference").and_then(Value::as_str) {
+            references.push(reference.to_owned());
+        }
+        for reference in references {
+            let reference = reference.trim();
+            if reference.is_empty() {
+                continue;
+            }
+            let key = format!("{service_id}\0{reference}");
+            keys.entry(key).or_insert_with(|| {
+                json!({
+                    "id": reference,
+                    "provider_key_name": reference,
+                    "name": reference,
+                    "algorithm": service.get("algorithms").and_then(Value::as_array).and_then(|values| values.first()).cloned().unwrap_or(Value::Null),
+                    "status": "active",
+                    "created_at": Value::Null,
+                    "expiry_date": Value::Null,
+                    "service_id": service_id,
+                    "provider": service.get("provider").cloned().unwrap_or(Value::Null),
+                    "key_purpose": Value::Null,
+                })
+            });
+        }
+    }
+
+    keys.into_values().collect()
 }
 
 impl IntoResponse for PublicSigningError {
@@ -1391,6 +1523,7 @@ async fn openapi() -> Json<serde_json::Value> {
         "info": {"title": "Signing Keys Service", "version": "1.0.0"},
         "paths": {
             "/health": {"get": {"summary": "Health Check", "responses": {"200": {"description": "Successful Response"}}}},
+            "/v1/signing-keys": {"get": {"summary": "List Signing Keys", "responses": {"200": {"description": "Provider-neutral signing-key inventory"}}}},
             "/v1/signing-keys/service-status": {"get": {"summary": "Signing Keys Service Extraction Status", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/purposes": {"get": {"summary": "List Available Key Purposes", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/service-capabilities": {"get": {"summary": "List Provider Capability Metadata", "responses": {"200": {"description": "Successful Response"}}}}
@@ -1467,5 +1600,34 @@ mod public_contract_tests {
         ));
         assert!(validate_identity_scope("org-a", &identity("vc_jwt_issuer", "ES256")).is_ok());
         assert!(validate_identity_scope("org-b", &identity("vc_jwt_issuer", "ES256")).is_err());
+    }
+
+    #[test]
+    fn public_inventory_combines_profile_and_service_key_references_without_custody_data() {
+        let registry = json!({
+            "services": [{
+                "id": "svc-openbao",
+                "provider": "openbao",
+                "algorithms": ["ES256"],
+                "key_reference": "configured-key",
+                "auth_reference": "private-token-reference"
+            }]
+        });
+        let profiles = vec![json!({
+            "id": "private-profile-id",
+            "name": "Issuer identity",
+            "signing_service_id": "svc-openbao",
+            "signing_key_reference": "issuer-key",
+            "key_purpose": "vc_jwt_issuer",
+            "algorithm": "ES256",
+            "status": "active"
+        })];
+        let inventory = public_signing_key_inventory(&registry, &profiles);
+        assert_eq!(inventory.len(), 2);
+        assert!(inventory.iter().any(|key| key["id"] == "issuer-key"));
+        assert!(inventory.iter().any(|key| key["id"] == "configured-key"));
+        let serialized = serde_json::to_string(&inventory).expect("inventory JSON");
+        assert!(!serialized.contains("private-profile-id"));
+        assert!(!serialized.contains("private-token-reference"));
     }
 }
