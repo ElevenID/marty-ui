@@ -27,6 +27,7 @@ pub enum RegistryError {
 #[derive(Clone)]
 pub struct RegistryStore {
     connection: ConnectionManager,
+    managed_openbao_endpoint: Option<String>,
 }
 
 impl RegistryStore {
@@ -42,7 +43,16 @@ impl RegistryStore {
             .query_async::<String>(&mut probe)
             .await
             .map_err(|error| RegistryError::Storage(error.to_string()))?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            managed_openbao_endpoint: None,
+        })
+    }
+
+    #[must_use]
+    pub fn with_managed_openbao(mut self, endpoint: Option<String>) -> Self {
+        self.managed_openbao_endpoint = endpoint;
+        self
     }
 
     pub async fn load(&self, organization_id: &str) -> Result<Value, RegistryError> {
@@ -51,12 +61,15 @@ impl RegistryStore {
             .get(storage_key(organization_id))
             .await
             .map_err(|error| RegistryError::Storage(error.to_string()))?;
-        let Some(payload) = payload else {
-            return Ok(empty_registry());
+        let registry = match payload {
+            Some(payload) => {
+                let parsed = serde_json::from_str(&payload)
+                    .map_err(|error| RegistryError::Corrupt(error.to_string()))?;
+                normalize_stored_registry(&parsed)?
+            }
+            None => empty_registry(),
         };
-        let parsed = serde_json::from_str(&payload)
-            .map_err(|error| RegistryError::Corrupt(error.to_string()))?;
-        normalize_stored_registry(&parsed)
+        Ok(self.with_managed_service(registry))
     }
 
     pub async fn save(
@@ -72,7 +85,7 @@ impl RegistryStore {
             .set::<_, _, ()>(storage_key(organization_id), payload)
             .await
             .map_err(|error| RegistryError::Storage(error.to_string()))?;
-        Ok(normalized)
+        Ok(self.with_managed_service(normalized))
     }
 
     pub async fn bind_profile(
@@ -152,6 +165,77 @@ impl RegistryStore {
     pub fn connection(&self) -> ConnectionManager {
         self.connection.clone()
     }
+
+    fn with_managed_service(&self, mut registry: Value) -> Value {
+        let Some(endpoint) = self.managed_openbao_endpoint.as_deref() else {
+            return registry;
+        };
+        let requested_default = registry
+            .get("default_service_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        {
+            let services = registry["services"]
+                .as_array_mut()
+                .expect("normalized signing registry services");
+            services.retain(|service| {
+                service.get("id").and_then(Value::as_str) != Some(MANAGED_OPENBAO_SERVICE_ID)
+            });
+            services.insert(0, managed_openbao_service(endpoint));
+        }
+        let configured_default = requested_default.as_deref().is_some_and(|id| {
+            registry["services"]
+                .as_array()
+                .expect("normalized signing registry services")
+                .iter()
+                .any(|service| service.get("id").and_then(Value::as_str) == Some(id))
+        });
+        if !configured_default {
+            registry["default_service_id"] = Value::String(MANAGED_OPENBAO_SERVICE_ID.into());
+        }
+        registry
+    }
+}
+
+fn managed_openbao_service(endpoint: &str) -> Value {
+    let purposes = key_purposes()
+        .into_iter()
+        .map(|purpose| purpose.id)
+        .collect::<Vec<_>>();
+    json!({
+        "id": MANAGED_OPENBAO_SERVICE_ID,
+        "name": "Marty managed OpenBao transit",
+        "description": "Managed by the Marty service stack.",
+        "service_type": "openbao-transit",
+        "provider": "openbao",
+        "provider_label": "OpenBao Transit",
+        "protocol": "vault-transit",
+        "category": "service-hsm",
+        "endpoint": endpoint,
+        "region": "",
+        "mount": "transit",
+        "namespace": "",
+        "auth_mode": "service_token",
+        "auth_reference": "Managed by Marty service stack",
+        "key_reference": "",
+        "key_aliases": [],
+        "algorithms": SUPPORTED_ALGORITHMS,
+        "key_purposes": purposes,
+        "credential_formats": ["jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc", "vds_nc", "oauth-authz-req+jwt", "lti_tool_jwt"],
+        "status": "configured",
+        "managed": true,
+        "read_only": true,
+        "managed_by": "Marty service stack",
+        "key_count": 0,
+        "capabilities": {
+            "discover_keys": true,
+            "sign": true,
+            "rotate_keys": false,
+            "upload_public_keys": false,
+            "delete_keys": false,
+            "multiple_key_references": true
+        }
+    })
 }
 
 #[derive(Debug, Clone, Deserialize)]

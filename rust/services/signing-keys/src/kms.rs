@@ -178,7 +178,16 @@ pub async fn sign(request: SignRequest) -> Result<SignResponse, KmsError> {
 
 pub async fn public_key(request: ProviderRequest) -> Result<Value, KmsError> {
     match Provider::from_config(&request.service_config)? {
-        Provider::OpenBao => public_key_openbao(&request.service_config).await,
+        Provider::OpenBao => match public_key_openbao(&request.service_config).await {
+            Err(KmsError::ProviderStatus { status, .. })
+                if status == StatusCode::NOT_FOUND
+                    && string(&request.service_config, "id") == Some("managed-openbao-transit") =>
+            {
+                create_managed_openbao_key(&request.service_config).await?;
+                public_key_openbao(&request.service_config).await
+            }
+            result => result,
+        },
         Provider::Aws => public_key_aws(&request.service_config).await,
         Provider::Azure => public_key_azure(&request.service_config).await,
         Provider::Gcp => public_key_gcp(&request.service_config).await,

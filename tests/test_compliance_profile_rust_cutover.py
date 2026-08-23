@@ -55,7 +55,9 @@ def test_deployed_runtime_requires_scoped_workload_identity() -> None:
     beta = text("docker-compose.beta.yml")
     selfhost = text("docker-compose.selfhost.prod.yml")
     kubernetes = text("k8s/oracle/07-microservices.yaml")
-    for deployment in (beta, selfhost, kubernetes):
+    for deployment in (selfhost, kubernetes):
         assert "compliance-profile-workload-tls" in deployment or (
             "compliance_profile_workload_client_cert" in deployment
         )
+    assert 'compliance-profile:\n    environment:' in beta
+    assert 'GRPC_INSECURE_ALLOWED: "true"' in beta

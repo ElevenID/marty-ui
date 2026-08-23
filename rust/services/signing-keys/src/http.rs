@@ -25,13 +25,14 @@ use crate::registry::{
 };
 use crate::validation::{self, ValidationRequest};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::Html,
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use tower_http::trace::TraceLayer;
@@ -58,6 +59,7 @@ struct AppState {
     profile_store: Option<ProfileStore>,
     flow_envelopes: Option<OpenBaoEnvelopeProvider>,
     compatibility: Option<SigningCompatibilityService>,
+    public_domain: Option<String>,
 }
 
 pub fn router() -> Router {
@@ -95,6 +97,24 @@ pub fn router_with_dependencies(
         .route("/docs", get(docs))
         .route("/redoc", get(redoc))
         .route("/v1/signing-keys/service-status", get(service_status))
+        .route(
+            "/v1/signing-keys/config",
+            get(public_config).patch(save_public_config),
+        )
+        .route(
+            "/v1/signing-keys/config/validate",
+            post(validate_public_service),
+        )
+        .route(
+            "/v1/signing-keys/issuer-identities",
+            get(list_public_issuer_identities)
+                .post(create_public_issuer_identity)
+                .delete(delete_public_issuer_identity),
+        )
+        .route(
+            "/v1/signing-keys/issuer-identities/certificate",
+            axum::routing::put(store_public_issuer_certificate),
+        )
         .route("/v1/signing-keys/config/purposes", get(purposes))
         .route(
             "/v1/signing-keys/config/service-capabilities",
@@ -216,7 +236,435 @@ pub fn router_with_dependencies(
             profile_store,
             flow_envelopes,
             compatibility,
+            public_domain,
         })
+}
+
+#[derive(Debug, Deserialize)]
+struct OrganizationScope {
+    organization_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct IssuerIdentityQuery {
+    organization_id: String,
+    #[serde(default)]
+    key_purpose: Option<String>,
+    #[serde(default)]
+    credential_format: Option<String>,
+    #[serde(default)]
+    algorithm: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IssuerIdentityRequest {
+    #[serde(default)]
+    organization_id: Option<String>,
+    issuer_did: String,
+    key_purpose: String,
+    credential_format: String,
+    algorithm: String,
+    #[serde(default)]
+    key_attestation_policy: Option<Value>,
+    #[serde(default)]
+    cert_pem: Option<String>,
+    #[serde(default)]
+    cert_chain_pem: Option<String>,
+}
+
+struct PublicSigningError {
+    status: StatusCode,
+    detail: String,
+}
+
+impl IntoResponse for PublicSigningError {
+    fn into_response(self) -> Response {
+        public_error(self.status, &self.detail)
+    }
+}
+
+async fn public_config(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+) -> Response {
+    let Some(store) = state.registry_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        );
+    };
+    match store.load(&scope.organization_id).await {
+        Ok(registry) => Json(public_config_document(&state, registry)).into_response(),
+        Err(error) => public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+    }
+}
+
+async fn save_public_config(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    Json(body): Json<Value>,
+) -> Response {
+    let Some(store) = state.registry_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Signing registry is unavailable.",
+        );
+    };
+    match store.save(&scope.organization_id, &body).await {
+        Ok(registry) => Json(public_config_document(&state, registry)).into_response(),
+        Err(error) => public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
+    }
+}
+
+async fn validate_public_service(Json(request): Json<ValidationRequest>) -> Response {
+    Json(validation::validate(request).await).into_response()
+}
+
+async fn list_public_issuer_identities(
+    State(state): State<AppState>,
+    Query(query): Query<IssuerIdentityQuery>,
+) -> Response {
+    let Some(store) = state.profile_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is unavailable.",
+        );
+    };
+    let request = FindProfilesRequest {
+        active_only: true,
+        key_purpose: cleaned(query.key_purpose),
+        credential_format: cleaned(query.credential_format).map(|value| value.to_ascii_uppercase()),
+        algorithm: cleaned(query.algorithm).map(|value| canonical_algorithm(&value)),
+        require_signing_service: true,
+        require_signing_key_reference: true,
+        require_public_identity: true,
+        ..FindProfilesRequest::default()
+    };
+    match store.find(&query.organization_id, request).await {
+        Ok(profiles) => match projected_identities(profiles) {
+            Ok(identities) => Json(json!({"identities": identities})).into_response(),
+            Err(error) => error.into_response(),
+        },
+        Err(error) => public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
+    }
+}
+
+async fn create_public_issuer_identity(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    Json(input): Json<IssuerIdentityRequest>,
+) -> Response {
+    if let Err(error) = validate_identity_scope(&scope.organization_id, &input) {
+        return error.into_response();
+    }
+    if !local_managed_did(state.public_domain.as_deref(), &input.issuer_did) {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "New managed identities require a local path-scoped did:web issuer.",
+        );
+    }
+    let Some(store) = state.profile_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is unavailable.",
+        );
+    };
+    let selector = identity_selector(&input);
+    let existing = match store.find(&scope.organization_id, selector).await {
+        Ok(existing) => existing,
+        Err(error) => return public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
+    };
+    if existing.len() > 1 {
+        return public_error(
+            StatusCode::CONFLICT,
+            "Issuer DID resolution is ambiguous for the requested identity tuple.",
+        );
+    }
+    if let Some(profile) = existing.first() {
+        return Json(json!({"identity": identity_projection(profile), "created": false}))
+            .into_response();
+    }
+    let Some(compatibility) = state.compatibility.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity service is unavailable.",
+        );
+    };
+    let body = json!({
+        "name": input.issuer_did,
+        "issuer_did": input.issuer_did,
+        "signing_service_id": "managed-openbao-transit",
+        "signing_key_reference": managed_key_reference(&scope.organization_id, &input),
+        "key_purpose": input.key_purpose,
+        "credential_format": input.credential_format.to_ascii_uppercase(),
+        "algorithm": canonical_algorithm(&input.algorithm),
+        "key_attestation_policy": input.key_attestation_policy,
+        "status": "active"
+    });
+    match compatibility
+        .create_profile(&ProfileWriteRequest {
+            organization_id: scope.organization_id,
+            body,
+        })
+        .await
+    {
+        Ok(created) => {
+            let Some(profile) = created.get("profile") else {
+                return public_error(
+                    StatusCode::BAD_GATEWAY,
+                    "Issuer identity provisioning returned an invalid response.",
+                );
+            };
+            Json(json!({
+                "identity": identity_projection(profile),
+                "created": created.get("created").and_then(Value::as_bool).unwrap_or(true)
+            }))
+            .into_response()
+        }
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn store_public_issuer_certificate(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    Json(input): Json<IssuerIdentityRequest>,
+) -> Response {
+    if let Err(error) = validate_identity_scope(&scope.organization_id, &input) {
+        return error.into_response();
+    }
+    let profile = match one_matching_profile(&state, &scope.organization_id, &input).await {
+        Ok(profile) => profile,
+        Err(error) => return error.into_response(),
+    };
+    let Some(profile_id) = profile.get("id").and_then(Value::as_str) else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is malformed.",
+        );
+    };
+    let Some(compatibility) = state.compatibility.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity service is unavailable.",
+        );
+    };
+    match compatibility
+        .attach_profile_certificate(
+            profile_id,
+            &ProfileWriteRequest {
+                organization_id: scope.organization_id,
+                body: json!({
+                    "cert_pem": input.cert_pem,
+                    "cert_chain_pem": input.cert_chain_pem,
+                }),
+            },
+        )
+        .await
+    {
+        Ok(_) => Json(identity_projection(&profile)).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+async fn delete_public_issuer_identity(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    Json(input): Json<IssuerIdentityRequest>,
+) -> Response {
+    if let Err(error) = validate_identity_scope(&scope.organization_id, &input) {
+        return error.into_response();
+    }
+    let profile = match one_matching_profile(&state, &scope.organization_id, &input).await {
+        Ok(profile) => profile,
+        Err(error) => return error.into_response(),
+    };
+    let Some(profile_id) = profile.get("id").and_then(Value::as_str) else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is malformed.",
+        );
+    };
+    let Some(store) = state.profile_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is unavailable.",
+        );
+    };
+    match store.delete(&scope.organization_id, profile_id).await {
+        Ok(()) => Json(json!({"deleted": identity_projection(&profile)})).into_response(),
+        Err(error) => public_error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+    }
+}
+
+fn public_config_document(state: &AppState, registry: Value) -> Value {
+    let services = registry
+        .get("services")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    json!({
+        "hsm_enabled": !services.is_empty(),
+        "hsm_settings": {},
+        "vault_enabled": false,
+        "vault_settings": {},
+        "provider_metadata": {"provider": "openbao", "status": "configured", "managed_by": "Marty service stack"},
+        "domain_config": {"public_domain": state.public_domain},
+        "supports_native_key_management": true,
+        "registration_mode": "managed-or-external",
+        "default_service_id": registry.get("default_service_id").cloned().unwrap_or(Value::Null),
+        "services": services,
+        "key_reference_purposes": registry.get("key_reference_purposes").cloned().unwrap_or_else(|| json!({})),
+        "service_type_catalog": registry::service_catalog(),
+    })
+}
+
+fn identity_selector(input: &IssuerIdentityRequest) -> FindProfilesRequest {
+    FindProfilesRequest {
+        active_only: true,
+        issuer_did: Some(input.issuer_did.trim().to_owned()),
+        key_purpose: Some(input.key_purpose.trim().to_owned()),
+        credential_format: Some(input.credential_format.trim().to_ascii_uppercase()),
+        algorithm: Some(canonical_algorithm(&input.algorithm)),
+        require_signing_service: true,
+        require_signing_key_reference: true,
+        require_public_identity: true,
+        ..FindProfilesRequest::default()
+    }
+}
+
+async fn one_matching_profile(
+    state: &AppState,
+    organization_id: &str,
+    input: &IssuerIdentityRequest,
+) -> Result<Value, PublicSigningError> {
+    let Some(store) = state.profile_store.as_ref() else {
+        return Err(public_failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is unavailable.",
+        ));
+    };
+    match store.find(organization_id, identity_selector(input)).await {
+        Ok(matches) if matches.len() == 1 => Ok(matches.into_iter().next().expect("one match")),
+        Ok(matches) if matches.is_empty() => Err(public_failure(
+            StatusCode::NOT_FOUND,
+            "No active issuer identity matches the requested tuple.",
+        )),
+        Ok(_) => Err(public_failure(
+            StatusCode::CONFLICT,
+            "Issuer DID resolution is ambiguous for the requested identity tuple.",
+        )),
+        Err(error) => Err(public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            &error.to_string(),
+        )),
+    }
+}
+
+fn projected_identities(profiles: Vec<Value>) -> Result<Vec<Value>, PublicSigningError> {
+    let identities = profiles.iter().map(identity_projection).collect::<Vec<_>>();
+    let mut unique = std::collections::BTreeSet::new();
+    for identity in &identities {
+        let tuple = serde_json::to_string(identity).unwrap_or_default();
+        if !unique.insert(tuple) {
+            return Err(public_failure(
+                StatusCode::CONFLICT,
+                "Issuer DID resolution is ambiguous for the requested identity tuple.",
+            ));
+        }
+    }
+    Ok(identities)
+}
+
+fn identity_projection(profile: &Value) -> Value {
+    json!({
+        "issuer_did": profile.get("issuer_did").cloned().unwrap_or(Value::Null),
+        "key_purpose": profile.get("key_purpose").cloned().unwrap_or_else(|| Value::String("vc_jwt_issuer".into())),
+        "credential_format": profile.get("credential_format").cloned().unwrap_or(Value::Null),
+        "algorithm": profile.get("algorithm").and_then(Value::as_str).map(canonical_algorithm).unwrap_or_else(|| "ES256".into()),
+        "status": "active"
+    })
+}
+
+fn validate_identity_scope(
+    organization_id: &str,
+    input: &IssuerIdentityRequest,
+) -> Result<(), PublicSigningError> {
+    if input
+        .organization_id
+        .as_deref()
+        .is_some_and(|requested| requested.trim() != organization_id)
+    {
+        return Err(public_failure(
+            StatusCode::FORBIDDEN,
+            "organization_id does not match the authorized organization context.",
+        ));
+    }
+    if organization_id.trim().is_empty()
+        || input.issuer_did.trim().is_empty()
+        || input.key_purpose.trim().is_empty()
+        || input.credential_format.trim().is_empty()
+        || input.algorithm.trim().is_empty()
+    {
+        return Err(public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "A complete issuer identity tuple is required.",
+        ));
+    }
+    Ok(())
+}
+
+fn local_managed_did(public_domain: Option<&str>, issuer_did: &str) -> bool {
+    public_domain
+        .map(str::trim)
+        .filter(|domain| !domain.is_empty())
+        .is_some_and(|domain| issuer_did.starts_with(&format!("did:web:{domain}:orgs:")))
+}
+
+fn managed_key_reference(organization_id: &str, input: &IssuerIdentityRequest) -> String {
+    let tuple = format!(
+        "{organization_id}|{}|{}|{}|{}",
+        input.issuer_did, input.key_purpose, input.credential_format, input.algorithm
+    );
+    let token = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, tuple.as_bytes())
+        .simple()
+        .to_string();
+    let prefix = match input.key_purpose.as_str() {
+        "oid4vp_request_signing" => "oid4vp-verifier-",
+        "lti_tool_signing" => "lti-tool-",
+        "mdoc_dsc" | "x509_doc_signer" | "vdsnc_signing" | "csca" => "cred-dsc-",
+        _ => "cred-issuer-",
+    };
+    format!(
+        "{prefix}{}-{}",
+        &token[..20],
+        input.algorithm.to_ascii_lowercase()
+    )
+}
+
+fn cleaned(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn canonical_algorithm(value: &str) -> String {
+    if value.trim().eq_ignore_ascii_case("eddsa") {
+        "EdDSA".into()
+    } else {
+        value.trim().to_ascii_uppercase()
+    }
+}
+
+fn public_error(status: StatusCode, detail: &str) -> Response {
+    (status, Json(json!({"detail": detail}))).into_response()
+}
+
+fn public_failure(status: StatusCode, detail: &str) -> PublicSigningError {
+    PublicSigningError {
+        status,
+        detail: detail.into(),
+    }
 }
 
 async fn issuer_context(
@@ -960,4 +1408,64 @@ async fn redoc() -> Html<&'static str> {
     Html(
         r#"<!doctype html><html><head><title>Signing Keys Service - ReDoc</title></head><body><redoc spec-url="/openapi.json"></redoc><script src="https://cdn.jsdelivr.net/npm/redoc@next/bundles/redoc.standalone.js"></script></body></html>"#,
     )
+}
+
+#[cfg(test)]
+mod public_contract_tests {
+    use super::*;
+
+    fn identity(purpose: &str, algorithm: &str) -> IssuerIdentityRequest {
+        IssuerIdentityRequest {
+            organization_id: Some("org-a".into()),
+            issuer_did: "did:web:beta.example:orgs:acme".into(),
+            key_purpose: purpose.into(),
+            credential_format: "SD_JWT_VC".into(),
+            algorithm: algorithm.into(),
+            key_attestation_policy: None,
+            cert_pem: None,
+            cert_chain_pem: None,
+        }
+    }
+
+    #[test]
+    fn public_projection_never_exposes_private_profile_or_kms_coordinates() {
+        let projection = identity_projection(&json!({
+            "id": "private-profile-id",
+            "issuer_did": "did:web:beta.example:orgs:acme",
+            "signing_service_id": "private-service-id",
+            "signing_key_reference": "private-key-reference",
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "ES256",
+        }));
+        assert_eq!(projection["status"], "active");
+        for private in ["id", "signing_service_id", "signing_key_reference"] {
+            assert!(projection.get(private).is_none());
+        }
+    }
+
+    #[test]
+    fn managed_key_names_preserve_purpose_isolation_and_algorithm_canonicalization() {
+        let issuer = managed_key_reference("org-a", &identity("vc_jwt_issuer", "ES256"));
+        let verifier = managed_key_reference("org-a", &identity("oid4vp_request_signing", "ES256"));
+        assert!(issuer.starts_with("cred-issuer-"));
+        assert!(issuer.ends_with("-es256"));
+        assert!(verifier.starts_with("oid4vp-verifier-"));
+        assert_ne!(issuer, verifier);
+        assert_eq!(canonical_algorithm("eddsa"), "EdDSA");
+    }
+
+    #[test]
+    fn managed_identity_scope_requires_the_local_path_scoped_did() {
+        assert!(local_managed_did(
+            Some("beta.example"),
+            "did:web:beta.example:orgs:acme"
+        ));
+        assert!(!local_managed_did(
+            Some("beta.example"),
+            "did:web:attacker.example:orgs:acme"
+        ));
+        assert!(validate_identity_scope("org-a", &identity("vc_jwt_issuer", "ES256")).is_ok());
+        assert!(validate_identity_scope("org-b", &identity("vc_jwt_issuer", "ES256")).is_err());
+    }
 }

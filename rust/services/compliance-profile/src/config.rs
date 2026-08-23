@@ -76,7 +76,11 @@ impl ComplianceServiceConfig {
                 name: "GRPC_SERVICE_TOKEN",
             });
         }
-        let workload_tls = tls(&v, environment)?;
+        let insecure_allowed = boolean(&v, "GRPC_INSECURE_ALLOWED", false)?;
+        if environment == RuntimeEnvironment::Production && insecure_allowed {
+            return Err(invalid("GRPC_INSECURE_ALLOWED"));
+        }
+        let workload_tls = tls(&v, environment, insecure_allowed)?;
         let target = value(&v, "ORG_GRPC_TARGET").unwrap_or("organization:9002");
         if target.chars().any(char::is_whitespace) {
             return Err(invalid("ORG_GRPC_TARGET"));
@@ -114,6 +118,7 @@ impl ComplianceServiceConfig {
 fn tls(
     v: &BTreeMap<String, String>,
     e: RuntimeEnvironment,
+    insecure_allowed: bool,
 ) -> Result<Option<WorkloadTlsFiles>, ComplianceConfigError> {
     let n = [
         "GRPC_WORKLOAD_TLS_CLIENT_CERT",
@@ -121,7 +126,7 @@ fn tls(
         "GRPC_WORKLOAD_TLS_CA_CERT",
     ];
     let count = n.iter().filter(|x| value(v, x).is_some()).count();
-    if count == 0 && !e.is_deployed() {
+    if count == 0 && (!e.is_deployed() || insecure_allowed) {
         return Ok(None);
     }
     if count != 3 {
@@ -136,6 +141,17 @@ fn tls(
         private_key: value(v, n[1]).unwrap_or_default().into(),
         ca_certificate: value(v, n[2]).unwrap_or_default().into(),
     }))
+}
+fn boolean(
+    v: &BTreeMap<String, String>,
+    n: &'static str,
+    default: bool,
+) -> Result<bool, ComplianceConfigError> {
+    value(v, n).map_or(Ok(default), |raw| match raw.to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" => Ok(true),
+        "false" | "0" | "no" => Ok(false),
+        _ => Err(invalid(n)),
+    })
 }
 fn value<'a>(v: &'a BTreeMap<String, String>, n: &str) -> Option<&'a str> {
     v.get(n)
@@ -199,6 +215,27 @@ mod tests {
             ComplianceServiceConfig::from_values(values),
             Err(ComplianceConfigError::Missing {
                 name: "GRPC_WORKLOAD_TLS_CLIENT_CERT"
+            })
+        );
+    }
+
+    #[test]
+    fn beta_can_explicitly_match_a_plaintext_organization_server_but_production_cannot() {
+        let mut beta = base("beta");
+        beta.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+        beta.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
+        assert!(ComplianceServiceConfig::from_values(beta)
+            .unwrap()
+            .workload_tls
+            .is_none());
+
+        let mut production = base("production");
+        production.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+        production.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
+        assert_eq!(
+            ComplianceServiceConfig::from_values(production),
+            Err(ComplianceConfigError::Invalid {
+                name: "GRPC_INSECURE_ALLOWED"
             })
         );
     }
