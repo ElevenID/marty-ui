@@ -120,6 +120,7 @@ async fn connect_providers(
         &config.credential_template_url,
         &config.trust_profile_url,
         &config.deployment_profile_url,
+        config.service_token.as_deref(),
     )?);
     references.health_check().await?;
     runtime.mark_healthy(FlowDependency::ReferenceCatalog)?;
