@@ -64,6 +64,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.service_urls.clone(),
         config.signing_internal_api_key.clone(),
         Some(config.issuance_api_key.clone()),
+        config.grpc_service_token.clone(),
         None,
     )?);
     let owners: Arc<dyn ResourceOwnerProvider> = http_provider.clone();
