@@ -484,6 +484,13 @@ async fn tenant_authorization_middleware(
             );
         }
     };
+    // Public wallet protocol routes are deliberately tenant-authorization
+    // skips.  Bypass owner resolution as well: resolving an instance owner
+    // requires an authenticated service call and must never make a public
+    // request-object endpoint depend on browser session context.
+    if skips_tenant_authorization(parts.uri.path()) {
+        return next.run(Request::from_parts(parts, Body::from(body))).await;
+    }
     let identity = parts.extensions.get::<GatewayIdentity>().cloned();
     let query_organization_id = query_pairs(parts.uri.query())
         .remove("organization_id")
@@ -4297,6 +4304,22 @@ mod tests {
         }
     }
 
+    struct UnavailableOwner;
+
+    #[async_trait]
+    impl ResourceOwnerProvider for UnavailableOwner {
+        async fn resolve_organization(
+            &self,
+            _: &str,
+            _: &str,
+            _: &ResourceOwnerContext,
+        ) -> Result<Option<String>, SecurityError> {
+            Err(SecurityError::ProviderUnavailable(
+                "owner lookup must not run for wallet-public routes".into(),
+            ))
+        }
+    }
+
     #[async_trait]
     impl ReadinessProvider for NoOwner {
         async fn check_services(
@@ -5123,6 +5146,24 @@ mod tests {
 
     fn runtime_state() -> Arc<GatewayRuntimeState> {
         runtime_state_with_events(Arc::new(NoOwner))
+    }
+
+    #[tokio::test]
+    async fn wallet_public_request_object_bypasses_unavailable_owner_lookup() {
+        let mut state = runtime_state();
+        Arc::get_mut(&mut state)
+            .expect("unique runtime state")
+            .owners = Arc::new(UnavailableOwner);
+        let response = gateway_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/flows/instances/flow-1/request")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     fn runtime_state_with_events(

@@ -44,11 +44,17 @@ struct FakeOrganizations {
     add_error: Mutex<bool>,
     context_error: Mutex<bool>,
     context: Mutex<Option<OrganizationContext>>,
+    added_user_ids: Mutex<Vec<String>>,
+    resolved_user_ids: Mutex<Vec<String>>,
 }
 
 #[async_trait]
 impl OrganizationProvisioning for FakeOrganizations {
-    async fn ensure_default_member(&self, _user_id: &str, _email: &str) -> Result<(), PortError> {
+    async fn ensure_default_member(&self, user_id: &str, _email: &str) -> Result<(), PortError> {
+        self.added_user_ids
+            .lock()
+            .expect("added user IDs lock")
+            .push(user_id.to_owned());
         if *self.add_error.lock().expect("add lock") {
             Err(PortError::new("organization_unavailable", "add failed"))
         } else {
@@ -58,8 +64,12 @@ impl OrganizationProvisioning for FakeOrganizations {
 
     async fn resolve_default_context(
         &self,
-        _user_id: &str,
+        user_id: &str,
     ) -> Result<Option<OrganizationContext>, PortError> {
+        self.resolved_user_ids
+            .lock()
+            .expect("resolved user IDs lock")
+            .push(user_id.to_owned());
         if *self.context_error.lock().expect("context error lock") {
             Err(PortError::new("organization_unavailable", "lookup failed"))
         } else {
@@ -130,10 +140,26 @@ async fn provisioning_enriches_roles_type_and_browser_organization_shape() {
         role_names: vec!["reviewer".to_owned(), "owner".to_owned()],
         has_org_console_access: true,
     });
-    let user = provisioner(organizations)
+    let user = provisioner(organizations.clone())
         .provision_at(&oidc_user(), now())
         .await
         .expect("provision user");
+    assert_eq!(user.user_id, "account-1");
+    assert_ne!(user.applicant_id.as_deref(), Some(user.user_id.as_str()));
+    assert_eq!(
+        *organizations
+            .added_user_ids
+            .lock()
+            .expect("added user IDs lock"),
+        ["account-1"]
+    );
+    assert_eq!(
+        *organizations
+            .resolved_user_ids
+            .lock()
+            .expect("resolved user IDs lock"),
+        ["account-1"]
+    );
     assert_eq!(user.user_type, UserType::Vendor);
     assert_eq!(user.roles, ["applicant", "reviewer", "owner"]);
     assert_eq!(user.organization_id.as_deref(), Some("org-1"));
