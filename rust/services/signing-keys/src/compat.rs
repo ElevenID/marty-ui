@@ -16,7 +16,9 @@ use crate::{
         self, DocumentStore, InspectCertificateRequest, LoadDidRequest, PublishDidRequest,
     },
     kms::{self, ProviderRequest},
-    profiles::{self, FindProfilesRequest, ProfileStore, ValidateBindingRequest},
+    profiles::{
+        self, CustodyFormatRequest, FindProfilesRequest, ProfileStore, ValidateBindingRequest,
+    },
     registry::RegistryStore,
 };
 
@@ -857,14 +859,27 @@ pub async fn resolve_issuer_identity(
         .get("profiles")
         .and_then(Value::as_array)
         .ok_or(CompatibilityError::Unavailable)?;
+    let key_purpose = clean(request.key_purpose.as_deref());
+    let wire_credential_format = clean(request.credential_format.as_deref())
+        .map(|credential_format| {
+            profiles::custody_format(&CustodyFormatRequest {
+                credential_format,
+                key_purpose: key_purpose
+                    .clone()
+                    .unwrap_or_else(|| "vc_jwt_issuer".to_owned()),
+            })
+            .map(|response| response.wire_format)
+            .map_err(map_profile_error)
+        })
+        .transpose()?;
     let active_profiles = profiles::find_profiles(
         profiles,
         &request.organization_id,
         &FindProfilesRequest {
             active_only: true,
             issuer_did: Some(request.issuer_did.clone()),
-            key_purpose: clean(request.key_purpose.as_deref()),
-            wire_credential_format: clean(request.credential_format.as_deref()),
+            key_purpose,
+            wire_credential_format: wire_credential_format.clone(),
             algorithm: clean(request.algorithm.as_deref()),
             allow_missing_algorithm: request.algorithm.is_some(),
             require_signing_service: true,
@@ -906,8 +921,8 @@ pub async fn resolve_issuer_identity(
         })
         .map_err(map_profile_error)?;
 
-        if let Some(format) = clean(request.credential_format.as_deref()) {
-            if !supports(&service, "credential_formats", &format) {
+        if let Some(format) = wire_credential_format.as_deref() {
+            if !supports(&service, "credential_formats", format) {
                 mismatch = format!(
                     "Signing service '{service_id}' is not configured for credential_format '{format}'."
                 );

@@ -7,7 +7,7 @@ use axum::{
     routing::{get, patch, post},
     Json, Router,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use mmf_security::ServiceTokenAuthenticator;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -365,6 +365,7 @@ struct CreateApiKeyRequest {
     name: String,
     description: Option<String>,
     scopes: Option<Vec<String>>,
+    expires_at: Option<DateTime<Utc>>,
     #[serde(default)]
     is_test: bool,
 }
@@ -965,7 +966,7 @@ async fn create_api_key(
             scope_type: ApiKeyScopeType::Organization,
             deployment_profile_id: None,
             rate_limit: None,
-            expires_at: None,
+            expires_at: input.expires_at,
             now: Utc::now(),
         })
         .await
