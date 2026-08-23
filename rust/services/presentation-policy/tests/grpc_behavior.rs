@@ -128,13 +128,18 @@ fn service(organization_id: Uuid) -> PresentationPolicyGrpcService {
 }
 
 fn authenticated<T>(message: T) -> Request<T> {
+    let mut request = service_authenticated(message);
+    request
+        .metadata_mut()
+        .insert("x-user-id", "user-1".parse().unwrap());
+    request
+}
+
+fn service_authenticated<T>(message: T) -> Request<T> {
     let mut request = Request::new(message);
     request
         .metadata_mut()
         .insert("x-service-token", TOKEN.parse().unwrap());
-    request
-        .metadata_mut()
-        .insert("x-user-id", "user-1".parse().unwrap());
     request
 }
 
@@ -303,4 +308,43 @@ async fn malformed_json_and_untrusted_principals_fail_closed_before_writes() {
         .insert("x-user-id", "attacker".parse().unwrap());
     let forbidden = service.create_policy(request).await.unwrap_err();
     assert_eq!(forbidden.code(), Code::PermissionDenied);
+}
+
+#[tokio::test]
+async fn exact_internal_lookup_uses_service_auth_while_collections_require_a_principal() {
+    let organization_id = Uuid::new_v4();
+    let service = service(organization_id);
+    let policy = service
+        .create_policy(authenticated(create_request(organization_id)))
+        .await
+        .unwrap()
+        .into_inner();
+
+    let fetched = service
+        .get_policy(service_authenticated(GetPolicyRequest {
+            policy_id: policy.id,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(fetched.organization_id, organization_id.to_string());
+
+    let list_error = service
+        .list_policies(service_authenticated(ListPoliciesRequest {
+            organization_id: organization_id.to_string(),
+            status: String::new(),
+            limit: 100,
+            offset: 0,
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(list_error.code(), Code::Unauthenticated);
+
+    let unauthenticated = service
+        .get_policy(Request::new(GetPolicyRequest {
+            policy_id: fetched.id,
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(unauthenticated.code(), Code::Unauthenticated);
 }
