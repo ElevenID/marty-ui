@@ -384,7 +384,7 @@ impl FlowServiceConfig {
         let signing_keys_url = service_endpoint_url(
             &values,
             "SIGNING_KEYS_INTERNAL_URL",
-            Some("http://signing-keys:8017"),
+            Some("http://signing-keys:8017/internal"),
             environment,
         )?;
         let credential_template_url = service_url(

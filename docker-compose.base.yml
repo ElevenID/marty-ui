@@ -801,7 +801,9 @@ services:
       MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:-}
       OID4VP_ISSUER_DID: ${OID4VP_ISSUER_DID:-}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-}
-      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      # Flow validates signing readiness before the gateway can start, so this
+      # dependency must not traverse the gateway and create a startup cycle.
+      SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       ICAO_DOCUMENT_SIGNER_URL: ${ICAO_DOCUMENT_SIGNER_URL:-}
       PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED: ${PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED:-false}

@@ -6,7 +6,6 @@ use rand::RngCore;
 use redis::{aio::ConnectionManager, AsyncCommands, Script};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
-use url::Url;
 
 use crate::DeviceError;
 
@@ -144,8 +143,10 @@ impl std::fmt::Debug for RedisChallengeRepository {
 
 impl RedisChallengeRepository {
     pub async fn connect(url: &str, ttl_seconds: u64) -> Result<Self, DeviceError> {
-        let url = redis_url_with_explicit_acl_user(url);
-        let client = redis::Client::open(url.as_str())
+        // redis-rs natively supports password-only URLs. Preserve that form;
+        // adding an ACL username failed database selection against the beta
+        // requirepass deployment.
+        let client = redis::Client::open(url)
             .map_err(|error| DeviceError::ChallengeStore(error.to_string()))?;
         let mut connection = ConnectionManager::new(client)
             .await
@@ -159,20 +160,6 @@ impl RedisChallengeRepository {
             connection,
         })
     }
-}
-
-fn redis_url_with_explicit_acl_user(value: &str) -> String {
-    let Ok(mut parsed) = Url::parse(value) else {
-        return value.to_owned();
-    };
-    if matches!(parsed.scheme(), "redis" | "rediss")
-        && parsed.username().is_empty()
-        && parsed.password().is_some()
-        && parsed.set_username("default").is_ok()
-    {
-        return parsed.to_string();
-    }
-    value.to_owned()
 }
 
 #[async_trait]
@@ -232,30 +219,13 @@ impl ChallengeRepository for RedisChallengeRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
-    fn password_only_redis_urls_use_default_acl_user() {
-        for value in [
-            "redis://:secret@redis:6379/0",
-            "rediss://:secret@redis:6379/0",
-        ] {
-            let normalized = redis_url_with_explicit_acl_user(value);
-            let parsed = Url::parse(&normalized).expect("normalized Redis URL");
-            assert_eq!(parsed.username(), "default");
-            assert_eq!(parsed.password(), Some("secret"));
-        }
-    }
-
-    #[test]
-    fn explicit_users_and_non_redis_values_are_unchanged() {
-        for value in [
-            "redis://worker:secret@redis:6379/0",
-            "rediss://worker:secret@redis:6379/0",
-            "http://example.test/",
-            "not a url",
-        ] {
-            assert_eq!(redis_url_with_explicit_acl_user(value), value);
-        }
+    fn redis_client_preserves_password_only_authentication_and_database() {
+        let client =
+            redis::Client::open("redis://:secret@redis:6379/5").expect("password-only Redis URL");
+        let settings = client.get_connection_info().redis_settings();
+        assert_eq!(settings.username(), None);
+        assert_eq!(settings.password(), Some("secret"));
+        assert_eq!(settings.db(), 5);
     }
 }
