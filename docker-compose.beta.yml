@@ -95,13 +95,7 @@ services:
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
-      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/compliance_profile_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/compliance_profile_workload_client_key
-      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
-    secrets:
-      - compliance_profile_workload_client_cert
-      - compliance_profile_workload_client_key
-      - workload_identity_ca_cert
+      GRPC_INSECURE_ALLOWED: "true"
 
   presentation-policy:
     environment:
@@ -118,13 +112,7 @@ services:
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
-      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/deployment_profile_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/deployment_profile_workload_client_key
-      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
-    secrets:
-      - deployment_profile_workload_client_cert
-      - deployment_profile_workload_client_key
-      - workload_identity_ca_cert
+      GRPC_INSECURE_ALLOWED: "true"
 
   signing-keys:
     environment:

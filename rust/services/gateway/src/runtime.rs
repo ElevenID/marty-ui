@@ -840,7 +840,14 @@ async fn proxy_handler(
         }
     };
     let public_path = parts.uri.path().to_owned();
-    let mut gateway_request = GatewayRequest::new(method, &public_path, now_ms());
+    let upstream_path = match organization_api_key_upstream_path(
+        &public_path,
+        authenticated_organization_id.as_deref(),
+    ) {
+        Ok(path) => path,
+        Err((status, detail)) => return detail_response(status, detail),
+    };
+    let mut gateway_request = GatewayRequest::new(method, &upstream_path, now_ms());
     gateway_request.query = query_pairs(parts.uri.query());
     gateway_request.headers = request_headers(&parts.headers);
     let mut canonical_body = match organization_contract::canonicalize_request(
@@ -941,7 +948,7 @@ async fn proxy_handler(
     if let Some(request_id) = gateway_request.header("x-request-id") {
         gateway_request.request_id = request_id.to_owned();
     }
-    let overrides = proxy_overrides(&state, &public_path, &identity);
+    let overrides = proxy_overrides(&state, &upstream_path, &identity);
     match state
         .proxy
         .execute(gateway_request, &identity, &overrides)
@@ -2514,7 +2521,7 @@ fn proxy_overrides(
             .insert("x-api-key".into(), state.issuance_service_api_key.clone());
     }
     let owner = route_ownership(path);
-    if owner.service == "organizations" {
+    if requires_gateway_service_token(owner.service) {
         if let Some(service_token) = &state.service_token {
             overrides
                 .headers
@@ -2527,7 +2534,7 @@ fn proxy_overrides(
                 .then(|| identity.organization_id.clone())
                 .flatten()
         })
-    } else if matches!(owner.service, "notifications") {
+    } else if matches!(owner.service, "notifications" | "signing-keys") {
         identity.organization_id.clone()
     } else {
         None
@@ -2538,6 +2545,40 @@ fn proxy_overrides(
             .insert("organization_id".into(), vec![organization_id]);
     }
     overrides
+}
+
+fn organization_api_key_upstream_path(
+    public_path: &str,
+    organization_id: Option<&str>,
+) -> Result<String, (u16, &'static str)> {
+    let Some(relative) = public_path.strip_prefix("/v1/api-keys") else {
+        return Ok(public_path.to_owned());
+    };
+    if !relative.is_empty()
+        && (!relative.starts_with('/') || relative[1..].is_empty() || relative[1..].contains('/'))
+    {
+        return Err((404, "API key route not found"));
+    }
+    let Some(organization_id) = organization_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err((
+            422,
+            "An active organization is required before managing API keys",
+        ));
+    };
+    Ok(format!(
+        "/v1/organizations/{}/api-keys{relative}",
+        utf8_percent_encode(organization_id, NON_ALPHANUMERIC)
+    ))
+}
+
+fn requires_gateway_service_token(service: &str) -> bool {
+    matches!(
+        service,
+        "organizations" | "credential-templates" | "trust-profiles" | "presentation-policies"
+    )
 }
 
 async fn readiness_handler(state: Arc<GatewayRuntimeState>) -> Response {
@@ -5051,17 +5092,49 @@ mod tests {
     }
 
     #[test]
-    fn organization_proxy_receives_only_gateway_configured_service_credentials() {
+    fn service_authenticated_proxies_receive_only_gateway_configured_credentials() {
         let state = runtime_state();
         let identity = TrustedIdentityContext::default();
-        let organization = proxy_overrides(
-            &state,
+        for path in [
             "/v1/organizations/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            &identity,
-        );
-        assert_eq!(organization.headers["x-service-token"], "s".repeat(32));
+            "/v1/credential-templates",
+            "/v1/trust-profiles",
+            "/v1/presentation-policies",
+        ] {
+            let overrides = proxy_overrides(&state, path, &identity);
+            assert_eq!(overrides.headers["x-service-token"], "s".repeat(32));
+        }
         let applicant = proxy_overrides(&state, "/v1/applicants", &identity);
         assert!(!applicant.headers.contains_key("x-service-token"));
+    }
+
+    #[test]
+    fn legacy_api_key_routes_are_bound_to_the_authenticated_organization() {
+        assert_eq!(
+            organization_api_key_upstream_path("/v1/api-keys", Some("org-1")).expect("list path"),
+            "/v1/organizations/org%2D1/api-keys"
+        );
+        assert_eq!(
+            organization_api_key_upstream_path("/v1/api-keys/key-1", Some("org-1"))
+                .expect("key path"),
+            "/v1/organizations/org%2D1/api-keys/key-1"
+        );
+        assert!(organization_api_key_upstream_path("/v1/api-keys", None).is_err());
+        assert!(organization_api_key_upstream_path("/v1/api-keys/a/b", Some("org-1")).is_err());
+    }
+
+    #[test]
+    fn signing_proxy_overrides_untrusted_tenant_query_with_session_scope() {
+        let state = runtime_state();
+        let identity = TrustedIdentityContext {
+            organization_id: Some("trusted-org".into()),
+            ..TrustedIdentityContext::default()
+        };
+        let overrides = proxy_overrides(&state, "/v1/signing-keys/issuer-identities", &identity);
+        assert_eq!(
+            overrides.trusted_query["organization_id"],
+            vec!["trusted-org"]
+        );
     }
 
     #[tokio::test]

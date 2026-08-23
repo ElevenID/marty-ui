@@ -710,8 +710,9 @@ jobs:
           grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert' <<<"$rendered"
           grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/applicant_workload_client_cert' <<<"$rendered"
           grep -F 'GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert' <<<"$rendered"
-          grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/deployment_profile_workload_client_cert' <<<"$rendered"
-          grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/compliance_profile_workload_client_cert' <<<"$rendered"
+          # Flow already has an explicit beta-only exception. Deployment and
+          # compliance add the other two while Organization remains plaintext.
+          test "$(grep -Fc 'GRPC_INSECURE_ALLOWED: "true"' <<<"$rendered")" -eq 3
           rendered="$(docker compose \
             --file docker-compose.base.yml \
             --file docker-compose.beta.yml \

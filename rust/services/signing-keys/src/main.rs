@@ -19,7 +19,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         error!(%error, "invalid signing-keys configuration");
         error
     })?;
-    let registry_store = RegistryStore::connect(&config.registry_redis_url).await?;
+    let managed_openbao_endpoint = config.bao_addr.clone();
+    let registry_store = RegistryStore::connect(&config.registry_redis_url)
+        .await?
+        .with_managed_openbao(managed_openbao_endpoint);
     let document_store = DocumentStore::from_connection(registry_store.connection());
     let profile_store = ProfileStore::from_connection(registry_store.connection());
     let flow_envelopes = match (config.bao_addr, config.bao_token) {
