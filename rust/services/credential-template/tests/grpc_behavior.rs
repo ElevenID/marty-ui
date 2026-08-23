@@ -505,16 +505,38 @@ async fn all_declared_grpc_methods_share_native_behavior_and_fail_closed_securit
 }
 
 #[tokio::test]
-async fn tenant_grpc_methods_require_forwarded_user_identity() {
+async fn internal_get_template_requires_service_auth_without_user_identity() {
     let service = service();
+    let created = service
+        .create_template(authenticated(create_request(
+            "Service Badge",
+            "ServiceBadge",
+        )))
+        .await
+        .unwrap()
+        .into_inner();
     let mut request = Request::new(GetTemplateRequest {
-        template_id: "missing".to_owned(),
+        template_id: created.id,
     });
     request
         .metadata_mut()
         .insert("x-service-token", TOKEN.parse().unwrap());
+    let fetched = service.get_template(request).await.unwrap().into_inner();
+    assert_eq!(fetched.name, "Service Badge");
+
+    let mut list_request = Request::new(ListTemplatesRequest {
+        organization_id: "org-1".to_owned(),
+        status: "draft".to_owned(),
+    });
+    list_request
+        .metadata_mut()
+        .insert("x-service-token", TOKEN.parse().unwrap());
     assert_eq!(
-        service.get_template(request).await.unwrap_err().code(),
+        service
+            .list_templates(list_request)
+            .await
+            .unwrap_err()
+            .code(),
         Code::Unauthenticated
     );
 }
