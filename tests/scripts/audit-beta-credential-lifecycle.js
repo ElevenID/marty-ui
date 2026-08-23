@@ -482,6 +482,13 @@ async function verify(page, walletPage, label) {
   if (!session.ok || !session.instanceId || !session.requestUri) return { session };
 
   const wallet = await present(walletPage, session.requestUri);
+  if (!wallet.ok) {
+    return {
+      session: { ...session, requestUri: '[present]' },
+      wallet,
+      result: null,
+    };
+  }
   const rawResult = await waitFor(() => page.evaluate(async (instanceId) => {
     const response = await fetch(`/v1/flows/instances/${encodeURIComponent(instanceId)}/result`, {
       credentials: 'include',

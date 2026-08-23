@@ -161,14 +161,24 @@ impl JitUserProvisioner {
             .applicants
             .upsert(&applicant_upsert(oidc_user, now))
             .await?;
+        // The account ID is the stable authentication principal used by
+        // existing organization memberships.  The applicant profile ID is a
+        // separate resource identifier and must not replace that principal
+        // when profile persistence moves between services.
+        let principal_user_id = applicant
+            .account_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(&applicant.id)
+            .to_owned();
         let add_failed = self
             .organizations
-            .ensure_default_member(&applicant.id, &applicant.email)
+            .ensure_default_member(&principal_user_id, &applicant.email)
             .await
             .is_err();
         let (context, context_failed) = match self
             .organizations
-            .resolve_default_context(&applicant.id)
+            .resolve_default_context(&principal_user_id)
             .await
         {
             Ok(context) => (context, false),
@@ -197,7 +207,7 @@ impl JitUserProvisioner {
             .map_or_else(Vec::new, |context| self.organization_summary(context));
 
         Ok(AuthenticatedUser {
-            user_id: applicant.id.clone(),
+            user_id: principal_user_id,
             email: applicant.email,
             username: oidc_user.preferred_username.clone(),
             given_name,
