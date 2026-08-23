@@ -4,7 +4,7 @@
     "organization_id": "org-1",
     "issuer_did": "did:web:issuer.example:orgs:acme",
     "verification_method_id": "did:web:issuer.example:orgs:acme#issuer-key",
-    "credential_format": "dc+sd-jwt",
+    "credential_format": "SD_JWT_VC",
     "key_purpose": "vc_jwt_issuer",
     "algorithm": "ES256"
   },
