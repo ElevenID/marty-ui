@@ -337,18 +337,16 @@ impl SigningIdentityProvider for HttpSigningProvider {
         credential_format: &str,
         algorithm: Option<&str>,
     ) -> Result<SigningIdentity, FlowProviderError> {
-        let mut query = vec![
-            ("organization_id", organization_id),
-            ("issuer_did", issuer_did),
-            ("key_purpose", key_purpose),
-            ("credential_format", credential_format),
-        ];
-        if let Some(algorithm) = algorithm {
-            query.push(("algorithm", algorithm));
-        }
+        let body = json!({
+            "organization_id": organization_id,
+            "issuer_did": issuer_did,
+            "key_purpose": key_purpose,
+            "credential_format": credential_format,
+            "algorithm": algorithm,
+        });
         let mut identity: SigningIdentity = self
             .signing
-            .json(Method::GET, "resolve-issuer-did", &query, None)
+            .json(Method::POST, "resolve-issuer-did", &[], Some(body))
             .await?;
         if identity.credential_format.is_empty() {
             identity.credential_format = credential_format.into();
@@ -617,6 +615,34 @@ fn http_status(provider: &'static str, status: StatusCode) -> FlowProviderError 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    use axum::{
+        extract::State,
+        http::{HeaderMap, Uri},
+        routing::post,
+        Json, Router,
+    };
+
+    type CapturedRequest = Arc<Mutex<Option<(HeaderMap, Uri, Value)>>>;
+
+    async fn signing_resolver(
+        State(captured): State<CapturedRequest>,
+        headers: HeaderMap,
+        uri: Uri,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        *captured.lock().unwrap() = Some((headers, uri, body.clone()));
+        Json(json!({
+            "organization_id": body["organization_id"],
+            "issuer_did": body["issuer_did"],
+            "verification_method_id": format!("{}#key-1", body["issuer_did"].as_str().unwrap()),
+            "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+            "key_purpose": body["key_purpose"],
+            "credential_format": body["credential_format"],
+            "algorithm": body["algorithm"],
+        }))
+    }
 
     fn request(operation: PhysicalDocumentOperation) -> PhysicalDocumentRequest {
         PhysicalDocumentRequest {
@@ -671,6 +697,51 @@ mod tests {
         assert!(references.trust_profiles.api_key.is_none());
         assert!(references.deployment_profiles.api_key.is_none());
         assert!(references.application_templates.api_key.is_some());
+    }
+
+    #[tokio::test]
+    async fn signing_resolution_posts_the_exact_internal_json_contract() {
+        let captured = CapturedRequest::default();
+        let router = Router::new()
+            .route(
+                "/internal/compat/resolve-issuer-did",
+                post(signing_resolver),
+            )
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let api_key = "0123456789abcdef0123456789abcdef";
+        let provider =
+            HttpSigningProvider::new(&format!("http://{address}/internal/"), api_key).unwrap();
+
+        let identity = provider
+            .resolve(
+                "org-1",
+                "did:web:issuer.example",
+                "vc_jwt_issuer",
+                "dc+sd-jwt",
+                Some("ES256"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(identity.organization_id, "org-1");
+
+        let (headers, uri, body) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(uri.path(), "/internal/compat/resolve-issuer-did");
+        assert!(uri.query().is_none());
+        assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert_eq!(
+            body,
+            json!({
+                "organization_id": "org-1",
+                "issuer_did": "did:web:issuer.example",
+                "key_purpose": "vc_jwt_issuer",
+                "credential_format": "dc+sd-jwt",
+                "algorithm": "ES256",
+            })
+        );
+        server.abort();
     }
 
     #[tokio::test]

@@ -94,6 +94,13 @@ impl PolicyApplication {
         Ok(policy)
     }
 
+    pub async fn get_for_internal_service(
+        &self,
+        policy_id: Uuid,
+    ) -> Result<PresentationPolicy, PolicyApplicationError> {
+        self.load(policy_id).await
+    }
+
     pub async fn get_for_evaluation(
         &self,
         principal_id: &str,
