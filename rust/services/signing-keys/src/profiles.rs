@@ -620,13 +620,19 @@ fn profile_wire_format(profile: &Map<String, Value>) -> Option<String> {
 }
 
 fn protocol_wire_format(protocol_format: &str) -> Option<String> {
-    match protocol_format.to_ascii_uppercase().as_str() {
-        "MDOC" => Some("mso_mdoc".to_string()),
-        "SD_JWT_VC" => Some("dc+sd-jwt".to_string()),
-        "VC_JWT" => Some("jwt_vc_json".to_string()),
-        "JSON_LD" => Some("ldp_vc".to_string()),
-        "ZK_MDOC" => Some("zk_mdoc".to_string()),
-        "ICAO_EMRTD" => Some("icao_emrtd".to_string()),
+    match protocol_format
+        .trim()
+        .to_ascii_lowercase()
+        .replace('-', "_")
+        .as_str()
+    {
+        "mdoc" | "mso_mdoc" => Some("mso_mdoc".to_string()),
+        "sd_jwt_vc" | "dc+sd_jwt" | "vc+sd_jwt" => Some("dc+sd-jwt".to_string()),
+        "vc_jwt" | "jwt_vc" | "jwt_vc_json" => Some("jwt_vc_json".to_string()),
+        "json_ld" | "ldp_vc" => Some("ldp_vc".to_string()),
+        "zk_mdoc" => Some("zk_mdoc".to_string()),
+        "icao_emrtd" => Some("icao_emrtd".to_string()),
+        "vds_nc" => Some("vds_nc".to_string()),
         _ => None,
     }
 }

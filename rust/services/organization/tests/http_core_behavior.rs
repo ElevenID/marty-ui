@@ -637,6 +637,8 @@ async fn core_http_round_trip_is_behaviorally_complete_when_postgres_is_configur
         Some(&user_id),
         Some(serde_json::json!({
             "name": "HTTP acceptance",
+            "scopes": ["flows:execute"],
+            "expires_at": null,
             "is_test": true
         })),
     )
