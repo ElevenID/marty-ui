@@ -125,6 +125,15 @@ fn rule(
 
 static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
     vec![
+        rule(
+            r"^/v1/api-keys(?:/[^/]+)?$",
+            &[
+                ("GET", "api-key:view"),
+                ("POST", "api-key:create"),
+                ("DELETE", "api-key:revoke"),
+            ],
+            "api-key",
+        ),
         // Gateway compatibility rules are intentionally first, matching the
         // Python prepend semantics used before this classifier was canonical.
         rule(

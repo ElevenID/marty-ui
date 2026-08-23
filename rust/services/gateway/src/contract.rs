@@ -214,6 +214,38 @@ impl GatewayContract {
             priority: 100,
             tags: BTreeSet::from(["gateway-internal".into()]),
         })?;
+        table.add(RouteConfig {
+            name: "internal:organizations:legacy-api-key-collection".into(),
+            pattern: "/v1/organizations/{organization_id}/api-keys".into(),
+            match_type: RouteMatchType::Template,
+            upstream_service: "organizations".into(),
+            methods: BTreeSet::from([HttpMethod::Get, HttpMethod::Post]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: None,
+            timeout_ms: 10_000,
+            retries: 1,
+            auth_required: false,
+            authentication_type: AuthenticationType::None,
+            priority: 20_000,
+            tags: BTreeSet::from(["gateway-internal".into()]),
+        })?;
+        table.add(RouteConfig {
+            name: "internal:organizations:legacy-api-key-item".into(),
+            pattern: "/v1/organizations/{organization_id}/api-keys/{key_id}".into(),
+            match_type: RouteMatchType::Template,
+            upstream_service: "organizations".into(),
+            methods: BTreeSet::from([HttpMethod::Delete]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: None,
+            timeout_ms: 10_000,
+            retries: 1,
+            auth_required: false,
+            authentication_type: AuthenticationType::None,
+            priority: 20_000,
+            tags: BTreeSet::from(["gateway-internal".into()]),
+        })?;
         Ok(table)
     }
 }
@@ -610,7 +642,7 @@ mod tests {
         let contract = GatewayContract::load().expect("gateway contract");
         assert_eq!(contract.route_table().expect("public").routes().len(), 434);
         let proxy = contract.proxy_route_table().expect("proxy");
-        assert_eq!(proxy.routes().len(), 443);
+        assert_eq!(proxy.routes().len(), 445);
         assert_eq!(
             route_for(
                 &proxy,
@@ -621,6 +653,13 @@ mod tests {
             .route
             .upstream_service,
             "compliance-profiles"
+        );
+        assert_eq!(
+            route_for(&proxy, HttpMethod::Get, "/v1/organizations/org-1/api-keys")
+                .expect("legacy API-key upstream route")
+                .route
+                .upstream_service,
+            "organizations"
         );
     }
 
