@@ -5,7 +5,7 @@
     "": {
       "name": "marty-ui",
       "dependencies": {
-        "@elevenid/marty-api-core": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.3/elevenid-marty-api-core-0.2.3.tgz",
+        "@elevenid/marty-api-core": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.4/elevenid-marty-api-core-0.2.4.tgz",
         "@elevenid/marty-blog": "https://github.com/ElevenID/marty-blog/releases/download/v0.1.5/elevenid-marty-blog-0.1.5.tgz",
         "@emotion/react": "^11.14.0",
         "@emotion/styled": "^11.14.1",
@@ -129,7 +129,7 @@
 
     "@csstools/css-tokenizer": ["@csstools/css-tokenizer@4.0.0", "", {}, "sha512-QxULHAm7cNu72w97JUNCBFODFaXpbDg+dP8b/oWFAZ2MTRppA3U00Y2L1HqaS4J6yBqxwa/Y3nMBaxVKbB/NsA=="],
 
-    "@elevenid/marty-api-core": ["@elevenid/marty-api-core@https://github.com/ElevenID/marty-cli/releases/download/v0.2.3/elevenid-marty-api-core-0.2.3.tgz", {}, "sha512-mp23tH38ijTHyVCvDxYrZurz2+7rmQQKYXYA9pmdzL4cJFa9rxIQC/uQcOFWsyhDvWNufFMJN5CK9mneRDn26w=="],
+    "@elevenid/marty-api-core": ["@elevenid/marty-api-core@https://github.com/ElevenID/marty-cli/releases/download/v0.2.4/elevenid-marty-api-core-0.2.4.tgz", {}, "sha512-iKbLYcfpSvrqrlbCcqpecOJIW5PnR1Gqza9gQfIFsaLpE3OMyxz1ZxxF3hPL1q07rwjfwfsG1eccNkqSbpwCkA=="],
 
     "@elevenid/marty-blog": ["@elevenid/marty-blog@https://github.com/ElevenID/marty-blog/releases/download/v0.1.5/elevenid-marty-blog-0.1.5.tgz", { "dependencies": { "prop-types": "^15.8.1" }, "peerDependencies": { "@mui/icons-material": ">=5", "@mui/material": ">=5", "react": ">=18", "react-dom": ">=18", "react-router": ">=8.3.0" } }, "sha512-nMtqlt6Pnej0m/uHMmxNrvx6OhgIRYQ+y0j13Qa3Ys/XmOzE98RBih4OZ1eykBFrF0cFlEaQApaC0t+CSuSTDg=="],
 
