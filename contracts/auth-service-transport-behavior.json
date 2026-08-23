@@ -17,8 +17,15 @@
     "method": "PATCH",
     "path": "/v1/me/applicant-profile",
     "required_headers": ["content-type", "x-user-id", "x-user-email", "x-organization-id"],
+    "body_fields": ["email", "given_name", "family_name"],
+    "jit_patch_field": "vetting_data_patch",
     "maximum_response_bytes": 65536,
-    "failure_mode": "best_effort_at_application_boundary"
+    "canvas_failure_mode": "best_effort_at_application_boundary",
+    "jit_failure_mode": "fail_closed",
+    "identity_keys": ["oidc_subject", "email"],
+    "preserve_existing_names_when_claims_missing": true,
+    "merge_vetting_data": true,
+    "fail_on_split_identity": true
   },
   "auth_events": {
     "topic": "auth.events",

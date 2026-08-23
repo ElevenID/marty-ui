@@ -1,45 +1,11 @@
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row as _};
 use uuid::Uuid;
 
-use crate::{
-    ApplicantProfile, ApplicantProvisioningStore, ApplicantUpsert, AuthAuditSink, PortError,
-    Session, SessionStatus,
-};
-
-const SELECT_APPLICANT: &str = "
-    SELECT id::text AS id, account_id, email, surname, given_names, date_of_birth,
-           nationality, identity_proofing_completed, identity_proofing_date, active,
-           suspended, COALESCE(extra_data::jsonb, '{}'::jsonb) AS extra_data,
-           created_at, updated_at
-    FROM public.applicants
-    WHERE deleted_at IS NULL AND (account_id=$1 OR email=$2)
-    ORDER BY CASE WHEN account_id=$1 THEN 0 ELSE 1 END FOR UPDATE";
-
-const UPDATE_APPLICANT: &str = "
-    UPDATE public.applicants
-    SET account_id=$2, email=$3, given_names=$4, surname=$5,
-        extra_data=$6::json, updated_at=$7
-    WHERE id::text=$1
-    RETURNING id::text AS id, account_id, email, surname, given_names, date_of_birth,
-              nationality, identity_proofing_completed, identity_proofing_date, active,
-              suspended, COALESCE(extra_data::jsonb, '{}'::jsonb) AS extra_data,
-              created_at, updated_at";
-
-const INSERT_APPLICANT: &str = "
-    INSERT INTO public.applicants (
-        id, account_id, email, surname, given_names, date_of_birth, nationality,
-        identity_proofing_completed, identity_proofing_date, active, suspended,
-        extra_data, created_at, updated_at, deleted_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, NULL, TRUE, FALSE,
-              $8::json, $9, $9, NULL)
-    RETURNING id::text AS id, account_id, email, surname, given_names, date_of_birth,
-              nationality, identity_proofing_completed, identity_proofing_date, active,
-              suspended, COALESCE(extra_data::jsonb, '{}'::jsonb) AS extra_data,
-              created_at, updated_at";
+use crate::{AuthAuditSink, PortError, Session, SessionStatus};
 
 #[derive(Clone)]
 pub struct PostgresAuthRepository {
@@ -134,82 +100,6 @@ impl PostgresAuthRepository {
         .await
         .map(|result| result.rows_affected() == 1)
         .map_err(database_error)
-    }
-}
-
-#[async_trait]
-impl ApplicantProvisioningStore for PostgresAuthRepository {
-    async fn upsert(&self, plan: &ApplicantUpsert) -> Result<ApplicantProfile, PortError> {
-        let mut transaction = self.pool.begin().await.map_err(database_error)?;
-        // Acquire both locks in a stable order so either natural key serializes first login.
-        let mut lock_keys = [
-            format!("auth-applicant-account:{}", plan.account_id),
-            format!("auth-applicant-email:{}", plan.email),
-        ];
-        lock_keys.sort();
-        for lock_key in lock_keys {
-            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-                .bind(lock_key)
-                .execute(&mut *transaction)
-                .await
-                .map_err(database_error)?;
-        }
-
-        let rows = sqlx::query(SELECT_APPLICANT)
-            .bind(&plan.account_id)
-            .bind(&plan.email)
-            .fetch_all(&mut *transaction)
-            .await
-            .map_err(database_error)?;
-        if rows.len() > 1 {
-            return Err(PortError::new(
-                "applicant_identity_conflict",
-                "OIDC account and email resolve to different applicant records",
-            ));
-        }
-
-        let profile = if let Some(row) = rows.first() {
-            let mut extra_data: Value = row.get("extra_data");
-            merge_json_object(&mut extra_data, &plan.extra_data_patch);
-            let current_given: String = row.get("given_names");
-            let current_surname: String = row.get("surname");
-            let given_names = plan.given_names.as_ref().unwrap_or(&current_given);
-            let surname = plan.surname.as_ref().unwrap_or(&current_surname);
-            let id: String = row.get("id");
-            let row = sqlx::query(UPDATE_APPLICANT)
-                .bind(id)
-                .bind(&plan.account_id)
-                .bind(&plan.email)
-                .bind(given_names)
-                .bind(surname)
-                .bind(extra_data)
-                .bind(plan.now)
-                .fetch_one(&mut *transaction)
-                .await
-                .map_err(database_error)?;
-            applicant_from_row(&row)
-        } else {
-            let row = sqlx::query(INSERT_APPLICANT)
-                .bind(&plan.new_id)
-                .bind(&plan.account_id)
-                .bind(&plan.email)
-                .bind(plan.surname.as_ref().unwrap_or(&plan.fallback_surname))
-                .bind(
-                    plan.given_names
-                        .as_ref()
-                        .unwrap_or(&plan.fallback_given_names),
-                )
-                .bind(plan.date_of_birth)
-                .bind(&plan.nationality)
-                .bind(&plan.extra_data_patch)
-                .bind(plan.now)
-                .fetch_one(&mut *transaction)
-                .await
-                .map_err(database_error)?;
-            applicant_from_row(&row)
-        };
-        transaction.commit().await.map_err(database_error)?;
-        Ok(profile)
     }
 }
 
@@ -389,25 +279,6 @@ pub struct SessionHistoryRecord {
     pub last_activity: Option<DateTime<Utc>>,
 }
 
-fn applicant_from_row(row: &PgRow) -> ApplicantProfile {
-    ApplicantProfile {
-        id: row.get("id"),
-        account_id: row.get("account_id"),
-        email: row.get("email"),
-        surname: row.get("surname"),
-        given_names: row.get("given_names"),
-        date_of_birth: row.get::<NaiveDate, _>("date_of_birth"),
-        nationality: row.get("nationality"),
-        identity_proofing_completed: row.get("identity_proofing_completed"),
-        identity_proofing_date: row.get("identity_proofing_date"),
-        active: row.get("active"),
-        suspended: row.get("suspended"),
-        extra_data: row.get("extra_data"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-    }
-}
-
 fn audit_log_from_row(row: &PgRow) -> AuditLogRecord {
     AuditLogRecord {
         id: row.get("id"),
@@ -442,14 +313,6 @@ fn session_history_from_row(row: &PgRow) -> SessionHistoryRecord {
         user_agent: row.get("user_agent"),
         device_info: row.get("device_info"),
         last_activity: row.get("last_activity"),
-    }
-}
-
-fn merge_json_object(target: &mut Value, patch: &Value) {
-    if let (Some(target), Some(patch)) = (target.as_object_mut(), patch.as_object()) {
-        for (key, value) in patch {
-            target.insert(key.clone(), value.clone());
-        }
     }
 }
 

@@ -41,6 +41,13 @@
   "evidence_upload_types": ["DOCUMENT_SCAN","BIOMETRIC","SELFIE","THIRD_PARTY_VERIFICATION"],
   "maximum_evidence_bytes": 10485760,
   "reviewer_lock_ttl_seconds": 300,
+  "profile_upsert": {
+    "identity_keys": ["organization_id+oidc_subject", "organization_id+email"],
+    "email_changes_preserve_profile_id": true,
+    "missing_names_preserve_existing_values": true,
+    "vetting_data_patch_merges": true,
+    "split_identity_failure": "conflict"
+  },
   "capabilities": [
     "tenant-bound self-service applicant profiles",
     "application-template-derived applications and validation",

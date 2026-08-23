@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{DateTime, NaiveDate, Utc};
 use mmf_messaging::{
     DeliveryGuarantee, EventKind, Message, MessageMetadata, MessagePriority, MessageStatus,
     MessageTransport, MessagingPattern,
@@ -9,6 +9,7 @@ use mmf_messaging::{
 use mmf_platform::{
     GrpcChannelFactory, OutboundHttpClient, OutboundHttpMethod, OutboundHttpRequest,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tonic::{transport::Channel, Code, Request};
 use url::Url;
@@ -19,9 +20,10 @@ use crate::{
         organization_service_client::OrganizationServiceClient, AddMemberRequest, GetMemberRequest,
         GetOrganizationRequest,
     },
-    AuthEvent, AuthEventPublisher, AuthenticatedUser, CanvasApplicantProfileProvisioner,
-    CredentialVerificationFlow, CredentialVerificationStarter, OrganizationContext,
-    OrganizationProvisioning, PortError, StartCredentialVerification,
+    ApplicantProfile, ApplicantProvisioningStore, ApplicantUpsert, AuthEvent, AuthEventPublisher,
+    AuthenticatedUser, CanvasApplicantProfileProvisioner, CredentialVerificationFlow,
+    CredentialVerificationStarter, OrganizationContext, OrganizationProvisioning, PortError,
+    StartCredentialVerification,
 };
 
 const APPLICANT_PROFILE_RESPONSE_LIMIT: usize = 64 * 1024;
@@ -286,24 +288,26 @@ impl MmfApplicantProfileProvisioner {
             service_url: service_url.trim_end_matches('/').into(),
         })
     }
-}
 
-#[async_trait]
-impl CanvasApplicantProfileProvisioner for MmfApplicantProfileProvisioner {
-    async fn ensure_profile(&self, user: &AuthenticatedUser) -> Result<Option<String>, PortError> {
-        let Some(organization_id) = user.organization_id.as_deref() else {
-            return Ok(user.applicant_id.clone());
-        };
-        if user.user_id.trim().is_empty() || user.email.trim().is_empty() {
-            return Ok(user.applicant_id.clone());
+    async fn upsert_profile(
+        &self,
+        user_id: &str,
+        email: &str,
+        organization_id: &str,
+        given_name: Option<&str>,
+        family_name: Option<&str>,
+        vetting_data_patch: Option<&Value>,
+    ) -> Result<Value, PortError> {
+        let mut payload = json!({
+            "email": email,
+            "given_name": given_name,
+            "family_name": family_name,
+        });
+        if let (Some(payload), Some(patch)) = (payload.as_object_mut(), vetting_data_patch) {
+            payload.insert("vetting_data_patch".into(), patch.clone());
         }
-        let body = serde_json::to_vec(&json!({
-            "organization_id": organization_id,
-            "email": user.email,
-            "given_name": user.given_name,
-            "family_name": user.family_name,
-        }))
-        .map_err(|error| transport_error("applicant_profile_request_invalid", error))?;
+        let body = serde_json::to_vec(&payload)
+            .map_err(|error| transport_error("applicant_profile_request_invalid", error))?;
         let response = self
             .client
             .execute(OutboundHttpRequest {
@@ -311,8 +315,8 @@ impl CanvasApplicantProfileProvisioner for MmfApplicantProfileProvisioner {
                 url: format!("{}/v1/me/applicant-profile", self.service_url),
                 headers: BTreeMap::from([
                     ("content-type".into(), "application/json".into()),
-                    ("x-user-id".into(), user.user_id.clone()),
-                    ("x-user-email".into(), user.email.clone()),
+                    ("x-user-id".into(), user_id.into()),
+                    ("x-user-email".into(), email.into()),
                     ("x-organization-id".into(), organization_id.into()),
                 ]),
                 body: Some(body),
@@ -329,15 +333,162 @@ impl CanvasApplicantProfileProvisioner for MmfApplicantProfileProvisioner {
                 ),
             ));
         }
-        let payload = response
+        response
             .json_object("applicant profile provisioning")
-            .map_err(|error| transport_error("applicant_profile_response_invalid", error))?;
+            .map_err(|error| transport_error("applicant_profile_response_invalid", error))
+    }
+}
+
+#[async_trait]
+impl CanvasApplicantProfileProvisioner for MmfApplicantProfileProvisioner {
+    async fn ensure_profile(&self, user: &AuthenticatedUser) -> Result<Option<String>, PortError> {
+        if user
+            .applicant_id
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Ok(user.applicant_id.clone());
+        }
+        let Some(organization_id) = user.organization_id.as_deref() else {
+            return Ok(user.applicant_id.clone());
+        };
+        if user.user_id.trim().is_empty() || user.email.trim().is_empty() {
+            return Ok(user.applicant_id.clone());
+        }
+        let payload = self
+            .upsert_profile(
+                &user.user_id,
+                &user.email,
+                organization_id,
+                user.given_name.as_deref(),
+                user.family_name.as_deref(),
+                None,
+            )
+            .await?;
         Ok(payload
             .get("id")
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
             .or_else(|| user.applicant_id.clone()))
+    }
+}
+
+#[derive(Clone)]
+pub struct MmfApplicantProvisioningStore {
+    profiles: MmfApplicantProfileProvisioner,
+    default_organization_id: String,
+}
+
+impl MmfApplicantProvisioningStore {
+    pub fn new(
+        profiles: MmfApplicantProfileProvisioner,
+        default_organization_id: impl Into<String>,
+    ) -> Result<Self, PortError> {
+        let default_organization_id = default_organization_id.into();
+        if default_organization_id.trim().is_empty() {
+            return Err(PortError::new(
+                "applicant_profile_configuration_invalid",
+                "Default organization ID is required for applicant provisioning",
+            ));
+        }
+        Ok(Self {
+            profiles,
+            default_organization_id,
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ApplicantServiceProfile {
+    id: String,
+    user_id: Option<String>,
+    email: String,
+    given_name: Option<String>,
+    family_name: Option<String>,
+    status: String,
+    #[serde(default)]
+    application_data: Value,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[async_trait]
+impl ApplicantProvisioningStore for MmfApplicantProvisioningStore {
+    async fn upsert(&self, plan: &ApplicantUpsert) -> Result<ApplicantProfile, PortError> {
+        let payload = self
+            .profiles
+            .upsert_profile(
+                &plan.account_id,
+                &plan.email,
+                &self.default_organization_id,
+                plan.given_names.as_deref(),
+                plan.surname.as_deref(),
+                Some(&plan.extra_data_patch),
+            )
+            .await?;
+        let profile: ApplicantServiceProfile = serde_json::from_value(payload)
+            .map_err(|error| transport_error("applicant_profile_response_invalid", error))?;
+        if profile.id.trim().is_empty()
+            || profile.email != plan.email
+            || profile.user_id.as_deref() != Some(plan.account_id.as_str())
+        {
+            return Err(PortError::new(
+                "applicant_profile_response_invalid",
+                "Applicant profile service returned an inconsistent identity",
+            ));
+        }
+        let identity_proofing_completed = profile
+            .application_data
+            .get("identity_proofing_completed")
+            .and_then(Value::as_bool)
+            .unwrap_or({
+                matches!(
+                    profile.status.as_str(),
+                    "APPROVED" | "OFFERED" | "CREDENTIALED"
+                )
+            });
+        let identity_proofing_date = profile
+            .application_data
+            .get("identity_proofing_date")
+            .and_then(Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc))
+            .or_else(|| identity_proofing_completed.then_some(profile.updated_at));
+        let date_of_birth = profile
+            .application_data
+            .get("date_of_birth")
+            .and_then(Value::as_str)
+            .and_then(|value| NaiveDate::parse_from_str(value, "%Y-%m-%d").ok())
+            .unwrap_or(plan.date_of_birth);
+        let nationality = profile
+            .application_data
+            .get("nationality")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(&plan.nationality)
+            .to_owned();
+        let suspended = profile.status == "SUSPENDED";
+        Ok(ApplicantProfile {
+            id: profile.id,
+            account_id: profile.user_id,
+            email: profile.email,
+            surname: profile
+                .family_name
+                .unwrap_or_else(|| plan.fallback_surname.clone()),
+            given_names: profile
+                .given_name
+                .unwrap_or_else(|| plan.fallback_given_names.clone()),
+            date_of_birth,
+            nationality,
+            identity_proofing_completed,
+            identity_proofing_date,
+            active: !suspended,
+            suspended,
+            extra_data: profile.application_data,
+            created_at: profile.created_at,
+            updated_at: profile.updated_at,
+        })
     }
 }
 

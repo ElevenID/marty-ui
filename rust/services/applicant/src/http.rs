@@ -150,6 +150,7 @@ impl From<ServiceError> for ApiError {
             | ServiceError::CheckNotFound
             | ServiceError::EvidenceNotFound => StatusCode::NOT_FOUND,
             ServiceError::DuplicateApplication(_)
+            | ServiceError::ApplicantIdentityConflict
             | ServiceError::ReviewerLockRequired
             | ServiceError::ConcurrentModification
             | ServiceError::InvalidApplicationState(_)
@@ -208,6 +209,7 @@ struct ProfileRequest {
     family_name: Option<String>,
     phone: Option<String>,
     vetting_data: Option<Value>,
+    vetting_data_patch: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -397,6 +399,12 @@ async fn upsert_profile(
         applicant = state
             .service
             .set_profile_vetting_data(&applicant.id, vetting_data, Utc::now())
+            .await?;
+    }
+    if let Some(vetting_data_patch) = body.vetting_data_patch {
+        applicant = state
+            .service
+            .patch_profile_vetting_data(&applicant.id, &vetting_data_patch, Utc::now())
             .await?;
     }
     Ok(Json(applicant_json(&applicant)))
