@@ -502,6 +502,26 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "organization",
         ),
         rule(
+            r"^/v1/organizations/[a-f0-9\-]{36}/lifecycle/purge$",
+            &[("POST", "organization:edit")],
+            "organization",
+        ),
+        rule(
+            r"^/v1/organizations/[a-f0-9\-]{36}/runtime/status$",
+            &[("GET", "organization:view")],
+            "organization",
+        ),
+        rule(
+            r"^/v1/organizations/[a-f0-9\-]{36}/dashboard/applicant-stats$",
+            &[("GET", "application:review")],
+            "application",
+        ),
+        rule(
+            r"^/v1/organizations/[a-f0-9\-]{36}/integration-info$",
+            &[("GET", "organization:view")],
+            "organization",
+        ),
+        rule(
             r"^/v1/organizations/[a-f0-9\-]{36}/audit-events/export$",
             &[("GET", "audit:export")],
             "audit",
