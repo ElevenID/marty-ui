@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, time::Instant};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use mmf_platform::{
@@ -55,8 +58,21 @@ impl UpstreamClient for ReqwestUpstream {
                 }
             }
         }
-        let mut builder = self.client.request(method(request.method), url);
+        let mut builder =
+            self.client
+                .request(method(request.method), url)
+                .timeout(Duration::from_millis(
+                    instance.endpoint.read_timeout_ms.max(1),
+                ));
         for (name, value) in request.headers {
+            // Every request reaching this transport owns an in-memory body. In
+            // particular, gateway contract handlers can replace the public
+            // body with canonical JSON before proxying it. Never forward the
+            // client's framing for a body whose length may have changed;
+            // reqwest will derive correct framing from the bytes below.
+            if is_body_framing_header(&name) {
+                continue;
+            }
             builder = builder.header(name, value);
         }
         if let Some(body) = request.body {
@@ -97,6 +113,10 @@ impl UpstreamClient for ReqwestUpstream {
     }
 }
 
+fn is_body_framing_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("transfer-encoding")
+}
+
 fn method(method: HttpMethod) -> reqwest::Method {
     match method {
         HttpMethod::Get => reqwest::Method::GET,
@@ -118,5 +138,112 @@ fn map_reqwest_error(error: reqwest::Error) -> PlatformError {
         PlatformError::UpstreamTransport(error.to_string())
     } else {
         PlatformError::Operation(error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{body::Bytes, extract::State, http::HeaderMap, routing::post, Json, Router};
+    use mmf_platform::{
+        EndpointProtocol, GatewayRequest, HttpMethod, ServiceEndpoint, ServiceInstance,
+        UpstreamClient,
+    };
+    use serde_json::{json, Value};
+    use tokio::{net::TcpListener, time::sleep};
+
+    use super::*;
+
+    fn instance(port: u16, read_timeout_ms: u64) -> ServiceInstance {
+        ServiceInstance::new(
+            "test-upstream",
+            ServiceEndpoint {
+                host: "127.0.0.1".into(),
+                port,
+                protocol: EndpointProtocol::Http,
+                path: String::new(),
+                verify_tls: true,
+                connect_timeout_ms: 5_000,
+                read_timeout_ms,
+            },
+            0,
+        )
+        .expect("service instance")
+    }
+
+    async fn echo(headers: HeaderMap, body: Bytes) -> Json<Value> {
+        Json(json!({
+            "body": String::from_utf8(body.to_vec()).expect("UTF-8 request"),
+            "content_length": headers
+                .get("content-length")
+                .and_then(|value| value.to_str().ok()),
+            "transfer_encoding": headers
+                .get("transfer-encoding")
+                .and_then(|value| value.to_str().ok()),
+        }))
+    }
+
+    async fn delayed(State(delay): State<Duration>) -> Json<Value> {
+        sleep(delay).await;
+        Json(json!({"completed": true}))
+    }
+
+    #[tokio::test]
+    async fn proxy_recomputes_framing_after_gateway_body_replacement() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let port = listener.local_addr().expect("local address").port();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, Router::new().route("/echo", post(echo)))
+                .await
+                .expect("serve");
+        });
+        let canonical = br#"{"canonical":"body is a different length"}"#.to_vec();
+        let mut request = GatewayRequest::new(HttpMethod::Post, "/echo", 0);
+        request
+            .headers
+            .insert("content-type".into(), "application/json".into());
+        request
+            .headers
+            .insert("Content-Length".into(), "9999".into());
+        request
+            .headers
+            .insert("Transfer-Encoding".into(), "chunked".into());
+        request.body = Some(canonical.clone());
+
+        let response = ReqwestUpstream::new(1_024)
+            .expect("upstream")
+            .send(&instance(port, 1_000), request)
+            .await
+            .expect("proxy response");
+        let response: Value =
+            serde_json::from_slice(response.body.as_deref().expect("body")).expect("JSON response");
+        assert_eq!(response["body"], String::from_utf8(canonical).unwrap());
+        assert_eq!(
+            response["content_length"],
+            response["body"].as_str().unwrap().len().to_string()
+        );
+        assert!(response["transfer_encoding"].is_null());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn proxy_enforces_the_discovered_upstream_read_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let port = listener.local_addr().expect("local address").port();
+        let server = tokio::spawn(async move {
+            let app = Router::new()
+                .route("/delayed", post(delayed))
+                .with_state(Duration::from_millis(250));
+            axum::serve(listener, app).await.expect("serve");
+        });
+        let mut request = GatewayRequest::new(HttpMethod::Post, "/delayed", 0);
+        request.body = Some(b"{}".to_vec());
+
+        let error = ReqwestUpstream::new(1_024)
+            .expect("upstream")
+            .send(&instance(port, 25), request)
+            .await
+            .expect_err("slow upstream must time out");
+        assert!(matches!(error, PlatformError::UpstreamTimeout(_)));
+        server.abort();
     }
 }
