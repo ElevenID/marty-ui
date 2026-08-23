@@ -126,10 +126,9 @@ impl CredentialTemplateService for CredentialTemplateGrpcService {
         request: Request<GetTemplateRequest>,
     ) -> Result<Response<TemplateResponse>, Status> {
         self.authenticate(&request)?;
-        let user_id = self.user_id(&request)?;
         let template = self
             .application
-            .get_template(&user_id, &request.get_ref().template_id)
+            .get_template_for_internal_service(&request.get_ref().template_id)
             .await
             .map_err(application_status)?;
         Ok(Response::new(template_message(&template)?))

@@ -297,6 +297,18 @@ impl CredentialTemplateApplication {
         Ok(template)
     }
 
+    /// Load a template for an already authenticated internal service.
+    ///
+    /// Tenant-facing HTTP and collection APIs continue to use `get_template`
+    /// and require membership. The internal gRPC lookup preserves the released
+    /// service-token contract used by issuance and flow consumers.
+    pub async fn get_template_for_internal_service(
+        &self,
+        template_id: &str,
+    ) -> Result<CredentialTemplate, CredentialTemplateApplicationError> {
+        self.load(template_id).await
+    }
+
     pub async fn list_templates(
         &self,
         user_id: &str,
