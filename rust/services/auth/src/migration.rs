@@ -28,8 +28,7 @@ pub async fn migrate_auth_schema(pool: &PgPool) -> Result<(), AuthMigrationError
 
 pub async fn validate_auth_schema(pool: &PgPool) -> Result<(), AuthMigrationError> {
     let mut connection = pool.acquire().await?;
-    validate_owned_schema(&mut connection).await?;
-    validate_applicant_dependency(&mut connection).await
+    validate_owned_schema(&mut connection).await
 }
 
 async fn validate_owned_schema(connection: &mut PgConnection) -> Result<(), AuthMigrationError> {
@@ -101,34 +100,6 @@ async fn validate_owned_schema(connection: &mut PgConnection) -> Result<(), Auth
     )
     .await?;
     Ok(())
-}
-
-async fn validate_applicant_dependency(
-    connection: &mut PgConnection,
-) -> Result<(), AuthMigrationError> {
-    validate_columns(
-        connection,
-        "public",
-        "applicants",
-        &[
-            "id",
-            "account_id",
-            "email",
-            "surname",
-            "given_names",
-            "date_of_birth",
-            "nationality",
-            "identity_proofing_completed",
-            "identity_proofing_date",
-            "active",
-            "suspended",
-            "extra_data",
-            "created_at",
-            "updated_at",
-            "deleted_at",
-        ],
-    )
-    .await
 }
 
 async fn validate_columns(
