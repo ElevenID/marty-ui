@@ -41,6 +41,7 @@ pub struct HttpGatewayProvider {
     service_urls: BTreeMap<String, String>,
     internal_api_key: String,
     issuance_api_key: Option<String>,
+    service_token: Option<String>,
     maximum_response_bytes: usize,
 }
 
@@ -49,6 +50,7 @@ impl HttpGatewayProvider {
         service_urls: BTreeMap<String, String>,
         internal_api_key: impl Into<String>,
         issuance_api_key: Option<String>,
+        service_token: Option<String>,
         maximum_response_bytes: Option<usize>,
     ) -> Result<Self, ProviderCompositionError> {
         let maximum_response_bytes =
@@ -95,6 +97,7 @@ impl HttpGatewayProvider {
             service_urls,
             internal_api_key,
             issuance_api_key: issuance_api_key.filter(|value| !value.trim().is_empty()),
+            service_token: service_token.filter(|value| !value.trim().is_empty()),
             maximum_response_bytes,
         })
     }
@@ -145,6 +148,9 @@ impl ResourceOwnerProvider for HttpGatewayProvider {
         let mut request = self.client.get(self.service_url(service, path)?);
         for (name, value) in &context.headers {
             request = request.header(name, value);
+        }
+        if let Some(value) = &self.service_token {
+            request = request.header(SERVICE_TOKEN_HEADER, value);
         }
         if service == "issuance" {
             if let Some(value) = &self.issuance_api_key {
@@ -667,7 +673,11 @@ mod tests {
                 if request
                     .headers()
                     .get("x-api-key")
-                    .is_some_and(|value| value == "internal-secret") =>
+                    .is_some_and(|value| value == "internal-secret")
+                    && request
+                        .headers()
+                        .get(SERVICE_TOKEN_HEADER)
+                        .is_some_and(|value| value == "service-secret") =>
             {
                 (StatusCode::OK, Json(json!({"organization_id": "org-1"})))
             }
@@ -679,7 +689,11 @@ mod tests {
                     && request
                         .headers()
                         .get("x-user-id")
-                        .is_some_and(|value| value == "user-1") =>
+                        .is_some_and(|value| value == "user-1")
+                    && request
+                        .headers()
+                        .get(SERVICE_TOKEN_HEADER)
+                        .is_some_and(|value| value == "service-secret") =>
             {
                 (StatusCode::OK, Json(json!({"organization_id": "org-2"})))
             }
@@ -711,6 +725,7 @@ mod tests {
             ]),
             "internal-secret",
             Some("issuance-secret".into()),
+            Some("service-secret".into()),
             Some(4_096),
         )
         .expect("provider");
