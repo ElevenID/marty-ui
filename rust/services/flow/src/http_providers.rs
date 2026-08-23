@@ -21,6 +21,7 @@ struct BoundedHttpClient {
     client: Client,
     base_url: Url,
     api_key: Option<String>,
+    service_token: Option<String>,
     provider: &'static str,
 }
 
@@ -31,20 +32,22 @@ impl BoundedHttpClient {
         provider: &'static str,
         timeout: Duration,
     ) -> Result<Self, FlowProviderError> {
-        Self::build(base_url, Some(api_key), provider, timeout)
+        Self::build(base_url, Some(api_key), None, provider, timeout)
     }
 
     fn delegated(
         base_url: &str,
+        service_token: Option<&str>,
         provider: &'static str,
         timeout: Duration,
     ) -> Result<Self, FlowProviderError> {
-        Self::build(base_url, None, provider, timeout)
+        Self::build(base_url, None, service_token, provider, timeout)
     }
 
     fn build(
         base_url: &str,
         api_key: Option<&str>,
+        service_token: Option<&str>,
         provider: &'static str,
         timeout: Duration,
     ) -> Result<Self, FlowProviderError> {
@@ -56,6 +59,7 @@ impl BoundedHttpClient {
             || base_url.query().is_some()
             || base_url.fragment().is_some()
             || api_key.is_some_and(|value| value.trim().len() < 16)
+            || service_token.is_some_and(|value| value.trim().len() < 16)
         {
             return Err(invalid_config(provider));
         }
@@ -73,6 +77,7 @@ impl BoundedHttpClient {
             client,
             base_url,
             api_key: api_key.map(str::to_owned),
+            service_token: service_token.map(str::to_owned),
             provider,
         })
     }
@@ -102,6 +107,9 @@ impl BoundedHttpClient {
         let mut request = self.client.request(method, url).query(query);
         if let Some(api_key) = &self.api_key {
             request = request.header("X-API-Key", api_key);
+        }
+        if let Some(service_token) = &self.service_token {
+            request = request.header("X-Service-Token", service_token);
         }
         if let Some(principal_id) = principal_id {
             request = request.header("X-User-ID", principal_id);
@@ -151,6 +159,7 @@ impl HttpFlowReferenceProvider {
         credential_template_url: &str,
         trust_profile_url: &str,
         deployment_profile_url: &str,
+        service_token: Option<&str>,
     ) -> Result<Self, FlowProviderError> {
         Ok(Self {
             application_templates: BoundedHttpClient::new(
@@ -161,16 +170,19 @@ impl HttpFlowReferenceProvider {
             )?,
             delivery_destinations: BoundedHttpClient::delegated(
                 credential_template_url,
+                service_token,
                 "delivery_destination",
                 Duration::from_secs(10),
             )?,
             trust_profiles: BoundedHttpClient::delegated(
                 trust_profile_url,
+                service_token,
                 "trust_profile",
                 Duration::from_secs(10),
             )?,
             deployment_profiles: BoundedHttpClient::delegated(
                 deployment_profile_url,
+                service_token,
                 "deployment_profile",
                 Duration::from_secs(10),
             )?,
@@ -620,11 +632,12 @@ mod tests {
     use axum::{
         extract::State,
         http::{HeaderMap, Uri},
-        routing::post,
+        routing::{get, post},
         Json, Router,
     };
 
     type CapturedRequest = Arc<Mutex<Option<(HeaderMap, Uri, Value)>>>;
+    type CapturedRead = Arc<Mutex<Option<(HeaderMap, Uri)>>>;
 
     async fn signing_resolver(
         State(captured): State<CapturedRequest>,
@@ -641,6 +654,19 @@ mod tests {
             "key_purpose": body["key_purpose"],
             "credential_format": body["credential_format"],
             "algorithm": body["algorithm"],
+        }))
+    }
+
+    async fn reference_resolver(
+        State(captured): State<CapturedRead>,
+        headers: HeaderMap,
+        uri: Uri,
+    ) -> Json<Value> {
+        *captured.lock().unwrap() = Some((headers, uri));
+        Json(json!({
+            "id": "trust-1",
+            "organization_id": "org-1",
+            "status": "active",
         }))
     }
 
@@ -664,6 +690,15 @@ mod tests {
                 .is_err()
         );
         assert!(HttpSigningProvider::new("https://example.com/internal/", "short").is_err());
+        assert!(HttpFlowReferenceProvider::new(
+            "https://issuance.example",
+            &"a".repeat(32),
+            "https://credential-template.example",
+            "https://trust-profile.example",
+            "https://deployment-profile.example",
+            Some("short"),
+        )
+        .is_err());
         let signing =
             HttpSigningProvider::new("https://example.com/internal/", &"a".repeat(32)).unwrap();
         assert_eq!(
@@ -691,12 +726,17 @@ mod tests {
             "https://credential-template.example",
             "https://trust-profile.example",
             "https://deployment-profile.example",
+            Some(&"s".repeat(32)),
         )
         .unwrap();
         assert!(references.delivery_destinations.api_key.is_none());
         assert!(references.trust_profiles.api_key.is_none());
         assert!(references.deployment_profiles.api_key.is_none());
         assert!(references.application_templates.api_key.is_some());
+        assert!(references.application_templates.service_token.is_none());
+        assert!(references.delivery_destinations.service_token.is_some());
+        assert!(references.trust_profiles.service_token.is_some());
+        assert!(references.deployment_profiles.service_token.is_some());
     }
 
     #[tokio::test]
@@ -745,6 +785,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn delegated_reference_lookup_sends_service_and_user_authentication() {
+        let captured = CapturedRead::default();
+        let router = Router::new()
+            .route("/v1/trust-profiles/{profile_id}", get(reference_resolver))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let base_url = format!("http://{address}");
+        let service_token = "0123456789abcdef0123456789abcdef";
+        let provider = HttpFlowReferenceProvider::new(
+            &base_url,
+            &"a".repeat(32),
+            &base_url,
+            &base_url,
+            &base_url,
+            Some(service_token),
+        )
+        .unwrap();
+
+        let reference = provider
+            .resolve(FlowReferenceKind::TrustProfile, "trust-1", "user-1")
+            .await
+            .unwrap();
+        assert_eq!(reference.organization_id.as_deref(), Some("org-1"));
+
+        let (headers, uri) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(uri.path(), "/v1/trust-profiles/trust-1");
+        assert!(uri.query().is_none());
+        assert_eq!(headers.get("x-service-token").unwrap(), service_token);
+        assert_eq!(headers.get("x-user-id").unwrap(), "user-1");
+        assert!(headers.get("x-api-key").is_none());
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn reference_catalog_rejects_unbound_inputs_before_network_io() {
         let references = HttpFlowReferenceProvider::new(
             "https://issuance.example",
@@ -752,6 +828,7 @@ mod tests {
             "https://credential-template.example",
             "https://trust-profile.example",
             "https://deployment-profile.example",
+            None,
         )
         .unwrap();
         assert!(references

@@ -16,11 +16,18 @@ use serde_json::{json, Value};
 struct Contract {
     schema_version: u32,
     required_providers: Vec<String>,
-    reference_catalog: BTreeMap<String, [String; 3]>,
+    reference_catalog: BTreeMap<String, ReferenceOperation>,
     signing_identity: SigningIdentity,
     invalid_identity_mutations: Vec<String>,
     physical_document_operations: BTreeMap<String, [String; 2]>,
     authorization: Vec<AuthorizationCase>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct ReferenceOperation {
+    method: String,
+    path: String,
+    headers: Vec<String>,
 }
 
 #[test]
@@ -64,7 +71,7 @@ fn contract() -> Contract {
 #[test]
 fn provider_composition_fails_closed_until_every_feature_port_is_present() {
     let contract = contract();
-    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.schema_version, 2);
     assert_eq!(contract.required_providers, REQUIRED_FLOW_PROVIDERS);
     let registry = FlowProviderRegistry::default();
     assert_eq!(registry.missing(), REQUIRED_FLOW_PROVIDERS);
@@ -77,19 +84,35 @@ fn reference_catalog_preserves_authoritative_routes_and_authentication() {
     assert_eq!(operations.len(), 4);
     assert_eq!(
         operations["application_template"],
-        ["GET", "v1/application-templates/{id}", "x-api-key"]
+        ReferenceOperation {
+            method: "GET".into(),
+            path: "v1/application-templates/{id}".into(),
+            headers: vec!["x-api-key".into()],
+        }
     );
     assert_eq!(
         operations["delivery_destination"],
-        ["GET", "v1/delivery-destinations/{id}", "x-user-id"]
+        ReferenceOperation {
+            method: "GET".into(),
+            path: "v1/delivery-destinations/{id}".into(),
+            headers: vec!["x-service-token".into(), "x-user-id".into()],
+        }
     );
     assert_eq!(
         operations["trust_profile"],
-        ["GET", "v1/trust-profiles/{id}", "x-user-id"]
+        ReferenceOperation {
+            method: "GET".into(),
+            path: "v1/trust-profiles/{id}".into(),
+            headers: vec!["x-service-token".into(), "x-user-id".into()],
+        }
     );
     assert_eq!(
         operations["deployment_profile"],
-        ["GET", "v1/deployment-profiles/{id}", "x-user-id"]
+        ReferenceOperation {
+            method: "GET".into(),
+            path: "v1/deployment-profiles/{id}".into(),
+            headers: vec!["x-service-token".into(), "x-user-id".into()],
+        }
     );
 }
 

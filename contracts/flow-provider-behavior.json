@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "required_providers": [
     "tenant_membership",
     "credential_template",
@@ -11,10 +11,26 @@
     "reference_catalog"
   ],
   "reference_catalog": {
-    "application_template": ["GET", "v1/application-templates/{id}", "x-api-key"],
-    "delivery_destination": ["GET", "v1/delivery-destinations/{id}", "x-user-id"],
-    "trust_profile": ["GET", "v1/trust-profiles/{id}", "x-user-id"],
-    "deployment_profile": ["GET", "v1/deployment-profiles/{id}", "x-user-id"]
+    "application_template": {
+      "method": "GET",
+      "path": "v1/application-templates/{id}",
+      "headers": ["x-api-key"]
+    },
+    "delivery_destination": {
+      "method": "GET",
+      "path": "v1/delivery-destinations/{id}",
+      "headers": ["x-service-token", "x-user-id"]
+    },
+    "trust_profile": {
+      "method": "GET",
+      "path": "v1/trust-profiles/{id}",
+      "headers": ["x-service-token", "x-user-id"]
+    },
+    "deployment_profile": {
+      "method": "GET",
+      "path": "v1/deployment-profiles/{id}",
+      "headers": ["x-service-token", "x-user-id"]
+    }
   },
   "signing_identity": {
     "organization_id": "org-1",
