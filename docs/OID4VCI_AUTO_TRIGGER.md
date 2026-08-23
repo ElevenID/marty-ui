@@ -2,7 +2,7 @@
 
 ## Overview
 
-MIP 0.4.1 can generate a pre-authorized OID4VCI offer after an organization reviewer approves an application. The application service owns claim derivation and invokes only an active custom Flow extension that explicitly handles `APPLICATION_APPROVED` for the application's Credential Template.
+MIP 0.5.0 can generate a pre-authorized OID4VCI offer after an organization reviewer approves an application. The application service owns claim derivation and invokes only an active custom Flow extension that explicitly handles `APPLICATION_APPROVED` for the application's Credential Template.
 
 There are no legacy applicant review routes or client-selected issuance claims in this workflow.
 

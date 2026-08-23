@@ -255,7 +255,7 @@ jobs:
           echo "Marty browser test wallet did not become ready." >&2
           exit 1
 
-      - name: Require deployed MIP 0.4.1 contract
+      - name: Require deployed MIP 0.5.0 contract
         shell: bash
         run: |
           node --input-type=module <<'NODE'
@@ -266,13 +266,13 @@ jobs:
           const forbidden = ['api_base_url', 'supported_issuance_protocols', 'endpoints', 'wallet_facing_endpoints', 'authorization'];
           const canonical = body?.issuer === origin
             && body?.mip_configuration_endpoint === `${origin}/.well-known/mip-configuration`
-            && JSON.stringify(body?.supported_versions) === JSON.stringify(['0.4.1'])
+            && JSON.stringify(body?.supported_versions) === JSON.stringify(['0.5.0'])
             && Array.isArray(body?.implementation_classes)
             && Array.isArray(body?.supported_compliance_profiles)
             && Array.isArray(body?.active_compliance_profiles)
             && forbidden.every((field) => !(field in body));
-          if (!response.ok || body?.mip_version !== '0.4.1' || header !== '0.4.1' || !canonical) {
-            throw new Error(`Expected deployed MIP 0.4.1; status=${response.status}, body=${body?.mip_version}, header=${header}`);
+          if (!response.ok || body?.mip_version !== '0.5.0' || header !== '0.5.0' || !canonical) {
+            throw new Error(`Expected deployed MIP 0.5.0; status=${response.status}, body=${body?.mip_version}, header=${header}`);
           }
           const { mkdirSync, writeFileSync } = await import('node:fs');
           mkdirSync('tests/artifacts', { recursive: true });
@@ -312,7 +312,7 @@ jobs:
             --arg marty_protocol_sha "$MARTY_PROTOCOL_REF" \
             --arg evidence_tooling_sha "$EVIDENCE_TOOLING_SHA" \
             --arg beta_origin "$BETA_ORIGIN" \
-            --arg mip_version "0.4.1" \
+            --arg mip_version "0.5.0" \
             '{
               run_id: $run_id,
               stack_release_run_id: $stack_release_run_id,

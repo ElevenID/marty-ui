@@ -69,6 +69,7 @@ async fn both_grpc_clients_are_created_only_by_shared_mmf_factories() {
     let clients = AuthGrpcChannelFactories {
         flow: factory("http://flow:9011"),
         organization: factory("http://organization:9002"),
+        service_token: "s".repeat(32),
     }
     .connect_lazy()
     .unwrap();

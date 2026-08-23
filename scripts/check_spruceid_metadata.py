@@ -110,7 +110,7 @@ def _fetch_json(url: str, *, timeout: float) -> dict[str, Any]:
         url,
         headers={
             "Accept": "application/json",
-            "User-Agent": "Marty-MIP-Conformance/0.4.1",
+            "User-Agent": "Marty-MIP-Conformance/0.5.0",
         },
     )
     try:

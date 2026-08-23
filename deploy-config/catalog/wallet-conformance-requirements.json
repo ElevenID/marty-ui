@@ -1,6 +1,6 @@
 {
   "schema_version": 3,
-  "mip_version": "0.4.1",
+  "mip_version": "0.5.0",
   "sprucekit_login": {
     "wallet_id": "wr-spruce-001",
     "expected_configuration_id": "MemberCredential#sd-jwt",

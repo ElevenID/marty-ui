@@ -107,10 +107,14 @@ impl AuthConnections {
             config.workload_client_tls.as_ref(),
         )?;
         let organization = workload_channel_factory(&config.organization_grpc_target, None)?;
-        let grpc_clients = AuthGrpcChannelFactories { flow, organization }
-            .connect()
-            .await
-            .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?;
+        let grpc_clients = AuthGrpcChannelFactories {
+            flow,
+            organization,
+            service_token: config.grpc_service_token.clone(),
+        }
+        .connect()
+        .await
+        .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?;
         runtime_health(runtime, AuthDependency::Flow)?;
         runtime_health(runtime, AuthDependency::Organization)?;
 

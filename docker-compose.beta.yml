@@ -117,6 +117,7 @@ services:
   signing-keys:
     environment:
       SIGNING_KEYS_REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/2
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set for beta}
 
   flow:
     environment:

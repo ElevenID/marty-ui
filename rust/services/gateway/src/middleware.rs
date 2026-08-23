@@ -15,7 +15,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-pub const MIP_VERSION: &str = "0.4.1";
+pub const MIP_VERSION: &str = "0.5.0";
 pub const RATE_LIMIT_WINDOW_MS: u64 = 60_000;
 
 #[derive(Clone, Debug)]
@@ -552,7 +552,7 @@ mod tests {
     fn exact_gateway_http_policy_values_are_preserved() {
         let policies = GatewayHttpPolicies::new().expect("policies");
         assert_eq!(
-            policies.negotiate_version(Some("0.4.1")),
+            policies.negotiate_version(Some("0.5.0")),
             ProtocolVersionDecision::Accepted
         );
         assert!(matches!(
