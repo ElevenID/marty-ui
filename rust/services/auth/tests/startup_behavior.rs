@@ -22,6 +22,7 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
             "did:web:verifier.example".into(),
         ),
         ("FLOW_WEBHOOK_SECRET".into(), "s".repeat(32)),
+        ("GRPC_SERVICE_TOKEN".into(), "g".repeat(32)),
         ("ALLOW_PLAINTEXT_GRPC".into(), "true".into()),
     ])
 }
@@ -41,6 +42,7 @@ fn complete_beta_configuration_is_normalized_without_hidden_fallbacks() {
     assert_eq!(config.flow_grpc_target, "http://flow:9011");
     assert_eq!(config.organization_grpc_target, "http://organization:9002");
     assert_eq!(config.event_stream_grpc_target, "http://event-stream:9015");
+    assert_eq!(config.grpc_service_token, "g".repeat(32));
     assert_eq!(config.oidc.issuer_url, "http://localhost:8180/realms/marty");
     assert_eq!(
         config.oidc.redirect_uri,
@@ -65,6 +67,17 @@ fn required_settings_secrets_and_production_transport_fail_closed() {
     let mut short_secret = baseline("beta");
     short_secret.insert("FLOW_WEBHOOK_SECRET".into(), "short".into());
     assert!(AuthServiceConfig::from_values(short_secret).is_err());
+
+    let mut short_service_token = baseline("beta");
+    short_service_token.insert("GRPC_SERVICE_TOKEN".into(), "short".into());
+    assert!(AuthServiceConfig::from_values(short_service_token).is_err());
+
+    let mut invalid_service_token = baseline("beta");
+    invalid_service_token.insert(
+        "GRPC_SERVICE_TOKEN".into(),
+        format!("{}\n{}", "g".repeat(16), "g".repeat(16)),
+    );
+    assert!(AuthServiceConfig::from_values(invalid_service_token).is_err());
 
     let mut production = baseline("production");
     production.remove("ALLOW_PLAINTEXT_GRPC");

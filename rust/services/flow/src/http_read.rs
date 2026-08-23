@@ -21,7 +21,7 @@ use crate::{
     RepositoryError, StartFlowRequest, UpdateFlowDefinitionRequest,
 };
 
-const MIP_VERSION: &str = "0.4.1";
+const MIP_VERSION: &str = "0.5.0";
 const DEFAULT_PAGE_SIZE: usize = 100;
 const MAXIMUM_PAGE_SIZE: usize = 500;
 

@@ -92,14 +92,14 @@ def test_manifest_snapshots_all_coordinated_repositories(tmp_path: Path) -> None
     output = tmp_path / "manifest.json"
     snapshots = tmp_path / "snapshots"
 
-    manifest = create_manifest(workspace, "mip-0.4.1-local-test", output, snapshots)
+    manifest = create_manifest(workspace, "mip-0.5.0-local-test", output, snapshots)
 
     assert manifest["source_kind"] == "local-worktree-snapshot"
     assert manifest["promotion_eligible"] is False
     assert manifest["release_ready"] is False
     assert len(manifest["marty_ui_sha"]) == 40
     assert set(manifest["repositories"]) == set(REPOSITORIES)
-    assert json.loads(output.read_text(encoding="utf-8"))["mip_version"] == "0.4.1"
+    assert json.loads(output.read_text(encoding="utf-8"))["mip_version"] == "0.5.0"
     for name, record in manifest["repositories"].items():
         snapshot = snapshots / record["snapshot"]
         assert snapshot.is_file()
@@ -121,7 +121,7 @@ def test_manifest_verification_rejects_worktree_drift(tmp_path: Path) -> None:
             (repo / "src").mkdir()
             (repo / "src" / "index.js").write_text("export {};", encoding="utf-8")
     output = tmp_path / "manifest.json"
-    create_manifest(workspace, "mip-0.4.1-local-test", output, tmp_path / "snapshots")
+    create_manifest(workspace, "mip-0.5.0-local-test", output, tmp_path / "snapshots")
 
     (workspace / "marty-ui" / "tracked.txt").write_text("drift", encoding="utf-8")
 

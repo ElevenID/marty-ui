@@ -46,7 +46,7 @@
   "stored_private_context": "recursively_redacted",
   "malformed_stored_state": "fail_closed",
   "capabilities": {
-    "protocol_version": "0.4.1",
+    "protocol_version": "0.5.0",
     "flow_type_count": 12,
     "standard_flow_type_count": 11,
     "trigger_count": 4,

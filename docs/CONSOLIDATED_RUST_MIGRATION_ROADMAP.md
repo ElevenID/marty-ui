@@ -482,7 +482,7 @@ complete application surface is now attached in the crate; the next executable
 slice must bind both listeners and activate only after both are serving.
 
 The first executable HTTP operation slice is complete under
-`contracts/flow-http-read-behavior.json`. Axum now serves the public MIP 0.4.1
+`contracts/flow-http-read-behavior.json`. Axum now serves the public MIP 0.5.0
 capability document plus tenant-authorized definition, instance, terminal
 verification-result and artifact reads directly from Rust-owned PostgreSQL
 records. Pagination is bounded to 500, removed lifecycle aliases stay rejected,

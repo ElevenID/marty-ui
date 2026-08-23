@@ -33,10 +33,10 @@
     {"compliance_code": ""}
   ],
   "mip_configuration": {
-    "mip_version": "0.4.1",
+    "mip_version": "0.5.0",
     "issuer": "https://issuer.example",
     "mip_configuration_endpoint": "https://issuer.example/.well-known/mip-configuration",
-    "supported_versions": ["0.4.1"],
+    "supported_versions": ["0.5.0"],
     "implementation_classes": ["ISSUER", "VERIFIER", "REGISTRY"],
     "issuance_endpoint": "https://issuer.example/v1/issuance",
     "openid_credential_issuer": "https://issuer.example/.well-known/openid-credential-issuer",
@@ -60,17 +60,17 @@
   },
   "release": {
     "input": {
-      "release_version": "mip-0.4.1-beta-test",
+      "release_version": "mip-0.5.0-beta-test",
       "stack_version": "2026.07.0",
       "marty_ui_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "image_digests": {"gateway": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
     },
     "expected": {
       "component": "services",
-      "release_version": "mip-0.4.1-beta-test",
-      "deployment_release_marker": "mip-0.4.1-beta-test",
+      "release_version": "mip-0.5.0-beta-test",
+      "deployment_release_marker": "mip-0.5.0-beta-test",
       "stack_version": "2026.07.0",
-      "mip_version": "0.4.1",
+      "mip_version": "0.5.0",
       "marty_ui_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "image_digests": {"gateway": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
     }

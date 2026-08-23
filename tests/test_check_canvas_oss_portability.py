@@ -172,14 +172,14 @@ def test_runtime_binding_requires_deployment_and_source_snapshot(tmp_path: Path)
     source_id = "c" * 40
     context = write(
         tmp_path / "runtime.json",
-        runtime_context("mip-0.4.1-local-test", source_id),
+        runtime_context("mip-0.5.0-local-test", source_id),
     )
     write(
         tmp_path / "source-manifest.json",
         {
             "schema_version": 1,
             "source_kind": "local-worktree-snapshot",
-            "release_version": "mip-0.4.1-local-test",
+            "release_version": "mip-0.5.0-local-test",
             "marty_ui_sha": source_id,
             "promotion_eligible": False,
             "release_ready": False,
@@ -190,15 +190,15 @@ def test_runtime_binding_requires_deployment_and_source_snapshot(tmp_path: Path)
         {
             "schema_version": 1,
             "source_kind": "local-worktree-snapshot",
-            "release_version": "mip-0.4.1-local-test",
+            "release_version": "mip-0.5.0-local-test",
             "marty_ui_sha": source_id,
             "beta_origin": "https://beta.elevenidllc.com",
             "source_manifest": "source-manifest.json",
             "services_marker": {
                 "component": "services",
-                "release_version": "mip-0.4.1-local-test",
+                "release_version": "mip-0.5.0-local-test",
                 "marty_ui_sha": source_id,
-                "deployment_release_marker": "mip-0.4.1-local-test",
+                "deployment_release_marker": "mip-0.5.0-local-test",
                 "image_digests": {
                     "gateway": "sha256:" + "1" * 64,
                     "issuance": "sha256:" + "2" * 64,
@@ -207,13 +207,13 @@ def test_runtime_binding_requires_deployment_and_source_snapshot(tmp_path: Path)
             },
             "ui_marker": {
                 "component": "ui",
-                "release_version": "mip-0.4.1-local-test",
+                "release_version": "mip-0.5.0-local-test",
                 "marty_ui_sha": source_id,
             },
             "images": [
                 {
                     "container": container,
-                    "configured_image": f"elevenid-local/{image_service}:mip-0.4.1-local-test",
+                    "configured_image": f"elevenid-local/{image_service}:mip-0.5.0-local-test",
                     "image_id": image_id,
                     "status": "running",
                 }
@@ -234,7 +234,7 @@ def test_runtime_binding_rejects_current_ui_only_reused_backend_manifest(tmp_pat
     source_id = "1" * 40
     source_digest = source_id + "2" * 24
     revision = "3" * 40
-    release = "mip-0.4.1-local-current"
+    release = "mip-0.5.0-local-current"
     context = write(
         tmp_path / "runtime.json",
         runtime_context(release, source_id),
@@ -278,7 +278,7 @@ def test_runtime_binding_rejects_current_ui_only_reused_backend_manifest(tmp_pat
 
 def test_runtime_binding_rejects_missing_canvas_worker_image(tmp_path: Path) -> None:
     source_id = "c" * 40
-    release = "mip-0.4.1-local-test"
+    release = "mip-0.5.0-local-test"
     context = write(
         tmp_path / "runtime.json",
         runtime_context(release, source_id),
@@ -344,7 +344,7 @@ def test_full_finalize_requires_all_oss_cases_and_hosted_classification(tmp_path
         bootstrap_audit=write(tmp_path / "bootstrap.json", bootstrap_audit()),
         runtime_context=write(
             tmp_path / "runtime.json",
-            runtime_context("mip-0.4.1-local-test", "b" * 40),
+            runtime_context("mip-0.5.0-local-test", "b" * 40),
         ),
         observations=write(tmp_path / "observations.json", observations),
         driver_manifest=write(tmp_path / "driver.json", driver_manifest),
