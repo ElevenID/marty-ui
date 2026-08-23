@@ -842,13 +842,11 @@ async fn proxy_handler(
         }
     };
     let public_path = parts.uri.path().to_owned();
-    let upstream_path = match organization_api_key_upstream_path(
-        &public_path,
-        api_key_organization_id.as_deref(),
-    ) {
-        Ok(path) => path,
-        Err((status, detail)) => return detail_response(status, detail),
-    };
+    let upstream_path =
+        match compatibility_upstream_path(&public_path, api_key_organization_id.as_deref()) {
+            Ok(path) => path,
+            Err((status, detail)) => return detail_response(status, detail),
+        };
     let mut gateway_request = GatewayRequest::new(method, &upstream_path, now_ms());
     gateway_request.query = query_pairs(parts.uri.query());
     gateway_request.headers = request_headers(&parts.headers);
@@ -950,7 +948,11 @@ async fn proxy_handler(
     if let Some(request_id) = gateway_request.header("x-request-id") {
         gateway_request.request_id = request_id.to_owned();
     }
-    let mut overrides = proxy_overrides(&state, &upstream_path, &identity);
+    // Authentication and tenant scope belong to the public contract. Some
+    // compatibility paths are rewritten for an upstream service, so deriving
+    // overrides from the upstream path can lose the authenticated tenant or
+    // misread a compatibility segment (for example `organizations/audit`).
+    let mut overrides = proxy_overrides(&state, &public_path, &identity);
     overrides.body = canonical_body;
     match state
         .proxy
@@ -1663,6 +1665,13 @@ async fn composition_proxy_json(
         overrides
             .headers
             .insert("x-api-key".into(), state.issuance_service_api_key.clone());
+    }
+    if requires_gateway_service_token(service) {
+        if let Some(service_token) = &state.service_token {
+            overrides
+                .headers
+                .insert("x-service-token".into(), service_token.clone());
+        }
     }
     let response = state
         .proxy
@@ -2550,31 +2559,76 @@ fn proxy_overrides(
     overrides
 }
 
-fn organization_api_key_upstream_path(
+fn compatibility_upstream_path(
     public_path: &str,
     organization_id: Option<&str>,
 ) -> Result<String, (u16, &'static str)> {
-    let Some(relative) = public_path.strip_prefix("/v1/api-keys") else {
-        return Ok(public_path.to_owned());
-    };
-    if !relative.is_empty()
-        && (!relative.starts_with('/') || relative[1..].is_empty() || relative[1..].contains('/'))
-    {
-        return Err((404, "API key route not found"));
-    }
-    let Some(organization_id) = organization_id
+    let organization_id = organization_id
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return Err((
-            422,
-            "An active organization is required before managing API keys",
+        .filter(|value| !value.is_empty());
+
+    if let Some(relative) = public_path.strip_prefix("/v1/api-keys") {
+        if !relative.is_empty()
+            && (!relative.starts_with('/')
+                || relative[1..].is_empty()
+                || relative[1..].contains('/'))
+        {
+            return Err((404, "API key route not found"));
+        }
+        let Some(organization_id) = organization_id else {
+            return Err((
+                422,
+                "An active organization is required before managing API keys",
+            ));
+        };
+        return Ok(format!(
+            "/v1/organizations/{}/api-keys{relative}",
+            utf8_percent_encode(organization_id, NON_ALPHANUMERIC)
         ));
-    };
-    Ok(format!(
-        "/v1/organizations/{}/api-keys{relative}",
-        utf8_percent_encode(organization_id, NON_ALPHANUMERIC)
-    ))
+    }
+
+    if let Some(relative) = public_path.strip_prefix("/v1/policy-sets") {
+        if !relative.is_empty() && !relative.starts_with('/') {
+            return Err((404, "Policy set route not found"));
+        }
+        let Some(organization_id) = organization_id else {
+            return Err((
+                422,
+                "An active organization is required before managing policy sets",
+            ));
+        };
+        return Ok(format!(
+            "/__gateway/composition/organizations/v1/organizations/{}/policy-sets{relative}",
+            utf8_percent_encode(organization_id, NON_ALPHANUMERIC)
+        ));
+    }
+
+    if let Some(tail) = public_path.strip_prefix("/v1/organizations/") {
+        if let Some((path_organization_id, audit_path)) = tail.split_once("/audit-events") {
+            let valid_suffix = audit_path.is_empty()
+                || audit_path == "/export"
+                || audit_path
+                    .strip_prefix('/')
+                    .is_some_and(|event_id| !event_id.is_empty() && !event_id.contains('/'));
+            if !valid_suffix {
+                return Err((404, "Audit event route not found"));
+            }
+            let Some(organization_id) = organization_id else {
+                return Err((
+                    422,
+                    "An active organization is required before viewing audit events",
+                ));
+            };
+            if path_organization_id != organization_id {
+                return Err((403, "Request is not authorized for this organization"));
+            }
+            return Ok(format!(
+                "/__gateway/composition/organizations/v1/organizations/audit/events{audit_path}"
+            ));
+        }
+    }
+
+    Ok(public_path.to_owned())
 }
 
 fn requires_gateway_service_token(service: &str) -> bool {
@@ -4217,6 +4271,9 @@ mod tests {
                     "api-key:view".into(),
                     "api-key:create".into(),
                     "api-key:revoke".into(),
+                    "organization:view".into(),
+                    "audit:view".into(),
+                    "policy-set:view".into(),
                     "notification:view".into(),
                 ]),
                 is_owner: false,
@@ -4666,6 +4723,28 @@ mod tests {
                     .expect("template list")
                 }
                 "/v1/organizations/org%2D1/api-keys" => b"[]".to_vec(),
+                "/v1/organizations/11111111%2D1111%2D1111%2D1111%2D111111111111/policy-sets" => {
+                    assert_eq!(
+                        request.query.get("organization_id"),
+                        Some(&vec!["11111111-1111-1111-1111-111111111111".into()])
+                    );
+                    assert_eq!(
+                        request.header("x-service-token"),
+                        Some("ssssssssssssssssssssssssssssssss")
+                    );
+                    b"[]".to_vec()
+                }
+                "/v1/organizations/audit/events" => {
+                    assert_eq!(
+                        request.query.get("organization_id"),
+                        Some(&vec!["11111111-1111-1111-1111-111111111111".into()])
+                    );
+                    assert_eq!(
+                        request.header("x-service-token"),
+                        Some("ssssssssssssssssssssssssssssssss")
+                    );
+                    br#"{"events":[],"total":0,"page":1,"per_page":5}"#.to_vec()
+                }
                 "/v1/organizations" => {
                     if request.method == HttpMethod::Get && request.query.contains_key("limit") {
                         return Ok(GatewayResponse {
@@ -4805,12 +4884,18 @@ mod tests {
                     .expect("applicant list")
                 }
                 "/v1/organizations/org%2D1/lifecycle"
-                | "/internal/v1/organizations/org%2D1/lifecycle" => serde_json::to_vec(&json!({
-                    "created_at":"2026-04-01T00:00:00Z",
-                    "audit_retention_days":30,
-                    "pilot_retention":{"enabled":true,"window_days":30}
-                }))
-                .expect("lifecycle"),
+                | "/internal/v1/organizations/org%2D1/lifecycle" => {
+                    assert_eq!(
+                        request.header("x-service-token"),
+                        Some("ssssssssssssssssssssssssssssssss")
+                    );
+                    serde_json::to_vec(&json!({
+                        "created_at":"2026-04-01T00:00:00Z",
+                        "audit_retention_days":30,
+                        "pilot_retention":{"enabled":true,"window_days":30}
+                    }))
+                    .expect("lifecycle")
+                }
                 "/v1/issuance/organizations/org%2D1/retention" => {
                     assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
                     assert_eq!(
@@ -5135,16 +5220,48 @@ mod tests {
     #[test]
     fn legacy_api_key_routes_are_bound_to_the_authenticated_organization() {
         assert_eq!(
-            organization_api_key_upstream_path("/v1/api-keys", Some("org-1")).expect("list path"),
+            compatibility_upstream_path("/v1/api-keys", Some("org-1")).expect("list path"),
             "/v1/organizations/org%2D1/api-keys"
         );
         assert_eq!(
-            organization_api_key_upstream_path("/v1/api-keys/key-1", Some("org-1"))
-                .expect("key path"),
+            compatibility_upstream_path("/v1/api-keys/key-1", Some("org-1")).expect("key path"),
             "/v1/organizations/org%2D1/api-keys/key-1"
         );
-        assert!(organization_api_key_upstream_path("/v1/api-keys", None).is_err());
-        assert!(organization_api_key_upstream_path("/v1/api-keys/a/b", Some("org-1")).is_err());
+        assert!(compatibility_upstream_path("/v1/api-keys", None).is_err());
+        assert!(compatibility_upstream_path("/v1/api-keys/a/b", Some("org-1")).is_err());
+    }
+
+    #[test]
+    fn console_compatibility_paths_preserve_the_authorized_tenant() {
+        let organization_id = "66955e44-28fd-431e-a4e1-4c2579a66e66";
+        assert_eq!(
+            compatibility_upstream_path("/v1/policy-sets", Some(organization_id))
+                .expect("policy list"),
+            "/__gateway/composition/organizations/v1/organizations/66955e44%2D28fd%2D431e%2Da4e1%2D4c2579a66e66/policy-sets"
+        );
+        assert_eq!(
+            compatibility_upstream_path(
+                &format!("/v1/organizations/{organization_id}/audit-events"),
+                Some(organization_id),
+            )
+            .expect("audit list"),
+            "/__gateway/composition/organizations/v1/organizations/audit/events"
+        );
+        assert_eq!(
+            compatibility_upstream_path(
+                &format!("/v1/organizations/{organization_id}/audit-events/export"),
+                Some(organization_id),
+            )
+            .expect("audit export"),
+            "/__gateway/composition/organizations/v1/organizations/audit/events/export"
+        );
+        assert!(matches!(
+            compatibility_upstream_path(
+                &format!("/v1/organizations/{organization_id}/audit-events"),
+                Some("67e9df9d-a3c1-4ada-a2d7-0789992097a2"),
+            ),
+            Err((403, _))
+        ));
     }
 
     #[test]
@@ -5199,6 +5316,57 @@ mod tests {
             .await
             .expect("body");
         assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    }
+
+    #[tokio::test]
+    async fn console_policy_and_audit_compatibility_routes_reach_canonical_rust_upstreams() {
+        let organization_id = "11111111-1111-1111-1111-111111111111";
+        for uri in [
+            format!("/v1/policy-sets?organization_id={organization_id}"),
+            format!("/v1/organizations/{organization_id}/audit-events?limit=5"),
+        ] {
+            let response = runtime_router()
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .header("cookie", "sessionId=valid-uuid")
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            let status = response.status();
+            let body = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .expect("body");
+            assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        }
+    }
+
+    #[tokio::test]
+    async fn organization_composition_uses_membership_authorized_tenant_over_stale_session_scope() {
+        let organization_id = "11111111-1111-1111-1111-111111111111";
+        let response = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/organizations/{organization_id}/integration-info"
+                    ))
+                    // This session names org-1, but RuntimeProvider confirms an
+                    // active membership in the organization selected by path.
+                    .header("cookie", "sessionId=valid")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+            .await
+            .expect("body");
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+        let body: Value = serde_json::from_slice(&body).expect("integration info");
+        assert_eq!(body["org_id"], organization_id);
     }
 
     #[test]
