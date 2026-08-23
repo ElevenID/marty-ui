@@ -88,10 +88,9 @@ impl PresentationPolicyService for PresentationPolicyGrpcService {
         } else {
             self.authenticate(&request)?;
         }
-        let principal = self.principal(&request)?;
         let policy = self
             .application
-            .get(&principal, parse_uuid(&request.get_ref().policy_id)?)
+            .get_for_internal_service(parse_uuid(&request.get_ref().policy_id)?)
             .await
             .map_err(application_status)?;
         Ok(Response::new(policy_message(&policy)?))
