@@ -866,6 +866,9 @@ services:
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
+      # Flow validates signing readiness before the gateway can start, so this
+      # later compose layer must override the base stack with the direct peer.
+      SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       REDIS_URL: redis://redis:6379
       REDIS_DB_FLOW: "3"
       FLOW_GRPC_PORT: "9011"
