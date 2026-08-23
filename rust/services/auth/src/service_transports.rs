@@ -11,7 +11,7 @@ use mmf_platform::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tonic::{transport::Channel, Code, Request};
+use tonic::{metadata::AsciiMetadataValue, transport::Channel, Code, Request};
 use url::Url;
 
 use crate::{
@@ -28,11 +28,13 @@ use crate::{
 
 const APPLICANT_PROFILE_RESPONSE_LIMIT: usize = 64 * 1024;
 const AUTH_EVENT_TOPIC: &str = "auth.events";
+const SERVICE_TOKEN_HEADER: &str = "x-service-token";
 
 #[derive(Clone)]
 pub struct AuthGrpcChannelFactories {
     pub flow: GrpcChannelFactory,
     pub organization: GrpcChannelFactory,
+    pub service_token: String,
 }
 
 impl AuthGrpcChannelFactories {
@@ -44,6 +46,7 @@ impl AuthGrpcChannelFactories {
             self.organization
                 .connect_lazy()
                 .map_err(|error| transport_error("organization_grpc_unavailable", error))?,
+            self.service_token.clone(),
         ))
     }
 
@@ -51,7 +54,11 @@ impl AuthGrpcChannelFactories {
         let (flow, organization) =
             tokio::try_join!(self.flow.connect(), self.organization.connect())
                 .map_err(|error| transport_error("auth_grpc_unavailable", error))?;
-        Ok(AuthGrpcClients::new(flow, organization))
+        Ok(AuthGrpcClients::new(
+            flow,
+            organization,
+            self.service_token.clone(),
+        ))
     }
 }
 
@@ -59,20 +66,22 @@ impl AuthGrpcChannelFactories {
 pub struct AuthGrpcClients {
     pub flow: FlowServiceClient<Channel>,
     pub organization: OrganizationServiceClient<Channel>,
+    service_token: String,
 }
 
 impl AuthGrpcClients {
     #[must_use]
-    pub fn new(flow: Channel, organization: Channel) -> Self {
+    pub fn new(flow: Channel, organization: Channel, service_token: impl Into<String>) -> Self {
         Self {
             flow: FlowServiceClient::new(flow),
             organization: OrganizationServiceClient::new(organization),
+            service_token: service_token.into(),
         }
     }
 
     #[must_use]
     pub fn credential_verification(&self) -> GrpcCredentialVerificationStarter {
-        GrpcCredentialVerificationStarter::new(self.flow.clone())
+        GrpcCredentialVerificationStarter::new(self.flow.clone(), self.service_token.clone())
     }
 
     #[must_use]
@@ -80,19 +89,27 @@ impl AuthGrpcClients {
         &self,
         default_organization_id: impl Into<String>,
     ) -> GrpcOrganizationProvisioning {
-        GrpcOrganizationProvisioning::new(self.organization.clone(), default_organization_id)
+        GrpcOrganizationProvisioning::new(
+            self.organization.clone(),
+            default_organization_id,
+            self.service_token.clone(),
+        )
     }
 }
 
 #[derive(Clone)]
 pub struct GrpcCredentialVerificationStarter {
     client: FlowServiceClient<Channel>,
+    service_token: String,
 }
 
 impl GrpcCredentialVerificationStarter {
     #[must_use]
-    pub fn new(client: FlowServiceClient<Channel>) -> Self {
-        Self { client }
+    pub fn new(client: FlowServiceClient<Channel>, service_token: impl Into<String>) -> Self {
+        Self {
+            client,
+            service_token: service_token.into(),
+        }
     }
 }
 
@@ -104,7 +121,10 @@ impl CredentialVerificationStarter for GrpcCredentialVerificationStarter {
     ) -> Result<CredentialVerificationFlow, PortError> {
         let mut client = self.client.clone();
         let response = client
-            .start_verification(Request::new(credential_verification_request(request)))
+            .start_verification(service_request(
+                credential_verification_request(request),
+                &self.service_token,
+            )?)
             .await
             .map_err(|status| {
                 PortError::new(
@@ -155,6 +175,7 @@ pub fn credential_verification_flow(
 pub struct GrpcOrganizationProvisioning {
     client: OrganizationServiceClient<Channel>,
     default_organization_id: String,
+    service_token: String,
 }
 
 impl GrpcOrganizationProvisioning {
@@ -162,10 +183,12 @@ impl GrpcOrganizationProvisioning {
     pub fn new(
         client: OrganizationServiceClient<Channel>,
         default_organization_id: impl Into<String>,
+        service_token: impl Into<String>,
     ) -> Self {
         Self {
             client,
             default_organization_id: default_organization_id.into(),
+            service_token: service_token.into(),
         }
     }
 }
@@ -184,12 +207,15 @@ impl OrganizationProvisioning for GrpcOrganizationProvisioning {
         }
         let mut client = self.client.clone();
         match client
-            .add_member(Request::new(AddMemberRequest {
-                organization_id: self.default_organization_id.clone(),
-                user_id: user_id.into(),
-                email: email.into(),
-                role_ids: Vec::new(),
-            }))
+            .add_member(service_request(
+                AddMemberRequest {
+                    organization_id: self.default_organization_id.clone(),
+                    user_id: user_id.into(),
+                    email: email.into(),
+                    role_ids: Vec::new(),
+                },
+                &self.service_token,
+            )?)
             .await
         {
             Ok(_) => Ok(()),
@@ -213,10 +239,13 @@ impl OrganizationProvisioning for GrpcOrganizationProvisioning {
         }
         let mut client = self.client.clone();
         let member = match client
-            .get_member(Request::new(GetMemberRequest {
-                organization_id: self.default_organization_id.clone(),
-                user_id: user_id.into(),
-            }))
+            .get_member(service_request(
+                GetMemberRequest {
+                    organization_id: self.default_organization_id.clone(),
+                    user_id: user_id.into(),
+                },
+                &self.service_token,
+            )?)
             .await
         {
             Ok(response) => response.into_inner(),
@@ -232,9 +261,12 @@ impl OrganizationProvisioning for GrpcOrganizationProvisioning {
             return Ok(None);
         }
         let organization_name = client
-            .get_organization(Request::new(GetOrganizationRequest {
-                organization_id: member.organization_id.clone(),
-            }))
+            .get_organization(service_request(
+                GetOrganizationRequest {
+                    organization_id: member.organization_id.clone(),
+                },
+                &self.service_token,
+            )?)
             .await
             .ok()
             .map(tonic::Response::into_inner)
@@ -571,4 +603,48 @@ pub fn auth_event_message(event: &AuthEvent) -> Result<Message, PortError> {
 
 fn transport_error(code: &str, error: impl std::fmt::Display) -> PortError {
     PortError::new(code, error.to_string())
+}
+
+fn service_request<T>(body: T, service_token: &str) -> Result<Request<T>, PortError> {
+    let mut token = AsciiMetadataValue::try_from(service_token).map_err(|_| {
+        PortError::new(
+            "grpc_service_token_invalid",
+            "GRPC_SERVICE_TOKEN is not valid gRPC metadata",
+        )
+    })?;
+    token.set_sensitive(true);
+    let mut request = Request::new(body);
+    request.metadata_mut().insert(SERVICE_TOKEN_HEADER, token);
+    Ok(request)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{service_request, SERVICE_TOKEN_HEADER};
+
+    #[test]
+    fn service_requests_attach_the_configured_workload_token() {
+        let request = service_request((), &"g".repeat(32)).expect("service request");
+
+        assert_eq!(
+            request
+                .metadata()
+                .get(SERVICE_TOKEN_HEADER)
+                .expect("service token"),
+            "g".repeat(32).as_str()
+        );
+        assert!(request
+            .metadata()
+            .get(SERVICE_TOKEN_HEADER)
+            .expect("service token")
+            .is_sensitive());
+    }
+
+    #[test]
+    fn service_requests_reject_non_ascii_tokens() {
+        let invalid_token = format!("{}\n{}", "g".repeat(16), "g".repeat(16));
+        let error = service_request((), &invalid_token).expect_err("invalid token");
+
+        assert_eq!(error.code, "grpc_service_token_invalid");
+    }
 }

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
 
 use thiserror::Error;
+use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
 use mmf_messaging::OutboxDispatcherConfig;
@@ -45,6 +46,7 @@ pub struct AuthServiceConfig {
     pub flow_grpc_target: String,
     pub organization_grpc_target: String,
     pub event_stream_grpc_target: String,
+    pub grpc_service_token: String,
     pub default_organization_id: String,
     pub default_organization_slug: String,
     pub default_organization_name: String,
@@ -144,6 +146,9 @@ impl AuthServiceConfig {
             get("ES_GRPC_TARGET").unwrap_or("event-stream:9015"),
             allow_plaintext_grpc,
         )?;
+        let grpc_service_token = minimum_secret(get("GRPC_SERVICE_TOKEN"), "GRPC_SERVICE_TOKEN")?;
+        AsciiMetadataValue::try_from(grpc_service_token.as_str())
+            .map_err(|_| invalid("GRPC_SERVICE_TOKEN is not valid gRPC metadata"))?;
         let cookie_secure = boolean(get("COOKIE_SECURE"), true)?;
         let cookie = SessionCookieConfig {
             name: get("AUTH_SESSION_COOKIE_NAME")
@@ -277,6 +282,7 @@ impl AuthServiceConfig {
             flow_grpc_target,
             organization_grpc_target,
             event_stream_grpc_target,
+            grpc_service_token,
             default_organization_id: get("MARTY_ORG_ID")
                 .unwrap_or(&credential_login_organization_id)
                 .into(),

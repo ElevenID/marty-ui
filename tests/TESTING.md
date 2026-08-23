@@ -612,7 +612,7 @@ only and never reads secret values.
 
 The job starts the deterministic Marty browser wallet and fails unless:
 
-- the well-known configuration and response header advertise MIP `0.4.1`, and
+- the well-known configuration and response header advertise MIP `0.5.0`, and
   the body uses the canonical strict discovery schema with an
   `active_compliance_profiles` array and without removed `api_base_url`, endpoint
   maps, or authorization extensions;

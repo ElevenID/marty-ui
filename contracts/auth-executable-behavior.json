@@ -8,7 +8,8 @@
     "CREDENTIAL_LOGIN_POLICY_ID",
     "CREDENTIAL_LOGIN_ORGANIZATION_ID",
     "CREDENTIAL_LOGIN_ISSUER_DID",
-    "FLOW_WEBHOOK_SECRET"
+    "FLOW_WEBHOOK_SECRET",
+    "GRPC_SERVICE_TOKEN"
   ],
   "minimum_secret_bytes": 32,
   "listeners": {

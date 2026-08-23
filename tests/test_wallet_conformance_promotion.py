@@ -26,7 +26,7 @@ BETA_SOURCE_ID = "b" * 40
 MARTY_PROTOCOL_SHA = "c" * 40
 EVIDENCE_TOOLING_SHA = "d" * 40
 MARTY_CORE_SHA = "3" * 40
-RELEASE_VERSION = "mip-0.4.1-beta-test"
+RELEASE_VERSION = "mip-0.5.0-beta-test"
 BETA_RUN_ID = "123456"
 STACK_RELEASE_RUN_ID = "123455"
 PROMOTION_RUN_ID = "123457"
@@ -47,7 +47,7 @@ def _wallet_evidence(requirements: dict, stack_manifest_sha256: str) -> dict:
     return {
         "schema_version": requirements["schema_version"],
         "release_version": RELEASE_VERSION,
-        "mip_version": "0.4.1",
+        "mip_version": "0.5.0",
         "beta_origin": BETA_ORIGIN,
         "stack_release_run_id": STACK_RELEASE_RUN_ID,
         "marty_ui_release_sha": UI_RELEASE_SHA,
@@ -197,7 +197,7 @@ def _beta_evidence(root: Path, stack_manifest_sha256: str) -> None:
             "marty_protocol_sha": MARTY_PROTOCOL_SHA,
             "evidence_tooling_sha": EVIDENCE_TOOLING_SHA,
             "beta_origin": BETA_ORIGIN,
-            "mip_version": "0.4.1",
+            "mip_version": "0.5.0",
         },
     )
     _write_json(
@@ -674,7 +674,7 @@ def test_wallet_evidence_fails_closed(mutation, message: str) -> None:
             marty_protocol_sha=MARTY_PROTOCOL_SHA,
             evidence_tooling_sha=EVIDENCE_TOOLING_SHA,
             beta_origin=BETA_ORIGIN,
-            mip_version="0.4.1",
+            mip_version="0.5.0",
         )
 
 

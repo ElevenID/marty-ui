@@ -1,7 +1,7 @@
 {
   "schema_version": 3,
   "release_version": "REPLACE_WITH_RELEASE_VERSION",
-  "mip_version": "0.4.1",
+  "mip_version": "0.5.0",
   "beta_origin": "https://beta.elevenidllc.com",
   "stack_release_run_id": "REPLACE_WITH_WORKFLOW_RUN_ID",
   "marty_ui_release_sha": "REPLACE_WITH_40_CHARACTER_RELEASE_COMMIT_SHA",

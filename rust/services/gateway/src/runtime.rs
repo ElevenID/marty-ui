@@ -821,10 +821,12 @@ async fn proxy_handler(
         .get::<TrustedIdentityContext>()
         .cloned()
         .unwrap_or_default();
-    let authenticated_organization_id = request
+    let session_organization_id = request
         .extensions()
         .get::<GatewayIdentity>()
         .and_then(|identity| identity.session_organization_id.clone());
+    let api_key_organization_id =
+        api_key_organization_id(&identity, session_organization_id.as_deref());
     let peer_ip = request
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
@@ -842,7 +844,7 @@ async fn proxy_handler(
     let public_path = parts.uri.path().to_owned();
     let upstream_path = match organization_api_key_upstream_path(
         &public_path,
-        authenticated_organization_id.as_deref(),
+        api_key_organization_id.as_deref(),
     ) {
         Ok(path) => path,
         Err((status, detail)) => return detail_response(status, detail),
@@ -929,7 +931,7 @@ async fn proxy_handler(
         };
         if let Some(canonical) = canonical_body.as_deref() {
             if didcomm_contract::request_organization(canonical).as_deref()
-                != authenticated_organization_id.as_deref()
+                != session_organization_id.as_deref()
             {
                 return detail_response(403, "Request is not authorized for this organization");
             }
@@ -3493,6 +3495,16 @@ fn base_trusted_identity(identity: &GatewayIdentity) -> TrustedIdentityContext {
     }
 }
 
+fn api_key_organization_id(
+    trusted_identity: &TrustedIdentityContext,
+    session_organization_id: Option<&str>,
+) -> Option<String> {
+    trusted_identity
+        .organization_id
+        .clone()
+        .or_else(|| session_organization_id.map(str::to_owned))
+}
+
 fn request_headers(headers: &axum::http::HeaderMap) -> BTreeMap<String, String> {
     headers
         .iter()
@@ -5121,6 +5133,41 @@ mod tests {
         );
         assert!(organization_api_key_upstream_path("/v1/api-keys", None).is_err());
         assert!(organization_api_key_upstream_path("/v1/api-keys/a/b", Some("org-1")).is_err());
+    }
+
+    #[test]
+    fn legacy_api_key_routes_prefer_the_tenant_authorized_organization() {
+        let trusted_identity = TrustedIdentityContext {
+            organization_id: Some("authorized-org".into()),
+            ..TrustedIdentityContext::default()
+        };
+        let session_identity = GatewayIdentity {
+            source: AuthenticationSource::Session,
+            user_id: "user-1".into(),
+            user_email: None,
+            user_domain: None,
+            session_organization_id: Some("stale-session-org".into()),
+            api_key_id: None,
+            api_key_prefix: None,
+            api_key_scopes: Vec::new(),
+        };
+
+        assert_eq!(
+            api_key_organization_id(
+                &trusted_identity,
+                session_identity.session_organization_id.as_deref(),
+            )
+            .as_deref(),
+            Some("authorized-org")
+        );
+        assert_eq!(
+            api_key_organization_id(
+                &TrustedIdentityContext::default(),
+                session_identity.session_organization_id.as_deref(),
+            )
+            .as_deref(),
+            Some("stale-session-org")
+        );
     }
 
     #[test]

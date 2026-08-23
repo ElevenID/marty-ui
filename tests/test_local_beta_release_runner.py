@@ -258,10 +258,12 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
     assert "SERVICE_NAME: signing-keys" in base
     assert "ENVIRONMENT: beta" in beta
     assert "GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set" in beta
+    assert "GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production" in base
+    assert "PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set for beta" in beta
     assert beta.count("<<: *beta-grpc-service-auth") == 17
     assert "-TunnelEnvFile" in deploy and "-GeneratedEnvFile" in deploy
-    assert 'mip_version -ne "0.4.1"' in deploy
-    assert 'mip_version = "0.4.1"' in deploy
+    assert 'mip_version -ne "0.5.0"' in deploy
+    assert 'mip_version = "0.5.0"' in deploy
     assert "name: elevenid-beta" in beta
     assert "name: elevenid-beta-network" in beta
     assert "container_name:" not in base
