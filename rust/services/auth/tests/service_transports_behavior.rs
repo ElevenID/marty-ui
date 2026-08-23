@@ -4,8 +4,9 @@ use async_trait::async_trait;
 use chrono::{TimeZone as _, Utc};
 use marty_auth::{
     auth_event_message, credential_verification_flow, credential_verification_request,
-    domain_event, AuthEvent, AuthEventPublisher, AuthGrpcChannelFactories, AuthenticatedUser,
-    CanvasApplicantProfileProvisioner, MmfApplicantProfileProvisioner, MmfAuthEventPublisher,
+    domain_event, ApplicantProvisioningStore, ApplicantUpsert, AuthEvent, AuthEventPublisher,
+    AuthGrpcChannelFactories, AuthenticatedUser, CanvasApplicantProfileProvisioner,
+    MmfApplicantProfileProvisioner, MmfApplicantProvisioningStore, MmfAuthEventPublisher,
     StartCredentialVerification, UserType,
 };
 use mmf_messaging::{
@@ -90,7 +91,7 @@ impl OutboundHttpClient for HttpStub {
         Ok(OutboundHttpResponse {
             status: 200,
             headers: BTreeMap::new(),
-            body: br#"{"id":"applicant-1"}"#.to_vec(),
+            body: br#"{"id":"applicant-1","user_id":"oidc-1","email":"alice@example.com","given_name":"Alice","family_name":"Example","status":"DRAFT","application_data":{"preserved":"yes"},"created_at":"2026-08-22T00:00:00Z","updated_at":"2026-08-22T01:00:00Z"}"#.to_vec(),
         })
     }
 }
@@ -113,11 +114,52 @@ async fn applicant_profile_transport_preserves_headers_body_and_response_bound()
         assert!(request.headers.contains_key(header.as_str().unwrap()));
     }
     let body: Value = serde_json::from_slice(request.body.as_deref().unwrap()).unwrap();
-    assert_eq!(body["organization_id"], "org-1");
+    assert!(body.get("organization_id").is_none());
     assert_eq!(body["email"], "alice@example.com");
     assert!(
         MmfApplicantProfileProvisioner::new(client, "http://user:password@applicant:8006").is_err()
     );
+}
+
+#[tokio::test]
+async fn jit_applicant_transport_is_fail_closed_and_preserves_profile_state() {
+    let client = Arc::new(HttpStub::default());
+    let profiles =
+        MmfApplicantProfileProvisioner::new(client.clone(), "http://applicant:8006").unwrap();
+    let store = MmfApplicantProvisioningStore::new(profiles, "org-1").unwrap();
+    let now = Utc.with_ymd_and_hms(2026, 8, 22, 1, 0, 0).unwrap();
+    let profile = store
+        .upsert(&ApplicantUpsert {
+            new_id: "ignored-by-owner".into(),
+            account_id: "oidc-1".into(),
+            email: "alice@example.com".into(),
+            given_names: Some("Alice".into()),
+            surname: Some("Example".into()),
+            fallback_given_names: "Unknown".into(),
+            fallback_surname: "Unknown".into(),
+            date_of_birth: now.date_naive(),
+            nationality: "UNK".into(),
+            extra_data_patch: serde_json::json!({"last_login_at": now.to_rfc3339()}),
+            now,
+        })
+        .await
+        .unwrap();
+    assert_eq!(profile.id, "applicant-1");
+    assert_eq!(profile.account_id.as_deref(), Some("oidc-1"));
+    assert_eq!(profile.given_names, "Alice");
+    assert_eq!(profile.extra_data["preserved"], "yes");
+    let request = client.request.lock().await.clone().unwrap();
+    let body: Value = serde_json::from_slice(request.body.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        body["vetting_data_patch"]["last_login_at"],
+        now.to_rfc3339()
+    );
+    assert_eq!(request.headers["x-user-id"], "oidc-1");
+    assert!(MmfApplicantProvisioningStore::new(
+        MmfApplicantProfileProvisioner::new(client, "http://applicant:8006").unwrap(),
+        ""
+    )
+    .is_err());
 }
 
 #[tokio::test]

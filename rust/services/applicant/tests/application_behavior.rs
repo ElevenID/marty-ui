@@ -183,6 +183,72 @@ async fn draft(service: &ApplicantService) -> Application {
 }
 
 #[tokio::test]
+async fn profile_upsert_tracks_subject_and_email_without_split_identity_loss() {
+    let (service, _, _, _, _) = service();
+    let now = Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap();
+    let created = service
+        .upsert_profile(
+            &identity(),
+            "ada@example.com",
+            Some("Ada".into()),
+            Some("Lovelace".into()),
+            None,
+            now,
+        )
+        .await
+        .unwrap();
+    let renamed_email = service
+        .upsert_profile(&identity(), "ada.new@example.com", None, None, None, now)
+        .await
+        .unwrap();
+    assert_eq!(renamed_email.id, created.id);
+    assert_eq!(renamed_email.email, "ada.new@example.com");
+    assert_eq!(renamed_email.given_name.as_deref(), Some("Ada"));
+
+    let other_identity = Identity {
+        user_id: "user-2".into(),
+        organization_id: "holder-org".into(),
+    };
+    service
+        .upsert_profile(
+            &other_identity,
+            "grace@example.com",
+            Some("Grace".into()),
+            None,
+            None,
+            now,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        service
+            .upsert_profile(&identity(), "grace@example.com", None, None, None, now,)
+            .await,
+        Err(ServiceError::ApplicantIdentityConflict)
+    ));
+}
+
+#[tokio::test]
+async fn profile_vetting_patch_merges_without_erasing_owned_data() {
+    let (service, _, _, _, _) = service();
+    let now = Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap();
+    let created = service
+        .upsert_profile(&identity(), "ada@example.com", None, None, None, now)
+        .await
+        .unwrap();
+    service
+        .set_profile_vetting_data(&created.id, json!({"preserved": true}), now)
+        .await
+        .unwrap();
+    let patched = service
+        .patch_profile_vetting_data(&created.id, &json!({"last_login_at": "now"}), now)
+        .await
+        .unwrap();
+    assert_eq!(patched.vetting_data["preserved"], true);
+    assert_eq!(patched.vetting_data["last_login_at"], "now");
+}
+
+#[tokio::test]
 async fn creation_is_profile_bound_duplicate_safe_and_submission_creates_checks() {
     let (service, _, _, _, _) = service();
     let application = draft(&service).await;

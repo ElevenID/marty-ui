@@ -1319,19 +1319,22 @@ bounded transport and container URL normalization. Thirty-three Rust
 behavioral tests, the focused Python oracle suites, formatting and strict
 Clippy pass.
 
-Commit `c281dec2` ports Auth persistence. Auth now owns a non-destructive,
-advisory-lock-protected schema migration and strict owned/shared schema
-validation; the shared `public.applicants` table remains externally owned.
-The PostgreSQL repository serializes both applicant natural keys, fails closed
-when account and email identify different records, preserves existing names
-when later claims are incomplete, merges JIT metadata, and writes each
+Commit `c281dec2` ports Auth persistence. Auth owns a non-destructive,
+advisory-lock-protected schema migration for audit logs and session history.
+The beta deployment gate subsequently exposed that its original JIT adapter
+also depended on an alleged externally owned `public.applicants` table that no
+service or migration actually owned. That dependency is removed: canonical
+Applicant-service profile persistence now owns JIT identity, serializes access
+inside its durable store, keys profiles by tenant plus OIDC subject or email,
+fails closed when those keys identify different records, preserves existing
+names on incomplete later claims, and merges JIT vetting metadata. Auth reaches
+that owner through the bounded shared MMF HTTP transport and fails closed at
+the JIT boundary. Its PostgreSQL repository now only writes each
 authentication/logout audit pair with its session-history mutation in one
-transaction. Audit and session-history query behavior remains available. The
-language-neutral persistence contract and optional
-`AUTH_POSTGRES_TEST_URL` round trip cover migration idempotency, JIT updates,
-the four event families and revocation history. No configured test database is
-available locally, so the live gate compiled and skipped without claiming
-external acceptance.
+transaction; audit and session-history query behavior remains available. The
+language-neutral persistence and transport contracts cover owned-schema
+migration idempotency, JIT updates, the four event families, and revocation
+history.
 
 Commit `adf28056` ports the Canvas learner-identity and credential callback
 state kernels. The callback is bound to the canonical MMF event signature,

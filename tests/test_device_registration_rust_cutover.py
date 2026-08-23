@@ -48,3 +48,13 @@ def test_behavior_contract_and_native_crate_are_owned() -> None:
     assert 'name = "marty-device-registration"' in manifest
     workspace = text("rust/Cargo.toml")
     assert '"services/device-registration"' in workspace
+
+
+def test_beta_runtime_uses_authenticated_dedicated_redis_database() -> None:
+    compose = text("docker-compose.beta.yml")
+    device = compose.split("  device-registration:\n", 1)[1].split("\n  event-stream:\n", 1)[0]
+    assert "ENVIRONMENT: beta" in device
+    assert (
+        "REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/5"
+        in device
+    )

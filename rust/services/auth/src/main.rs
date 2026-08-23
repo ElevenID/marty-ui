@@ -11,8 +11,8 @@ use marty_auth::{
     CredentialLoginHttpApplication, CredentialLoginStartConfig, CredentialLoginStateStore,
     ExchangedTokenValidator, HttpCanvasExperienceSessionProvider, JitProvisioningConfig,
     JitUserProvisioner, KeycloakAdminAdapter, MmfApplicantProfileProvisioner,
-    MmfAuthOutboxPublisher, PkceStateRepository, PostgresAuthRepository,
-    RustCredentialLoginPageRenderer, SessionRepository, UserProvisioner,
+    MmfApplicantProvisioningStore, MmfAuthOutboxPublisher, PkceStateRepository,
+    PostgresAuthRepository, RustCredentialLoginPageRenderer, SessionRepository, UserProvisioner,
 };
 use mmf_messaging::{run_outbox_dispatcher, MessageTransport};
 use tokio::{net::TcpListener, sync::watch};
@@ -157,13 +157,21 @@ fn assemble_applications(
     let sessions: Arc<dyn SessionRepository> = cache_repository.clone();
     let pkce_states: Arc<dyn PkceStateRepository> = cache_repository;
     let postgres = Arc::new(PostgresAuthRepository::new(connections.pool.clone()));
+    let applicant_profile = Arc::new(MmfApplicantProfileProvisioner::new(
+        connections.outbound_http.clone(),
+        config.applicant_service_url.clone(),
+    )?);
+    let applicants = Arc::new(MmfApplicantProvisioningStore::new(
+        applicant_profile.as_ref().clone(),
+        config.default_organization_id.clone(),
+    )?);
     let organizations = Arc::new(
         connections
             .grpc_clients
             .organization_provisioning(config.default_organization_id.clone()),
     );
     let provisioner = Arc::new(JitUserProvisioner::new(
-        postgres.clone(),
+        applicants,
         organizations,
         JitProvisioningConfig {
             default_organization_id: config.default_organization_id.clone(),
@@ -192,10 +200,6 @@ fn assemble_applications(
     let canvas_provider = Arc::new(HttpCanvasExperienceSessionProvider::new(
         connections.outbound_http.clone(),
         &config.issuance_service_url,
-    )?);
-    let applicant_profile = Arc::new(MmfApplicantProfileProvisioner::new(
-        connections.outbound_http.clone(),
-        config.applicant_service_url.clone(),
     )?);
     let canvas = Arc::new(CanvasLtiApplication::new(
         canvas_provider,

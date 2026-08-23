@@ -464,13 +464,22 @@ impl ApplicantService {
     ) -> Result<Applicant, ServiceError> {
         identity.validate()?;
         let mut store = self.store.write().await;
-        if let Some(existing) = store
-            .applicants
-            .iter_mut()
-            .find(|item| item.organization_id == identity.organization_id && item.email == email)
-        {
+        let subject_index = store.applicants.iter().position(|item| {
+            item.organization_id == identity.organization_id
+                && (item.user_id.as_deref() == Some(identity.user_id.as_str())
+                    || item.oidc_subject.as_deref() == Some(identity.user_id.as_str()))
+        });
+        let email_index = store.applicants.iter().position(|item| {
+            item.organization_id == identity.organization_id && item.email == email
+        });
+        if subject_index.is_some() && email_index.is_some() && subject_index != email_index {
+            return Err(ServiceError::ApplicantIdentityConflict);
+        }
+        if let Some(index) = subject_index.or(email_index) {
+            let existing = &mut store.applicants[index];
             existing.user_id = Some(identity.user_id.clone());
             existing.oidc_subject = Some(identity.user_id.clone());
+            existing.email = email.into();
             if given_name.is_some() {
                 existing.given_name = given_name;
             }
@@ -492,6 +501,31 @@ impl ApplicantService {
         applicant.family_name = family_name;
         applicant.phone = phone;
         store.save_applicant(applicant.clone());
+        self.persistence.persist(&store)?;
+        Ok(applicant)
+    }
+
+    pub async fn patch_profile_vetting_data(
+        &self,
+        applicant_id: &str,
+        patch: &Value,
+        now: DateTime<Utc>,
+    ) -> Result<Applicant, ServiceError> {
+        let mut store = self.store.write().await;
+        let applicant = store
+            .applicants
+            .iter_mut()
+            .find(|applicant| applicant.id == applicant_id)
+            .ok_or(ServiceError::ApplicantNotFound)?;
+        if let (Some(current), Some(patch)) =
+            (applicant.vetting_data.as_object_mut(), patch.as_object())
+        {
+            for (key, value) in patch {
+                current.insert(key.clone(), value.clone());
+            }
+        }
+        applicant.updated_at = now;
+        let applicant = applicant.clone();
         self.persistence.persist(&store)?;
         Ok(applicant)
     }
@@ -1486,6 +1520,8 @@ pub enum ServiceError {
     DuplicateApplication(Option<String>),
     #[error("applicant not found")]
     ApplicantNotFound,
+    #[error("OIDC subject and email resolve to different applicant profiles")]
+    ApplicantIdentityConflict,
     #[error("application not found")]
     ApplicationNotFound,
     #[error("check not found")]
