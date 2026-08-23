@@ -79,6 +79,32 @@
       }
     },
     {
+      "name":"trust_profile_create_accepts_console_wizard_payload",
+      "method":"POST",
+      "path":"/v1/trust-profiles",
+      "input":{
+        "organization_id":"org-1","name":"Audit Trust Profile","description":"Trust profile created during beta UI audit.",
+        "profile_type":"CUSTOM","compliance_status":"SETUP_REQUIRED","supported_formats":["VC_JWT","SD_JWT_VC","MDOC"],
+        "trust_sources":[],
+        "validation_rules":{"allowed_algorithms":["ES256","ES384","ES512","EdDSA"],"min_key_size_rsa":2048,"min_key_size_ec":256,"require_key_usage":true,"max_chain_depth":5,"allow_self_signed":false},
+        "allowed_algorithms":["ES256","ES384","ES512","EdDSA"],"min_key_size_rsa":2048,"min_key_size_ec":256,"require_key_usage":true,"max_chain_depth":5,"allow_self_signed":false,
+        "revocation_policy":{"check_mode":"HARD_FAIL"},
+        "time_policy":{"clock_skew_seconds":300,"require_freshness":false,"freshness_window_seconds":86400},
+        "system_issuer_overrides":{},"compatible_compliance_codes":[],"auto_generated":false
+      },
+      "expected":{
+        "organization_id":"org-1","name":"Audit Trust Profile","description":"Trust profile created during beta UI audit.",
+        "profile_type":"CUSTOM","compliance_status":"SETUP_REQUIRED","supported_formats":["VC_JWT","SD_JWT_VC","MDOC"],
+        "trust_sources":[],
+        "validation_rules":{"allowed_algorithms":["ES256","ES384","ES512","EdDSA"],"min_key_size_rsa":2048,"min_key_size_ec":256,"require_key_usage":true,"max_chain_depth":5,"allow_self_signed":false},
+        "allowed_algorithms":["ES256","ES384","ES512","EdDSA"],"min_key_size_rsa":2048,"min_key_size_ec":256,"require_key_usage":true,"max_chain_depth":5,"allow_self_signed":false,
+        "revocation_policy":{"check_mode":"HARD_FAIL"},"revocation_profile_id":null,
+        "time_policy":{"clock_skew_seconds":300,"require_freshness":false,"freshness_window_seconds":86400},
+        "allowed_issuers":null,"denied_issuers":null,
+        "system_issuer_overrides":{},"compatible_compliance_codes":[],"verification_policy_set_id":null,"auto_generated":false
+      }
+    },
+    {
       "name":"trust_profile_partial_update",
       "method":"PATCH",
       "path":"/v1/trust-profiles/40000000-0000-4000-8000-000000000001",

@@ -945,12 +945,13 @@ async fn proxy_handler(
             }
         };
     }
-    gateway_request.body = canonical_body.or_else(|| (!body.is_empty()).then(|| body.to_vec()));
+    gateway_request.body = (!body.is_empty()).then(|| body.to_vec());
     gateway_request.client_ip = peer_ip;
     if let Some(request_id) = gateway_request.header("x-request-id") {
         gateway_request.request_id = request_id.to_owned();
     }
-    let overrides = proxy_overrides(&state, &upstream_path, &identity);
+    let mut overrides = proxy_overrides(&state, &upstream_path, &identity);
+    overrides.body = canonical_body;
     match state
         .proxy
         .execute(gateway_request, &identity, &overrides)
@@ -4156,13 +4157,14 @@ mod tests {
             session_id: &str,
         ) -> Result<Option<SessionIdentity>, SecurityError> {
             let organization_id = match session_id {
-                "valid" => "org-1",
-                "valid-uuid" => "11111111-1111-1111-1111-111111111111",
+                "valid" => Some("org-1"),
+                "valid-uuid" => Some("11111111-1111-1111-1111-111111111111"),
+                "valid-no-org" => None,
                 _ => return Ok(None),
             };
             Ok(Some(SessionIdentity {
                 user_id: "user-1".into(),
-                organization_id: Some(organization_id.into()),
+                organization_id: organization_id.map(str::to_owned),
                 ..SessionIdentity::default()
             }))
         }
@@ -4212,6 +4214,9 @@ mod tests {
                     "deployment-profile:view".into(),
                     "deployment-profile:create".into(),
                     "deployment-profile:edit".into(),
+                    "api-key:view".into(),
+                    "api-key:create".into(),
+                    "api-key:revoke".into(),
                     "notification:view".into(),
                 ]),
                 is_owner: false,
@@ -4343,6 +4348,11 @@ mod tests {
                     request.query.get("organization_id"),
                     Some(&vec!["11111111-1111-1111-1111-111111111111".into()])
                 );
+            }
+            if request.path == "/v1/organizations/org%2D1/api-keys" {
+                assert_eq!(instance.service_name, "organizations");
+                assert_eq!(request.header("x-user-id"), Some("user-1"));
+                assert_eq!(request.header("x-organization-id"), Some("org-1"));
             }
             let body = match request.path.as_str() {
                 path if path.contains("presentation-policies") && path.ends_with("/evaluate") => {
@@ -4655,6 +4665,7 @@ mod tests {
                     }]))
                     .expect("template list")
                 }
+                "/v1/organizations/org%2D1/api-keys" => b"[]".to_vec(),
                 "/v1/organizations" => {
                     if request.method == HttpMethod::Get && request.query.contains_key("limit") {
                         return Ok(GatewayResponse {
@@ -4721,6 +4732,7 @@ mod tests {
                     .expect("issuer entity response")
                 }
                 "/v1/trust-profiles" if request.method == HttpMethod::Post => {
+                    assert_eq!(request.header("content-length"), None);
                     let body: Value = serde_json::from_slice(
                         request.body.as_deref().expect("trust profile body"),
                     )
@@ -5168,6 +5180,25 @@ mod tests {
             .as_deref(),
             Some("stale-session-org")
         );
+    }
+
+    #[tokio::test]
+    async fn legacy_api_key_routes_accept_an_authorized_query_organization_without_session_scope() {
+        let response = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/api-keys?organization_id=org-1")
+                    .header("cookie", "sessionId=valid-no-org")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+            .await
+            .expect("body");
+        assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
     }
 
     #[test]
@@ -5823,6 +5854,7 @@ mod tests {
                     .uri("/v1/trust-profiles")
                     .header("cookie", "sessionId=valid")
                     .header("content-type", "application/json")
+                    .header("content-length", "999")
                     .body(Body::from(
                         br#"{"organization_id":"org-1","name":"Registry profile","trust_sources":[{"source_type":"trust_list","url":"https://registry.example/sync","registry_sync":{"protocol":"MARTY_TRUST_REGISTRY_SYNC_V1","refresh_interval_hours":24}}],"revocation_policy":{},"time_policy":{"require_freshness":true,"freshness_window_seconds":21600}}"#.as_slice(),
                     ))
