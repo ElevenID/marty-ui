@@ -58,13 +58,13 @@ def test_compose_preserves_development_and_beta_features() -> None:
     assert "auth_workload_client_cert" in beta
     assert "applicant_workload_client_cert" in beta
     assert "pp_workload_server_cert" in beta
-    assert "SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017" in flow_base
+    assert "SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal" in flow_base
 
     selfhost = text("docker-compose.selfhost.prod.yml")
     flow_selfhost = selfhost.split("\n  flow:\n", maxsplit=1)[1].split(
         "\n  verification:\n", maxsplit=1
     )[0]
-    assert "SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017" in flow_selfhost
+    assert "SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal" in flow_selfhost
 
 
 def test_deleted_python_flow_cannot_reenter_ownership_inventory() -> None:

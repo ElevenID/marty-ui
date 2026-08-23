@@ -300,19 +300,24 @@ pub struct HttpSigningProvider {
 
 impl HttpSigningProvider {
     pub fn new(base_url: &str, api_key: &str) -> Result<Self, FlowProviderError> {
+        let envelopes = BoundedHttpClient::new(
+            base_url,
+            api_key,
+            "flow_key_envelope",
+            Duration::from_secs(10),
+        )?;
+        let compatibility_url = envelopes
+            .base_url
+            .join("compat/")
+            .map_err(|_| invalid_config("signing_identity"))?;
         Ok(Self {
             signing: BoundedHttpClient::new(
-                base_url,
+                compatibility_url.as_str(),
                 api_key,
                 "signing_identity",
                 Duration::from_secs(10),
             )?,
-            envelopes: BoundedHttpClient::new(
-                base_url,
-                api_key,
-                "flow_key_envelope",
-                Duration::from_secs(10),
-            )?,
+            envelopes,
         })
     }
 
@@ -633,7 +638,16 @@ mod tests {
                 .is_err()
         );
         assert!(HttpSigningProvider::new("https://example.com/internal/", "short").is_err());
-        assert!(HttpSigningProvider::new("https://example.com/internal/", &"a".repeat(32)).is_ok());
+        let signing =
+            HttpSigningProvider::new("https://example.com/internal/", &"a".repeat(32)).unwrap();
+        assert_eq!(
+            signing.signing.base_url.as_str(),
+            "https://example.com/internal/compat/"
+        );
+        assert_eq!(
+            signing.envelopes.base_url.as_str(),
+            "https://example.com/internal/"
+        );
         let client = BoundedHttpClient::new(
             "https://example.com/internal/signing-keys",
             &"a".repeat(32),
