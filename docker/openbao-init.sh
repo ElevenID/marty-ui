@@ -40,6 +40,14 @@ bao write -address="${BAO_ADDR}" -f transit/keys/cred-issuer-marty-es384 \
 bao write -address="${BAO_ADDR}" -f transit/keys/cred-issuer-marty-rs256 \
     type=rsa-2048 2>/dev/null || echo "  cred-issuer-marty-rs256 already exists"
 
+# Purpose-bound RSA key for Canvas LTI tool assertions
+bao write -address="${BAO_ADDR}" -f transit/keys/lti-tool-marty-rs256 \
+    type=rsa-2048 2>/dev/null || echo "  lti-tool-marty-rs256 already exists"
+
+# Purpose-bound ECDSA key for signed OID4VP authorization requests
+bao write -address="${BAO_ADDR}" -f transit/keys/oid4vp-verifier-marty-es256 \
+    type=ecdsa-p256 2>/dev/null || echo "  oid4vp-verifier-marty-es256 already exists"
+
 # EdDSA key — for DID-based credential issuance
 bao write -address="${BAO_ADDR}" -f transit/keys/cred-issuer-marty-eddsa \
     type=ed25519 2>/dev/null || echo "  cred-issuer-marty-eddsa already exists"
@@ -127,6 +135,27 @@ path "transit/decrypt/cred-*" {
   capabilities = ["create", "update"]
 }
 path "transit/keys/cred-*" {
+  capabilities = ["read"]
+}
+
+# Purpose-bound protocol keys are deliberately outside the credential-key
+# wildcard so a caller cannot substitute them across signing domains.
+path "transit/sign/lti-tool-marty-rs256" {
+  capabilities = ["create", "update"]
+}
+path "transit/verify/lti-tool-marty-rs256" {
+  capabilities = ["create", "update"]
+}
+path "transit/keys/lti-tool-marty-rs256" {
+  capabilities = ["read"]
+}
+path "transit/sign/oid4vp-verifier-marty-es256" {
+  capabilities = ["create", "update"]
+}
+path "transit/verify/oid4vp-verifier-marty-es256" {
+  capabilities = ["create", "update"]
+}
+path "transit/keys/oid4vp-verifier-marty-es256" {
   capabilities = ["read"]
 }
 
