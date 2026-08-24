@@ -21,7 +21,8 @@ use crate::{
     RequestTransport, RequestUriMethod, SiopSubmissionOptions, SiopSubmitRequest,
     StartSiopFlowRequest, StartVerificationFlowRequest, VerificationRequestMethod,
     VerificationRequestRetrievalOptions, VerificationRequestTransport, VerificationResponseType,
-    VerificationStartOptions, VerificationSubmissionInput, VerificationSubmissionOptions,
+    VerificationStartContext, VerificationStartOptions, VerificationSubmissionInput,
+    VerificationSubmissionOptions,
 };
 
 const DC_API_PROTOCOL: &str = "openid4vp-v1-signed";
@@ -213,11 +214,13 @@ async fn persist_verification_start(
         &state.providers,
         &state.verification.callback_destinations,
         request,
-        &state.public_base_url,
-        state.verification.allow_http_loopback,
         &state.verification.verification_start,
-        principal_id,
-        Utc::now(),
+        VerificationStartContext {
+            public_base_url: &state.public_base_url,
+            allow_http_loopback: state.verification.allow_http_loopback,
+            principal_id,
+            now: Utc::now(),
+        },
     )
     .await?;
     if !state

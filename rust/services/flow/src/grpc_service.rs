@@ -41,7 +41,7 @@ use crate::{
     FlowProviderRegistry, FlowRecordError, FlowServiceConfig, Oid4vpProfile,
     PostgresFlowRepository, RedisApplicationEventReplayStore, RepositoryError, RequestTransport,
     RequestUriMethod, StartFlowRequest, StartVerificationFlowRequest, VerificationResponseType,
-    VerificationStartOptions,
+    VerificationStartContext, VerificationStartOptions,
 };
 
 const USER_ID_METADATA: &str = "x-user-id";
@@ -550,11 +550,13 @@ impl FlowService for FlowGrpcService {
                         .map_err(|_| Status::invalid_argument("expiry_minutes is invalid"))?
                 },
             },
-            &self.public_base_url,
-            true,
             &self.verification,
-            &principal_id,
-            Utc::now(),
+            VerificationStartContext {
+                public_base_url: &self.public_base_url,
+                allow_http_loopback: true,
+                principal_id: &principal_id,
+                now: Utc::now(),
+            },
         )
         .await
         .map_err(verification_start_status)?;

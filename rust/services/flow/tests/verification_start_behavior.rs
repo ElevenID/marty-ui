@@ -11,7 +11,7 @@ use marty_flow::{
     PresentationEvaluationResult, PresentationPolicyProvider, PresentationPolicyReference,
     RequestTransport, RequestUriMethod, SigningIdentity, SigningIdentityProvider, SigningRequest,
     SigningResult, StartVerificationFlowRequest, VerificationResponseType,
-    VerificationStartOptions,
+    VerificationStartContext, VerificationStartOptions,
 };
 use mmf_push::WebhookDestinationRegistry;
 use serde::Deserialize;
@@ -366,11 +366,13 @@ async fn configured_identity_and_haip_gates_apply_before_persistence() {
         &providers("org-1"),
         &callbacks(),
         request(RequestTransport::RequestUri),
-        "https://verifier.example",
-        false,
         &options,
-        "user-1",
-        now(),
+        VerificationStartContext {
+            public_base_url: "https://verifier.example",
+            allow_http_loopback: false,
+            principal_id: "user-1",
+            now: now(),
+        },
     )
     .await
     .unwrap();
@@ -388,11 +390,13 @@ async fn configured_identity_and_haip_gates_apply_before_persistence() {
         &providers("org-1"),
         &callbacks(),
         haip,
-        "https://verifier.example",
-        false,
         &options,
-        "user-1",
-        now(),
+        VerificationStartContext {
+            public_base_url: "https://verifier.example",
+            allow_http_loopback: false,
+            principal_id: "user-1",
+            now: now(),
+        },
     )
     .await
     .unwrap_err()

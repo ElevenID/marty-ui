@@ -41,6 +41,14 @@ impl Default for VerificationStartOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerificationStartContext<'a> {
+    pub public_base_url: &'a str,
+    pub allow_http_loopback: bool,
+    pub principal_id: &'a str,
+    pub now: DateTime<Utc>,
+}
+
 #[derive(Debug, Error)]
 pub enum FlowVerificationStartError {
     #[error(transparent)]
@@ -88,11 +96,13 @@ pub async fn prepare_verification_start(
         providers,
         callback_destinations,
         request,
-        public_base_url,
-        allow_http_loopback,
         &options,
-        principal_id,
-        now,
+        VerificationStartContext {
+            public_base_url,
+            allow_http_loopback,
+            principal_id,
+            now,
+        },
     )
     .await
 }
@@ -101,12 +111,15 @@ pub async fn prepare_profiled_verification_start(
     providers: &FlowProviderRegistry,
     callback_destinations: &WebhookDestinationRegistry,
     request: StartVerificationFlowRequest,
-    public_base_url: &str,
-    allow_http_loopback: bool,
     options: &VerificationStartOptions,
-    principal_id: &str,
-    now: DateTime<Utc>,
+    context: VerificationStartContext<'_>,
 ) -> Result<PreparedVerificationStart, FlowVerificationStartError> {
+    let VerificationStartContext {
+        public_base_url,
+        allow_http_loopback,
+        principal_id,
+        now,
+    } = context;
     let principal_id = principal_id.trim();
     if principal_id.is_empty() {
         return Err(FlowVerificationStartError::PrincipalRequired);
