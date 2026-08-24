@@ -32,6 +32,7 @@ pub enum DeploymentEnvironment {
 #[serde(rename_all = "lowercase")]
 pub enum AuthMethod {
     #[default]
+    #[serde(rename = "api_key", alias = "apikey")]
     ApiKey,
     Oauth2,
     Mtls,

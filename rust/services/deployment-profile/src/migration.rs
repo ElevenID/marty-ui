@@ -2,7 +2,7 @@ use sqlx::PgPool;
 use thiserror::Error;
 
 const ADVISORY_LOCK: i64 = 801_020_260_821;
-const VERSION: &str = "deployment-profile-rust-v1";
+const VERSION: &str = "deployment-profile-rust-v2-api-auth-canonicalization";
 
 pub const DEPLOYMENT_PROFILE_SCHEMA: &str = r#"
 CREATE SCHEMA IF NOT EXISTS deployment_profile_service;
@@ -68,6 +68,15 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), DeploymentMigrationErro
            END IF;
          END $$;"
     ).execute(&mut *tx).await?;
+    // Rust's initial enum spelling emitted `apikey`; preserve reads of those
+    // records while converging persisted data on the language-neutral contract.
+    sqlx::query(
+        "UPDATE deployment_profile_service.deployment_profiles
+         SET api_auth=jsonb_set(api_auth, '{auth_method}', '\"api_key\"'::jsonb, false)
+         WHERE api_auth->>'auth_method'='apikey'",
+    )
+    .execute(&mut *tx)
+    .await?;
     seed_marty_login(&mut tx).await?;
     sqlx::query("INSERT INTO deployment_profile_service.native_migrations(version) VALUES($1) ON CONFLICT(version) DO NOTHING")
         .bind(VERSION).execute(&mut *tx).await?;
@@ -117,7 +126,12 @@ mod tests {
             assert!(DEPLOYMENT_PROFILE_SCHEMA.contains(field));
         }
         let source = include_str!("migration.rs");
+        assert_eq!(
+            VERSION,
+            "deployment-profile-rust-v2-api-auth-canonicalization"
+        );
         assert!(source.contains("50000000-0000-0000-0000-000000000040"));
+        assert!(source.contains("api_auth->>'auth_method'='apikey'"));
         assert!(!DEPLOYMENT_PROFILE_SCHEMA.contains("default_compliance_profile_id"));
     }
 }
