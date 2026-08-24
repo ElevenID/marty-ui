@@ -1463,6 +1463,12 @@ fn application_error(error: TrustProfileApplicationError) -> TrustProfileHttpErr
             bad_request("Revoked issuer cannot be reinstated; create a new IssuerEntity instead")
         }
         TrustProfileApplicationError::Domain(error) => unprocessable(error.to_string()),
+        TrustProfileApplicationError::IssuerKeyResolution(
+            crate::IssuerKeyResolutionError::Invalid,
+        ) => unprocessable("Issuer DID has no valid public assertion verification keys"),
+        TrustProfileApplicationError::IssuerKeyResolution(
+            crate::IssuerKeyResolutionError::Unavailable,
+        ) => unavailable("Issuer DID resolution is unavailable"),
         TrustProfileApplicationError::Repository(error) => repository_error(error),
     }
 }

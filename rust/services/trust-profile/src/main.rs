@@ -2,7 +2,7 @@ use std::{error::Error, sync::Arc, time::Duration};
 
 use marty_trust_profile::{
     bootstrap_system_catalog, run_migrations, trust_profile_router, MartyBootstrapConfig,
-    NativeTrustProfileControlPlane, NativeTrustRegistrySynchronizer,
+    NativeIssuerKeyResolver, NativeTrustProfileControlPlane, NativeTrustRegistrySynchronizer,
     PostgresTrustProfileRepository, TrustProfileApplication, TrustProfileDependency,
     TrustProfileHttpState, TrustProfileRepository, TrustProfileRuntime, TrustProfileServiceConfig,
     TrustRegistryScheduler,
@@ -56,10 +56,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )?);
     runtime.mark_healthy(TrustProfileDependency::ControlPlane)?;
     let repository: Arc<dyn TrustProfileRepository> = store;
-    let application = Arc::new(TrustProfileApplication::new(
-        Arc::clone(&repository),
-        control,
+    let issuer_key_resolver = Arc::new(NativeIssuerKeyResolver::new(
+        config.did_resolution_base_urls.clone(),
+        config.did_web_allowed_hosts.clone(),
     ));
+    runtime.mark_healthy(TrustProfileDependency::NativeDidResolver)?;
+    let application = Arc::new(
+        TrustProfileApplication::new(Arc::clone(&repository), control)
+            .with_issuer_key_resolver(issuer_key_resolver),
+    );
     let registry_synchronizer = Arc::new(NativeTrustRegistrySynchronizer::new(
         Arc::clone(&repository),
         config.dependency_timeout,

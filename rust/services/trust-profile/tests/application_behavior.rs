@@ -4,9 +4,10 @@ use async_trait::async_trait;
 use chrono::{Duration, TimeZone, Utc};
 use marty_trust_profile::{
     CascadeRevocationPolicy, Change, ComplianceStatus, CreateProfileInput, IssuerEntity,
-    IssuerEntityComplianceStatus, IssuerEntityPatch, IssuerEntityType,
-    MemoryTrustProfileRepository, OrganizationProfilePatch, OrganizationTrustProfile, ProfilePatch,
-    RegistryImportSource, RegistryImportType, RegistryImportedIssuer, RevocationPolicy, TimePolicy,
+    IssuerEntityComplianceStatus, IssuerEntityPatch, IssuerEntityType, IssuerKeyResolution,
+    IssuerKeyResolutionError, IssuerKeyResolver, MemoryTrustProfileRepository,
+    OrganizationProfilePatch, OrganizationTrustProfile, ProfilePatch, RegistryImportSource,
+    RegistryImportType, RegistryImportedIssuer, RevocationPolicy, TimePolicy,
     TrustAuthorizationError, TrustFramework, TrustProfile, TrustProfileApplication,
     TrustProfileApplicationError, TrustProfileControlPlane, TrustProfileIssuer,
     TrustProfileRepository, TrustProfileStatus, TrustProfileType, TrustRelationshipStatus,
@@ -27,6 +28,26 @@ impl TrustProfileControlPlane for AllowAll {
         _action: &'static str,
     ) -> Result<(), TrustAuthorizationError> {
         Ok(())
+    }
+}
+
+struct FixedIssuerKeyResolver;
+
+#[async_trait]
+impl IssuerKeyResolver for FixedIssuerKeyResolver {
+    async fn resolve(&self, _did: &str) -> Result<IssuerKeyResolution, IssuerKeyResolutionError> {
+        Ok(IssuerKeyResolution {
+            verification_keys: vec![json!({
+                "kty": "EC",
+                "crv": "P-256",
+                "x": "public-x",
+                "y": "public-y",
+                "kid": "issuer-key"
+            })],
+            source: "configured_internal_resolver".into(),
+            retrieved_at: "2026-08-21T00:00:00Z".into(),
+            content_sha256: "a".repeat(64),
+        })
     }
 }
 
@@ -113,6 +134,37 @@ fn harness() -> (Arc<MemoryTrustProfileRepository>, TrustProfileApplication) {
     let repository = Arc::new(MemoryTrustProfileRepository::default());
     let application = TrustProfileApplication::new(repository.clone(), Arc::new(AllowAll));
     (repository, application)
+}
+
+#[tokio::test]
+async fn did_issuer_creation_pins_native_assertion_keys_and_resolution_provenance() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let application = TrustProfileApplication::new(repository, Arc::new(AllowAll))
+        .with_issuer_key_resolver(Arc::new(FixedIssuerKeyResolver));
+
+    let created = application
+        .create_issuer_entity("user-a", issuer(Some("org-a"), false))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        created.metadata["verification_keys"],
+        json!([{
+            "kty": "EC",
+            "crv": "P-256",
+            "x": "public-x",
+            "y": "public-y",
+            "kid": "issuer-key"
+        }])
+    );
+    assert_eq!(
+        created.metadata["verification_key_resolution"]["source"],
+        "configured_internal_resolver"
+    );
+    assert_eq!(
+        created.metadata["verification_key_resolution"]["content_sha256"],
+        "a".repeat(64)
+    );
 }
 
 #[tokio::test]

@@ -465,6 +465,9 @@ services:
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       ORG_GRPC_TARGET: organization:9002
+      DID_RESOLUTION_BASE_URL: http://gateway:8000
+      DID_PUBLIC_FALLBACK_ENABLED: ${DID_PUBLIC_FALLBACK_ENABLED:-false}
+      DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
     secrets:
       - marty_db_password
       - grpc_service_token
