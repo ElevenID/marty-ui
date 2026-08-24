@@ -251,18 +251,31 @@ pub async fn prepare_verification_submission(
     let evaluation = match evaluation {
         Ok(evaluation) if !evaluation.result.trim().is_empty() => evaluation,
         Ok(_) => {
+            tracing::warn!(
+                flow_instance_id = %instance.id,
+                organization_id = %instance.organization_id,
+                presentation_policy_id = %policy_id,
+                "OID4VP policy evaluation returned no decision"
+            );
             return Ok(retryable_result(
                 &instance,
                 "Policy service returned no verification decision",
                 now,
-            ))
+            ));
         }
         Err(error) => {
+            tracing::warn!(
+                flow_instance_id = %instance.id,
+                organization_id = %instance.organization_id,
+                presentation_policy_id = %policy_id,
+                provider_error = %error,
+                "OID4VP policy evaluation failed"
+            );
             return Ok(retryable_result(
                 &instance,
                 &format!("Policy service unavailable: {error}"),
                 now,
-            ))
+            ));
         }
     };
     let authenticated = !evaluation.credential_results.is_empty()
@@ -430,7 +443,7 @@ fn authentication_failure_diagnostic(evaluation: &PresentationEvaluationResult) 
     })
 }
 
-fn sanitized_diagnostic_text(value: &str, maximum_characters: usize) -> String {
+pub(crate) fn sanitized_diagnostic_text(value: &str, maximum_characters: usize) -> String {
     value
         .chars()
         .take(maximum_characters)

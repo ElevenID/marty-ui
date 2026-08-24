@@ -24,10 +24,10 @@ use crate::{
         presentation_policy_service_client::PresentationPolicyServiceClient,
         EvaluatePresentationRequest, GetPolicyRequest,
     },
-    CredentialClaimReference, CredentialTemplateProvider, CredentialTemplateReference,
-    FlowProviderError, FlowServiceConfig, IssuanceInitiationRequest, IssuanceInitiationResult,
-    IssuanceProvider, PresentationEvaluationRequest, PresentationEvaluationResult,
-    PresentationPolicyProvider, PresentationPolicyReference,
+    sanitized_diagnostic_text, CredentialClaimReference, CredentialTemplateProvider,
+    CredentialTemplateReference, FlowProviderError, FlowServiceConfig, IssuanceInitiationRequest,
+    IssuanceInitiationResult, IssuanceProvider, PresentationEvaluationRequest,
+    PresentationEvaluationResult, PresentationPolicyProvider, PresentationPolicyReference,
 };
 
 const MAXIMUM_PROVIDER_JSON_BYTES: usize = 1024 * 1024;
@@ -439,7 +439,15 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                 }),
             )
             .await
-            .map_err(|status| provider_status("presentation_policy", &request.policy_id, status))?
+            .map_err(|status| {
+                tracing::warn!(
+                    presentation_policy_id = %request.policy_id,
+                    grpc_code = ?status.code(),
+                    grpc_detail = %sanitized_diagnostic_text(status.message(), 512),
+                    "Presentation Policy gRPC evaluation failed"
+                );
+                provider_status("presentation_policy", &request.policy_id, status)
+            })?
             .into_inner();
         if response.policy_id != request.policy_id || response.nonce != request.nonce {
             return Err(invalid_response(
