@@ -271,18 +271,19 @@ impl PresentationPolicyService for PresentationPolicyGrpcService {
         &self,
         request: Request<EvaluatePresentationMessage>,
     ) -> Result<Response<PolicyEvaluationResponse>, Status> {
-        if self.workload_security.is_some() {
+        let policy_id = parse_uuid(&request.get_ref().policy_id)?;
+        let policy = if self.workload_security.is_some() {
             self.authenticate_workload(&request, EVALUATE_PRESENTATION_METHOD)?;
+            self.application.get_for_internal_service(policy_id).await
         } else {
             self.authenticate(&request)?;
+            let principal = self.principal(&request)?;
+            self.application
+                .get_for_evaluation(&principal, policy_id)
+                .await
         }
-        let principal = self.principal(&request)?;
+        .map_err(application_status)?;
         let input = request.into_inner();
-        let policy = self
-            .application
-            .get_for_evaluation(&principal, parse_uuid(&input.policy_id)?)
-            .await
-            .map_err(application_status)?;
         let context = if input.context_json.trim().is_empty() {
             Map::new()
         } else {
