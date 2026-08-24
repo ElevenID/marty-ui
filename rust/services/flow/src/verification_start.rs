@@ -41,6 +41,14 @@ impl Default for VerificationStartOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerificationStartContext<'a> {
+    pub public_base_url: &'a str,
+    pub allow_http_loopback: bool,
+    pub principal_id: &'a str,
+    pub now: DateTime<Utc>,
+}
+
 #[derive(Debug, Error)]
 pub enum FlowVerificationStartError {
     #[error(transparent)]
@@ -59,6 +67,8 @@ pub enum FlowVerificationStartError {
     InvalidClock,
     #[error("FLOW.VERIFICATION_HAIP_DISABLED")]
     HaipDisabled,
+    #[error("FLOW.VERIFICATION_PRINCIPAL_REQUIRED")]
+    PrincipalRequired,
     #[error("FLOW.VERIFICATION_SERIALIZATION")]
     Serialization,
 }
@@ -73,6 +83,7 @@ pub async fn prepare_verification_start(
     request_object_maximum_length: usize,
     url_query_maximum_length: usize,
     verifier_client_id: Option<&str>,
+    principal_id: &str,
     now: DateTime<Utc>,
 ) -> Result<PreparedVerificationStart, FlowVerificationStartError> {
     let mut options = VerificationStartOptions {
@@ -85,10 +96,13 @@ pub async fn prepare_verification_start(
         providers,
         callback_destinations,
         request,
-        public_base_url,
-        allow_http_loopback,
         &options,
-        now,
+        VerificationStartContext {
+            public_base_url,
+            allow_http_loopback,
+            principal_id,
+            now,
+        },
     )
     .await
 }
@@ -97,11 +111,19 @@ pub async fn prepare_profiled_verification_start(
     providers: &FlowProviderRegistry,
     callback_destinations: &WebhookDestinationRegistry,
     request: StartVerificationFlowRequest,
-    public_base_url: &str,
-    allow_http_loopback: bool,
     options: &VerificationStartOptions,
-    now: DateTime<Utc>,
+    context: VerificationStartContext<'_>,
 ) -> Result<PreparedVerificationStart, FlowVerificationStartError> {
+    let VerificationStartContext {
+        public_base_url,
+        allow_http_loopback,
+        principal_id,
+        now,
+    } = context;
+    let principal_id = principal_id.trim();
+    if principal_id.is_empty() {
+        return Err(FlowVerificationStartError::PrincipalRequired);
+    }
     request.validate_for_environment(allow_http_loopback)?;
     if request.oid4vp_profile == Oid4vpProfile::Haip && !options.haip_enabled {
         return Err(FlowVerificationStartError::HaipDisabled);
@@ -192,6 +214,10 @@ pub async fn prepare_profiled_verification_start(
     context.insert("current_step_index".into(), json!(0));
     context.insert("step_results".into(), json!({}));
     context.insert("callback_url".into(), json!(request.callback_url));
+    context.insert(
+        "_marty_verification_principal_id".into(),
+        json!(principal_id),
+    );
     context.insert("oid4vp_issuer_did".into(), json!(identity.issuer_did));
     context.insert(
         "oid4vp_signing_identity".into(),

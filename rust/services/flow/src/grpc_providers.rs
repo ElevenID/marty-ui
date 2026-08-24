@@ -24,14 +24,15 @@ use crate::{
         presentation_policy_service_client::PresentationPolicyServiceClient,
         EvaluatePresentationRequest, GetPolicyRequest,
     },
-    CredentialClaimReference, CredentialTemplateProvider, CredentialTemplateReference,
-    FlowProviderError, FlowServiceConfig, IssuanceInitiationRequest, IssuanceInitiationResult,
-    IssuanceProvider, PresentationEvaluationRequest, PresentationEvaluationResult,
-    PresentationPolicyProvider, PresentationPolicyReference,
+    sanitized_diagnostic_text, CredentialClaimReference, CredentialTemplateProvider,
+    CredentialTemplateReference, FlowProviderError, FlowServiceConfig, IssuanceInitiationRequest,
+    IssuanceInitiationResult, IssuanceProvider, PresentationEvaluationRequest,
+    PresentationEvaluationResult, PresentationPolicyProvider, PresentationPolicyReference,
 };
 
 const MAXIMUM_PROVIDER_JSON_BYTES: usize = 1024 * 1024;
 const SERVICE_TOKEN_HEADER: &str = "x-service-token";
+const USER_ID_HEADER: &str = "x-user-id";
 
 #[derive(Clone)]
 pub struct FlowGrpcChannelFactories {
@@ -199,6 +200,24 @@ impl GrpcAuthentication {
                 .insert(SERVICE_TOKEN_HEADER, token.clone());
         }
         request
+    }
+
+    fn request_for_principal<T>(
+        &self,
+        message: T,
+        principal_id: &str,
+    ) -> Result<Request<T>, FlowProviderError> {
+        let principal =
+            principal_id
+                .trim()
+                .parse()
+                .map_err(|_| FlowProviderError::InvalidResponse {
+                    provider: "grpc",
+                    message: "principal is not valid ASCII metadata".into(),
+                })?;
+        let mut request = self.request(message);
+        request.metadata_mut().insert(USER_ID_HEADER, principal);
+        Ok(request)
     }
 }
 
@@ -419,27 +438,38 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
         let mut client = self.client.clone();
         let response = client
             .evaluate_presentation(
-                self.auth.request(EvaluatePresentationRequest {
-                    policy_id: request.policy_id.clone(),
-                    vp_token: request.presentation.clone(),
-                    nonce: request.nonce.clone(),
-                    audience: request.audience.clone(),
-                    trust_profile_id: request
-                        .context
-                        .get("trust_profile_id")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default()
-                        .into(),
-                    context_json: serde_json::to_string(&request.context).map_err(|_| {
-                        invalid_response(
-                            "presentation_policy",
-                            "evaluation context is not serializable",
-                        )
-                    })?,
-                }),
+                self.auth.request_for_principal(
+                    EvaluatePresentationRequest {
+                        policy_id: request.policy_id.clone(),
+                        vp_token: request.presentation.clone(),
+                        nonce: request.nonce.clone(),
+                        audience: request.audience.clone(),
+                        trust_profile_id: request
+                            .context
+                            .get("trust_profile_id")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default()
+                            .into(),
+                        context_json: serde_json::to_string(&request.context).map_err(|_| {
+                            invalid_response(
+                                "presentation_policy",
+                                "evaluation context is not serializable",
+                            )
+                        })?,
+                    },
+                    &request.principal_id,
+                )?,
             )
             .await
-            .map_err(|status| provider_status("presentation_policy", &request.policy_id, status))?
+            .map_err(|status| {
+                tracing::warn!(
+                    presentation_policy_id = %request.policy_id,
+                    grpc_code = ?status.code(),
+                    grpc_detail = %sanitized_diagnostic_text(status.message(), 512),
+                    "Presentation Policy gRPC evaluation failed"
+                );
+                provider_status("presentation_policy", &request.policy_id, status)
+            })?
             .into_inner();
         if response.policy_id != request.policy_id || response.nonce != request.nonce {
             return Err(invalid_response(
@@ -585,4 +615,25 @@ fn invalid_response(provider: &'static str, message: &str) -> FlowProviderError 
 
 fn nonempty(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn principal_request_carries_service_and_user_authentication() {
+        let authentication =
+            GrpcAuthentication::new(Some("0123456789abcdef0123456789abcdef")).unwrap();
+        let request = authentication.request_for_principal((), "user-1").unwrap();
+
+        assert_eq!(
+            request.metadata().get(SERVICE_TOKEN_HEADER).unwrap(),
+            "0123456789abcdef0123456789abcdef"
+        );
+        assert_eq!(request.metadata().get(USER_ID_HEADER).unwrap(), "user-1");
+        assert!(authentication
+            .request_for_principal((), "invalid\nprincipal")
+            .is_err());
+    }
 }

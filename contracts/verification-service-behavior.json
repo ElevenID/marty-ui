@@ -34,6 +34,8 @@
     "standalone callbacks and trust or deployment profile overrides are rejected in favor of the Flow service",
     "SIOPv2 id_token sessions do not require a presentation policy and emit scope openid without DCQL",
     "wallet request and submission routes remain public while management routes are tenant authorized",
+    "pending sessions privately retain the authenticated initiating principal and propagate it to Presentation Policy evaluation",
+    "terminal session minimization removes the initiating principal",
     "one presentation digest owns a session and duplicate submissions reuse the canonical terminal result",
     "Redis server time controls expiry and lease recovery across replicas",
     "claim transitions preserve the original session TTL and terminal writes are lease fenced",

@@ -21,7 +21,8 @@ use crate::{
     RequestTransport, RequestUriMethod, SiopSubmissionOptions, SiopSubmitRequest,
     StartSiopFlowRequest, StartVerificationFlowRequest, VerificationRequestMethod,
     VerificationRequestRetrievalOptions, VerificationRequestTransport, VerificationResponseType,
-    VerificationStartOptions, VerificationSubmissionInput, VerificationSubmissionOptions,
+    VerificationStartContext, VerificationStartOptions, VerificationSubmissionInput,
+    VerificationSubmissionOptions,
 };
 
 const DC_API_PROTOCOL: &str = "openid4vp-v1-signed";
@@ -157,7 +158,7 @@ async fn start_verification(
             "Verification start request is malformed",
         )
     })?;
-    authorize(
+    let principal = authorize(
         &state,
         &headers,
         &request.organization_id,
@@ -165,7 +166,7 @@ async fn start_verification(
     )
     .await?;
     Ok(Json(json!(
-        persist_verification_start(&state, request).await?
+        persist_verification_start(&state, request, &principal).await?
     )))
 }
 
@@ -175,7 +176,7 @@ async fn start_siop(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, FlowHttpError> {
     let request: StartSiopFlowRequest = parse_request(payload)?;
-    authorize(
+    let principal = authorize(
         &state,
         &headers,
         &request.organization_id,
@@ -198,6 +199,7 @@ async fn start_siop(
             request_uri_method: RequestUriMethod::Get,
             expiry_minutes: request.expiry_minutes,
         },
+        &principal,
     )
     .await?;
     Ok(Json(siop_start_response(response)))
@@ -206,15 +208,19 @@ async fn start_siop(
 async fn persist_verification_start(
     state: &FlowHttpState,
     request: StartVerificationFlowRequest,
+    principal_id: &str,
 ) -> Result<crate::VerificationRequestResponse, FlowHttpError> {
     let prepared = prepare_profiled_verification_start(
         &state.providers,
         &state.verification.callback_destinations,
         request,
-        &state.public_base_url,
-        state.verification.allow_http_loopback,
         &state.verification.verification_start,
-        Utc::now(),
+        VerificationStartContext {
+            public_base_url: &state.public_base_url,
+            allow_http_loopback: state.verification.allow_http_loopback,
+            principal_id,
+            now: Utc::now(),
+        },
     )
     .await?;
     if !state

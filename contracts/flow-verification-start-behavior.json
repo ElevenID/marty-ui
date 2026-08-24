@@ -1,8 +1,9 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "nonce_entropy_bytes": 32,
   "initial_status": "awaiting_wallet",
   "callback_policy": "mmf_tenant_registered_destination",
+  "principal_binding": "required_for_http_and_grpc_and_persisted_in_private_context",
   "policy_binding": ["id", "organization_id", "active", "nonempty_requirements"],
   "signing_identity_binding": [
     "organization_id",

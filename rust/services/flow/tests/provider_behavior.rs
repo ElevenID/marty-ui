@@ -17,10 +17,20 @@ struct Contract {
     schema_version: u32,
     required_providers: Vec<String>,
     reference_catalog: BTreeMap<String, ReferenceOperation>,
+    presentation_policy: PresentationPolicyOperation,
     signing_identity: SigningIdentity,
     invalid_identity_mutations: Vec<String>,
     physical_document_operations: BTreeMap<String, [String; 2]>,
     authorization: Vec<AuthorizationCase>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct PresentationPolicyOperation {
+    transport: String,
+    service_token_header: String,
+    principal_header: String,
+    principal_source: String,
+    workload_identity: String,
 }
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
@@ -71,11 +81,25 @@ fn contract() -> Contract {
 #[test]
 fn provider_composition_fails_closed_until_every_feature_port_is_present() {
     let contract = contract();
-    assert_eq!(contract.schema_version, 2);
+    assert_eq!(contract.schema_version, 3);
     assert_eq!(contract.required_providers, REQUIRED_FLOW_PROVIDERS);
     let registry = FlowProviderRegistry::default();
     assert_eq!(registry.missing(), REQUIRED_FLOW_PROVIDERS);
     assert!(registry.require_complete().is_err());
+}
+
+#[test]
+fn presentation_policy_evaluation_preserves_dual_authentication() {
+    assert_eq!(
+        contract().presentation_policy,
+        PresentationPolicyOperation {
+            transport: "grpc".into(),
+            service_token_header: "x-service-token".into(),
+            principal_header: "x-user-id".into(),
+            principal_source: "authenticated_verification_start".into(),
+            workload_identity: "spiffe://marty.internal/service/flow".into(),
+        }
+    );
 }
 
 #[test]

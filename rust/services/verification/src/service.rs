@@ -74,6 +74,11 @@ impl VerificationService {
         principal: &ManagementPrincipal,
     ) -> Result<VerificationSession, VerificationError> {
         validate_start(&body)?;
+        if body.response_type == "vp_token" && principal.user_id.trim().is_empty() {
+            return Err(VerificationError::Unauthorized(
+                "Authenticated initiating principal is required".into(),
+            ));
+        }
         if !principal.organization_id.trim().is_empty()
             && !body.organization_id.trim().is_empty()
             && principal.organization_id != body.organization_id
@@ -104,7 +109,8 @@ impl VerificationService {
                     .await?;
             }
         }
-        let session = VerificationSession::new(&body, Utc::now())?;
+        let mut session = VerificationSession::new(&body, Utc::now())?;
+        session.evaluation_principal_id = principal.user_id.clone();
         self.store
             .save(session.clone())
             .await
@@ -239,6 +245,7 @@ impl VerificationService {
             .evaluate(&PresentationEvaluationRequest {
                 policy_id,
                 organization_id: session.organization_id.clone(),
+                principal_id: session.evaluation_principal_id.clone(),
                 presentation: vp_token.into(),
                 nonce: session.nonce.clone(),
                 audience: String::new(),
@@ -316,6 +323,11 @@ impl VerificationService {
         principal: &ManagementPrincipal,
     ) -> Result<Value, VerificationError> {
         validate_evaluate(&body)?;
+        if principal.user_id.trim().is_empty() {
+            return Err(VerificationError::Unauthorized(
+                "Authenticated evaluation principal is required".into(),
+            ));
+        }
         let policy = self.policy_reference(&body.presentation_policy_id).await?;
         if !policy.status.eq_ignore_ascii_case("active") {
             return Err(VerificationError::Conflict(
@@ -331,6 +343,7 @@ impl VerificationService {
             .evaluate(&PresentationEvaluationRequest {
                 policy_id: body.presentation_policy_id,
                 organization_id: policy.organization_id,
+                principal_id: principal.user_id.clone(),
                 presentation: body.vp_token,
                 nonce: body.nonce.unwrap_or_default(),
                 audience: body.audience.unwrap_or_default(),
