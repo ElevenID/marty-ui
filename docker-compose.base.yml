@@ -563,6 +563,9 @@ services:
       MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:-}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+      DID_RESOLUTION_BASE_URL: http://gateway:8000
+      DID_PUBLIC_FALLBACK_ENABLED: ${DID_PUBLIC_FALLBACK_ENABLED:-false}
+      DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
     ports:
       - "127.0.0.1:8004:8004"
     depends_on:

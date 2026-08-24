@@ -10,10 +10,11 @@ use crate::{
     allowed_issuers_after_request, normalize_accreditations, normalize_jurisdictions,
     reject_private_custody_metadata, require_issuer_status_transition, CascadeRevocationPolicy,
     ComplianceStatus, IssuerEntity, IssuerEntityComplianceStatus, IssuerEntityType,
-    OrganizationTrustProfile, RegistryImportSource, RegistryImportedIssuer, RegistryStatus,
-    TimePolicy, TrustAnchorType, TrustDomainError, TrustFramework, TrustProfile,
-    TrustProfileIssuer, TrustProfileRepository, TrustProfileRepositoryError, TrustRegistryEntry,
-    TrustRelationshipStatus, TrustSource, ValidationRules,
+    IssuerKeyResolutionError, IssuerKeyResolver, OrganizationTrustProfile, RegistryImportSource,
+    RegistryImportedIssuer, RegistryStatus, TimePolicy, TrustAnchorType, TrustDomainError,
+    TrustFramework, TrustProfile, TrustProfileIssuer, TrustProfileRepository,
+    TrustProfileRepositoryError, TrustRegistryEntry, TrustRelationshipStatus, TrustSource,
+    ValidationRules,
 };
 
 const VALID_ALGORITHMS: &[&str] = &[
@@ -70,6 +71,8 @@ pub enum TrustProfileApplicationError {
     Authorization(#[from] TrustAuthorizationError),
     #[error(transparent)]
     Domain(#[from] TrustDomainError),
+    #[error(transparent)]
+    IssuerKeyResolution(#[from] IssuerKeyResolutionError),
     #[error(transparent)]
     Repository(#[from] TrustProfileRepositoryError),
 }
@@ -154,6 +157,7 @@ pub struct RelationshipPatch {
 pub struct TrustProfileApplication {
     repository: Arc<dyn TrustProfileRepository>,
     control_plane: Arc<dyn TrustProfileControlPlane>,
+    issuer_key_resolver: Option<Arc<dyn IssuerKeyResolver>>,
 }
 
 impl TrustProfileApplication {
@@ -165,7 +169,14 @@ impl TrustProfileApplication {
         Self {
             repository,
             control_plane,
+            issuer_key_resolver: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_issuer_key_resolver(mut self, resolver: Arc<dyn IssuerKeyResolver>) -> Self {
+        self.issuer_key_resolver = Some(resolver);
+        self
     }
 
     pub async fn create_profile(
@@ -480,19 +491,19 @@ impl TrustProfileApplication {
         user_id: &str,
         mut issuer: IssuerEntity,
     ) -> Result<IssuerEntity, TrustProfileApplicationError> {
-        let organization_id =
-            issuer
-                .organization_id
-                .as_deref()
-                .ok_or(TrustProfileApplicationError::Invalid(
-                    "organization_id_required",
-                ))?;
+        let organization_id = issuer
+            .organization_id
+            .as_deref()
+            .ok_or(TrustProfileApplicationError::Invalid(
+                "organization_id_required",
+            ))?
+            .to_owned();
         self.control_plane
-            .require_permission(user_id, organization_id, "trusted-issuer", "create")
+            .require_permission(user_id, &organization_id, "trusted-issuer", "create")
             .await?;
         if self
             .repository
-            .issuer_entity_by_identifier(Some(organization_id), &issuer.issuer_id)
+            .issuer_entity_by_identifier(Some(&organization_id), &issuer.issuer_id)
             .await?
             .is_some()
         {
@@ -500,6 +511,7 @@ impl TrustProfileApplication {
                 "issuer_identifier_exists",
             ));
         }
+        let _ = self.ensure_issuer_verification_keys(&mut issuer).await?;
         validate_issuer(&mut issuer)?;
         self.repository.save_issuer_entity(&issuer).await?;
         Ok(issuer)
@@ -573,6 +585,7 @@ impl TrustProfileApplication {
         apply(&mut issuer.valid_until, patch.valid_until);
         apply(&mut issuer.trust_anchor_id, patch.trust_anchor_id);
         apply(&mut issuer.metadata, patch.metadata);
+        let _ = self.ensure_issuer_verification_keys(&mut issuer).await?;
         if let Change::Set(next_status) = patch.compliance_status {
             require_issuer_status_transition(issuer.compliance_status, next_status)?;
             if next_status == IssuerEntityComplianceStatus::Revoked {
@@ -600,6 +613,32 @@ impl TrustProfileApplication {
         validate_issuer(&mut issuer)?;
         self.repository.save_issuer_entity(&issuer).await?;
         Ok(issuer)
+    }
+
+    async fn ensure_issuer_verification_keys(
+        &self,
+        issuer: &mut IssuerEntity,
+    ) -> Result<bool, TrustProfileApplicationError> {
+        if !issuer.issuer_id.starts_with("did:") || has_verification_keys(&issuer.metadata) {
+            return Ok(false);
+        }
+        let Some(resolver) = &self.issuer_key_resolver else {
+            return Ok(false);
+        };
+        let resolution = resolver.resolve(&issuer.issuer_id).await?;
+        crate::issuer_keys::pin_resolution(&mut issuer.metadata, resolution)?;
+        Ok(true)
+    }
+
+    pub async fn ensure_decision_issuer_verification_keys(
+        &self,
+        issuer: &mut IssuerEntity,
+    ) -> Result<(), TrustProfileApplicationError> {
+        if self.ensure_issuer_verification_keys(issuer).await? {
+            validate_issuer(issuer)?;
+            self.repository.save_issuer_entity(issuer).await?;
+        }
+        Ok(())
     }
 
     pub async fn delete_issuer_entity(
@@ -1102,12 +1141,38 @@ fn validate_issuer(issuer: &mut IssuerEntity) -> Result<(), TrustProfileApplicat
     issuer.accreditations = normalize_accreditations(issuer.accreditations.clone())?;
     reject_private_custody_metadata(&issuer.metadata)?;
     if issuer
+        .metadata
+        .get("verification_keys")
+        .is_some_and(|value| {
+            value.as_array().is_none_or(|keys| {
+                keys.len() > 32
+                    || keys.iter().any(|key| {
+                        key.as_object()
+                            .and_then(|key| key.get("kty"))
+                            .and_then(Value::as_str)
+                            .is_none_or(|value| value.trim().is_empty())
+                    })
+            })
+        })
+    {
+        return Err(TrustProfileApplicationError::Invalid(
+            "issuer_verification_keys",
+        ));
+    }
+    if issuer
         .valid_until
         .is_some_and(|until| until <= issuer.valid_from)
     {
         return Err(TrustProfileApplicationError::Invalid("issuer_validity"));
     }
     Ok(())
+}
+
+fn has_verification_keys(metadata: &Value) -> bool {
+    metadata
+        .get("verification_keys")
+        .and_then(Value::as_array)
+        .is_some_and(|keys| !keys.is_empty())
 }
 
 fn validate_relationship(

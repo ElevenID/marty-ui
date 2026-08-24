@@ -7,6 +7,7 @@
   "native_owner": {
     "service_crate": "marty-trust-profile",
     "registry_kernel": "marty_verification::trust_sync",
+    "issuer_key_resolver": "marty_didcomm::DidResolver",
     "runtime_crates": ["mmf-core", "mmf-data", "mmf-platform", "mmf-runtime", "mmf-security"]
   },
   "http_operations": [
@@ -98,6 +99,20 @@
     "initial_and_delta_updates_are_atomic": true,
     "reject_sequence_rollback_unknown_removal_duplicate_entries_and_repeated_tokens": true,
     "revalidate_imported_certificates_at_decision_time": true
+  },
+  "issuer_did_key_resolution": {
+    "resolve_when_did_has_no_pinned_verification_keys": true,
+    "resolve_keyless_relationships_before_internal_decision": true,
+    "pin_only_assertion_method_public_jwks": true,
+    "canonicalize_pinned_jwk_kid_to_assertion_method_id": true,
+    "preserve_explicitly_pinned_public_jwks": true,
+    "persist_resolution_source_timestamp_and_sha256": true,
+    "configured_internal_resolver_precedes_public_egress": true,
+    "public_egress_disabled_by_default": true,
+    "public_egress_requires_explicit_exact_host_allowlist": true,
+    "reject_private_jwk_members": true,
+    "reject_empty_ambiguous_or_foreign_controller_assertion_methods": true,
+    "resolution_failure_prevents_issuer_creation": true
   },
   "security": {
     "tenant_membership_and_action_permissions": true,

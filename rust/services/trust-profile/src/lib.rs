@@ -4,6 +4,7 @@ pub mod config;
 pub mod control_plane;
 pub mod domain;
 pub mod http_service;
+pub mod issuer_keys;
 pub mod migration;
 pub mod persistence;
 pub mod policy;
@@ -38,6 +39,9 @@ pub use domain::{
 };
 pub use http_service::{
     trust_profile_router, TrustProfileHttpState, TrustRegistrySyncError, TrustRegistrySynchronizer,
+};
+pub use issuer_keys::{
+    IssuerKeyResolution, IssuerKeyResolutionError, IssuerKeyResolver, NativeIssuerKeyResolver,
 };
 pub use migration::{run_migrations, TrustProfileMigrationError, TrustProfileMigrationSummary};
 pub use persistence::{TrustProfileRecord, TrustProfileRecordError, TRUST_PROFILE_MIGRATION};
