@@ -74,6 +74,7 @@ fn instance(callback: bool) -> FlowInstanceRecord {
         "oid4vp_expected_state": "state-1",
         "oid4vp_verifier_context": true,
         "presentation_policy_id": "policy-1",
+        "_marty_verification_principal_id": "user-1",
         "verification_audience": "did:web:verifier.example",
         "trust_profile_id": "trust-1",
         "vp_token": "must-be-removed",
@@ -235,6 +236,7 @@ async fn language_neutral_allow_contract_scrubs_evidence_and_builds_atomic_outpu
     let requests = seen.lock().unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].presentation, "header.payload.signature");
+    assert_eq!(requests[0].principal_id, "user-1");
     assert_eq!(requests[0].nonce, "nonce-with-at-least-32-bytes-1234567890");
     assert_eq!(requests[0].audience, "did:web:verifier.example");
     assert_eq!(requests[0].context["replay_check_verified"], true);
@@ -304,6 +306,25 @@ async fn unavailable_or_unauthenticated_verifier_is_retryable_without_terminal_o
 #[tokio::test]
 async fn state_submission_callback_and_expiry_boundaries_fail_closed() {
     let (providers, _) = providers(Ok(allowed()));
+    let mut missing_principal = instance(false);
+    missing_principal
+        .context
+        .as_object_mut()
+        .unwrap()
+        .remove("_marty_verification_principal_id");
+    assert!(matches!(
+        prepare_verification_submission(
+            &providers,
+            missing_principal,
+            input("header.payload.signature"),
+            &options(None),
+            now(),
+        )
+        .await,
+        Err(FlowVerificationSubmissionError::InvalidContext(
+            "_marty_verification_principal_id"
+        ))
+    ));
     let mut wrong_state = input("header.payload.signature");
     wrong_state.state = Some("wrong".into());
     assert!(matches!(

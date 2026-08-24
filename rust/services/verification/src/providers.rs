@@ -24,6 +24,7 @@ use tonic::{metadata::AsciiMetadataValue, transport::Channel, Request};
 use crate::{EvaluationResult, VerificationError};
 
 const SERVICE_TOKEN_HEADER: &str = "x-service-token";
+const USER_ID_HEADER: &str = "x-user-id";
 const MAX_PROVIDER_JSON_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug)]
@@ -192,7 +193,14 @@ impl GrpcEvaluationProvider {
         })
     }
 
-    fn request<T>(&self, body: T) -> Request<T> {
+    fn request<T>(&self, body: T, principal_id: &str) -> Result<Request<T>, VerificationError> {
+        let principal_id = principal_id.trim();
+        if principal_id.is_empty() {
+            return Err(unavailable("evaluation principal is missing"));
+        }
+        let principal = principal_id
+            .parse()
+            .map_err(|_| unavailable("evaluation principal is invalid gRPC metadata"))?;
         let mut request = Request::new(body);
         request.set_timeout(self.timeout);
         if let Some(token) = &self.service_token {
@@ -200,7 +208,8 @@ impl GrpcEvaluationProvider {
                 .metadata_mut()
                 .insert(SERVICE_TOKEN_HEADER, token.clone());
         }
-        request
+        request.metadata_mut().insert(USER_ID_HEADER, principal);
+        Ok(request)
     }
 }
 
@@ -215,19 +224,22 @@ impl EvaluationProvider for GrpcEvaluationProvider {
         let mut client = self.client.clone();
         let response = client
             .evaluate_presentation(
-                self.request(EvaluatePresentationRequest {
-                    policy_id: request.policy_id.clone(),
-                    vp_token: request.presentation.clone(),
-                    nonce: request.nonce.clone(),
-                    audience: request.audience.clone(),
-                    trust_profile_id: request
-                        .context
-                        .get("trust_profile_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .into(),
-                    context_json,
-                }),
+                self.request(
+                    EvaluatePresentationRequest {
+                        policy_id: request.policy_id.clone(),
+                        vp_token: request.presentation.clone(),
+                        nonce: request.nonce.clone(),
+                        audience: request.audience.clone(),
+                        trust_profile_id: request
+                            .context
+                            .get("trust_profile_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .into(),
+                        context_json,
+                    },
+                    &request.principal_id,
+                )?,
             )
             .await
             .map_err(|_| unavailable("Presentation policy service unavailable"))?
@@ -384,4 +396,28 @@ fn provider_error(error: FlowProviderError) -> VerificationError {
 
 fn unavailable(message: &str) -> VerificationError {
     VerificationError::Dependency(message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn evaluation_requests_carry_service_and_initiating_principal_identity() {
+        let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+        let provider = GrpcEvaluationProvider::new(
+            PresentationPolicyServiceClient::new(channel),
+            Some("0123456789abcdef0123456789abcdef"),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let request = provider.request((), " user-1 ").unwrap();
+        assert_eq!(
+            request.metadata().get(SERVICE_TOKEN_HEADER).unwrap(),
+            "0123456789abcdef0123456789abcdef"
+        );
+        assert_eq!(request.metadata().get(USER_ID_HEADER).unwrap(), "user-1");
+        assert!(provider.request((), "").is_err());
+        assert!(provider.request((), "invalid\nprincipal").is_err());
+    }
 }

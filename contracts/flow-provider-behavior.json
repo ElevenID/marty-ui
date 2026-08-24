@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "required_providers": [
     "tenant_membership",
     "credential_template",
@@ -31,6 +31,13 @@
       "path": "v1/deployment-profiles/{id}",
       "headers": ["x-service-token", "x-user-id"]
     }
+  },
+  "presentation_policy": {
+    "transport": "grpc",
+    "service_token_header": "x-service-token",
+    "principal_header": "x-user-id",
+    "principal_source": "authenticated_verification_start",
+    "workload_identity": "spiffe://marty.internal/service/flow"
   },
   "signing_identity": {
     "organization_id": "org-1",

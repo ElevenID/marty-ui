@@ -53,6 +53,7 @@ impl VerificationGrpc for VerificationGrpcService {
         &self,
         request: Request<GrpcStartRequest>,
     ) -> Result<Response<GrpcSession>, Status> {
+        let principal = principal(&request);
         let request = request.into_inner();
         let session = self
             .service
@@ -73,7 +74,7 @@ impl VerificationGrpc for VerificationGrpcService {
                     },
                     purpose: request.purpose,
                 },
-                &ManagementPrincipal::default(),
+                &principal,
             )
             .await
             .map_err(status)?;
@@ -109,6 +110,7 @@ impl VerificationGrpc for VerificationGrpcService {
         &self,
         request: Request<EvaluatePresentationRequest>,
     ) -> Result<Response<VerificationResult>, Status> {
+        let principal = principal(&request);
         let request = request.into_inner();
         let context = if request.context_json.trim().is_empty() {
             Map::new()
@@ -126,7 +128,7 @@ impl VerificationGrpc for VerificationGrpcService {
                     audience: nonempty(request.audience),
                     context: Some(context),
                 },
-                &ManagementPrincipal::default(),
+                &principal,
             )
             .await
             .map_err(status)?;
@@ -207,6 +209,26 @@ impl VerificationGrpc for VerificationGrpcService {
             status: "serving".into(),
         }))
     }
+}
+
+fn principal<T>(request: &Request<T>) -> ManagementPrincipal {
+    ManagementPrincipal {
+        user_id: metadata(request, "x-user-id"),
+        organization_id: metadata(request, "x-organization-id"),
+        api_key_id: metadata(request, "x-api-key-id"),
+        api_key_scopes: metadata(request, "x-api-key-scopes"),
+        required_permission: metadata(request, "x-required-permission"),
+    }
+}
+
+fn metadata<T>(request: &Request<T>, name: &'static str) -> String {
+    request
+        .metadata()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .unwrap_or_default()
+        .into()
 }
 
 fn result_message(session: &VerificationSession) -> VerificationResult {

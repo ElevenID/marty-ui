@@ -29,6 +29,8 @@ pub struct VerificationSession {
     pub flow_instance_id: String,
     pub organization_id: String,
     #[serde(default)]
+    pub evaluation_principal_id: String,
+    #[serde(default)]
     pub presentation_policy_id: Option<String>,
     #[serde(default = "default_response_type")]
     pub response_type: String,
@@ -248,6 +250,7 @@ impl VerificationSession {
             flow_id: Uuid::new_v4().to_string(),
             flow_instance_id: session_id,
             organization_id: request.organization_id.clone(),
+            evaluation_principal_id: String::new(),
             presentation_policy_id: request.presentation_policy_id.clone(),
             response_type: request.response_type.clone(),
             trust_profile_id: request.trust_profile_id.clone(),
@@ -291,6 +294,7 @@ impl VerificationSession {
             return;
         }
         self.callback_url = None;
+        self.evaluation_principal_id.clear();
         self.processing_token = None;
         self.processing_expires_at = None;
         if self.vp_token_sha256.is_none() {
