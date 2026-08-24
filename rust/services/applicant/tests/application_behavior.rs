@@ -391,6 +391,22 @@ async fn uncertain_flow_retry_reuses_attempt_and_complete_claim_snapshot() {
 }
 
 #[tokio::test]
+async fn no_op_issuance_reconciliation_preserves_application_ordering_metadata() {
+    let (service, _, _, _, persistence) = service();
+    let application = draft(&service).await;
+    let persisted_before = persistence.0.lock().unwrap().len();
+    let later = application.created_at + chrono::Duration::hours(1);
+
+    let reconciled = service
+        .reconcile_issuance(&application.id, None, None, later)
+        .await
+        .unwrap();
+
+    assert_eq!(reconciled.updated_at, application.updated_at);
+    assert_eq!(persistence.0.lock().unwrap().len(), persisted_before);
+}
+
+#[tokio::test]
 async fn production_authorizer_uses_the_canonical_mmf_policy() {
     let authorizer = MmfApprovalAuthorizer::new().unwrap();
     let facts = ApprovalFacts {

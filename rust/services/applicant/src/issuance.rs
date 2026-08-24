@@ -178,14 +178,26 @@ pub fn reconcile_transaction(
     let mut changed = false;
     match normalized.as_str() {
         "issued" => {
+            let reconciled_issued_at = issued_at.or(application.issued_at).unwrap_or(now);
             if application.status != LifecycleStatus::Credentialed {
                 application.status = LifecycleStatus::Credentialed;
+                changed = true;
             }
-            application.issued_at = Some(issued_at.unwrap_or(now));
-            application.claim_state = ClaimState::Claimed;
-            application.claim_blocker = None;
-            advance_to_credentialed(applicant, now)?;
-            changed = true;
+            if application.issued_at != Some(reconciled_issued_at) {
+                application.issued_at = Some(reconciled_issued_at);
+                changed = true;
+            }
+            if application.claim_state != ClaimState::Claimed {
+                application.claim_state = ClaimState::Claimed;
+                changed = true;
+            }
+            if application.claim_blocker.take().is_some() {
+                changed = true;
+            }
+            if applicant.status != LifecycleStatus::Credentialed {
+                advance_to_credentialed(applicant, now)?;
+                changed = true;
+            }
         }
         "pending" | "authorized" if application.status == LifecycleStatus::Credentialed => {
             application.status = LifecycleStatus::Offered;

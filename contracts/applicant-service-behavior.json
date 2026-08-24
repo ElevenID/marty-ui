@@ -48,6 +48,11 @@
     "vetting_data_patch_merges": true,
     "split_identity_failure": "conflict"
   },
+  "issuance_reconciliation": {
+    "no_op": "preserve_application_updated_at_and_skip_persistence",
+    "state_change": "persist_once_with_reconciliation_timestamp",
+    "listing_order": "stable_across_read_only_reconciliation"
+  },
   "capabilities": [
     "tenant-bound self-service applicant profiles",
     "application-template-derived applications and validation",

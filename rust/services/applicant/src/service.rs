@@ -900,6 +900,7 @@ impl ApplicantService {
         let mut store = self.store.write().await;
         let index = application_index(&store, application_id)?;
         let mut application = store.applications[index].clone();
+        let mut changed = false;
         if application.claim_state == ClaimState::OfferReady
             && application
                 .system_data
@@ -914,6 +915,7 @@ impl ApplicantService {
                 "owner": "APPLICANT",
                 "message": "This credential offer has expired. Request a new offer."
             }));
+            changed = true;
         }
         if let Some(status) = transaction_status {
             let applicant_index = store
@@ -922,8 +924,13 @@ impl ApplicantService {
                 .position(|applicant| applicant.id == application.applicant_id)
                 .ok_or(ServiceError::ApplicantNotFound)?;
             let mut applicant = store.applicants[applicant_index].clone();
-            reconcile_transaction(&mut application, &mut applicant, status, issued_at, now)?;
-            store.applicants[applicant_index] = applicant;
+            if reconcile_transaction(&mut application, &mut applicant, status, issued_at, now)? {
+                store.applicants[applicant_index] = applicant;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(application);
         }
         application.updated_at = now;
         store.applications[index] = application.clone();

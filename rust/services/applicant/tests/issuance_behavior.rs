@@ -79,6 +79,34 @@ fn offer_is_not_credentialed_until_transaction_reports_issued() {
 }
 
 #[test]
+fn repeated_issued_reconciliation_is_a_no_op() {
+    let issued_at = Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap();
+    let (mut application, mut applicant) = state();
+
+    assert!(reconcile_transaction(
+        &mut application,
+        &mut applicant,
+        "issued",
+        Some(issued_at),
+        issued_at,
+    )
+    .unwrap());
+    let application_snapshot = application.clone();
+    let applicant_snapshot = applicant.clone();
+
+    assert!(!reconcile_transaction(
+        &mut application,
+        &mut applicant,
+        "issued",
+        Some(issued_at),
+        issued_at + chrono::Duration::hours(1),
+    )
+    .unwrap());
+    assert_eq!(application, application_snapshot);
+    assert_eq!(applicant, applicant_snapshot);
+}
+
+#[test]
 fn missing_active_flow_persists_stable_issuer_owned_blocker() {
     let now = Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap();
     let (mut application, _) = state();
