@@ -780,3 +780,55 @@ fn application_error(error: AuthApplicationError) -> PortError {
     };
     PortError::new(code, error.to_string())
 }
+
+#[cfg(test)]
+mod application_error_tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    #[test]
+    fn callback_stage_codes_match_the_language_neutral_contract() {
+        let errors = [
+            AuthApplicationError::InvalidState,
+            AuthApplicationError::ExpiredState,
+            AuthApplicationError::MissingNonce,
+            AuthApplicationError::MissingAccessToken,
+            AuthApplicationError::MissingIdToken,
+            port("save OIDC state"),
+            port("build OIDC authorization URL"),
+            port("consume OIDC state"),
+            port("exchange OIDC code"),
+            port("validate OIDC tokens"),
+            port("provision authenticated user"),
+            port("save authenticated session"),
+            port("publish authentication event"),
+            port("publish session-created event"),
+            port("future backend operation"),
+        ];
+        let actual = errors
+            .into_iter()
+            .map(application_error)
+            .map(|error| error.code)
+            .collect::<BTreeSet<_>>();
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/auth-login-state-behavior.json"
+        ))
+        .unwrap();
+        let expected = contract["oidc_callback_failures"]["stage_codes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(actual, expected);
+    }
+
+    fn port(operation: &'static str) -> AuthApplicationError {
+        AuthApplicationError::Port {
+            operation,
+            source: PortError::new("private_source", "private downstream detail"),
+        }
+    }
+}
