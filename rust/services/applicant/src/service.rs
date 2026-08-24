@@ -32,6 +32,8 @@ pub struct ApplicationTemplate {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
     pub form_fields: Vec<FieldDefinition>,
     #[serde(default)]
     pub required_checks: Vec<CheckSpec>,
@@ -898,6 +900,7 @@ impl ApplicantService {
         let mut store = self.store.write().await;
         let index = application_index(&store, application_id)?;
         let mut application = store.applications[index].clone();
+        let mut changed = false;
         if application.claim_state == ClaimState::OfferReady
             && application
                 .system_data
@@ -912,6 +915,7 @@ impl ApplicantService {
                 "owner": "APPLICANT",
                 "message": "This credential offer has expired. Request a new offer."
             }));
+            changed = true;
         }
         if let Some(status) = transaction_status {
             let applicant_index = store
@@ -920,8 +924,13 @@ impl ApplicantService {
                 .position(|applicant| applicant.id == application.applicant_id)
                 .ok_or(ServiceError::ApplicantNotFound)?;
             let mut applicant = store.applicants[applicant_index].clone();
-            reconcile_transaction(&mut application, &mut applicant, status, issued_at, now)?;
-            store.applicants[applicant_index] = applicant;
+            if reconcile_transaction(&mut application, &mut applicant, status, issued_at, now)? {
+                store.applicants[applicant_index] = applicant;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(application);
         }
         application.updated_at = now;
         store.applications[index] = application.clone();
@@ -1444,6 +1453,10 @@ fn build_claims(
             )),
         ),
         ("template.name", template.name.clone().map(Value::String)),
+        (
+            "template.description",
+            template.description.clone().map(Value::String),
+        ),
     ]
     .into_iter()
     .filter_map(|(key, value)| value.map(|value| (key.into(), value)))
