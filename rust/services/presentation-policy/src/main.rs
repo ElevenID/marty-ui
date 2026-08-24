@@ -48,7 +48,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &config.credential_status_url_template,
         config.service_token.as_deref(),
         config.issuance_api_key.as_deref(),
-        config.managed_issuers.clone(),
         config.dependency_timeout,
     )?);
     runtime.mark_healthy(PresentationPolicyDependency::ControlPlane)?;

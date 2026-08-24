@@ -84,6 +84,15 @@
     "20260717_pp_0001",
     "20260718_pp_0001"
   ],
+  "evaluation_projection": {
+    "equivalent_error_code_forms": ["snake_case", "PascalCase"],
+    "status_flags_derive_from_canonical_error_codes": true
+  },
+  "grpc_authorization": {
+    "internal_lookup": "service_token_and_authorized_workload_identity",
+    "internal_evaluation": "service_token_and_authorized_flow_workload_identity",
+    "management": "user_principal_and_organization_permission"
+  },
   "failure_behavior": "fail_closed",
   "decision_kernel": "marty_verification::policy::evaluate_service_policy"
 }

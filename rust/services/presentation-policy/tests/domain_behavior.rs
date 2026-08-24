@@ -18,8 +18,16 @@ struct Contract {
     request_purposes: Vec<String>,
     holder_binding_vectors: Vec<HolderVector>,
     format_vectors: Vec<FormatVector>,
+    grpc_authorization: GrpcAuthorization,
     failure_behavior: String,
     decision_kernel: String,
+}
+
+#[derive(Deserialize)]
+struct GrpcAuthorization {
+    internal_lookup: String,
+    internal_evaluation: String,
+    management: String,
 }
 
 #[derive(Deserialize)]
@@ -63,6 +71,18 @@ fn complete_surface_and_domain_inventory_match_the_shared_contract() {
     assert_eq!(contract.statuses.len(), 4);
     assert_eq!(contract.constraint_types.len(), 11);
     assert_eq!(contract.request_purposes.len(), 8);
+    assert_eq!(
+        contract.grpc_authorization.internal_lookup,
+        "service_token_and_authorized_workload_identity"
+    );
+    assert_eq!(
+        contract.grpc_authorization.internal_evaluation,
+        "service_token_and_authorized_flow_workload_identity"
+    );
+    assert_eq!(
+        contract.grpc_authorization.management,
+        "user_principal_and_organization_permission"
+    );
     assert_eq!(contract.failure_behavior, "fail_closed");
     assert_eq!(
         contract.decision_kernel,

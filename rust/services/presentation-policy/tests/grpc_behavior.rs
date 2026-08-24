@@ -311,7 +311,7 @@ async fn malformed_json_and_untrusted_principals_fail_closed_before_writes() {
 }
 
 #[tokio::test]
-async fn exact_internal_lookup_uses_service_auth_while_collections_require_a_principal() {
+async fn exact_internal_operations_use_service_auth_while_management_requires_a_principal() {
     let organization_id = Uuid::new_v4();
     let service = service(organization_id);
     let policy = service
@@ -328,6 +328,22 @@ async fn exact_internal_lookup_uses_service_auth_while_collections_require_a_pri
         .unwrap()
         .into_inner();
     assert_eq!(fetched.organization_id, organization_id.to_string());
+
+    let evaluation_without_workload_identity = service
+        .evaluate_presentation(service_authenticated(EvaluatePresentationMessage {
+            policy_id: fetched.id.clone(),
+            vp_token: "header.payload.signature".into(),
+            nonce: "challenge-1".into(),
+            audience: "https://verifier.example".into(),
+            context_json: "{}".into(),
+            ..EvaluatePresentationMessage::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        evaluation_without_workload_identity.code(),
+        Code::Unauthenticated
+    );
 
     let list_error = service
         .list_policies(service_authenticated(ListPoliciesRequest {
