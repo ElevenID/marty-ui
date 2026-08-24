@@ -168,6 +168,34 @@ async fn did_issuer_creation_pins_native_assertion_keys_and_resolution_provenanc
 }
 
 #[tokio::test]
+async fn internal_decision_reconciles_and_persists_existing_keyless_did_issuer() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let mut existing = issuer(Some("org-a"), false);
+    repository.save_issuer_entity(&existing).await.unwrap();
+    let application = TrustProfileApplication::new(repository.clone(), Arc::new(AllowAll))
+        .with_issuer_key_resolver(Arc::new(FixedIssuerKeyResolver));
+
+    application
+        .ensure_decision_issuer_verification_keys(&mut existing)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        existing.metadata["verification_keys"][0]["kid"],
+        "issuer-key"
+    );
+    let persisted = repository
+        .issuer_entity_by_id(existing.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        persisted.metadata["verification_key_resolution"]["source"],
+        "configured_internal_resolver"
+    );
+}
+
+#[tokio::test]
 async fn create_and_source_removal_default_to_deny_all_without_losing_explicit_intent() {
     let (_, application) = harness();
     let created = application

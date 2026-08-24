@@ -191,7 +191,9 @@ fn issuer_did_key_resolution_contract_is_native_pinned_and_fail_closed() {
     );
     for invariant in [
         "resolve_when_did_has_no_pinned_verification_keys",
+        "resolve_keyless_relationships_before_internal_decision",
         "pin_only_assertion_method_public_jwks",
+        "canonicalize_pinned_jwk_kid_to_assertion_method_id",
         "preserve_explicitly_pinned_public_jwks",
         "persist_resolution_source_timestamp_and_sha256",
         "configured_internal_resolver_precedes_public_egress",

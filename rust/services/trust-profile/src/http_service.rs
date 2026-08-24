@@ -1090,7 +1090,7 @@ async fn internal_profile(
         .map_err(repository_error)?;
     let mut decisions = Vec::with_capacity(relationships.len());
     for relationship in relationships {
-        let issuer = state
+        let mut issuer = state
             .repository
             .issuer_entity_by_id(relationship.issuer_id)
             .await
@@ -1105,6 +1105,11 @@ async fn internal_profile(
                 "Trust Profile contains a cross-organization issuer relationship",
             ));
         }
+        state
+            .application
+            .ensure_decision_issuer_verification_keys(&mut issuer)
+            .await
+            .map_err(application_error)?;
         let keys = issuer
             .metadata
             .get("verification_keys")

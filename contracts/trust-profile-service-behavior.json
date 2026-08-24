@@ -102,7 +102,9 @@
   },
   "issuer_did_key_resolution": {
     "resolve_when_did_has_no_pinned_verification_keys": true,
+    "resolve_keyless_relationships_before_internal_decision": true,
     "pin_only_assertion_method_public_jwks": true,
+    "canonicalize_pinned_jwk_kid_to_assertion_method_id": true,
     "preserve_explicitly_pinned_public_jwks": true,
     "persist_resolution_source_timestamp_and_sha256": true,
     "configured_internal_resolver_precedes_public_egress": true,

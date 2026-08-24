@@ -140,9 +140,9 @@ fn public_assertion_jwk(
     did: &str,
     method: &VerificationMethod,
 ) -> Result<Option<Value>, IssuerKeyResolutionError> {
-    if method.controller != did || canonical_method_id(did, &method.id).is_none() {
-        return Err(IssuerKeyResolutionError::Invalid);
-    }
+    let method_id = canonical_method_id(did, &method.id)
+        .filter(|_| method.controller == did)
+        .ok_or(IssuerKeyResolutionError::Invalid)?;
     let Some(jwk) = &method.public_key_jwk else {
         return Ok(None);
     };
@@ -151,6 +151,7 @@ fn public_assertion_jwk(
         .as_object_mut()
         .ok_or(IssuerKeyResolutionError::Invalid)?;
     object.retain(|_, value| !value.is_null());
+    object.insert("kid".into(), Value::String(method_id));
     valid_public_jwk(object)?;
     Ok(Some(key))
 }
@@ -250,7 +251,10 @@ mod tests {
     fn pins_only_assertion_authorized_public_jwks() {
         let keys = assertion_verification_keys(&document()).unwrap();
         assert_eq!(keys.len(), 1);
-        assert_eq!(keys[0]["kid"], "issuer-key");
+        assert_eq!(
+            keys[0]["kid"],
+            "did:web:issuer.example:orgs:acme#issuer-key"
+        );
         assert!(keys[0].get("d").is_none());
     }
 
@@ -302,7 +306,10 @@ mod tests {
 
         assert_eq!(resolved.source, "configured_internal_resolver");
         assert_eq!(resolved.verification_keys.len(), 1);
-        assert_eq!(resolved.verification_keys[0]["kid"], "issuer-key");
+        assert_eq!(
+            resolved.verification_keys[0]["kid"],
+            "did:web:issuer.example:orgs:acme#issuer-key"
+        );
         assert_eq!(resolved.content_sha256.len(), 64);
         server.abort();
     }

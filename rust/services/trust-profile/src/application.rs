@@ -511,7 +511,7 @@ impl TrustProfileApplication {
                 "issuer_identifier_exists",
             ));
         }
-        self.ensure_issuer_verification_keys(&mut issuer).await?;
+        let _ = self.ensure_issuer_verification_keys(&mut issuer).await?;
         validate_issuer(&mut issuer)?;
         self.repository.save_issuer_entity(&issuer).await?;
         Ok(issuer)
@@ -585,7 +585,7 @@ impl TrustProfileApplication {
         apply(&mut issuer.valid_until, patch.valid_until);
         apply(&mut issuer.trust_anchor_id, patch.trust_anchor_id);
         apply(&mut issuer.metadata, patch.metadata);
-        self.ensure_issuer_verification_keys(&mut issuer).await?;
+        let _ = self.ensure_issuer_verification_keys(&mut issuer).await?;
         if let Change::Set(next_status) = patch.compliance_status {
             require_issuer_status_transition(issuer.compliance_status, next_status)?;
             if next_status == IssuerEntityComplianceStatus::Revoked {
@@ -618,15 +618,26 @@ impl TrustProfileApplication {
     async fn ensure_issuer_verification_keys(
         &self,
         issuer: &mut IssuerEntity,
-    ) -> Result<(), TrustProfileApplicationError> {
+    ) -> Result<bool, TrustProfileApplicationError> {
         if !issuer.issuer_id.starts_with("did:") || has_verification_keys(&issuer.metadata) {
-            return Ok(());
+            return Ok(false);
         }
         let Some(resolver) = &self.issuer_key_resolver else {
-            return Ok(());
+            return Ok(false);
         };
         let resolution = resolver.resolve(&issuer.issuer_id).await?;
         crate::issuer_keys::pin_resolution(&mut issuer.metadata, resolution)?;
+        Ok(true)
+    }
+
+    pub async fn ensure_decision_issuer_verification_keys(
+        &self,
+        issuer: &mut IssuerEntity,
+    ) -> Result<(), TrustProfileApplicationError> {
+        if self.ensure_issuer_verification_keys(issuer).await? {
+            validate_issuer(issuer)?;
+            self.repository.save_issuer_entity(issuer).await?;
+        }
         Ok(())
     }
 
