@@ -539,4 +539,21 @@ async fn internal_get_template_requires_service_auth_without_user_identity() {
             .code(),
         Code::Unauthenticated
     );
+
+    let mut wallets_request = Request::new(ListWalletsRequest {
+        active_only: true,
+        organization_id: "org-1".to_owned(),
+    });
+    wallets_request
+        .metadata_mut()
+        .insert("x-service-token", TOKEN.parse().unwrap());
+    let wallets = service
+        .list_wallets(wallets_request)
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(wallets
+        .wallets
+        .iter()
+        .any(|wallet| wallet.id == contract()["behavior"]["system_wallet_id"]));
 }
