@@ -24,7 +24,6 @@ RUN cargo build --locked --release -p marty-deployment-profile --bin marty-deplo
 
 FROM python:3.12-slim
 
-ARG SERVICE_NAME
 ARG MARTY_RELEASE_VERSION=development
 ARG MARTY_UI_SHA=unknown
 ARG MARTY_RS_VERSION=0.1.0
@@ -52,7 +51,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/app:/app/packages:/app/services \
-    SERVICE_NAME=${SERVICE_NAME} \
     MARTY_RELEASE_VERSION=${MARTY_RELEASE_VERSION} \
     MARTY_UI_SHA=${MARTY_UI_SHA}
 
@@ -101,6 +99,13 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-deployment-pro
 RUN chmod +x /app/services/entrypoint.sh /app/load-secrets-env.sh \
     && adduser --disabled-password --gecos '' appuser \
     && install -d -o appuser -g appuser -m 0700 /app/data
+
+# Keep the only service-specific build argument after every filesystem layer.
+# All service images contain the same binaries and select their entrypoint at
+# runtime, so this preserves immutable per-service metadata without rebuilding
+# or duplicating the shared Rust/Python runtime for each Compose target.
+ARG SERVICE_NAME
+ENV SERVICE_NAME=${SERVICE_NAME}
 
 USER appuser
 WORKDIR /app/services
