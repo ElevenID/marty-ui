@@ -21,9 +21,8 @@ impl CredentialFormat {
         let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
         match normalized.as_str() {
             "mdoc" | "mso_mdoc" => Ok(Self::Mdoc),
-            "sd_jwt_vc" | "vc+sd_jwt" | "dc+sd_jwt" | "spruce_vc+sd_jwt" | "sd_jwt" => {
-                Ok(Self::SdJwtVc)
-            }
+            "sd_jwt_vc" | "vc+sd_jwt" | "dc+sd_jwt" | "spruce_vc+sd_jwt" | "sd_jwt"
+            | "ietf_sd_jwt" => Ok(Self::SdJwtVc),
             "vc_jwt" | "jwt_vc" | "jwt_vc_json" | "jwt_vc_json_ld" => Ok(Self::VcJwt),
             "jsonld" | "json_ld" | "ldp_vc" => Ok(Self::JsonLd),
             "zk_mdoc" | "zkp_mdoc" => Ok(Self::ZkMdoc),
