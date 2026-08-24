@@ -6,9 +6,10 @@ use axum::{
     http::{Request, StatusCode},
 };
 use marty_deployment_profile::{
-    deployment_router, AssignDeviceRequest, CreateDeploymentProfileRequest, CreateLaneRequest,
-    DeploymentError, DeploymentHttpState, DeploymentRepository, DeploymentService,
-    MemoryDeploymentRepository, UpdateDeploymentProfileRequest,
+    deployment_router, ApiAuthConfiguration, AssignDeviceRequest, AuthMethod,
+    CreateDeploymentProfileRequest, CreateLaneRequest, DeploymentError, DeploymentHttpState,
+    DeploymentRepository, DeploymentService, MemoryDeploymentRepository,
+    UpdateDeploymentProfileRequest,
 };
 use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
 use serde_json::{json, Value};
@@ -107,6 +108,22 @@ async fn language_neutral_contract_declares_all_fourteen_routes_and_intended_fea
         .unwrap()
         .iter()
         .any(|v| v.as_str().unwrap().contains("transactionally serialized")));
+}
+
+#[test]
+fn api_key_auth_reads_legacy_rust_spelling_and_writes_contract_spelling() {
+    for spelling in ["api_key", "apikey"] {
+        let configuration: ApiAuthConfiguration = serde_json::from_value(json!({
+            "auth_method": spelling,
+            "api_key_header": "X-API-Key"
+        }))
+        .unwrap();
+        assert_eq!(configuration.auth_method, AuthMethod::ApiKey);
+        assert_eq!(
+            serde_json::to_value(configuration).unwrap()["auth_method"],
+            "api_key"
+        );
+    }
 }
 
 #[tokio::test]
