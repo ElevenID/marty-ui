@@ -146,6 +146,14 @@ async function main() {
       viewport: VIDEO_SIZE,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
+    // This lane drives presentation through the deterministic local wallet.
+    // Keep Chromium's platform-wallet prefetch from racing the same request URI.
+    await loginContext.addInitScript(() => {
+      Object.defineProperty(globalThis, 'DigitalCredential', {
+        value: undefined,
+        configurable: false,
+      });
+    });
     const loginPage = holderPage || await loginContext.newPage();
     const loginVideo = holderVideo || loginPage.video();
     loginPage.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));

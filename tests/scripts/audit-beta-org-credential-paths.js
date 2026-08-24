@@ -162,6 +162,14 @@ async function presentWithTestWallet(walletPage, oid4vpUri) {
 
 async function loginWithTestWallet(browser, walletPage, report) {
   const context = await browser.newContext({ viewport: { width: 1365, height: 900 } });
+  // This lane presents through the deterministic local wallet, so prevent a
+  // simultaneous platform-wallet request prefetch from consuming the URI.
+  await context.addInitScript(() => {
+    Object.defineProperty(globalThis, 'DigitalCredential', {
+      value: undefined,
+      configurable: false,
+    });
+  });
   const page = await context.newPage();
   page.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
   page.on('response', (response) => {
