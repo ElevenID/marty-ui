@@ -32,6 +32,8 @@ pub struct ApplicationTemplate {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
     pub form_fields: Vec<FieldDefinition>,
     #[serde(default)]
     pub required_checks: Vec<CheckSpec>,
@@ -1444,6 +1446,10 @@ fn build_claims(
             )),
         ),
         ("template.name", template.name.clone().map(Value::String)),
+        (
+            "template.description",
+            template.description.clone().map(Value::String),
+        ),
     ]
     .into_iter()
     .filter_map(|(key, value)| value.map(|value| (key.into(), value)))

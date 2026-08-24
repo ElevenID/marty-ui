@@ -31,6 +31,7 @@ impl TemplateProvider for Templates {
             status: "ACTIVE".into(),
             credential_template_id: "credential-template-1".into(),
             name: Some("Airport badge".into()),
+            description: Some("Airport access credential".into()),
             form_fields: Vec::new(),
             required_checks: Vec::new(),
             evidence_requirements: Vec::new(),
