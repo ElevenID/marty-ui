@@ -523,6 +523,7 @@ impl FlowService for FlowGrpcService {
         self.security
             .authorize_workload(&request, crate::START_VERIFICATION_METHOD)?;
         let input = request.into_inner();
+        let principal_id = verification_principal(&input)?;
         let response_type = parse_response_type(default_value(&input.response_type, "vp_token"))?;
         let prepared = prepare_profiled_verification_start(
             &self.providers,
@@ -552,6 +553,7 @@ impl FlowService for FlowGrpcService {
             &self.public_base_url,
             true,
             &self.verification,
+            &principal_id,
             Utc::now(),
         )
         .await
@@ -1143,6 +1145,17 @@ fn default_value<'a>(value: &'a str, default: &'a str) -> &'a str {
     }
 }
 
+fn verification_principal(input: &StartVerificationRequest) -> Result<String, Status> {
+    let principal = input.user_id.trim();
+    if principal.is_empty() {
+        Err(Status::unauthenticated(
+            "verification principal is required",
+        ))
+    } else {
+        Ok(principal.to_owned())
+    }
+}
+
 fn default_success(value: &str) -> &str {
     default_value(value, "success")
 }
@@ -1209,6 +1222,9 @@ fn verification_start_status(error: crate::FlowVerificationStartError) -> Status
         }
         crate::FlowVerificationStartError::HaipDisabled => {
             Status::failed_precondition("HAIP is disabled")
+        }
+        crate::FlowVerificationStartError::PrincipalRequired => {
+            Status::unauthenticated("Verification principal is required")
         }
         _ => Status::unavailable("Verification request could not be created"),
     }
@@ -1291,6 +1307,17 @@ mod tests {
         assert_eq!(decoded["boolean"], json!(true));
         assert_eq!(decoded["object"], json!({"a": 1, "b": 2}));
         assert_eq!(decoded["legacy"], json!("plain"));
+    }
+
+    #[test]
+    fn verification_start_requires_and_normalizes_the_workload_principal() {
+        let mut input = StartVerificationRequest::default();
+        assert_eq!(
+            verification_principal(&input).unwrap_err().code(),
+            tonic::Code::Unauthenticated
+        );
+        input.user_id = " auth-service ".into();
+        assert_eq!(verification_principal(&input).unwrap(), "auth-service");
     }
 
     #[test]

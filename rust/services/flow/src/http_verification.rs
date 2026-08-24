@@ -209,32 +209,17 @@ async fn persist_verification_start(
     request: StartVerificationFlowRequest,
     principal_id: &str,
 ) -> Result<crate::VerificationRequestResponse, FlowHttpError> {
-    let mut prepared = prepare_profiled_verification_start(
+    let prepared = prepare_profiled_verification_start(
         &state.providers,
         &state.verification.callback_destinations,
         request,
         &state.public_base_url,
         state.verification.allow_http_loopback,
         &state.verification.verification_start,
+        principal_id,
         Utc::now(),
     )
     .await?;
-    prepared
-        .instance
-        .context
-        .as_object_mut()
-        .ok_or_else(|| {
-            FlowHttpError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "invalid_stored_flow_state",
-                "Prepared verification transaction is invalid",
-            )
-        })?
-        .insert(
-            "_marty_verification_principal_id".into(),
-            json!(principal_id),
-        );
-    prepared.instance.kernel()?;
     if !state
         .repository
         .save_started_instance(&prepared.instance, None)

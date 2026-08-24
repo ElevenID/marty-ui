@@ -23,6 +23,7 @@ struct Contract {
     nonce_entropy_bytes: usize,
     initial_status: String,
     callback_policy: String,
+    principal_binding: String,
     policy_binding: Vec<String>,
     signing_identity_binding: Vec<String>,
     request_uri_transport: String,
@@ -206,12 +207,16 @@ async fn language_neutral_contract_preserves_all_start_transports() {
         "../../../../contracts/flow-verification-start-behavior.json"
     ))
     .unwrap();
-    assert_eq!(contract.schema_version, 1);
+    assert_eq!(contract.schema_version, 2);
     assert_eq!(contract.nonce_entropy_bytes, 32);
     assert_eq!(contract.initial_status, "awaiting_wallet");
     assert_eq!(
         contract.callback_policy,
         "mmf_tenant_registered_destination"
+    );
+    assert_eq!(
+        contract.principal_binding,
+        "required_for_http_and_grpc_and_persisted_in_private_context"
     );
     assert_eq!(contract.policy_binding.len(), 4);
     assert_eq!(contract.signing_identity_binding.len(), 5);
@@ -245,6 +250,7 @@ async fn language_neutral_contract_preserves_all_start_transports() {
             16_384,
             16_384,
             None,
+            "user-1",
             now(),
         )
         .await
@@ -266,6 +272,10 @@ async fn language_neutral_contract_preserves_all_start_transports() {
             prepared.instance.context["callback_url"],
             "https://callback.example/result?nonce=token-1234567890"
         );
+        assert_eq!(
+            prepared.instance.context["_marty_verification_principal_id"],
+            "user-1"
+        );
         assert_eq!(prepared.instance.organization_id, "org-1");
     }
 
@@ -281,6 +291,7 @@ async fn language_neutral_contract_preserves_all_start_transports() {
         16_384,
         16_384,
         Some("https://verifier.example/client"),
+        "user-1",
         now(),
     )
     .await
@@ -298,6 +309,22 @@ async fn language_neutral_contract_preserves_all_start_transports() {
 
 #[tokio::test]
 async fn rejected_callback_or_cross_tenant_policy_produces_no_prepared_instance() {
+    let principal_error = prepare_verification_start(
+        &providers("org-1"),
+        &callbacks(),
+        request(RequestTransport::RequestUri),
+        "https://verifier.example",
+        false,
+        16_384,
+        16_384,
+        None,
+        " ",
+        now(),
+    )
+    .await
+    .unwrap_err();
+    assert!(principal_error.to_string().contains("PRINCIPAL_REQUIRED"));
+
     let callback_error = prepare_verification_start(
         &providers("org-1"),
         &WebhookDestinationRegistry::default(),
@@ -307,6 +334,7 @@ async fn rejected_callback_or_cross_tenant_policy_produces_no_prepared_instance(
         16_384,
         16_384,
         None,
+        "user-1",
         now(),
     )
     .await
@@ -322,6 +350,7 @@ async fn rejected_callback_or_cross_tenant_policy_produces_no_prepared_instance(
         16_384,
         16_384,
         None,
+        "user-1",
         now(),
     )
     .await
@@ -340,6 +369,7 @@ async fn configured_identity_and_haip_gates_apply_before_persistence() {
         "https://verifier.example",
         false,
         &options,
+        "user-1",
         now(),
     )
     .await
@@ -361,6 +391,7 @@ async fn configured_identity_and_haip_gates_apply_before_persistence() {
         "https://verifier.example",
         false,
         &options,
+        "user-1",
         now(),
     )
     .await
