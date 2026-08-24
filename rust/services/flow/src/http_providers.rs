@@ -375,6 +375,7 @@ impl SigningIdentityProvider for HttpSigningProvider {
 
     async fn sign(&self, request: &SigningRequest) -> Result<SigningResult, FlowProviderError> {
         let body = json!({
+            "organization_id": request.organization_id,
             "issuer_did": request.issuer_did,
             "credential_format": request.credential_format,
             "key_purpose": request.key_purpose,
@@ -657,6 +658,21 @@ mod tests {
         }))
     }
 
+    async fn signing_signer(
+        State(captured): State<CapturedRequest>,
+        headers: HeaderMap,
+        uri: Uri,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        *captured.lock().unwrap() = Some((headers, uri, body.clone()));
+        Json(json!({
+            "issuer_did": body["issuer_did"],
+            "verification_method_id": format!("{}#key-1", body["issuer_did"].as_str().unwrap()),
+            "algorithm": body["algorithm"],
+            "signature_raw_b64": "c2lnbmF0dXJl",
+        }))
+    }
+
     async fn reference_resolver(
         State(captured): State<CapturedRead>,
         headers: HeaderMap,
@@ -779,6 +795,51 @@ mod tests {
                 "key_purpose": "vc_jwt_issuer",
                 "credential_format": "dc+sd-jwt",
                 "algorithm": "ES256",
+            })
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn signing_posts_trusted_organization_scope_in_query_and_body() {
+        let captured = CapturedRequest::default();
+        let router = Router::new()
+            .route("/internal/compat/issuer-dids/sign", post(signing_signer))
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let api_key = "0123456789abcdef0123456789abcdef";
+        let provider =
+            HttpSigningProvider::new(&format!("http://{address}/internal/"), api_key).unwrap();
+
+        let result = provider
+            .sign(&SigningRequest {
+                organization_id: "org-1".into(),
+                issuer_did: "did:web:issuer.example".into(),
+                verification_method_id: "did:web:issuer.example#key-1".into(),
+                key_purpose: "oid4vp_request_signing".into(),
+                credential_format: "oauth-authz-req+jwt".into(),
+                algorithm: "ES256".into(),
+                payload_b64url: "cGF5bG9hZA".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.signature_raw_b64url, "c2lnbmF0dXJl");
+
+        let (headers, uri, body) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(uri.path(), "/internal/compat/issuer-dids/sign");
+        assert_eq!(uri.query(), Some("organization_id=org-1"));
+        assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert_eq!(
+            body,
+            json!({
+                "organization_id": "org-1",
+                "issuer_did": "did:web:issuer.example",
+                "key_purpose": "oid4vp_request_signing",
+                "credential_format": "oauth-authz-req+jwt",
+                "algorithm": "ES256",
+                "payload_b64": "cGF5bG9hZA",
             })
         );
         server.abort();
