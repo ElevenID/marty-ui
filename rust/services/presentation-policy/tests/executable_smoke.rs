@@ -51,7 +51,6 @@ fn deployed_executable_fails_before_database_io_without_service_identity() {
                 "ISSUANCE_API_KEY",
                 "test-only-issuance-key-with-at-least-32-bytes",
             ),
-            ("MIP_MANAGED_ISSUER_IDENTIFIERS", "did:example:issuer"),
         ],
     );
     assert!(!output.status.success());

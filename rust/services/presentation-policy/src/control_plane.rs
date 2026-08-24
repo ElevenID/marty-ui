@@ -32,7 +32,6 @@ pub struct NativePresentationControlPlane {
     trust_profile_url: Arc<str>,
     status_url_template: Arc<str>,
     issuance_api_key: Option<Arc<str>>,
-    managed_issuers: Arc<BTreeSet<String>>,
     timeout: Duration,
 }
 
@@ -42,7 +41,6 @@ impl std::fmt::Debug for NativePresentationControlPlane {
             .debug_struct("NativePresentationControlPlane")
             .field("trust_profile_url", &self.trust_profile_url)
             .field("status_url_template", &self.status_url_template)
-            .field("managed_issuer_count", &self.managed_issuers.len())
             .field("service_token_configured", &self.service_token.is_some())
             .field(
                 "issuance_api_key_configured",
@@ -61,7 +59,6 @@ impl NativePresentationControlPlane {
         status_url_template: &str,
         service_token: Option<&str>,
         issuance_api_key: Option<&str>,
-        managed_issuers: impl IntoIterator<Item = String>,
         timeout: Duration,
     ) -> Result<Self, PresentationVerificationError> {
         if timeout.is_zero() {
@@ -86,12 +83,6 @@ impl NativePresentationControlPlane {
             trust_profile_url: Arc::from(trust_profile_url),
             status_url_template: Arc::from(status_url_template),
             issuance_api_key: issuance_api_key.map(Arc::<str>::from),
-            managed_issuers: Arc::new(
-                managed_issuers
-                    .into_iter()
-                    .flat_map(|issuer| issuer_candidates(&issuer))
-                    .collect(),
-            ),
             timeout,
         })
     }
@@ -238,8 +229,8 @@ impl CredentialStatusResolver for NativePresentationControlPlane {
         issuer_id: &str,
         credential_ids: &[String],
     ) -> Result<CredentialStatusEvidence, PresentationVerificationError> {
-        let presented_issuer_candidates = issuer_candidates(issuer_id);
-        if presented_issuer_candidates.is_disjoint(&self.managed_issuers) {
+        let presented_issuer = normalize_issuer(issuer_id);
+        if issuer_candidates(&presented_issuer).is_empty() {
             return Ok(CredentialStatusEvidence::default());
         }
         for credential_id in credential_ids {
@@ -271,10 +262,16 @@ impl CredentialStatusResolver for NativePresentationControlPlane {
             let object = payload
                 .as_object()
                 .ok_or(PresentationVerificationError::Unavailable)?;
-            if let Some(recorded_issuer) = object.get("issuer_did").and_then(Value::as_str) {
-                if issuer_candidates(recorded_issuer).is_disjoint(&presented_issuer_candidates) {
-                    continue;
-                }
+            let Some(recorded_issuer) = object
+                .get("issuer_did")
+                .and_then(Value::as_str)
+                .map(normalize_issuer)
+                .filter(|issuer| !issuer.is_empty())
+            else {
+                continue;
+            };
+            if recorded_issuer != presented_issuer {
+                continue;
             }
             let status = object
                 .get("status")
@@ -686,7 +683,7 @@ fn normalize_issuer(value: &str) -> String {
         if matches!(url.scheme(), "http" | "https") {
             url.set_query(None);
             url.set_fragment(None);
-            url.as_str().trim_end_matches('/').to_ascii_lowercase()
+            url.as_str().trim_end_matches('/').to_owned()
         } else {
             raw.to_owned()
         }

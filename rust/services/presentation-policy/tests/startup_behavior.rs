@@ -30,7 +30,7 @@ fn compose_compatible_development_configuration_is_normalized() {
 }
 
 #[test]
-fn deployed_configuration_requires_secrets_issuer_scope_and_complete_mtls() {
+fn deployed_configuration_requires_secrets_and_complete_mtls() {
     let beta = values("beta");
     assert_eq!(
         PresentationPolicyServiceConfig::from_values(beta).unwrap_err(),
@@ -42,10 +42,6 @@ fn deployed_configuration_requires_secrets_issuer_scope_and_complete_mtls() {
     let mut configured = values("beta");
     configured.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
     configured.insert("ISSUANCE_API_KEY".into(), "i".repeat(32));
-    configured.insert(
-        "MIP_MANAGED_ISSUER_IDENTIFIERS".into(),
-        "did:web:issuer.example".into(),
-    );
     assert_eq!(
         PresentationPolicyServiceConfig::from_values(configured.clone()).unwrap_err(),
         PresentationPolicyConfigError::Missing {
@@ -62,13 +58,11 @@ fn deployed_configuration_requires_secrets_issuer_scope_and_complete_mtls() {
 }
 
 #[test]
-fn deployed_configuration_preserves_public_issuer_identity_derivation() {
+fn deployed_configuration_supports_dynamic_issuers_without_static_scope() {
     let mut configured = values("beta");
     configured.extend([
         ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
         ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
-        ("PUBLIC_BASE_URL".into(), "https://beta.example.test".into()),
-        ("MARTY_ORG_SLUG".into(), "member-services".into()),
         ("GRPC_WORKLOAD_TLS_SERVER_CERT".into(), "/cert.pem".into()),
         ("GRPC_WORKLOAD_TLS_SERVER_KEY".into(), "/key.pem".into()),
         ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/ca.pem".into()),
@@ -76,8 +70,8 @@ fn deployed_configuration_preserves_public_issuer_identity_derivation() {
 
     let config = PresentationPolicyServiceConfig::from_values(configured).unwrap();
     assert_eq!(
-        config.managed_issuers,
-        ["did:web:beta.example.test:orgs:member-services"]
+        config.credential_status_url_template,
+        "http://issuance:8005/v1/issuance/credentials/{credential_id}/status"
     );
 }
 

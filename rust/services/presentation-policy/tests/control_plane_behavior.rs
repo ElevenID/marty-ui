@@ -1,8 +1,9 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use axum::{
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::get,
     Json, Router,
 };
@@ -18,7 +19,8 @@ use uuid::Uuid;
 #[derive(Clone)]
 struct Fixture {
     profile: Value,
-    status: Value,
+    organization_id: String,
+    statuses: BTreeMap<String, Value>,
 }
 
 async fn trust_profile(
@@ -37,16 +39,25 @@ async fn trust_profile(
 
 async fn credential_status(
     State(fixture): State<Arc<Fixture>>,
-    Path(_credential_id): Path<String>,
+    Path(credential_id): Path<String>,
     headers: HeaderMap,
-) -> Json<Value> {
+) -> Response {
     assert_eq!(
         headers
             .get("x-api-key")
             .and_then(|value| value.to_str().ok()),
         Some("behavioral-issuance-key")
     );
-    Json(fixture.status.clone())
+    assert_eq!(
+        headers
+            .get("x-organization-id")
+            .and_then(|value| value.to_str().ok()),
+        Some(fixture.organization_id.as_str())
+    );
+    fixture.statuses.get(&credential_id).map_or_else(
+        || StatusCode::NOT_FOUND.into_response(),
+        |status| Json(status.clone()).into_response(),
+    )
 }
 
 #[tokio::test]
@@ -55,9 +66,40 @@ async fn fresh_trust_and_status_reads_match_the_language_neutral_contract() {
         "../../../../contracts/presentation-control-plane-behavior.json"
     ))
     .unwrap();
+    let organization_id = contract["organization_id"].as_str().unwrap();
     let fixture = Arc::new(Fixture {
         profile: contract["trust_profile"].clone(),
-        status: contract["status_response"].clone(),
+        organization_id: organization_id.into(),
+        statuses: BTreeMap::from([
+            (
+                contract["credential_id"].as_str().unwrap().into(),
+                contract["status_response"].clone(),
+            ),
+            (
+                "suspended".into(),
+                serde_json::json!({"issuer_did": contract["issuer_id"], "status": "suspended"}),
+            ),
+            (
+                "revoked".into(),
+                serde_json::json!({"issuer_did": contract["issuer_id"], "status": "revoked"}),
+            ),
+            (
+                "mismatched-issuer".into(),
+                serde_json::json!({"issuer_did": "did:web:issuer.example:orgs:other", "status": "active"}),
+            ),
+            (
+                "missing-issuer".into(),
+                serde_json::json!({"status": "active"}),
+            ),
+            (
+                "url-case-match".into(),
+                serde_json::json!({"issuer_did": "https://ISSUER.EXAMPLE/Org/Acme/", "status": "active"}),
+            ),
+            (
+                "url-path-case-mismatch".into(),
+                serde_json::json!({"issuer_did": "https://issuer.example/org/acme", "status": "active"}),
+            ),
+        ]),
     });
     let app = Router::new()
         .route(
@@ -78,16 +120,11 @@ async fn fresh_trust_and_status_reads_match_the_language_neutral_contract() {
         &format!("{base}/status/{{credential_id}}"),
         Some("behavioral-service-token"),
         Some("behavioral-issuance-key"),
-        [issuer.to_owned()],
         Duration::from_secs(2),
     )
     .unwrap();
     let profile_id = contract["profile_id"].as_str().unwrap().parse().unwrap();
-    let organization_id = contract["organization_id"]
-        .as_str()
-        .unwrap()
-        .parse()
-        .unwrap();
+    let organization_id = organization_id.parse().unwrap();
     let profile = control
         .load_profile(profile_id, organization_id)
         .await
@@ -119,6 +156,45 @@ async fn fresh_trust_and_status_reads_match_the_language_neutral_contract() {
     assert_eq!(status.not_revoked, Some(true));
     assert_eq!(status.credential_status.as_deref(), Some("active"));
 
+    for (credential_id, expected_status) in [("suspended", "suspended"), ("revoked", "revoked")] {
+        let status = control
+            .resolve(organization_id, issuer, &[credential_id.into()])
+            .await
+            .unwrap();
+        assert_eq!(status.not_revoked, Some(false));
+        assert_eq!(status.credential_status.as_deref(), Some(expected_status));
+    }
+    for credential_id in ["mismatched-issuer", "missing-issuer", "not-found"] {
+        let status = control
+            .resolve(organization_id, issuer, &[credential_id.into()])
+            .await
+            .unwrap();
+        assert_eq!(status, Default::default());
+    }
+    let normalized_url_status = control
+        .resolve(
+            organization_id,
+            "https://issuer.example/Org/Acme",
+            &["url-case-match".into()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(normalized_url_status.not_revoked, Some(true));
+    let path_case_mismatch = control
+        .resolve(
+            organization_id,
+            "https://issuer.example/Org/Acme",
+            &["url-path-case-mismatch".into()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(path_case_mismatch, Default::default());
+    assert_eq!(
+        contract["status_resolution"]["issuer_binding"],
+        "exact_normalized_identifier"
+    );
+    assert_eq!(contract["status_resolution"]["dynamic_issuers"], true);
+
     let mismatch = control
         .load_profile(profile_id, Uuid::from_u128(999))
         .await
@@ -135,7 +211,6 @@ fn invalid_native_control_plane_configuration_fails_before_startup() {
         "http://status.example/no-placeholder",
         None,
         None,
-        [],
         Duration::ZERO,
     );
     assert!(matches!(

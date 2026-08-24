@@ -756,7 +756,6 @@ services:
       DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
       MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
-      MIP_MANAGED_ISSUER_DIDS: ${MIP_MANAGED_ISSUER_DIDS:-}
       MIP_CREDENTIAL_STATUS_URL_TEMPLATE: "${MIP_CREDENTIAL_STATUS_URL_TEMPLATE:-http://issuance:8005/v1/issuance/credentials/{credential_id}/status}"
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       ISSUANCE_SERVICE_URL: http://issuance:8005

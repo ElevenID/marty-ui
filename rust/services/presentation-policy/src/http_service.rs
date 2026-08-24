@@ -1043,10 +1043,21 @@ fn without_nulls(mut value: Value) -> Value {
 }
 
 fn has_any_code(codes: &[Value], expected: &[&str]) -> bool {
-    codes
-        .iter()
-        .filter_map(Value::as_str)
-        .any(|code| expected.contains(&code))
+    codes.iter().filter_map(Value::as_str).any(|code| {
+        expected
+            .iter()
+            .any(|candidate| equivalent_error_code(code, candidate))
+    })
+}
+
+fn equivalent_error_code(left: &str, right: &str) -> bool {
+    left.bytes()
+        .filter(u8::is_ascii_alphanumeric)
+        .map(|byte| byte.to_ascii_lowercase())
+        .eq(right
+            .bytes()
+            .filter(u8::is_ascii_alphanumeric)
+            .map(|byte| byte.to_ascii_lowercase()))
 }
 
 fn validate_evaluation_request(
@@ -1229,4 +1240,30 @@ fn unprocessable(detail: &str) -> PresentationPolicyHttpError {
 
 fn service_unavailable(detail: &str) -> PresentationPolicyHttpError {
     error(StatusCode::SERVICE_UNAVAILABLE, detail)
+}
+
+#[cfg(test)]
+mod error_code_projection_tests {
+    use super::*;
+
+    #[test]
+    fn language_neutral_error_code_forms_drive_the_same_projection_flags() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/presentation-policy-service-behavior.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            contract["evaluation_projection"]["equivalent_error_code_forms"],
+            serde_json::json!(["snake_case", "PascalCase"])
+        );
+        for (native, legacy) in [
+            ("revocation_check_required", "RevocationCheckRequired"),
+            ("credential_revoked", "CredentialRevoked"),
+            ("signature_invalid", "SignatureInvalid"),
+            ("trust_profile_not_verified", "TrustProfileNotVerified"),
+        ] {
+            assert!(has_any_code(&[Value::String(native.into())], &[legacy]));
+            assert!(has_any_code(&[Value::String(legacy.into())], &[native]));
+        }
+    }
 }

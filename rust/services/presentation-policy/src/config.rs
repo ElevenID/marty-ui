@@ -1,10 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    net::SocketAddr,
-    path::PathBuf,
-    time::Duration,
-};
+use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf, time::Duration};
 
 use thiserror::Error;
 use url::Url;
@@ -45,7 +39,6 @@ pub struct PresentationPolicyServiceConfig {
     pub credential_status_url_template: String,
     pub service_token: Option<String>,
     pub issuance_api_key: Option<String>,
-    pub managed_issuers: Vec<String>,
     pub dependency_timeout: Duration,
     pub workload_server_tls: Option<WorkloadServerTlsFiles>,
     pub release_version: String,
@@ -129,12 +122,6 @@ impl PresentationPolicyServiceConfig {
         } else {
             secret(&values, "ISSUANCE_API_KEY", environment)?
         };
-        let managed_issuers = managed_issuers(&values);
-        if environment.is_deployed() && managed_issuers.is_empty() {
-            return Err(PresentationPolicyConfigError::Missing {
-                name: "MIP_MANAGED_ISSUER_IDENTIFIERS",
-            });
-        }
         let workload_server_tls = workload_server_tls(&values, environment)?;
         Ok(Self {
             environment,
@@ -147,7 +134,6 @@ impl PresentationPolicyServiceConfig {
             credential_status_url_template,
             service_token,
             issuance_api_key,
-            managed_issuers,
             dependency_timeout: Duration::from_secs(number(
                 &values,
                 "PRESENTATION_POLICY_DEPENDENCY_TIMEOUT_SECONDS",
@@ -177,47 +163,6 @@ fn environment(value: &str) -> Result<RuntimeEnvironment, PresentationPolicyConf
         "production" | "prod" => Ok(RuntimeEnvironment::Production),
         _ => Err(invalid("ENVIRONMENT")),
     }
-}
-
-fn managed_issuers(values: &BTreeMap<String, String>) -> Vec<String> {
-    let mut issuers = [
-        "MIP_MANAGED_ISSUER_IDENTIFIERS",
-        "MIP_MANAGED_ISSUER_DIDS",
-        "MARTY_ISSUER_DID",
-        "CREDENTIAL_LOGIN_ISSUER_DID",
-        "ISSUER_DID",
-    ]
-    .into_iter()
-    .filter_map(|name| value(values, name))
-    .flat_map(|value| value.split(','))
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-    .map(str::to_owned)
-    .collect::<BTreeSet<_>>();
-
-    let organization_slug = value(values, "MARTY_ORG_SLUG").unwrap_or("marty");
-    if let Some(public_domain) = value(values, "PUBLIC_DOMAIN") {
-        issuers.insert(format!("did:web:{public_domain}:orgs:{organization_slug}"));
-    }
-    for name in ["PUBLIC_BASE_URL", "ISSUER_BASE_URL", "PUBLIC_API_URL"] {
-        let Some(base_url) = value(values, name) else {
-            continue;
-        };
-        let Ok(parsed) = Url::parse(base_url) else {
-            continue;
-        };
-        let Some(host) = parsed.host_str() else {
-            continue;
-        };
-        if !matches!(
-            host,
-            "localhost" | "127.0.0.1" | "gateway" | "marty-gateway"
-        ) {
-            issuers.insert(format!("did:web:{host}:orgs:{organization_slug}"));
-        }
-    }
-
-    issuers.into_iter().collect()
 }
 
 fn workload_server_tls(

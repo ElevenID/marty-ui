@@ -331,6 +331,7 @@ async fn verify_vc_jwt_material(
         false,
         1,
     );
+    bind_authenticated_jwt_credential_id(&mut evidence, claims);
     evidence.algorithm = jwt_algorithm(token);
     evidence.validity_checked = true;
     evidence.is_expired = Some(false);
@@ -618,6 +619,27 @@ fn credential_evidence(
         presentation_count: Some(credential_count),
         ..Default::default()
     }
+}
+
+fn bind_authenticated_jwt_credential_id(
+    evidence: &mut CredentialVerificationEvidence,
+    claims: &Map<String, Value>,
+) {
+    let Some(credential_id) = claims
+        .get("jti")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    evidence.credential_id = Some(credential_id.to_owned());
+    evidence
+        .credential_status_ids
+        .retain(|candidate| candidate != credential_id);
+    evidence
+        .credential_status_ids
+        .insert(0, credential_id.to_owned());
 }
 
 fn open_badge_document(
@@ -1007,6 +1029,42 @@ mod tests {
         let mut private = profile;
         private["issuer_relationships"][0]["verification_keys"][0]["d"] = json!("secret");
         assert!(governed_public_jwk(&context(private), &token).is_none());
+    }
+
+    #[test]
+    fn authenticated_jwt_id_precedes_embedded_status_entry_ids() {
+        let contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/presentation-control-plane-behavior.json"
+        ))
+        .unwrap();
+        let status_id = "https://issuer.example/status/revocation#21";
+        let credential = json!({
+            "credentialStatus": {
+                "id": status_id,
+                "type": "BitstringStatusListEntry"
+            }
+        });
+        let mut evidence = credential_evidence(
+            credential.as_object().unwrap(),
+            Some("did:web:issuer.example"),
+            false,
+            1,
+        );
+        let claims = json!({"jti": "urn:uuid:credential-1"});
+        bind_authenticated_jwt_credential_id(&mut evidence, claims.as_object().unwrap());
+
+        assert_eq!(
+            evidence.credential_id.as_deref(),
+            Some("urn:uuid:credential-1")
+        );
+        assert_eq!(
+            evidence.credential_status_ids,
+            ["urn:uuid:credential-1", status_id]
+        );
+        assert_eq!(
+            contract["status_resolution"]["canonical_credential_identifier"],
+            "authenticated_outer_jwt_jti_precedes_embedded_status_entry_ids"
+        );
     }
 
     #[test]
