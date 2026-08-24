@@ -23,6 +23,7 @@ const TEST_WALLET_ORIGIN = process.env.MARTY_TEST_WALLET_ORIGIN || 'http://127.0
 const ORG_ID = process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID;
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
+const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 const RECORDING_PAUSE_MS = Number.parseInt(process.env.RECORDING_PAUSE_MS || '1400', 10);
 const MEMBERSHIP_BADGE_VCT = process.env.MARTY_LOGIN_BADGE_VCT
   || `${BETA_ORIGIN}/credentials/marty-verified-member-badge`;
@@ -161,7 +162,10 @@ async function presentWithTestWallet(walletPage, oid4vpUri) {
 }
 
 async function loginWithTestWallet(browser, walletPage, report) {
-  const context = await browser.newContext({ viewport: { width: 1365, height: 900 } });
+  const context = await browser.newContext({
+    viewport: { width: 1365, height: 900 },
+    ignoreHTTPSErrors: LOCAL_BETA_PROXY,
+  });
   // This lane presents through the deterministic local wallet, so prevent a
   // simultaneous platform-wallet request prefetch from consuming the URI.
   await context.addInitScript(() => {
@@ -451,11 +455,17 @@ async function main() {
     badResponses: [],
     pageErrors: [],
   };
-  const browser = await chromium.launch({ headless: HEADLESS });
+  const browser = await chromium.launch({
+    headless: HEADLESS,
+    args: LOCAL_BETA_PROXY
+      ? ['--host-resolver-rules=MAP beta.elevenidllc.com 127.0.0.1', '--no-proxy-server']
+      : [],
+  });
   let context = null;
   try {
     context = await browser.newContext({
       viewport: { width: 1440, height: 1000 },
+      ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? {
         recordVideo: {
           dir: path.join(artifactDir, 'raw-video'),

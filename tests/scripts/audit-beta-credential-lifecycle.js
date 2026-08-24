@@ -31,6 +31,7 @@ const SOURCE_TEMPLATE_ID = process.env.BETA_AUDIT_TEMPLATE_ID || DEFAULT_LIFECYC
 const VERIFIER_DID = process.env.BETA_AUDIT_VERIFIER_DID || '';
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
+const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 
 async function showLifecycleStep(page, title, detail) {
   return showStep(page, title, detail, {
@@ -84,12 +85,13 @@ async function selectOrg(page) {
   }, ORG_ID);
   if (!selection.ok) return selection;
 
-  const orgButton = page.getByRole('button', {
-    name: /Marty Identity Platform|Audit Production Flow|Select Organization/i,
-  }).first();
-  await orgButton.click({ timeout: 15_000 });
-  await page.getByPlaceholder('Search organizations').fill(selection.name);
-  await page.getByRole('menuitem').filter({ hasText: selection.name }).first().click();
+  await page.evaluate((organizationId) => {
+    localStorage.setItem('activeOrgId', organizationId);
+  }, ORG_ID);
+  await page.goto(`${BETA_ORIGIN}/console/org`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 60_000,
+  });
   await waitFor(() => page.evaluate((organizationId) => (
     localStorage.getItem('activeOrgId') === organizationId
   ), ORG_ID));
@@ -357,6 +359,14 @@ async function findIssuedCredential(page, templateId) {
   }, { organizationId: ORG_ID, templateId }));
 }
 
+async function findCredentialRow(page, credentialId) {
+  const search = page.getByPlaceholder('Search issued credentials...');
+  await search.fill(credentialId);
+  const row = page.locator('tbody tr').first();
+  await row.waitFor({ state: 'visible', timeout: 30_000 });
+  return row;
+}
+
 async function cleanupActiveLifecycleCredentials(page, templateId) {
   return page.evaluate(async ({ organizationId, templateId }) => {
     const listResponse = await fetch(
@@ -476,19 +486,30 @@ async function verify(page, walletPage, label) {
       status: response.status,
       instanceId: body?.instance_id || body?.id || null,
       requestUri: body?.request_uri || null,
-      error: response.ok ? null : body?.detail || body?.message || 'Session creation failed',
+      diagnostic: response.ok ? undefined : body,
+      error: response.ok
+        ? null
+        : body?.detail
+          || body?.message
+          || body?.error?.message
+          || (typeof body?.error === 'string' ? body.error : null)
+          || JSON.stringify(body)
+          || 'Session creation failed',
     };
   }, request);
-  if (!session.ok || !session.instanceId || !session.requestUri) return { session };
+  const sanitizedSession = {
+    ...session,
+    requestUri: session.requestUri ? '[present]' : null,
+    diagnostic: session.diagnostic == null
+      ? undefined
+      : redact(session.diagnostic).slice(0, 800),
+    error: session.error == null ? null : redact(session.error).slice(0, 800),
+  };
+  if (!session.ok || !session.instanceId || !session.requestUri) {
+    return { session: sanitizedSession };
+  }
 
   const wallet = await present(walletPage, session.requestUri);
-  if (!wallet.ok) {
-    return {
-      session: { ...session, requestUri: '[present]' },
-      wallet,
-      result: null,
-    };
-  }
   const rawResult = await waitFor(() => page.evaluate(async (instanceId) => {
     const response = await fetch(`/v1/flows/instances/${encodeURIComponent(instanceId)}/result`, {
       credentials: 'include',
@@ -502,7 +523,7 @@ async function verify(page, walletPage, label) {
   const result = rawResult
     ? verificationResultEvidence(rawResult.body, rawResult.httpStatus)
     : null;
-  return { session: { ...session, requestUri: '[present]' }, wallet, result };
+  return { session: sanitizedSession, wallet, result };
 }
 
 async function main() {
@@ -525,10 +546,16 @@ async function main() {
     unexpectedResponses: [],
   };
 
-  const browser = await chromium.launch({ headless: HEADLESS });
+  const browser = await chromium.launch({
+    headless: HEADLESS,
+    args: LOCAL_BETA_PROXY
+      ? ['--host-resolver-rules=MAP beta.elevenidllc.com 127.0.0.1', '--no-proxy-server']
+      : [],
+  });
   try {
     const context = await browser.newContext({
       viewport: VIDEO_SIZE,
+      ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
     const page = await context.newPage();
@@ -604,8 +631,7 @@ async function main() {
       waitUntil: 'domcontentloaded',
       timeout: 60_000,
     });
-    let row = page.getByRole('row').filter({ hasText: report.issuance.templateName }).first();
-    await row.waitFor({ state: 'visible', timeout: 30_000 });
+    let row = await findCredentialRow(page, credential.id);
     await showLifecycleStep(page, 'Active credential issued', 'The issuer inventory shows the newly issued credential and its available lifecycle controls.');
     await page.screenshot({ path: path.join(artifactDir, '01-active-credential.png'), fullPage: true });
 
@@ -634,8 +660,7 @@ async function main() {
       waitUntil: 'domcontentloaded',
       timeout: 60_000,
     });
-    row = page.getByRole('row').filter({ hasText: report.issuance.templateName }).first();
-    await row.waitFor({ state: 'visible', timeout: 30_000 });
+    row = await findCredentialRow(page, credential.id);
     await showLifecycleStep(page, 'Credential renewed', 'The replacement credential is active and linked to its superseded predecessor.');
     await page.screenshot({ path: path.join(artifactDir, '02-renewed-credential.png'), fullPage: true });
 

@@ -30,6 +30,7 @@ const MEMBERSHIP_BADGE_CONFIGURATION_ID = process.env.EXPECTED_LOGIN_BADGE_CONFI
   || DEFAULT_LOGIN_BADGE_CONFIGURATION_ID;
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
+const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 async function showStep(page, title, detail) {
   return showRecordingStep(page, title, detail, {
     enabled: RECORD_VIDEO,
@@ -95,7 +96,12 @@ async function main() {
     );
   fs.mkdirSync(artifactDir, { recursive: true });
 
-  const browser = await chromium.launch({ headless: HEADLESS });
+  const browser = await chromium.launch({
+    headless: HEADLESS,
+    args: LOCAL_BETA_PROXY
+      ? ['--host-resolver-rules=MAP beta.elevenidllc.com 127.0.0.1', '--no-proxy-server']
+      : [],
+  });
   const report = {
     startedAt: new Date().toISOString(),
     betaOrigin: BETA_ORIGIN,
@@ -121,6 +127,7 @@ async function main() {
     const holderVideo = holderPage?.video() || null;
     const walletContext = await browser.newContext({
       viewport: VIDEO_SIZE,
+      ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
     const walletPage = await walletContext.newPage();
@@ -144,6 +151,7 @@ async function main() {
 
     const loginContext = holderContext || await browser.newContext({
       viewport: VIDEO_SIZE,
+      ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
     // This lane drives presentation through the deterministic local wallet.

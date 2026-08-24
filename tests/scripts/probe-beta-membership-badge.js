@@ -9,6 +9,7 @@ const { DEFAULT_LOGIN_BADGE_TEMPLATE_ID } = require('./beta-credential-contract'
 const ROOT = path.resolve(__dirname, '..', '..');
 const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
 const TEMPLATE_ID = process.env.LOGIN_BADGE_TEMPLATE_ID || DEFAULT_LOGIN_BADGE_TEMPLATE_ID;
+const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 
 function loadEnvFile(file) {
   if (!fs.existsSync(file)) return;
@@ -87,6 +88,11 @@ async function apiGet(request, url) {
   };
 }
 
+async function publicGet(page, request, url) {
+  if (LOCAL_BETA_PROXY) return browserFetch(page, url, { credentials: 'omit' });
+  return apiGet(request, url);
+}
+
 async function main() {
   loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
   loadEnvFile(path.join(ROOT, '.env'));
@@ -98,8 +104,16 @@ async function main() {
   const artifactDir = path.join(ROOT, 'tests', 'artifacts', `beta-membership-probe-${runId}`);
   fs.mkdirSync(artifactDir, { recursive: true });
 
-  const browser = await chromium.launch({ headless: process.env.HEADED !== '1' });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const browser = await chromium.launch({
+    headless: process.env.HEADED !== '1',
+    args: LOCAL_BETA_PROXY
+      ? ['--host-resolver-rules=MAP beta.elevenidllc.com 127.0.0.1', '--no-proxy-server']
+      : [],
+  });
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 1000 },
+    ignoreHTTPSErrors: LOCAL_BETA_PROXY,
+  });
   const page = await context.newPage();
   const responses = [];
   const failedRequests = [];
@@ -165,12 +179,12 @@ async function main() {
       profile: await browserFetch(page, '/v1/me/applicant-profile'),
       applications: await browserFetch(page, '/v1/me/applications?limit=100'),
       holderInventory: await browserFetch(page, '/v1/issued-credentials/mine?limit=100'),
-      removedPublicApplications: await apiGet(context.request, '/v1/applications'),
-      removedApplications: await apiGet(context.request, '/v1/applicants/applications'),
-      removedOrgApplications: await apiGet(context.request, '/v1/applicants/org-applications'),
-      removedProfileApplications: await apiGet(context.request, '/v1/applicants/profiles/removed-route-probe/applications'),
+      removedPublicApplications: await publicGet(page, context.request, '/v1/applications'),
+      removedApplications: await publicGet(page, context.request, '/v1/applicants/applications'),
+      removedOrgApplications: await publicGet(page, context.request, '/v1/applicants/org-applications'),
+      removedProfileApplications: await publicGet(page, context.request, '/v1/applicants/profiles/removed-route-probe/applications'),
       removedByUser: userId
-        ? await apiGet(context.request, `/v1/applicants/by-user/${encodeURIComponent(userId)}`)
+        ? await publicGet(page, context.request, `/v1/applicants/by-user/${encodeURIComponent(userId)}`)
         : { status: 0, body: null },
       credentialLogin: await browserFetch(page, '/v1/auth/credential-login'),
     };
@@ -190,6 +204,16 @@ async function main() {
       routeProbes.removedProfileApplications,
       routeProbes.removedByUser,
     ];
+    let expectedRemovedRouteConsoleErrors = [];
+    if (LOCAL_BETA_PROXY && consoleErrors.length >= removedRoutes.length) {
+      const expectedStart = consoleErrors.length - removedRoutes.length;
+      const candidates = consoleErrors.slice(expectedStart);
+      if (candidates.every((message) => (
+        message === 'Failed to load resource: the server responded with a status of 404 (Not Found)'
+      ))) {
+        expectedRemovedRouteConsoleErrors = consoleErrors.splice(expectedStart);
+      }
+    }
     const serverErrors = responses.filter((response) => response.status >= 500);
     const removedPaths = new Set([
       '/v1/applications',
@@ -225,6 +249,7 @@ async function main() {
       failedRequests,
       pageErrors,
       consoleErrors,
+      expectedRemovedRouteConsoleErrors,
       releaseReady,
     };
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
