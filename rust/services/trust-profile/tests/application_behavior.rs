@@ -51,6 +51,15 @@ impl IssuerKeyResolver for FixedIssuerKeyResolver {
     }
 }
 
+struct UnavailableIssuerKeyResolver;
+
+#[async_trait]
+impl IssuerKeyResolver for UnavailableIssuerKeyResolver {
+    async fn resolve(&self, _did: &str) -> Result<IssuerKeyResolution, IssuerKeyResolutionError> {
+        Err(IssuerKeyResolutionError::Unavailable)
+    }
+}
+
 fn now() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 21, 0, 0, 0).unwrap()
 }
@@ -193,6 +202,54 @@ async fn internal_decision_reconciles_and_persists_existing_keyless_did_issuer()
         persisted.metadata["verification_key_resolution"]["source"],
         "configured_internal_resolver"
     );
+}
+
+#[tokio::test]
+async fn explicitly_pinned_public_keys_are_preserved_without_resolution() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let application = TrustProfileApplication::new(repository, Arc::new(AllowAll))
+        .with_issuer_key_resolver(Arc::new(UnavailableIssuerKeyResolver));
+    let mut input = issuer(Some("org-a"), false);
+    let pinned = json!([{
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "public-x",
+        "y": "public-y",
+        "kid": "did:web:issuer.example#issuer-key"
+    }]);
+    input.metadata["verification_keys"] = pinned.clone();
+
+    let created = application
+        .create_issuer_entity("user-a", input)
+        .await
+        .unwrap();
+
+    assert_eq!(created.metadata["verification_keys"], pinned);
+    assert!(created
+        .metadata
+        .get("verification_key_resolution")
+        .is_none());
+}
+
+#[tokio::test]
+async fn resolution_failure_prevents_keyless_did_issuer_creation() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let application = TrustProfileApplication::new(repository.clone(), Arc::new(AllowAll))
+        .with_issuer_key_resolver(Arc::new(UnavailableIssuerKeyResolver));
+
+    assert!(matches!(
+        application
+            .create_issuer_entity("user-a", issuer(Some("org-a"), false))
+            .await,
+        Err(TrustProfileApplicationError::IssuerKeyResolution(
+            IssuerKeyResolutionError::Unavailable
+        ))
+    ));
+    assert!(repository
+        .issuer_entity_by_identifier(Some("org-a"), "did:web:issuer.example")
+        .await
+        .unwrap()
+        .is_none());
 }
 
 #[tokio::test]
