@@ -199,10 +199,43 @@ pub fn reconcile_transaction(
                 changed = true;
             }
         }
-        "pending" | "authorized" if application.status == LifecycleStatus::Credentialed => {
+        "pending" if application.status == LifecycleStatus::Credentialed => {
             application.status = LifecycleStatus::Offered;
             application.issued_at = None;
             changed = true;
+        }
+        "authorized" | "signing" => {
+            if application.status == LifecycleStatus::Credentialed {
+                application.status = LifecycleStatus::Offered;
+                application.issued_at = None;
+                changed = true;
+            }
+            changed |= mark_offer_unclaimable(
+                application,
+                "OFFER_CONSUMED",
+                "This credential offer has already been accepted. Request a new offer to use another wallet.",
+            );
+        }
+        "failed" => {
+            changed |= mark_offer_unclaimable(
+                application,
+                "ISSUANCE_FAILED",
+                "Credential issuance did not complete. Request a new offer.",
+            );
+        }
+        "expired" => {
+            changed |= mark_offer_unclaimable(
+                application,
+                "OFFER_EXPIRED",
+                "This credential offer has expired. Request a new offer.",
+            );
+        }
+        "revoked" => {
+            changed |= mark_offer_unclaimable(
+                application,
+                "ISSUANCE_REVOKED",
+                "This credential offer is no longer valid. Request a new offer if permitted.",
+            );
         }
         _ => {}
     }
@@ -221,6 +254,19 @@ pub fn reconcile_transaction(
         application.updated_at = now;
     }
     Ok(changed)
+}
+
+fn mark_offer_unclaimable(application: &mut Application, code: &str, message: &str) -> bool {
+    let blocker = json!({
+        "code": code,
+        "owner": "APPLICANT",
+        "message": message,
+    });
+    let changed = application.claim_state != ClaimState::Expired
+        || application.claim_blocker.as_ref() != Some(&blocker);
+    application.claim_state = ClaimState::Expired;
+    application.claim_blocker = Some(blocker);
+    changed
 }
 
 fn advance_to_offered(applicant: &mut Applicant, now: DateTime<Utc>) -> Result<(), ApplicantError> {

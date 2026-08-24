@@ -51,7 +51,12 @@
   "issuance_reconciliation": {
     "no_op": "preserve_application_updated_at_and_skip_persistence",
     "state_change": "persist_once_with_reconciliation_timestamp",
-    "listing_order": "stable_across_read_only_reconciliation"
+    "listing_order": "stable_across_read_only_reconciliation",
+    "reusable_offer_statuses": ["pending"],
+    "consumed_offer_statuses": ["authorized", "signing"],
+    "terminal_offer_statuses": ["failed", "expired", "revoked"],
+    "non_reusable_offer_claim_state": "EXPIRED",
+    "new_claim_after_non_reusable_offer": "reserve_new_attempt_and_initiate_new_offer"
   },
   "capabilities": [
     "tenant-bound self-service applicant profiles",

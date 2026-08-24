@@ -107,6 +107,49 @@ fn repeated_issued_reconciliation_is_a_no_op() {
 }
 
 #[test]
+fn consumed_offer_requires_a_fresh_claim_attempt() {
+    let now = Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap();
+    let (mut application, mut applicant) = state();
+    let (attempt, _) = reserve_attempt(&mut application, Map::new(), now).unwrap();
+    apply_offer(
+        &mut application,
+        &mut applicant,
+        attempt,
+        &IssuanceOffer {
+            id: Some("transaction-1".into()),
+            credential_offer_uri: Some("openid-credential-offer://offer".into()),
+            credential_offer_uris: Map::new(),
+            credential_offer_labels: Map::new(),
+            expires_at: Some("2026-08-28T12:00:00Z".into()),
+            status: "pending".into(),
+            flow_instance_id: Some("flow-instance-1".into()),
+            flow_definition_id: Some("flow-1".into()),
+            source: Some("flow".into()),
+        },
+        now,
+    )
+    .unwrap();
+
+    assert!(
+        reconcile_transaction(&mut application, &mut applicant, "authorized", None, now).unwrap()
+    );
+    assert_eq!(application.claim_state, ClaimState::Expired);
+    assert_eq!(
+        application.claim_blocker.as_ref().unwrap()["code"],
+        "OFFER_CONSUMED"
+    );
+    assert_eq!(application.system_data["issuance_status"], "authorized");
+    assert!(!reconcile_transaction(
+        &mut application,
+        &mut applicant,
+        "authorized",
+        None,
+        now + chrono::Duration::minutes(1),
+    )
+    .unwrap());
+}
+
+#[test]
 fn missing_active_flow_persists_stable_issuer_owned_blocker() {
     let now = Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap();
     let (mut application, _) = state();
