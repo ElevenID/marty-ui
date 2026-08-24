@@ -38,6 +38,22 @@ def test_oid4vp_signing_and_flow_envelopes_have_dedicated_kms_keys() -> None:
     assert '"exportable": False' in migrations
 
 
+def test_openbao_initializer_provisions_and_authorizes_purpose_bound_protocol_keys() -> None:
+    init_script = (ROOT / "docker" / "openbao-init.sh").read_text(
+        encoding="utf-8"
+    )
+
+    for key_id, key_type in (
+        ("oid4vp-verifier-marty-es256", "ecdsa-p256"),
+        ("lti-tool-marty-rs256", "rsa-2048"),
+    ):
+        assert f"transit/keys/{key_id}" in init_script
+        assert f"type={key_type}" in init_script
+        assert f'path "transit/sign/{key_id}"' in init_script
+        assert f'path "transit/verify/{key_id}"' in init_script
+        assert f'path "transit/keys/{key_id}"' in init_script
+
+
 def test_protocol_services_cannot_select_an_issuer_profile_for_signing() -> None:
     gateway_routes = json.loads(
         (ROOT / "contracts" / "gateway-routes.json").read_text(encoding="utf-8")
