@@ -25,6 +25,7 @@ use tower::ServiceExt as _;
 struct AppStub {
     initiated: Mutex<Vec<(bool, String, String)>>,
     session: Mutex<Option<Session>>,
+    callback_error: Mutex<Option<PortError>>,
 }
 
 #[async_trait]
@@ -43,6 +44,9 @@ impl AuthHttpApplication for AppStub {
     }
 
     async fn callback(&self, _: HandleCallbackCommand) -> Result<HandleCallbackResult, PortError> {
+        if let Some(error) = self.callback_error.lock().unwrap().take() {
+            return Err(error);
+        }
         Ok(HandleCallbackResult {
             session: self.session.lock().unwrap().clone().unwrap(),
             redirect_uri: "/".into(),
@@ -462,12 +466,30 @@ async fn login_registration_and_canvas_preserve_redirect_auth_and_cookie_behavio
 
 #[tokio::test]
 async fn callback_me_update_and_logout_preserve_browser_boundary_behavior() {
-    let (router, _, sessions) = harness();
+    let (router, app, sessions) = harness();
     let missing = request(&router, Method::GET, "/v1/auth/callback", &[], "").await;
     assert!(missing.headers()[header::LOCATION]
         .to_str()
         .unwrap()
         .contains("Missing+authentication+parameters"));
+
+    *app.callback_error.lock().unwrap() = Some(PortError::new(
+        "auth_user_provisioning_failed",
+        "private downstream detail",
+    ));
+    let failed_callback = request(
+        &router,
+        Method::GET,
+        "/v1/auth/callback?code=code&state=state",
+        &[],
+        "",
+    )
+    .await;
+    let failed_location = failed_callback.headers()[header::LOCATION]
+        .to_str()
+        .unwrap();
+    assert!(failed_location.contains("Session+expired.+Please+try+again"));
+    assert!(!failed_location.contains("private"));
 
     let callback = request(
         &router,

@@ -1,5 +1,26 @@
 {
   "schema_version": 1,
+  "oidc_callback_failures": {
+    "log": "stable_stage_code_without_private_downstream_detail",
+    "browser_redirect": "generic_retry_message",
+    "stage_codes": [
+      "auth_oidc_state_invalid",
+      "auth_oidc_state_expired",
+      "auth_oidc_nonce_missing",
+      "auth_oidc_access_token_missing",
+      "auth_oidc_id_token_missing",
+      "auth_oidc_state_save_failed",
+      "auth_oidc_authorization_url_failed",
+      "auth_oidc_state_consume_failed",
+      "auth_oidc_code_exchange_failed",
+      "auth_oidc_token_validation_failed",
+      "auth_user_provisioning_failed",
+      "auth_session_save_failed",
+      "auth_login_event_publish_failed",
+      "auth_session_event_publish_failed",
+      "auth_backend_operation_failed"
+    ]
+  },
   "session_id_vectors": [
     {
       "secret": "test-flow-webhook-secret-at-least-32-bytes",

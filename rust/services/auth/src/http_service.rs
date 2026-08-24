@@ -11,6 +11,7 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tracing::warn;
 
 use crate::{
     build_session_impersonation, build_ui_redirect_url, oidc_callback_url,
@@ -344,10 +345,17 @@ async fn callback(
             user_agent: header_text(&headers, header::USER_AGENT).map(str::to_owned),
         })
         .await;
-    let Ok(mut result) = result else {
-        return redirect_response(&format!(
-            "{ui_base}/?auth_error=Session+expired.+Please+try+again."
-        ));
+    let mut result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            warn!(
+                error_code = %error.code,
+                "OIDC callback failed before session creation"
+            );
+            return redirect_response(&format!(
+                "{ui_base}/?auth_error=Session+expired.+Please+try+again."
+            ));
+        }
     };
     if let Some(impersonation) = build_session_impersonation(
         &result.session,
@@ -751,5 +759,24 @@ fn title_case(value: &str) -> &'static str {
 }
 
 fn application_error(error: AuthApplicationError) -> PortError {
-    PortError::new("auth_application_error", error.to_string())
+    let code = match &error {
+        AuthApplicationError::InvalidState => "auth_oidc_state_invalid",
+        AuthApplicationError::ExpiredState => "auth_oidc_state_expired",
+        AuthApplicationError::MissingNonce => "auth_oidc_nonce_missing",
+        AuthApplicationError::MissingAccessToken => "auth_oidc_access_token_missing",
+        AuthApplicationError::MissingIdToken => "auth_oidc_id_token_missing",
+        AuthApplicationError::Port { operation, .. } => match *operation {
+            "save OIDC state" => "auth_oidc_state_save_failed",
+            "build OIDC authorization URL" => "auth_oidc_authorization_url_failed",
+            "consume OIDC state" => "auth_oidc_state_consume_failed",
+            "exchange OIDC code" => "auth_oidc_code_exchange_failed",
+            "validate OIDC tokens" => "auth_oidc_token_validation_failed",
+            "provision authenticated user" => "auth_user_provisioning_failed",
+            "save authenticated session" => "auth_session_save_failed",
+            "publish authentication event" => "auth_login_event_publish_failed",
+            "publish session-created event" => "auth_session_event_publish_failed",
+            _ => "auth_backend_operation_failed",
+        },
+    };
+    PortError::new(code, error.to_string())
 }
