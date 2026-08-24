@@ -138,6 +138,21 @@ def test_beta_runner_builds_application_images_serially_before_maintenance() -> 
     assert "($applicationBuildArguments + $script:ApplicationBuildServices)" not in script
 
 
+def test_service_specific_image_metadata_cannot_fan_out_shared_runtime_layers() -> None:
+    dockerfile = text("services/Dockerfile")
+
+    assert dockerfile.count("ARG SERVICE_NAME") == 1
+    service_boundary = dockerfile.index("ARG SERVICE_NAME")
+    assert dockerfile.index("RUN chmod +x /app/services/entrypoint.sh") < service_boundary
+    assert dockerfile.index("ENV SERVICE_NAME=${SERVICE_NAME}", service_boundary) > service_boundary
+
+    service_specific_tail = dockerfile[service_boundary:].splitlines()
+    filesystem_instructions = ("RUN ", "COPY ", "ADD ")
+    assert not any(
+        line.startswith(filesystem_instructions) for line in service_specific_tail
+    ), "service-specific build arguments must follow every shared filesystem layer"
+
+
 def test_direct_ui_proxy_uses_canonical_gateway() -> None:
     for config_path in ("ui/nginx.prod.conf", "ui/nginx.dev.conf"):
         config = text(config_path)
