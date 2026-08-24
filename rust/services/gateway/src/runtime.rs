@@ -1244,11 +1244,15 @@ async fn sse_events_handler(state: Arc<GatewayRuntimeState>, request: Request) -
         .get::<TrustedIdentityContext>()
         .cloned()
         .unwrap_or_default();
-    let Some(authorized_org) = request
-        .extensions()
-        .get::<GatewayIdentity>()
-        .and_then(|identity| identity.session_organization_id.as_deref())
-        .or(identity.organization_id.as_deref())
+    let Some(authorized_org) = identity
+        .organization_id
+        .as_deref()
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<GatewayIdentity>()
+                .and_then(|identity| identity.session_organization_id.as_deref())
+        })
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
@@ -4242,6 +4246,9 @@ mod tests {
             user_id: &str,
             organization_id: &str,
         ) -> Result<Option<OrganizationMembership>, SecurityError> {
+            if organization_id == "org-other" {
+                return Ok(None);
+            }
             Ok(Some(OrganizationMembership {
                 user_id: user_id.into(),
                 organization_id: organization_id.into(),
@@ -5848,6 +5855,24 @@ mod tests {
             .unwrap()
             .join("");
         assert_eq!(String::from_utf8(body.to_vec()).unwrap(), expected);
+        let selected_tenant = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/v1/notifications/events/push?{}",
+                        contract["valid_query"].as_str().unwrap()
+                    ))
+                    .header("cookie", "sessionId=valid-uuid")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(
+            selected_tenant.status(),
+            StatusCode::OK,
+            "tenant authorization must override stale session organization context"
+        );
         for query in contract["rejected_queries"].as_array().unwrap() {
             let response = runtime_router()
                 .oneshot(
