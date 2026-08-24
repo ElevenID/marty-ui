@@ -157,7 +157,7 @@ async fn start_verification(
             "Verification start request is malformed",
         )
     })?;
-    authorize(
+    let principal = authorize(
         &state,
         &headers,
         &request.organization_id,
@@ -165,7 +165,7 @@ async fn start_verification(
     )
     .await?;
     Ok(Json(json!(
-        persist_verification_start(&state, request).await?
+        persist_verification_start(&state, request, &principal).await?
     )))
 }
 
@@ -175,7 +175,7 @@ async fn start_siop(
     Json(payload): Json<Value>,
 ) -> Result<Json<Value>, FlowHttpError> {
     let request: StartSiopFlowRequest = parse_request(payload)?;
-    authorize(
+    let principal = authorize(
         &state,
         &headers,
         &request.organization_id,
@@ -198,6 +198,7 @@ async fn start_siop(
             request_uri_method: RequestUriMethod::Get,
             expiry_minutes: request.expiry_minutes,
         },
+        &principal,
     )
     .await?;
     Ok(Json(siop_start_response(response)))
@@ -206,8 +207,9 @@ async fn start_siop(
 async fn persist_verification_start(
     state: &FlowHttpState,
     request: StartVerificationFlowRequest,
+    principal_id: &str,
 ) -> Result<crate::VerificationRequestResponse, FlowHttpError> {
-    let prepared = prepare_profiled_verification_start(
+    let mut prepared = prepare_profiled_verification_start(
         &state.providers,
         &state.verification.callback_destinations,
         request,
@@ -217,6 +219,22 @@ async fn persist_verification_start(
         Utc::now(),
     )
     .await?;
+    prepared
+        .instance
+        .context
+        .as_object_mut()
+        .ok_or_else(|| {
+            FlowHttpError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "invalid_stored_flow_state",
+                "Prepared verification transaction is invalid",
+            )
+        })?
+        .insert(
+            "_marty_verification_principal_id".into(),
+            json!(principal_id),
+        );
+    prepared.instance.kernel()?;
     if !state
         .repository
         .save_started_instance(&prepared.instance, None)

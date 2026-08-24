@@ -113,6 +113,7 @@ pub struct PresentationPolicyReference {
 pub struct PresentationEvaluationRequest {
     pub policy_id: String,
     pub organization_id: String,
+    pub principal_id: String,
     pub presentation: String,
     pub nonce: String,
     pub audience: String,

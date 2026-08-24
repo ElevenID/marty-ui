@@ -173,6 +173,8 @@ pub async fn prepare_verification_submission(
     }
     let nonce = required_context_string(context, "nonce")?.to_owned();
     let policy_id = required_context_string(context, "presentation_policy_id")?.to_owned();
+    let principal_id =
+        required_context_string(context, "_marty_verification_principal_id")?.to_owned();
     let audience = input
         .audience_override
         .as_deref()
@@ -239,6 +241,7 @@ pub async fn prepare_verification_submission(
                 .evaluate(&PresentationEvaluationRequest {
                     policy_id: policy_id.clone(),
                     organization_id: instance.organization_id.clone(),
+                    principal_id,
                     presentation: vp_token.clone(),
                     nonce: nonce.clone(),
                     audience: audience.clone(),
