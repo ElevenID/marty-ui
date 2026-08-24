@@ -2,8 +2,8 @@
   "schema": "marty.presentation-policy-catalog/v1",
   "policies": [
     {"id":"50000000-0000-0000-0000-000000000001","organization_id":"22222222-2222-2222-2222-222222222222","name":"MemberLogin","format":"ietf_sd_jwt","claim":"email","version":2},
-    {"id":"50000000-0000-0000-0000-000000000002","organization_id":"00000000-0000-0000-0000-000000000001","name":"MemberLogin-SD-JWT","format":"ietf_sd_jwt","claim":"email","version":2},
-    {"id":"50000000-0000-0000-0000-000000000003","organization_id":"00000000-0000-0000-0000-000000000001","name":"MemberLogin-mDoc","format":"mso_mdoc","claim":"email","version":2},
+    {"id":"50000000-0000-0000-0000-000000000002","organization_id":"00000000-0000-0000-0000-000000000001","name":"MemberLogin-SD-JWT","format":"ietf_sd_jwt","claim":"email","version":2,"trust_profile_id":"60000000-0000-0000-0000-000000000001"},
+    {"id":"50000000-0000-0000-0000-000000000003","organization_id":"00000000-0000-0000-0000-000000000001","name":"MemberLogin-mDoc","format":"mso_mdoc","claim":"email","version":2,"trust_profile_id":"60000000-0000-0000-0000-000000000001"},
     {"id":"50000000-0000-0000-0000-000000000004","organization_id":"00000000-0000-0000-0000-000000000001","name":"OpenBadgeLogin","format":"openbadge-v3","claim":"email","version":2,"trust_profile_id":"60000000-0000-0000-0000-000000000001","require_not_revoked":true},
     {"id":"50000000-0000-0000-0000-000000000005","organization_id":"00000000-0000-0000-0000-000000000001","name":"Private Online Age Proof","format":"mso_mdoc","claim":"age_over_21","version":1,"trust_profile_id":"60000000-0000-0000-0000-000000000001"}
   ]
