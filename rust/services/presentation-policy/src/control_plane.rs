@@ -683,7 +683,7 @@ fn normalize_issuer(value: &str) -> String {
         if matches!(url.scheme(), "http" | "https") {
             url.set_query(None);
             url.set_fragment(None);
-            url.as_str().trim_end_matches('/').to_ascii_lowercase()
+            url.as_str().trim_end_matches('/').to_owned()
         } else {
             raw.to_owned()
         }
