@@ -35,6 +35,8 @@ pub struct TrustProfileServiceConfig {
     pub registry_sync_poll_interval: Duration,
     pub registry_private_hosts: Vec<String>,
     pub registry_ca_bundle: Option<Vec<u8>>,
+    pub did_resolution_base_urls: Vec<String>,
+    pub did_web_allowed_hosts: Vec<String>,
     pub marty_organization_id: Uuid,
     pub marty_issuer_did: String,
     pub marty_issuer_url: String,
@@ -152,6 +154,31 @@ impl TrustProfileServiceConfig {
                 })
             })
             .transpose()?;
+        let did_resolution_base_urls =
+            csv(value(&values, "DID_RESOLUTION_BASE_URL").unwrap_or("http://gateway:8000"));
+        if did_resolution_base_urls.is_empty()
+            || did_resolution_base_urls.iter().any(|url| {
+                Url::parse(url).map_or(true, |parsed| {
+                    !matches!(parsed.scheme(), "http" | "https")
+                        || parsed.host_str().is_none()
+                        || !parsed.username().is_empty()
+                        || parsed.password().is_some()
+                        || parsed.query().is_some()
+                        || parsed.fragment().is_some()
+                })
+            })
+        {
+            return Err(invalid("DID_RESOLUTION_BASE_URL"));
+        }
+        let public_fallback_enabled = boolean(
+            value(&values, "DID_PUBLIC_FALLBACK_ENABLED").unwrap_or("false"),
+            "DID_PUBLIC_FALLBACK_ENABLED",
+        )?;
+        let did_web_allowed_hosts = if public_fallback_enabled {
+            csv(value(&values, "DID_WEB_ALLOWED_HOSTS").unwrap_or_default())
+        } else {
+            Vec::new()
+        };
         Ok(Self {
             environment,
             http_addr,
@@ -164,6 +191,8 @@ impl TrustProfileServiceConfig {
             registry_sync_poll_interval,
             registry_private_hosts,
             registry_ca_bundle,
+            did_resolution_base_urls,
+            did_web_allowed_hosts,
             marty_organization_id,
             marty_issuer_did,
             marty_issuer_url: marty_issuer_url.trim_end_matches('/').to_owned(),
@@ -269,6 +298,23 @@ where
     value(values, name).map_or(Ok(default), |raw| raw.parse().map_err(|_| invalid(name)))
 }
 
+fn csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn boolean(value: &str, name: &'static str) -> Result<bool, TrustProfileConfigError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => Err(invalid(name)),
+    }
+}
+
 fn required(
     values: &BTreeMap<String, String>,
     name: &'static str,
@@ -315,6 +361,8 @@ mod tests {
         assert_eq!(config.organization_grpc_target, "http://organization:9002");
         assert_eq!(config.http_addr.port(), 8004);
         assert_eq!(config.marty_issuer_url, "https://issuer.example");
+        assert_eq!(config.did_resolution_base_urls, ["http://gateway:8000"]);
+        assert!(config.did_web_allowed_hosts.is_empty());
     }
 
     #[test]
@@ -371,6 +419,41 @@ mod tests {
                 .unwrap()
                 .registry_sync_poll_interval,
             Duration::from_secs(86_400)
+        );
+    }
+
+    #[test]
+    fn public_did_fallback_requires_an_explicit_enablement_and_exact_hosts() {
+        let mut disabled = values("development");
+        disabled.insert(
+            "DID_WEB_ALLOWED_HOSTS".into(),
+            "issuer.example, partner.example".into(),
+        );
+        assert!(TrustProfileServiceConfig::from_values(disabled)
+            .unwrap()
+            .did_web_allowed_hosts
+            .is_empty());
+
+        let mut enabled = values("development");
+        enabled.insert("DID_PUBLIC_FALLBACK_ENABLED".into(), "true".into());
+        enabled.insert(
+            "DID_WEB_ALLOWED_HOSTS".into(),
+            "issuer.example, partner.example".into(),
+        );
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(enabled)
+                .unwrap()
+                .did_web_allowed_hosts,
+            ["issuer.example", "partner.example"]
+        );
+
+        let mut invalid = values("development");
+        invalid.insert("DID_RESOLUTION_BASE_URL".into(), "file:///tmp/did".into());
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(invalid),
+            Err(TrustProfileConfigError::Invalid {
+                name: "DID_RESOLUTION_BASE_URL"
+            })
         );
     }
 }

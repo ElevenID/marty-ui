@@ -1090,7 +1090,7 @@ async fn internal_profile(
         .map_err(repository_error)?;
     let mut decisions = Vec::with_capacity(relationships.len());
     for relationship in relationships {
-        let issuer = state
+        let mut issuer = state
             .repository
             .issuer_entity_by_id(relationship.issuer_id)
             .await
@@ -1105,6 +1105,11 @@ async fn internal_profile(
                 "Trust Profile contains a cross-organization issuer relationship",
             ));
         }
+        state
+            .application
+            .ensure_decision_issuer_verification_keys(&mut issuer)
+            .await
+            .map_err(application_error)?;
         let keys = issuer
             .metadata
             .get("verification_keys")
@@ -1463,6 +1468,12 @@ fn application_error(error: TrustProfileApplicationError) -> TrustProfileHttpErr
             bad_request("Revoked issuer cannot be reinstated; create a new IssuerEntity instead")
         }
         TrustProfileApplicationError::Domain(error) => unprocessable(error.to_string()),
+        TrustProfileApplicationError::IssuerKeyResolution(
+            crate::IssuerKeyResolutionError::Invalid,
+        ) => unprocessable("Issuer DID has no valid public assertion verification keys"),
+        TrustProfileApplicationError::IssuerKeyResolution(
+            crate::IssuerKeyResolutionError::Unavailable,
+        ) => unavailable("Issuer DID resolution is unavailable"),
         TrustProfileApplicationError::Repository(error) => repository_error(error),
     }
 }

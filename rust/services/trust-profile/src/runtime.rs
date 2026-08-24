@@ -12,6 +12,7 @@ pub enum TrustProfileDependency {
     SystemCatalog,
     ControlPlane,
     NativeRegistryKernel,
+    NativeDidResolver,
     HttpListener,
 }
 
@@ -24,6 +25,7 @@ impl TrustProfileDependency {
             Self::SystemCatalog => "system_catalog",
             Self::ControlPlane => "organization_control_plane",
             Self::NativeRegistryKernel => "native_registry_kernel",
+            Self::NativeDidResolver => "native_did_resolver",
             Self::HttpListener => "http_listener",
         }
     }
@@ -35,6 +37,7 @@ impl TrustProfileDependency {
             Self::SystemCatalog,
             Self::ControlPlane,
             Self::NativeRegistryKernel,
+            Self::NativeDidResolver,
             Self::HttpListener,
         ]
         .into_iter()
@@ -56,6 +59,7 @@ impl TrustProfileRuntime {
                 "native_trust_profiles".into(),
                 "native_issuer_registry".into(),
                 "native_registry_sync_validation".into(),
+                "native_did_assertion_key_resolution".into(),
                 "organization_overlays".into(),
                 "postgres_migrations".into(),
                 "system_catalog_reconciliation".into(),
@@ -124,6 +128,7 @@ async fn native_backend_health() -> Json<NativeBackendDiagnostics> {
             "trust_relationships",
             "registry_import_storage",
             "registry_sync_validation",
+            "did_assertion_key_resolution",
             "trust_framework_catalog",
             "postgres_migrations",
         ],
