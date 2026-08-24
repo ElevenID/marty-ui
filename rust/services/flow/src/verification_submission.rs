@@ -13,7 +13,7 @@ use thiserror::Error;
 use crate::{
     public_context, public_status, CallbackEvent, FlowInstanceRecord, FlowKeyEnvelope,
     FlowProviderError, FlowProviderRegistry, FlowRecordError, PresentationEvaluationRequest,
-    VerificationResultResponse,
+    PresentationEvaluationResult, VerificationResultResponse,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -271,6 +271,14 @@ pub async fn prepare_verification_submission(
             .iter()
             .all(|result| result.get("signature_valid").and_then(Value::as_bool) == Some(true));
     if !authenticated {
+        let diagnostic = authentication_failure_diagnostic(&evaluation);
+        tracing::warn!(
+            flow_instance_id = %instance.id,
+            organization_id = %instance.organization_id,
+            presentation_policy_id = %policy_id,
+            diagnostic = %diagnostic,
+            "OID4VP presentation authentication rejected"
+        );
         return Ok(retryable_result(
             &instance,
             evaluation
@@ -379,6 +387,61 @@ pub async fn prepare_verification_submission(
             submission_digest,
         },
     )))
+}
+
+fn authentication_failure_diagnostic(evaluation: &PresentationEvaluationResult) -> Value {
+    let credential_results = evaluation
+        .credential_results
+        .iter()
+        .map(|result| {
+            let warning_count = result
+                .get("warnings")
+                .and_then(Value::as_array)
+                .map_or(0, Vec::len);
+            json!({
+                "signature_valid": result.get("signature_valid").and_then(Value::as_bool),
+                "error_codes": result
+                    .get("error_codes")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(|value| sanitized_diagnostic_text(value, 160))
+                    .collect::<Vec<_>>(),
+                "warning_count": warning_count,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "result": sanitized_diagnostic_text(&evaluation.result, 80),
+        "decision": sanitized_diagnostic_text(&evaluation.decision, 80),
+        "decision_reason": evaluation
+            .decision_reason
+            .as_deref()
+            .map(|value| sanitized_diagnostic_text(value, 512)),
+        "error_codes": evaluation
+            .error_codes
+            .iter()
+            .map(|value| sanitized_diagnostic_text(value, 160))
+            .collect::<Vec<_>>(),
+        "warning_count": evaluation.warnings.len(),
+        "credential_count": evaluation.credential_results.len(),
+        "credential_results": credential_results,
+    })
+}
+
+fn sanitized_diagnostic_text(value: &str, maximum_characters: usize) -> String {
+    value
+        .chars()
+        .take(maximum_characters)
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 fn parse_presentation_submission(
@@ -691,4 +754,44 @@ pub(crate) fn sha256_hex(value: &[u8]) -> String {
 
 pub(crate) fn constant_time_equal(left: &str, right: &str) -> bool {
     left.len() == right.len() && bool::from(left.as_bytes().ct_eq(right.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authentication_failure_diagnostic_excludes_claims_tokens_and_warning_text() {
+        let evaluation = PresentationEvaluationResult {
+            result: "failed".into(),
+            decision: "deny".into(),
+            decision_reason: Some("Signature invalid\nretry".into()),
+            verified_claims: [("secret_claim".into(), json!("claim-value"))].into(),
+            credential_results: vec![json!({
+                "signature_valid": false,
+                "error_codes": ["PRESENTATION.SIGNATURE_INVALID"],
+                "warnings": ["credential-token-value"],
+                "credential": "header.payload.signature",
+                "claims": {"secret": "credential-claim-value"}
+            })],
+            error_codes: vec!["POLICY.AUTHENTICATION_FAILED".into()],
+            warnings: vec!["top-level-token-value".into()],
+        };
+
+        let diagnostic = authentication_failure_diagnostic(&evaluation);
+        let serialized = serde_json::to_string(&diagnostic).unwrap();
+
+        assert_eq!(diagnostic["decision_reason"], "Signature invalid retry");
+        assert_eq!(diagnostic["warning_count"], 1);
+        assert_eq!(diagnostic["credential_results"][0]["warning_count"], 1);
+        assert_eq!(
+            diagnostic["credential_results"][0]["signature_valid"],
+            false
+        );
+        assert!(serialized.contains("PRESENTATION.SIGNATURE_INVALID"));
+        assert!(!serialized.contains("claim-value"));
+        assert!(!serialized.contains("credential-token-value"));
+        assert!(!serialized.contains("top-level-token-value"));
+        assert!(!serialized.contains("header.payload.signature"));
+    }
 }
