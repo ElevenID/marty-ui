@@ -722,6 +722,12 @@ try {
     $restoreScript = Join-Path $script:RepoRoot "scripts\restore-local-beta-release.ps1"
     "& `"$restoreScript`" -ArtifactDir `"$script:ArtifactDir`" -TunnelEnvFile `"$TunnelEnvFile`" -GeneratedEnvFile `"$GeneratedEnvFile`" -ConfirmBetaRestore" | Set-Content -LiteralPath (Join-Path $script:ArtifactDir "supervised-recovery.txt") -Encoding utf8
 
+    Write-Step "Reconcile beta OpenBao state from release configuration"
+    Invoke-ComposeLogged `
+        -Arguments @("run", "--rm", "--no-deps", "openbao-init") `
+        -LogPath (Join-Path $logsDir "openbao-init-live.log") `
+        -FailureMessage "Beta OpenBao reconciliation failed"
+
     $env:MARTY_MIGRATION_PROFILE = "beta"
     $env:PUBLIC_API_URL = $BetaOrigin
     $previousBaoToken = $env:BAO_TOKEN

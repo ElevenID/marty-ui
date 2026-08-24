@@ -85,6 +85,21 @@ def test_beta_runner_reconciles_infrastructure_writer_configuration() -> None:
     assert script.index(step) < script.index('Write-Step "Recreate application containers')
 
 
+def test_beta_runner_reconciles_ephemeral_openbao_before_live_migrations() -> None:
+    script = text("scripts/deploy-local-beta-release.ps1")
+
+    step = 'Write-Step "Reconcile beta OpenBao state from release configuration"'
+    command = '-Arguments @("run", "--rm", "--no-deps", "openbao-init")'
+    migration = '"python", "/app/services/run_all_migrations.py"'
+
+    assert step in script
+    assert command in script
+    assert '"openbao-init-live.log"' in script
+    assert 'Beta OpenBao reconciliation failed' in script
+    step_index = script.index(step)
+    assert script.index(migration, step_index) > step_index
+
+
 def test_release_ui_compose_uses_image_without_source_mounts() -> None:
     compose = text("docker-compose.ui-release.yml")
 
