@@ -32,6 +32,23 @@
     "issuer_did": "did:web:issuer.example",
     "status": "active"
   },
+  "status_resolution": {
+    "authority": "issuance_internal_status_record",
+    "dynamic_issuers": true,
+    "static_issuer_allowlist_required": false,
+    "issuer_binding": "exact_normalized_identifier",
+    "missing_or_mismatched_issuer": "no_evidence",
+    "not_found": "no_evidence",
+    "status_outcomes": {
+      "active": true,
+      "valid": true,
+      "current": true,
+      "good": true,
+      "suspended": false,
+      "revoked": false,
+      "unknown": false
+    }
+  },
   "expected": {
     "trust_level": 90,
     "compliance_status": "ACCREDITED",
