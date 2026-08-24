@@ -100,12 +100,14 @@ fn template() -> ApplicationTemplate {
         "status":"ACTIVE",
         "credential_template_id":"credential-template-1",
         "name":"Member credential",
+        "description":"Verified organization membership",
         "form_fields":[{"field_id":"email","required":true}],
         "required_checks":[{"check_type":"identity_verification","is_required":true,"order":1}],
         "approval_strategy":"MANUAL",
         "claim_collection_rules":[
             {"claim_name":"subject_email","source":"FORM_FIELD","source_config":{"field_id":"email"}},
-            {"claim_name":"application_id","source":"SYSTEM","source_config":{"system_field":"application.id"}}
+            {"claim_name":"application_id","source":"SYSTEM","source_config":{"system_field":"application.id"}},
+            {"claim_name":"achievement_description","source":"SYSTEM","source_config":{"system_field":"template.description"}}
         ]
     }))
     .unwrap()
@@ -372,6 +374,10 @@ async fn uncertain_flow_retry_reuses_attempt_and_complete_claim_snapshot() {
     assert_eq!(calls[0], calls[1]);
     assert_eq!(calls[0].1["subject_email"], "ada@example.com");
     assert_eq!(calls[0].1["application_id"], application.id);
+    assert_eq!(
+        calls[0].1["achievement_description"],
+        "Verified organization membership"
+    );
     drop(calls);
     let persisted = persistence.0.lock().unwrap();
     assert!(persisted
@@ -382,6 +388,22 @@ async fn uncertain_flow_retry_reuses_attempt_and_complete_claim_snapshot() {
         .system_data
         .get("active_issuance_attempt")
         .is_none());
+}
+
+#[tokio::test]
+async fn no_op_issuance_reconciliation_preserves_application_ordering_metadata() {
+    let (service, _, _, _, persistence) = service();
+    let application = draft(&service).await;
+    let persisted_before = persistence.0.lock().unwrap().len();
+    let later = application.created_at + chrono::Duration::hours(1);
+
+    let reconciled = service
+        .reconcile_issuance(&application.id, None, None, later)
+        .await
+        .unwrap();
+
+    assert_eq!(reconciled.updated_at, application.updated_at);
+    assert_eq!(persistence.0.lock().unwrap().len(), persisted_before);
 }
 
 #[tokio::test]
