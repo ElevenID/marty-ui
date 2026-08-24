@@ -72,7 +72,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), DeploymentMigrationErro
     // records while converging persisted data on the language-neutral contract.
     sqlx::query(
         "UPDATE deployment_profile_service.deployment_profiles
-         SET api_auth=jsonb_set(api_auth, '{auth_method}', '\"api_key\"'::jsonb, false)
+         SET api_auth=jsonb_set(api_auth::jsonb, '{auth_method}', '\"api_key\"'::jsonb, false)
          WHERE api_auth->>'auth_method'='apikey'",
     )
     .execute(&mut *tx)
@@ -131,6 +131,9 @@ mod tests {
             "deployment-profile-rust-v2-api-auth-canonicalization"
         );
         assert!(source.contains("50000000-0000-0000-0000-000000000040"));
+        // Python-created databases own this column as `json`, while fresh
+        // Rust databases own it as `jsonb`. The normalizer must accept both.
+        assert!(source.contains("jsonb_set(api_auth::jsonb"));
         assert!(source.contains("api_auth->>'auth_method'='apikey'"));
         assert!(!DEPLOYMENT_PROFILE_SCHEMA.contains("default_compliance_profile_id"));
     }
