@@ -34,7 +34,7 @@
     "@emotion/styled": "^11.14.1",
     "@mui/icons-material": "^9.3.0",
     "@mui/material": "^9.3.0",
-    "@mui/x-date-pickers": "^9.10.1",
+    "@mui/x-date-pickers": "^9.11.0",
     "axios": "^1.19.0",
     "date-fns": "^4.4.0",
     "i18next": "^26.3.6",
