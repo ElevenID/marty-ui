@@ -19,6 +19,7 @@ const EXPECTED_VCT = process.env.EXPECTED_LOGIN_BADGE_VCT || `${BETA_ORIGIN}/cre
 const EXPECTED_CONFIGURATION_ID = process.env.EXPECTED_LOGIN_BADGE_CONFIGURATION_ID
   || DEFAULT_LOGIN_BADGE_CONFIGURATION_ID;
 const HEADLESS = process.env.HEADED !== '1';
+const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 
 function loadEnvFile(file) {
   if (!fs.existsSync(file)) return;
@@ -41,6 +42,7 @@ function redact(value) {
   let text = typeof value === 'string' ? value : JSON.stringify(value);
   text = text.replace(/(credential_offer_uri=)[^&\s"']+/gi, '$1[redacted]');
   text = text.replace(/(credential_offer=)[^&\s"']+/gi, '$1[redacted]');
+  text = text.replace(/("(?:credential_offer_uri|request_uri)"\s*:\s*")[^"]+/gi, '$1[redacted]');
   text = text.replace(/("pre-authorized_code"\s*:\s*")[^"]+/gi, '$1[redacted]');
   text = text.replace(/("(?:token|accessToken|idToken|refreshToken)"\s*:\s*")[^"]+/gi, '$1[redacted]');
   text = text.replace(/(Bearer\s+)[A-Za-z0-9._-]+/g, '$1[redacted]');
@@ -193,6 +195,7 @@ async function collectBetaOffer(browser, {
 
   const context = await browser.newContext({
     viewport: { width: 1440, height: 1000 },
+    ignoreHTTPSErrors: LOCAL_BETA_PROXY,
     ...contextOptions,
   });
   const page = await context.newPage();
@@ -239,6 +242,11 @@ async function collectBetaOffer(browser, {
   await page.getByTestId(`wallet-option-${walletId}`).click();
   await waitFor(() => issueResponses.length > 0 && issueResponses[issueResponses.length - 1].json, 60_000);
   const latest = issueResponses[issueResponses.length - 1].json;
+  const offerUri = latest.offer_url || latest.credential_offer_uri;
+  if (!offerUri) {
+    const diagnostic = redact(JSON.stringify(latest)).slice(0, 800);
+    throw new Error(`Credential claim returned no offer URI: ${diagnostic}`);
+  }
   const selectedWallets = await page.evaluate(() => (
     Object.fromEntries(Object.entries(localStorage).filter(([key]) => key.startsWith('elevenid_wallets_')))
   ));
@@ -268,7 +276,7 @@ async function collectBetaOffer(browser, {
   if (!keepContext) await context.close();
 
   const result = {
-    offerUri: latest.offer_url || latest.credential_offer_uri,
+    offerUri,
     offerSource: 'canonical-ui',
     issueStatus: latest.status,
     issueWalletOfferIds: Object.keys(latest.credential_offer_uris || {}),
