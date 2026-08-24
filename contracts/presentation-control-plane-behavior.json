@@ -37,6 +37,7 @@
     "dynamic_issuers": true,
     "static_issuer_allowlist_required": false,
     "issuer_binding": "exact_normalized_identifier",
+    "canonical_credential_identifier": "authenticated_outer_jwt_jti_precedes_embedded_status_entry_ids",
     "missing_or_mismatched_issuer": "no_evidence",
     "not_found": "no_evidence",
     "status_outcomes": {
