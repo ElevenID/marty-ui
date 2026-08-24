@@ -13,6 +13,7 @@ use marty_flow::{
 use marty_verification_service::{
     verification_proto::{
         verification_service_server::VerificationService as VerificationGrpc,
+        EvaluatePresentationRequest as GrpcEvaluateRequest,
         StartVerificationRequest as GrpcStartRequest,
     },
     EvaluationProvider, EvaluationResult, InspectionProvider, ManagementPrincipal,
@@ -271,8 +272,9 @@ async fn siopv2_has_no_policy_dependency_and_management_is_fail_closed() {
 
 #[tokio::test]
 async fn grpc_adapter_preserves_the_legacy_contract() {
-    let grpc = VerificationGrpcService::new(Arc::new(service(false)));
-    let response = grpc
+    let service = Arc::new(service(false));
+    let grpc = VerificationGrpcService::new(service.clone());
+    let missing_principal = grpc
         .start_verification(Request::new(GrpcStartRequest {
             organization_id: "org-1".into(),
             presentation_policy_id: "policy-1".into(),
@@ -280,14 +282,53 @@ async fn grpc_adapter_preserves_the_legacy_contract() {
             ..GrpcStartRequest::default()
         }))
         .await
-        .unwrap()
-        .into_inner();
+        .unwrap_err();
+    assert_eq!(missing_principal.code(), tonic::Code::Unauthenticated);
+
+    let mut start = Request::new(GrpcStartRequest {
+        organization_id: "org-1".into(),
+        presentation_policy_id: "policy-1".into(),
+        purpose: "Membership".into(),
+        ..GrpcStartRequest::default()
+    });
+    start
+        .metadata_mut()
+        .insert("x-user-id", "user-1".parse().unwrap());
+    start
+        .metadata_mut()
+        .insert("x-organization-id", "org-1".parse().unwrap());
+    let response = grpc.start_verification(start).await.unwrap().into_inner();
     assert_eq!(response.status, "pending");
     assert_eq!(response.response_type, "vp_token");
     assert!(response.request_uri.ends_with("/request"));
     assert!(response
         .qr_code_data
         .starts_with("openid4vp://authorize?request_uri="));
+    assert_eq!(
+        service
+            .session_record(&response.session_id)
+            .await
+            .unwrap()
+            .evaluation_principal_id,
+        "user-1"
+    );
+
+    let mut evaluation = Request::new(GrpcEvaluateRequest {
+        vp_token: "header.payload.signature".into(),
+        presentation_policy_id: "policy-1".into(),
+        nonce: "nonce-1".into(),
+        audience: "https://verifier.example".into(),
+        ..GrpcEvaluateRequest::default()
+    });
+    evaluation
+        .metadata_mut()
+        .insert("x-user-id", "user-1".parse().unwrap());
+    let evaluated = grpc
+        .evaluate_presentation(evaluation)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(evaluated.decision, "allow");
 }
 
 #[tokio::test]

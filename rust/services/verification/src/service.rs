@@ -74,6 +74,11 @@ impl VerificationService {
         principal: &ManagementPrincipal,
     ) -> Result<VerificationSession, VerificationError> {
         validate_start(&body)?;
+        if body.response_type == "vp_token" && principal.user_id.trim().is_empty() {
+            return Err(VerificationError::Unauthorized(
+                "Authenticated initiating principal is required".into(),
+            ));
+        }
         if !principal.organization_id.trim().is_empty()
             && !body.organization_id.trim().is_empty()
             && principal.organization_id != body.organization_id
@@ -318,6 +323,11 @@ impl VerificationService {
         principal: &ManagementPrincipal,
     ) -> Result<Value, VerificationError> {
         validate_evaluate(&body)?;
+        if principal.user_id.trim().is_empty() {
+            return Err(VerificationError::Unauthorized(
+                "Authenticated evaluation principal is required".into(),
+            ));
+        }
         let policy = self.policy_reference(&body.presentation_policy_id).await?;
         if !policy.status.eq_ignore_ascii_case("active") {
             return Err(VerificationError::Conflict(
