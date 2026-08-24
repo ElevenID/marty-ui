@@ -504,8 +504,7 @@ fn expire_session(session: &mut VerificationSession, now: DateTime<Utc>) {
     session.status = SessionStatus::Expired;
     session.error = Some("Session expired before presentation was submitted".into());
     session.updated_at = now;
-    session.processing_token = None;
-    session.processing_expires_at = None;
+    session.minimize_terminal();
 }
 
 fn validate_terminal_candidate(
@@ -516,6 +515,7 @@ fn validate_terminal_candidate(
         && current.flow_id == candidate.flow_id
         && current.flow_instance_id == candidate.flow_instance_id
         && current.organization_id == candidate.organization_id
+        && current.evaluation_principal_id == candidate.evaluation_principal_id
         && current.presentation_policy_id == candidate.presentation_policy_id
         && current.response_type == candidate.response_type
         && current.nonce == candidate.nonce

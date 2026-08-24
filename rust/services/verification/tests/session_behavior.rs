@@ -77,6 +77,7 @@ fn protocol_projection_exposes_only_the_stable_shape() {
     for prohibited in [
         "session_id",
         "organization_id",
+        "evaluation_principal_id",
         "response_type",
         "nonce",
         "external_reference",
@@ -150,7 +151,8 @@ async fn terminal_records_are_minimized_before_persistence() {
 #[tokio::test]
 async fn expiry_uses_the_supplied_shared_clock() {
     let store = MemorySessionStore::new();
-    let session = VerificationSession::new(&request(), now()).unwrap();
+    let mut session = VerificationSession::new(&request(), now()).unwrap();
+    session.evaluation_principal_id = "user-1".into();
     let id = session.session_id.clone();
     store.save(session).await.unwrap();
     let expired = store
@@ -162,6 +164,7 @@ async fn expiry_uses_the_supplied_shared_clock() {
         expired.error.as_deref(),
         Some("Session expired before presentation was submitted")
     );
+    assert!(expired.evaluation_principal_id.is_empty());
 }
 
 #[tokio::test]

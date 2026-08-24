@@ -125,6 +125,7 @@ impl EvaluationProvider for Evaluation {
         &self,
         request: &PresentationEvaluationRequest,
     ) -> Result<EvaluationResult, VerificationError> {
+        assert_eq!(request.principal_id, "user-1");
         Ok(EvaluationResult {
             result: "passed".into(),
             decision: "allow".into(),
@@ -217,6 +218,7 @@ async fn managed_oid4vp_lifecycle_uses_canonical_policy_and_minimizes_terminal_d
     assert_eq!(completed["result"]["claims_satisfied"], json!(["email"]));
     let stored = service.session_record(session_id).await.unwrap();
     let encoded = serde_json::to_string(&stored).unwrap();
+    assert!(stored.evaluation_principal_id.is_empty());
     assert_eq!(stored.verified_claims["email"], true);
     assert_eq!(stored.inspection_result, "verified");
     for secret in [
@@ -363,5 +365,9 @@ fn behavioral_contract_declares_siop_and_transport_parity() {
     assert!(invariants
         .iter()
         .any(|item| item.as_str().unwrap().contains("SIOPv2")));
+    assert!(invariants.iter().any(|item| item
+        .as_str()
+        .unwrap()
+        .contains("authenticated initiating principal")));
     assert_eq!(contract["transports"], json!(["http", "grpc"]));
 }
