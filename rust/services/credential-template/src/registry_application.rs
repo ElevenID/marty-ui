@@ -277,6 +277,17 @@ impl CredentialTemplateRegistryApplication {
                 .require_membership(user_id, organization_id)
                 .await?;
         }
+        self.list_wallets_for_internal_service(organization_id, active_only)
+            .await
+    }
+
+    /// List the system catalog plus overrides visible to an authenticated
+    /// internal service for the requested organization.
+    pub async fn list_wallets_for_internal_service(
+        &self,
+        organization_id: Option<&str>,
+        active_only: bool,
+    ) -> Result<Vec<WalletRegistryEntry>, CredentialTemplateApplicationError> {
         Ok(self
             .registry
             .wallets(active_only)

@@ -320,16 +320,16 @@ impl CredentialTemplateService for CredentialTemplateGrpcService {
         self.authenticate(&request)?;
         let input = request.get_ref();
         let organization_id = non_empty(&input.organization_id);
-        let user_id = if organization_id.is_some() {
-            self.user_id(&request)?
+        let wallets = if let Some(user_id) = metadata(&request, "x-user-id") {
+            self.registry_application
+                .list_wallets(&user_id, organization_id, input.active_only)
+                .await
         } else {
-            String::new()
+            self.registry_application
+                .list_wallets_for_internal_service(organization_id, input.active_only)
+                .await
         };
-        let wallets = self
-            .registry_application
-            .list_wallets(&user_id, organization_id, input.active_only)
-            .await
-            .map_err(application_status)?;
+        let wallets = wallets.map_err(application_status)?;
         Ok(Response::new(ListWalletsResponse {
             wallets: wallets
                 .iter()
