@@ -23,7 +23,16 @@ env:
   MIGRATIONS_IMAGE: ghcr.io/elevenid/marty-ui-oss/migrations
 
 jobs:
+  release-environment-preflight:
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/release-environment-preflight.yml
+    with:
+      environment: stack-release
+
   validate-stack:
+    needs: release-environment-preflight
     runs-on: ubuntu-latest
     permissions:
       contents: read

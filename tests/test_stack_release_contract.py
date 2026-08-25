@@ -291,7 +291,10 @@ def test_stack_release_actions_are_pinned_by_full_commit_sha() -> None:
     uses_lines = [line for line in workflow.splitlines() if "uses:" in line]
 
     assert uses_lines
-    assert all(FULL_SHA_ACTION.match(line) for line in uses_lines)
+    assert all(
+        FULL_SHA_ACTION.match(line) or "uses: ./.github/workflows/" in line
+        for line in uses_lines
+    )
 
 
 def test_stack_release_uses_read_only_default_permissions() -> None:

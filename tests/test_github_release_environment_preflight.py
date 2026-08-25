@@ -36,13 +36,33 @@ def requirement() -> dict:
 
 
 def test_environment_accepts_protected_complete_configuration() -> None:
-    assert validate_environment(
-        "beta",
-        requirement(),
-        protected_environment(),
-        {"SECRET_A"},
-        {"VARIABLE_A"},
-    ) == []
+    assert (
+        validate_environment(
+            "beta",
+            requirement(),
+            protected_environment(),
+            {"SECRET_A"},
+            {"VARIABLE_A"},
+        )
+        == []
+    )
+
+
+def test_environment_accepts_declared_solo_maintainer_review() -> None:
+    solo_requirement = requirement()
+    solo_requirement["prevent_self_review"] = False
+    solo_environment = protected_environment()
+    solo_environment["protection_rules"][0]["prevent_self_review"] = False
+    solo_environment["protection_rules"][0]["reviewers"] = [
+        {"type": "User", "reviewer": {"id": 7076785, "login": "burdettadam"}}
+    ]
+
+    assert (
+        validate_environment(
+            "beta", solo_requirement, solo_environment, {"SECRET_A"}, {"VARIABLE_A"}
+        )
+        == []
+    )
 
 
 def test_environment_reports_every_missing_protection_and_input() -> None:
@@ -89,3 +109,47 @@ def test_configuration_checks_repository_shas_and_missing_environments() -> None
         "repository variable MISSING_REF must be a lowercase 40-character SHA",
         "missing: GitHub API returned 404",
     ]
+
+
+def test_configuration_can_validate_one_declared_environment() -> None:
+    manifest = {
+        "repository_variables": ["MARTY_REF"],
+        "environments": {
+            "beta": requirement(),
+            "missing": requirement(),
+        },
+    }
+
+    assert validate_configuration(FakeApi(), manifest, {"beta"}) == []
+
+
+def test_configuration_rejects_an_undeclared_selected_environment() -> None:
+    manifest = {
+        "repository_variables": ["MARTY_REF"],
+        "environments": {"beta": requirement()},
+    }
+
+    assert validate_configuration(FakeApi(), manifest, {"production"}) == [
+        "manifest does not declare environments: production"
+    ]
+
+
+def test_protection_only_does_not_require_privileged_input_inventory() -> None:
+    class ProtectionsOnlyApi(FakeApi):
+        def repository_variables(self) -> dict[str, str]:
+            raise AssertionError("repository variables must not be requested")
+
+        def environment_names(self, name: str, resource: str) -> set[str]:
+            raise AssertionError("environment inputs must not be requested")
+
+    manifest = {
+        "repository_variables": ["MARTY_REF"],
+        "environments": {"beta": requirement()},
+    }
+
+    assert (
+        validate_configuration(
+            ProtectionsOnlyApi(), manifest, {"beta"}, check_inputs=False
+        )
+        == []
+    )
