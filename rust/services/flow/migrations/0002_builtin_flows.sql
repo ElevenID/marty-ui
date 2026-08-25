@@ -137,8 +137,8 @@ BEGIN
         UPDATE deployment_profile_service.deployment_profiles
         SET enabled_flow_ids = CASE
             WHEN enabled_flow_ids::jsonb @> '["71000000-0000-0000-0000-000000000001"]'::jsonb
-                THEN enabled_flow_ids
-            ELSE (enabled_flow_ids::jsonb || '["71000000-0000-0000-0000-000000000001"]'::jsonb)::json
+                THEN enabled_flow_ids::jsonb
+            ELSE enabled_flow_ids::jsonb || '["71000000-0000-0000-0000-000000000001"]'::jsonb
         END
         WHERE id = '70000000-0000-0000-0000-000000000001';
     END IF;
