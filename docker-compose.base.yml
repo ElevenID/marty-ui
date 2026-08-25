@@ -6,7 +6,7 @@
 # Public deployments reach edge services over the Compose network through a
 # governed proxy/tunnel; internal service ports are never LAN/public listeners.
 
-x-marty-service-build-artifacts: &marty_service_build_artifacts
+x-marty-migration-build-artifacts: &marty_migration_build_artifacts
   MARTY_RS_URI: ${MARTY_RS_URI:?set MARTY_RS_URI to the immutable marty-rs wheel}
   MARTY_RS_DIGEST: ${MARTY_RS_DIGEST:?set MARTY_RS_DIGEST to that wheel's sha256 digest}
   MARTY_VERIFICATION_URI: ${MARTY_VERIFICATION_URI:?set MARTY_VERIFICATION_URI to the immutable marty-verification wheel}
@@ -237,7 +237,6 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
-        <<: *marty_service_build_artifacts
         SERVICE_NAME: revocation-profile
     environment:
       SERVICE_NAME: revocation_profile
@@ -260,6 +259,8 @@ services:
     build:
       context: .
       dockerfile: services/Dockerfile.migrations
+      args:
+        <<: *marty_migration_build_artifacts
     environment:
       MARTY_DB_PASSWORD: ${MARTY_DB_PASSWORD:-marty_dev_password}
       DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
@@ -319,7 +320,6 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
-        <<: *marty_service_build_artifacts
         SERVICE_NAME: gateway
     environment:
       GATEWAY_PORT: "8000"
@@ -410,7 +410,6 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
-        <<: *marty_service_build_artifacts
         SERVICE_NAME: auth
     environment:
       AUTH_SERVICE_PORT: "8001"
@@ -479,7 +478,6 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
-        <<: *marty_service_build_artifacts
         SERVICE_NAME: organization
     environment:
       ORGANIZATION_SERVICE_PORT: "8002"
@@ -513,7 +511,6 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
-        <<: *marty_service_build_artifacts
         SERVICE_NAME: credential-template
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
@@ -550,7 +547,6 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
-        <<: *marty_service_build_artifacts
         SERVICE_NAME: trust-profile
     environment:
       ENVIRONMENT: ${ENVIRONMENT:-development}
@@ -585,7 +581,6 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
-        <<: *marty_service_build_artifacts
         SERVICE_NAME: applicant
     environment:
       APPLICANT_SERVICE_PORT: "8006"
@@ -623,7 +618,6 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
-        <<: *marty_service_build_artifacts
         SERVICE_NAME: notification
     environment:
       NOTIFICATION_SERVICE_PORT: "8007"
@@ -689,7 +683,6 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
-        <<: *marty_service_build_artifacts
         SERVICE_NAME: presentation-policy
     environment:
       PRESENTATION_POLICY_SERVICE_PORT: "8009"
@@ -754,7 +747,6 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
-        <<: *marty_service_build_artifacts
         SERVICE_NAME: signing-keys
     environment:
       SIGNING_KEYS_SERVICE_PORT: "8017"
@@ -784,7 +776,6 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
-        <<: *marty_service_build_artifacts
         SERVICE_NAME: flow
     environment:
       ENVIRONMENT: development
@@ -994,7 +985,6 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
-        <<: *marty_service_build_artifacts
         SERVICE_NAME: revocation-profile
     environment:
       SERVICE_NAME: revocation_profile
@@ -1061,7 +1051,6 @@ services:
       context: .
       dockerfile: services/Dockerfile
       args:
-        <<: *marty_service_build_artifacts
         SERVICE_NAME: event_stream
     environment:
       - EVENT_STREAM_SERVICE_PORT=8015

@@ -376,19 +376,20 @@ def test_stack_tag_requires_exact_main_gate_evidence() -> None:
     assert "actions: read" in workflow
 
 
-def test_service_images_install_every_required_native_backend() -> None:
+def test_python_migration_image_installs_every_required_native_backend() -> None:
     service = _text("services/Dockerfile")
     migrations = _text("services/Dockerfile.migrations")
 
-    for dockerfile in (service, migrations):
-        assert 'MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}"' in dockerfile
-        assert (
-            'MARTY_VERIFICATION_WHEEL="/tmp/${MARTY_VERIFICATION_URI##*/}"'
-            in dockerfile
-        )
-        assert 'MARTY_ISO18013_WHEEL="/tmp/${MARTY_ISO18013_URI##*/}"' in dockerfile
-        assert '"$MARTY_VERIFICATION_WHEEL"' in dockerfile
-        assert '"$MARTY_ISO18013_WHEEL"' in dockerfile
+    assert 'MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}"' in migrations
+    assert (
+        'MARTY_VERIFICATION_WHEEL="/tmp/${MARTY_VERIFICATION_URI##*/}"'
+        in migrations
+    )
+    assert 'MARTY_ISO18013_WHEEL="/tmp/${MARTY_ISO18013_URI##*/}"' in migrations
+    assert '"$MARTY_VERIFICATION_WHEEL"' in migrations
+    assert '"$MARTY_ISO18013_WHEEL"' in migrations
+    assert "MARTY_RS_WHEEL" not in service
+    assert "python" not in service.split("FROM debian:bookworm-slim", maxsplit=1)[1]
 
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}

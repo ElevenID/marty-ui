@@ -271,18 +271,6 @@ jobs:
             SERVICE_NAME=gateway
             MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
             MARTY_UI_SHA=${{ github.sha }}
-            MARTY_RS_VERSION=${{ needs.validate-stack.outputs.marty_rs_version }}
-            MARTY_RS_URI=${{ needs.validate-stack.outputs.marty_rs_uri }}
-            MARTY_RS_DIGEST=${{ needs.validate-stack.outputs.marty_rs_digest }}
-            MARTY_VERIFICATION_VERSION=${{ needs.validate-stack.outputs.marty_verification_version }}
-            MARTY_VERIFICATION_URI=${{ needs.validate-stack.outputs.marty_verification_uri }}
-            MARTY_VERIFICATION_DIGEST=${{ needs.validate-stack.outputs.marty_verification_digest }}
-            MARTY_ISO18013_VERSION=${{ needs.validate-stack.outputs.marty_iso18013_version }}
-            MARTY_ISO18013_URI=${{ needs.validate-stack.outputs.marty_iso18013_uri }}
-            MARTY_ISO18013_DIGEST=${{ needs.validate-stack.outputs.marty_iso18013_digest }}
-            MARTY_COMMON_VERSION=${{ needs.validate-stack.outputs.marty_common_version }}
-            MARTY_COMMON_URI=${{ needs.validate-stack.outputs.marty_common_uri }}
-            MARTY_COMMON_DIGEST=${{ needs.validate-stack.outputs.marty_common_digest }}
           provenance: mode=max
           sbom: true
       - id: migrations

@@ -45,7 +45,17 @@ MARTY_BLOG_VERSION="${MARTY_BLOG_VERSION:?Set the released @elevenid/marty-blog 
 MARTY_BLOG_URI="${MARTY_BLOG_URI:?Set the immutable @elevenid/marty-blog release URI}"
 MARTY_BLOG_DIGEST="${MARTY_BLOG_DIGEST:?Set the @elevenid/marty-blog release SHA-256 digest}"
 MARTY_COMMON_VERSION="${MARTY_COMMON_VERSION:?Set the released marty-common version}"
+MARTY_COMMON_URI="${MARTY_COMMON_URI:?Set the immutable marty-common wheel URI}"
+MARTY_COMMON_DIGEST="${MARTY_COMMON_DIGEST:?Set the marty-common wheel SHA-256 digest}"
 MARTY_RS_VERSION="${MARTY_RS_VERSION:?Set the released marty-credentials Python version}"
+MARTY_RS_URI="${MARTY_RS_URI:?Set the immutable marty-credentials wheel URI}"
+MARTY_RS_DIGEST="${MARTY_RS_DIGEST:?Set the marty-credentials wheel SHA-256 digest}"
+MARTY_VERIFICATION_VERSION="${MARTY_VERIFICATION_VERSION:?Set the released marty-verification Python version}"
+MARTY_VERIFICATION_URI="${MARTY_VERIFICATION_URI:?Set the immutable marty-verification wheel URI}"
+MARTY_VERIFICATION_DIGEST="${MARTY_VERIFICATION_DIGEST:?Set the marty-verification wheel SHA-256 digest}"
+MARTY_ISO18013_VERSION="${MARTY_ISO18013_VERSION:?Set the released marty-iso18013 Python version}"
+MARTY_ISO18013_URI="${MARTY_ISO18013_URI:?Set the immutable marty-iso18013 wheel URI}"
+MARTY_ISO18013_DIGEST="${MARTY_ISO18013_DIGEST:?Set the marty-iso18013 wheel SHA-256 digest}"
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -81,6 +91,7 @@ resolve_release_tag() {
 }
 
 IMAGE_TAG="$(resolve_release_tag)"
+SOURCE_SHA="${MARTY_UI_SHA:-$(git -C "$REPO_ROOT" rev-parse HEAD)}"
 
 declare -A REGION_KEY=(
   [us-ashburn-1]=iad [us-phoenix-1]=phx [eu-frankfurt-1]=fra
@@ -183,26 +194,26 @@ while IFS= read -r svc; do
     "$svc" \
     "services/Dockerfile" \
     "." \
-    "--build-arg SERVICE_NAME=${svc} --build-arg MARTY_RS_VERSION=${MARTY_RS_VERSION} --build-arg MARTY_COMMON_VERSION=${MARTY_COMMON_VERSION}"
+    "--build-arg SERVICE_NAME=${svc} --build-arg MARTY_RELEASE_VERSION=${IMAGE_TAG} --build-arg MARTY_UI_SHA=${SOURCE_SHA}"
 done < <(catalog_services app)
 
 build_and_push \
   "db-migrate" \
   "services/Dockerfile.migrations" \
   "." \
-  "--build-arg MARTY_COMMON_VERSION=${MARTY_COMMON_VERSION}"
+  "--build-arg MARTY_RELEASE_VERSION=${IMAGE_TAG} --build-arg MARTY_UI_SHA=${SOURCE_SHA} --build-arg MARTY_COMMON_VERSION=${MARTY_COMMON_VERSION} --build-arg MARTY_COMMON_URI=${MARTY_COMMON_URI} --build-arg MARTY_COMMON_DIGEST=${MARTY_COMMON_DIGEST} --build-arg MARTY_RS_VERSION=${MARTY_RS_VERSION} --build-arg MARTY_RS_URI=${MARTY_RS_URI} --build-arg MARTY_RS_DIGEST=${MARTY_RS_DIGEST} --build-arg MARTY_VERIFICATION_VERSION=${MARTY_VERIFICATION_VERSION} --build-arg MARTY_VERIFICATION_URI=${MARTY_VERIFICATION_URI} --build-arg MARTY_VERIFICATION_DIGEST=${MARTY_VERIFICATION_DIGEST} --build-arg MARTY_ISO18013_VERSION=${MARTY_ISO18013_VERSION} --build-arg MARTY_ISO18013_URI=${MARTY_ISO18013_URI} --build-arg MARTY_ISO18013_DIGEST=${MARTY_ISO18013_DIGEST}"
 
 build_and_push \
   "ui-selfhost" \
   "docker/ui.Dockerfile" \
   "." \
-  "--build-arg UI_VARIANT=selfhost --build-arg MARTY_API_CORE_VERSION=${MARTY_API_CORE_VERSION} --build-arg MARTY_API_CORE_URI=${MARTY_API_CORE_URI} --build-arg MARTY_API_CORE_DIGEST=${MARTY_API_CORE_DIGEST} --build-arg MARTY_BLOG_VERSION=${MARTY_BLOG_VERSION} --build-arg MARTY_BLOG_URI=${MARTY_BLOG_URI} --build-arg MARTY_BLOG_DIGEST=${MARTY_BLOG_DIGEST}"
+  "--build-arg UI_VARIANT=selfhost --build-arg MARTY_RELEASE_VERSION=${IMAGE_TAG} --build-arg MARTY_UI_SHA=${SOURCE_SHA} --build-arg MARTY_API_CORE_VERSION=${MARTY_API_CORE_VERSION} --build-arg MARTY_API_CORE_URI=${MARTY_API_CORE_URI} --build-arg MARTY_API_CORE_DIGEST=${MARTY_API_CORE_DIGEST} --build-arg MARTY_BLOG_VERSION=${MARTY_BLOG_VERSION} --build-arg MARTY_BLOG_URI=${MARTY_BLOG_URI} --build-arg MARTY_BLOG_DIGEST=${MARTY_BLOG_DIGEST}"
 
 build_and_push \
   "ui" \
   "docker/ui.Dockerfile" \
   "." \
-  "--build-arg UI_VARIANT=public --build-arg MARTY_API_CORE_VERSION=${MARTY_API_CORE_VERSION} --build-arg MARTY_API_CORE_URI=${MARTY_API_CORE_URI} --build-arg MARTY_API_CORE_DIGEST=${MARTY_API_CORE_DIGEST} --build-arg MARTY_BLOG_VERSION=${MARTY_BLOG_VERSION} --build-arg MARTY_BLOG_URI=${MARTY_BLOG_URI} --build-arg MARTY_BLOG_DIGEST=${MARTY_BLOG_DIGEST}"
+  "--build-arg UI_VARIANT=public --build-arg MARTY_RELEASE_VERSION=${IMAGE_TAG} --build-arg MARTY_UI_SHA=${SOURCE_SHA} --build-arg MARTY_API_CORE_VERSION=${MARTY_API_CORE_VERSION} --build-arg MARTY_API_CORE_URI=${MARTY_API_CORE_URI} --build-arg MARTY_API_CORE_DIGEST=${MARTY_API_CORE_DIGEST} --build-arg MARTY_BLOG_VERSION=${MARTY_BLOG_VERSION} --build-arg MARTY_BLOG_URI=${MARTY_BLOG_URI} --build-arg MARTY_BLOG_DIGEST=${MARTY_BLOG_DIGEST}"
 
 build_and_push \
   "cloudflared-wrapper" \

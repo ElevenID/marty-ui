@@ -632,14 +632,7 @@ Write-Step "Build marker-bearing application images"
 $env:MARTY_RELEASE_VERSION = $releaseVersion
 $env:MARTY_UI_SHA = $sourceId
 $applicationBuildArguments = @(
-    "build", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId",
-    "--build-arg", "MARTY_COMMON_VERSION=$($martyCommon.Version)", "--build-arg", "MARTY_COMMON_URI=$($martyCommon.Uri)",
-    "--build-arg", "MARTY_COMMON_DIGEST=$($martyCommon.Digest)", "--build-arg", "MARTY_RS_VERSION=$($martyRs.Version)",
-    "--build-arg", "MARTY_RS_URI=$($martyRs.Uri)", "--build-arg", "MARTY_RS_DIGEST=$($martyRs.Digest)",
-    "--build-arg", "MARTY_VERIFICATION_VERSION=$($martyVerification.Version)", "--build-arg", "MARTY_VERIFICATION_URI=$($martyVerification.Uri)",
-    "--build-arg", "MARTY_VERIFICATION_DIGEST=$($martyVerification.Digest)",
-    "--build-arg", "MARTY_ISO18013_VERSION=$($martyIso18013.Version)", "--build-arg", "MARTY_ISO18013_URI=$($martyIso18013.Uri)",
-    "--build-arg", "MARTY_ISO18013_DIGEST=$($martyIso18013.Digest)"
+    "build", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId"
 )
 # BuildKit bake can schedule every Compose target concurrently and exhaust the
 # local Docker Desktop VM. Build one immutable target at a time so a release

@@ -54,17 +54,22 @@ marty-crypto = { git = "https://example.com/not-marty-core.git", rev = "abc" }
         raise AssertionError("Unexpected dependency source must be rejected")
 
 
-def test_shared_service_image_installs_released_credentials_bindings() -> None:
+def test_shared_service_image_is_a_rust_only_runtime() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
 
-    assert "MARTY_RS_URI" in dockerfile
-    assert "MARTY_RS_DIGEST" in dockerfile
-    assert "curl --fail --location" in dockerfile
-    assert "sha256sum --check --strict" in dockerfile
-    assert 'MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}"' in dockerfile
-    assert 'MARTY_COMMON_WHEEL="/tmp/${MARTY_COMMON_URI##*/}"' in dockerfile
-    assert "/tmp/marty-rs.whl" not in dockerfile
-    assert "COPY marty-credentials" not in dockerfile
+    runtime = dockerfile.split("FROM debian:bookworm-slim", maxsplit=1)[1]
+    for marker in (
+        "python",
+        "pip",
+        "requirements-services",
+        "MARTY_RS_URI",
+        "MARTY_COMMON_URI",
+        "COPY services /app/services",
+        "COPY packages",
+    ):
+        assert marker not in runtime
+    assert "COPY services/entrypoint.sh /app/services/entrypoint.sh" in runtime
+    assert runtime.count("COPY --from=rust-service-builder") == 16
 
 
 def test_shared_service_image_provisions_private_writable_runtime_state() -> None:
@@ -72,7 +77,7 @@ def test_shared_service_image_provisions_private_writable_runtime_state() -> Non
 
     provision = "install -d -o appuser -g appuser -m 0700 /app/data"
     assert provision in dockerfile
-    assert dockerfile.index(provision) < dockerfile.index("USER appuser")
+    assert dockerfile.index(provision) < dockerfile.index("USER 10001:10001")
 
 
 def test_migration_image_preserves_released_wheel_filename() -> None:
