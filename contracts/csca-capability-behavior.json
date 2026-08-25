@@ -14,6 +14,20 @@
     ]
   },
   "supported_rust_surface": {
+    "emrtd_issuance": {
+      "canonical_crate": "marty-verification::issuance",
+      "production_consumer": "ElevenID/marty-credentials:rust/marty-rs",
+      "entrypoints": [
+        "issue_emrtd_passport",
+        "issue_emrtd_passport_self_signed"
+      ],
+      "capabilities": [
+        "CSCA-certificate-and-key-generation",
+        "DSC-certificate-issuance-from-CSCA",
+        "EF.SOD-signing-with-DSC",
+        "issue-to-trust-to-verification-round-trip"
+      ]
+    },
     "signing_keys": {
       "crate": "marty-signing-keys",
       "key_purpose": {
