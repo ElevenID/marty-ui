@@ -163,10 +163,19 @@ fn language_neutral_contract_and_logical_keys_are_stable() {
 
 #[test]
 fn plan_filters_orders_and_minimizes_authenticated_events() {
+    let mut archived = definition("flow-archived", "template-1");
+    archived.status = DefinitionStatus::Archived;
+    let mut paused = definition("flow-paused", "template-1");
+    paused.status = DefinitionStatus::Paused;
+    let mut draft = definition("flow-draft", "template-1");
+    draft.status = DefinitionStatus::Draft;
     let definitions = vec![
         definition("flow-z", "template-2"),
         definition("flow-b", "template-1"),
         definition("flow-a", "template-1"),
+        archived,
+        paused,
+        draft,
     ];
     let mut event = event();
     event.data.insert(

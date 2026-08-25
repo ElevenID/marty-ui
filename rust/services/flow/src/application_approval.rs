@@ -356,7 +356,8 @@ pub fn prepare_application_event_plan(
     let mut matching = definitions
         .iter()
         .filter(|definition| {
-            application_approved_trigger(definition)
+            definition.status == crate::DefinitionStatus::Active
+                && application_approved_trigger(definition)
                 && requested_template_id.as_deref().is_none_or(|expected| {
                     definition.credential_template_id.as_deref() == Some(expected)
                 })
