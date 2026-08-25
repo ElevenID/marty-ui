@@ -55,4 +55,4 @@ def test_reusable_preflight_uses_only_the_job_token() -> None:
     assert "GH_TOKEN: ${{ github.token }}" in workflow
     assert '--environment "$RELEASE_ENVIRONMENT"' in workflow
     assert "--protection-only" in workflow
-    assert "REPO_ACCESS_TOKEN" not in workflow
+    assert "secrets." not in workflow
