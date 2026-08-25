@@ -39,6 +39,7 @@ if ([string]::IsNullOrWhiteSpace($GeneratedEnvFile)) {
 $script:BetaProject = "elevenid-beta"
 $script:BetaUiProject = "elevenid-beta-ui"
 $script:BetaNetwork = "elevenid-beta-network"
+$script:VolumeHelperImage = "alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
 $env:MARTY_NETWORK_NAME = $script:BetaNetwork
 $script:EnvFiles = @($TunnelEnvFile, $GeneratedEnvFile)
 foreach ($envFile in $script:EnvFiles) {
@@ -171,6 +172,16 @@ function Get-ComposeContainerId {
     return $null
 }
 
+function Assert-BetaVolume([string]$Name) {
+    $raw = & docker volume inspect $Name
+    if ($LASTEXITCODE -ne 0) { throw "Required beta volume is absent: $Name" }
+    $volume = ($raw -join "`n") | ConvertFrom-Json
+    if ($volume.Count -ne 1 -or $volume[0].Labels.'com.docker.compose.project' -ne $script:BetaProject) {
+        throw "Refusing volume outside $($script:BetaProject): $Name"
+    }
+    return $Name
+}
+
 function Get-FileSha256([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
@@ -260,18 +271,20 @@ function New-BetaStateBackup {
     $applicant = Get-ComposeContainerId -Service "applicant"
     $redis = Get-ComposeContainerId -Service "redis"
     foreach ($required in @($postgres, $applicant, $redis)) { if (-not $required) { throw "Beta backup requires the running state services" } }
+    $applicantVolume = Assert-BetaVolume "elevenid-beta_applicant_data"
+    $openBaoVolume = Assert-BetaVolume "elevenid-beta_openbao_data"
     Invoke-Checked -FilePath docker -Arguments @("exec", $postgres, "sh", "-lc", "pg_dump -U postgres -Fc -d marty -f /tmp/$SafeRelease-marty.dump && pg_dump -U postgres -Fc -d keycloak -f /tmp/$SafeRelease-keycloak.dump && pg_dumpall -U postgres --globals-only -f /tmp/$SafeRelease-globals.sql")
     Invoke-Checked -FilePath docker -Arguments @("cp", "${postgres}:/tmp/$SafeRelease-marty.dump", (Join-Path $Destination "postgres-marty.dump"))
     Invoke-Checked -FilePath docker -Arguments @("cp", "${postgres}:/tmp/$SafeRelease-keycloak.dump", (Join-Path $Destination "postgres-keycloak.dump"))
     Invoke-Checked -FilePath docker -Arguments @("cp", "${postgres}:/tmp/$SafeRelease-globals.sql", (Join-Path $Destination "postgres-globals.sql"))
-    Invoke-Checked -FilePath docker -Arguments @("cp", "${applicant}:/app/data/applicant_store.json", (Join-Path $Destination "applicant_store.json"))
+    Invoke-Checked -FilePath docker -Arguments @("run", "--rm", "--mount", "type=volume,src=$applicantVolume,dst=/source,readonly", "--mount", "type=bind,src=$Destination,dst=/backup", $script:VolumeHelperImage, "sh", "-lc", "test -s /source/applicant_store.json && cp /source/applicant_store.json /backup/applicant_store.json")
     $redisSave = & docker exec --env "REDISCLI_AUTH=$RedisPassword" $redis redis-cli SAVE
     $redisSaveLine = [string]($redisSave | Select-Object -Last 1)
     if ($LASTEXITCODE -ne 0 -or $redisSaveLine.Trim() -ne "OK") {
         throw "Authenticated beta Redis snapshot failed"
     }
     Invoke-Checked -FilePath docker -Arguments @("cp", "${redis}:/data/dump.rdb", (Join-Path $Destination "redis-dump.rdb"))
-    Invoke-Checked -FilePath docker -Arguments @("run", "--rm", "--mount", "type=volume,src=elevenid-beta_openbao_data,dst=/source,readonly", "--mount", "type=bind,src=$Destination,dst=/backup", "postgres:15-alpine", "sh", "-lc", "cd /source && tar -czf /backup/openbao-data.tar.gz .")
+    Invoke-Checked -FilePath docker -Arguments @("run", "--rm", "--mount", "type=volume,src=$openBaoVolume,dst=/source,readonly", "--mount", "type=bind,src=$Destination,dst=/backup", $script:VolumeHelperImage, "sh", "-lc", "cd /source && tar -czf /backup/openbao-data.tar.gz .")
 
     $files = @(Get-ChildItem -LiteralPath $Destination -File | Sort-Object Name | ForEach-Object {
         [ordered]@{ name = $_.Name; size = $_.Length; sha256 = Get-FileSha256 $_.FullName }

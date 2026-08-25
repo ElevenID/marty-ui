@@ -84,6 +84,11 @@ if [ "$MODULE_NAME" = "deployment_profile" ]; then
 	exec /usr/local/bin/marty-deployment-profile
 fi
 
+if [ "$MODULE_NAME" = "compliance_profile" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-compliance-profile
+fi
+
 echo "Starting service: $SERVICE_NAME (module: $MODULE_NAME)"
 echo "Working directory: $(pwd)"
 echo "Python version: $(python --version)"
