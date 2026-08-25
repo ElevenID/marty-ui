@@ -365,8 +365,12 @@ def test_stack_tag_requires_exact_main_gate_evidence() -> None:
     assert "scripts/stack_tag_gate.py prepare" in prepare
     assert "git ls-remote --tags" in prepare
     assert "git tag -a" in prepare
+    assert "git bundle create prepared-stack-tag.bundle" in prepare
+    assert "git bundle verify prepared-stack-tag.bundle" in prepare
     assert "stack-tag-evidence-${{ inputs.tag }}" in prepare
-    assert 'gh workflow run cd.yml --ref "$TAG"' in prepare
+    assert "prepared-stack-tag.bundle" in prepare
+    assert "git push origin" not in prepare
+    assert "gh workflow run cd.yml" not in prepare
     assert "scripts/stack_tag_gate.py validate-release" in workflow
     assert "stack-tag-evidence-$TAG" in workflow
     assert "actions: read" in workflow

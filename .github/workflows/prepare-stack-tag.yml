@@ -112,38 +112,21 @@ jobs:
             --tag-object "$tag_object" \
             --peeled-commit "$peeled"
 
+      - name: Create portable exact-tag handoff
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          git bundle create prepared-stack-tag.bundle "refs/tags/$TAG"
+          git bundle verify prepared-stack-tag.bundle
+
       - name: Upload immutable tag preparation evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: stack-tag-evidence-${{ inputs.tag }}
-          path: stack-tag-evidence.json
+          path: |
+            stack-tag-evidence.json
+            prepared-stack-tag.bundle
           if-no-files-found: error
           retention-days: 90
-
-      - name: Publish the exact tag and dispatch its release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          git push origin "refs/tags/$TAG:refs/tags/$TAG"
-          for attempt in $(seq 1 5); do
-            if gh workflow run cd.yml --ref "$TAG"; then
-              exit 0
-            fi
-            echo "Stack release dispatch attempt $attempt failed" >&2
-            sleep 2
-            gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
-              "repos/$GITHUB_REPOSITORY/actions/workflows/cd.yml/runs?branch=$TAG&event=workflow_dispatch" \
-              > release-dispatch-runs.json
-            if jq -e --arg sha "$(git rev-parse "$TAG^{commit}")" \
-              '[.workflow_runs[] | select(.head_sha == $sha)] | length > 0' \
-              release-dispatch-runs.json >/dev/null; then
-              echo "The stack release dispatch was accepted despite the client error"
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "::error::The immutable tag exists but the stack release dispatch failed"
-          exit 1
