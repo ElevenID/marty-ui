@@ -271,7 +271,7 @@ impl GatewayContract {
     /// documentation endpoint from silently drifting after the Python/FastAPI
     /// gateway is removed.
     #[must_use]
-    pub fn openapi_document(&self) -> Value {
+    pub fn openapi_document(&self, release_version: &str) -> Value {
         let mut paths = Map::new();
         for route in self.routes.iter().filter(|route| route.include_in_schema) {
             let owner = route_ownership(&route.path);
@@ -306,7 +306,7 @@ impl GatewayContract {
             "openapi": "3.1.0",
             "info": {
                 "title": "Marty API Gateway",
-                "version": env!("CARGO_PKG_VERSION"),
+                "version": release_version,
                 "description": "Canonical public HTTP surface for the Marty Rust service platform."
             },
             "paths": paths,
@@ -784,9 +784,10 @@ mod tests {
     #[test]
     fn openapi_is_derived_from_every_schema_visible_route() {
         let contract = GatewayContract::load().expect("gateway contract");
-        let document = contract.openapi_document();
+        let document = contract.openapi_document("1.2.3");
         assert_eq!(document["openapi"], "3.1.0");
         assert_eq!(document["info"]["title"], "Marty API Gateway");
+        assert_eq!(document["info"]["version"], "1.2.3");
         let paths = document["paths"].as_object().expect("OpenAPI paths");
         let mut operations = 0;
         for route in &contract.routes {

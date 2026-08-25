@@ -724,7 +724,7 @@ async fn proxy_handler(
             return Json(
                 GatewayContract::load()
                     .expect("validated embedded gateway contract")
-                    .openapi_document(),
+                    .openapi_document(&state.release_identity.release_version),
             )
             .into_response();
         }
@@ -6448,6 +6448,7 @@ mod tests {
         )
         .expect("json");
         assert_eq!(openapi["openapi"], "3.1.0");
+        assert_eq!(openapi["info"]["version"], "development");
         assert!(openapi["paths"]["/v1/flows/definitions"]["get"].is_object());
 
         for path in ["/docs", "/redoc"] {
