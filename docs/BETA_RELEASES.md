@@ -13,8 +13,8 @@ Python MMF beta packages and do not recreate `release-beta.yml` workflows.
    `v*` tag in an evidence bundle, and records its exact object and source SHA.
    The accountable maintainer verifies and imports that bundle, publishes the
    previously unused tag through a temporary scoped tag-rule bypass, restores
-   the rule immediately, and dispatches `.github/workflows/cd.yml` at the
-   immutable tag.
+   the rule immediately, and lets the tag event start
+   `.github/workflows/cd.yml` at the immutable tag.
 3. Allow that workflow to validate the coordinated revisions, build the Rust
    service plane, publish immutable OCI images, SBOMs, attestations, checksums,
    and the atomic release manifest, and retain rollback evidence.
