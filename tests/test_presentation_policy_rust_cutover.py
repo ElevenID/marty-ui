@@ -13,8 +13,7 @@ def test_public_service_image_executes_the_native_presentation_policy_binary() -
     dockerfile = text("services/Dockerfile")
     entrypoint = text("services/entrypoint.sh")
     assert (
-        "cargo build --locked --release -p marty-presentation-policy "
-        "--bin marty-presentation-policy"
+        "-p marty-presentation-policy --bin marty-presentation-policy"
     ) in dockerfile
     assert (
         "/build/rust/target/release/marty-presentation-policy "

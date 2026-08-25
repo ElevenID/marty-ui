@@ -25,8 +25,7 @@ def test_shared_release_image_dispatches_to_the_native_binary() -> None:
     dockerfile = text("services/Dockerfile")
     entrypoint = text("services/entrypoint.sh")
     build = (
-        "cargo build --locked --release -p marty-compliance-profile "
-        "--bin marty-compliance-profile"
+        "-p marty-compliance-profile --bin marty-compliance-profile"
     )
     copy = (
         "COPY --from=rust-service-builder "

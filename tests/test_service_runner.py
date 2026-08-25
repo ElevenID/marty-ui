@@ -11,6 +11,13 @@ from services import service_runner
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_shared_service_image_builds_all_rust_binaries_once() -> None:
+    dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
+
+    assert dockerfile.count("RUN cargo build --locked --release") == 1
+    assert dockerfile.count(" --bin marty-") == 16
+
+
 def test_runner_imports_the_canonical_service_module(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -77,7 +84,7 @@ def test_event_stream_has_only_the_canonical_rust_server() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile").read_text(encoding="utf-8")
 
     assert not list((ROOT / "services" / "event_stream").glob("*.py"))
-    assert "cargo build --locked --release -p marty-event-stream" in dockerfile
+    assert "-p marty-event-stream --bin marty-event-stream" in dockerfile
     assert (
         "COPY --from=rust-service-builder "
         "/build/rust/target/release/marty-event-stream "
@@ -90,7 +97,7 @@ def test_auth_has_only_the_canonical_rust_server() -> None:
     entrypoint = (ROOT / "services" / "entrypoint.sh").read_text(encoding="utf-8")
 
     assert not list((ROOT / "services" / "auth").rglob("*.py"))
-    assert "cargo build --locked --release -p marty-auth --bin marty-auth" in dockerfile
+    assert "-p marty-auth --bin marty-auth" in dockerfile
     assert (
         "COPY --from=rust-service-builder "
         "/build/rust/target/release/marty-auth "

@@ -6,22 +6,23 @@ COPY rust /build/rust
 COPY proto /build/proto
 COPY contracts /build/contracts
 COPY services/auth/assets /build/services/auth/assets
-RUN cargo build --locked --release -p marty-event-stream --bin marty-event-stream
-RUN cargo build --locked --release -p marty-gateway --bin marty-gateway
-RUN cargo build --locked --release -p marty-revocation-profile --bin marty-revocation-profile
-RUN cargo build --locked --release -p marty-signing-keys --bin marty-signing-keys
-RUN cargo build --locked --release -p marty-notification --bin marty-notification
-RUN cargo build --locked --release -p marty-flow --bin marty-flow
-RUN cargo build --locked --release -p marty-organization --bin marty-organization
-RUN cargo build --locked --release -p marty-auth --bin marty-auth
-RUN cargo build --locked --release -p marty-credential-template --bin marty-credential-template
-RUN cargo build --locked --release -p marty-presentation-policy --bin marty-presentation-policy
-RUN cargo build --locked --release -p marty-trust-profile --bin marty-trust-profile
-RUN cargo build --locked --release -p marty-applicant --bin marty-applicant
-RUN cargo build --locked --release -p marty-device-registration --bin marty-device-registration
-RUN cargo build --locked --release -p marty-verification-service --bin marty-verification-service
-RUN cargo build --locked --release -p marty-deployment-profile --bin marty-deployment-profile
-RUN cargo build --locked --release -p marty-compliance-profile --bin marty-compliance-profile
+RUN cargo build --locked --release \
+    -p marty-event-stream --bin marty-event-stream \
+    -p marty-gateway --bin marty-gateway \
+    -p marty-revocation-profile --bin marty-revocation-profile \
+    -p marty-signing-keys --bin marty-signing-keys \
+    -p marty-notification --bin marty-notification \
+    -p marty-flow --bin marty-flow \
+    -p marty-organization --bin marty-organization \
+    -p marty-auth --bin marty-auth \
+    -p marty-credential-template --bin marty-credential-template \
+    -p marty-presentation-policy --bin marty-presentation-policy \
+    -p marty-trust-profile --bin marty-trust-profile \
+    -p marty-applicant --bin marty-applicant \
+    -p marty-device-registration --bin marty-device-registration \
+    -p marty-verification-service --bin marty-verification-service \
+    -p marty-deployment-profile --bin marty-deployment-profile \
+    -p marty-compliance-profile --bin marty-compliance-profile
 
 FROM python:3.12-slim
 
