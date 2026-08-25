@@ -92,7 +92,10 @@ async fn receive_application_approved(
         now,
     )
     .await
-    .map_err(application_error)?;
+    .map_err(|error| {
+        tracing::warn!(%error, "application event processing failed");
+        application_error(error)
+    })?;
     Ok(Json(response))
 }
 
@@ -117,6 +120,13 @@ fn application_error(error: ApplicationApprovalError) -> FlowHttpError {
             error.to_string(),
         ),
         ApplicationApprovalError::Conflict(_) => FlowHttpError::new(
+            StatusCode::CONFLICT,
+            "APPLICATION_OFFER_CONFLICT",
+            error.to_string(),
+        ),
+        ApplicationApprovalError::Repository(crate::RepositoryError::ApplicationOfferConflict(
+            _,
+        )) => FlowHttpError::new(
             StatusCode::CONFLICT,
             "APPLICATION_OFFER_CONFLICT",
             error.to_string(),
@@ -153,4 +163,46 @@ fn native_unavailable() -> FlowHttpError {
         "FLOW.NATIVE_BACKEND_UNAVAILABLE",
         "application event native backend is unavailable",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::response::IntoResponse;
+
+    use super::*;
+
+    async fn error_response(error: ApplicationApprovalError) -> (StatusCode, Value) {
+        let response = application_error(error).into_response();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    #[tokio::test]
+    async fn durable_offer_conflicts_remain_public_conflicts() {
+        let (status, body) = error_response(ApplicationApprovalError::Repository(
+            crate::RepositoryError::ApplicationOfferConflict(
+                "application and flow are bound to different issuance claims".into(),
+            ),
+        ))
+        .await;
+
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "APPLICATION_OFFER_CONFLICT");
+    }
+
+    #[tokio::test]
+    async fn repository_failures_remain_sanitized_and_retryable() {
+        let (status, body) = error_response(ApplicationApprovalError::Repository(
+            crate::RepositoryError::Storage("database password was rejected".into()),
+        ))
+        .await;
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"], "FLOW.APPLICATION_EVENT_UNAVAILABLE");
+        assert_eq!(body["detail"], "application event could not be processed");
+        assert!(!body.to_string().contains("database password"));
+    }
 }
