@@ -1,17 +1,17 @@
 # Marty UI
 
-Microservice-based control plane and UI for Marty credential, trust, policy, applicant, and flow management.
+<!-- cspell:ignore CBOR usermod prerendering prerendered bunx -->
+
+Microservice-based control plane and UI for Marty credential, trust, policy,
+applicant, and flow management.
 
 ## 🚀 Quick Start
 
 ### Local Development (Recommended)
 
 ```bash
-# Clone with sibling repositories
+# Clone the active service plane
 cd ~/workspace
-git clone https://github.com/ElevenID/Marty.git
-git clone https://github.com/ElevenID/marty-credentials.git
-git clone https://github.com/ElevenID/marty-microservices-framework.git
 git clone https://github.com/ElevenID/marty-ui.git
 
 # Start the local microservice stack
@@ -51,13 +51,15 @@ This repository hosts the active `marty-ui` application stack:
 
 - **Gateway** for public and authenticated API routing
 - **Auth** and **Organization** services for identity and tenancy
-- **Trust Profile**, **Compliance Profile**, **Presentation Policy**, and **Deployment Profile** services
-- **Applicant**, **Flow**, **Notification**, **Verification**, and **Device Registration** services
+- **Trust Profile**, **Compliance Profile**, **Presentation Policy**, and
+  **Deployment Profile** services
+- **Applicant**, **Flow**, **Notification**, **Verification**, and
+  **Device Registration** services
 - **React/Vite UI** for operator workflows and console experiences
 
 ## Architecture
 
-```
+```text
 ┌───────────────┐
 │  React / Vite │
 └───────┬───────┘
@@ -77,16 +79,21 @@ Auth  Organization  Trust/Profile/Policy services  Flow/Applicant/etc.
 
 Locally, the stack is orchestrated with `docker-compose.base.yml` plus profile overlays.
 
-## Package Dependencies
+## Runtime inputs
 
-This project depends on three Marty packages:
+- **[marty-microservices-framework](https://github.com/ElevenID/marty-microservices-framework)**
+  owns the shared Rust crate platform pinned in `rust/Cargo.toml`.
+- **[marty-core](https://github.com/ElevenID/marty-core)** owns shared protocol,
+  policy, verification, and cryptographic Rust kernels.
+- **[marty-credentials](https://github.com/ElevenID/marty-credentials)**
+  publishes the issuance service as an immutable OCI image.
+- **[marty-common](https://github.com/ElevenID/Marty/tree/main/packages/marty-common)**
+  and the `marty-core` Python binding are retained compatibility wheels selected
+  by immutable release URI and digest where Python adapters still require them.
 
-- **[marty-credentials](https://github.com/ElevenID/marty-credentials)** - Credential domain logic, status lists, Rust bindings (marty-rs)
-- **[marty-common](https://github.com/ElevenID/Marty/tree/main/packages/marty-common)** - Shared infrastructure (crypto_bridge, gRPC, database)
-- **[marty-microservices-framework](https://github.com/ElevenID/marty-microservices-framework)** - Microservices framework
-
-**Development:** Packages are mounted as volumes for live code reloading  
-**Production:** Packages are installed from GitHub Packages registry
+The Compose services do not mount sibling source repositories. Release images
+are built from pinned Rust revisions and immutable compatibility artifacts; they
+do not install a Python MMF package.
 
 See [IMPORT_MIGRATION.md](IMPORT_MIGRATION.md) for import path details.
 
@@ -97,7 +104,8 @@ See [IMPORT_MIGRATION.md](IMPORT_MIGRATION.md) for import path details.
 - **Credential Issuance**: Creates ISO 18013-5 compliant mDL credentials
 - **Document Types**: Supports driving licenses, ID cards, and custom documents
 - **Security**: Uses secure random generation for credential IDs
-- **Standards Compliance**: Implements mso_mdoc format with proper cryptographic signatures
+- **Standards Compliance**: Implements mso_mdoc format with proper
+  cryptographic signatures
 
 ### Verifier Service
 
@@ -119,7 +127,8 @@ See [IMPORT_MIGRATION.md](IMPORT_MIGRATION.md) for import path details.
 
 - **Privacy-Preserving**: Verify age without disclosing birth date
 - **Multiple Use Cases**: Alcohol purchase, voting, senior discounts, employment
-- **Zero-Knowledge Proofs**: Demonstrate age thresholds without revealing exact age
+- **Zero-Knowledge Proofs**: Demonstrate age thresholds without revealing exact
+  age
 - **Policy-Based**: Context-aware verification with privacy level reporting
 
 ### 📱 Offline QR Code Verification
@@ -152,7 +161,7 @@ See [IMPORT_MIGRATION.md](IMPORT_MIGRATION.md) for import path details.
 - **Enhanced Navigation**: Dedicated tab for advanced features
 - **Interactive Demos**: Hands-on exploration of all enhanced capabilities
 
-## Quick Start
+## Detailed local start
 
 ### 1. Start backend services
 
@@ -262,7 +271,8 @@ make services-restart
 
 ### Active service groups
 
-The current compose stack centers on the gateway plus backend microservices such as:
+The current Compose stack centers on the gateway plus backend microservices
+such as:
 
 - `auth`
 - `organization`
@@ -281,7 +291,8 @@ The current compose stack centers on the gateway plus backend microservices such
 
 ### Environment Variables
 
-The local stack supports a number of environment variables via `.env` and compose defaults. Common examples include:
+The local stack supports a number of environment variables via `.env` and
+Compose defaults. Common examples include:
 
 - `PUBLIC_API_URL`
 - `CORS_ORIGINS`
@@ -292,7 +303,8 @@ The local stack supports a number of environment variables via `.env` and compos
 
 ### Database Configuration
 
-The default local Postgres container is configured via compose and is intended for development use.
+The default local Postgres container is configured via Compose and is intended
+for development use.
 
 - External port: `5433`
 
@@ -302,7 +314,8 @@ The default local Postgres container is configured via compose and is intended f
 - `docker-compose.profile.dev.yml` - dev-mode overlay
 - `docker-compose.profile.tunnel.yml` - optional public tunnel support
 - `docker-compose.profile.obs.yml` - optional observability profile
-- `docker-compose.profile.conformance.yml` - project-scoped official interoperability isolation
+- `docker-compose.profile.conformance.yml` - project-scoped official
+  interoperability isolation
 
 ## Development
 
@@ -337,7 +350,8 @@ make grpc-health
 
 #### Adding or updating backend capabilities
 
-New backend features should be implemented in the relevant canonical Rust service, then surfaced through the native gateway and the UI as needed.
+New backend features should be implemented in the relevant canonical Rust
+service, then surfaced through the native gateway and the UI as needed.
 
 Typical areas:
 
@@ -401,11 +415,13 @@ docker stats
 
 ## Security Considerations
 
-### Production Deployment
+### Production hardening
 
-This repository contains active development infrastructure, but the default local configuration is still development-oriented. For production use:
+This repository contains active development infrastructure, but the default
+local configuration is still development-oriented. For production use:
 
-1. **Use proper certificates**: Replace self-signed certificates with CA-issued ones
+1. **Use proper certificates**: Replace self-signed certificates with CA-issued
+   ones
 2. **Implement authentication**: Add proper API authentication and authorization
 3. **Secure database**: Use encrypted connections and strong passwords
 4. **Network security**: Implement proper network policies and TLS
@@ -430,7 +446,9 @@ This project works across standards and service domains including:
 
 ## 📋 Future Work - SEO & Analytics
 
-The marketing site infrastructure is complete with prerendering, sitemap, and structured data. The following action items need to be completed before production deployment:
+The marketing site infrastructure is complete with prerendering, sitemap, and
+structured data. The following action items need to be completed before
+production deployment:
 
 ### Required Setup
 
@@ -469,6 +487,7 @@ The marketing site infrastructure is complete with prerendering, sitemap, and st
 ### Current Status
 
 ✅ **Complete:**
+
 - 14 pages prerendered with full SEO metadata
 - Meta tags, Open Graph, Twitter Cards configured
 - JSON-LD structured data for all pages
@@ -478,6 +497,7 @@ The marketing site infrastructure is complete with prerendering, sitemap, and st
 - web-vitals package installed
 
 🔲 **Pending:**
+
 - Search Console verification code
 - GA4 Measurement ID configuration
 - Analytics integration in App.jsx
@@ -504,7 +524,8 @@ To contribute to this project:
 
 ## License
 
-This project is released under the GNU Affero General Public License v3.0 (AGPL-3.0-only). See the [LICENSE](LICENSE) file for details.
+This project is released under the GNU Affero General Public License v3.0
+(AGPL-3.0-only). See the [LICENSE](LICENSE) file for details.
 
 ## Resources
 
@@ -514,4 +535,5 @@ This project is released under the GNU Affero General Public License v3.0 (AGPL-
 
 ---
 
-For questions or support, please create an issue in the repository or contact the development team.
+For questions or support, create an issue in the repository or contact the
+development team.

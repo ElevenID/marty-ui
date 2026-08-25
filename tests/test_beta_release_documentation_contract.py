@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GUIDE = ROOT / "docs" / "BETA_RELEASES.md"
 QUICK_START = ROOT / "QUICK_START.md"
+README = ROOT / "README.md"
 
 
 def test_beta_guide_names_the_current_aggregate_gates() -> None:
@@ -40,3 +41,13 @@ def test_quick_start_does_not_advertise_retired_source_mounts() -> None:
     assert "Mounted sibling repositories in dev mode" not in guide
     assert "/app/marty-microservices-framework" not in guide
     assert "do not mount sibling source repositories" in guide
+
+
+def test_readme_names_immutable_rust_runtime_inputs() -> None:
+    readme = README.read_text(encoding="utf-8")
+
+    assert "shared Rust crate platform" in readme
+    assert "immutable OCI image" in readme
+    assert "do not mount sibling source repositories" in readme
+    assert "Packages are mounted as volumes" not in readme
+    assert "installed from GitHub Packages registry" not in readme
