@@ -467,7 +467,8 @@ jobs:
           cp "$organization_application_executable" target/debug/organization-application-postgres-contract
           cp "$organization_repository_executable" target/debug/organization-repository-postgres-contract
           test -x target/debug/marty-revocation-profile
-          tar -cf "$RUNNER_TEMP/rust-db-test-bundle.tar" \
+          command -v zstd >/dev/null
+          tar --zstd -cf "$RUNNER_TEMP/rust-db-test-bundle.tar.zst" \
             "$contract_relative" \
             "$registry_relative" \
             "$document_relative" \
@@ -484,7 +485,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: rust-db-test-bundle-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/rust-db-test-bundle.tar
+          path: ${{ runner.temp }}/rust-db-test-bundle.tar.zst
           compression-level: 0
           retention-days: 1
       - name: Test Rust service contracts
@@ -556,7 +557,10 @@ jobs:
           path: ${{ runner.temp }}/rust-db-test-bundle
       - name: Extract reusable database contract executables
         shell: bash
-        run: tar -xf "$RUNNER_TEMP/rust-db-test-bundle/rust-db-test-bundle.tar" -C rust
+        run: >-
+          tar --zstd -xf
+          "$RUNNER_TEMP/rust-db-test-bundle/rust-db-test-bundle.tar.zst"
+          -C rust
       - name: Test Rust database and runtime contracts
         working-directory: rust
         shell: bash

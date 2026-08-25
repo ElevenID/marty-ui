@@ -1,5 +1,12 @@
 # Database Migration Progress
 
+> [!IMPORTANT]
+> Historical migration record only. The Python/Alembic/MMF procedure retained
+> below describes the superseded implementation and is not a supported runbook.
+> Current service migrations and persistence are owned by the Rust services and
+> shared `mmf-*` crates; do not reintroduce the Python `mmf.*` imports shown in
+> the historical examples.
+
 ## Overview
 Migrating services from in-memory storage to PostgreSQL with Alembic migrations.
 

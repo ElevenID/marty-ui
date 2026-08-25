@@ -2,18 +2,26 @@
 
 ## Overview
 
-`marty-ui` now runs as a microservice-based local stack rather than the retired single-process `src/` monolith. The current backend is composed of independently built services behind the gateway, plus the React UI in `ui/`.
+`marty-ui` now runs as a microservice-based local stack rather than the retired
+single-process `src/` monolith. The current backend is composed of independently
+built services behind the gateway, plus the React UI in `ui/`.
 
-Primary sibling dependencies:
+Primary external source repositories:
 
 - `marty-credentials` - credential issuance services and Rust bindings
 - `marty-common` - shared infrastructure, crypto bridge, gRPC, auth helpers
-- `marty-microservices-framework` - shared microservice runtime pieces
+- `marty-microservices-framework` - shared Rust platform crates
 - `marty-core` - Rust verification crates and related native components
+
+The Compose services do not mount those repositories at runtime. Cargo uses
+pinned Git revisions for platform crates, and released compatibility wheels are
+bound by immutable URI and digest. The sibling layout below is useful only for
+explicit local builds and coordinated local release manifests.
 
 ## Recommended local workflow
 
-For most development work, use the Make targets that orchestrate the current compose files.
+For most development work, use the Make targets that orchestrate the current
+Compose files.
 
 ```bash
 # full backend stack
@@ -28,11 +36,11 @@ make logs
 
 Key endpoints once started:
 
-- Gateway: http://localhost:8000
-- Gateway docs: http://localhost:8000/docs
-- Auth docs: http://localhost:8001/docs
-- Keycloak: http://localhost:8180
-- MailHog: http://localhost:9025
+- Gateway: <http://localhost:8000>
+- Gateway docs: <http://localhost:8000/docs>
+- Auth docs: <http://localhost:8001/docs>
+- Keycloak: <http://localhost:8180>
+- MailHog: <http://localhost:9025>
 
 ## Current compose layout
 
@@ -48,7 +56,8 @@ the local documentation and debugging endpoints available on the developer
 machine without exposing infrastructure or internal service APIs to the LAN.
 Public access must use the configured gateway proxy or tunnel path.
 
-The legacy monolith Dockerfiles and demo-only compose entrypoints were retired and should not be referenced for new setup steps.
+The legacy monolith Docker build files and demo-only Compose entrypoints were
+retired and should not be referenced for new setup steps.
 
 ## Workspace layout
 
@@ -81,7 +90,8 @@ Use this when you want the current microservice topology locally.
 make infra
 ```
 
-Useful when iterating on the UI or when you want supporting services without the full app stack.
+Useful when iterating on the UI or when you want supporting services without
+the full app stack.
 
 ### 3. Backend stack + native UI
 
@@ -95,7 +105,7 @@ This is the usual fast feedback loop for frontend and gateway work.
 ## Frequently used Make targets
 
 | Command | Description |
-|---------|-------------|
+| --------- | ------------- |
 | `make dev` | Start infrastructure + app microservices |
 | `make down` | Stop the full stack |
 | `make infra` | Start only Postgres, Redis, Keycloak, MailHog |
@@ -114,11 +124,14 @@ If you need local native wheels for Rust-backed packages:
 make build-wheels
 ```
 
-That script writes wheels into `wheels/` using the sibling `marty-credentials` and `marty-core` repositories.
+That script writes wheels into `wheels/` using the sibling `marty-credentials`
+and `marty-core` repositories.
 
 ## Open Badges FFI
 
-Open Badges functions continue to be imported from `marty_common.crypto_bridge`, not from retired monolith modules and not directly from `_marty_rs`.
+Open Badges functions continue to be imported from
+`marty_common.crypto_bridge`, not from retired monolith modules and not
+directly from `_marty_rs`.
 
 ```python
 from marty_common.crypto_bridge import (
