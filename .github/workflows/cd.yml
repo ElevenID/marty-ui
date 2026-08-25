@@ -35,6 +35,7 @@ jobs:
     needs: release-environment-preflight
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       attestations: read
     outputs:
@@ -84,6 +85,42 @@ jobs:
           main_commit="$(git rev-parse refs/remotes/origin/main)"
           test "$RUN_SHA" = "$tagged_commit"
           test "$tagged_commit" = "$main_commit"
+      - name: Verify successful exact-main tag preparation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag_type="$(git cat-file -t "refs/tags/$TAG")"
+          tag_object="$(git rev-parse "refs/tags/$TAG")"
+          commit="$(git rev-parse "refs/tags/$TAG^{commit}")"
+          git for-each-ref --format='%(contents)' "refs/tags/$TAG" > tag-message.txt
+          run_id="$(sed -n 's/^Preparation-Run: //p' tag-message.txt)"
+          [[ "$run_id" =~ ^[1-9][0-9]*$ ]]
+          for _ in $(seq 1 36); do
+            gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" > preparation-run.json
+            status="$(jq -r .status preparation-run.json)"
+            conclusion="$(jq -r '.conclusion // ""' preparation-run.json)"
+            if [ "$status" = completed ]; then
+              test "$conclusion" = success
+              break
+            fi
+            sleep 5
+          done
+          test "$(jq -r .status preparation-run.json)" = completed
+          gh run download "$run_id" --name "stack-tag-evidence-$TAG" \
+            --dir prepared-tag-evidence
+          python scripts/stack_tag_gate.py validate-release \
+            --repository-name "$GITHUB_REPOSITORY" \
+            --tag "$TAG" \
+            --commit "$commit" \
+            --tag-type "$tag_type" \
+            --tag-object "$tag_object" \
+            --tag-message tag-message.txt \
+            --run-json preparation-run.json \
+            --evidence prepared-tag-evidence/stack-tag-evidence.json
       - name: Reject any existing release
         env:
           GH_TOKEN: ${{ github.token }}
