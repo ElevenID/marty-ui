@@ -10,7 +10,7 @@
   "environments": {
     "stack-release": {
       "prevent_admin_bypass": true,
-      "prevent_self_review": true,
+      "prevent_self_review": false,
       "require_reviewers": true,
       "require_branch_policy": true,
       "required_secrets": [],
@@ -18,7 +18,7 @@
     },
     "beta-lifecycle": {
       "prevent_admin_bypass": true,
-      "prevent_self_review": true,
+      "prevent_self_review": false,
       "require_reviewers": true,
       "require_branch_policy": true,
       "required_secrets": [
@@ -34,7 +34,7 @@
     },
     "wallet-conformance": {
       "prevent_admin_bypass": true,
-      "prevent_self_review": true,
+      "prevent_self_review": false,
       "require_reviewers": true,
       "require_branch_policy": true,
       "required_secrets": [],

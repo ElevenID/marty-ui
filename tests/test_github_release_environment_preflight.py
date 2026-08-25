@@ -48,6 +48,23 @@ def test_environment_accepts_protected_complete_configuration() -> None:
     )
 
 
+def test_environment_accepts_declared_solo_maintainer_review() -> None:
+    solo_requirement = requirement()
+    solo_requirement["prevent_self_review"] = False
+    solo_environment = protected_environment()
+    solo_environment["protection_rules"][0]["prevent_self_review"] = False
+    solo_environment["protection_rules"][0]["reviewers"] = [
+        {"type": "User", "reviewer": {"id": 7076785, "login": "burdettadam"}}
+    ]
+
+    assert (
+        validate_environment(
+            "beta", solo_requirement, solo_environment, {"SECRET_A"}, {"VARIABLE_A"}
+        )
+        == []
+    )
+
+
 def test_environment_reports_every_missing_protection_and_input() -> None:
     errors = validate_environment("beta", requirement(), {}, set(), set())
 
