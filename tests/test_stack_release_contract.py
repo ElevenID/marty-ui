@@ -344,6 +344,34 @@ def test_stack_release_requires_annotated_tag_on_exact_protected_main() -> None:
     assert 'test "$tagged_commit" = "$main_commit"' in workflow
 
 
+def test_stack_tag_requires_exact_main_gate_evidence() -> None:
+    workflow = _text(".github/workflows/cd.yml")
+    prepare = _text(".github/workflows/prepare-stack-tag.yml")
+    policy = json.loads(_text(".github/stack-tag-policy.json"))
+
+    assert policy["schema"] == "elevenid.stack-tag-preparation/v1"
+    assert policy["required_workflows"] == [
+        {"path": ".github/workflows/ci.yml", "event": "merge_group"},
+        {
+            "path": ".github/workflows/open-source-policy.yml",
+            "event": "merge_group",
+        },
+        {
+            "path": ".github/workflows/organization-quality.yml",
+            "event": "merge_group",
+        },
+        {"path": "dynamic/github-code-scanning/codeql", "event": "dynamic"},
+    ]
+    assert "scripts/stack_tag_gate.py prepare" in prepare
+    assert "git ls-remote --tags" in prepare
+    assert "git tag -a" in prepare
+    assert "stack-tag-evidence-${{ inputs.tag }}" in prepare
+    assert 'gh workflow run cd.yml --ref "$TAG"' in prepare
+    assert "scripts/stack_tag_gate.py validate-release" in workflow
+    assert "stack-tag-evidence-$TAG" in workflow
+    assert "actions: read" in workflow
+
+
 def test_service_images_install_every_required_native_backend() -> None:
     service = _text("services/Dockerfile")
     migrations = _text("services/Dockerfile.migrations")
