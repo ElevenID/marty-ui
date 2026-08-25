@@ -8,8 +8,13 @@ Python MMF beta packages and do not recreate `release-beta.yml` workflows.
 
 1. Merge every coordinated component through its protected default branch and
    record each exact revision in the stack inputs.
-2. Create an annotated `v*` tag on the exact protected `marty-ui/main` commit.
-   The tag starts the **Stack release** workflow in `.github/workflows/cd.yml`.
+2. Dispatch **Prepare stack tag** on exact protected `marty-ui/main`. It checks
+   the configured merge-queue and code-scanning results, creates the annotated
+   `v*` tag in an evidence bundle, and records its exact object and source SHA.
+   The accountable maintainer verifies and imports that bundle, publishes the
+   previously unused tag through a temporary scoped tag-rule bypass, restores
+   the rule immediately, and dispatches `.github/workflows/cd.yml` at the
+   immutable tag.
 3. Allow that workflow to validate the coordinated revisions, build the Rust
    service plane, publish immutable OCI images, SBOMs, attestations, checksums,
    and the atomic release manifest, and retain rollback evidence.
@@ -42,9 +47,11 @@ aggregate release completes the same gates.
 
 ## Recovery dispatch
 
-If the release tag event is lost or delayed, dispatch `cd.yml` at the immutable
-annotated tag. Its validation rejects branches, lightweight tags, tags not on
-the exact protected `main` commit, and tags with an existing release.
+The **Stack release** workflow re-downloads the completed preparation evidence.
+It rejects branches, lightweight tags, tags not on the exact protected `main`
+commit, tag objects that differ from the preparation bundle, failed preparation
+runs, and tags with an existing release. A lost tag event is recovered by
+dispatching `.github/workflows/cd.yml` at that same immutable annotated tag.
 
 Do not use a branch workflow dispatch as a substitute for an immutable release,
 and do not mix independently built component versions in beta.
