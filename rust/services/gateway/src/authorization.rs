@@ -838,6 +838,7 @@ static SKIP_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         r"^/v1/integrations/canvas/oauth/callback/?$",
         r"^/v1/integrations/canvas/lti/experience-sessions/(?:exchange|current(?:/(?:bootstrap|evidence-sync|deep-linking-response))?)/?$",
         r"^/health",
+        r"^/(?:openapi\.json|docs|redoc)$",
         r"^/\.well-known/",
         r"^/internal/signing-keys(?:/|$)",
         r"^/v1/(?:flows/instances|verify)/[^/]+/(?:request|submit)$",

@@ -47,15 +47,19 @@ async fn postgres_finalization_and_callback_leases_are_atomic() -> TestResult {
 
     reset_schema(&pool).await?;
     let contract = run_contract(&pool).await;
-    let cleanup = sqlx::query("DROP SCHEMA IF EXISTS flow_service CASCADE")
-        .execute(&pool)
-        .await;
+    let cleanup = sqlx::raw_sql(
+        "DROP SCHEMA IF EXISTS flow_service CASCADE;
+         DROP SCHEMA IF EXISTS deployment_profile_service CASCADE;",
+    )
+    .execute(&pool)
+    .await;
     pool.close().await;
     cleanup?;
     contract
 }
 
 async fn run_contract(pool: &PgPool) -> TestResult {
+    assert_builtin_flow_link_is_idempotent(pool).await?;
     let repository = PostgresFlowRepository::new(pool.clone());
     let now = chrono::DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
         .expect("current timestamp");
@@ -734,9 +738,36 @@ async fn insert_live_instance(
 }
 
 async fn reset_schema(pool: &PgPool) -> TestResult {
-    sqlx::query("DROP SCHEMA IF EXISTS flow_service CASCADE")
-        .execute(pool)
-        .await?;
+    sqlx::raw_sql(
+        "DROP SCHEMA IF EXISTS flow_service CASCADE;
+         DROP SCHEMA IF EXISTS deployment_profile_service CASCADE;
+         CREATE SCHEMA deployment_profile_service;
+         CREATE TABLE deployment_profile_service.deployment_profiles (
+             id text PRIMARY KEY,
+             enabled_flow_ids jsonb NOT NULL DEFAULT '[]'::jsonb
+         );
+         INSERT INTO deployment_profile_service.deployment_profiles(id)
+         VALUES ('70000000-0000-0000-0000-000000000001');",
+    )
+    .execute(pool)
+    .await?;
     migrate_flow_schema(pool).await?;
+    Ok(())
+}
+
+async fn assert_builtin_flow_link_is_idempotent(pool: &PgPool) -> TestResult {
+    const BUILTIN_FLOW_ID: &str = "71000000-0000-0000-0000-000000000001";
+    const DEPLOYMENT_PROFILE_ID: &str = "70000000-0000-0000-0000-000000000001";
+
+    migrate_flow_schema(pool).await?;
+    let enabled: Value = sqlx::query_scalar(
+        "SELECT enabled_flow_ids
+         FROM deployment_profile_service.deployment_profiles
+         WHERE id = $1",
+    )
+    .bind(DEPLOYMENT_PROFILE_ID)
+    .fetch_one(pool)
+    .await?;
+    assert_eq!(enabled, json!([BUILTIN_FLOW_ID]));
     Ok(())
 }

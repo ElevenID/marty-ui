@@ -222,7 +222,14 @@ pub async fn execute_application_event_plan(
                     definition, &instance, &artifact,
                 ));
             }
-            Err(_) => failed_flow_ids.push(flow_id.clone()),
+            Err(error) => {
+                tracing::warn!(
+                    flow_definition_id = %flow_id,
+                    %error,
+                    "application offer completion failed"
+                );
+                failed_flow_ids.push(flow_id.clone());
+            }
         }
     }
     Ok(ApplicationApprovalResponse {
@@ -252,10 +259,17 @@ async fn complete_application_offer(
         return Ok((instance, artifact));
     }
     let expected_updated_at = instance.updated_at;
+    let flow_instance_id = instance.id.clone();
     let mut prepared =
         prepare_instance_start(providers, definition, instance, public_base_url, now)
             .await
-            .map_err(|_| {
+            .map_err(|error| {
+                tracing::warn!(
+                    flow_definition_id = %definition.id,
+                    %flow_instance_id,
+                    %error,
+                    "application offer side effect failed"
+                );
                 ApplicationApprovalError::Conflict("application offer initiation failed")
             })?;
     let artifact = prepared
@@ -342,7 +356,8 @@ pub fn prepare_application_event_plan(
     let mut matching = definitions
         .iter()
         .filter(|definition| {
-            application_approved_trigger(definition)
+            definition.status == crate::DefinitionStatus::Active
+                && application_approved_trigger(definition)
                 && requested_template_id.as_deref().is_none_or(|expected| {
                     definition.credential_template_id.as_deref() == Some(expected)
                 })

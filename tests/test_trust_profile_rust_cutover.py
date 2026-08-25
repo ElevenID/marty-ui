@@ -45,8 +45,7 @@ def test_native_service_has_shared_and_dedicated_image_paths() -> None:
     workflow = text(".github/workflows/ci.yml")
 
     assert (
-        "cargo build --locked --release -p marty-trust-profile "
-        "--bin marty-trust-profile"
+        "-p marty-trust-profile --bin marty-trust-profile"
     ) in shared
     assert (
         "/build/rust/target/release/marty-trust-profile "

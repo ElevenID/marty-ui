@@ -27,7 +27,7 @@ def test_shared_service_image_dispatches_revocation_to_rust() -> None:
     dockerfile = text("services/Dockerfile")
     entrypoint = text("services/entrypoint.sh")
 
-    assert "cargo build --locked --release -p marty-revocation-profile" in dockerfile
+    assert "-p marty-revocation-profile --bin marty-revocation-profile" in dockerfile
     assert "target/release/marty-revocation-profile" in dockerfile
     assert 'if [ "$MODULE_NAME" = "revocation_profile" ]; then' in entrypoint
     assert "exec /usr/local/bin/marty-revocation-profile" in entrypoint

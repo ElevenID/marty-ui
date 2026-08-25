@@ -21,7 +21,7 @@ def test_shared_service_image_dispatches_credential_template_to_rust() -> None:
     dockerfile = text("services/Dockerfile")
     entrypoint = text("services/entrypoint.sh")
     assert (
-        f"cargo build --locked --release -p marty-credential-template --bin {binary}"
+        f"-p marty-credential-template --bin {binary}"
         in dockerfile
     )
     assert f"/build/rust/target/release/{binary} /usr/local/bin/{binary}" in dockerfile

@@ -246,10 +246,10 @@ def test_revocation_deletion_release_uses_the_rust_candidate_overlay() -> None:
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.70"
-    assert integration["commit"] == "519d00e3d9d9c225bd748db2a1f1d5b50e1364cb"
+    assert integration["version"] == "1.2.74"
+    assert integration["commit"] == "ab7721ef6ae5d2a8fc7eba0730c5716188ebeb31"
     assert integration["artifacts"][0]["digest"] == (
-        "sha256:d68a947388d0fac74a89a2db6185e8dd2dbf6ce63170265772114da46bd5ffc9"
+        "sha256:943469e27c31fb66d28685ab0b2161c22a63395a07b4b8a54ec3da88adc45632"
     )
 
     issuance = next(
@@ -376,19 +376,20 @@ def test_stack_tag_requires_exact_main_gate_evidence() -> None:
     assert "actions: read" in workflow
 
 
-def test_service_images_install_every_required_native_backend() -> None:
+def test_python_migration_image_installs_every_required_native_backend() -> None:
     service = _text("services/Dockerfile")
     migrations = _text("services/Dockerfile.migrations")
 
-    for dockerfile in (service, migrations):
-        assert 'MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}"' in dockerfile
-        assert (
-            'MARTY_VERIFICATION_WHEEL="/tmp/${MARTY_VERIFICATION_URI##*/}"'
-            in dockerfile
-        )
-        assert 'MARTY_ISO18013_WHEEL="/tmp/${MARTY_ISO18013_URI##*/}"' in dockerfile
-        assert '"$MARTY_VERIFICATION_WHEEL"' in dockerfile
-        assert '"$MARTY_ISO18013_WHEEL"' in dockerfile
+    assert 'MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}"' in migrations
+    assert (
+        'MARTY_VERIFICATION_WHEEL="/tmp/${MARTY_VERIFICATION_URI##*/}"'
+        in migrations
+    )
+    assert 'MARTY_ISO18013_WHEEL="/tmp/${MARTY_ISO18013_URI##*/}"' in migrations
+    assert '"$MARTY_VERIFICATION_WHEEL"' in migrations
+    assert '"$MARTY_ISO18013_WHEEL"' in migrations
+    assert "MARTY_RS_WHEEL" not in service
+    assert "python" not in service.split("FROM debian:bookworm-slim", maxsplit=1)[1]
 
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}

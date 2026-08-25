@@ -35,6 +35,7 @@ if (-not $resolvedArtifacts.StartsWith($allowedPrefix, [StringComparison]::Ordin
 
 $project = "elevenid-beta"
 $uiProject = "elevenid-beta-ui"
+$volumeHelperImage = "alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
 $env:MARTY_NETWORK_NAME = "elevenid-beta-network"
 $composeFiles = @(
     "docker-compose.base.yml", "docker-compose.beta.yml", "docker-compose.profile.dev.yml",
@@ -107,6 +108,16 @@ function Find-ServiceContainer([string]$Service) {
     return [string]$ids[0]
 }
 
+function Assert-BetaVolume([string]$Name) {
+    $raw = & docker volume inspect $Name
+    if ($LASTEXITCODE -ne 0) { throw "Required beta volume is absent: $Name" }
+    $volume = ($raw -join "`n") | ConvertFrom-Json
+    if ($volume.Count -ne 1 -or $volume[0].Labels.'com.docker.compose.project' -ne $project) {
+        throw "Refusing volume outside ${project}: $Name"
+    }
+    return $Name
+}
+
 function Get-ServiceContainer([string]$Service) {
     $container = Find-ServiceContainer $Service
     if (-not $container) { throw "Expected one beta container for $Service" }
@@ -155,7 +166,8 @@ $preDeploy = @($preDeployDocument | ForEach-Object { $_ })
 $applicationServices = @(
     "auth", "organization", "credential-template", "trust-profile", "applicant", "notification",
     "compliance-profile", "presentation-policy", "deployment-profile", "flow", "verification",
-    "revocation-profile", "device-registration", "event-stream", "issuance", "canvas-sync-worker", "gateway"
+    "revocation-profile", "device-registration", "event-stream", "signing-keys", "issuance",
+    "canvas-sync-worker", "gateway"
 )
 Invoke-Checked docker (Get-ComposeArgs (@("stop") + $applicationServices + @("keycloak")))
 
@@ -169,13 +181,9 @@ foreach ($database in @("marty", "keycloak")) {
     Invoke-Checked docker @("exec", $postgres, "pg_restore", "-U", "postgres", "-d", $database, "--no-owner", "--role=$database", "/tmp/beta-restore-$database.dump")
 }
 
-$redisVolumeName = "elevenid-beta_redis_data"
-$redisVolumeRaw = & docker volume inspect $redisVolumeName
-if ($LASTEXITCODE -ne 0) { throw "Required beta Redis volume is absent" }
-$redisVolume = ($redisVolumeRaw -join "`n") | ConvertFrom-Json
-if ($redisVolume[0].Labels.'com.docker.compose.project' -ne $project) { throw "Refusing non-beta Redis volume" }
+$redisVolumeName = Assert-BetaVolume "elevenid-beta_redis_data"
 Invoke-Checked docker (Get-ComposeArgs @("stop", "redis"))
-Invoke-Checked docker @("run", "--rm", "--mount", "type=volume,src=$redisVolumeName,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", "postgres:15-alpine", "sh", "-lc", "rm -rf /data/appendonlydir && rm -f /data/dump.rdb && cp /backup/redis-dump.rdb /data/dump.rdb")
+Invoke-Checked docker @("run", "--rm", "--mount", "type=volume,src=$redisVolumeName,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", $volumeHelperImage, "sh", "-lc", "rm -rf /data/appendonlydir && rm -f /data/dump.rdb && cp /backup/redis-dump.rdb /data/dump.rdb")
 Invoke-Checked docker (Get-ComposeArgs @("start", "redis"))
 Wait-ForServiceHealth @("redis")
 
@@ -222,6 +230,8 @@ foreach ($record in $preDeploy) {
 }
 $yaml -join "`n" | Set-Content -LiteralPath $restoreImages -Encoding utf8
 $composeFiles += $restoreImages
+$applicantVolumeName = Assert-BetaVolume "elevenid-beta_applicant_data"
+Invoke-Checked docker @("run", "--rm", "--mount", "type=volume,src=$applicantVolumeName,dst=/data", "--mount", "type=bind,src=$backupDir,dst=/backup,readonly", $volumeHelperImage, "sh", "-lc", "test -s /backup/applicant_store.json && cp /backup/applicant_store.json /data/applicant_store.json.tmp && mv /data/applicant_store.json.tmp /data/applicant_store.json")
 Invoke-Checked docker (Get-ComposeArgs (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + @("keycloak") + $restoreServices))
 Wait-ForServiceHealth (@("keycloak") + $restoreServices)
 
@@ -229,9 +239,6 @@ if ("canvas-sync-worker" -notin @($preDeploy.service)) {
     $worker = Find-ServiceContainer "canvas-sync-worker"
     if ($worker) { Invoke-Checked docker @("rm", "--force", $worker) }
 }
-
-$applicant = Get-ServiceContainer "applicant"
-Invoke-Checked docker @("cp", (Join-Path $backupDir "applicant_store.json"), "${applicant}:/app/data/applicant_store.json")
 
 $uiRecord = @($preDeploy | Where-Object { $_.service -eq "ui-prod" -and $_.running } | Select-Object -First 1)
 if ($uiRecord.Count -eq 1) {

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -243,6 +244,33 @@ def test_beta_restore_is_explicit_and_project_scoped() -> None:
     assert '"GRPC_INSECURE_ALLOWED", "ALLOW_PLAINTEXT_GRPC"' in script
 
 
+def test_applicant_backup_and_restore_use_the_quiesced_named_volume() -> None:
+    deploy = text("scripts/deploy-local-beta-release.ps1")
+    restore = text("scripts/restore-local-beta-release.ps1")
+
+    assert 'Assert-BetaVolume "elevenid-beta_applicant_data"' in deploy
+    assert 'type=volume,src=$applicantVolume,dst=/source,readonly' in deploy
+    assert "test -s /source/applicant_store.json" in deploy
+    assert '${applicant}:/app/data/applicant_store.json' not in deploy
+
+    volume_restore = restore.index(
+        'Assert-BetaVolume "elevenid-beta_applicant_data"'
+    )
+    service_start = restore.index(
+        'Invoke-Checked docker (Get-ComposeArgs (@("up", "--detach"'
+    )
+    assert volume_restore < service_start
+    assert 'type=volume,src=$applicantVolumeName,dst=/data' in restore
+    assert "test -s /backup/applicant_store.json" in restore
+    assert '${applicant}:/app/data/applicant_store.json' not in restore
+    helper_digest = (
+        "alpine@sha256:"
+        "d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+    )
+    assert helper_digest in deploy
+    assert helper_digest in restore
+
+
 def test_beta_inventory_records_only_non_secret_rollback_connection_metadata() -> None:
     deploy = text("scripts/deploy-local-beta-release.ps1")
 
@@ -300,6 +328,12 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
     assert "${MARTY_NETWORK_NAME:-marty-infra-network}" in base
     assert '$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.uri)@$($martyIssuance.digest)"' in restore
     assert 'com.docker.compose.service=docs' in restore
+
+    deployed = deploy.split("$script:ApplicationServices = @(", 1)[1].split(")", 1)[0]
+    restored = restore.split("$applicationServices = @(", 1)[1].split(")", 1)[0]
+    assert set(re.findall(r'"([a-z0-9-]+)"', restored)) == set(
+        re.findall(r'"([a-z0-9-]+)"', deployed)
+    )
 
 
 def test_beta_rust_cutover_requires_a_persistent_shared_service_token() -> None:

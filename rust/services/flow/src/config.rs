@@ -492,12 +492,18 @@ impl FlowServiceConfig {
             allow_plaintext_grpc,
             workload_client_tls,
             workload_server_tls,
-            release_version: value(&values, "RELEASE_VERSION")
-                .unwrap_or(env!("CARGO_PKG_VERSION"))
-                .to_owned(),
-            build_revision: value(&values, "BUILD_REVISION")
-                .unwrap_or("unknown")
-                .to_owned(),
+            release_version: release_identity_value(
+                &values,
+                "MARTY_RELEASE_VERSION",
+                "RELEASE_VERSION",
+                env!("CARGO_PKG_VERSION"),
+            ),
+            build_revision: release_identity_value(
+                &values,
+                "MARTY_UI_SHA",
+                "BUILD_REVISION",
+                "unknown",
+            ),
         })
     }
 
@@ -525,6 +531,18 @@ impl FlowServiceConfig {
             url_query_maximum_length: self.oid4vp_url_query_maximum_length,
         }
     }
+}
+
+fn release_identity_value(
+    values: &BTreeMap<String, String>,
+    canonical_name: &str,
+    legacy_name: &str,
+    default: &str,
+) -> String {
+    value(values, canonical_name)
+        .or_else(|| value(values, legacy_name))
+        .unwrap_or(default)
+        .to_owned()
 }
 
 fn default_issuer_did(public_base_url: &str) -> String {
@@ -900,6 +918,39 @@ fn redacted(value: &Option<String>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_identity_prefers_shared_names_and_preserves_legacy_fallbacks() {
+        let canonical = BTreeMap::from([
+            ("MARTY_RELEASE_VERSION".into(), "1.2.3".into()),
+            ("RELEASE_VERSION".into(), "legacy-version".into()),
+            ("MARTY_UI_SHA".into(), "canonical-sha".into()),
+            ("BUILD_REVISION".into(), "legacy-sha".into()),
+        ]);
+        assert_eq!(
+            release_identity_value(
+                &canonical,
+                "MARTY_RELEASE_VERSION",
+                "RELEASE_VERSION",
+                "dev"
+            ),
+            "1.2.3"
+        );
+        assert_eq!(
+            release_identity_value(&canonical, "MARTY_UI_SHA", "BUILD_REVISION", "unknown"),
+            "canonical-sha"
+        );
+
+        let legacy = BTreeMap::from([("RELEASE_VERSION".into(), "legacy-version".into())]);
+        assert_eq!(
+            release_identity_value(&legacy, "MARTY_RELEASE_VERSION", "RELEASE_VERSION", "dev"),
+            "legacy-version"
+        );
+        assert_eq!(
+            release_identity_value(&legacy, "MARTY_UI_SHA", "BUILD_REVISION", "unknown"),
+            "unknown"
+        );
+    }
 
     #[test]
     fn secret_files_are_trimmed_and_unreadable_files_fail_closed() {

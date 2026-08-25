@@ -474,23 +474,32 @@ def test_local_build_requires_digest_pinned_bootstrap_artifacts(
         "--build-arg",
         "MARTY_RS_DIGEST=value-for-MARTY_RS_DIGEST",
         "--build-arg",
+        "MARTY_VERIFICATION_URI=value-for-MARTY_VERIFICATION_URI",
+        "--build-arg",
+        "MARTY_VERIFICATION_DIGEST=value-for-MARTY_VERIFICATION_DIGEST",
+        "--build-arg",
+        "MARTY_ISO18013_URI=value-for-MARTY_ISO18013_URI",
+        "--build-arg",
+        "MARTY_ISO18013_DIGEST=value-for-MARTY_ISO18013_DIGEST",
+        "--build-arg",
         "MARTY_COMMON_URI=value-for-MARTY_COMMON_URI",
         "--build-arg",
         "MARTY_COMMON_DIGEST=value-for-MARTY_COMMON_DIGEST",
     ]
 
 
-def test_all_shared_service_builds_receive_the_verified_bootstrap_artifacts() -> None:
-    """A source-built conformance stack must not silently omit Docker build args.
-
-    Services share ``services/Dockerfile``, which downloads the released
-    marty-rs and marty-common wheels and checks their digests.  Compose does
-    not automatically forward environment variables as build arguments, so
-    each service must inherit the explicit build-argument mapping.
-    """
+def test_only_python_migrations_receive_verified_python_artifacts() -> None:
+    """Rust services must not inherit Python artifact inputs or runtime residue."""
     compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
-    assert "x-marty-service-build-artifacts: &marty_service_build_artifacts" in compose
+    assert "x-marty-migration-build-artifacts: &marty_migration_build_artifacts" in compose
+    migration = re.search(
+        r"(?ms)^  db-migrate:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)", compose
+    )
+    assert migration is not None
+    assert "<<: *marty_migration_build_artifacts" in migration.group(1)
+
     for service in (
+        "revocation-profile-migrate",
         "gateway",
         "auth",
         "organization",
@@ -502,13 +511,16 @@ def test_all_shared_service_builds_receive_the_verified_bootstrap_artifacts() ->
         "flow",
         "revocation-profile",
         "event-stream",
+        "signing-keys",
     ):
         section = re.search(
             rf"(?ms)^  {re.escape(service)}:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
             compose,
         )
         assert section is not None
-        assert "<<: *marty_service_build_artifacts" in section.group(1)
+        assert "dockerfile: services/Dockerfile" in section.group(1)
+        assert "marty_migration_build_artifacts" not in section.group(1)
+        assert "SERVICE_NAME:" in section.group(1)
 
     for service, target in (
         ("compliance-profile", "compliance_profile"),

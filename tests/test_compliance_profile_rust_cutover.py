@@ -21,6 +21,24 @@ def test_dedicated_native_image_compose_target_and_ci_gate_are_present() -> None
     assert "tags: marty-compliance-profile:ci" in workflow
 
 
+def test_shared_release_image_dispatches_to_the_native_binary() -> None:
+    dockerfile = text("services/Dockerfile")
+    entrypoint = text("services/entrypoint.sh")
+    build = (
+        "-p marty-compliance-profile --bin marty-compliance-profile"
+    )
+    copy = (
+        "COPY --from=rust-service-builder "
+        "/build/rust/target/release/marty-compliance-profile "
+        "/usr/local/bin/marty-compliance-profile"
+    )
+
+    assert build in dockerfile
+    assert copy in dockerfile
+    assert 'if [ "$MODULE_NAME" = "compliance_profile" ]; then' in entrypoint
+    assert "exec /usr/local/bin/marty-compliance-profile" in entrypoint
+
+
 def test_only_native_compliance_profile_runtime_sources_remain() -> None:
     service = ROOT / "services" / "compliance_profile"
     assert not list(service.rglob("*.py"))

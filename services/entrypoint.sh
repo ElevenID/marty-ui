@@ -6,7 +6,7 @@ if [ -r /app/load-secrets-env.sh ]; then
 	. /app/load-secrets-env.sh
 fi
 
-# Convert hyphens to underscores for Python module names
+# Compose historically used both hyphenated and underscored service names.
 MODULE_NAME=$(echo "$SERVICE_NAME" | tr '-' '_')
 
 if [ "$MODULE_NAME" = "event_stream" ]; then
@@ -84,12 +84,10 @@ if [ "$MODULE_NAME" = "deployment_profile" ]; then
 	exec /usr/local/bin/marty-deployment-profile
 fi
 
-echo "Starting service: $SERVICE_NAME (module: $MODULE_NAME)"
-echo "Working directory: $(pwd)"
-echo "Python version: $(python --version)"
+if [ "$MODULE_NAME" = "compliance_profile" ]; then
+	echo "Starting canonical Rust service: $SERVICE_NAME"
+	exec /usr/local/bin/marty-compliance-profile
+fi
 
-# Change to services directory and import the service through its canonical package name.
-# Running `${MODULE_NAME}.main` directly with `python -m` would execute it as
-# `__main__`; later adapter imports could then load a second copy of the module.
-cd /app/services
-exec python -m service_runner
+echo "Unsupported SERVICE_NAME: ${SERVICE_NAME:-<empty>}" >&2
+exit 64

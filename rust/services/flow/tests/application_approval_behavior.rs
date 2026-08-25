@@ -163,10 +163,19 @@ fn language_neutral_contract_and_logical_keys_are_stable() {
 
 #[test]
 fn plan_filters_orders_and_minimizes_authenticated_events() {
+    let mut archived = definition("flow-archived", "template-1");
+    archived.status = DefinitionStatus::Archived;
+    let mut paused = definition("flow-paused", "template-1");
+    paused.status = DefinitionStatus::Paused;
+    let mut draft = definition("flow-draft", "template-1");
+    draft.status = DefinitionStatus::Draft;
     let definitions = vec![
         definition("flow-z", "template-2"),
         definition("flow-b", "template-1"),
         definition("flow-a", "template-1"),
+        archived,
+        paused,
+        draft,
     ];
     let mut event = event();
     event.data.insert(
@@ -194,6 +203,39 @@ fn plan_filters_orders_and_minimizes_authenticated_events() {
         assert!(!instance.context.to_string().contains("f4593698"));
         assert!(planned.plan_entry["offer_semantics_hash"].len() == 64);
     }
+}
+
+#[test]
+fn extension_only_python_application_flows_remain_executable() {
+    let mut legacy = definition("flow-legacy", "template-1");
+    legacy.steps.clear();
+    legacy.transitions.clear();
+    legacy.start_step_id = None;
+
+    let plan = prepare_application_event_plan(&event(), &evidence(), &[legacy], now()).unwrap();
+    assert_eq!(plan.planned_flows.len(), 1);
+    let instance = &plan.planned_flows[0].instance;
+    assert_eq!(instance.status.to_string(), "in_progress");
+    assert_eq!(instance.current_step_id, None);
+    assert_eq!(instance.context["application_id"], "application-1");
+}
+
+#[test]
+fn graphless_compatibility_is_narrow_and_validated() {
+    let mut invalid = definition("flow-invalid", "template-1");
+    invalid.steps.clear();
+    invalid.transitions.clear();
+    invalid.start_step_id = None;
+    invalid.trigger = None;
+
+    let skipped = prepare_application_event_plan(&event(), &evidence(), &[invalid], now()).unwrap();
+    assert!(skipped.planned_flows.is_empty());
+    let mut invalid = definition("flow-invalid", "template-1");
+    invalid.steps.clear();
+    invalid.transitions.clear();
+    invalid.start_step_id = None;
+    invalid.extension.as_mut().unwrap()["entry_step_id"] = json!("missing");
+    assert!(prepare_application_event_plan(&event(), &evidence(), &[invalid], now()).is_err());
 }
 
 #[test]

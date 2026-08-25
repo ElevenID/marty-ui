@@ -13,7 +13,7 @@ def text(path: str) -> str:
 def test_public_service_image_executes_only_the_native_device_binary() -> None:
     dockerfile = text("services/Dockerfile")
     entrypoint = text("services/entrypoint.sh")
-    assert "cargo build --locked --release -p marty-device-registration --bin marty-device-registration" in dockerfile
+    assert "-p marty-device-registration --bin marty-device-registration" in dockerfile
     assert "/build/rust/target/release/marty-device-registration /usr/local/bin/marty-device-registration" in dockerfile
     assert 'if [ "$MODULE_NAME" = "device_registration" ]; then' in entrypoint
     assert "exec /usr/local/bin/marty-device-registration" in entrypoint

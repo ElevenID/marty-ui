@@ -53,7 +53,7 @@ async fn executable_starts_and_serves_gateway_health() {
     child.wait().expect("reap gateway executable");
     assert_eq!(
         payload.expect("gateway health endpoint became available"),
-        serde_json::json!({"status": "healthy", "service": "gateway"})
+        serde_json::json!({"status": "healthy", "service": "api-gateway"})
     );
 }
 

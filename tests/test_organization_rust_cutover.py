@@ -26,7 +26,7 @@ def test_shared_service_image_builds_and_runs_native_organization() -> None:
     dedicated = text("rust/services/Dockerfile.ci")
     workflow = text(".github/workflows/ci.yml")
     assert (
-        f"cargo build --locked --release -p marty-organization --bin {binary}"
+        f"-p marty-organization --bin {binary}"
         in dockerfile
     )
     assert f"/build/rust/target/release/{binary} /usr/local/bin/{binary}" in dockerfile

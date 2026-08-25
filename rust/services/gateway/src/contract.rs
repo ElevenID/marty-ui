@@ -9,6 +9,7 @@ use mmf_platform::{
 };
 use regex::Regex;
 use serde::Deserialize;
+use serde_json::{json, Map, Value};
 
 pub const EXPECTED_ROUTE_COUNT: usize = 434;
 
@@ -135,6 +136,7 @@ impl GatewayContract {
     /// alter the frozen 434-route contract.
     pub fn proxy_route_table(&self) -> Result<RouteTable, PlatformError> {
         let mut table = self.route_table()?;
+        add_gateway_documentation_routes(&mut table)?;
         table.add(RouteConfig {
             name: "internal:compliance-profiles:discoverable".into(),
             pattern: "/v1/compliance-profiles/system/discoverable".into(),
@@ -253,6 +255,136 @@ impl GatewayContract {
             tags: BTreeSet::from(["gateway-internal".into()]),
         })?;
         Ok(table)
+    }
+
+    /// Build the table used by request middleware. Documentation handlers are
+    /// real public routes, while proxy-only helper routes remain unreachable
+    /// from the external request classifier.
+    pub fn runtime_route_table(&self) -> Result<RouteTable, PlatformError> {
+        let mut table = self.route_table()?;
+        add_gateway_documentation_routes(&mut table)?;
+        Ok(table)
+    }
+
+    /// Generate the public OpenAPI surface from the same frozen route
+    /// contract used by the proxy. This keeps discovery DRY and prevents the
+    /// documentation endpoint from silently drifting after the Python/FastAPI
+    /// gateway is removed.
+    #[must_use]
+    pub fn openapi_document(&self, release_version: &str) -> Value {
+        let mut paths = Map::new();
+        for route in self.routes.iter().filter(|route| route.include_in_schema) {
+            let owner = route_ownership(&route.path);
+            let path_item = paths
+                .entry(route.path.clone())
+                .or_insert_with(|| Value::Object(Map::new()))
+                .as_object_mut()
+                .expect("OpenAPI path items are objects");
+            let mut operation = json!({
+                "operationId": operation_id(route.method, &route.path),
+                "tags": [owner.service],
+                "responses": {
+                    route.status_code.to_string(): {
+                        "description": status_description(route.status_code)
+                    }
+                },
+                "x-marty-upstream-service": owner.service,
+                "x-marty-gateway-owned": owner.gateway_owned
+            });
+            let parameters = path_parameters(&route.path);
+            if !parameters.is_empty() {
+                operation["parameters"] = Value::Array(parameters);
+            }
+            operation["security"] = if owner.requires_authentication {
+                json!([{"bearerAuth": []}, {"apiKeyAuth": []}, {"sessionCookie": []}])
+            } else {
+                json!([])
+            };
+            path_item.insert(method_name(route.method).to_ascii_lowercase(), operation);
+        }
+        json!({
+            "openapi": "3.1.0",
+            "info": {
+                "title": "Marty API Gateway",
+                "version": release_version,
+                "description": "Canonical public HTTP surface for the Marty Rust service platform."
+            },
+            "paths": paths,
+            "components": {
+                "securitySchemes": {
+                    "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"},
+                    "apiKeyAuth": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
+                    "sessionCookie": {"type": "apiKey", "in": "cookie", "name": "sessionId"}
+                }
+            }
+        })
+    }
+}
+
+fn add_gateway_documentation_routes(table: &mut RouteTable) -> Result<(), PlatformError> {
+    for path in ["/openapi.json", "/docs", "/redoc"] {
+        table.add(RouteConfig {
+            name: format!("internal:gateway-documentation:{path}"),
+            pattern: path.into(),
+            match_type: RouteMatchType::Exact,
+            upstream_service: "gateway".into(),
+            methods: BTreeSet::from([HttpMethod::Get]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: None,
+            timeout_ms: 5_000,
+            retries: 0,
+            auth_required: false,
+            authentication_type: AuthenticationType::None,
+            priority: 20_000,
+            tags: BTreeSet::from(["gateway-internal".into()]),
+        })?;
+    }
+    Ok(())
+}
+
+fn operation_id(method: HttpMethod, path: &str) -> String {
+    let normalized = path
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!(
+        "{}_{}",
+        method_name(method).to_ascii_lowercase(),
+        normalized.trim_matches('_')
+    )
+}
+
+fn path_parameters(path: &str) -> Vec<Value> {
+    path.split('{')
+        .skip(1)
+        .filter_map(|tail| tail.split_once('}').map(|(parameter, _)| parameter))
+        .map(|parameter| parameter.split(':').next().unwrap_or(parameter))
+        .filter(|parameter| !parameter.is_empty())
+        .map(|parameter| {
+            json!({
+                "name": parameter,
+                "in": "path",
+                "required": true,
+                "schema": {"type": "string"}
+            })
+        })
+        .collect()
+}
+
+const fn status_description(status: u16) -> &'static str {
+    match status {
+        200 => "Successful response",
+        201 => "Resource created",
+        202 => "Request accepted",
+        204 => "Successful response with no content",
+        _ => "Declared response",
     }
 }
 
@@ -441,7 +573,10 @@ static DID_WEB_PUBLIC: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^/orgs/[^/]+/did\.json$").expect("static DID Web route regex"));
 
 fn public_route(path: &str) -> bool {
-    path == "/ready"
+    path == "/openapi.json"
+        || path == "/docs"
+        || path == "/redoc"
+        || path == "/ready"
         || path == "/health"
         || path.starts_with("/health/")
         || path.starts_with("/.well-known/")
@@ -473,7 +608,10 @@ fn public_route(path: &str) -> bool {
 }
 
 fn gateway_owned(path: &str) -> bool {
-    path.starts_with("/.well-known/")
+    path == "/openapi.json"
+        || path == "/docs"
+        || path == "/redoc"
+        || path.starts_with("/.well-known/")
         || path.starts_with("/credentials/")
         || path.starts_with("/health")
         || path.starts_with("/internal/signing-keys")
@@ -644,11 +782,69 @@ mod tests {
     }
 
     #[test]
+    fn openapi_is_derived_from_every_schema_visible_route() {
+        let contract = GatewayContract::load().expect("gateway contract");
+        let document = contract.openapi_document("1.2.3");
+        assert_eq!(document["openapi"], "3.1.0");
+        assert_eq!(document["info"]["title"], "Marty API Gateway");
+        assert_eq!(document["info"]["version"], "1.2.3");
+        let paths = document["paths"].as_object().expect("OpenAPI paths");
+        let mut operations = 0;
+        for route in &contract.routes {
+            let operation = paths
+                .get(&route.path)
+                .and_then(Value::as_object)
+                .and_then(|item| item.get(&method_name(route.method).to_ascii_lowercase()));
+            if route.include_in_schema {
+                let operation = operation.unwrap_or_else(|| {
+                    panic!(
+                        "missing OpenAPI operation {} {}",
+                        method_name(route.method),
+                        route.path
+                    )
+                });
+                assert!(operation["responses"]
+                    .get(route.status_code.to_string())
+                    .is_some());
+                assert_eq!(
+                    operation["x-marty-upstream-service"],
+                    route_ownership(&route.path).service
+                );
+                operations += 1;
+            } else {
+                assert!(operation.is_none(), "excluded operation was documented");
+            }
+        }
+        assert_eq!(
+            operations,
+            contract
+                .routes
+                .iter()
+                .filter(|route| route.include_in_schema)
+                .count()
+        );
+        assert_eq!(
+            document["paths"]["/v1/organizations/{organization_id}/applicants"]["get"]
+                ["parameters"][0]["name"],
+            "organization_id"
+        );
+        assert!(document.to_string().find("commerce").is_none());
+    }
+
+    #[test]
     fn internal_proxy_routes_do_not_mutate_public_contract() {
         let contract = GatewayContract::load().expect("gateway contract");
         assert_eq!(contract.route_table().expect("public").routes().len(), 434);
+        assert_eq!(
+            contract
+                .runtime_route_table()
+                .expect("runtime")
+                .routes()
+                .len(),
+            437
+        );
         let proxy = contract.proxy_route_table().expect("proxy");
-        assert_eq!(proxy.routes().len(), 445);
+        assert_eq!(proxy.routes().len(), 448);
         assert_eq!(
             route_for(
                 &proxy,

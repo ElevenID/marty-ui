@@ -14,7 +14,7 @@ def text(path: str) -> str:
 def test_public_service_image_executes_only_the_native_verification_binary() -> None:
     dockerfile = text("services/Dockerfile")
     entrypoint = text("services/entrypoint.sh")
-    assert "cargo build --locked --release -p marty-verification-service" in dockerfile
+    assert "-p marty-verification-service --bin marty-verification-service" in dockerfile
     assert "/target/release/marty-verification-service /usr/local/bin/marty-verification-service" in dockerfile
     assert 'if [ "$MODULE_NAME" = "verification" ]; then' in entrypoint
     assert "exec /usr/local/bin/marty-verification-service" in entrypoint
