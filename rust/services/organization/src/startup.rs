@@ -5,11 +5,15 @@ use uuid::Uuid;
 use crate::{
     catalog::{seed_system_roles, SeedError},
     postgres::{PostgresOrganizationStore, RepositoryError},
-    Member, MemberStatus, Role,
+    JoinMechanism, Member, MemberStatus, Organization, OrganizationStatus, OrganizationType, Role,
 };
+
+const MARTY_ORGANIZATION_NAME: &str = "Marty";
+const MARTY_ORGANIZATION_SLUG: &str = "marty";
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct OrganizationStartupReport {
+    pub default_organization_created: bool,
     pub organizations_reconciled: usize,
     pub bootstrap_memberships_reconciled: usize,
 }
@@ -22,6 +26,13 @@ pub enum OrganizationStartupError {
     Seed(#[from] SeedError),
     #[error("ORGANIZATION.STARTUP_ROLE_MISSING: {0}")]
     MissingRole(String),
+    #[error(
+        "ORGANIZATION.STARTUP_DEFAULT_ORGANIZATION_CONFLICT: {field} is owned by {existing_id}"
+    )]
+    DefaultOrganizationConflict {
+        field: &'static str,
+        existing_id: Uuid,
+    },
 }
 
 pub async fn reconcile_organization_startup(
@@ -32,6 +43,31 @@ pub async fn reconcile_organization_startup(
     now: DateTime<Utc>,
 ) -> Result<OrganizationStartupReport, OrganizationStartupError> {
     let mut report = OrganizationStartupReport::default();
+    if store
+        .organization_by_id(marty_organization_id)
+        .await?
+        .is_none()
+    {
+        if let Some(existing) = store.organization_by_slug(MARTY_ORGANIZATION_SLUG).await? {
+            return Err(OrganizationStartupError::DefaultOrganizationConflict {
+                field: "slug",
+                existing_id: existing.id,
+            });
+        }
+        if let Some(existing) = store
+            .organization_by_name_case_insensitive(MARTY_ORGANIZATION_NAME)
+            .await?
+        {
+            return Err(OrganizationStartupError::DefaultOrganizationConflict {
+                field: "name",
+                existing_id: existing.id,
+            });
+        }
+        store
+            .save_organization(&default_marty_organization(marty_organization_id, now))
+            .await?;
+        report.default_organization_created = true;
+    }
     let mut offset = 0_u32;
     loop {
         let organizations = store.list_organizations(1_000, offset).await?;
@@ -56,6 +92,33 @@ pub async fn reconcile_organization_startup(
         }
     }
     Ok(report)
+}
+
+#[must_use]
+pub fn default_marty_organization(id: Uuid, now: DateTime<Utc>) -> Organization {
+    Organization {
+        id,
+        name: MARTY_ORGANIZATION_NAME.into(),
+        display_name: Some("Marty Identity Platform".into()),
+        slug: MARTY_ORGANIZATION_SLUG.into(),
+        description: Some("The Marty Identity Platform provides secure, privacy-preserving digital identity solutions. All users are members of this organization and have access to core authentication capabilities.".into()),
+        org_type: OrganizationType::Enterprise,
+        status: OrganizationStatus::Active,
+        owner_id: String::new(),
+        join_code: None,
+        visibility: "PRIVATE".into(),
+        join_mechanism: JoinMechanism::Invite,
+        requires_approval: false,
+        is_discoverable: false,
+        contact_email: Some("support@marty.com".into()),
+        contact_phone: None,
+        website: Some("https://marty.com".into()),
+        plan: "free".into(),
+        plan_expires_at: None,
+        settings: serde_json::Map::new(),
+        created_at: now,
+        updated_at: now,
+    }
 }
 
 async fn ensure_bootstrap_membership(
@@ -153,5 +216,34 @@ mod tests {
             bootstrap_role_ids(&[viewer.clone(), admin.clone()], &admin),
             [viewer.id, admin.id]
         );
+    }
+
+    #[test]
+    fn default_organization_preserves_the_retired_python_seed_contract() {
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        let organization = default_marty_organization(id, now);
+
+        assert_eq!(organization.id, id);
+        assert_eq!(organization.name, "Marty");
+        assert_eq!(
+            organization.display_name.as_deref(),
+            Some("Marty Identity Platform")
+        );
+        assert_eq!(organization.slug, "marty");
+        assert_eq!(organization.org_type, OrganizationType::Enterprise);
+        assert_eq!(organization.status, OrganizationStatus::Active);
+        assert_eq!(organization.join_mechanism, JoinMechanism::Invite);
+        assert!(!organization.requires_approval);
+        assert!(!organization.is_discoverable);
+        assert_eq!(organization.visibility, "PRIVATE");
+        assert_eq!(
+            organization.contact_email.as_deref(),
+            Some("support@marty.com")
+        );
+        assert_eq!(organization.website.as_deref(), Some("https://marty.com"));
+        assert_eq!(organization.plan, "free");
+        assert_eq!(organization.created_at, now);
+        assert_eq!(organization.updated_at, now);
     }
 }

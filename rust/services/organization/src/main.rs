@@ -79,6 +79,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )
     .await?;
     info!(
+        default_organization_created = startup.default_organization_created,
         organizations = startup.organizations_reconciled,
         bootstrap_memberships = startup.bootstrap_memberships_reconciled,
         "Organization startup state reconciled"

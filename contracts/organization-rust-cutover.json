@@ -7,5 +7,10 @@
   "surface_contract": "contracts/organization-service-surface.json",
   "required_binary": "marty-organization",
   "required_ci_target": "organization",
+  "startup_parity": [
+    "idempotently create the canonical Marty organization when its configured stable ID is absent",
+    "fail closed when the reserved Marty name or slug belongs to a different organization",
+    "seed system roles before reconciling configured admin and reviewer memberships"
+  ],
   "python_runtime_fallback": false
 }

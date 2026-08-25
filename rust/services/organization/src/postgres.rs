@@ -88,6 +88,20 @@ impl PostgresOrganizationStore {
         row.as_ref().map(organization_from_row).transpose()
     }
 
+    pub async fn organization_by_name_case_insensitive(
+        &self,
+        name: &str,
+    ) -> Result<Option<Organization>, RepositoryError> {
+        let row = sqlx::query(
+            "SELECT * FROM organization_service.organizations
+             WHERE lower(name)=lower($1) LIMIT 1",
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(organization_from_row).transpose()
+    }
+
     pub async fn list_organizations(
         &self,
         limit: u32,

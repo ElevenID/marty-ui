@@ -29,7 +29,7 @@
     "audit_events.metadata"
   ],
   "repository_operations": [
-    "organization CRUD and discoverable search",
+    "organization CRUD plus exact slug and case-insensitive name lookup",
     "member CRUD by id, tenant, user, and case-insensitive email",
     "API-key CRUD by id, tenant, and hash including MIP scope metadata",
     "console-context preference upsert by user",
