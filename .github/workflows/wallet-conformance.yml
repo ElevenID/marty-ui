@@ -33,7 +33,13 @@ permissions:
   contents: read
 
 jobs:
+  release-environment-preflight:
+    uses: ./.github/workflows/release-environment-preflight.yml
+    with:
+      environment: wallet-conformance
+
   attest-release:
+    needs: release-environment-preflight
     name: Validate Device Evidence And Promote Release Manifest
     runs-on: ubuntu-latest
     environment: wallet-conformance

@@ -38,7 +38,13 @@ permissions:
   contents: read
 
 jobs:
+  release-environment-preflight:
+    uses: ./.github/workflows/release-environment-preflight.yml
+    with:
+      environment: beta-lifecycle
+
   full-stack-credential-lifecycle:
+    needs: release-environment-preflight
     name: Real Beta Issuance, Verification, And Contract Gate
     runs-on: ubuntu-latest
     environment: beta-lifecycle

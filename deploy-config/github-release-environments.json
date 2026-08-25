@@ -8,19 +8,13 @@
     "MARTY_PROTOCOL_REF"
   ],
   "environments": {
-    "beta-migration-rehearsal": {
+    "stack-release": {
       "prevent_admin_bypass": true,
       "prevent_self_review": true,
       "require_reviewers": true,
       "require_branch_policy": true,
-      "required_secrets": [
-        "MIGRATION_REHEARSAL_DATABASE_MARKER",
-        "MIGRATION_REHEARSAL_DATABASE_URL"
-      ],
-      "required_variables": [
-        "MIGRATION_REHEARSAL_PUBLIC_API_URL",
-        "MIGRATION_REHEARSAL_SNAPSHOT_ID"
-      ]
+      "required_secrets": [],
+      "required_variables": []
     },
     "beta-lifecycle": {
       "prevent_admin_bypass": true,

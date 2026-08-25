@@ -598,17 +598,29 @@ secrets.TEST_VENDOR_PASSWORD
 ```
 
 Every release environment must have at least one required reviewer, self-review
-and administrator bypass disabled, and a protected-branch or custom deployment-branch policy. The release workflow
-checks the live GitHub configuration before running repository tests or building
-an image:
+and administrator bypass disabled, and a protected-branch or custom
+deployment-branch policy. The stack-release, beta-lifecycle, and
+wallet-conformance workflows call the shared read-only preflight before running
+their protected job; the stack release runs it before building an image. The
+workflow check intentionally inspects protection metadata only, so it can use
+the least-privileged `GITHUB_TOKEN`:
+
+```bash
+GH_TOKEN=... python scripts/check_github_release_environments.py \
+  --environment beta-lifecycle --protection-only
+```
+
+An operator with environment-read access can also audit every declared input
+name and repository revision variable without reading secret values:
 
 ```bash
 GH_TOKEN=... python scripts/check_github_release_environments.py
 ```
 
 The required environment inputs and repository revision variables are declared
-in `deploy-config/github-release-environments.json`. The checker reports names
-only and never reads secret values.
+in `deploy-config/github-release-environments.json`. The protected lifecycle job
+also rejects empty required values before the browser journey starts. The
+checker reports names only and never reads secret values.
 
 The job starts the deterministic Marty browser wallet and fails unless:
 
