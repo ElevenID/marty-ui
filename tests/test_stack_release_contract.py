@@ -160,6 +160,25 @@ def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> No
     assert "build-ready-manifest-$RELEASE_VERSION" not in workflow
 
 
+def test_every_rust_toolchain_action_pins_the_workspace_toolchain() -> None:
+    action = (
+        "dtolnay/rust-toolchain@"
+        "6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772"
+    )
+    matched_steps: list[tuple[str, dict[str, object]]] = []
+
+    for workflow_path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+        workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        for job in workflow.get("jobs", {}).values():
+            for step in job.get("steps", []):
+                if step.get("uses") == action:
+                    matched_steps.append((workflow_path.name, step))
+
+    assert matched_steps
+    for workflow_name, step in matched_steps:
+        assert step.get("with", {}).get("toolchain") == "1.95.0", workflow_name
+
+
 def test_wallet_promotion_uses_signed_stack_and_distinct_release_source_lineage() -> (
     None
 ):
