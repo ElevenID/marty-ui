@@ -146,6 +146,18 @@ fn complete_surface_and_domain_inventory_match_the_shared_contract() {
 }
 
 #[test]
+fn csca_anchor_types_match_the_cross_service_contract() {
+    let csca_contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/csca-capability-behavior.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(values(&[TrustAnchorType::Csca, TrustAnchorType::Dsc])).unwrap(),
+        csca_contract["supported_rust_surface"]["trust_profile"]["anchor_types"]
+    );
+}
+
+#[test]
 fn trust_registry_behavior_is_owned_by_the_existing_marty_core_kernel() {
     let contract = contract();
     assert_eq!(

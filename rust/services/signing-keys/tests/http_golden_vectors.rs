@@ -26,6 +26,54 @@ async fn public_catalog_matches_language_neutral_contract() {
 }
 
 #[tokio::test]
+async fn csca_signing_surface_matches_the_language_neutral_contract() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/csca-capability-behavior.json"
+    ))
+    .unwrap();
+    let catalog = get_json("/v1/signing-keys/config/purposes").await;
+    let csca = catalog["purposes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|purpose| purpose["id"] == "csca")
+        .unwrap();
+    assert_eq!(
+        csca,
+        &contract["supported_rust_surface"]["signing_keys"]["key_purpose"]
+    );
+
+    for route in contract["supported_rust_surface"]["signing_keys"]["internal_routes"]
+        .as_array()
+        .unwrap()
+    {
+        let path = route.as_str().unwrap();
+        let body = match path {
+            "/internal/kms/sign" => {
+                serde_json::json!({"service_config": {}, "payload_b64": ""})
+            }
+            "/internal/kms/public-key" | "/internal/kms/verify" => {
+                serde_json::json!({"service_config": {}})
+            }
+            "/internal/documents/certificate/inspect" => {
+                serde_json::json!({"cert_pem": "not-a-certificate"})
+            }
+            _ => panic!("unhandled CSCA contract route: {path}"),
+        };
+        let response = marty_signing_keys::http::router()
+            .oneshot(
+                Request::post(path)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+    }
+}
+
+#[tokio::test]
 async fn health_and_extraction_status_preserve_the_service_contract() {
     assert_eq!(
         get_json("/health").await,

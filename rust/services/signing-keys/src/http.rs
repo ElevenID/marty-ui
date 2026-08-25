@@ -1581,9 +1581,21 @@ mod public_contract_tests {
     fn managed_key_names_preserve_purpose_isolation_and_algorithm_canonicalization() {
         let issuer = managed_key_reference("org-a", &identity("vc_jwt_issuer", "ES256"));
         let verifier = managed_key_reference("org-a", &identity("oid4vp_request_signing", "ES256"));
+        let csca = managed_key_reference("org-a", &identity("csca", "ES256"));
+        let dsc = managed_key_reference("org-a", &identity("mdoc_dsc", "ES256"));
+        let csca_contract: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/csca-capability-behavior.json"
+        ))
+        .unwrap();
         assert!(issuer.starts_with("cred-issuer-"));
         assert!(issuer.ends_with("-es256"));
         assert!(verifier.starts_with("oid4vp-verifier-"));
+        assert!(csca.starts_with(
+            csca_contract["supported_rust_surface"]["signing_keys"]["managed_key_reference_prefix"]
+                .as_str()
+                .unwrap()
+        ));
+        assert_ne!(csca, dsc);
         assert_ne!(issuer, verifier);
         assert_eq!(canonical_algorithm("eddsa"), "EdDSA");
     }

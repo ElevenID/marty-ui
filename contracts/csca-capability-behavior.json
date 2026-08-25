@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "historical_python_artifact": {
+    "repository": "ElevenID/Marty",
+    "directory": "src/marty_plugin/csca_service",
+    "container_entrypoint": "python -m src.apps.csca_service",
+    "executable_module_present": false,
+    "implementation_files": [],
+    "readme_only_claims": [
+      "CSCA private-key generation and storage",
+      "CSCA certificate issuance",
+      "DSC certificate signing",
+      "trust-anchor integration"
+    ]
+  },
+  "supported_rust_surface": {
+    "emrtd_issuance": {
+      "canonical_crate": "marty-verification::issuance",
+      "production_consumer": "ElevenID/marty-credentials:rust/marty-rs",
+      "entrypoints": [
+        "issue_emrtd_passport",
+        "issue_emrtd_passport_self_signed"
+      ],
+      "capabilities": [
+        "CSCA-certificate-and-key-generation",
+        "DSC-certificate-issuance-from-CSCA",
+        "EF.SOD-signing-with-DSC",
+        "issue-to-trust-to-verification-round-trip"
+      ]
+    },
+    "signing_keys": {
+      "crate": "marty-signing-keys",
+      "key_purpose": {
+        "id": "csca",
+        "allowed_algorithms": ["ES256", "ES384", "EdDSA", "RS256"],
+        "credential_formats": ["mso_mdoc", "zk_mdoc"]
+      },
+      "managed_key_reference_prefix": "cred-dsc-",
+      "internal_routes": [
+        "/internal/kms/sign",
+        "/internal/kms/public-key",
+        "/internal/kms/verify",
+        "/internal/documents/certificate/inspect"
+      ],
+      "capabilities": [
+        "provider-managed-key-generation-and-custody",
+        "detached-payload-signing",
+        "public-key-discovery",
+        "certificate-chain-attachment-and-inspection"
+      ]
+    },
+    "trust_profile": {
+      "crate": "marty-trust-profile",
+      "anchor_types": ["CSCA", "DSC"],
+      "http_operations": [
+        ["GET", "/v1/trust-registry/csca"],
+        ["GET", "/v1/trust-registry/csca/{country_code}"],
+        ["GET", "/v1/trust-registry/dsc"],
+        ["GET", "/v1/trust-registry/status"]
+      ],
+      "capabilities": [
+        "CSCA-and-DSC-anchor-persistence",
+        "country-filtered-CSCA-discovery",
+        "registry-synchronization",
+        "CSCA-and-DSC-status-counts"
+      ]
+    }
+  }
+}
