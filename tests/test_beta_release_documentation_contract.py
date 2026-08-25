@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GUIDE = ROOT / "docs" / "BETA_RELEASES.md"
+QUICK_START = ROOT / "QUICK_START.md"
 
 
 def test_beta_guide_names_the_current_aggregate_gates() -> None:
@@ -31,3 +32,11 @@ def test_retired_python_beta_trigger_does_not_return() -> None:
     assert "pip install" not in guide
     assert "marty-microservices-framework==" not in guide
     assert not (ROOT / "scripts" / "trigger-beta-builds.sh").exists()
+
+
+def test_quick_start_does_not_advertise_retired_source_mounts() -> None:
+    guide = QUICK_START.read_text(encoding="utf-8")
+
+    assert "Mounted sibling repositories in dev mode" not in guide
+    assert "/app/marty-microservices-framework" not in guide
+    assert "do not mount sibling source repositories" in guide

@@ -73,21 +73,22 @@ curl http://localhost:8000/health
 
 ## Useful local URLs
 
-- Gateway: http://localhost:8000
-- Gateway docs: http://localhost:8000/docs
-- Auth docs: http://localhost:8001/docs
-- Organization docs: http://localhost:8002/docs
-- Keycloak: http://localhost:8180
-- MailHog: http://localhost:9025
+- Gateway: <http://localhost:8000>
+- Gateway docs: <http://localhost:8000/docs>
+- Auth docs: <http://localhost:8001/docs>
+- Organization docs: <http://localhost:8002/docs>
+- Keycloak: <http://localhost:8180>
+- MailHog: <http://localhost:9025>
 - Postgres: localhost:5433
 - Redis: localhost:6379
 
-## Mounted sibling repositories in dev mode
+## Source inputs
 
-- `../marty-credentials` → `/app/marty-credentials`
-- `../marty-core` → `/app/marty-core`
-- `../marty-microservices-framework` → `/app/marty-microservices-framework`
-- `../Marty/packages/marty-common` → `/app/marty-common`
+The current Compose profiles do not mount sibling source repositories into
+service containers. Rust platform crates are pinned by Git revision, while
+released Python compatibility wheels are selected by immutable URI and digest.
+Sibling checkouts are needed only for explicit local wheel builds or creation
+of a coordinated local release manifest.
 
 ## Startup expectations
 
