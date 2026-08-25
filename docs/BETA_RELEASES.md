@@ -29,7 +29,10 @@ Python MMF beta packages and do not recreate `release-beta.yml` workflows.
 The three workflows fail closed through the repository's shared release-
 environment preflight. `stack-release`, `beta-lifecycle`, and
 `wallet-conformance` must disallow administrator bypass, restrict deployment
-branches or tags, require an independent reviewer, and prevent self-review.
+branches or tags, and require the named accountable maintainer review. This
+repository currently has one active maintainer, so `burdettadam` may approve
+their own deployment after the governed pull request and required status checks
+pass; an alternate identity must not be used to manufacture independence.
 
 The accepted evidence set must bind every result to the same release version,
 source commit, stack-release run, beta source ID, and deployed image digests.
