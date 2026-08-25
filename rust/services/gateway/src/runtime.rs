@@ -45,7 +45,10 @@ use crate::{
         resolve_resource_lookup, skips_tenant_authorization, OrganizationMembership,
         OrganizationMembershipProvider, TenantAuthorizationFailure,
     },
-    contract::{requires_issuance_service_auth, retired_canvas_state_route, route_ownership},
+    contract::{
+        requires_issuance_service_auth, retired_canvas_state_route, route_ownership,
+        GatewayContract,
+    },
     credential_metadata, credential_template_contract, deployment_contract, did_web,
     didcomm_contract,
     discovery::{self, ReleaseIdentity},
@@ -713,10 +716,19 @@ async fn proxy_handler(
         "/health" => {
             return (
                 StatusCode::OK,
-                Json(json!({"status": "healthy", "service": "gateway"})),
+                Json(json!({"status": "healthy", "service": "api-gateway"})),
             )
                 .into_response();
         }
+        "/openapi.json" => {
+            return Json(
+                GatewayContract::load()
+                    .expect("validated embedded gateway contract")
+                    .openapi_document(),
+            )
+            .into_response();
+        }
+        "/docs" | "/redoc" => return api_documentation_handler(),
         "/ready" | "/health/ready" => return readiness_handler(state).await,
         "/health/services" => return services_health_handler(state).await,
         "/.well-known/openid-configuration" => {
@@ -1138,6 +1150,19 @@ async fn proxy_handler(
             MipError::new("bad_gateway", "Unable to execute upstream request"),
         ),
     }
+}
+
+fn api_documentation_handler() -> Response {
+    const DOCUMENT: &str = r#"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Marty API Gateway documentation</title>
+<style>body{font:15px system-ui,sans-serif;max-width:72rem;margin:2rem auto;padding:0 1rem;color:#172033}input{width:100%;padding:.7rem;box-sizing:border-box}li{margin:.45rem 0}code{background:#eef1f6;padding:.15rem .3rem;border-radius:.2rem}.method{display:inline-block;width:4rem;font-weight:700}</style></head>
+<body><h1>Marty API Gateway</h1><p>This self-contained browser renders the canonical <a href="/openapi.json">OpenAPI 3.1 document</a>.</p>
+<input id="filter" aria-label="Filter API operations" placeholder="Filter methods or paths"><ol id="operations"></ol>
+<script>const list=document.querySelector('#operations'),filter=document.querySelector('#filter');let rows=[];fetch('/openapi.json').then(r=>r.json()).then(spec=>{for(const [path,item] of Object.entries(spec.paths))for(const [method,op] of Object.entries(item))rows.push({method:method.toUpperCase(),path,tag:(op.tags||[]).join(', ')});rows.sort((a,b)=>a.path.localeCompare(b.path)||a.method.localeCompare(b.method));render()});function render(){const q=filter.value.toLowerCase();list.replaceChildren(...rows.filter(r=>(r.method+' '+r.path+' '+r.tag).toLowerCase().includes(q)).map(r=>{const li=document.createElement('li'),method=document.createElement('span'),path=document.createElement('code'),tag=document.createElement('small');method.className='method';method.textContent=r.method;path.textContent=r.path;tag.textContent=r.tag;li.append(method,' ',path,' ',tag);return li}))}filter.addEventListener('input',render)</script></body></html>"#;
+    let mut response = Response::new(Body::from(DOCUMENT));
+    insert_header(&mut response, "content-type", "text/html; charset=utf-8");
+    response
 }
 
 #[derive(Clone, Copy)]
@@ -5178,7 +5203,7 @@ mod tests {
     ) -> Arc<GatewayRuntimeState> {
         let routes = GatewayContract::load()
             .expect("contract")
-            .route_table()
+            .runtime_route_table()
             .expect("routes");
         let proxy_routes = GatewayContract::load()
             .expect("contract")
@@ -6395,6 +6420,49 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(health.status(), StatusCode::OK);
+        let health: Value = serde_json::from_slice(
+            &to_bytes(health.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .expect("body"),
+        )
+        .expect("json");
+        assert_eq!(
+            health,
+            json!({"status": "healthy", "service": "api-gateway"})
+        );
+
+        let openapi = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/openapi.json")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(openapi.status(), StatusCode::OK);
+        let openapi: Value = serde_json::from_slice(
+            &to_bytes(openapi.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .expect("body"),
+        )
+        .expect("json");
+        assert_eq!(openapi["openapi"], "3.1.0");
+        assert!(openapi["paths"]["/v1/flows/definitions"]["get"].is_object());
+
+        for path in ["/docs", "/redoc"] {
+            let docs = runtime_router()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(docs.status(), StatusCode::OK, "{path}");
+            assert_eq!(docs.headers()["content-type"], "text/html; charset=utf-8");
+        }
 
         for path in ["/ready", "/health/ready"] {
             let ready = runtime_router()

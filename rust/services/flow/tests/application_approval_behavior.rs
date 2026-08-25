@@ -197,6 +197,39 @@ fn plan_filters_orders_and_minimizes_authenticated_events() {
 }
 
 #[test]
+fn extension_only_python_application_flows_remain_executable() {
+    let mut legacy = definition("flow-legacy", "template-1");
+    legacy.steps.clear();
+    legacy.transitions.clear();
+    legacy.start_step_id = None;
+
+    let plan = prepare_application_event_plan(&event(), &evidence(), &[legacy], now()).unwrap();
+    assert_eq!(plan.planned_flows.len(), 1);
+    let instance = &plan.planned_flows[0].instance;
+    assert_eq!(instance.status.to_string(), "in_progress");
+    assert_eq!(instance.current_step_id, None);
+    assert_eq!(instance.context["application_id"], "application-1");
+}
+
+#[test]
+fn graphless_compatibility_is_narrow_and_validated() {
+    let mut invalid = definition("flow-invalid", "template-1");
+    invalid.steps.clear();
+    invalid.transitions.clear();
+    invalid.start_step_id = None;
+    invalid.trigger = None;
+
+    let skipped = prepare_application_event_plan(&event(), &evidence(), &[invalid], now()).unwrap();
+    assert!(skipped.planned_flows.is_empty());
+    let mut invalid = definition("flow-invalid", "template-1");
+    invalid.steps.clear();
+    invalid.transitions.clear();
+    invalid.start_step_id = None;
+    invalid.extension.as_mut().unwrap()["entry_step_id"] = json!("missing");
+    assert!(prepare_application_event_plan(&event(), &evidence(), &[invalid], now()).is_err());
+}
+
+#[test]
 fn manual_attempt_claim_and_semantics_failures_are_closed() {
     let definitions = vec![definition("flow-1", "template-1")];
     let mut manual = event();

@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let config = GatewayConfig::from_env()?;
     let contract = GatewayContract::load()?;
-    let routes = contract.route_table()?;
+    let routes = contract.runtime_route_table()?;
     let proxy_routes = contract.proxy_route_table()?;
     let registry = StaticServiceRegistry::from_urls(&config.service_urls)?;
     let upstream = ReqwestUpstream::new(config.maximum_response_bytes)?;

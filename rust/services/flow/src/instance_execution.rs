@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use crate::{
     AdvanceFlowRequest, DefinitionStatus, FlowApiError, FlowDefinitionRecord, FlowDomainError,
-    FlowInstanceRecord, FlowRecordError, FlowType, StartFlowRequest, ValidateRequest,
+    FlowExtensionRequest, FlowInstanceRecord, FlowRecordError, FlowType, StartFlowRequest,
+    ValidateRequest,
 };
 
 const PRECONDITION_EVIDENCE_KEY: &str = "_marty_precondition_evidence_v1";
@@ -63,7 +64,10 @@ pub fn start_instance_record_with_trusted_context(
     if definition.status != DefinitionStatus::Active {
         return Err(FlowInstanceExecutionError::DefinitionNotActive);
     }
-    definition.kernel()?;
+    let extension_only_application = extension_only_application_graph(definition)?;
+    if !extension_only_application {
+        definition.kernel()?;
+    }
     let mut context = request
         .initial_context
         .as_object()
@@ -71,7 +75,12 @@ pub fn start_instance_record_with_trusted_context(
         .ok_or(FlowInstanceExecutionError::InvalidContext)?;
     context.extend(trusted_context);
     require_preconditions(definition, &context)?;
-    let status = if definition.start_step_id.is_some() {
+    // The retired Python application-approved handler supported persisted
+    // custom extensions from before graph materialization. Those records have
+    // a valid extension graph but no top-level steps/start_step_id, and it
+    // started them in progress while issuing the offer. Preserve that narrow
+    // compatibility path without accepting arbitrary graphless definitions.
+    let status = if definition.start_step_id.is_some() || extension_only_application {
         FlowInstanceStatus::InProgress
     } else {
         FlowInstanceStatus::Pending
@@ -126,6 +135,29 @@ pub fn start_instance_record_with_trusted_context(
     };
     record.kernel()?;
     Ok(record)
+}
+
+fn extension_only_application_graph(
+    definition: &FlowDefinitionRecord,
+) -> Result<bool, FlowInstanceExecutionError> {
+    if definition.start_step_id.is_some()
+        || !definition.steps.is_empty()
+        || !definition.transitions.is_empty()
+    {
+        return Ok(false);
+    }
+    if definition.flow_type != FlowType::Custom || !application_approved_trigger(definition) {
+        return Ok(false);
+    }
+    let extension: FlowExtensionRequest = serde_json::from_value(
+        definition
+            .extension
+            .clone()
+            .ok_or(FlowInstanceExecutionError::InvalidContext)?,
+    )
+    .map_err(|_| FlowInstanceExecutionError::InvalidContext)?;
+    extension.validate()?;
+    Ok(extension.extends_flow_type == FlowType::Oid4vciPreAuthorized)
 }
 
 pub fn advance_instance_record(
