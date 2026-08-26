@@ -226,7 +226,8 @@ jobs:
             --arg beta_origin "$BETA_ORIGIN" \
             --arg release_version "$RELEASE_VERSION" \
             --arg marty_ui_release_sha "$MARTY_UI_RELEASE_SHA" \
-            '{event_type: $event_type, client_payload: {beta_origin: $beta_origin, release_version: $release_version, marty_ui_release_sha: $marty_ui_release_sha}}' \
+            --arg beta_source_id "$BETA_SOURCE_ID" \
+            '{event_type: $event_type, client_payload: {beta_origin: $beta_origin, release_version: $release_version, marty_ui_release_sha: $marty_ui_release_sha, beta_source_id: $beta_source_id}}' \
             > tests/artifacts/demo-recorder-dispatch.json
           gh api --method POST repos/ElevenID/marty-demo-recorder/dispatches \
             --input tests/artifacts/demo-recorder-dispatch.json

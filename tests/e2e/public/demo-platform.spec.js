@@ -7,6 +7,16 @@ const viewports = [
   { name: 'desktop-1440', width: 1440, height: 1000 },
 ];
 
+test.beforeEach(async ({ page }) => {
+  if (!process.env.BASE_URL) {
+    await page.route('**/v1/auth/me', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ authenticated: false, user: null }),
+    }));
+  }
+});
+
 async function loadDemoIndex(request) {
   const response = await request.get('/demos/manifests/index.json');
   expect(response.ok()).toBe(true);

@@ -67,3 +67,4 @@ def test_beta_lifecycle_dispatches_exact_release_to_demo_recorder() -> None:
     assert "repos/ElevenID/marty-demo-recorder/dispatches" in workflow
     assert "marty-ui-beta-deployed" in workflow
     assert "marty_ui_release_sha: $marty_ui_release_sha" in workflow
+    assert "beta_source_id: $beta_source_id" in workflow
