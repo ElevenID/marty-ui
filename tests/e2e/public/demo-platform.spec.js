@@ -7,6 +7,32 @@ const viewports = [
   { name: 'desktop-1440', width: 1440, height: 1000 },
 ];
 
+test.beforeEach(async ({ page }) => {
+  if (!process.env.BASE_URL) {
+    await page.route('**/v1/auth/me', (route) => route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ authenticated: false, user: null }),
+    }));
+  }
+});
+
+async function loadDemoIndex(request) {
+  const response = await request.get('/demos/manifests/index.json');
+  expect(response.ok()).toBe(true);
+  return response.json();
+}
+
+async function loadDemoManifest(request, release) {
+  const response = await request.get(release.manifest_url);
+  expect(response.ok()).toBe(true);
+  return response.json();
+}
+
+function literalPattern(value) {
+  return new RegExp(value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+}
+
 function observeBrowser(page) {
   const expectedOrigin = new URL(process.env.BASE_URL || 'http://127.0.0.1:4173').origin;
   const failures = [];
@@ -34,6 +60,16 @@ function observeBrowser(page) {
 
 async function assertStablePage(page, telemetry) {
   await expect(page.locator('[data-demo-render-state="settled"]')).toBeVisible();
+  await page.evaluate(async () => {
+    for (const image of document.images) {
+      image.scrollIntoView({ block: 'center' });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve()));
+    }
+    window.scrollTo(0, 0);
+  });
+  await expect.poll(() => page.evaluate(() => (
+    [...document.images].every((image) => image.complete && image.naturalWidth > 0)
+  ))).toBe(true);
   const metrics = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
     viewportWidth: window.innerWidth,
@@ -50,6 +86,12 @@ async function assertStablePage(page, telemetry) {
 
 for (const viewport of viewports) {
   test(`${viewport.name} renders catalog and scenario without overflow or first-paint failure`, async ({ page }) => {
+    const index = await loadDemoIndex(page.request);
+    const release = index.releases.find(({ stack_version }) => stack_version === index.latest_available_stack_version);
+    expect(release).toBeTruthy();
+    const manifest = await loadDemoManifest(page.request, release);
+    const scenario = manifest.scenarios.find(({ state, youtube_id }) => state === 'PUBLIC' && youtube_id)
+      || manifest.scenarios[0];
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.addInitScript(() => {
       window.__elevenIdFirstPaint = [];
@@ -70,11 +112,11 @@ for (const viewport of viewports) {
     const telemetry = observeBrowser(page);
 
     await page.goto('/demos', { waitUntil: 'domcontentloaded' });
-    await expect(page.getByRole('heading', { level: 1, name: 'Credential Lifecycle Foundation' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: manifest.release_name })).toBeVisible();
     await expect(page.getByText('ElevenID LLC Credential Platform', { exact: true })).toBeVisible();
-    await expect(page.getByText('Version v2026.07.0', { exact: true })).toBeVisible();
-    await expect(page.getByText('Implements MIP 0.3.1')).toBeVisible();
-    await expect(page.getByRole('combobox', { name: 'Platform version' })).toContainText('v2026.07.0');
+    await expect(page.getByText(`Version v${manifest.stack_version}`, { exact: true })).toBeVisible();
+    await expect(page.getByText(`Implements MIP ${manifest.mip_version}`)).toBeVisible();
+    await expect(page.getByRole('combobox', { name: 'Platform version' })).toContainText(`v${manifest.stack_version}`);
     await expect(page.getByText(/vendor approval is not a publication requirement/i)).toBeVisible();
     await expect(page.getByRole('link', { name: 'request review or removal' })).toHaveAttribute('href', /sales@elevenidllc\.com/);
     await assertStablePage(page, telemetry);
@@ -82,9 +124,13 @@ for (const viewport of viewports) {
     expect(firstPaint.filter((sample) => !sample.ready).every((sample) => sample.rootVisibility === 'hidden' && sample.shellDisplay !== 'none')).toBe(true);
     await page.screenshot({ path: test.info().outputPath(`${viewport.name}-catalog.png`), fullPage: true });
 
-    await page.getByRole('link', { name: /Membership Badge and Login/ }).click();
-    await expect(page.getByRole('heading', { level: 1, name: 'Membership Badge and Login' })).toBeVisible();
-    await expect(page.getByText('Validated demonstration')).toBeVisible();
+    await page.getByRole('link', { name: literalPattern(scenario.title) }).click();
+    await expect(page.getByRole('heading', { level: 1, name: scenario.title })).toBeVisible();
+    if (scenario.state === 'PUBLIC' && scenario.youtube_id) {
+      await expect(page.getByRole('button', { name: `Load ${scenario.title} from YouTube` })).toBeVisible();
+    } else {
+      await expect(page.getByTestId('demo-video-player')).toBeVisible();
+    }
     await expect(page.locator('iframe[src*="youtube-nocookie.com"]')).toHaveCount(0);
     await expect(page.getByRole('heading', { level: 2, name: 'Transcript' })).toBeVisible();
     await assertStablePage(page, telemetry);
@@ -94,18 +140,31 @@ for (const viewport of viewports) {
 
 test('every release scenario has a canonical detail page and valid poster', async ({ page }) => {
   const telemetry = observeBrowser(page);
-  const index = await (await page.request.get('/demos/manifests/index.json')).json();
-  const release = index.releases[0];
-  const manifest = await (await page.request.get(release.manifest_url)).json();
-  for (const scenario of manifest.scenarios) {
-    await page.goto(`/demos/${manifest.stack_version}/${scenario.slug}`);
-    await expect(page.getByRole('heading', { level: 1, name: scenario.title })).toBeVisible();
-    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', `https://elevenidllc.com/demos/${manifest.stack_version}/${scenario.slug}`);
-    await assertStablePage(page, telemetry);
+  const index = await loadDemoIndex(page.request);
+  for (const release of index.releases) {
+    const manifest = await loadDemoManifest(page.request, release);
+    for (const scenario of manifest.scenarios) {
+      await page.goto(`/demos/${manifest.stack_version}/${scenario.slug}`);
+      await expect(page.getByRole('heading', { level: 1, name: scenario.title })).toBeVisible();
+      await expect(page.locator('link[rel="canonical"]')).toHaveAttribute('href', `https://elevenidllc.com/demos/${manifest.stack_version}/${scenario.slug}`);
+      await assertStablePage(page, telemetry);
+    }
   }
 });
 
 test('public video waits for consent and uses the privacy-enhanced player', async ({ page }) => {
+  const index = await loadDemoIndex(page.request);
+  let selected;
+  for (const release of index.releases) {
+    const manifest = await loadDemoManifest(page.request, release);
+    const scenario = manifest.scenarios.find(({ state, youtube_id }) => state === 'PUBLIC' && youtube_id);
+    if (scenario) {
+      selected = { manifest, scenario };
+      break;
+    }
+  }
+  expect(selected).toBeTruthy();
+  const { manifest, scenario } = selected;
   const youtubeRequests = [];
   page.on('request', (request) => {
     if (new URL(request.url()).hostname.endsWith('youtube-nocookie.com')) youtubeRequests.push(request.url());
@@ -116,18 +175,41 @@ test('public video waits for consent and uses the privacy-enhanced player', asyn
     body: '<!doctype html><title>Privacy-enhanced YouTube player</title>',
   }));
 
-  await page.goto('/demos/2026.07.0/organization-primitives');
-  const loadButton = page.getByRole('button', { name: 'Load Organization and MIP Primitives from YouTube' });
+  await page.goto(`/demos/${manifest.stack_version}/${scenario.slug}`);
+  const loadButton = page.getByRole('button', { name: `Load ${scenario.title} from YouTube` });
   await expect(loadButton).toBeVisible();
   await expect(page.locator('iframe[src*="youtube"]')).toHaveCount(0);
   expect(youtubeRequests).toEqual([]);
 
   await loadButton.click();
-  const player = page.getByTitle('Organization and MIP Primitives video');
-  await expect(player).toHaveAttribute('src', /https:\/\/www\.youtube-nocookie\.com\/embed\/GK7GbqBCwQ8/);
+  const player = page.getByTitle(`${scenario.title} video`);
+  await expect(player).toHaveAttribute('src', new RegExp(`https://www\\.youtube-nocookie\\.com/embed/${scenario.youtube_id}`));
   await expect(player).toHaveAttribute('src', /cc_load_policy=1/);
   await expect.poll(() => youtubeRequests.length).toBeGreaterThan(0);
 
-  await page.getByRole('button', { name: /2:12 Policy and deployment/ }).click();
-  await expect(player).toHaveAttribute('src', /start=132/);
+  const laterChapter = scenario.chapters.find(({ start_seconds }) => start_seconds > 0);
+  if (laterChapter) {
+    await page.getByRole('button', { name: literalPattern(laterChapter.title) }).click();
+    await expect(player).toHaveAttribute('src', new RegExp(`start=${laterChapter.start_seconds}`));
+  }
+});
+
+test('latest available demo manifest is bound to the exact live deployment', async ({ request }) => {
+  test.skip(process.env.REQUIRE_LIVE_DEMO_BINDING !== '1', 'Live release binding is required only for deployed acceptance.');
+  const index = await loadDemoIndex(request);
+  const indexedRelease = index.releases.find(({ stack_version }) => stack_version === index.latest_available_stack_version);
+  expect(indexedRelease).toBeTruthy();
+  const manifest = await loadDemoManifest(request, indexedRelease);
+  const releaseResponse = await request.get('/.well-known/marty-release', { headers: { 'Cache-Control': 'no-cache' } });
+  expect(releaseResponse.ok()).toBe(true);
+  const deployed = await releaseResponse.json();
+
+  expect(deployed.stack_version).toBe(manifest.stack_version);
+  expect(deployed.mip_version).toBe(manifest.mip_version);
+  expect(deployed.deployment_release_marker).toBe(manifest.deployment_release_marker);
+  expect(deployed.marty_ui_sha).toBe(manifest.release_evidence.source_marker);
+  expect(Object.keys(deployed.image_digests).sort()).toEqual(manifest.image_digests.map(({ component }) => component).sort());
+  for (const { component, digest } of manifest.image_digests) {
+    expect(deployed.image_digests[component]).toBe(digest);
+  }
 });

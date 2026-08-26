@@ -10,6 +10,11 @@ import { existsSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from
 import { resolve } from 'node:path'
 
 const PRERENDERED_ROOT_STAGING_PATH = '__prerendered-root.html'
+const PRERENDER_RUNTIME_ASSET_ORIGIN = /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?(?=\/assets\/)/gi
+
+function sanitizePrerenderedAssetUrls(html: string) {
+  return html.replace(PRERENDER_RUNTIME_ASSET_ORIGIN, '')
+}
 
 function createManualChunk(id: string) {
   const normalizedId = id.replace(/\\/g, '/')
@@ -308,6 +313,9 @@ export default defineConfig(async ({ mode }) => {
               : undefined,
           }),
           postProcess(route) {
+            // The renderer serves the build from a loopback origin. Dynamic-import
+            // preload hints must remain origin-relative when the HTML is deployed.
+            route.html = sanitizePrerenderedAssetUrls(route.html)
             // Add prerender status meta tag
             route.html = route.html.replace(
               '</head>',

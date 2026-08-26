@@ -1,5 +1,9 @@
 // @ts-check
+const path = require('path');
 const { defineConfig } = require('@playwright/test');
+
+const externalBaseUrl = process.env.BASE_URL;
+const baseURL = externalBaseUrl || 'http://127.0.0.1:4173';
 
 module.exports = defineConfig({
   testDir: './e2e/public',
@@ -15,10 +19,17 @@ module.exports = defineConfig({
     ['html', { outputFolder: './artifacts/demo-platform-playwright-report', open: 'never' }],
   ],
   use: {
-    baseURL: process.env.BASE_URL || 'http://127.0.0.1:4173',
+    baseURL,
     browserName: 'chromium',
     trace: 'on',
     screenshot: 'on',
     video: 'off',
+  },
+  webServer: externalBaseUrl ? undefined : {
+    command: 'npm run build && npm run preview -- --host 127.0.0.1 --port 4173 --strictPort',
+    cwd: path.join(__dirname, '..', 'ui'),
+    url: `${baseURL}/demos`,
+    reuseExistingServer: false,
+    timeout: 240_000,
   },
 });

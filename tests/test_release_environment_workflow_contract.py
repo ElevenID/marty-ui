@@ -56,3 +56,15 @@ def test_reusable_preflight_uses_only_the_job_token() -> None:
     assert '--environment "$RELEASE_ENVIRONMENT"' in workflow
     assert "--protection-only" in workflow
     assert "secrets." not in workflow
+
+
+def test_beta_lifecycle_dispatches_exact_release_to_demo_recorder() -> None:
+    workflow = _text(".github/workflows/e2e-tests.yml")
+
+    assert "Require release-bound public demos on beta" in workflow
+    assert 'REQUIRE_LIVE_DEMO_BINDING: "1"' in workflow
+    assert "DEMO_RECORDER_DISPATCH_TOKEN" in workflow
+    assert "repos/ElevenID/marty-demo-recorder/dispatches" in workflow
+    assert "marty-ui-beta-deployed" in workflow
+    assert "marty_ui_release_sha: $marty_ui_release_sha" in workflow
+    assert "beta_source_id: $beta_source_id" in workflow

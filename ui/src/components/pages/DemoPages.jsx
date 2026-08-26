@@ -106,7 +106,7 @@ function LoadState({ resource, label }) {
 
 function CoverageLabel({ manifest }) {
   return (
-    <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center">
+    <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
       <Chip
         size="small"
         color={manifest.coverage_state === 'COMPLETE' ? 'success' : 'warning'}
@@ -192,7 +192,7 @@ function ReleaseExperience({ index, manifest }) {
   }, [audience, manifest.scenarios, query]);
 
   return (
-    <Box component="main" data-demo-render-state="settled" sx={{ pt: { xs: 4, md: 6 } }}>
+    <Box component="main" data-demo-render-state="settled" sx={{ minWidth: 0, pt: { xs: 4, md: 6 } }}>
       <SEOHead
         title={`${manifest.release_name} | ElevenID LLC v${manifest.stack_version}`}
         description={`Release-bound demonstrations and evidence for the ${manifest.release_name} release of the ElevenID LLC Credential Platform, implementing MIP ${manifest.mip_version}.`}
@@ -216,7 +216,7 @@ function ReleaseExperience({ index, manifest }) {
         <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 760 }}>
           Follow credential journeys by role, inspect the exact release binding, and see at a glance which scenarios have recordings, validated evidence, or planned coverage.
         </Typography>
-        <Stack direction="row" spacing={1.5} useFlexGap flexWrap="wrap" alignItems="center">
+        <Stack direction="row" spacing={1.5} useFlexGap sx={{ flexWrap: 'wrap', alignItems: 'center' }}>
           <CoverageLabel manifest={manifest} />
           {manifest.video_distribution.status === 'CONFIGURED' && (
             <Button
@@ -283,14 +283,19 @@ function ReleaseExperience({ index, manifest }) {
               }}
             />
           </Stack>
-          <Box sx={{ overflowX: 'auto', pb: 0.5 }}>
+          <Box sx={{ width: '100%', maxWidth: '100%', minWidth: 0, overflowX: 'auto', pb: 0.5 }}>
             <ToggleButtonGroup
               exclusive
               size="small"
               value={audience}
               onChange={(_event, nextAudience) => nextAudience && setAudience(nextAudience)}
               aria-label="Audience"
-              sx={{ minWidth: 'max-content' }}
+              sx={{
+                width: { xs: '100%', sm: 'auto' },
+                minWidth: { sm: 'max-content' },
+                flexWrap: { xs: 'wrap', sm: 'nowrap' },
+                '& .MuiToggleButtonGroup-grouped': { flex: { xs: '1 1 auto', sm: '0 0 auto' } },
+              }}
             >
               {AUDIENCES.map((item) => <ToggleButton key={item} value={item}>{item}</ToggleButton>)}
             </ToggleButtonGroup>
@@ -474,7 +479,7 @@ export function DemoScenarioPage() {
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: 'minmax(0, 2fr) minmax(260px, 0.8fr)' }, gap: { xs: 3, lg: 4 }, alignItems: 'start' }}>
         <Stack spacing={3} sx={{ minWidth: 0 }}>
           <Box>
-            <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: 1.5 }}>
+            <Stack direction="row" spacing={1} useFlexGap sx={{ mb: 1.5, flexWrap: 'wrap' }}>
               <Chip size="small" color={stateColors[scenario.state]} label={scenario.state.replaceAll('_', ' ')} />
               <Chip size="small" variant="outlined" label={`Revision ${scenario.scenario_revision}`} />
               <Chip size="small" variant="outlined" label={scenario.recording_classification.replaceAll('_', ' ')} />
@@ -542,7 +547,7 @@ export function DemoScenarioPage() {
           <Divider />
           <Box>
             <Typography variant="overline" color="text.secondary">For</Typography>
-            <Stack direction="row" spacing={0.75} useFlexGap flexWrap="wrap" sx={{ mt: 0.5 }}>
+            <Stack direction="row" spacing={0.75} useFlexGap sx={{ mt: 0.5, flexWrap: 'wrap' }}>
               {scenario.audiences.map((audience) => <Chip key={audience} size="small" variant="outlined" label={audience} />)}
             </Stack>
           </Box>

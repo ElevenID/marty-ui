@@ -16,8 +16,10 @@ function PublicFooter() {
       <Stack
         direction={{ xs: 'column', md: 'row' }}
         spacing={2}
-        alignItems={{ xs: 'flex-start', md: 'center' }}
-        justifyContent="space-between"
+        sx={{
+          alignItems: { xs: 'flex-start', md: 'center' },
+          justifyContent: 'space-between',
+        }}
       >
         <Box>
           <Typography variant="subtitle2" fontWeight={700} color="text.primary">
@@ -34,8 +36,12 @@ function PublicFooter() {
           direction="row"
           spacing={2}
           useFlexGap
-          flexWrap="wrap"
-          justifyContent={{ xs: 'flex-start', md: 'flex-end' }}
+          sx={{
+            width: '100%',
+            minWidth: 0,
+            flexWrap: 'wrap',
+            justifyContent: { xs: 'flex-start', md: 'flex-end' },
+          }}
         >
           {footerLinks.map((link) => (
             <MuiLink
