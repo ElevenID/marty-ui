@@ -537,7 +537,7 @@ async function main() {
       report.recordings = {
         clearance: path.relative(
           ROOT,
-          await finalizeVideo(adminVideo, artifactDir, 'passport-pre-boarding-clearance.webm'),
+          await finalizeVideo(adminVideo, artifactDir, 'passport-pre-boarding-clearance-beta.webm'),
         ),
         wallet: path.relative(
           ROOT,
