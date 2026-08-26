@@ -8,6 +8,16 @@
 > implementations are now `rust/services/gateway` and
 > `rust/services/signing-keys`; the Python Gateway runtime has been deleted
 > after behavioral parity and fail-closed cutover gates passed.
+>
+> Current-state correction (2026-08-26): the earlier CSR route claims below
+> described the retired Python surface, not the canonical Rust service. Rust
+> keeps provider-managed private keys behind references, accepts and inspects
+> externally signed certificates, monitors expiry, and owns authenticated CSCA
+> lifecycle state. CSCA import binds the certificate to the public JWK that an
+> authenticated orchestrator obtained from the provider; the orchestrator must
+> use the provider public-key route rather than assert an unverified key. CSCA
+> bootstrap generation remains in
+> `marty-verification::issuance` for offline/HSM workflows.
 
 ---
 
@@ -130,21 +140,26 @@ AWS KMS, Azure Key Vault, and GCP Cloud KMS are registered as service types with
 
 **Priority:** MEDIUM  
 **File:** `marty-ui/services/gateway/routes/signing_keys.py`  
-**Status:** ✅ Implemented and tested  
+**Status:** ✅ Implemented and tested with managed key custody
 **Description:**  
 mDoc and travel credentials require X.509 chains (DSC → IACA/CSCA → Root). The platform now supports:
 - Certificate fields in the service registry schema (`cert_pem`, `cert_chain_pem`, `cert_expires_at`)
-- CSR generation endpoints (template for external signing)
-- Certificate storage and retrieval
+- Certificate attachment, native inspection, storage, and retrieval
 - Expiry monitoring with configurable thresholds and criticality levels
+- Authenticated CSCA import, lookup, status, filtered listing, expiry query,
+  idempotent revocation, renewal lineage, cryptographic chain validation, and
+  a transactional issued/renewed/revoked outbox
+- Offline/bootstrap CSCA generation and DSC issuance in
+  `marty-verification::issuance`, with production private keys represented only
+  by KMS/HSM references
 
 **Tasks:**
 - [x] `GAP-004-a` Add `certificate` model fields to registered service schema (`cert_pem`, `cert_chain_pem`, `cert_expires_at`)
-- [x] `GAP-004-b` Add `POST /v1/signing-keys/services/{id}/certificate-csr` — generates a PKCS#10 CSR from the service's public key
-- [x] `GAP-004-c` Add `PUT /v1/signing-keys/services/{id}/certificate` — stores a signed certificate response against the service
-- [x] `GAP-004-d` Add `GET /v1/signing-keys/services/{id}/certificate` — returns chain + expiry metadata
-- [x] `GAP-004-e` Add `GET /v1/signing-keys/config/certificate-expiry-alerts` — lists services with certificates expiring within a threshold
-- [x] `GAP-004-f` Add comprehensive tests for certificate storage, expiry detection, and alert filtering
+- [x] `GAP-004-b` Attach and inspect externally signed certificates without exporting private key material
+- [x] `GAP-004-c` Store and retrieve certificate chains and expiry metadata
+- [x] `GAP-004-d` Monitor certificate expiry with deterministic alert thresholds
+- [x] `GAP-004-e` Preserve the historical CSCA lifecycle operations in the Rust signing service
+- [x] `GAP-004-f` Add behavior, HTTP authorization, storage, concurrency, and language-neutral contract tests
 
 ---
 

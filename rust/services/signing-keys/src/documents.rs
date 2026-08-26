@@ -618,7 +618,7 @@ pub fn delete_jwks_document(
     Ok((document, DeleteJwkResponse { removed: true }))
 }
 
-fn same_public_jwk(left: &Value, right: &Value) -> bool {
+pub(crate) fn same_public_jwk(left: &Value, right: &Value) -> bool {
     let Some(key_type) = left.get("kty").and_then(Value::as_str) else {
         return false;
     };

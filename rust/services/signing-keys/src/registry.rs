@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::domain::{key_purposes, service_capabilities, service_type, service_types};
 
-const SUPPORTED_ALGORITHMS: &[&str] = &["ES256", "ES384", "RS256", "EdDSA"];
+const SUPPORTED_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdDSA"];
 const MANAGED_OPENBAO_SERVICE_ID: &str = "managed-openbao-transit";
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -424,6 +424,11 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
         })
         .expect("custom provider capabilities");
     let static_capabilities = capabilities.capabilities;
+    algorithms.retain(|algorithm| {
+        static_capabilities
+            .supported_algorithms
+            .contains(&algorithm.as_str())
+    });
     let rotation_policy = service.get("rotation_policy").and_then(Value::as_object);
     let key_reference_present = service.get("key_reference").is_some_and(truthy);
     let id = service
@@ -922,5 +927,24 @@ mod tests {
     #[test]
     fn storage_key_preserves_the_python_keyspace() {
         assert_eq!(storage_key("org-a"), "org:org-a:signing-key-services");
+    }
+
+    #[test]
+    fn service_algorithms_follow_the_selected_provider_contract() {
+        let aws = normalize_service_value(&json!({
+            "service_type": "aws-kms",
+            "algorithms": ["ES512"]
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(aws["algorithms"], json!(["ES512"]));
+
+        let gcp = normalize_service_value(&json!({
+            "service_type": "gcp-cloud-kms",
+            "algorithms": ["ES512", "EdDSA"]
+        }))
+        .unwrap()
+        .unwrap();
+        assert_eq!(gcp["algorithms"], json!(["EdDSA"]));
     }
 }

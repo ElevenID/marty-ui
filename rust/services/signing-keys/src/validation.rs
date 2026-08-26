@@ -8,11 +8,11 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::domain::service_type;
+use crate::domain::{service_capabilities, service_type};
 use crate::kms::{self, ProviderRequest};
 
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
-const SUPPORTED_ALGORITHMS: &[&str] = &["ES256", "ES384", "RS256", "EdDSA"];
+const SUPPORTED_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdDSA"];
 const KEY_PURPOSES: &[&str] = &[
     "vc_jwt_issuer",
     "mdoc_dsc",
@@ -203,6 +203,7 @@ fn append_baseline_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
 
 fn append_provider_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
     let provider = string(payload, "provider");
+    let service_type_id = string(payload, "service_type");
     let key_reference = string(payload, "key_reference");
     if !key_reference.is_empty() {
         let (pattern, pass, fail) = match provider {
@@ -237,11 +238,11 @@ fn append_provider_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
 
     append_provider_auth(payload, checks);
     let algorithms = string_list(payload.get("algorithms"));
-    let supported: &[&str] = match provider {
-        "aws" => &["ES256", "ES384", "RS256"],
-        "azure" | "gcp" => SUPPORTED_ALGORITHMS,
-        _ => &[],
-    };
+    let supported = service_capabilities()
+        .into_iter()
+        .find(|capability| capability.service_type_id == service_type_id)
+        .map(|capability| capability.capabilities.supported_algorithms)
+        .unwrap_or_default();
     if !algorithms.is_empty() && !supported.is_empty() {
         let unsupported = algorithms
             .iter()
@@ -254,9 +255,9 @@ fn append_provider_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
             add(
                 checks,
                 "Provider algorithm fit",
-                "warning",
+                "fail",
                 format!(
-                    "Selected algorithms may not be available in {provider}: {}.",
+                    "Selected algorithms are not supported by {provider}: {}.",
                     unsupported.join(", ")
                 ),
                 "provider",

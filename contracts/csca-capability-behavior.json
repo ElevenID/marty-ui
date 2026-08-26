@@ -1,28 +1,75 @@
 {
-  "schema_version": 1,
-  "historical_python_artifact": {
+  "schema_version": 2,
+  "historical_python_surface": {
     "repository": "ElevenID/Marty",
-    "directory": "src/marty_plugin/csca_service",
-    "container_entrypoint": "python -m src.apps.csca_service",
-    "executable_module_present": false,
-    "implementation_files": [],
-    "readme_only_claims": [
-      "CSCA private-key generation and storage",
-      "CSCA certificate issuance",
-      "DSC certificate signing",
-      "trust-anchor integration"
-    ]
+    "placeholder_artifact": {
+      "directory": "src/marty_plugin/csca_service",
+      "container_entrypoint": "python -m src.apps.csca_service",
+      "executable_module_present_when_retired": false,
+      "implementation_files": [],
+      "readme_only_claims": [
+        "CSCA private-key generation and storage",
+        "CSCA certificate issuance",
+        "DSC certificate signing",
+        "trust-anchor integration"
+      ]
+    },
+    "earlier_service": {
+      "implementation": "src/services/csca.py",
+      "launcher": "src/apps/csca_service.py",
+      "operations": [
+        "GetCscaData",
+        "CreateCertificate",
+        "RenewCertificate",
+        "RevokeCertificate",
+        "GetCertificateStatus",
+        "ListCertificates",
+        "CheckExpiringCertificates"
+      ],
+      "effective_limitations": [
+        "RenewCertificate ignored reuse_key",
+        "CreateCertificate ignored requested custom extensions",
+        "ListCertificates ignored its filters",
+        "GetCertificateStatus did not report expiry",
+        "lifecycle monitor hooks were no-ops",
+        "the launcher outlived its deleted service module and was no longer executable"
+      ],
+      "defaults": {
+        "key_algorithm": "RSA",
+        "key_size": 2048,
+        "validity_days": 365,
+        "expiring_threshold_days": 30
+      }
+    }
   },
   "supported_rust_surface": {
     "emrtd_issuance": {
       "canonical_crate": "marty-verification::issuance",
-      "production_consumer": "ElevenID/marty-credentials:rust/marty-rs",
+      "production_consumer": {
+        "repository": "ElevenID/marty-credentials",
+        "crate": "rust/marty-rs",
+        "bootstrap_entrypoint": "issue_emrtd_passport_self_signed",
+        "algorithm_request_field": "csca_key_algorithm",
+        "omitted_field_behavior": "ECDSA-P256 for backward compatibility"
+      },
       "entrypoints": [
+        "CscaAuthority::new",
+        "CscaAuthority::new_with_algorithm",
+        "CscaAuthority::from_pem",
+        "CscaAuthority::issue_dsc",
         "issue_emrtd_passport",
         "issue_emrtd_passport_self_signed"
       ],
+      "creation_algorithms": [
+        "RSA-2048",
+        "RSA-3072",
+        "RSA-4096",
+        "ECDSA-P256",
+        "ECDSA-P384",
+        "ECDSA-P521"
+      ],
       "capabilities": [
-        "CSCA-certificate-and-key-generation",
+        "CSCA-certificate-and-key-generation-for-offline-or-bootstrap-use",
         "DSC-certificate-issuance-from-CSCA",
         "EF.SOD-signing-with-DSC",
         "issue-to-trust-to-verification-round-trip"
@@ -32,21 +79,40 @@
       "crate": "marty-signing-keys",
       "key_purpose": {
         "id": "csca",
-        "allowed_algorithms": ["ES256", "ES384", "EdDSA", "RS256"],
+        "allowed_algorithms": ["ES256", "ES384", "ES512", "EdDSA", "RS256"],
         "credential_formats": ["mso_mdoc", "zk_mdoc"]
       },
       "managed_key_reference_prefix": "cred-dsc-",
       "internal_routes": [
-        "/internal/kms/sign",
-        "/internal/kms/public-key",
-        "/internal/kms/verify",
-        "/internal/documents/certificate/inspect"
+        {"method": "POST", "path": "/internal/kms/sign"},
+        {"method": "POST", "path": "/internal/kms/public-key"},
+        {"method": "POST", "path": "/internal/kms/verify"},
+        {"method": "POST", "path": "/internal/documents/certificate/inspect"},
+        {"method": "GET", "path": "/internal/documents/{organization_id}/csca-certificates"},
+        {"method": "PUT", "path": "/internal/documents/{organization_id}/csca-certificates/{certificate_id}"},
+        {"method": "GET", "path": "/internal/documents/{organization_id}/csca-certificates/{certificate_id}"},
+        {"method": "GET", "path": "/internal/documents/{organization_id}/csca-certificates/{certificate_id}/data"},
+        {"method": "POST", "path": "/internal/documents/{organization_id}/csca-certificates/{certificate_id}/revoke"},
+        {"method": "POST", "path": "/internal/documents/{organization_id}/csca-certificates/{certificate_id}/renew"},
+        {"method": "POST", "path": "/internal/documents/{organization_id}/csca-certificates/expiring"},
+        {"method": "GET", "path": "/internal/documents/{organization_id}/csca-outbox"},
+        {"method": "POST", "path": "/internal/documents/{organization_id}/csca-outbox/{event_id}/acknowledge"}
       ],
       "capabilities": [
         "provider-managed-key-generation-and-custody",
+        "certificate-to-authenticated-caller-verified-managed-public-key-binding",
         "detached-payload-signing",
         "public-key-discovery",
-        "certificate-chain-attachment-and-inspection"
+        "certificate-chain-attachment-and-inspection",
+        "CSCA-certificate-import-and-data-retrieval",
+        "valid-not-yet-valid-expired-and-revoked-status",
+        "subject-and-status-filtered-listing",
+        "expiry-window-query",
+        "idempotent-revocation",
+        "renewal-lineage",
+        "transactional-issued-renewed-and-revoked-outbox-events",
+        "idempotent-outbox-acknowledgement",
+        "optimistic-concurrency-protection"
       ]
     },
     "trust_profile": {
@@ -65,5 +131,14 @@
         "CSCA-and-DSC-status-counts"
       ]
     }
-  }
+  },
+  "lifecycle_parity": [
+    {"python_operation": "CreateCertificate", "rust_owner": "marty-verification::issuance::CscaAuthority::new_with_algorithm", "custody": "offline bootstrap or HSM/KMS import"},
+    {"python_operation": "GetCscaData", "rust_owner": "marty-signing-keys", "route_suffix": "/data"},
+    {"python_operation": "RenewCertificate", "rust_owner": "marty-signing-keys", "route_suffix": "/renew"},
+    {"python_operation": "RevokeCertificate", "rust_owner": "marty-signing-keys", "route_suffix": "/revoke"},
+    {"python_operation": "GetCertificateStatus", "rust_owner": "marty-signing-keys", "route_suffix": "/{certificate_id}"},
+    {"python_operation": "ListCertificates", "rust_owner": "marty-signing-keys", "route_suffix": "/csca-certificates"},
+    {"python_operation": "CheckExpiringCertificates", "rust_owner": "marty-signing-keys", "route_suffix": "/expiring"}
+  ]
 }
