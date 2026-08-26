@@ -265,7 +265,7 @@ def build_manifest() -> dict[str, object]:
         "superseded_by": None,
         "recorder_revision": {
             "kind": "git",
-            "value": "0ee126365c894d2ef368358362bafce820d3f700",
+            "value": "b8571cbe69500c377f035b33d643b0e397c1640e",
         },
         "demo_application_revision": None,
         "component_revisions": [],
