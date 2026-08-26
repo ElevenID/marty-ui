@@ -8,6 +8,7 @@ from scripts.validate_demo_manifests import ManifestValidationError, validate_in
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = ROOT / "ui" / "public" / "demos" / "manifests" / "2026.07.0.json"
+PORTFOLIO_MANIFEST_PATH = ROOT / "ui" / "public" / "demos" / "manifests" / "2026.08.0.json"
 
 
 class DemoManifestValidationTests(unittest.TestCase):
@@ -73,6 +74,13 @@ class DemoManifestValidationTests(unittest.TestCase):
         validate_manifest(manifest)
         manifest["deployment_release_marker"] = "invented-release"
         with self.assertRaisesRegex(ManifestValidationError, "cannot claim a release marker"):
+            validate_manifest(manifest)
+
+    def test_v3_portfolio_requires_exact_happy_denial_and_assertion_paths(self):
+        manifest = json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))
+        validate_manifest(copy.deepcopy(manifest))
+        manifest["scenarios"][0]["recording_plan"]["failure_paths"] = []
+        with self.assertRaisesRegex(ManifestValidationError, "failure paths differ"):
             validate_manifest(manifest)
 
     def test_sensitive_public_fields_are_rejected(self):

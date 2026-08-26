@@ -209,6 +209,18 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         else PORTFOLIO_SCENARIOS | PRESERVED_LEGACY_SCENARIOS
     )
     require(required_scenarios.issubset(set(slugs)), "all required portfolio and preserved legacy scenarios must be represented")
+    if not manifest["stack_version"].startswith("2026.07."):
+        scenario_by_slug = {scenario["slug"]: scenario for scenario in scenarios}
+        for contract in PORTFOLIO["scenarios"]:
+            scenario = scenario_by_slug[contract["slug"]]
+            require(scenario.get("demo_id") == contract["demo_id"], f"{contract['slug']}: demo ID differs from the portfolio contract")
+            plan = scenario.get("recording_plan", {})
+            require(plan.get("fresh_recording_required") is True, f"{contract['slug']}: fresh recording must be required")
+            require(plan.get("happy_path") == contract["happy_path"], f"{contract['slug']}: happy path differs from the portfolio contract")
+            require(plan.get("failure_paths") == contract["failure_paths"], f"{contract['slug']}: failure paths differ from the portfolio contract")
+            assertion_ids = {assertion.get("id") for assertion in scenario.get("assertions", [])}
+            required_assertions = set(contract["happy_path"]) | set(contract["failure_paths"])
+            require(required_assertions.issubset(assertion_ids), f"{contract['slug']}: behavioral paths require explicit assertions")
 
     for scenario in scenarios:
         slug = scenario.get("slug", "unknown")
