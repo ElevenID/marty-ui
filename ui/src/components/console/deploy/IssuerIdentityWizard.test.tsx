@@ -80,6 +80,26 @@ describe('IssuerIdentityWizard', () => {
     expect(showNotification).toHaveBeenCalledWith('Issuer identity created.', 'success');
   });
 
+  it('provisions a managed P-521 CSCA identity without exposing custody inputs', async () => {
+    const { user } = renderWithRouter(<IssuerIdentityWizard />);
+
+    await user.click(await screen.findByLabelText(/Signing purpose/));
+    await user.click(screen.getByRole('option', { name: 'CSCA / IACA root authority' }));
+    await user.click(screen.getByLabelText(/Algorithm/));
+    await user.click(screen.getByRole('option', { name: 'ES512' }));
+    await user.click(screen.getByRole('button', { name: 'Create managed identity' }));
+
+    await waitFor(() => {
+      expect(createIssuerIdentity).toHaveBeenCalledWith({
+        organization_id: 'org-test-1',
+        issuer_did: 'did:web:localhost%3A3000:orgs:test-org',
+        key_purpose: 'csca',
+        credential_format: 'MDOC',
+        algorithm: 'ES512',
+      });
+    });
+  });
+
   it('does not submit a non-DID identity', async () => {
     const { user } = renderWithRouter(<IssuerIdentityWizard />);
     const didInput = await screen.findByLabelText(/Issuer DID/);

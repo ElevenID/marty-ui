@@ -1313,6 +1313,7 @@ fn algorithm_for_jwk(jwk: &Map<String, Value>) -> Option<&'static str> {
     ) {
         (Some("EC"), Some("P-256")) => Some("ES256"),
         (Some("EC"), Some("P-384")) => Some("ES384"),
+        (Some("EC"), Some("P-521")) => Some("ES512"),
         (Some("RSA"), _) => Some("RS256"),
         (Some("OKP"), Some("Ed25519")) => Some("EdDSA"),
         _ => None,
@@ -1728,6 +1729,17 @@ mod tests {
         let jwk = public_jwk_from_method(&method).expect("public JWK");
         assert!(!jwk.contains_key("d"));
         assert_eq!(jwk.get("kid"), method.get("id"));
+    }
+
+    #[test]
+    fn managed_p521_public_keys_resolve_to_es512() {
+        let jwk = json!({
+            "kty": "EC",
+            "crv": "P-521",
+            "x": "public-x",
+            "y": "public-y"
+        });
+        assert_eq!(algorithm_for_jwk(jwk.as_object().unwrap()), Some("ES512"));
     }
 
     #[test]

@@ -73,7 +73,7 @@ const DEFAULT_KEY_MANAGEMENT_SERVICE_TYPE_CATALOG = [
   },
 ]
 
-export const KEY_MANAGEMENT_ALGORITHM_OPTIONS = ['ES256', 'ES384', 'RS256', 'EdDSA']
+export const KEY_MANAGEMENT_ALGORITHM_OPTIONS = ['ES256', 'ES384', 'ES512', 'RS256', 'EdDSA']
 
 export const KEY_PURPOSE_ALGORITHM_CONSTRAINTS = {
   vc_jwt_issuer: ['ES256', 'ES384', 'RS256', 'EdDSA'],
@@ -82,7 +82,7 @@ export const KEY_PURPOSE_ALGORITHM_CONSTRAINTS = {
   holder_binding: ['ES256', 'EdDSA'],
   presentation_signing: ['ES256', 'EdDSA'],
   vdsnc_signing: ['ES256', 'ES384', 'EdDSA'],
-  csca: ['ES256', 'ES384', 'RS256', 'EdDSA'],
+  csca: ['ES256', 'ES384', 'ES512', 'RS256', 'EdDSA'],
   jwks_signing: ['ES256', 'ES384', 'RS256', 'EdDSA'],
 }
 
