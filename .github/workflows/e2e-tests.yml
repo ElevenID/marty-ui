@@ -236,6 +236,10 @@ jobs:
         working-directory: tests
         run: npm ci
 
+      - name: Test beta evidence and recording contracts
+        working-directory: tests
+        run: node --test scripts/*.test.js
+
       - name: Cache Chromium
         id: playwright-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9

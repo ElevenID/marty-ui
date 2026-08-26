@@ -12,6 +12,7 @@ const {
 } = require('./verify-beta-waltid-acceptance');
 const {
   VIDEO_SIZE,
+  createArtifactDir,
   finalizeVideo,
   maskProtocolField: maskRecordingProtocolField,
   showStep: showRecordingStep,
@@ -19,6 +20,7 @@ const {
 const {
   DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
   credentialInventoryEvidence,
+  membershipLoginBehaviorAssertions,
 } = require('./beta-credential-contract');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -86,15 +88,8 @@ async function presentBadge(walletPage, requestUri) {
 async function main() {
   loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
   loadEnvFile(path.join(ROOT, '.env'));
-  const artifactDir = process.env.DEMO_ARTIFACT_DIR
-    ? path.resolve(process.env.DEMO_ARTIFACT_DIR)
-    : path.join(
-      ROOT,
-      'tests',
-      'artifacts',
-      `beta-credential-login-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '')}`,
-    );
-  fs.mkdirSync(artifactDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
+  const artifactDir = createArtifactDir(ROOT, `beta-credential-login-${stamp}`);
 
   const browser = await chromium.launch({
     headless: HEADLESS,
@@ -245,14 +240,9 @@ async function main() {
       'Credential login complete',
       'The badge presentation resolved the existing user and created a new authenticated ElevenID session.',
     );
+    report.behaviorAssertions = membershipLoginBehaviorAssertions(report);
     report.releaseReady = (
-      report.badge.offerSource === 'canonical-ui'
-      && report.badge.loggedOut
-      && report.badge.accepted
-      && report.badge.storedExpectedCredential
-      && report.presentation.accepted
-      && report.completion.status === 'completed'
-      && report.completion.authenticated
+      Object.values(report.behaviorAssertions).every((passed) => passed === true)
       && report.pageErrors.length === 0
       && report.badResponses.length === 0
     );

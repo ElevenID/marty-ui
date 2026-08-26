@@ -3,6 +3,15 @@ const path = require('path');
 
 const VIDEO_SIZE = Object.freeze({ width: 1920, height: 1080 });
 
+function createArtifactDir(root, defaultName, env = process.env) {
+  const configured = String(env.DEMO_ARTIFACT_DIR || '').trim();
+  const artifactDir = configured
+    ? path.resolve(configured)
+    : path.join(root, 'tests', 'artifacts', defaultName);
+  fs.mkdirSync(artifactDir, { recursive: true });
+  return artifactDir;
+}
+
 async function showStep(page, title, detail, options = {}) {
   if (!options.enabled) return;
   await page.evaluate(({ title: headingText, detail: detailText, eyebrowText }) => {
@@ -62,4 +71,10 @@ async function finalizeVideo(video, artifactDir, filename) {
   return finalPath;
 }
 
-module.exports = { VIDEO_SIZE, finalizeVideo, maskProtocolField, showStep };
+module.exports = {
+  VIDEO_SIZE,
+  createArtifactDir,
+  finalizeVideo,
+  maskProtocolField,
+  showStep,
+};

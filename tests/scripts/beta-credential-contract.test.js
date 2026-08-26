@@ -9,7 +9,9 @@ const {
   DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
   DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
   credentialConfigurationIdForWaltid,
+  credentialLifecycleBehaviorAssertions,
   credentialInventoryEvidence,
+  membershipLoginBehaviorAssertions,
   verificationResultEvidence,
   verificationSessionRequest,
 } = require('./beta-credential-contract');
@@ -135,4 +137,48 @@ test('verification session request fails closed without exact public identifiers
   assert.throws(() => verificationSessionRequest({ ...valid, presentationPolicyId: '' }), /UUID/);
   assert.throws(() => verificationSessionRequest({ ...valid, issuerDid: '' }), /DID/);
   assert.throws(() => verificationSessionRequest({ ...valid, externalReference: '' }), /non-empty/);
+});
+
+test('membership recording exposes the three exact happy-path behavior assertions', () => {
+  assert.deepEqual(membershipLoginBehaviorAssertions({
+    badge: {
+      offerSource: 'canonical-ui', loggedOut: true, accepted: true, storedExpectedCredential: true,
+    },
+    presentation: { accepted: true },
+    completion: { status: 'completed', authenticated: true },
+  }), {
+    governed_claim: true,
+    conformant_open_badge_issuance: true,
+    same_device_passwordless_login: true,
+  });
+  assert.equal(membershipLoginBehaviorAssertions({}).governed_claim, false);
+});
+
+test('lifecycle recording requires status-aware allow and deny decisions', () => {
+  const assertions = credentialLifecycleBehaviorAssertions({
+    renewal: { ok: true },
+    suspend: {
+      ok: true,
+      current: { lifecycleStatus: 'SUSPENDED' },
+      verification: { result: { decision: 'deny', decisionReason: 'Credential suspended' } },
+    },
+    reinstate: {
+      ok: true,
+      current: { lifecycleStatus: 'ACTIVE' },
+      verification: { result: { decision: 'allow' } },
+    },
+    revoke: {
+      ok: true,
+      current: { lifecycleStatus: 'REVOKED' },
+      verification: { result: { decision: 'deny', decisionReason: 'Credential revoked' } },
+    },
+  });
+  assert.deepEqual(assertions, {
+    renew: true,
+    suspend: true,
+    reinstate: true,
+    revoke: true,
+    suspended_and_revoked_states_denied: true,
+  });
+  assert.equal(credentialLifecycleBehaviorAssertions({}).suspended_and_revoked_states_denied, false);
 });
