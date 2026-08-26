@@ -213,12 +213,12 @@ jobs:
 
       - name: Dispatch fresh demo release intake
         env:
-          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+          GH_TOKEN: ${{ secrets.DEMO_RECORDER_DISPATCH_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ -z "$GH_TOKEN" ]]; then
-            echo "REPO_ACCESS_TOKEN is required by the beta-lifecycle environment." >&2
+            echo "DEMO_RECORDER_DISPATCH_TOKEN is required by the beta-lifecycle environment." >&2
             exit 1
           fi
           jq -n \
