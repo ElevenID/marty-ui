@@ -51,6 +51,14 @@ class DemoManifestValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ManifestValidationError, "verified ElevenID LLC YouTube channel"):
             validate_manifest(manifest)
 
+    def test_post_july_releases_require_the_v3_portfolio_and_legacy_wallet_demos(self):
+        manifest = copy.deepcopy(self.manifest)
+        manifest["stack_version"] = "2026.08.0"
+        for scenario in manifest["scenarios"]:
+            scenario["poster"]["src"] = scenario["poster"]["src"].replace("2026.07.0", "2026.08.0")
+        with self.assertRaisesRegex(ManifestValidationError, "required portfolio and preserved legacy"):
+            validate_manifest(manifest)
+
     def test_sensitive_public_fields_are_rejected(self):
         manifest = copy.deepcopy(self.manifest)
         manifest["scenarios"][0]["credential_offer_uri"] = "https://example.invalid/offer"

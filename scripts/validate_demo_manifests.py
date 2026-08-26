@@ -46,13 +46,20 @@ SENSITIVE_KEYS = {
     "private_key",
     "email",
 }
-REQUIRED_SCENARIOS = {
+HISTORICAL_2026_07_SCENARIOS = {
     "membership-badge-login",
     "organization-primitives",
     "first-party-browser-wallet",
     "independent-wallet-interoperability",
     "canvas-learning-achievement",
     "credential-lifecycle",
+}
+PORTFOLIO_PATH = Path(__file__).resolve().parents[1] / "deploy-config" / "catalog" / "demo-portfolio-v3.json"
+PORTFOLIO = json.loads(PORTFOLIO_PATH.read_text(encoding="utf-8"))
+PORTFOLIO_SCENARIOS = {scenario["slug"] for scenario in PORTFOLIO["scenarios"]}
+PRESERVED_LEGACY_SCENARIOS = {
+    "first-party-browser-wallet",
+    "independent-wallet-interoperability",
 }
 SCENARIO_PUBLICATION_CHECKS = {
     "accessibility", "captions", "evidence", "links", "playback", "privacy", "thumbnail", "transcript",
@@ -181,7 +188,12 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     require(isinstance(scenarios, list) and scenarios, "scenarios cannot be empty")
     slugs = [scenario.get("slug") for scenario in scenarios]
     require(len(slugs) == len(set(slugs)), "scenario slugs must be unique")
-    require(REQUIRED_SCENARIOS.issubset(set(slugs)), "all six release scenarios must be represented")
+    required_scenarios = (
+        HISTORICAL_2026_07_SCENARIOS
+        if manifest["stack_version"].startswith("2026.07.")
+        else PORTFOLIO_SCENARIOS | PRESERVED_LEGACY_SCENARIOS
+    )
+    require(required_scenarios.issubset(set(slugs)), "all required portfolio and preserved legacy scenarios must be represented")
 
     for scenario in scenarios:
         slug = scenario.get("slug", "unknown")
@@ -240,7 +252,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
 
     if manifest["coverage_state"] == "COMPLETE":
         require(manifest["publication_state"] == "PUBLIC" and manifest["public_demo_ready"], "COMPLETE coverage must be publicly approved")
-        require(all(scenario.get("state") == "PUBLIC" for scenario in scenarios if scenario.get("slug") in REQUIRED_SCENARIOS), "COMPLETE coverage requires all required scenarios to be PUBLIC")
+        require(all(scenario.get("state") == "PUBLIC" for scenario in scenarios if scenario.get("slug") in required_scenarios), "COMPLETE coverage requires all required scenarios to be PUBLIC")
         independent = next(item for item in scenarios if item.get("slug") == "independent-wallet-interoperability")
         require(any(wallet.get("classification") == "INDEPENDENT" and wallet.get("result") == "PASS" for wallet in independent.get("wallets", [])), "COMPLETE coverage requires passing independent-wallet evidence")
 
