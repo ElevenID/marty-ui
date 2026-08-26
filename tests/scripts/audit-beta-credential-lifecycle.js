@@ -468,11 +468,15 @@ async function present(walletPage, requestUri) {
   };
 }
 
-async function verify(page, walletPage, label) {
+async function verify(page, walletPage, label, {
+  organizationId = ORG_ID,
+  presentationPolicyId = POLICY_ID,
+  issuerDid = VERIFIER_DID,
+} = {}) {
   const request = verificationSessionRequest({
-    organizationId: ORG_ID,
-    presentationPolicyId: POLICY_ID,
-    issuerDid: VERIFIER_DID,
+    organizationId,
+    presentationPolicyId,
+    issuerDid,
     externalReference: label,
   });
   const session = await page.evaluate(async (payload) => {
@@ -746,8 +750,14 @@ if (require.main === module) {
 }
 
 module.exports = {
+  findCredentialRow,
+  findIssuedCredential,
+  getCredentialStatus,
   issueCredential,
   login,
+  performLifecycleAction,
+  receiveCredential,
   selectOrg,
+  verify,
   waitFor,
 };
