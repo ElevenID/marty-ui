@@ -372,6 +372,21 @@ export async function listPublicIssuerIdentities(params = {}) {
 }
 
 /**
+ * Rebind one DID-selected identity to Marty's compatible default signing
+ * service. Provider and key coordinates remain private to the service.
+ */
+export async function rebindIssuerIdentity(body) {
+  const organizationId = requireOrganizationId(body, 'rebinding issuer identities');
+  return patch(`${BASE_PATH}/issuer-identities`, {
+    organization_id: organizationId,
+    issuer_did: body?.issuer_did,
+    key_purpose: body?.key_purpose,
+    credential_format: body?.credential_format,
+    algorithm: body?.algorithm,
+  });
+}
+
+/**
  * Attach a public certificate chain to one DID-selected managed identity.
  */
 export async function storeIssuerIdentityCertificate(body) {
@@ -431,6 +446,7 @@ export default {
   getOrgDidDocument,
   createIssuerIdentity,
   listPublicIssuerIdentities,
+  rebindIssuerIdentity,
   storeIssuerIdentityCertificate,
   deleteIssuerIdentity,
 };

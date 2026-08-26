@@ -16,6 +16,7 @@ import {
   getKeyManagementConfig,
   listPublicIssuerIdentities,
   listSigningKeys,
+  rebindIssuerIdentity,
   rotateSigningKey,
   setServiceCertificate,
   storeIssuerIdentityCertificate,
@@ -296,6 +297,19 @@ describe('readiness gateway smoke', () => {
           status: 'active',
         })
       }),
+      http.patch('*/v1/signing-keys/issuer-identities', async ({ request }) => {
+        const body = await request.json() as Record<string, unknown>
+        requests.push({ method: request.method, body })
+        return HttpResponse.json({
+          changed: true,
+          identity: {
+            issuer_did: body.issuer_did,
+            key_purpose: body.key_purpose,
+            algorithm: body.algorithm,
+            status: 'active',
+          },
+        })
+      }),
       http.delete('*/v1/signing-keys/issuer-identities', async ({ request }) => {
         const body = await request.json() as Record<string, unknown>
         requests.push({ method: request.method, body })
@@ -324,9 +338,10 @@ describe('readiness gateway smoke', () => {
       cert_pem: 'certificate',
       cert_chain_pem: 'chain',
     })
+    await rebindIssuerIdentity(selector)
     await deleteIssuerIdentity(selector)
 
-    expect(requests.map(({ method }) => method)).toEqual(['POST', 'PUT', 'DELETE'])
+    expect(requests.map(({ method }) => method)).toEqual(['POST', 'PUT', 'PATCH', 'DELETE'])
     for (const { body } of requests) {
       expect(body).not.toHaveProperty('issuer_profile_id')
       expect(body).not.toHaveProperty('signing_service_id')
