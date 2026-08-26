@@ -40,6 +40,10 @@ def _required_steps():
             "api_key_secret_screenshot_redacted": True,
         },
         {"label": "resource-inventory-verified", "body_excerpt": "Inventory"},
+        {
+            "label": "unauthorized-administration-denied",
+            "body_excerpt": "Administration denied",
+        },
     ]
 
 
@@ -152,6 +156,109 @@ def test_release_checks_accept_typed_plan_entitlement_response() -> None:
             "error_code": "plan_feature_unavailable",
         }
     ]
+
+
+def test_release_checks_accept_only_exact_cross_org_admin_denials() -> None:
+    audit = _load_audit_module()
+    denied = [
+        {
+            "status": 403,
+            "url": f"https://beta.elevenidllc.com{path}?organization_id={audit.CROSS_ORG_SENTINEL}",
+            "message_id": f"denied-{index}",
+        }
+        for index, path in enumerate(sorted(audit.CROSS_ORG_ADMIN_PATHS))
+    ]
+
+    checks = audit.evaluate_release_checks({
+        "steps": _required_steps(),
+        "bad_responses": denied,
+        "failed_requests": [],
+        "page_errors": [],
+    })
+
+    assert checks["status"] == "pass"
+    assert checks["observations"]["expected_cross_org_admin_denials"] == denied
+    assert not audit.is_expected_cross_org_admin_denial({
+        "status": 403,
+        "url": f"https://beta.elevenidllc.com/v1/api-keys?organization_id={audit.CROSS_ORG_SENTINEL}",
+    })
+    assert not audit.is_expected_cross_org_admin_denial({
+        "status": 403,
+        "url": "https://beta.elevenidllc.com/v1/trust-profiles?organization_id=another-org",
+    })
+
+
+def test_organization_management_behavior_assertions_require_exact_steps() -> None:
+    audit = _load_audit_module()
+    report = {"steps": _required_steps()}
+
+    assert audit.organization_management_behavior_assertions(report) == {
+        "configure_organization": True,
+        "configure_issuer_profiles": True,
+        "configure_trust_and_mip_primitives": True,
+        "unauthorized_administration_denied": True,
+    }
+
+    report["steps"] = [
+        step for step in report["steps"]
+        if step["label"] != "unauthorized-administration-denied"
+    ]
+    assert audit.organization_management_behavior_assertions(report)[
+        "unauthorized_administration_denied"
+    ] is False
+
+
+def test_external_recorder_artifact_dir_is_supported(monkeypatch, tmp_path: Path) -> None:
+    audit = _load_audit_module()
+    artifact_dir = tmp_path / "fresh-recording"
+    monkeypatch.setenv("DEMO_ARTIFACT_DIR", str(artifact_dir))
+
+    assert audit.resolve_artifact_dir("ignored-run-id") == artifact_dir.resolve()
+    assert audit.report_artifact_path(artifact_dir / "report.json", artifact_dir) == "report.json"
+
+    source = (Path(__file__).resolve().parents[1] / "scripts" / "beta_org_console_audit.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'os.environ.get("BETA_ORIGIN")' in source
+
+
+@pytest.mark.parametrize(
+    "override_status, expected_label",
+    [
+        (None, "unauthorized-administration-denied"),
+        (200, "unauthorized-administration-not-denied"),
+    ],
+)
+def test_cross_org_admin_probe_fails_closed(
+    monkeypatch,
+    override_status: int | None,
+    expected_label: str,
+) -> None:
+    audit = _load_audit_module()
+
+    class FakeAudit:
+        page = object()
+
+        def __init__(self) -> None:
+            self.snapshots = []
+
+        def snapshot(self, label, note, extra) -> None:
+            self.snapshots.append({"label": label, "note": note, "extra": extra})
+
+    first_path = sorted(audit.CROSS_ORG_ADMIN_PATHS)[0]
+
+    def fetch_probe(_page, path, organization_id):
+        assert organization_id == audit.CROSS_ORG_SENTINEL
+        status = override_status if path == first_path and override_status is not None else 403
+        return {"status": status}
+
+    monkeypatch.setattr(audit, "fetch_org_collection", fetch_probe)
+    fake_audit = FakeAudit()
+
+    audit.verify_unauthorized_administration_denied(fake_audit)
+
+    assert [snapshot["label"] for snapshot in fake_audit.snapshots] == [expected_label]
+    assert set(fake_audit.snapshots[0]["extra"]["statuses"]) == audit.CROSS_ORG_ADMIN_PATHS
 
 
 def test_release_checks_block_unexplained_failed_request() -> None:

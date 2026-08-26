@@ -18,7 +18,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlparse
 from uuid import UUID
 
 from playwright.sync_api import Error as PlaywrightError
@@ -30,6 +30,13 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env.tunnel.beta.local"
 ARTIFACT_ROOT = ROOT / "tests" / "artifacts"
 RECORDING_VIEWPORT = {"width": 1920, "height": 1080}
+CROSS_ORG_SENTINEL = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+CROSS_ORG_ADMIN_PATHS = {
+    "/v1/credential-templates",
+    "/v1/deployment-profiles",
+    "/v1/presentation-policies",
+    "/v1/trust-profiles",
+}
 
 
 SECRET_PATTERNS = [
@@ -228,6 +235,17 @@ def is_expected_entitlement_response(entry: dict[str, Any]) -> bool:
     )
 
 
+def is_expected_cross_org_admin_denial(entry: dict[str, Any]) -> bool:
+    """Recognize only the audit's explicit cross-organization access probes."""
+    if int(entry.get("status") or 0) != 403:
+        return False
+    parsed = urlparse(str(entry.get("url") or ""))
+    return (
+        parsed.path in CROSS_ORG_ADMIN_PATHS
+        and parse_qs(parsed.query).get("organization_id") == [CROSS_ORG_SENTINEL]
+    )
+
+
 def is_loading_only_step(step: dict[str, Any]) -> bool:
     body = re.sub(r"\s+", " ", str(step.get("body_excerpt") or "")).strip().lower()
     return body in {
@@ -268,11 +286,13 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
         "verification-flow-active",
         "api-key-created",
         "resource-inventory-verified",
+        "unauthorized-administration-denied",
     }
 
     blockers: list[dict[str, Any]] = []
     degraded: list[dict[str, Any]] = []
     expected_entitlements: list[dict[str, Any]] = []
+    expected_cross_org_denials: list[dict[str, Any]] = []
 
     def add_blocker(code: str, message: str, **extra: Any) -> None:
         blockers.append({"code": code, "message": message, **extra})
@@ -345,6 +365,14 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
                 url=response.get("url"),
                 message_id=response.get("message_id"),
             )
+        elif is_expected_cross_org_admin_denial(response):
+            expected_cross_org_denials.append(
+                {
+                    "status": status,
+                    "url": response.get("url"),
+                    "message_id": response.get("message_id"),
+                }
+            )
         elif is_expected_entitlement_response(response):
             expected_entitlements.append(
                 {
@@ -402,11 +430,51 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
             "failed_request_count": len(report.get("failed_requests") or []),
             "expected_navigation_aborts": expected_navigation_aborts,
             "expected_entitlement_responses": expected_entitlements,
+            "expected_cross_org_admin_denials": expected_cross_org_denials,
             "api_key_secret_screenshot_redacted": bool(
                 api_key_steps and all(step.get("api_key_secret_screenshot_redacted") for step in api_key_steps)
             ),
         },
     }
+
+
+def organization_management_behavior_assertions(report: dict[str, Any]) -> dict[str, bool]:
+    """Map the live audit evidence to the exact D-10 behavior contract."""
+    labels = {str(step.get("label") or "") for step in report.get("steps") or []}
+    return {
+        "configure_organization": {"post-org-probe", "resource-inventory-verified"}.issubset(labels),
+        "configure_issuer_profiles": {
+            "kms-service-configured",
+            "issuer-identity-active",
+            "verifier-issuer-identity-active",
+        }.issubset(labels),
+        "configure_trust_and_mip_primitives": {
+            "trust-profile-active",
+            "revocation-profile-activated",
+            "credential-template-activated",
+            "application-template-activated",
+            "presentation-policy-active",
+            "deployment-profile-active",
+            "issuance-flow-active",
+            "verification-flow-active",
+            "api-key-created",
+            "resource-inventory-verified",
+        }.issubset(labels),
+        "unauthorized_administration_denied": "unauthorized-administration-denied" in labels,
+    }
+
+
+def resolve_artifact_dir(run_id: str) -> Path:
+    configured = os.environ.get("DEMO_ARTIFACT_DIR", "").strip()
+    return Path(configured).resolve() if configured else ARTIFACT_ROOT / f"beta-org-console-audit-{run_id}"
+
+
+def report_artifact_path(path: Path, artifact_dir: Path) -> str:
+    """Keep legacy repo-relative paths while allowing an external recorder directory."""
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path.relative_to(artifact_dir))
 
 
 def verified_audit_lifecycle_environment(report: dict[str, Any]) -> dict[str, str]:
@@ -855,7 +923,7 @@ class Audit:
                 "url": self.page.url,
                 "heading": first_heading(self.page),
                 "body_excerpt": body_excerpt(self.page),
-                "screenshot": str(screenshot.relative_to(ROOT)) if screenshot else None,
+                "screenshot": report_artifact_path(screenshot, self.artifact_dir) if screenshot else None,
                 **(extra or {}),
             }
         )
@@ -949,7 +1017,7 @@ class Audit:
         report = {
             "created_at": datetime.now(timezone.utc).isoformat(),
             "base_url": self.base_url,
-            "artifact_dir": str(self.artifact_dir.relative_to(ROOT)),
+            "artifact_dir": report_artifact_path(self.artifact_dir, self.artifact_dir),
             "summary": {
                 "steps": len(self.steps),
                 "screenshots": len(screenshot_files),
@@ -975,6 +1043,11 @@ class Audit:
             "interesting_responses": self.interesting_responses[-300:],
         }
         report["release_checks"] = evaluate_release_checks(report)
+        report["behaviorAssertions"] = organization_management_behavior_assertions(report)
+        report["releaseReady"] = (
+            report["release_checks"]["status"] == "pass"
+            and all(report["behaviorAssertions"].values())
+        )
         return report
 
 
@@ -2159,6 +2232,27 @@ def verify_resource_inventory(audit: Audit, run_id: str) -> None:
     )
 
 
+def verify_unauthorized_administration_denied(audit: Audit) -> None:
+    """Prove that this administrator cannot enumerate another organization's primitives."""
+    probes = {
+        path: fetch_org_collection(audit.page, path, CROSS_ORG_SENTINEL)
+        for path in sorted(CROSS_ORG_ADMIN_PATHS)
+    }
+    statuses = {path: int(probe.get("status") or 0) for path, probe in probes.items()}
+    if not all(status == 403 for status in statuses.values()):
+        audit.snapshot(
+            "unauthorized-administration-not-denied",
+            "At least one cross-organization administration request was not denied with 403.",
+            {"organization_id": CROSS_ORG_SENTINEL, "statuses": statuses},
+        )
+        return
+    audit.snapshot(
+        "unauthorized-administration-denied",
+        "Cross-organization reads of credential, trust, policy, and deployment primitives were denied.",
+        {"organization_id": CROSS_ORG_SENTINEL, "statuses": statuses},
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run the live beta org-console audit with Playwright.",
@@ -2166,7 +2260,7 @@ def main() -> int:
     parser.add_argument(
         "--base-url",
         default=None,
-        help="Beta base URL to audit. Defaults to BASE_URL from env or https://beta.elevenidllc.com.",
+        help="Beta base URL to audit. Defaults to BETA_ORIGIN/BASE_URL or https://beta.elevenidllc.com.",
     )
     parser.add_argument(
         "--headed",
@@ -2196,7 +2290,13 @@ def main() -> int:
     args = parser.parse_args()
 
     env = load_env_file(ENV_FILE)
-    base_url = args.base_url or os.environ.get("BASE_URL") or env.get("BASE_URL") or "https://beta.elevenidllc.com"
+    base_url = (
+        args.base_url
+        or os.environ.get("BETA_ORIGIN")
+        or os.environ.get("BASE_URL")
+        or env.get("BASE_URL")
+        or "https://beta.elevenidllc.com"
+    )
     if "beta.elevenidllc.com" not in base_url:
         base_url = "https://beta.elevenidllc.com"
 
@@ -2207,7 +2307,7 @@ def main() -> int:
         return 2
 
     run_id = datetime.now().strftime("%Y%m%d%H%M%S")
-    artifact_dir = ARTIFACT_ROOT / f"beta-org-console-audit-{run_id}"
+    artifact_dir = resolve_artifact_dir(run_id)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
@@ -2257,6 +2357,7 @@ def main() -> int:
             create_flow(audit, run_id, "verification")
             create_api_key(audit, run_id)
             verify_resource_inventory(audit, run_id)
+            verify_unauthorized_administration_denied(audit)
         except Exception as exc:
             audit.snapshot("audit-exception", f"Audit stopped with exception: {exc!r}")
             raise
@@ -2268,8 +2369,10 @@ def main() -> int:
                 trace_path = artifact_dir / "mip-primitives-management-trace.zip"
                 context.tracing.stop(path=str(trace_path))
                 recording = {
-                    "video": str((artifact_dir / "mip-primitives-management.webm").relative_to(ROOT)),
-                    "trace": str(trace_path.relative_to(ROOT)),
+                    "video": report_artifact_path(
+                        artifact_dir / "mip-primitives-management.webm", artifact_dir
+                    ),
+                    "trace": report_artifact_path(trace_path, artifact_dir),
                 }
             context.close()
             if page_video is not None:
