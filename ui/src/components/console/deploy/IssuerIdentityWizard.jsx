@@ -26,6 +26,7 @@ const PURPOSES = [
   { value: 'vc_jwt_issuer', label: 'Credential issuance' },
   { value: 'mdoc_dsc', label: 'mdoc document signing' },
   { value: 'x509_doc_signer', label: 'X.509 document signing' },
+  { value: 'csca', label: 'CSCA / IACA root authority' },
   { value: 'jwks_signing', label: 'JWKS signing' },
 ];
 
@@ -33,6 +34,7 @@ const FORMATS_BY_PURPOSE = {
   vc_jwt_issuer: ['SD_JWT_VC', 'VC_JWT', 'JSON_LD'],
   mdoc_dsc: ['MDOC', 'ZK_MDOC'],
   x509_doc_signer: ['MDOC', 'ZK_MDOC', 'ICAO_EMRTD'],
+  csca: ['MDOC', 'ZK_MDOC'],
   jwks_signing: ['VC_JWT', 'SD_JWT_VC'],
 };
 
@@ -40,6 +42,7 @@ const ALGORITHMS_BY_PURPOSE = {
   vc_jwt_issuer: ['ES256', 'ES384', 'RS256', 'EdDSA'],
   mdoc_dsc: ['ES256', 'ES384', 'EdDSA'],
   x509_doc_signer: ['ES256', 'ES384', 'RS256', 'EdDSA'],
+  csca: ['ES256', 'ES384', 'ES512', 'RS256', 'EdDSA'],
   jwks_signing: ['ES256', 'ES384', 'RS256', 'EdDSA'],
 };
 

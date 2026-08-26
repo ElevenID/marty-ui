@@ -224,4 +224,25 @@ describe('KeyManagementServiceWizard', () => {
 
     expect(screen.getByRole('checkbox', { name: /mDoc document signer/i })).toBeDisabled()
   })
+
+  it('offers ES512 for CSCA key services while keeping other purposes constrained', async () => {
+    const { user } = renderWithRouter(<KeyManagementServiceWizard />, {
+      initialEntries: ['/console/org/deploy/signing-keys/services/new'],
+    })
+
+    await waitFor(() => {
+      expect(screen.getByText('Choose a key management service')).toBeInTheDocument()
+    })
+    await user.click(screen.getByText('AWS KMS'))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    await user.type(screen.getByRole('textbox', { name: /service name/i }), 'P-521 CSCA')
+    await user.type(screen.getByRole('textbox', { name: /region \/ location/i }), 'us-east-1')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await user.click(screen.getByLabelText('ES512'))
+    await user.click(screen.getByLabelText('ES256'))
+
+    expect(screen.getByRole('checkbox', { name: /CSCA \/ IACA root authority/i })).toBeEnabled()
+    expect(screen.getByRole('checkbox', { name: /VC JWT \/ SD-JWT issuer/i })).toBeDisabled()
+  })
 })
