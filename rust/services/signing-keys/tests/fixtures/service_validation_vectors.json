@@ -73,6 +73,25 @@
     ]
   },
   {
+    "name": "gcp_rejects_unsupported_p521",
+    "input": {
+      "service_type": "gcp-cloud-kms",
+      "auth_mode": "workload_identity",
+      "key_reference": "projects/acme/locations/us/keyRings/issuance/cryptoKeys/signer/cryptoKeyVersions/7",
+      "algorithms": ["ES512"],
+      "live_probe": false
+    },
+    "expected_ok": false,
+    "expected_checks": [
+      {"name": "Authentication reference", "status": "pass", "detail": "Authentication mode and reference look ready.", "source": "baseline"},
+      {"name": "Key reference", "status": "pass", "detail": "Key reference was provided.", "source": "baseline"},
+      {"name": "Algorithm coverage", "status": "pass", "detail": "Selected algorithms: ES512", "source": "baseline"},
+      {"name": "Provider key format", "status": "pass", "detail": "GCP key reference looks like a Cloud KMS resource path.", "source": "provider"},
+      {"name": "Provider auth policy", "status": "pass", "detail": "Workload identity selected; ensure cloudkms.cryptoKeyVersions.useToSign permission is granted.", "source": "provider"},
+      {"name": "Provider algorithm fit", "status": "fail", "detail": "Selected algorithms are not supported by gcp: ES512.", "source": "provider"}
+    ]
+  },
+  {
     "name": "mdoc_rejects_rsa_algorithm",
     "input": {
       "service_type": "custom-transit-compatible",
@@ -88,7 +107,8 @@
       {"name": "Authentication reference", "status": "pass", "detail": "Authentication mode and reference look ready.", "source": "baseline"},
       {"name": "Key reference", "status": "pass", "detail": "Key reference was provided.", "source": "baseline"},
       {"name": "Algorithm coverage", "status": "pass", "detail": "Selected algorithms: RS256", "source": "baseline"},
-      {"name": "Key purpose algorithm fit", "status": "warning", "detail": "Algorithm(s) RS256 may not be suitable for the declared key purpose(s) mdoc_dsc.", "source": "baseline"}
+      {"name": "Key purpose algorithm fit", "status": "warning", "detail": "Algorithm(s) RS256 may not be suitable for the declared key purpose(s) mdoc_dsc.", "source": "baseline"},
+      {"name": "Provider algorithm fit", "status": "pass", "detail": "Selected algorithms are compatible with expected custom signer capabilities.", "source": "provider"}
     ]
   },
   {
@@ -106,7 +126,8 @@
       {"name": "Authentication reference", "status": "pass", "detail": "Authentication mode and reference look ready.", "source": "baseline"},
       {"name": "Key reference", "status": "pass", "detail": "Key reference was provided.", "source": "baseline"},
       {"name": "Algorithm coverage", "status": "pass", "detail": "Selected algorithms: ES256", "source": "baseline"},
-      {"name": "Key purpose algorithm fit", "status": "warning", "detail": "Algorithm(s) ES256 may not be suitable for the declared key purpose(s) lti_tool_signing.", "source": "baseline"}
+      {"name": "Key purpose algorithm fit", "status": "warning", "detail": "Algorithm(s) ES256 may not be suitable for the declared key purpose(s) lti_tool_signing.", "source": "baseline"},
+      {"name": "Provider algorithm fit", "status": "pass", "detail": "Selected algorithms are compatible with expected custom signer capabilities.", "source": "provider"}
     ]
   }
 ]

@@ -47,8 +47,12 @@ async fn csca_signing_surface_matches_the_language_neutral_contract() {
         .as_array()
         .unwrap()
     {
-        let path = route.as_str().unwrap();
-        let body = match path {
+        let contract_path = route["path"].as_str().unwrap();
+        let path = contract_path
+            .replace("{organization_id}", "org-a")
+            .replace("{certificate_id}", "csca-a")
+            .replace("{event_id}", "event-a");
+        let body = match contract_path {
             "/internal/kms/sign" => {
                 serde_json::json!({"service_config": {}, "payload_b64": ""})
             }
@@ -58,19 +62,53 @@ async fn csca_signing_surface_matches_the_language_neutral_contract() {
             "/internal/documents/certificate/inspect" => {
                 serde_json::json!({"cert_pem": "not-a-certificate"})
             }
-            _ => panic!("unhandled CSCA contract route: {path}"),
+            path if path.ends_with("/renew") => serde_json::json!({
+                "replacement_certificate_id": "csca-b",
+                "cert_pem": "not-a-certificate",
+                "key_reference": "hsm://csca/b",
+                "expected_public_jwk": {}
+            }),
+            path if path.ends_with("/revoke") => {
+                serde_json::json!({"reason": "test"})
+            }
+            path if path.ends_with("/expiring") => {
+                serde_json::json!({"days_threshold": 30})
+            }
+            _ if route["method"] == "PUT" => serde_json::json!({
+                "cert_pem": "not-a-certificate",
+                "key_reference": "hsm://csca/a",
+                "expected_public_jwk": {}
+            }),
+            _ => serde_json::json!({}),
         };
+        let method = route["method"].as_str().unwrap();
         let response = marty_signing_keys::http::router()
             .oneshot(
-                Request::post(path)
+                Request::builder()
+                    .method(method)
+                    .uri(&path)
                     .header("content-type", "application/json")
                     .body(Body::from(body.to_string()))
                     .unwrap(),
             )
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{path}");
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "{method} {path}"
+        );
     }
+}
+
+#[tokio::test]
+async fn public_openapi_does_not_publish_internal_custody_routes() {
+    let spec = get_json("/openapi.json").await;
+    assert!(spec["paths"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .all(|path| !path.starts_with("/internal/")));
 }
 
 #[tokio::test]
@@ -254,6 +292,17 @@ async fn internal_document_routes_require_auth_and_fail_closed_without_storage()
         .await
         .unwrap();
     assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let csca_unavailable = marty_signing_keys::http::router()
+        .oneshot(
+            Request::get("/internal/documents/org-a/csca-certificates")
+                .header("x-api-key", "dev-signing-keys-internal-api-key")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(csca_unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
 
     let compatibility_unavailable = marty_signing_keys::http::router()
         .oneshot(

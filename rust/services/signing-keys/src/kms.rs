@@ -15,7 +15,7 @@ use marty_crypto::jwk::{public_key_der_to_jwk, public_key_pem_to_jwk, PublicJwk}
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha384, Sha512};
 use thiserror::Error;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -135,7 +135,7 @@ impl Provider {
     }
 
     fn signature_encoding(self, algorithm: &str) -> &'static str {
-        if self == Self::OpenBao && algorithm == "EdDSA" {
+        if algorithm == "EdDSA" {
             "raw"
         } else {
             "der"
@@ -163,9 +163,11 @@ pub async fn sign(request: SignRequest) -> Result<SignResponse, KmsError> {
         Provider::Gcp => sign_gcp(&request.service_config, &payload).await?,
     };
     let transcoded_signature_b64 = match algorithm {
-        "ES256" | "ES384" => marty_crypto::ecdsa::normalize_signature(&signature, algorithm)
-            .ok()
-            .map(|bytes| URL_SAFE_NO_PAD.encode(bytes)),
+        "ES256" | "ES384" | "ES512" => {
+            marty_crypto::ecdsa::normalize_signature(&signature, algorithm)
+                .ok()
+                .map(|bytes| URL_SAFE_NO_PAD.encode(bytes))
+        }
         _ => None,
     };
 
@@ -218,11 +220,22 @@ async fn sign_openbao(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsErro
         .unwrap_or("transit")
         .trim_matches('/');
     let algorithm = string(config, "algorithm").unwrap_or("ES256");
-    let (input, prehashed) = if algorithm == "EdDSA" {
-        (STANDARD.encode(payload), false)
+    let (input, prehashed, hash_algorithm) = if algorithm == "EdDSA" {
+        (STANDARD.encode(payload), false, None)
     } else {
-        (STANDARD.encode(Sha256::digest(payload)), true)
+        let (name, digest) = signing_digest(algorithm, payload)?;
+        let vault_name = match name {
+            "sha256" => "sha2-256",
+            "sha384" => "sha2-384",
+            "sha512" => "sha2-512",
+            _ => unreachable!("signing_digest returns a supported SHA-2 name"),
+        };
+        (STANDARD.encode(digest), true, Some(vault_name))
     };
+    let mut body = json!({"input": input, "prehashed": prehashed});
+    if let Some(hash_algorithm) = hash_algorithm {
+        body["hash_algorithm"] = Value::String(hash_algorithm.to_string());
+    }
     let url = format!(
         "{}/v1/{mount}/sign/{key_reference}",
         endpoint.trim_end_matches('/')
@@ -232,7 +245,7 @@ async fn sign_openbao(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsErro
             .post(url)
             .timeout(HTTP_TIMEOUT)
             .header("X-Vault-Token", transit_token(config))
-            .json(&json!({"input": input, "prehashed": prehashed})),
+            .json(&body),
     )
     .await?;
     let encoded = response
@@ -349,17 +362,7 @@ async fn create_managed_openbao_key(config: &Value) -> Result<(), KmsError> {
         .unwrap_or("transit")
         .trim_matches('/');
     let algorithm = string(config, "algorithm").unwrap_or("ES256");
-    let key_type = match algorithm {
-        "ES256" => "ecdsa-p256",
-        "ES384" => "ecdsa-p384",
-        "RS256" => "rsa-2048",
-        "EdDSA" => "ed25519",
-        other => {
-            return Err(KmsError::InvalidConfig(format!(
-                "Unsupported signing algorithm '{other}'."
-            )))
-        }
-    };
+    let key_type = openbao_key_type(algorithm)?;
     let token = transit_token(config);
     if token.is_empty() {
         return Err(KmsError::InvalidConfig(
@@ -417,6 +420,21 @@ async fn create_managed_openbao_key(config: &Value) -> Result<(), KmsError> {
         }
         Err(error) => Err(error),
     }
+}
+
+fn openbao_key_type(algorithm: &str) -> Result<&'static str, KmsError> {
+    Ok(match algorithm {
+        "ES256" => "ecdsa-p256",
+        "ES384" => "ecdsa-p384",
+        "ES512" => "ecdsa-p521",
+        "RS256" => "rsa-2048",
+        "EdDSA" => "ed25519",
+        other => {
+            return Err(KmsError::InvalidConfig(format!(
+                "Unsupported signing algorithm '{other}'."
+            )))
+        }
+    })
 }
 
 async fn verify_openbao(config: &Value) -> CapabilityResult {
@@ -493,6 +511,10 @@ async fn sign_azure(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError>
         "azure-key-vault adapter requires 'endpoint' and 'key_reference' in service_config",
     )?;
     let key_path = key_path(key_reference, string(config, "key_version"));
+    let algorithm = string(config, "azure_signing_algorithm")
+        .or_else(|| string(config, "algorithm"))
+        .unwrap_or("ES256");
+    let (_, digest) = signing_digest(algorithm, payload)?;
     let response = send_json(
         bearer(
             Client::new().post(format!(
@@ -503,8 +525,8 @@ async fn sign_azure(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError>
         )
         .timeout(HTTP_TIMEOUT)
         .json(&json!({
-            "alg": string(config, "azure_signing_algorithm").unwrap_or("ES256"),
-            "value": URL_SAFE_NO_PAD.encode(Sha256::digest(payload)),
+            "alg": algorithm,
+            "value": URL_SAFE_NO_PAD.encode(digest),
         })),
     )
     .await?;
@@ -601,6 +623,8 @@ async fn sign_gcp(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
         "key_reference",
         "gcp-cloud-kms adapter requires 'key_reference' in service_config",
     )?;
+    let algorithm = string(config, "algorithm").unwrap_or("ES256");
+    let body = gcp_sign_body(algorithm, payload)?;
     let response = send_json(
         bearer(
             Client::new().post(format!(
@@ -610,7 +634,7 @@ async fn sign_gcp(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
             config,
         )
         .timeout(HTTP_TIMEOUT)
-        .json(&json!({"digest": {"sha256": STANDARD.encode(Sha256::digest(payload))}})),
+        .json(&body),
     )
     .await?;
     let signature = response
@@ -808,6 +832,42 @@ async fn verify_aws(config: &Value) -> CapabilityResult {
 
 fn string<'a>(config: &'a Value, name: &str) -> Option<&'a str> {
     config.get(name).and_then(Value::as_str)
+}
+
+fn signing_digest(algorithm: &str, payload: &[u8]) -> Result<(&'static str, Vec<u8>), KmsError> {
+    match algorithm {
+        "ES256"
+        | "RS256"
+        | "PS256"
+        | "ECDSA_SHA_256"
+        | "RSASSA_PKCS1_V1_5_SHA_256"
+        | "RSASSA_PSS_SHA_256" => Ok(("sha256", Sha256::digest(payload).to_vec())),
+        "ES384"
+        | "RS384"
+        | "PS384"
+        | "ECDSA_SHA_384"
+        | "RSASSA_PKCS1_V1_5_SHA_384"
+        | "RSASSA_PSS_SHA_384" => Ok(("sha384", Sha384::digest(payload).to_vec())),
+        "ES512"
+        | "RS512"
+        | "PS512"
+        | "ECDSA_SHA_512"
+        | "RSASSA_PKCS1_V1_5_SHA_512"
+        | "RSASSA_PSS_SHA_512" => Ok(("sha512", Sha512::digest(payload).to_vec())),
+        other => Err(KmsError::InvalidConfig(format!(
+            "Unsupported signing algorithm '{other}'."
+        ))),
+    }
+}
+
+fn gcp_sign_body(algorithm: &str, payload: &[u8]) -> Result<Value, KmsError> {
+    if algorithm == "EdDSA" {
+        return Ok(json!({"data": STANDARD.encode(payload)}));
+    }
+    let (digest_name, digest) = signing_digest(algorithm, payload)?;
+    Ok(json!({
+        "digest": {digest_name: STANDARD.encode(digest)}
+    }))
 }
 
 fn required<'a>(config: &'a Value, name: &str, message: &str) -> Result<&'a str, KmsError> {
@@ -1021,5 +1081,35 @@ mod tests {
     #[test]
     fn invalid_payload_base64_fails_closed() {
         assert!(decode_urlsafe("***", "payload_b64").is_err());
+    }
+
+    #[test]
+    fn provider_digest_and_managed_key_mappings_cover_all_csca_curves() {
+        for (algorithm, digest_name, digest_len, key_type) in [
+            ("ES256", "sha256", 32, "ecdsa-p256"),
+            ("ES384", "sha384", 48, "ecdsa-p384"),
+            ("ES512", "sha512", 64, "ecdsa-p521"),
+        ] {
+            let (actual_name, digest) = signing_digest(algorithm, b"CSCA parity vector").unwrap();
+            assert_eq!(actual_name, digest_name);
+            assert_eq!(digest.len(), digest_len);
+            assert_eq!(openbao_key_type(algorithm).unwrap(), key_type);
+        }
+        assert!(signing_digest("unsupported", b"payload").is_err());
+        assert!(openbao_key_type("unsupported").is_err());
+    }
+
+    #[test]
+    fn gcp_ed25519_signing_sends_data_instead_of_a_digest() {
+        assert_eq!(
+            gcp_sign_body("EdDSA", b"payload").unwrap(),
+            json!({"data": "cGF5bG9hZA=="})
+        );
+        assert_eq!(
+            gcp_sign_body("ES256", b"payload").unwrap(),
+            json!({
+                "digest": {"sha256": "I59Z7VXnN8dxR89VrQwbAwttfudIp0JpUvm4UtWpNeU="}
+            })
+        );
     }
 }

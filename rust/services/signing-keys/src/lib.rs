@@ -1,5 +1,6 @@
 pub mod compat;
 pub mod config;
+pub mod csca_lifecycle;
 pub mod documents;
 pub mod domain;
 pub mod flow_envelope;

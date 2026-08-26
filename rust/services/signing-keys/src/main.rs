@@ -1,6 +1,6 @@
 use marty_signing_keys::{
-    config::Config, documents::DocumentStore, flow_envelope::OpenBaoEnvelopeProvider, http,
-    profiles::ProfileStore, registry::RegistryStore,
+    config::Config, csca_lifecycle::CscaLifecycleStore, documents::DocumentStore,
+    flow_envelope::OpenBaoEnvelopeProvider, http, profiles::ProfileStore, registry::RegistryStore,
 };
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -24,6 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?
         .with_managed_openbao(managed_openbao_endpoint);
     let document_store = DocumentStore::from_connection(registry_store.connection());
+    let csca_lifecycle_store = CscaLifecycleStore::from_connection(registry_store.connection());
     let profile_store = ProfileStore::from_connection(registry_store.connection());
     let flow_envelopes = match (config.bao_addr, config.bao_token) {
         (Some(address), Some(token)) => Some(OpenBaoEnvelopeProvider::new(address, token)?),
@@ -43,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             config.internal_api_key,
             Some(registry_store),
             Some(document_store),
+            Some(csca_lifecycle_store),
             Some(profile_store),
             flow_envelopes,
             config.public_domain,

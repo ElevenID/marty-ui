@@ -42,10 +42,13 @@ pub struct ServiceCapability {
 }
 
 const PURPOSE_ALL_ALGORITHMS: &[&str] = &["ES256", "ES384", "EdDSA", "RS256"];
-const PROVIDER_ALL_ALGORITHMS: &[&str] = &["ES256", "ES384", "RS256", "EdDSA"];
+const CSCA_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "EdDSA", "RS256"];
+const P521_PROVIDER_ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdDSA"];
+const GCP_ALGORITHMS: &[&str] = &["ES256", "ES384", "RS256", "EdDSA"];
+const CUSTOM_TRANSIT_ALGORITHMS: &[&str] = &["ES256", "ES384", "RS256", "EdDSA"];
 const EC_AND_EDDSA: &[&str] = &["ES256", "ES384", "EdDSA"];
 const ES256_AND_EDDSA: &[&str] = &["ES256", "EdDSA"];
-const CLOUD_RSA_EC: &[&str] = &["ES256", "ES384", "RS256"];
+const CLOUD_RSA_EC: &[&str] = &["ES256", "ES384", "ES512", "RS256"];
 
 const SERVICE_TYPES: &[ServiceType] = &[
     ServiceType {
@@ -180,7 +183,7 @@ pub fn key_purposes() -> Vec<KeyPurpose> {
         },
         KeyPurpose {
             id: "csca",
-            allowed_algorithms: PURPOSE_ALL_ALGORITHMS,
+            allowed_algorithms: CSCA_ALGORITHMS,
             credential_formats: &["mso_mdoc", "zk_mdoc"],
         },
         KeyPurpose {
@@ -222,12 +225,12 @@ pub fn service_capabilities() -> Vec<ServiceCapability> {
         ServiceCapability {
             service_type_id: "openbao-transit",
             label: "OpenBao Transit",
-            capabilities: capabilities(PROVIDER_ALL_ALGORITHMS, "der", false, false, true, true),
+            capabilities: capabilities(P521_PROVIDER_ALGORITHMS, "der", false, false, true, true),
         },
         ServiceCapability {
             service_type_id: "hashicorp-vault-transit",
             label: "HashiCorp Vault Transit",
-            capabilities: capabilities(PROVIDER_ALL_ALGORITHMS, "der", false, false, true, true),
+            capabilities: capabilities(P521_PROVIDER_ALGORITHMS, "der", false, false, true, true),
         },
         ServiceCapability {
             service_type_id: "aws-kms",
@@ -237,19 +240,19 @@ pub fn service_capabilities() -> Vec<ServiceCapability> {
         ServiceCapability {
             service_type_id: "azure-key-vault",
             label: "Azure Key Vault",
-            capabilities: capabilities(PROVIDER_ALL_ALGORITHMS, "der", true, true, true, true),
+            capabilities: capabilities(CLOUD_RSA_EC, "der", true, true, true, true),
         },
         ServiceCapability {
             service_type_id: "gcp-cloud-kms",
             label: "Google Cloud KMS",
-            capabilities: capabilities(PROVIDER_ALL_ALGORITHMS, "der", true, true, false, true),
+            capabilities: capabilities(GCP_ALGORITHMS, "der", true, true, false, true),
         },
         ServiceCapability {
             service_type_id: "custom-transit-compatible",
             label: "Custom Transit-Compatible Service",
             capabilities: ProviderCapabilities {
-                supported_algorithms: PROVIDER_ALL_ALGORITHMS,
-                signature_encoding: "raw_ieee_p1363",
+                supported_algorithms: CUSTOM_TRANSIT_ALGORITHMS,
+                signature_encoding: "der",
                 public_key_export: false,
                 hardware_attestation: false,
                 key_import: false,

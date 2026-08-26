@@ -13,7 +13,7 @@ const PROFILE_STATUSES: &[&str] = &["draft", "active", "revoked"];
 const ISSUER_MODES: &[&str] = &["org_managed", "elevenid_managed", "elevenid_alias_for_org"];
 const ATTESTATION_MODES: &[&str] = &["disabled", "optional", "required"];
 const STATUS_POLICIES: &[&str] = &["disabled", "if_present", "required"];
-const ALGORITHMS: &[&str] = &["ES256", "ES384", "RS256", "EdDSA"];
+const ALGORITHMS: &[&str] = &["ES256", "ES384", "ES512", "RS256", "EdDSA"];
 const KEY_PURPOSES: &[&str] = &[
     "vc_jwt_issuer",
     "mdoc_dsc",

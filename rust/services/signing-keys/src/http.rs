@@ -2,6 +2,12 @@ use crate::compat::{
     CompatibilityError, IssuerContextRequest, IssuerDidSignRequest, ProfileIdentityRequest,
     ProfileWriteRequest, ResolveIssuerDidRequest, ServiceSignRequest, SigningCompatibilityService,
 };
+use crate::csca_lifecycle::{
+    self, CscaCertificateDataResponse, CscaCertificateView, CscaLifecycleDocument,
+    CscaLifecycleError, CscaLifecycleStore, CscaOutboxEvent, ExpiringCscaCertificatesRequest,
+    ImportCscaCertificateRequest, ListCscaCertificatesQuery, ListCscaOutboxQuery,
+    RenewCscaCertificateRequest, RevokeCscaCertificateRequest,
+};
 use crate::documents::{
     self, CertificateAlertsRequest, CertificateAlertsResponse, DeleteJwkResponse, DocumentStore,
     InspectCertificateRequest, InspectCertificateResponse, LoadDidRequest, LoadDidResponse,
@@ -56,6 +62,7 @@ struct AppState {
     internal_api_key: Arc<str>,
     registry_store: Option<RegistryStore>,
     document_store: Option<DocumentStore>,
+    csca_lifecycle_store: Option<CscaLifecycleStore>,
     profile_store: Option<ProfileStore>,
     flow_envelopes: Option<OpenBaoEnvelopeProvider>,
     compatibility: Option<SigningCompatibilityService>,
@@ -67,13 +74,14 @@ pub fn router() -> Router {
 }
 
 pub fn router_with_internal_api_key(internal_api_key: String) -> Router {
-    router_with_dependencies(internal_api_key, None, None, None, None, None)
+    router_with_dependencies(internal_api_key, None, None, None, None, None, None)
 }
 
 pub fn router_with_dependencies(
     internal_api_key: String,
     registry_store: Option<RegistryStore>,
     document_store: Option<DocumentStore>,
+    csca_lifecycle_store: Option<CscaLifecycleStore>,
     profile_store: Option<ProfileStore>,
     flow_envelopes: Option<OpenBaoEnvelopeProvider>,
     public_domain: Option<String>,
@@ -188,6 +196,38 @@ pub fn router_with_dependencies(
             "/internal/documents/{organization_id}/certificates/{service_id}",
             axum::routing::put(store_certificate),
         )
+        .route(
+            "/internal/documents/{organization_id}/csca-certificates",
+            get(list_csca_certificates),
+        )
+        .route(
+            "/internal/documents/{organization_id}/csca-certificates/expiring",
+            post(expiring_csca_certificates),
+        )
+        .route(
+            "/internal/documents/{organization_id}/csca-certificates/{certificate_id}",
+            get(get_csca_certificate).put(import_csca_certificate),
+        )
+        .route(
+            "/internal/documents/{organization_id}/csca-certificates/{certificate_id}/data",
+            get(get_csca_certificate_data),
+        )
+        .route(
+            "/internal/documents/{organization_id}/csca-certificates/{certificate_id}/revoke",
+            post(revoke_csca_certificate),
+        )
+        .route(
+            "/internal/documents/{organization_id}/csca-certificates/{certificate_id}/renew",
+            post(renew_csca_certificate),
+        )
+        .route(
+            "/internal/documents/{organization_id}/csca-outbox",
+            get(list_csca_outbox),
+        )
+        .route(
+            "/internal/documents/{organization_id}/csca-outbox/{event_id}/acknowledge",
+            post(acknowledge_csca_outbox),
+        )
         .route("/internal/documents/{organization_id}/jwks", get(load_jwks))
         .route(
             "/internal/documents/{organization_id}/jwks/{service_id}",
@@ -234,6 +274,7 @@ pub fn router_with_dependencies(
             internal_api_key: Arc::from(internal_api_key),
             registry_store,
             document_store,
+            csca_lifecycle_store,
             profile_store,
             flow_envelopes,
             compatibility,
@@ -1175,6 +1216,153 @@ async fn store_certificate(
         .map_err(document_error)
 }
 
+async fn list_csca_certificates(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    Query(query): Query<ListCscaCertificatesQuery>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<CscaCertificateView>>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    let now = chrono::Utc::now();
+    let document = load_csca_lifecycle(&state, &organization_id, now).await?;
+    document
+        .list(&query, now)
+        .map(Json)
+        .map_err(csca_lifecycle_error)
+}
+
+async fn import_csca_certificate(
+    State(state): State<AppState>,
+    Path((organization_id, certificate_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<ImportCscaCertificateRequest>,
+) -> Result<Json<CscaCertificateView>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    let now = chrono::Utc::now();
+    let mut document = load_csca_lifecycle(&state, &organization_id, now).await?;
+    let view = document
+        .import(&certificate_id, request, now)
+        .map_err(csca_lifecycle_error)?;
+    save_csca_lifecycle(&state, &document).await?;
+    Ok(Json(view))
+}
+
+async fn get_csca_certificate(
+    State(state): State<AppState>,
+    Path((organization_id, certificate_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<CscaCertificateView>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    let now = chrono::Utc::now();
+    let document = load_csca_lifecycle(&state, &organization_id, now).await?;
+    document
+        .get(&certificate_id, now)
+        .map(Json)
+        .map_err(csca_lifecycle_error)
+}
+
+async fn get_csca_certificate_data(
+    State(state): State<AppState>,
+    Path((organization_id, certificate_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<CscaCertificateDataResponse>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    let now = chrono::Utc::now();
+    let document = load_csca_lifecycle(&state, &organization_id, now).await?;
+    let certificate_data = document
+        .certificate_data(&certificate_id, now)
+        .map_err(csca_lifecycle_error)?
+        .to_string();
+    Ok(Json(CscaCertificateDataResponse {
+        certificate_id,
+        certificate_data,
+        status: csca_lifecycle::CscaCertificateStatus::Valid,
+    }))
+}
+
+async fn revoke_csca_certificate(
+    State(state): State<AppState>,
+    Path((organization_id, certificate_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<RevokeCscaCertificateRequest>,
+) -> Result<Json<CscaCertificateView>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    let now = chrono::Utc::now();
+    let mut document = load_csca_lifecycle(&state, &organization_id, now).await?;
+    let prior_revision = document.revision;
+    let view = document
+        .revoke(&certificate_id, &request.reason, now)
+        .map_err(csca_lifecycle_error)?;
+    if document.revision != prior_revision {
+        save_csca_lifecycle(&state, &document).await?;
+    }
+    Ok(Json(view))
+}
+
+async fn renew_csca_certificate(
+    State(state): State<AppState>,
+    Path((organization_id, certificate_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<RenewCscaCertificateRequest>,
+) -> Result<Json<CscaCertificateView>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    let now = chrono::Utc::now();
+    let mut document = load_csca_lifecycle(&state, &organization_id, now).await?;
+    let replacement_id = request.replacement_certificate_id.clone();
+    let view = document
+        .renew(&certificate_id, &replacement_id, request.into_import(), now)
+        .map_err(csca_lifecycle_error)?;
+    save_csca_lifecycle(&state, &document).await?;
+    Ok(Json(view))
+}
+
+async fn expiring_csca_certificates(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<ExpiringCscaCertificatesRequest>,
+) -> Result<Json<Vec<CscaCertificateView>>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    let now = chrono::Utc::now();
+    let document = load_csca_lifecycle(&state, &organization_id, now).await?;
+    document
+        .expiring(request.days_threshold, now)
+        .map(Json)
+        .map_err(csca_lifecycle_error)
+}
+
+async fn list_csca_outbox(
+    State(state): State<AppState>,
+    Path(organization_id): Path<String>,
+    Query(query): Query<ListCscaOutboxQuery>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<CscaOutboxEvent>>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    let document = load_csca_lifecycle(&state, &organization_id, chrono::Utc::now()).await?;
+    document
+        .pending_outbox(&query)
+        .map(Json)
+        .map_err(csca_lifecycle_error)
+}
+
+async fn acknowledge_csca_outbox(
+    State(state): State<AppState>,
+    Path((organization_id, event_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<CscaOutboxEvent>, DocumentHttpError> {
+    authorize_documents(&state, &headers)?;
+    let now = chrono::Utc::now();
+    let mut document = load_csca_lifecycle(&state, &organization_id, now).await?;
+    let prior_revision = document.revision;
+    let event = document
+        .acknowledge_outbox(&event_id, now)
+        .map_err(csca_lifecycle_error)?;
+    if document.revision != prior_revision {
+        save_csca_lifecycle(&state, &document).await?;
+    }
+    Ok(Json(event))
+}
+
 async fn load_jwks(
     State(state): State<AppState>,
     Path(organization_id): Path<String>,
@@ -1281,6 +1469,36 @@ fn document_store(state: &AppState) -> Result<&DocumentStore, DocumentHttpError>
     })
 }
 
+fn csca_lifecycle_store(state: &AppState) -> Result<&CscaLifecycleStore, DocumentHttpError> {
+    state.csca_lifecycle_store.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"detail": "CSCA lifecycle storage is unavailable"})),
+        )
+    })
+}
+
+async fn load_csca_lifecycle(
+    state: &AppState,
+    organization_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<CscaLifecycleDocument, DocumentHttpError> {
+    csca_lifecycle_store(state)?
+        .load(organization_id, now)
+        .await
+        .map_err(csca_lifecycle_error)
+}
+
+async fn save_csca_lifecycle(
+    state: &AppState,
+    document: &CscaLifecycleDocument,
+) -> Result<(), DocumentHttpError> {
+    csca_lifecycle_store(state)?
+        .save(document)
+        .await
+        .map_err(csca_lifecycle_error)
+}
+
 fn authorize_documents(state: &AppState, headers: &HeaderMap) -> Result<(), DocumentHttpError> {
     authorize_internal(state, headers).map_err(|error| {
         (
@@ -1297,6 +1515,26 @@ fn document_error(error: documents::DocumentError) -> DocumentHttpError {
         documents::DocumentError::NotFound(_) => StatusCode::NOT_FOUND,
         documents::DocumentError::Storage(_) => StatusCode::SERVICE_UNAVAILABLE,
         documents::DocumentError::Corrupt(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (
+        status,
+        Json(serde_json::json!({"detail": error.to_string()})),
+    )
+}
+
+fn csca_lifecycle_error(error: CscaLifecycleError) -> DocumentHttpError {
+    let status = match &error {
+        CscaLifecycleError::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        CscaLifecycleError::Conflict(_) | CscaLifecycleError::ConcurrentModification => {
+            StatusCode::CONFLICT
+        }
+        CscaLifecycleError::NotFound(_) | CscaLifecycleError::OutboxEventNotFound(_) => {
+            StatusCode::NOT_FOUND
+        }
+        CscaLifecycleError::Revoked(_) | CscaLifecycleError::Expired(_) => StatusCode::GONE,
+        CscaLifecycleError::NotYetValid(_) => StatusCode::TOO_EARLY,
+        CscaLifecycleError::Storage(_) => StatusCode::SERVICE_UNAVAILABLE,
+        CscaLifecycleError::Corrupt(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (
         status,
