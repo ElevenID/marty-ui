@@ -46,6 +46,14 @@ complete component revision map, stack-release run, beta source ID, and deployed
 image digests. Local aggregate deployment refuses dirty coordinated worktrees;
 the live Rust gateway publishes the same exact component map for recorders and
 acceptance gates to compare.
+
+After the live markers match, the local beta runner creates a hashed
+`deployed-demo-manifest.json` evidence artifact. Its
+`DEPLOYED_PENDING_EVIDENCE` state binds exact revisions and image digests while
+truthfully leaving recording timestamps and evidence hashes empty. Recorders use
+that artifact; only a later evidence-finalization step may claim completed
+recordings or publication readiness. This avoids embedding an image's own final
+digest inside that same immutable image.
 Retain the last known-good beta images, release manifest, SBOMs, signature
 bundles, checksums, lifecycle report, and wallet attestation until a newer
 aggregate release completes the same gates.

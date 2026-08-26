@@ -129,12 +129,28 @@ def repository_record(repo: Path, snapshot_dir: Path) -> dict[str, object]:
     status = _git(repo, "status", "--porcelain=v1", "-z")
     if status:
         raise RuntimeError(f"Coordinated release repository must be clean: {repo.name}")
+    head_sha = _git(repo, "rev-parse", "HEAD").decode().strip()
+    try:
+        protected_main_sha = (
+            _git(repo, "rev-parse", "--verify", "refs/remotes/origin/main")
+            .decode()
+            .strip()
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"Coordinated release repository is missing fetched origin/main: {repo.name}"
+        ) from exc
+    if head_sha != protected_main_sha:
+        raise RuntimeError(
+            f"Coordinated release repository is not at protected origin/main: {repo.name}"
+        )
     files = release_files(repo)
     source_sha256 = worktree_digest(repo, files)
     snapshot_path = snapshot_dir / f"{repo.name}.tar.gz"
     snapshot_sha256 = write_snapshot(repo, files, snapshot_path)
     return {
-        "head_sha": _git(repo, "rev-parse", "HEAD").decode().strip(),
+        "head_sha": head_sha,
+        "protected_main_sha": protected_main_sha,
         "dirty": bool(status),
         "file_count": len(files),
         "include_prefixes": list(REPOSITORY_INCLUDE_PREFIXES.get(repo.name, ())),
@@ -231,6 +247,17 @@ def verify_manifest(workspace: Path, manifest_path: Path) -> dict[str, object]:
             raise RuntimeError(f"Coordinated release repository is no longer clean: {name}")
 
         expected_revision = _git(repo, "rev-parse", "HEAD").decode().strip()
+        protected_main_revision = (
+            _git(repo, "rev-parse", "--verify", "refs/remotes/origin/main")
+            .decode()
+            .strip()
+        )
+        if expected_revision != protected_main_revision:
+            raise RuntimeError(
+                f"Coordinated release repository moved away from protected origin/main: {name}"
+            )
+        if record.get("protected_main_sha") != protected_main_revision:
+            raise RuntimeError(f"Protected main revision changed after snapshot: {name}")
         revision = revisions_by_name[name]
         if revision.get("repository") != REPOSITORY_URLS[name]:
             raise RuntimeError(f"Component repository mismatch: {name}")

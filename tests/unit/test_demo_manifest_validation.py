@@ -76,6 +76,27 @@ class DemoManifestValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ManifestValidationError, "cannot claim a release marker"):
             validate_manifest(manifest)
 
+    def test_deployed_binding_can_await_recording_without_invented_evidence(self):
+        manifest = json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))
+        manifest["binding_state"] = "DEPLOYED_PENDING_EVIDENCE"
+        manifest["deployment_release_marker"] = "mip-0.5.0-local-test"
+        manifest["demo_application_revision"] = "a" * 40
+        manifest["component_revisions"] = [
+            {
+                "component": "marty-ui",
+                "repository": "https://github.com/ElevenID/marty-ui",
+                "revision": "a" * 40,
+            }
+        ]
+        manifest["image_digests"] = [
+            {"component": "ui-prod", "digest": f"sha256:{'b' * 64}"}
+        ]
+        manifest["release_evidence"]["source_marker"] = "c" * 40
+        validate_manifest(manifest)
+        manifest["release_evidence"]["recorded_at"] = "2026-08-26T12:00:00Z"
+        with self.assertRaisesRegex(ManifestValidationError, "cannot claim recording times"):
+            validate_manifest(manifest)
+
     def test_v3_portfolio_requires_exact_happy_denial_and_assertion_paths(self):
         manifest = json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))
         validate_manifest(copy.deepcopy(manifest))

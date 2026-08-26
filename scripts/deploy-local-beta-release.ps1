@@ -862,6 +862,16 @@ foreach ($marker in @($servicesMarker, $betaServicesMarker)) {
     }
 }
 
+Write-Step "Create exact deployed demo binding for qualification"
+$deployedDemoManifestPath = Join-Path $script:ArtifactDir "deployed-demo-manifest.json"
+Invoke-Checked -FilePath python -Arguments @(
+    (Join-Path $script:RepoRoot "scripts\bind_deployed_demo_manifest.py"),
+    "--template", (Join-Path $script:RepoRoot "ui\public\demos\manifests\${stackVersion}.json"),
+    "--source-manifest", $sourceManifestPath,
+    "--image-digests-json", $env:ELEVENID_IMAGE_DIGESTS_JSON,
+    "--output", $deployedDemoManifestPath
+)
+
 $postDeployContainers = Get-ServiceRecords $script:ApplicationServices -IncludeUi
 $deploymentManifest = [ordered]@{
     schema_version = 1
@@ -879,6 +889,8 @@ $deploymentManifest = [ordered]@{
     backup_manifest = "backup-manifest.json"
     source_manifest = "source-manifest.json"
     component_revisions = $componentRevisions
+    deployed_demo_manifest = "deployed-demo-manifest.json"
+    deployed_demo_manifest_sha256 = Get-FileSha256 $deployedDemoManifestPath
     services_marker = $servicesMarker
     ui_marker = $uiMarker
     images = $postDeployContainers

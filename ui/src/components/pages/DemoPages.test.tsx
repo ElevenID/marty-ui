@@ -5,6 +5,7 @@ import { renderWithRouter, screen, waitFor } from '@test/utils';
 import {
   DemoCatalogPage,
   DemoLatestScenarioRedirect,
+  DemoReleasePage,
   DemoScenarioPage,
 } from './DemoPages';
 
@@ -179,6 +180,30 @@ describe('DemoPages', () => {
     expect(screen.getByText('Validated demonstration')).toBeInTheDocument();
     expect(screen.queryByTitle('Membership Badge and Login video')).not.toBeInTheDocument();
     expect(screen.getByText('Receive the badge.')).toBeInTheDocument();
+  });
+
+  it('labels an exact deployment binding without inventing recording timestamps', async () => {
+    mockLoadIndex.mockResolvedValue(index);
+    mockLoadManifest.mockResolvedValue({
+      ...manifest,
+      binding_state: 'DEPLOYED_PENDING_EVIDENCE',
+      release_evidence: {
+        ...manifest.release_evidence,
+        recorded_at: null,
+        displayed_offers_invalidated_at: null,
+        artifacts: [],
+      },
+    });
+
+    renderWithRouter(
+      <Routes>
+        <Route path="/demos/:stackVersion" element={<DemoReleasePage />} />
+      </Routes>,
+      { initialEntries: ['/demos/2026.07.0'] },
+    );
+
+    expect(await screen.findByText(/beta deployment is exactly bound/i)).toBeInTheDocument();
+    expect(screen.queryByText(/1\/1\/1970/)).not.toBeInTheDocument();
   });
 
   it('does not contact YouTube until the viewer activates playback', async () => {

@@ -51,6 +51,9 @@ def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() 
     assert "ELEVENID_COMPONENT_REVISIONS_JSON" in script
     assert "component_revisions = $componentRevisions" in script
     assert "Services runtime marker component revision set does not match" in script
+    assert "bind_deployed_demo_manifest.py" in script
+    assert 'deployed_demo_manifest = "deployed-demo-manifest.json"' in script
+    assert "deployed_demo_manifest_sha256 = Get-FileSha256" in script
     assert '"NGINX_CONFIG=nginx.spa.conf"' in script
     assert "marty-ui-release.json" in script
     assert "/.well-known/marty-release" in script

@@ -368,9 +368,17 @@ function ReleaseExperience({ index, manifest }) {
         </Box>
         <Box sx={{ mt: 3 }}>
           <Typography variant="overline" color="text.secondary">Protected evidence hashes</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-            Recorded {new Date(manifest.release_evidence.recorded_at).toLocaleString()} / displayed offers invalidated {new Date(manifest.release_evidence.displayed_offers_invalidated_at).toLocaleString()}
-          </Typography>
+          {manifest.release_evidence.recorded_at && manifest.release_evidence.displayed_offers_invalidated_at ? (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              Recorded {new Date(manifest.release_evidence.recorded_at).toLocaleString()} / displayed offers invalidated {new Date(manifest.release_evidence.displayed_offers_invalidated_at).toLocaleString()}
+            </Typography>
+          ) : (
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+              {manifest.binding_state === 'DEPLOYED_PENDING_EVIDENCE'
+                ? 'The beta deployment is exactly bound; fresh recording evidence is pending.'
+                : 'Aggregate deployment and fresh recording evidence are pending.'}
+            </Typography>
+          )}
           <Stack spacing={1}>
             {manifest.release_evidence.artifacts.map((artifact) => (
               <Box key={artifact.sha256}>

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 
 from scripts.create_demo_manifest_draft import (
@@ -8,6 +7,7 @@ from scripts.create_demo_manifest_draft import (
     POSTER_PATH,
     build_manifest,
 )
+from scripts.demo_asset_hashes import public_asset_sha256
 from scripts.validate_demo_manifests import validate_manifest
 
 
@@ -27,7 +27,7 @@ def test_draft_is_complete_unbound_and_generated_from_the_reviewed_contract() ->
     assert [item["slug"] for item in manifest["scenarios"][10:]] == contract[
         "preserved_legacy_scenarios"
     ]
-    poster_hash = hashlib.sha256(POSTER_PATH.read_bytes()).hexdigest()
+    poster_hash = public_asset_sha256(POSTER_PATH)
     assert all(
         item["poster"]["sha256"] == poster_hash for item in manifest["scenarios"]
     )

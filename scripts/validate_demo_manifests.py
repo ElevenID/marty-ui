@@ -4,13 +4,17 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+if __package__:
+    from .demo_asset_hashes import public_asset_sha256
+else:
+    from demo_asset_hashes import public_asset_sha256
 
 
 STACK_VERSION = re.compile(r"^\d{4}\.\d{2}\.\d+$")
@@ -138,7 +142,10 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     require(manifest["publication_state"] in {"DRAFT", "PUBLIC", "SUPERSEDED"}, "invalid publication_state")
     require(manifest["coverage_state"] in {"PARTIAL", "COMPLETE", "SUPERSEDED"}, "invalid coverage_state")
     binding_state = manifest.get("binding_state", "BOUND")
-    require(binding_state in {"BOUND", "PENDING_DEPLOYMENT"}, "invalid binding_state")
+    require(
+        binding_state in {"BOUND", "PENDING_DEPLOYMENT", "DEPLOYED_PENDING_EVIDENCE"},
+        "invalid binding_state",
+    )
     if not manifest["stack_version"].startswith("2026.07."):
         require("binding_state" in manifest, "post-July manifests require an explicit binding_state")
 
@@ -178,12 +185,16 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     require(binding_state == "PENDING_DEPLOYMENT" or components, "component_revisions cannot be empty")
     for component in components:
         require(bool(GIT_REVISION.fullmatch(component.get("revision", ""))), f"{component.get('component')}: revision must be a full SHA")
+    component_names = [component.get("component") for component in components]
+    require(len(component_names) == len(set(component_names)), "component revisions must be unique")
 
     images = manifest["image_digests"]
     require(isinstance(images, list), "image_digests must be a list")
     require(binding_state == "PENDING_DEPLOYMENT" or images, "image_digests cannot be empty")
     for image in images:
         require(bool(DIGEST.fullmatch(image.get("digest", ""))), f"{image.get('component')}: immutable image digest required")
+    image_names = [image.get("component") for image in images]
+    require(len(image_names) == len(set(image_names)), "image digests must be unique")
 
     if binding_state == "PENDING_DEPLOYMENT":
         require(manifest["publication_state"] == "DRAFT" and not manifest["release_ready"], "pending deployment binding must remain a non-ready draft")
@@ -193,7 +204,17 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         require(evidence.get("source_marker") is None, "pending deployment binding cannot claim a source marker")
         require(evidence.get("recorded_at") is None and evidence.get("displayed_offers_invalidated_at") is None, "pending deployment binding cannot claim recording times")
         require(evidence.get("artifacts") == [], "pending deployment binding cannot claim release artifacts")
+    elif binding_state == "DEPLOYED_PENDING_EVIDENCE":
+        require(manifest["publication_state"] == "DRAFT" and not manifest["release_ready"], "deployed pending-evidence binding must remain a non-ready draft")
+        require(bool(manifest.get("deployment_release_marker")), "deployed binding requires a release marker")
+        require(bool(GIT_REVISION.fullmatch(manifest.get("demo_application_revision", ""))), "deployed binding requires the exact demo application revision")
+        evidence = manifest["release_evidence"]
+        require(bool(GIT_REVISION.fullmatch(evidence.get("source_marker", ""))), "deployed binding requires an exact source marker")
+        require(evidence.get("recorded_at") is None and evidence.get("displayed_offers_invalidated_at") is None, "deployed pending-evidence binding cannot claim recording times")
+        require(evidence.get("artifacts") == [], "deployed pending-evidence binding cannot claim release artifacts")
     else:
+        require(bool(manifest.get("deployment_release_marker")), "bound release requires a deployment marker")
+        require(bool(GIT_REVISION.fullmatch(manifest["release_evidence"].get("source_marker", ""))), "bound release requires an exact source marker")
         require(bool(manifest["release_evidence"].get("displayed_offers_invalidated_at")), "displayed offers must be invalidated before evidence publication")
 
     scenarios = manifest["scenarios"]
@@ -332,7 +353,7 @@ def load_manifests(root: Path, version_file: Path | None = None) -> tuple[dict[s
         for scenario in manifest["scenarios"]:
             poster_path = public_root / scenario["poster"]["src"].lstrip("/")
             require(poster_path.exists(), f"{scenario['slug']}: poster is missing: {poster_path}")
-            poster_hash = hashlib.sha256(poster_path.read_bytes()).hexdigest()
+            poster_hash = public_asset_sha256(poster_path)
             require(poster_hash == scenario["poster"]["sha256"], f"{scenario['slug']}: poster SHA-256 mismatch")
         manifests[manifest["stack_version"]] = manifest
     validate_index(index, manifests)

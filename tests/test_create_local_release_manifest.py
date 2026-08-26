@@ -5,6 +5,8 @@ import subprocess
 import tarfile
 from pathlib import Path
 
+import pytest
+
 from scripts.create_local_release_manifest import (
     REPOSITORIES,
     create_manifest,
@@ -21,6 +23,7 @@ def git(repo: Path, *args: str) -> None:
 def commit_changes(repo: Path, message: str = "release input") -> None:
     git(repo, "add", ".")
     git(repo, "commit", "-qm", message)
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
 
 
 def make_repo(path: Path, *, content: str = "initial") -> None:
@@ -32,6 +35,7 @@ def make_repo(path: Path, *, content: str = "initial") -> None:
     (path / "tracked.txt").write_text(content, encoding="utf-8")
     git(path, "add", ".")
     git(path, "commit", "-qm", "initial")
+    git(path, "update-ref", "refs/remotes/origin/main", "HEAD")
 
 
 def test_release_files_include_dirty_and_untracked_but_not_ignored(tmp_path: Path) -> None:
@@ -185,3 +189,22 @@ def test_manifest_creation_rejects_dirty_coordinated_repository(tmp_path: Path) 
         assert str(exc) == "Coordinated release repository must be clean: marty-verifier"
     else:
         raise AssertionError("Expected dirty coordinated source to fail manifest creation")
+
+
+def test_manifest_creation_rejects_clean_unlanded_commit(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in REPOSITORIES:
+        make_repo(workspace / name, content=name)
+    verifier = workspace / "marty-verifier"
+    (verifier / "tracked.txt").write_text("clean but not merged", encoding="utf-8")
+    git(verifier, "add", "tracked.txt")
+    git(verifier, "commit", "-qm", "unlanded")
+
+    with pytest.raises(RuntimeError, match="not at protected origin/main: marty-verifier"):
+        create_manifest(
+            workspace,
+            "mip-0.5.0-local-test",
+            tmp_path / "manifest.json",
+            tmp_path / "snapshots",
+        )
