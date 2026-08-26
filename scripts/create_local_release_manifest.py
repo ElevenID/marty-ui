@@ -23,8 +23,14 @@ REPOSITORIES = (
     "marty-cli",
     "marty-blog",
     "marty-microservices-framework",
+    "marty-verifier",
+    "marty-demo-recorder",
     "longfellow-zk",
 )
+
+REPOSITORY_URLS = {
+    name: f"https://github.com/ElevenID/{name}" for name in REPOSITORIES
+}
 
 REPOSITORY_INCLUDE_PREFIXES = {
     # The public UI image consumes only these named-context paths.
@@ -120,11 +126,13 @@ def write_snapshot(repo: Path, files: Iterable[Path], destination: Path) -> str:
 
 
 def repository_record(repo: Path, snapshot_dir: Path) -> dict[str, object]:
+    status = _git(repo, "status", "--porcelain=v1", "-z")
+    if status:
+        raise RuntimeError(f"Coordinated release repository must be clean: {repo.name}")
     files = release_files(repo)
     source_sha256 = worktree_digest(repo, files)
     snapshot_path = snapshot_dir / f"{repo.name}.tar.gz"
     snapshot_sha256 = write_snapshot(repo, files, snapshot_path)
-    status = _git(repo, "status", "--porcelain=v1", "-z")
     return {
         "head_sha": _git(repo, "rev-parse", "HEAD").decode().strip(),
         "dirty": bool(status),
@@ -151,6 +159,14 @@ def create_manifest(
         repositories[name] = repository_record(repo, snapshot_dir)
 
     ui_source_sha = str(repositories["marty-ui"]["source_sha256"])
+    component_revisions = [
+        {
+            "component": name,
+            "repository": REPOSITORY_URLS[name],
+            "revision": repositories[name]["head_sha"],
+        }
+        for name in REPOSITORIES
+    ]
     manifest: dict[str, object] = {
         "schema_version": 1,
         "release_version": release_version,
@@ -164,6 +180,7 @@ def create_manifest(
         "release_ready": False,
         "snapshot_directory": os.path.relpath(snapshot_dir, output.parent),
         "repositories": repositories,
+        "component_revisions": component_revisions,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -175,6 +192,20 @@ def verify_manifest(workspace: Path, manifest_path: Path) -> dict[str, object]:
     repositories = manifest.get("repositories")
     if not isinstance(repositories, dict) or set(repositories) != set(REPOSITORIES):
         raise RuntimeError("Source manifest repository set does not match release inputs")
+
+    component_revisions = manifest.get("component_revisions")
+    if not isinstance(component_revisions, list):
+        raise RuntimeError("Source manifest is missing component revisions")
+    revisions_by_name: dict[str, dict[str, object]] = {}
+    for entry in component_revisions:
+        if not isinstance(entry, dict) or not isinstance(entry.get("component"), str):
+            raise RuntimeError("Source manifest contains an invalid component revision")
+        name = str(entry["component"])
+        if name in revisions_by_name:
+            raise RuntimeError(f"Source manifest repeats component revision: {name}")
+        revisions_by_name[name] = entry
+    if set(revisions_by_name) != set(REPOSITORIES):
+        raise RuntimeError("Source manifest component revision set does not match release inputs")
 
     snapshot_directory = manifest.get("snapshot_directory")
     if not isinstance(snapshot_directory, str) or not snapshot_directory:
@@ -196,6 +227,15 @@ def verify_manifest(workspace: Path, manifest_path: Path) -> dict[str, object]:
         expected_source = record.get("source_sha256")
         if actual_source != expected_source:
             raise RuntimeError(f"Worktree changed after snapshot: {name}")
+        if _git(repo, "status", "--porcelain=v1", "-z"):
+            raise RuntimeError(f"Coordinated release repository is no longer clean: {name}")
+
+        expected_revision = _git(repo, "rev-parse", "HEAD").decode().strip()
+        revision = revisions_by_name[name]
+        if revision.get("repository") != REPOSITORY_URLS[name]:
+            raise RuntimeError(f"Component repository mismatch: {name}")
+        if revision.get("revision") != expected_revision:
+            raise RuntimeError(f"Component revision mismatch: {name}")
 
         snapshot_name = record.get("snapshot")
         if not isinstance(snapshot_name, str) or Path(snapshot_name).name != snapshot_name:
