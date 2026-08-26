@@ -63,6 +63,7 @@
       "release_version": "mip-0.5.0-beta-test",
       "stack_version": "2026.07.0",
       "marty_ui_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "component_revisions": {"marty-ui": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
       "image_digests": {"gateway": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
     },
     "expected": {
@@ -72,6 +73,7 @@
       "stack_version": "2026.07.0",
       "mip_version": "0.5.0",
       "marty_ui_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "component_revisions": {"marty-ui": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
       "image_digests": {"gateway": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
     }
   },

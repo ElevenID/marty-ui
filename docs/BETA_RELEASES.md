@@ -7,7 +7,9 @@ Python MMF beta packages and do not recreate `release-beta.yml` workflows.
 ## Release sequence
 
 1. Merge every coordinated component through its protected default branch and
-   record each exact revision in the stack inputs.
+   record each exact revision in the stack inputs. The coordinated set includes
+   the Rust verifier and the demo recorder because their executable behavior is
+   part of release qualification even though they are not service images.
 2. Dispatch **Prepare stack tag** on exact protected `marty-ui/main`. It checks
    the configured merge-queue and code-scanning results, creates the annotated
    `v*` tag in an evidence bundle, and records its exact object and source SHA.
@@ -40,7 +42,18 @@ their own deployment after the governed pull request and required status checks
 pass; an alternate identity must not be used to manufacture independence.
 
 The accepted evidence set must bind every result to the same release version,
-source commit, stack-release run, beta source ID, and deployed image digests.
+complete component revision map, stack-release run, beta source ID, and deployed
+image digests. Local aggregate deployment refuses dirty coordinated worktrees;
+the live Rust gateway publishes the same exact component map for recorders and
+acceptance gates to compare.
+
+After the live markers match, the local beta runner creates a hashed
+`deployed-demo-manifest.json` evidence artifact. Its
+`DEPLOYED_PENDING_EVIDENCE` state binds exact revisions and image digests while
+truthfully leaving recording timestamps and evidence hashes empty. Recorders use
+that artifact; only a later evidence-finalization step may claim completed
+recordings or publication readiness. This avoids embedding an image's own final
+digest inside that same immutable image.
 Retain the last known-good beta images, release manifest, SBOMs, signature
 bundles, checksums, lifecycle report, and wallet attestation until a newer
 aggregate release completes the same gates.

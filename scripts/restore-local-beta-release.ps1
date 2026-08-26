@@ -189,7 +189,7 @@ Wait-ForServiceHealth @("redis")
 
 $gatewayRecord = @($preDeploy | Where-Object { $_.service -eq "gateway" } | Select-Object -First 1)
 if ($gatewayRecord.Count -eq 1) {
-    foreach ($name in @("MARTY_RELEASE_VERSION", "MARTY_UI_SHA", "ELEVENID_STACK_VERSION", "ELEVENID_IMAGE_DIGESTS_JSON")) {
+    foreach ($name in @("MARTY_RELEASE_VERSION", "MARTY_UI_SHA", "ELEVENID_STACK_VERSION", "ELEVENID_COMPONENT_REVISIONS_JSON", "ELEVENID_IMAGE_DIGESTS_JSON")) {
         $property = $gatewayRecord[0].runtime_marker_environment.PSObject.Properties[$name]
         if ($null -ne $property -and $null -ne $property.Value) {
             Set-Item -Path "Env:$name" -Value ([string]$property.Value)

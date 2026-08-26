@@ -208,6 +208,12 @@ test('latest available demo manifest is bound to the exact live deployment', asy
   expect(deployed.mip_version).toBe(manifest.mip_version);
   expect(deployed.deployment_release_marker).toBe(manifest.deployment_release_marker);
   expect(deployed.marty_ui_sha).toBe(manifest.release_evidence.source_marker);
+  expect(Object.keys(deployed.component_revisions).sort()).toEqual(
+    manifest.component_revisions.map(({ component }) => component).sort(),
+  );
+  for (const { component, revision } of manifest.component_revisions) {
+    expect(deployed.component_revisions[component]).toBe(revision);
+  }
   expect(Object.keys(deployed.image_digests).sort()).toEqual(manifest.image_digests.map(({ component }) => component).sort());
   for (const { component, digest } of manifest.image_digests) {
     expect(deployed.image_digests[component]).toBe(digest);

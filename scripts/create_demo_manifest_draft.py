@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
+
+if __package__:
+    from .demo_asset_hashes import public_asset_sha256
+else:
+    from demo_asset_hashes import public_asset_sha256
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,7 +134,7 @@ def draft_scenario(contract: dict[str, object]) -> dict[str, object]:
         },
         "poster": {
             "src": POSTER_URL,
-            "sha256": hashlib.sha256(POSTER_PATH.read_bytes()).hexdigest(),
+            "sha256": public_asset_sha256(POSTER_PATH),
             "alt": f"Draft release card for {title}; fresh recording pending",
         },
         "youtube_id": None,
@@ -193,7 +197,7 @@ def legacy_scenario(
         "protocols": ["openid4vci-1.0", "openid4vp-1.0", "dcql-1.0", "sd-jwt-vc"],
         "poster": {
             "src": POSTER_URL,
-            "sha256": hashlib.sha256(POSTER_PATH.read_bytes()).hexdigest(),
+            "sha256": public_asset_sha256(POSTER_PATH),
             "alt": f"Draft release card for {title}; historical capability preserved",
         },
         "youtube_id": None,

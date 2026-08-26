@@ -288,6 +288,7 @@ impl GatewayConfig {
                 stack_version: value(values, "ELEVENID_STACK_VERSION")
                     .unwrap_or_else(|| "development".into()),
                 marty_ui_sha: value(values, "MARTY_UI_SHA").unwrap_or_else(|| "unknown".into()),
+                component_revisions: component_revisions(values)?,
                 image_digests: image_digests(values),
             },
         })
@@ -431,6 +432,28 @@ fn image_digests(values: &BTreeMap<String, String>) -> BTreeMap<String, String> 
         .unwrap_or_default()
 }
 
+fn component_revisions(
+    values: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, GatewayConfigError> {
+    let Some(raw) = value(values, "ELEVENID_COMPONENT_REVISIONS_JSON") else {
+        return Ok(BTreeMap::new());
+    };
+    let revisions = serde_json::from_str::<BTreeMap<String, String>>(&raw)
+        .map_err(|_| error("ELEVENID_COMPONENT_REVISIONS_JSON must be a JSON string map"))?;
+    if revisions.iter().any(|(component, revision)| {
+        component.trim().is_empty()
+            || revision.len() != 40
+            || !revision
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }) {
+        return Err(error(
+            "ELEVENID_COMPONENT_REVISIONS_JSON must map component names to full lowercase Git revisions",
+        ));
+    }
+    Ok(revisions)
+}
+
 fn error(message: impl Into<String>) -> GatewayConfigError {
     GatewayConfigError(message.into())
 }
@@ -447,6 +470,25 @@ mod tests {
         assert_eq!(config.rate_limit_rpm, 120);
         assert_eq!(config.public_domain, "localhost:8000");
         assert!(config.redis_url.is_none());
+        assert!(config.release_identity.component_revisions.is_empty());
+    }
+
+    #[test]
+    fn release_component_revisions_are_exact_and_fail_closed() {
+        let mut values = BTreeMap::from([(
+            "ELEVENID_COMPONENT_REVISIONS_JSON".into(),
+            format!(r#"{{"marty-ui":"{}"}}"#, "a".repeat(40)),
+        )]);
+        let config = GatewayConfig::from_values(&values).expect("valid component revisions");
+        assert_eq!(
+            config.release_identity.component_revisions["marty-ui"],
+            "a".repeat(40)
+        );
+        values.insert(
+            "ELEVENID_COMPONENT_REVISIONS_JSON".into(),
+            r#"{"marty-ui":"dirty"}"#.into(),
+        );
+        assert!(GatewayConfig::from_values(&values).is_err());
     }
 
     #[test]

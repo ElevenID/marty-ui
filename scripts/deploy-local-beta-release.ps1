@@ -227,7 +227,7 @@ function Get-ServiceRecords([string[]]$Services, [switch]$IncludeUi) {
         $rollbackEnvironment = [ordered]@{}
         foreach ($entry in @($inspect.Config.Env)) {
             $parts = $entry -split "=", 2
-            if ($parts[0] -in @("MARTY_RELEASE_VERSION", "MARTY_UI_SHA", "ELEVENID_STACK_VERSION", "ELEVENID_IMAGE_DIGESTS_JSON")) {
+            if ($parts[0] -in @("MARTY_RELEASE_VERSION", "MARTY_UI_SHA", "ELEVENID_STACK_VERSION", "ELEVENID_COMPONENT_REVISIONS_JSON", "ELEVENID_IMAGE_DIGESTS_JSON")) {
                 $markerEnvironment[$parts[0]] = if ($parts.Count -gt 1) { $parts[1] } else { "" }
             }
             if ($parts.Count -gt 1 -and $parts[0] -in @("GRPC_INSECURE_ALLOWED", "ALLOW_PLAINTEXT_GRPC")) {
@@ -402,6 +402,22 @@ if ($sourceManifest.schema_version -ne 1 -or $sourceManifest.mip_version -ne "0.
 }
 if ($sourceManifest.source_kind -ne "local-worktree-snapshot" -or $sourceManifest.promotion_eligible -ne $false) {
     throw "Local source manifest must be a non-promotable worktree snapshot"
+}
+
+$repositoryNames = @($sourceManifest.repositories.PSObject.Properties.Name | Sort-Object)
+$componentEntries = @($sourceManifest.component_revisions)
+$componentNames = @($componentEntries | ForEach-Object { [string]$_.component } | Sort-Object)
+if ($repositoryNames.Count -eq 0 -or ($repositoryNames -join "`n") -ne ($componentNames -join "`n")) {
+    throw "Source manifest component revisions must cover the exact coordinated repository set"
+}
+$componentRevisions = [ordered]@{}
+foreach ($entry in $componentEntries) {
+    $component = [string]$entry.component
+    $revision = [string]$entry.revision
+    if ($componentRevisions.Contains($component) -or $revision -notmatch '^[0-9a-f]{40}$') {
+        throw "Source manifest contains an invalid or duplicate component revision: $component"
+    }
+    $componentRevisions[$component] = $revision
 }
 
 $releaseVersion = [string]$sourceManifest.release_version
@@ -699,6 +715,7 @@ if ($LASTEXITCODE -ne 0 -or $uiImageId -notmatch '^sha256:[0-9a-f]{64}$') {
 }
 $runtimeImageDigests["ui-prod"] = $uiImageId
 $env:ELEVENID_STACK_VERSION = $stackVersion
+$env:ELEVENID_COMPONENT_REVISIONS_JSON = $componentRevisions | ConvertTo-Json -Compress
 $env:ELEVENID_IMAGE_DIGESTS_JSON = $runtimeImageDigests | ConvertTo-Json -Compress
 
 Write-Step "Enter maintenance window and apply live migration"
@@ -829,12 +846,31 @@ foreach ($marker in @($servicesMarker, $betaServicesMarker)) {
     if ($marker.stack_version -ne $stackVersion -or $marker.mip_version -ne "0.5.0" -or $marker.deployment_release_marker -ne $releaseVersion) {
         throw "Services runtime marker does not match Stack and MIP provenance"
     }
+    $observedComponentNames = @($marker.component_revisions.PSObject.Properties.Name | Sort-Object)
+    if (($observedComponentNames -join "`n") -ne ($componentNames -join "`n")) {
+        throw "Services runtime marker component revision set does not match the source manifest"
+    }
+    foreach ($entry in $componentRevisions.GetEnumerator()) {
+        if ($marker.component_revisions.($entry.Key) -ne $entry.Value) {
+            throw "Services runtime marker component revision mismatch for $($entry.Key)"
+        }
+    }
     foreach ($entry in $runtimeImageDigests.GetEnumerator()) {
         if ($marker.image_digests.($entry.Key) -ne $entry.Value) {
             throw "Services runtime marker image mismatch for $($entry.Key)"
         }
     }
 }
+
+Write-Step "Create exact deployed demo binding for qualification"
+$deployedDemoManifestPath = Join-Path $script:ArtifactDir "deployed-demo-manifest.json"
+Invoke-Checked -FilePath python -Arguments @(
+    (Join-Path $script:RepoRoot "scripts\bind_deployed_demo_manifest.py"),
+    "--template", (Join-Path $script:RepoRoot "ui\public\demos\manifests\${stackVersion}.json"),
+    "--source-manifest", $sourceManifestPath,
+    "--image-digests-json", $env:ELEVENID_IMAGE_DIGESTS_JSON,
+    "--output", $deployedDemoManifestPath
+)
 
 $postDeployContainers = Get-ServiceRecords $script:ApplicationServices -IncludeUi
 $deploymentManifest = [ordered]@{
@@ -852,6 +888,9 @@ $deploymentManifest = [ordered]@{
     release_ready = $false
     backup_manifest = "backup-manifest.json"
     source_manifest = "source-manifest.json"
+    component_revisions = $componentRevisions
+    deployed_demo_manifest = "deployed-demo-manifest.json"
+    deployed_demo_manifest_sha256 = Get-FileSha256 $deployedDemoManifestPath
     services_marker = $servicesMarker
     ui_marker = $uiMarker
     images = $postDeployContainers

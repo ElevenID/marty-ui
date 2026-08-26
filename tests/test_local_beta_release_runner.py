@@ -48,6 +48,12 @@ def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() 
     assert 'MARTY_MIGRATION_PROFILE=beta' in script
     assert 'MARTY_RELEASE_VERSION=$releaseVersion' in script
     assert 'MARTY_UI_SHA=$sourceId' in script
+    assert "ELEVENID_COMPONENT_REVISIONS_JSON" in script
+    assert "component_revisions = $componentRevisions" in script
+    assert "Services runtime marker component revision set does not match" in script
+    assert "bind_deployed_demo_manifest.py" in script
+    assert 'deployed_demo_manifest = "deployed-demo-manifest.json"' in script
+    assert "deployed_demo_manifest_sha256 = Get-FileSha256" in script
     assert '"NGINX_CONFIG=nginx.spa.conf"' in script
     assert "marty-ui-release.json" in script
     assert "/.well-known/marty-release" in script
@@ -109,6 +115,14 @@ def test_release_ui_compose_uses_image_without_source_mounts() -> None:
     assert "elevenid-beta-ui" in compose
     assert "${MARTY_NETWORK_NAME:-elevenid-beta-network}" in compose
     assert "container_name:" not in compose
+
+
+def test_gateway_compose_exposes_complete_component_revision_marker() -> None:
+    compose = text("docker-compose.base.yml")
+    restore = text("scripts/restore-local-beta-release.ps1")
+
+    assert "ELEVENID_COMPONENT_REVISIONS_JSON: ${ELEVENID_COMPONENT_REVISIONS_JSON:-}" in compose
+    assert "ELEVENID_COMPONENT_REVISIONS_JSON" in restore
 
 
 def test_plan_only_exits_before_artifact_writes() -> None:

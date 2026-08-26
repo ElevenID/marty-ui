@@ -282,6 +282,8 @@ pub struct ReleaseIdentity {
     pub stack_version: String,
     pub marty_ui_sha: String,
     #[serde(default)]
+    pub component_revisions: BTreeMap<String, String>,
+    #[serde(default)]
     pub image_digests: BTreeMap<String, String>,
 }
 
@@ -291,6 +293,7 @@ impl Default for ReleaseIdentity {
             release_version: "development".into(),
             stack_version: "development".into(),
             marty_ui_sha: "unknown".into(),
+            component_revisions: BTreeMap::new(),
             image_digests: BTreeMap::new(),
         }
     }
@@ -305,6 +308,7 @@ pub fn release_document(identity: &ReleaseIdentity) -> Value {
         "stack_version": identity.stack_version,
         "mip_version": MIP_VERSION,
         "marty_ui_sha": identity.marty_ui_sha,
+        "component_revisions": identity.component_revisions,
         "image_digests": identity.image_digests,
     })
 }

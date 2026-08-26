@@ -5,6 +5,8 @@ import subprocess
 import tarfile
 from pathlib import Path
 
+import pytest
+
 from scripts.create_local_release_manifest import (
     REPOSITORIES,
     create_manifest,
@@ -18,6 +20,12 @@ def git(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
+def commit_changes(repo: Path, message: str = "release input") -> None:
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", message)
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+
 def make_repo(path: Path, *, content: str = "initial") -> None:
     path.mkdir()
     git(path, "init", "-q")
@@ -27,6 +35,7 @@ def make_repo(path: Path, *, content: str = "initial") -> None:
     (path / "tracked.txt").write_text(content, encoding="utf-8")
     git(path, "add", ".")
     git(path, "commit", "-qm", "initial")
+    git(path, "update-ref", "refs/remotes/origin/main", "HEAD")
 
 
 def test_release_files_include_dirty_and_untracked_but_not_ignored(tmp_path: Path) -> None:
@@ -89,6 +98,7 @@ def test_manifest_snapshots_all_coordinated_repositories(tmp_path: Path) -> None
             (repo / "package.json").write_text("{}", encoding="utf-8")
             (repo / "src").mkdir()
             (repo / "src" / "index.js").write_text("export {};", encoding="utf-8")
+            commit_changes(repo)
     output = tmp_path / "manifest.json"
     snapshots = tmp_path / "snapshots"
 
@@ -99,6 +109,10 @@ def test_manifest_snapshots_all_coordinated_repositories(tmp_path: Path) -> None
     assert manifest["release_ready"] is False
     assert len(manifest["marty_ui_sha"]) == 40
     assert set(manifest["repositories"]) == set(REPOSITORIES)
+    assert {entry["component"] for entry in manifest["component_revisions"]} == set(REPOSITORIES)
+    assert {entry["component"]: entry["revision"] for entry in manifest["component_revisions"]} == {
+        name: manifest["repositories"][name]["head_sha"] for name in REPOSITORIES
+    }
     assert json.loads(output.read_text(encoding="utf-8"))["mip_version"] == "0.5.0"
     for name, record in manifest["repositories"].items():
         snapshot = snapshots / record["snapshot"]
@@ -120,6 +134,7 @@ def test_manifest_verification_rejects_worktree_drift(tmp_path: Path) -> None:
             (repo / "package.json").write_text("{}", encoding="utf-8")
             (repo / "src").mkdir()
             (repo / "src" / "index.js").write_text("export {};", encoding="utf-8")
+            commit_changes(repo)
     output = tmp_path / "manifest.json"
     create_manifest(workspace, "mip-0.5.0-local-test", output, tmp_path / "snapshots")
 
@@ -131,3 +146,65 @@ def test_manifest_verification_rejects_worktree_drift(tmp_path: Path) -> None:
         assert str(exc) == "Worktree changed after snapshot: marty-ui"
     else:
         raise AssertionError("Expected worktree drift to fail verification")
+
+
+def test_manifest_verification_rejects_component_revision_tampering(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in REPOSITORIES:
+        make_repo(workspace / name, content=name)
+    output = tmp_path / "manifest.json"
+    create_manifest(workspace, "mip-0.5.0-local-test", output, tmp_path / "snapshots")
+    manifest = json.loads(output.read_text(encoding="utf-8"))
+    next(
+        entry
+        for entry in manifest["component_revisions"]
+        if entry["component"] == "marty-demo-recorder"
+    )["revision"] = "f" * 40
+    output.write_text(json.dumps(manifest), encoding="utf-8")
+
+    try:
+        verify_manifest(workspace, output)
+    except RuntimeError as exc:
+        assert str(exc) == "Component revision mismatch: marty-demo-recorder"
+    else:
+        raise AssertionError("Expected component revision tampering to fail verification")
+
+
+def test_manifest_creation_rejects_dirty_coordinated_repository(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in REPOSITORIES:
+        make_repo(workspace / name, content=name)
+    (workspace / "marty-verifier" / "tracked.txt").write_text("unlanded", encoding="utf-8")
+
+    try:
+        create_manifest(
+            workspace,
+            "mip-0.5.0-local-test",
+            tmp_path / "manifest.json",
+            tmp_path / "snapshots",
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "Coordinated release repository must be clean: marty-verifier"
+    else:
+        raise AssertionError("Expected dirty coordinated source to fail manifest creation")
+
+
+def test_manifest_creation_rejects_clean_unlanded_commit(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for name in REPOSITORIES:
+        make_repo(workspace / name, content=name)
+    verifier = workspace / "marty-verifier"
+    (verifier / "tracked.txt").write_text("clean but not merged", encoding="utf-8")
+    git(verifier, "add", "tracked.txt")
+    git(verifier, "commit", "-qm", "unlanded")
+
+    with pytest.raises(RuntimeError, match="not at protected origin/main: marty-verifier"):
+        create_manifest(
+            workspace,
+            "mip-0.5.0-local-test",
+            tmp_path / "manifest.json",
+            tmp_path / "snapshots",
+        )
