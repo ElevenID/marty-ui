@@ -7,6 +7,7 @@ const { chromium } = require('@playwright/test');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
 const {
   VIDEO_SIZE,
+  createArtifactDir,
   finalizeVideo,
   maskProtocolField,
   showStep,
@@ -532,10 +533,7 @@ async function main() {
   if (!email || !password) throw new Error('Missing beta operator credentials');
 
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
-  const artifactDir = process.env.DEMO_ARTIFACT_DIR
-    ? path.resolve(process.env.DEMO_ARTIFACT_DIR)
-    : path.join(ROOT, 'tests', 'artifacts', `beta-credential-lifecycle-${stamp}`);
-  fs.mkdirSync(artifactDir, { recursive: true });
+  const artifactDir = createArtifactDir(ROOT, `beta-credential-lifecycle-${stamp}`);
   const report = {
     createdAt: new Date().toISOString(),
     organizationId: ORG_ID,

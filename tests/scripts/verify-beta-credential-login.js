@@ -12,6 +12,7 @@ const {
 } = require('./verify-beta-waltid-acceptance');
 const {
   VIDEO_SIZE,
+  createArtifactDir,
   finalizeVideo,
   maskProtocolField: maskRecordingProtocolField,
   showStep: showRecordingStep,
@@ -86,15 +87,8 @@ async function presentBadge(walletPage, requestUri) {
 async function main() {
   loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
   loadEnvFile(path.join(ROOT, '.env'));
-  const artifactDir = process.env.DEMO_ARTIFACT_DIR
-    ? path.resolve(process.env.DEMO_ARTIFACT_DIR)
-    : path.join(
-      ROOT,
-      'tests',
-      'artifacts',
-      `beta-credential-login-${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '')}`,
-    );
-  fs.mkdirSync(artifactDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
+  const artifactDir = createArtifactDir(ROOT, `beta-credential-login-${stamp}`);
 
   const browser = await chromium.launch({
     headless: HEADLESS,

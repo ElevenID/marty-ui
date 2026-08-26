@@ -5,6 +5,13 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('@playwright/test');
 const {
+  VIDEO_SIZE,
+  createArtifactDir,
+  finalizeVideo,
+  maskProtocolField: maskRecordingProtocolField,
+  showStep: showRecordingStep,
+} = require('./demo-recording');
+const {
   collectBetaOffer,
   loadEnvFile,
   redact,
@@ -31,46 +38,16 @@ const MEMBERSHIP_BADGE_CONFIGURATION_ID = process.env.EXPECTED_LOGIN_BADGE_CONFI
   || DEFAULT_LOGIN_BADGE_CONFIGURATION_ID;
 
 async function showStep(page, title, detail = '') {
-  if (!RECORD_VIDEO || page.isClosed()) return;
-  await page.evaluate(({ stepTitle, stepDetail }) => {
-    document.querySelector('[data-marty-recording-step]')?.remove();
-    const overlay = document.createElement('section');
-    overlay.dataset.martyRecordingStep = 'true';
-    overlay.setAttribute('aria-hidden', 'true');
-    overlay.style.cssText = [
-      'position:fixed', 'z-index:2147483647', 'left:24px', 'right:24px', 'top:20px',
-      'padding:14px 18px', 'background:rgba(17,24,39,.96)', 'color:#fff',
-      'border:1px solid rgba(255,255,255,.24)', 'border-radius:6px',
-      'box-shadow:0 10px 32px rgba(0,0,0,.28)', 'font-family:system-ui,sans-serif',
-      'pointer-events:none',
-    ].join(';');
-    overlay.innerHTML = `
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;color:#a7f3d0">Organization issuance and verification</div>
-      <div style="font-size:20px;font-weight:700;margin-top:2px">${stepTitle}</div>
-      ${stepDetail ? `<div style="font-size:13px;color:#d1d5db;margin-top:3px">${stepDetail}</div>` : ''}
-    `;
-    document.body.appendChild(overlay);
-  }, { stepTitle: title, stepDetail: detail });
-  await page.waitForTimeout(Number.isFinite(RECORDING_PAUSE_MS) ? RECORDING_PAUSE_MS : 1400);
-}
-
-async function maskProtocolField(page, label) {
-  if (!RECORD_VIDEO) return;
-  const field = page.getByLabel(label);
-  await field.evaluate((element) => {
-    element.style.color = 'transparent';
-    element.style.textShadow = '0 0 10px rgba(17, 24, 39, .8)';
-    element.style.caretColor = 'transparent';
+  if (page.isClosed()) return;
+  return showRecordingStep(page, title, detail, {
+    enabled: RECORD_VIDEO,
+    durationMs: Number.isFinite(RECORDING_PAUSE_MS) ? RECORDING_PAUSE_MS : 1400,
+    eyebrow: 'Organization issuance and verification',
   });
 }
 
-async function finalizeVideo(video, artifactDir, filename) {
-  if (!video) return null;
-  const source = await video.path();
-  const destination = path.join(artifactDir, filename);
-  fs.copyFileSync(source, destination);
-  if (path.resolve(source) !== path.resolve(destination)) fs.unlinkSync(source);
-  return destination;
+async function maskProtocolField(page, label) {
+  return maskRecordingProtocolField(page, label, RECORD_VIDEO);
 }
 
 async function login(page, email, password) {
@@ -444,8 +421,7 @@ async function main() {
   if (!email || !password) throw new Error('Missing beta vendor test credentials');
 
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
-  const artifactDir = path.join(ROOT, 'tests', 'artifacts', `beta-org-credential-paths-${stamp}`);
-  fs.mkdirSync(artifactDir, { recursive: true });
+  const artifactDir = createArtifactDir(ROOT, `beta-org-credential-paths-${stamp}`);
   const report = {
     createdAt: new Date().toISOString(),
     organizationId: ORG_ID,
@@ -464,12 +440,12 @@ async function main() {
   let context = null;
   try {
     context = await browser.newContext({
-      viewport: { width: 1440, height: 1000 },
+      viewport: VIDEO_SIZE,
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? {
         recordVideo: {
-          dir: path.join(artifactDir, 'raw-video'),
-          size: { width: 1440, height: 1000 },
+          dir: artifactDir,
+          size: VIDEO_SIZE,
         },
       } : {}),
     });
@@ -768,16 +744,12 @@ async function main() {
       await context.close();
       context = null;
       report.recordings = {
-        organization: await finalizeVideo(
-          organizationVideo,
-          artifactDir,
-          'organization-issuance-and-verification.webm',
-        ),
-        browserWallet: await finalizeVideo(
-          walletVideo,
-          artifactDir,
-          'organization-browser-wallet.webm',
-        ),
+        organization: path.relative(ROOT, await finalizeVideo(
+          organizationVideo, artifactDir, 'organization-issuance-and-verification.webm',
+        )),
+        browserWallet: path.relative(ROOT, await finalizeVideo(
+          walletVideo, artifactDir, 'organization-browser-wallet.webm',
+        )),
       };
     }
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
