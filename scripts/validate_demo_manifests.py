@@ -46,7 +46,7 @@ SENSITIVE_KEYS = {
     "private_key",
     "email",
 }
-REQUIRED_SCENARIOS = {
+HISTORICAL_2026_07_SCENARIOS = {
     "membership-badge-login",
     "organization-primitives",
     "first-party-browser-wallet",
@@ -54,6 +54,10 @@ REQUIRED_SCENARIOS = {
     "canvas-learning-achievement",
     "credential-lifecycle",
 }
+PORTFOLIO_PATH = Path(__file__).resolve().parents[1] / "deploy-config" / "catalog" / "demo-portfolio-v3.json"
+PORTFOLIO = json.loads(PORTFOLIO_PATH.read_text(encoding="utf-8"))
+PORTFOLIO_SCENARIOS = {scenario["slug"] for scenario in PORTFOLIO["scenarios"]}
+PRESERVED_LEGACY_SCENARIOS = set(PORTFOLIO["preserved_legacy_scenarios"])
 SCENARIO_PUBLICATION_CHECKS = {
     "accessibility", "captions", "evidence", "links", "playback", "privacy", "thumbnail", "transcript",
 }
@@ -133,6 +137,10 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     require(bool(MIP_VERSION.fullmatch(manifest["mip_version"])), "mip_version must be semantic and independent")
     require(manifest["publication_state"] in {"DRAFT", "PUBLIC", "SUPERSEDED"}, "invalid publication_state")
     require(manifest["coverage_state"] in {"PARTIAL", "COMPLETE", "SUPERSEDED"}, "invalid coverage_state")
+    binding_state = manifest.get("binding_state", "BOUND")
+    require(binding_state in {"BOUND", "PENDING_DEPLOYMENT"}, "invalid binding_state")
+    if not manifest["stack_version"].startswith("2026.07."):
+        require("binding_state" in manifest, "post-July manifests require an explicit binding_state")
 
     distribution = manifest["video_distribution"]
     require(distribution.get("provider") == "YOUTUBE", "video distribution provider must be YOUTUBE")
@@ -166,22 +174,50 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         require(bool(SHA256.fullmatch(recorder.get("value", ""))), "recorder source snapshot must be a SHA-256")
 
     components = manifest["component_revisions"]
-    require(isinstance(components, list) and components, "component_revisions cannot be empty")
+    require(isinstance(components, list), "component_revisions must be a list")
+    require(binding_state == "PENDING_DEPLOYMENT" or components, "component_revisions cannot be empty")
     for component in components:
         require(bool(GIT_REVISION.fullmatch(component.get("revision", ""))), f"{component.get('component')}: revision must be a full SHA")
 
     images = manifest["image_digests"]
-    require(isinstance(images, list) and images, "image_digests cannot be empty")
+    require(isinstance(images, list), "image_digests must be a list")
+    require(binding_state == "PENDING_DEPLOYMENT" or images, "image_digests cannot be empty")
     for image in images:
         require(bool(DIGEST.fullmatch(image.get("digest", ""))), f"{image.get('component')}: immutable image digest required")
 
-    require(bool(manifest["release_evidence"].get("displayed_offers_invalidated_at")), "displayed offers must be invalidated before evidence publication")
+    if binding_state == "PENDING_DEPLOYMENT":
+        require(manifest["publication_state"] == "DRAFT" and not manifest["release_ready"], "pending deployment binding must remain a non-ready draft")
+        require(manifest.get("deployment_release_marker") is None, "pending deployment binding cannot claim a release marker")
+        require(not components and not images, "pending deployment binding cannot claim revisions or image digests")
+        evidence = manifest["release_evidence"]
+        require(evidence.get("source_marker") is None, "pending deployment binding cannot claim a source marker")
+        require(evidence.get("recorded_at") is None and evidence.get("displayed_offers_invalidated_at") is None, "pending deployment binding cannot claim recording times")
+        require(evidence.get("artifacts") == [], "pending deployment binding cannot claim release artifacts")
+    else:
+        require(bool(manifest["release_evidence"].get("displayed_offers_invalidated_at")), "displayed offers must be invalidated before evidence publication")
 
     scenarios = manifest["scenarios"]
     require(isinstance(scenarios, list) and scenarios, "scenarios cannot be empty")
     slugs = [scenario.get("slug") for scenario in scenarios]
     require(len(slugs) == len(set(slugs)), "scenario slugs must be unique")
-    require(REQUIRED_SCENARIOS.issubset(set(slugs)), "all six release scenarios must be represented")
+    required_scenarios = (
+        HISTORICAL_2026_07_SCENARIOS
+        if manifest["stack_version"].startswith("2026.07.")
+        else PORTFOLIO_SCENARIOS | PRESERVED_LEGACY_SCENARIOS
+    )
+    require(required_scenarios.issubset(set(slugs)), "all required portfolio and preserved legacy scenarios must be represented")
+    if not manifest["stack_version"].startswith("2026.07."):
+        scenario_by_slug = {scenario["slug"]: scenario for scenario in scenarios}
+        for contract in PORTFOLIO["scenarios"]:
+            scenario = scenario_by_slug[contract["slug"]]
+            require(scenario.get("demo_id") == contract["demo_id"], f"{contract['slug']}: demo ID differs from the portfolio contract")
+            plan = scenario.get("recording_plan", {})
+            require(plan.get("fresh_recording_required") is True, f"{contract['slug']}: fresh recording must be required")
+            require(plan.get("happy_path") == contract["happy_path"], f"{contract['slug']}: happy path differs from the portfolio contract")
+            require(plan.get("failure_paths") == contract["failure_paths"], f"{contract['slug']}: failure paths differ from the portfolio contract")
+            assertion_ids = {assertion.get("id") for assertion in scenario.get("assertions", [])}
+            required_assertions = set(contract["happy_path"]) | set(contract["failure_paths"])
+            require(required_assertions.issubset(assertion_ids), f"{contract['slug']}: behavioral paths require explicit assertions")
 
     for scenario in scenarios:
         slug = scenario.get("slug", "unknown")
@@ -240,7 +276,7 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
 
     if manifest["coverage_state"] == "COMPLETE":
         require(manifest["publication_state"] == "PUBLIC" and manifest["public_demo_ready"], "COMPLETE coverage must be publicly approved")
-        require(all(scenario.get("state") == "PUBLIC" for scenario in scenarios if scenario.get("slug") in REQUIRED_SCENARIOS), "COMPLETE coverage requires all required scenarios to be PUBLIC")
+        require(all(scenario.get("state") == "PUBLIC" for scenario in scenarios if scenario.get("slug") in required_scenarios), "COMPLETE coverage requires all required scenarios to be PUBLIC")
         independent = next(item for item in scenarios if item.get("slug") == "independent-wallet-interoperability")
         require(any(wallet.get("classification") == "INDEPENDENT" and wallet.get("result") == "PASS" for wallet in independent.get("wallets", [])), "COMPLETE coverage requires passing independent-wallet evidence")
 

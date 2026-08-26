@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+  <title id="title">ElevenID release demonstration recording pending</title>
+  <desc id="description">A dark blue release card for the 2026.08 ElevenID MIP 0.5 demonstration portfolio.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07192f"/>
+      <stop offset="1" stop-color="#123d65"/>
+    </linearGradient>
+  </defs>
+  <rect width="1600" height="900" fill="url(#background)"/>
+  <rect x="112" y="112" width="1376" height="676" rx="40" fill="none" stroke="#73d5ff" stroke-width="4"/>
+  <text x="160" y="255" fill="#73d5ff" font-family="Arial, sans-serif" font-size="48" font-weight="700">ELEVENID LLC</text>
+  <text x="160" y="405" fill="#ffffff" font-family="Arial, sans-serif" font-size="92" font-weight="700">MIP 0.5 Demo Portfolio</text>
+  <text x="160" y="515" fill="#d7efff" font-family="Arial, sans-serif" font-size="54">Platform version 2026.08.0</text>
+  <text x="160" y="650" fill="#ffffff" font-family="Arial, sans-serif" font-size="42">Fresh release-bound recording pending</text>
+  <text x="160" y="720" fill="#a9c9df" font-family="Arial, sans-serif" font-size="30">Draft catalog — not publication evidence</text>
+</svg>

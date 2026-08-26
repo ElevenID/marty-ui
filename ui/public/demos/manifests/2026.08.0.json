@@ -1,0 +1,2245 @@
+{
+  "schema_version": 2,
+  "stack_version": "2026.08.0",
+  "release_name": "Rust Platform Completion",
+  "mip_version": "0.5.0",
+  "publication_state": "DRAFT",
+  "coverage_state": "PARTIAL",
+  "release_ready": false,
+  "public_demo_ready": false,
+  "binding_state": "PENDING_DEPLOYMENT",
+  "video_distribution": {
+    "provider": "YOUTUBE",
+    "status": "PENDING_CHANNEL_SETUP",
+    "channel_name": "ElevenID LLC",
+    "channel_id": null,
+    "channel_handle": null,
+    "channel_url": null,
+    "playlist_id": null,
+    "playlist_url": null,
+    "privacy_enhanced_embeds": true,
+    "verified_at": null
+  },
+  "deployment_release_marker": null,
+  "published_at": null,
+  "publication_attestation": null,
+  "superseded_by": null,
+  "recorder_revision": {
+    "kind": "git",
+    "value": "b8571cbe69500c377f035b33d643b0e397c1640e"
+  },
+  "demo_application_revision": null,
+  "component_revisions": [],
+  "image_digests": [],
+  "release_evidence": {
+    "environment": "beta",
+    "recorded_at": null,
+    "displayed_offers_invalidated_at": null,
+    "source_marker": null,
+    "artifacts": []
+  },
+  "release_differences": {
+    "previous_stack_version": "2026.07.0",
+    "ux": [
+      "Adds a complete ten-scenario release catalog without removing historical wallet demonstrations."
+    ],
+    "services": [
+      "Qualifies the Rust-native platform through explicit happy and denial paths."
+    ],
+    "wallets": [
+      "Requires fresh wallet evidence under MIP 0.5."
+    ],
+    "integrations": [
+      "Retains stock Canvas and external-evidence portability coverage."
+    ],
+    "operations": [
+      "Defers all release identity and digest binding until the aggregate beta deployment exists."
+    ]
+  },
+  "scenarios": [
+    {
+      "demo_id": "D-01",
+      "slug": "passport-pre-boarding-clearance",
+      "title": "Passport Pre-Boarding Clearance",
+      "summary": "Validate a passport, issue a pre-boarding credential, and verify it rapidly at the gate.",
+      "scenario_revision": 1,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [],
+      "mip_version": "0.5.0",
+      "state": "DRAFT",
+      "audiences": [
+        "Holder",
+        "Issuer",
+        "Verifier"
+      ],
+      "capabilities": [
+        "Passport validation",
+        "Pre boarding credential issuance",
+        "Rapid gate verification",
+        "Untrusted or invalid passport denied"
+      ],
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc"
+      ],
+      "recording_plan": {
+        "fresh_recording_required": true,
+        "happy_path": [
+          "passport_validation",
+          "pre_boarding_credential_issuance",
+          "rapid_gate_verification"
+        ],
+        "failure_paths": [
+          "untrusted_or_invalid_passport_denied"
+        ]
+      },
+      "poster": {
+        "src": "/images/demos/2026.08.0/portfolio-draft.svg",
+        "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
+        "alt": "Draft release card for Passport Pre-Boarding Clearance; fresh recording pending"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          {
+            "start_seconds": 0,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Passport validation."
+          },
+          {
+            "start_seconds": 30,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Pre boarding credential issuance."
+          },
+          {
+            "start_seconds": 60,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Rapid gate verification."
+          },
+          {
+            "start_seconds": 90,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Untrusted or invalid passport denied."
+          }
+        ]
+      },
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Passport validation",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 30,
+          "title": "Pre boarding credential issuance",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 60,
+          "title": "Rapid gate verification",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 90,
+          "title": "Untrusted or invalid passport denied",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        }
+      ],
+      "wallets": [],
+      "assertions": [
+        {
+          "id": "passport_validation",
+          "label": "Passport validation",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "pre_boarding_credential_issuance",
+          "label": "Pre boarding credential issuance",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "rapid_gate_verification",
+          "label": "Rapid gate verification",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "untrusted_or_invalid_passport_denied",
+          "label": "Untrusted or invalid passport denied",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        }
+      ],
+      "limitations": [
+        "Fresh release-bound recording and automated evidence are required before publication."
+      ],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "demo_id": "D-02",
+      "slug": "stable-issuer-identity-pluggable-kms",
+      "title": "Stable Issuer Identity with Pluggable KMS",
+      "summary": "Keep one issuer identity stable while changing its managed signing provider.",
+      "scenario_revision": 1,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [],
+      "mip_version": "0.5.0",
+      "state": "DRAFT",
+      "audiences": [
+        "Administrator",
+        "Issuer",
+        "Verifier"
+      ],
+      "capabilities": [
+        "Create issuer profile",
+        "Issue with provider a",
+        "Switch signing provider",
+        "Verify same did identity",
+        "Unpublished signing key denied"
+      ],
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc"
+      ],
+      "recording_plan": {
+        "fresh_recording_required": true,
+        "happy_path": [
+          "create_issuer_profile",
+          "issue_with_provider_a",
+          "switch_signing_provider",
+          "verify_same_did_identity"
+        ],
+        "failure_paths": [
+          "unpublished_signing_key_denied"
+        ]
+      },
+      "poster": {
+        "src": "/images/demos/2026.08.0/portfolio-draft.svg",
+        "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
+        "alt": "Draft release card for Stable Issuer Identity with Pluggable KMS; fresh recording pending"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          {
+            "start_seconds": 0,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Create issuer profile."
+          },
+          {
+            "start_seconds": 30,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Issue with provider a."
+          },
+          {
+            "start_seconds": 60,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Switch signing provider."
+          },
+          {
+            "start_seconds": 90,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Verify same did identity."
+          },
+          {
+            "start_seconds": 120,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Unpublished signing key denied."
+          }
+        ]
+      },
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Create issuer profile",
+          "role": "Administrator",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 30,
+          "title": "Issue with provider a",
+          "role": "Administrator",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 60,
+          "title": "Switch signing provider",
+          "role": "Administrator",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 90,
+          "title": "Verify same did identity",
+          "role": "Administrator",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 120,
+          "title": "Unpublished signing key denied",
+          "role": "Administrator",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        }
+      ],
+      "wallets": [],
+      "assertions": [
+        {
+          "id": "create_issuer_profile",
+          "label": "Create issuer profile",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "issue_with_provider_a",
+          "label": "Issue with provider a",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "switch_signing_provider",
+          "label": "Switch signing provider",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "verify_same_did_identity",
+          "label": "Verify same did identity",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "unpublished_signing_key_denied",
+          "label": "Unpublished signing key denied",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        }
+      ],
+      "limitations": [
+        "Fresh release-bound recording and automated evidence are required before publication."
+      ],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "demo_id": "D-03",
+      "slug": "private-online-age-proof",
+      "title": "Private Online Age Proof",
+      "summary": "Request and verify only an age-over-21 fact from a trusted mobile document issuer.",
+      "scenario_revision": 1,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [],
+      "mip_version": "0.5.0",
+      "state": "DRAFT",
+      "audiences": [
+        "Holder",
+        "Verifier"
+      ],
+      "capabilities": [
+        "Trusted mdl issuance",
+        "Request only age over 21",
+        "Verify issuer trust and minimum response",
+        "Untrusted issuer denied"
+      ],
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc"
+      ],
+      "recording_plan": {
+        "fresh_recording_required": true,
+        "happy_path": [
+          "trusted_mdl_issuance",
+          "request_only_age_over_21",
+          "verify_issuer_trust_and_minimum_response"
+        ],
+        "failure_paths": [
+          "untrusted_issuer_denied"
+        ]
+      },
+      "poster": {
+        "src": "/images/demos/2026.08.0/portfolio-draft.svg",
+        "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
+        "alt": "Draft release card for Private Online Age Proof; fresh recording pending"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          {
+            "start_seconds": 0,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Trusted mdl issuance."
+          },
+          {
+            "start_seconds": 30,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Request only age over 21."
+          },
+          {
+            "start_seconds": 60,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Verify issuer trust and minimum response."
+          },
+          {
+            "start_seconds": 90,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Untrusted issuer denied."
+          }
+        ]
+      },
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Trusted mdl issuance",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 30,
+          "title": "Request only age over 21",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 60,
+          "title": "Verify issuer trust and minimum response",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 90,
+          "title": "Untrusted issuer denied",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        }
+      ],
+      "wallets": [],
+      "assertions": [
+        {
+          "id": "trusted_mdl_issuance",
+          "label": "Trusted mdl issuance",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "request_only_age_over_21",
+          "label": "Request only age over 21",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "verify_issuer_trust_and_minimum_response",
+          "label": "Verify issuer trust and minimum response",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "untrusted_issuer_denied",
+          "label": "Untrusted issuer denied",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        }
+      ],
+      "limitations": [
+        "Fresh release-bound recording and automated evidence are required before publication."
+      ],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "demo_id": "D-04",
+      "slug": "employee-onboarding-secure-access",
+      "title": "Employee Onboarding and Secure Access",
+      "summary": "Approve an employee, issue an access credential, and enforce suspension immediately.",
+      "scenario_revision": 1,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [],
+      "mip_version": "0.5.0",
+      "state": "DRAFT",
+      "audiences": [
+        "Holder",
+        "Issuer",
+        "Verifier"
+      ],
+      "capabilities": [
+        "Approve employee",
+        "Issue employee credential",
+        "Allow active access",
+        "Suspended employee denied"
+      ],
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc"
+      ],
+      "recording_plan": {
+        "fresh_recording_required": true,
+        "happy_path": [
+          "approve_employee",
+          "issue_employee_credential",
+          "allow_active_access"
+        ],
+        "failure_paths": [
+          "suspended_employee_denied"
+        ]
+      },
+      "poster": {
+        "src": "/images/demos/2026.08.0/portfolio-draft.svg",
+        "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
+        "alt": "Draft release card for Employee Onboarding and Secure Access; fresh recording pending"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          {
+            "start_seconds": 0,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Approve employee."
+          },
+          {
+            "start_seconds": 30,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Issue employee credential."
+          },
+          {
+            "start_seconds": 60,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Allow active access."
+          },
+          {
+            "start_seconds": 90,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Suspended employee denied."
+          }
+        ]
+      },
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Approve employee",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 30,
+          "title": "Issue employee credential",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 60,
+          "title": "Allow active access",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 90,
+          "title": "Suspended employee denied",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        }
+      ],
+      "wallets": [],
+      "assertions": [
+        {
+          "id": "approve_employee",
+          "label": "Approve employee",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "issue_employee_credential",
+          "label": "Issue employee credential",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "allow_active_access",
+          "label": "Allow active access",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "suspended_employee_denied",
+          "label": "Suspended employee denied",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        }
+      ],
+      "limitations": [
+        "Fresh release-bound recording and automated evidence are required before publication."
+      ],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "demo_id": "D-05",
+      "slug": "membership-badge-login",
+      "title": "Membership Badge and Login",
+      "summary": "Issue a governed Open Badge and use it for same-device passwordless account return.",
+      "scenario_revision": 1,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [],
+      "mip_version": "0.5.0",
+      "state": "DRAFT",
+      "audiences": [
+        "Holder",
+        "Issuer",
+        "Verifier"
+      ],
+      "capabilities": [
+        "Governed claim",
+        "Conformant open badge issuance",
+        "Same device passwordless login",
+        "Holder cancel no session",
+        "Issuer not trusted no session",
+        "Expired offer reissue"
+      ],
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc",
+        "open-badges-3.0"
+      ],
+      "recording_plan": {
+        "fresh_recording_required": true,
+        "happy_path": [
+          "governed_claim",
+          "conformant_open_badge_issuance",
+          "same_device_passwordless_login"
+        ],
+        "failure_paths": [
+          "holder_cancel_no_session",
+          "issuer_not_trusted_no_session",
+          "expired_offer_reissue"
+        ]
+      },
+      "poster": {
+        "src": "/images/demos/2026.08.0/portfolio-draft.svg",
+        "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
+        "alt": "Draft release card for Membership Badge and Login; fresh recording pending"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          {
+            "start_seconds": 0,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Governed claim."
+          },
+          {
+            "start_seconds": 30,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Conformant open badge issuance."
+          },
+          {
+            "start_seconds": 60,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Same device passwordless login."
+          },
+          {
+            "start_seconds": 90,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Holder cancel no session."
+          },
+          {
+            "start_seconds": 120,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Issuer not trusted no session."
+          },
+          {
+            "start_seconds": 150,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Expired offer reissue."
+          }
+        ]
+      },
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Governed claim",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 30,
+          "title": "Conformant open badge issuance",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 60,
+          "title": "Same device passwordless login",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 90,
+          "title": "Holder cancel no session",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 120,
+          "title": "Issuer not trusted no session",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 150,
+          "title": "Expired offer reissue",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        }
+      ],
+      "wallets": [],
+      "assertions": [
+        {
+          "id": "governed_claim",
+          "label": "Governed claim",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "conformant_open_badge_issuance",
+          "label": "Conformant open badge issuance",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "same_device_passwordless_login",
+          "label": "Same device passwordless login",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "holder_cancel_no_session",
+          "label": "Holder cancel no session",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "issuer_not_trusted_no_session",
+          "label": "Issuer not trusted no session",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "expired_offer_reissue",
+          "label": "Expired offer reissue",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        }
+      ],
+      "limitations": [
+        "Fresh release-bound recording and automated evidence are required before publication."
+      ],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "demo_id": "D-06",
+      "slug": "credential-lifecycle",
+      "title": "Credential Lifecycle",
+      "summary": "Renew, suspend, reinstate, and revoke while verification follows current status.",
+      "scenario_revision": 1,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [],
+      "mip_version": "0.5.0",
+      "state": "DRAFT",
+      "audiences": [
+        "Holder",
+        "Issuer",
+        "Verifier"
+      ],
+      "capabilities": [
+        "Renew",
+        "Suspend",
+        "Reinstate",
+        "Revoke",
+        "Suspended and revoked states denied"
+      ],
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc"
+      ],
+      "recording_plan": {
+        "fresh_recording_required": true,
+        "happy_path": [
+          "renew",
+          "suspend",
+          "reinstate",
+          "revoke"
+        ],
+        "failure_paths": [
+          "suspended_and_revoked_states_denied"
+        ]
+      },
+      "poster": {
+        "src": "/images/demos/2026.08.0/portfolio-draft.svg",
+        "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
+        "alt": "Draft release card for Credential Lifecycle; fresh recording pending"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          {
+            "start_seconds": 0,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Renew."
+          },
+          {
+            "start_seconds": 30,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Suspend."
+          },
+          {
+            "start_seconds": 60,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Reinstate."
+          },
+          {
+            "start_seconds": 90,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Revoke."
+          },
+          {
+            "start_seconds": 120,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Suspended and revoked states denied."
+          }
+        ]
+      },
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Renew",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 30,
+          "title": "Suspend",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 60,
+          "title": "Reinstate",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 90,
+          "title": "Revoke",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 120,
+          "title": "Suspended and revoked states denied",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        }
+      ],
+      "wallets": [],
+      "assertions": [
+        {
+          "id": "renew",
+          "label": "Renew",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "suspend",
+          "label": "Suspend",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "reinstate",
+          "label": "Reinstate",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "revoke",
+          "label": "Revoke",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "suspended_and_revoked_states_denied",
+          "label": "Suspended and revoked states denied",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        }
+      ],
+      "limitations": [
+        "Fresh release-bound recording and automated evidence are required before publication."
+      ],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "demo_id": "D-07",
+      "slug": "canvas-learning-achievement",
+      "title": "Portable Learning Achievement with Canvas",
+      "summary": "Turn authoritative evidence from stock Canvas into a learner-claimed Open Badge.",
+      "scenario_revision": 1,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [],
+      "mip_version": "0.5.0",
+      "state": "DRAFT",
+      "audiences": [
+        "Holder",
+        "Issuer",
+        "Administrator"
+      ],
+      "capabilities": [
+        "Capture canvas evidence",
+        "Governed review",
+        "Issue open badge",
+        "Invalid evidence provenance denied"
+      ],
+      "protocols": [
+        "lti-1.3",
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc",
+        "open-badges-3.0"
+      ],
+      "recording_plan": {
+        "fresh_recording_required": true,
+        "happy_path": [
+          "capture_canvas_evidence",
+          "governed_review",
+          "issue_open_badge"
+        ],
+        "failure_paths": [
+          "invalid_evidence_provenance_denied"
+        ]
+      },
+      "poster": {
+        "src": "/images/demos/2026.08.0/portfolio-draft.svg",
+        "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
+        "alt": "Draft release card for Portable Learning Achievement with Canvas; fresh recording pending"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          {
+            "start_seconds": 0,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Capture canvas evidence."
+          },
+          {
+            "start_seconds": 30,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Governed review."
+          },
+          {
+            "start_seconds": 60,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Issue open badge."
+          },
+          {
+            "start_seconds": 90,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Invalid evidence provenance denied."
+          }
+        ]
+      },
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Capture canvas evidence",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "lti-1.3",
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 30,
+          "title": "Governed review",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "lti-1.3",
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 60,
+          "title": "Issue open badge",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "lti-1.3",
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 90,
+          "title": "Invalid evidence provenance denied",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "lti-1.3",
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        }
+      ],
+      "wallets": [],
+      "assertions": [
+        {
+          "id": "capture_canvas_evidence",
+          "label": "Capture canvas evidence",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "governed_review",
+          "label": "Governed review",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "issue_open_badge",
+          "label": "Issue open badge",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "invalid_evidence_provenance_denied",
+          "label": "Invalid evidence provenance denied",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        }
+      ],
+      "limitations": [
+        "Fresh release-bound recording and automated evidence are required before publication."
+      ],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "demo_id": "D-08",
+      "slug": "external-evidence-to-credential",
+      "title": "External Evidence to Credential",
+      "summary": "Normalize external evidence, evaluate policy, and issue only after governed review.",
+      "scenario_revision": 1,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [],
+      "mip_version": "0.5.0",
+      "state": "DRAFT",
+      "audiences": [
+        "Holder",
+        "Issuer",
+        "Administrator"
+      ],
+      "capabilities": [
+        "Normalize external evidence",
+        "Evaluate policy",
+        "Review and issue",
+        "Insufficient or conflicting evidence review"
+      ],
+      "protocols": [
+        "openid4vci-1.0",
+        "sd-jwt-vc"
+      ],
+      "recording_plan": {
+        "fresh_recording_required": true,
+        "happy_path": [
+          "normalize_external_evidence",
+          "evaluate_policy",
+          "review_and_issue"
+        ],
+        "failure_paths": [
+          "insufficient_or_conflicting_evidence_review"
+        ]
+      },
+      "poster": {
+        "src": "/images/demos/2026.08.0/portfolio-draft.svg",
+        "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
+        "alt": "Draft release card for External Evidence to Credential; fresh recording pending"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          {
+            "start_seconds": 0,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Normalize external evidence."
+          },
+          {
+            "start_seconds": 30,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Evaluate policy."
+          },
+          {
+            "start_seconds": 60,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Review and issue."
+          },
+          {
+            "start_seconds": 90,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Insufficient or conflicting evidence review."
+          }
+        ]
+      },
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Normalize external evidence",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 30,
+          "title": "Evaluate policy",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 60,
+          "title": "Review and issue",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 90,
+          "title": "Insufficient or conflicting evidence review",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        }
+      ],
+      "wallets": [],
+      "assertions": [
+        {
+          "id": "normalize_external_evidence",
+          "label": "Normalize external evidence",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "evaluate_policy",
+          "label": "Evaluate policy",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "review_and_issue",
+          "label": "Review and issue",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "insufficient_or_conflicting_evidence_review",
+          "label": "Insufficient or conflicting evidence review",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        }
+      ],
+      "limitations": [
+        "Fresh release-bound recording and automated evidence are required before publication."
+      ],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "demo_id": "D-09",
+      "slug": "offline-facility-verification",
+      "title": "Offline Facility Verification",
+      "summary": "Verify against provisioned trust offline, buffer the audit, and synchronize after reconnection.",
+      "scenario_revision": 1,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [],
+      "mip_version": "0.5.0",
+      "state": "DRAFT",
+      "audiences": [
+        "Holder",
+        "Verifier",
+        "Administrator"
+      ],
+      "capabilities": [
+        "Provision edge trust",
+        "Verify offline",
+        "Buffer audit",
+        "Restore and sync",
+        "Expired offline trust denied"
+      ],
+      "protocols": [
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc"
+      ],
+      "recording_plan": {
+        "fresh_recording_required": true,
+        "happy_path": [
+          "provision_edge_trust",
+          "verify_offline",
+          "buffer_audit",
+          "restore_and_sync"
+        ],
+        "failure_paths": [
+          "expired_offline_trust_denied"
+        ]
+      },
+      "poster": {
+        "src": "/images/demos/2026.08.0/portfolio-draft.svg",
+        "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
+        "alt": "Draft release card for Offline Facility Verification; fresh recording pending"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          {
+            "start_seconds": 0,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Provision edge trust."
+          },
+          {
+            "start_seconds": 30,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Verify offline."
+          },
+          {
+            "start_seconds": 60,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Buffer audit."
+          },
+          {
+            "start_seconds": 90,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Restore and sync."
+          },
+          {
+            "start_seconds": 120,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Expired offline trust denied."
+          }
+        ]
+      },
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Provision edge trust",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 30,
+          "title": "Verify offline",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 60,
+          "title": "Buffer audit",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 90,
+          "title": "Restore and sync",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 120,
+          "title": "Expired offline trust denied",
+          "role": "Holder",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        }
+      ],
+      "wallets": [],
+      "assertions": [
+        {
+          "id": "provision_edge_trust",
+          "label": "Provision edge trust",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "verify_offline",
+          "label": "Verify offline",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "buffer_audit",
+          "label": "Buffer audit",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "restore_and_sync",
+          "label": "Restore and sync",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "expired_offline_trust_denied",
+          "label": "Expired offline trust denied",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        }
+      ],
+      "limitations": [
+        "Fresh release-bound recording and automated evidence are required before publication."
+      ],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "demo_id": "D-10",
+      "slug": "organization-primitives",
+      "title": "Organization and MIP Primitives",
+      "summary": "Configure the organization, issuer, trust, policy, deployment, and flow primitives required to operate.",
+      "scenario_revision": 1,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [],
+      "mip_version": "0.5.0",
+      "state": "DRAFT",
+      "audiences": [
+        "Administrator",
+        "Issuer",
+        "Verifier"
+      ],
+      "capabilities": [
+        "Configure organization",
+        "Configure issuer profiles",
+        "Configure trust and mip primitives",
+        "Unauthorized administration denied"
+      ],
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc",
+        "open-badges-3.0"
+      ],
+      "recording_plan": {
+        "fresh_recording_required": true,
+        "happy_path": [
+          "configure_organization",
+          "configure_issuer_profiles",
+          "configure_trust_and_mip_primitives"
+        ],
+        "failure_paths": [
+          "unauthorized_administration_denied"
+        ]
+      },
+      "poster": {
+        "src": "/images/demos/2026.08.0/portfolio-draft.svg",
+        "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
+        "alt": "Draft release card for Organization and MIP Primitives; fresh recording pending"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          {
+            "start_seconds": 0,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Configure organization."
+          },
+          {
+            "start_seconds": 30,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Configure issuer profiles."
+          },
+          {
+            "start_seconds": 60,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Configure trust and mip primitives."
+          },
+          {
+            "start_seconds": 90,
+            "speaker": "Narrator",
+            "text": "The fresh recording will demonstrate: Unauthorized administration denied."
+          }
+        ]
+      },
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Configure organization",
+          "role": "Administrator",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 30,
+          "title": "Configure issuer profiles",
+          "role": "Administrator",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 60,
+          "title": "Configure trust and mip primitives",
+          "role": "Administrator",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        },
+        {
+          "start_seconds": 90,
+          "title": "Unauthorized administration denied",
+          "role": "Administrator",
+          "mip_primitives": [
+            "Release acceptance path"
+          ],
+          "standards": [
+            "openid4vci-1.0",
+            "openid4vp-1.0",
+            "dcql-1.0",
+            "sd-jwt-vc",
+            "open-badges-3.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "MIP protocol",
+              "href": "/protocol"
+            }
+          ]
+        }
+      ],
+      "wallets": [],
+      "assertions": [
+        {
+          "id": "configure_organization",
+          "label": "Configure organization",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "configure_issuer_profiles",
+          "label": "Configure issuer profiles",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "configure_trust_and_mip_primitives",
+          "label": "Configure trust and mip primitives",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "unauthorized_administration_denied",
+          "label": "Unauthorized administration denied",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        }
+      ],
+      "limitations": [
+        "Fresh release-bound recording and automated evidence are required before publication."
+      ],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "slug": "first-party-browser-wallet",
+      "title": "First-Party Browser Wallet",
+      "summary": "Preserved historical first-party wallet demonstration; fresh MIP 0.5 evidence remains separate.",
+      "scenario_revision": 1,
+      "recording_classification": "FIRST_PARTY_CONTROL",
+      "revision_history": [],
+      "mip_version": "0.5.0",
+      "state": "DRAFT",
+      "audiences": [
+        "Holder",
+        "Developer"
+      ],
+      "capabilities": [
+        "Historical behavior preservation"
+      ],
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc"
+      ],
+      "poster": {
+        "src": "/images/demos/2026.08.0/portfolio-draft.svg",
+        "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
+        "alt": "Draft release card for First-Party Browser Wallet; historical capability preserved"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          {
+            "start_seconds": 0,
+            "speaker": "Narrator",
+            "text": "Preserved historical first-party wallet demonstration; fresh MIP 0.5 evidence remains separate."
+          }
+        ]
+      },
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Preserved qualification surface",
+          "role": "Developer",
+          "mip_primitives": [
+            "Issuance Flow",
+            "Verification Flow"
+          ],
+          "standards": [
+            "OpenID4VCI 1.0",
+            "OpenID4VP 1.0",
+            "DCQL 1.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "Standards",
+              "href": "/standards"
+            }
+          ]
+        }
+      ],
+      "wallets": [],
+      "assertions": [
+        {
+          "id": "historical-capability-preserved",
+          "label": "The historical qualification capability remains represented.",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        }
+      ],
+      "limitations": [
+        "This entry preserves the historical capability; it does not reuse prior media as MIP 0.5 evidence."
+      ],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    },
+    {
+      "slug": "independent-wallet-interoperability",
+      "title": "Independent Wallet Interoperability",
+      "summary": "Preserved independent-wallet qualification surface for final-protocol interoperability.",
+      "scenario_revision": 1,
+      "recording_classification": "INDEPENDENT_WALLET",
+      "revision_history": [],
+      "mip_version": "0.5.0",
+      "state": "DRAFT",
+      "audiences": [
+        "Holder",
+        "Developer"
+      ],
+      "capabilities": [
+        "Historical behavior preservation"
+      ],
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc"
+      ],
+      "poster": {
+        "src": "/images/demos/2026.08.0/portfolio-draft.svg",
+        "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
+        "alt": "Draft release card for Independent Wallet Interoperability; historical capability preserved"
+      },
+      "youtube_id": null,
+      "media_evidence": null,
+      "transcript": {
+        "language": "en",
+        "segments": [
+          {
+            "start_seconds": 0,
+            "speaker": "Narrator",
+            "text": "Preserved independent-wallet qualification surface for final-protocol interoperability."
+          }
+        ]
+      },
+      "chapters": [
+        {
+          "start_seconds": 0,
+          "title": "Preserved qualification surface",
+          "role": "Developer",
+          "mip_primitives": [
+            "Issuance Flow",
+            "Verification Flow"
+          ],
+          "standards": [
+            "OpenID4VCI 1.0",
+            "OpenID4VP 1.0",
+            "DCQL 1.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "Standards",
+              "href": "/standards"
+            }
+          ]
+        }
+      ],
+      "wallets": [],
+      "assertions": [
+        {
+          "id": "historical-capability-preserved",
+          "label": "The historical qualification capability remains represented.",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        }
+      ],
+      "limitations": [
+        "This entry preserves the historical capability; it does not reuse prior media as MIP 0.5 evidence."
+      ],
+      "published_at": null,
+      "publication_attestation": null,
+      "inherited_evidence": null
+    }
+  ]
+}

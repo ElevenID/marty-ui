@@ -1,8 +1,17 @@
 {
   "schema_version": 2,
   "latest_approved_stack_version": null,
-  "latest_available_stack_version": "2026.07.0",
+  "latest_available_stack_version": "2026.08.0",
   "releases": [
+    {
+      "stack_version": "2026.08.0",
+      "release_name": "Rust Platform Completion",
+      "mip_version": "0.5.0",
+      "publication_state": "DRAFT",
+      "coverage_state": "PARTIAL",
+      "manifest_url": "/demos/manifests/2026.08.0.json",
+      "summary": "Complete fresh-recording portfolio for the Rust-native MIP 0.5 platform; deployment binding remains pending."
+    },
     {
       "stack_version": "2026.07.0",
       "release_name": "Credential Lifecycle Foundation",

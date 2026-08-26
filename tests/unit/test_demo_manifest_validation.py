@@ -8,6 +8,7 @@ from scripts.validate_demo_manifests import ManifestValidationError, validate_in
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_PATH = ROOT / "ui" / "public" / "demos" / "manifests" / "2026.07.0.json"
+PORTFOLIO_MANIFEST_PATH = ROOT / "ui" / "public" / "demos" / "manifests" / "2026.08.0.json"
 
 
 class DemoManifestValidationTests(unittest.TestCase):
@@ -49,6 +50,37 @@ class DemoManifestValidationTests(unittest.TestCase):
         for field in ("channel_id", "channel_handle", "channel_url", "playlist_id", "playlist_url", "verified_at"):
             manifest["video_distribution"][field] = None
         with self.assertRaisesRegex(ManifestValidationError, "verified ElevenID LLC YouTube channel"):
+            validate_manifest(manifest)
+
+    def test_post_july_releases_require_the_v3_portfolio_and_legacy_wallet_demos(self):
+        manifest = copy.deepcopy(self.manifest)
+        manifest["stack_version"] = "2026.08.0"
+        manifest["binding_state"] = "BOUND"
+        for scenario in manifest["scenarios"]:
+            scenario["poster"]["src"] = scenario["poster"]["src"].replace("2026.07.0", "2026.08.0")
+        with self.assertRaisesRegex(ManifestValidationError, "required portfolio and preserved legacy"):
+            validate_manifest(manifest)
+
+    def test_pending_deployment_draft_cannot_claim_release_evidence(self):
+        manifest = copy.deepcopy(self.manifest)
+        manifest["binding_state"] = "PENDING_DEPLOYMENT"
+        manifest["deployment_release_marker"] = None
+        manifest["component_revisions"] = []
+        manifest["image_digests"] = []
+        manifest["release_evidence"]["source_marker"] = None
+        manifest["release_evidence"]["recorded_at"] = None
+        manifest["release_evidence"]["displayed_offers_invalidated_at"] = None
+        manifest["release_evidence"]["artifacts"] = []
+        validate_manifest(manifest)
+        manifest["deployment_release_marker"] = "invented-release"
+        with self.assertRaisesRegex(ManifestValidationError, "cannot claim a release marker"):
+            validate_manifest(manifest)
+
+    def test_v3_portfolio_requires_exact_happy_denial_and_assertion_paths(self):
+        manifest = json.loads(PORTFOLIO_MANIFEST_PATH.read_text(encoding="utf-8"))
+        validate_manifest(copy.deepcopy(manifest))
+        manifest["scenarios"][0]["recording_plan"]["failure_paths"] = []
+        with self.assertRaisesRegex(ManifestValidationError, "failure paths differ"):
             validate_manifest(manifest)
 
     def test_sensitive_public_fields_are_rejected(self):

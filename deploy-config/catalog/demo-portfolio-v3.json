@@ -1,0 +1,17 @@
+{
+  "schema_version": 3,
+  "fresh_recording_required": true,
+  "preserved_legacy_scenarios": ["first-party-browser-wallet", "independent-wallet-interoperability"],
+  "scenarios": [
+    { "demo_id": "D-01", "slug": "passport-pre-boarding-clearance", "happy_path": ["passport_validation", "pre_boarding_credential_issuance", "rapid_gate_verification"], "failure_paths": ["untrusted_or_invalid_passport_denied"] },
+    { "demo_id": "D-02", "slug": "stable-issuer-identity-pluggable-kms", "happy_path": ["create_issuer_profile", "issue_with_provider_a", "switch_signing_provider", "verify_same_did_identity"], "failure_paths": ["unpublished_signing_key_denied"] },
+    { "demo_id": "D-03", "slug": "private-online-age-proof", "happy_path": ["trusted_mdl_issuance", "request_only_age_over_21", "verify_issuer_trust_and_minimum_response"], "failure_paths": ["untrusted_issuer_denied"] },
+    { "demo_id": "D-04", "slug": "employee-onboarding-secure-access", "happy_path": ["approve_employee", "issue_employee_credential", "allow_active_access"], "failure_paths": ["suspended_employee_denied"] },
+    { "demo_id": "D-05", "slug": "membership-badge-login", "happy_path": ["governed_claim", "conformant_open_badge_issuance", "same_device_passwordless_login"], "failure_paths": ["holder_cancel_no_session", "issuer_not_trusted_no_session", "expired_offer_reissue"] },
+    { "demo_id": "D-06", "slug": "credential-lifecycle", "happy_path": ["renew", "suspend", "reinstate", "revoke"], "failure_paths": ["suspended_and_revoked_states_denied"] },
+    { "demo_id": "D-07", "slug": "canvas-learning-achievement", "happy_path": ["capture_canvas_evidence", "governed_review", "issue_open_badge"], "failure_paths": ["invalid_evidence_provenance_denied"] },
+    { "demo_id": "D-08", "slug": "external-evidence-to-credential", "happy_path": ["normalize_external_evidence", "evaluate_policy", "review_and_issue"], "failure_paths": ["insufficient_or_conflicting_evidence_review"] },
+    { "demo_id": "D-09", "slug": "offline-facility-verification", "happy_path": ["provision_edge_trust", "verify_offline", "buffer_audit", "restore_and_sync"], "failure_paths": ["expired_offline_trust_denied"] },
+    { "demo_id": "D-10", "slug": "organization-primitives", "happy_path": ["configure_organization", "configure_issuer_profiles", "configure_trust_and_mip_primitives"], "failure_paths": ["unauthorized_administration_denied"] }
+  ]
+}
