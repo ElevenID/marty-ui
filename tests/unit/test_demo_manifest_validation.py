@@ -54,9 +54,25 @@ class DemoManifestValidationTests(unittest.TestCase):
     def test_post_july_releases_require_the_v3_portfolio_and_legacy_wallet_demos(self):
         manifest = copy.deepcopy(self.manifest)
         manifest["stack_version"] = "2026.08.0"
+        manifest["binding_state"] = "BOUND"
         for scenario in manifest["scenarios"]:
             scenario["poster"]["src"] = scenario["poster"]["src"].replace("2026.07.0", "2026.08.0")
         with self.assertRaisesRegex(ManifestValidationError, "required portfolio and preserved legacy"):
+            validate_manifest(manifest)
+
+    def test_pending_deployment_draft_cannot_claim_release_evidence(self):
+        manifest = copy.deepcopy(self.manifest)
+        manifest["binding_state"] = "PENDING_DEPLOYMENT"
+        manifest["deployment_release_marker"] = None
+        manifest["component_revisions"] = []
+        manifest["image_digests"] = []
+        manifest["release_evidence"]["source_marker"] = None
+        manifest["release_evidence"]["recorded_at"] = None
+        manifest["release_evidence"]["displayed_offers_invalidated_at"] = None
+        manifest["release_evidence"]["artifacts"] = []
+        validate_manifest(manifest)
+        manifest["deployment_release_marker"] = "invented-release"
+        with self.assertRaisesRegex(ManifestValidationError, "cannot claim a release marker"):
             validate_manifest(manifest)
 
     def test_sensitive_public_fields_are_rejected(self):

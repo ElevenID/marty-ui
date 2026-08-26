@@ -140,6 +140,10 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     require(bool(MIP_VERSION.fullmatch(manifest["mip_version"])), "mip_version must be semantic and independent")
     require(manifest["publication_state"] in {"DRAFT", "PUBLIC", "SUPERSEDED"}, "invalid publication_state")
     require(manifest["coverage_state"] in {"PARTIAL", "COMPLETE", "SUPERSEDED"}, "invalid coverage_state")
+    binding_state = manifest.get("binding_state", "BOUND")
+    require(binding_state in {"BOUND", "PENDING_DEPLOYMENT"}, "invalid binding_state")
+    if not manifest["stack_version"].startswith("2026.07."):
+        require("binding_state" in manifest, "post-July manifests require an explicit binding_state")
 
     distribution = manifest["video_distribution"]
     require(distribution.get("provider") == "YOUTUBE", "video distribution provider must be YOUTUBE")
@@ -173,16 +177,27 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         require(bool(SHA256.fullmatch(recorder.get("value", ""))), "recorder source snapshot must be a SHA-256")
 
     components = manifest["component_revisions"]
-    require(isinstance(components, list) and components, "component_revisions cannot be empty")
+    require(isinstance(components, list), "component_revisions must be a list")
+    require(binding_state == "PENDING_DEPLOYMENT" or components, "component_revisions cannot be empty")
     for component in components:
         require(bool(GIT_REVISION.fullmatch(component.get("revision", ""))), f"{component.get('component')}: revision must be a full SHA")
 
     images = manifest["image_digests"]
-    require(isinstance(images, list) and images, "image_digests cannot be empty")
+    require(isinstance(images, list), "image_digests must be a list")
+    require(binding_state == "PENDING_DEPLOYMENT" or images, "image_digests cannot be empty")
     for image in images:
         require(bool(DIGEST.fullmatch(image.get("digest", ""))), f"{image.get('component')}: immutable image digest required")
 
-    require(bool(manifest["release_evidence"].get("displayed_offers_invalidated_at")), "displayed offers must be invalidated before evidence publication")
+    if binding_state == "PENDING_DEPLOYMENT":
+        require(manifest["publication_state"] == "DRAFT" and not manifest["release_ready"], "pending deployment binding must remain a non-ready draft")
+        require(manifest.get("deployment_release_marker") is None, "pending deployment binding cannot claim a release marker")
+        require(not components and not images, "pending deployment binding cannot claim revisions or image digests")
+        evidence = manifest["release_evidence"]
+        require(evidence.get("source_marker") is None, "pending deployment binding cannot claim a source marker")
+        require(evidence.get("recorded_at") is None and evidence.get("displayed_offers_invalidated_at") is None, "pending deployment binding cannot claim recording times")
+        require(evidence.get("artifacts") == [], "pending deployment binding cannot claim release artifacts")
+    else:
+        require(bool(manifest["release_evidence"].get("displayed_offers_invalidated_at")), "displayed offers must be invalidated before evidence publication")
 
     scenarios = manifest["scenarios"]
     require(isinstance(scenarios, list) and scenarios, "scenarios cannot be empty")
