@@ -136,6 +136,52 @@ async fn redis_backed_http_routes_complete_the_authenticated_lifecycle() {
         serde_json::from_slice(&to_bytes(listed.into_body(), usize::MAX).await.unwrap()).unwrap();
     assert_eq!(listed.as_array().unwrap().len(), 1);
 
+    let renewal = request("HTTP CSCA");
+    let renewed_path =
+        format!("/internal/documents/{organization_id}/csca-certificates/csca-http-2");
+    let renewed = app
+        .clone()
+        .oneshot(
+            Request::post(format!("{certificate_path}/renew"))
+                .header("content-type", "application/json")
+                .header("x-api-key", "test-internal-key")
+                .body(Body::from(
+                    serde_json::json!({
+                        "replacement_certificate_id": "csca-http-2",
+                        "cert_pem": renewal.cert_pem,
+                        "cert_chain_pem": renewal.cert_chain_pem,
+                        "key_reference": renewal.key_reference,
+                        "expected_public_jwk": renewal.expected_public_jwk,
+                        "reuse_key": false,
+                        "metadata": renewal.metadata,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(renewed.status(), StatusCode::OK);
+
+    let expiring = app
+        .clone()
+        .oneshot(
+            Request::post(format!(
+                "/internal/documents/{organization_id}/csca-certificates/expiring"
+            ))
+            .header("content-type", "application/json")
+            .header("x-api-key", "test-internal-key")
+            .body(Body::from(r#"{"threshold_days":30}"#))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(expiring.status(), StatusCode::OK);
+    let expiring: Value =
+        serde_json::from_slice(&to_bytes(expiring.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(expiring.as_array().unwrap().len(), 1);
+    assert_eq!(expiring[0]["certificate_id"], "csca-http-2");
+
     let outbox_path = format!("/internal/documents/{organization_id}/csca-outbox");
     let outbox = app
         .clone()
@@ -166,7 +212,7 @@ async fn redis_backed_http_routes_complete_the_authenticated_lifecycle() {
     let revoked = app
         .clone()
         .oneshot(
-            Request::post(format!("{certificate_path}/revoke"))
+            Request::post(format!("{renewed_path}/revoke"))
                 .header("content-type", "application/json")
                 .header("x-api-key", "test-internal-key")
                 .body(Body::from(r#"{"reason":"KEY_COMPROMISE"}"#))
@@ -178,7 +224,7 @@ async fn redis_backed_http_routes_complete_the_authenticated_lifecycle() {
 
     let data = app
         .oneshot(
-            Request::get(format!("{certificate_path}/data"))
+            Request::get(format!("{renewed_path}/data"))
                 .header("x-api-key", "test-internal-key")
                 .body(Body::empty())
                 .unwrap(),

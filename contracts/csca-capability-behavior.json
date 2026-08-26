@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "historical_python_surface": {
     "repository": "ElevenID/Marty",
     "placeholder_artifact": {
@@ -83,6 +83,28 @@
         "credential_formats": ["mso_mdoc", "zk_mdoc"]
       },
       "managed_key_reference_prefix": "cred-dsc-",
+      "renewal_contract": {
+        "replacement_must_be": [
+          "a distinct certificate",
+          "currently valid",
+          "the same X.509 subject"
+        ],
+        "reuse_key_default": false,
+        "reuse_key_false_requires": "a newly rotated certificate public key",
+        "reuse_key_true_requires": [
+          "the existing managed key reference",
+          "the existing certificate public key"
+        ]
+      },
+      "extension_contract": {
+        "certificate_embedded_extensions": "preserved in the imported PEM certificate",
+        "loose_extension_map": "rejected instead of silently ignored"
+      },
+      "legacy_request_aliases": {
+        "threshold_days": "days_threshold",
+        "status_filter": "status",
+        "subject_filter": "subject"
+      },
       "internal_routes": [
         {"method": "POST", "path": "/internal/kms/sign"},
         {"method": "POST", "path": "/internal/kms/public-key"},
@@ -110,6 +132,8 @@
         "expiry-window-query",
         "idempotent-revocation",
         "renewal-lineage",
+        "validated-optional-renewal-key-reuse",
+        "certificate-embedded-X.509-extension-preservation-without-silently-ignored-extension-maps",
         "transactional-issued-renewed-and-revoked-outbox-events",
         "idempotent-outbox-acknowledgement",
         "optimistic-concurrency-protection"
