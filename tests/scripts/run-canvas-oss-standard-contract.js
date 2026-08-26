@@ -1754,6 +1754,7 @@ module.exports = {
   didWebResolutionUrl,
   extractDeveloperKeyRecord,
   parseCredentialOfferUri,
+  receiveAndVerifyCredential,
   requireComposeExecutionBoundary,
   requireSecretFile,
   responseJson,
@@ -1761,6 +1762,8 @@ module.exports = {
   validateAuthoritativeEvidenceHeads,
   validateReadinessSnapshot,
   verifyCompactJws,
+  verifyCompactJwsStructure,
+  verificationMethodFromDidDocument,
 };
 
 if (require.main === module) {

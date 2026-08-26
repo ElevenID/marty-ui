@@ -773,6 +773,8 @@ fn public_config_document(state: &AppState, registry: Value) -> Value {
         "supports_native_key_management": true,
         "registration_mode": "managed-or-external",
         "default_service_id": registry.get("default_service_id").cloned().unwrap_or(Value::Null),
+        "format_defaults": registry.get("format_defaults").cloned().unwrap_or_else(|| json!({})),
+        "type_defaults": registry.get("type_defaults").cloned().unwrap_or_else(|| json!({})),
         "services": services,
         "key_reference_purposes": registry.get("key_reference_purposes").cloned().unwrap_or_else(|| json!({})),
         "service_type_catalog": registry::service_catalog(),
@@ -1996,6 +1998,32 @@ mod public_contract_tests {
             request[private] = json!("must-not-cross");
             assert!(serde_json::from_value::<IssuerIdentityRequest>(request).is_err());
         }
+    }
+
+    #[test]
+    fn public_config_preserves_provider_routing_defaults_for_lossless_updates() {
+        let state = AppState {
+            internal_api_key: Arc::from("test-key"),
+            registry_store: None,
+            document_store: None,
+            csca_lifecycle_store: None,
+            profile_store: None,
+            flow_envelopes: None,
+            compatibility: None,
+            public_domain: Some("beta.example".into()),
+        };
+        let projected = public_config_document(
+            &state,
+            json!({
+                "services": [],
+                "default_service_id": "provider-a",
+                "format_defaults": {"dc+sd-jwt": "provider-b"},
+                "type_defaults": {"vc_jwt_issuer": "provider-c"},
+                "key_reference_purposes": {}
+            }),
+        );
+        assert_eq!(projected["format_defaults"]["dc+sd-jwt"], "provider-b");
+        assert_eq!(projected["type_defaults"]["vc_jwt_issuer"], "provider-c");
     }
 
     #[test]
