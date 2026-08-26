@@ -16,6 +16,7 @@ const {
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LIFECYCLE_POLICY_ID,
   DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
+  credentialLifecycleBehaviorAssertions,
   verificationResultEvidence,
   verificationSessionRequest,
 } = require('./beta-credential-contract');
@@ -709,27 +710,14 @@ async function main() {
       entry.status === 403 && entry.url.includes('/v1/policy-sets?')
     ));
 
-    const suspendDecision = report.suspend.verification?.result;
-    const reinstateDecision = report.reinstate.verification?.result;
-    const revokeDecision = report.revoke.verification?.result;
+    report.behaviorAssertions = credentialLifecycleBehaviorAssertions(report);
     report.releaseReady = Boolean(
       report.permissions.status === 200
       && report.permissions.hasLifecyclePermission
       && report.draftCleanup.ok
       && report.credentialCleanup.ok
-      && report.renewal.ok
+      && Object.values(report.behaviorAssertions).every((passed) => passed === true)
       && report.statusListOwnership.ok
-      && report.suspend.ok
-      && String(report.suspend.current.lifecycleStatus).toUpperCase() === 'SUSPENDED'
-      && suspendDecision?.decision === 'deny'
-      && /suspend/i.test(suspendDecision?.decisionReason || '')
-      && report.reinstate.ok
-      && String(report.reinstate.current.lifecycleStatus).toUpperCase() === 'ACTIVE'
-      && reinstateDecision?.decision === 'allow'
-      && report.revoke.ok
-      && String(report.revoke.current.lifecycleStatus).toUpperCase() === 'REVOKED'
-      && revokeDecision?.decision === 'deny'
-      && /revok/i.test(revokeDecision?.decisionReason || '')
       && report.crossOrg.denied
       && report.pageErrors.length === 0
       && report.unexpectedResponses.length === 0

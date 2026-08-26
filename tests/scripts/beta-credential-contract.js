@@ -83,6 +83,38 @@ function verificationSessionRequest({
   };
 }
 
+function membershipLoginBehaviorAssertions(report) {
+  return {
+    governed_claim: report?.badge?.offerSource === 'canonical-ui'
+      && report?.badge?.loggedOut === true,
+    conformant_open_badge_issuance: report?.badge?.accepted === true
+      && report?.badge?.storedExpectedCredential === true,
+    same_device_passwordless_login: report?.presentation?.accepted === true
+      && report?.completion?.status === 'completed'
+      && report?.completion?.authenticated === true,
+  };
+}
+
+function credentialLifecycleBehaviorAssertions(report) {
+  const suspended = report?.suspend?.verification?.result;
+  const reinstated = report?.reinstate?.verification?.result;
+  const revoked = report?.revoke?.verification?.result;
+  return {
+    renew: report?.renewal?.ok === true,
+    suspend: report?.suspend?.ok === true
+      && String(report?.suspend?.current?.lifecycleStatus || '').toUpperCase() === 'SUSPENDED',
+    reinstate: report?.reinstate?.ok === true
+      && String(report?.reinstate?.current?.lifecycleStatus || '').toUpperCase() === 'ACTIVE'
+      && reinstated?.decision === 'allow',
+    revoke: report?.revoke?.ok === true
+      && String(report?.revoke?.current?.lifecycleStatus || '').toUpperCase() === 'REVOKED',
+    suspended_and_revoked_states_denied: suspended?.decision === 'deny'
+      && /suspend/i.test(suspended?.decisionReason || '')
+      && revoked?.decision === 'deny'
+      && /revok/i.test(revoked?.decisionReason || ''),
+  };
+}
+
 module.exports = {
   DEFAULT_BETA_ORGANIZATION_ID,
   DEFAULT_LIFECYCLE_POLICY_ID,
@@ -90,7 +122,9 @@ module.exports = {
   DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
   DEFAULT_LOGIN_BADGE_TEMPLATE_ID,
   credentialConfigurationIdForWaltid,
+  credentialLifecycleBehaviorAssertions,
   credentialInventoryEvidence,
+  membershipLoginBehaviorAssertions,
   verificationResultEvidence,
   verificationSessionRequest,
 };

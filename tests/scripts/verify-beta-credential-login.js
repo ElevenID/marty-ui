@@ -20,6 +20,7 @@ const {
 const {
   DEFAULT_LOGIN_BADGE_CONFIGURATION_ID,
   credentialInventoryEvidence,
+  membershipLoginBehaviorAssertions,
 } = require('./beta-credential-contract');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -239,14 +240,9 @@ async function main() {
       'Credential login complete',
       'The badge presentation resolved the existing user and created a new authenticated ElevenID session.',
     );
+    report.behaviorAssertions = membershipLoginBehaviorAssertions(report);
     report.releaseReady = (
-      report.badge.offerSource === 'canonical-ui'
-      && report.badge.loggedOut
-      && report.badge.accepted
-      && report.badge.storedExpectedCredential
-      && report.presentation.accepted
-      && report.completion.status === 'completed'
-      && report.completion.authenticated
+      Object.values(report.behaviorAssertions).every((passed) => passed === true)
       && report.pageErrors.length === 0
       && report.badResponses.length === 0
     );
