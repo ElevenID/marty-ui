@@ -43,6 +43,20 @@ def test_static_ui_nginx_does_not_serve_spa_for_readiness() -> None:
     assert contents.index("location = /ready") < contents.index("location / {")
 
 
+def test_static_ui_nginx_routes_demo_catalog_around_manifest_directory() -> None:
+    expected_location = "location ~ ^/demos/?$"
+    expected_fallback = "try_files /demos/index.html /index.html;"
+
+    for relative_path in (
+        "ui/nginx.spa.conf",
+        "ui/nginx.prod.conf",
+        "ui/nginx.dev.conf",
+    ):
+        contents = _text(relative_path)
+        assert expected_location in contents, relative_path
+        assert expected_fallback in contents, relative_path
+
+
 def test_beta_tunnel_edge_healthcheck_uses_readiness() -> None:
     contents = _text("docker-compose.profile.tunnel.yml")
 

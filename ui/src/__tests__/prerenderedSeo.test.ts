@@ -20,8 +20,13 @@ function readPrerenderedHtml(...segments: string[]) {
   return fs.readFileSync(filePath, 'utf8')
 }
 
+function expectDeployableAssetUrls(html: string) {
+  expect(html).not.toMatch(/https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?\/assets\//i)
+}
+
 describeIfBuilt('prerendered blog SEO output', () => {
   it('keeps article and guide metadata in emitted post pages', () => {
+    expectDeployableAssetUrls(readPrerenderedHtml())
     const guideHtml = readPrerenderedHtml('blog', 'foundations-identity')
     expect(guideHtml).toContain('data-seo-jsonld="true"')
     expect(guideHtml).toContain('"@type":"Article"')
@@ -32,7 +37,7 @@ describeIfBuilt('prerendered blog SEO output', () => {
     expect(articleHtml).toContain('meta property="article:author" content="Daniel Ortega"')
     expect(articleHtml).toContain('meta property="og:image" content="https://elevenidllc.com/images/social/why-identity-needs-a-protocol.png"')
     expect(articleHtml).toContain('meta property="og:image:width" content="1200"')
-    expect(articleHtml).toContain('"dateModified":"2026-06-28"')
+    expect(articleHtml).toContain('"dateModified":"2026-07-30"')
   })
 
   it('emits collection and author metadata for archive surfaces', () => {
@@ -59,6 +64,7 @@ describeIfBuilt('prerendered blog SEO output', () => {
 describeIfBuilt('prerendered ElevenID LLC demo output', () => {
   it('emits release and scenario pages from the public manifest', () => {
     const releaseHtml = readPrerenderedHtml('demos', '2026.07.0')
+    expectDeployableAssetUrls(releaseHtml)
     expect(releaseHtml).toContain('Credential Lifecycle Foundation')
     expect(releaseHtml).toContain('ElevenID LLC Credential Platform')
     expect(releaseHtml).toContain('Version v2026.07.0')
@@ -66,6 +72,7 @@ describeIfBuilt('prerendered ElevenID LLC demo output', () => {
     expect(releaseHtml).toContain('PARTIAL coverage')
 
     const scenarioHtml = readPrerenderedHtml('demos', '2026.07.0', 'membership-badge-login')
+    expectDeployableAssetUrls(scenarioHtml)
     expect(scenarioHtml).toContain('Membership Badge and Login')
     expect(scenarioHtml).toContain('Automated publication verification')
     expect(scenarioHtml).toContain('Play recording')

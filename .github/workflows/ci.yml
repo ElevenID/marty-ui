@@ -1266,6 +1266,9 @@ jobs:
       - name: Install Chromium system dependencies
         working-directory: tests
         run: npx playwright install-deps chromium
+      - name: Build and verify the public demo platform
+        working-directory: tests
+        run: npm run test:demo-platform
       - name: Run deterministic credential lifecycle gate
         working-directory: tests
         run: npx playwright test --config playwright.applicant-wallet.config.js
@@ -1277,6 +1280,8 @@ jobs:
           path: |
             tests/test-results/
             tests/playwright-report-applicant-wallet/
+            tests/artifacts/demo-platform-playwright/
+            tests/artifacts/demo-platform-playwright-report/
           retention-days: 14
 
   security:
