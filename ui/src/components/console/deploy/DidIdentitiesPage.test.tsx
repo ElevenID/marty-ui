@@ -3,8 +3,9 @@ import { renderWithRouter, screen, waitFor } from '@test/utils';
 
 import DidIdentitiesPage from './DidIdentitiesPage';
 
-const { listPublicIssuerIdentities, deleteIssuerIdentity, showNotification } = vi.hoisted(() => ({
+const { listPublicIssuerIdentities, rebindIssuerIdentity, deleteIssuerIdentity, showNotification } = vi.hoisted(() => ({
   listPublicIssuerIdentities: vi.fn(),
+  rebindIssuerIdentity: vi.fn(),
   deleteIssuerIdentity: vi.fn(),
   showNotification: vi.fn(),
 }));
@@ -12,6 +13,7 @@ const { listPublicIssuerIdentities, deleteIssuerIdentity, showNotification } = v
 vi.mock('../../../services/signingKeysApi', () => ({
   default: {
     listPublicIssuerIdentities: (...args: unknown[]) => listPublicIssuerIdentities(...args),
+    rebindIssuerIdentity: (...args: unknown[]) => rebindIssuerIdentity(...args),
     deleteIssuerIdentity: (...args: unknown[]) => deleteIssuerIdentity(...args),
   },
 }));
@@ -38,6 +40,7 @@ describe('DidIdentitiesPage', () => {
         : [],
     }));
     deleteIssuerIdentity.mockResolvedValue({ deleted: { issuer_did: 'did:web:issuer.example:orgs:test' } });
+    rebindIssuerIdentity.mockResolvedValue({ changed: true });
   });
 
   it('loads identities through format-scoped public DID queries', async () => {
@@ -69,6 +72,27 @@ describe('DidIdentitiesPage', () => {
       });
     });
     expect(showNotification).toHaveBeenCalledWith('Issuer identity retired.', 'success');
+  });
+
+  it('moves an identity to the configured default without exposing custody coordinates', async () => {
+    const { user } = renderWithRouter(<DidIdentitiesPage />);
+    await screen.findByText('did:web:issuer.example:orgs:test');
+    await user.click(screen.getByRole('button', { name: 'Move identity to default signing service' }));
+    await user.click(screen.getByRole('button', { name: 'Move identity' }));
+
+    await waitFor(() => {
+      expect(rebindIssuerIdentity).toHaveBeenCalledWith({
+        organization_id: 'org-test-1',
+        issuer_did: 'did:web:issuer.example:orgs:test',
+        key_purpose: 'vc_jwt_issuer',
+        credential_format: 'SD_JWT_VC',
+        algorithm: 'ES256',
+      });
+    });
+    expect(showNotification).toHaveBeenCalledWith(
+      'Issuer identity moved to the default signing service.',
+      'success',
+    );
   });
 
   it('never loads issuer profiles, services, or raw keys', async () => {

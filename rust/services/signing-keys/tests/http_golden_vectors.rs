@@ -110,6 +110,77 @@ async fn public_openapi_does_not_publish_internal_custody_routes() {
         .unwrap()
         .keys()
         .all(|path| !path.starts_with("/internal/")));
+    assert!(spec["paths"]["/v1/signing-keys/issuer-identities"]["patch"].is_object());
+}
+
+#[tokio::test]
+async fn public_provider_rebind_route_is_tuple_only_and_fail_closed() {
+    let app = || {
+        marty_signing_keys::http::router_with_dependencies(
+            "internal-key".into(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("beta.example".into()),
+        )
+    };
+    let body = serde_json::json!({
+        "organization_id": "org-a",
+        "issuer_did": "did:web:beta.example:orgs:acme",
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256"
+    });
+    let unavailable = app()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/signing-keys/issuer-identities?organization_id=org-a")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let mut private = body;
+    private["signing_service_id"] = serde_json::json!("must-not-cross");
+    let rejected = app()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/signing-keys/issuer-identities?organization_id=org-a")
+                .header("content-type", "application/json")
+                .body(Body::from(private.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let mut irrelevant = serde_json::json!({
+        "organization_id": "org-a",
+        "issuer_did": "did:web:beta.example:orgs:acme",
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256"
+    });
+    irrelevant["cert_pem"] = serde_json::json!("must-not-be-ignored");
+    let rejected = app()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/v1/signing-keys/issuer-identities?organization_id=org-a")
+                .header("content-type", "application/json")
+                .body(Body::from(irrelevant.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]

@@ -19,7 +19,7 @@ use crate::{
     profiles::{
         self, CustodyFormatRequest, FindProfilesRequest, ProfileStore, ValidateBindingRequest,
     },
-    registry::RegistryStore,
+    registry::{self, RegistryStore, ResolveRequest},
 };
 
 #[derive(Clone)]
@@ -535,6 +535,134 @@ impl SigningCompatibilityService {
         Ok(json!({"ok": true, "profile": profile, "created": created}))
     }
 
+    pub async fn create_provider_neutral_profile(
+        &self,
+        request: &ProfileWriteRequest,
+        managed_key_reference: &str,
+    ) -> Result<Value, CompatibilityError> {
+        let mut body = request.body.clone();
+        let (service_id, key_reference) = self
+            .resolve_identity_custody(
+                &request.organization_id,
+                required(&body, "credential_format")?,
+                required(&body, "key_purpose")?,
+                required(&body, "algorithm")?,
+                managed_key_reference,
+            )
+            .await?;
+        body["signing_service_id"] = Value::String(service_id);
+        body["signing_key_reference"] = Value::String(key_reference);
+        self.create_profile(&ProfileWriteRequest {
+            organization_id: request.organization_id.clone(),
+            body,
+        })
+        .await
+    }
+
+    pub async fn rebind_profile_to_default(
+        &self,
+        organization_id: &str,
+        profile_id: &str,
+        managed_key_reference: &str,
+    ) -> Result<Value, CompatibilityError> {
+        let existing = self
+            .profiles
+            .get(organization_id, profile_id)
+            .await
+            .map_err(map_profile_error)?;
+        let (service_id, key_reference) = self
+            .resolve_identity_custody(
+                organization_id,
+                required(&existing, "credential_format")?,
+                required(&existing, "key_purpose")?,
+                required(&existing, "algorithm")?,
+                managed_key_reference,
+            )
+            .await?;
+        let unchanged = existing.get("signing_service_id").and_then(Value::as_str)
+            == Some(service_id.as_str())
+            && existing
+                .get("signing_key_reference")
+                .and_then(Value::as_str)
+                == Some(key_reference.as_str());
+        if unchanged {
+            return Ok(json!({"ok": true, "profile": existing, "changed": false}));
+        }
+
+        let mut profile = profiles::normalize_profile(
+            organization_id,
+            profiles::NormalizeProfileRequest {
+                body: json!({
+                    "signing_service_id": service_id,
+                    "signing_key_reference": key_reference,
+                    "verification_method_id": ""
+                }),
+                existing: Some(existing),
+                now: None,
+                profile_id: Some(profile_id.into()),
+            },
+        )
+        .map_err(map_profile_error)?;
+        let registry = self
+            .registry
+            .load(organization_id)
+            .await
+            .map_err(|_| CompatibilityError::Unavailable)?;
+        let service_id = required(&profile, "signing_service_id")?.to_owned();
+        let mut service =
+            service_for(&registry, &service_id).ok_or(CompatibilityError::ServiceNotFound)?;
+        complete_profile_binding(&mut profile, &mut service).await?;
+        profiles::validate_binding(&ValidateBindingRequest {
+            profile: profile.clone(),
+            service: Value::Object(service.clone()),
+            registry,
+        })
+        .map_err(map_profile_error)?;
+
+        // Publish and validate the replacement public key before changing the
+        // active profile. A provider outage or unpublished key therefore leaves
+        // the old issuer binding usable and never creates a fail-open window.
+        self.ensure_did_web_verification_method(
+            organization_id,
+            &service_id,
+            &service,
+            &mut profile,
+        )
+        .await?;
+        self.registry
+            .bind_profile(organization_id, &profile)
+            .await
+            .map_err(|error| CompatibilityError::Invalid(error.to_string()))?;
+        let profile = self
+            .profiles
+            .put(organization_id, profile_id, profile)
+            .await
+            .map_err(map_profile_error)?;
+        Ok(json!({"ok": true, "profile": profile, "changed": true}))
+    }
+
+    async fn resolve_identity_custody(
+        &self,
+        organization_id: &str,
+        credential_format: &str,
+        key_purpose: &str,
+        algorithm: &str,
+        managed_key_reference: &str,
+    ) -> Result<(String, String), CompatibilityError> {
+        let registry = self
+            .registry
+            .load(organization_id)
+            .await
+            .map_err(|_| CompatibilityError::Unavailable)?;
+        select_identity_custody(
+            &registry,
+            credential_format,
+            key_purpose,
+            algorithm,
+            managed_key_reference,
+        )
+    }
+
     pub async fn update_profile(
         &self,
         profile_id: &str,
@@ -661,6 +789,11 @@ impl SigningCompatibilityService {
         .await
         .map_err(map_kms_error)?;
         let jwk = extract_provider_jwk(&provider_key).ok_or(CompatibilityError::Unavailable)?;
+        validate_public_key_algorithm(
+            &jwk,
+            Some(required(profile, "algorithm")?),
+            "The replacement signing key",
+        )?;
         let key_reference = clean(profile.get("signing_key_reference").and_then(Value::as_str));
         let published = self
             .documents
@@ -1255,20 +1388,11 @@ async fn complete_profile_binding(
         .await
         .map_err(map_kms_error)?;
         let jwk = extract_provider_jwk(&provider_key).ok_or(CompatibilityError::Unavailable)?;
-        let discovered = algorithm_for_jwk(&jwk).ok_or_else(|| {
-            CompatibilityError::Invalid(format!(
-                "Managed KMS key '{reference}' uses an unsupported public key type."
-            ))
-        })?;
-        if requested
-            .as_deref()
-            .is_some_and(|value| value != discovered)
-        {
-            return Err(CompatibilityError::Invalid(format!(
-                "Managed KMS key '{reference}' uses algorithm '{discovered}', not '{}'.",
-                requested.as_deref().unwrap_or_default()
-            )));
-        }
+        let discovered = validate_public_key_algorithm(
+            &jwk,
+            requested.as_deref(),
+            &format!("Managed KMS key '{reference}'"),
+        )?;
         profile["algorithm"] = Value::String(discovered.into());
         return Ok(());
     }
@@ -1320,6 +1444,23 @@ fn algorithm_for_jwk(jwk: &Map<String, Value>) -> Option<&'static str> {
     }
 }
 
+fn validate_public_key_algorithm(
+    jwk: &Map<String, Value>,
+    requested: Option<&str>,
+    key_label: &str,
+) -> Result<&'static str, CompatibilityError> {
+    let discovered = algorithm_for_jwk(jwk).ok_or_else(|| {
+        CompatibilityError::Invalid(format!("{key_label} uses an unsupported public key type."))
+    })?;
+    if requested.is_some_and(|algorithm| algorithm != discovered) {
+        return Err(CompatibilityError::Conflict(format!(
+            "{key_label} uses algorithm '{discovered}', not '{}'.",
+            requested.unwrap_or_default()
+        )));
+    }
+    Ok(discovered)
+}
+
 fn map_document_error(error: documents::DocumentError) -> CompatibilityError {
     match error {
         documents::DocumentError::Invalid(detail) => CompatibilityError::BadRequest(detail),
@@ -1354,6 +1495,57 @@ fn supports(service: &Map<String, Value>, field: &str, requested: &str) -> bool 
                     })
                 })
         })
+}
+
+fn select_identity_custody(
+    registry_document: &Value,
+    credential_format: &str,
+    key_purpose: &str,
+    algorithm: &str,
+    managed_key_reference: &str,
+) -> Result<(String, String), CompatibilityError> {
+    let wire_format = profiles::custody_format(&CustodyFormatRequest {
+        credential_format: credential_format.into(),
+        key_purpose: key_purpose.into(),
+    })
+    .map_err(map_profile_error)?
+    .wire_format;
+    let resolved = registry::resolve(ResolveRequest {
+        registry: registry_document.clone(),
+        service: None,
+        keys: Vec::new(),
+        credential_format: Some(wire_format.clone()),
+        key_purpose: Some(key_purpose.into()),
+        algorithm: Some(algorithm.into()),
+    })
+    .map_err(|error| CompatibilityError::Invalid(error.to_string()))?;
+    let service = resolved
+        .service
+        .and_then(|value| value.as_object().cloned())
+        .ok_or(CompatibilityError::ServiceNotFound)?;
+    let service_id = required(&Value::Object(service.clone()), "id")?.to_owned();
+    if !supports(&service, "credential_formats", &wire_format)
+        || !supports(&service, "key_purposes", key_purpose)
+        || !supports(&service, "algorithms", algorithm)
+    {
+        return Err(CompatibilityError::Conflict(
+            "Resolved signing service is incompatible with the issuer identity tuple.".into(),
+        ));
+    }
+    let key_reference = if service_id == "managed-openbao-transit" {
+        clean(Some(managed_key_reference))
+    } else {
+        resolved
+            .key_reference
+            .or_else(|| clean(service.get("key_reference").and_then(Value::as_str)))
+    }
+    .ok_or_else(|| {
+        CompatibilityError::NotFound(
+            "Resolved signing service has no compatible published key for the issuer identity tuple."
+                .into(),
+        )
+    })?;
+    Ok((service_id, key_reference))
 }
 
 fn single_string(service: &Map<String, Value>, field: &str) -> Option<String> {
@@ -1718,6 +1910,151 @@ mod tests {
             .expect("resolver")
             .remove("resolved_at");
         assert_eq!(result, contract.expected_without_resolved_at);
+    }
+
+    #[test]
+    fn provider_neutral_custody_uses_the_compatible_registry_default() {
+        let registry = json!({
+            "services": [
+                {
+                    "id": "provider-a",
+                    "key_reference": "issuer-a",
+                    "credential_formats": ["dc+sd-jwt"],
+                    "key_purposes": ["vc_jwt_issuer"],
+                    "algorithms": ["ES256"]
+                },
+                {
+                    "id": "provider-b",
+                    "key_reference": "issuer-b",
+                    "credential_formats": ["dc+sd-jwt"],
+                    "key_purposes": ["vc_jwt_issuer"],
+                    "algorithms": ["ES256"]
+                }
+            ],
+            "default_service_id": "provider-b",
+            "format_defaults": {},
+            "type_defaults": {},
+            "key_reference_purposes": {}
+        });
+        assert_eq!(
+            select_identity_custody(
+                &registry,
+                "SD_JWT_VC",
+                "vc_jwt_issuer",
+                "ES256",
+                "managed-key"
+            )
+            .expect("compatible default custody"),
+            ("provider-b".into(), "issuer-b".into())
+        );
+
+        let mut incompatible = registry;
+        incompatible["services"][1]["algorithms"] = json!(["RS256"]);
+        assert!(matches!(
+            select_identity_custody(
+                &incompatible,
+                "SD_JWT_VC",
+                "vc_jwt_issuer",
+                "ES256",
+                "managed-key"
+            ),
+            Err(CompatibilityError::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn provider_public_key_algorithm_is_derived_from_key_material() {
+        let p384 = json!({"kty": "EC", "crv": "P-384"});
+        assert_eq!(
+            validate_public_key_algorithm(p384.as_object().unwrap(), Some("ES384"), "key").unwrap(),
+            "ES384"
+        );
+        assert!(matches!(
+            validate_public_key_algorithm(p384.as_object().unwrap(), Some("ES256"), "key"),
+            Err(CompatibilityError::Conflict(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn provider_rebind_keeps_the_did_and_requires_the_replacement_publication() {
+        let contract: IdentityContract = serde_json::from_str(include_str!(
+            "../../../../contracts/gateway-issuer-identity-behavior.json"
+        ))
+        .expect("issuer identity contract");
+        let replacement_method_id = "did:web:issuer.example:orgs:acme#provider-b-issuer-key";
+        let mut replacement_profile = contract.profile_document["profiles"][0].clone();
+        replacement_profile["signing_service_id"] = json!("provider-b");
+        replacement_profile["signing_key_reference"] = json!("provider-b-key");
+        replacement_profile["verification_method_id"] = json!(replacement_method_id);
+        let profile_document = json!({"profiles": [replacement_profile]});
+        let mut registry = contract.registry.clone();
+        registry["services"]
+            .as_array_mut()
+            .expect("services")
+            .push(json!({
+                "id": "provider-b",
+                "name": "Replacement issuer signer",
+                "service_type": "custom-transit-compatible",
+                "key_reference": "provider-b-key",
+                "key_purposes": ["vc_jwt_issuer"],
+                "credential_formats": ["dc+sd-jwt"],
+                "algorithms": ["ES256"]
+            }));
+        registry["key_reference_purposes"]["provider-b"] =
+            json!({"provider-b-key": ["vc_jwt_issuer"]});
+        let mut request = contract.request.clone();
+        request.verification_method_id = Some(replacement_method_id.into());
+
+        let unpublished = resolve_issuer_identity(
+            &profile_document,
+            &registry,
+            &contract.certificates,
+            &contract.did_document,
+            &request,
+        )
+        .await
+        .expect_err("an unpublished replacement key must fail closed");
+        assert!(matches!(unpublished, CompatibilityError::NotFound(_)));
+
+        let mut did_document = contract.did_document;
+        did_document["verificationMethod"]
+            .as_array_mut()
+            .expect("verification methods")
+            .push(json!({
+                "id": replacement_method_id,
+                "type": "JsonWebKey",
+                "controller": request.issuer_did,
+                "publicKeyJwk": {
+                    "kty": "EC", "crv": "P-256", "x": "replacement-x", "y": "replacement-y"
+                }
+            }));
+        did_document["assertionMethod"]
+            .as_array_mut()
+            .expect("assertion methods")
+            .push(json!(replacement_method_id));
+        let resolved = resolve_issuer_identity(
+            &profile_document,
+            &registry,
+            &contract.certificates,
+            &did_document,
+            &request,
+        )
+        .await
+        .expect("published replacement identity");
+        assert_eq!(resolved["issuer_did"], request.issuer_did);
+        assert_eq!(resolved["verification_method_id"], replacement_method_id);
+        assert_eq!(
+            resolved["issuer_profile"]["signing_service_id"],
+            "provider-b"
+        );
+        assert_eq!(
+            did_document["verificationMethod"]
+                .as_array()
+                .expect("verification methods")
+                .len(),
+            2,
+            "the old key remains published so existing credentials stay verifiable"
+        );
     }
 
     #[test]

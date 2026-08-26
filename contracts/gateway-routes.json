@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 434,
+  "route_count": 435,
   "routes": [
     {
       "include_in_schema": true,
@@ -2210,6 +2210,12 @@
     {
       "include_in_schema": true,
       "method": "GET",
+      "path": "/v1/signing-keys/issuer-identities",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "PATCH",
       "path": "/v1/signing-keys/issuer-identities",
       "status_code": 200
     },

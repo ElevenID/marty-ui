@@ -11,7 +11,7 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-pub const EXPECTED_ROUTE_COUNT: usize = 434;
+pub const EXPECTED_ROUTE_COUNT: usize = 435;
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayContract {
@@ -133,7 +133,7 @@ impl GatewayContract {
 
     /// Build the public table plus explicit gateway-to-service helper routes.
     /// Internal helpers are not public API declarations and therefore do not
-    /// alter the frozen 434-route contract.
+    /// alter the frozen public-route contract.
     pub fn proxy_route_table(&self) -> Result<RouteTable, PlatformError> {
         let mut table = self.route_table()?;
         add_gateway_documentation_routes(&mut table)?;
@@ -834,17 +834,17 @@ mod tests {
     #[test]
     fn internal_proxy_routes_do_not_mutate_public_contract() {
         let contract = GatewayContract::load().expect("gateway contract");
-        assert_eq!(contract.route_table().expect("public").routes().len(), 434);
+        assert_eq!(contract.route_table().expect("public").routes().len(), 435);
         assert_eq!(
             contract
                 .runtime_route_table()
                 .expect("runtime")
                 .routes()
                 .len(),
-            437
+            438
         );
         let proxy = contract.proxy_route_table().expect("proxy");
-        assert_eq!(proxy.routes().len(), 448);
+        assert_eq!(proxy.routes().len(), 449);
         assert_eq!(
             route_for(
                 &proxy,

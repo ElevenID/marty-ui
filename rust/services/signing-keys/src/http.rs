@@ -118,6 +118,7 @@ pub fn router_with_dependencies(
             "/v1/signing-keys/issuer-identities",
             get(list_public_issuer_identities)
                 .post(create_public_issuer_identity)
+                .patch(rebind_public_issuer_identity)
                 .delete(delete_public_issuer_identity),
         )
         .route(
@@ -299,6 +300,7 @@ struct IssuerIdentityQuery {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct IssuerIdentityRequest {
     #[serde(default)]
     organization_id: Option<String>,
@@ -530,6 +532,9 @@ async fn create_public_issuer_identity(
     if let Err(error) = validate_identity_scope(&scope.organization_id, &input) {
         return error.into_response();
     }
+    if let Err(error) = validate_identity_operation_fields(&input, true, false) {
+        return error.into_response();
+    }
     if !local_managed_did(state.public_domain.as_deref(), &input.issuer_did) {
         return public_error(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -542,7 +547,7 @@ async fn create_public_issuer_identity(
             "Issuer identity storage is unavailable.",
         );
     };
-    let selector = identity_selector(&input);
+    let selector = identity_selector_with_publication(&input, false);
     let existing = match store.find(&scope.organization_id, selector).await {
         Ok(existing) => existing,
         Err(error) => return public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
@@ -553,21 +558,39 @@ async fn create_public_issuer_identity(
             "Issuer DID resolution is ambiguous for the requested identity tuple.",
         );
     }
-    if let Some(profile) = existing.first() {
-        return Json(json!({"identity": identity_projection(profile), "created": false}))
-            .into_response();
-    }
     let Some(compatibility) = state.compatibility.as_ref() else {
         return public_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "Issuer identity service is unavailable.",
         );
     };
+    if let Some(profile) = existing.first() {
+        return match compatibility
+            .create_profile(&ProfileWriteRequest {
+                organization_id: scope.organization_id.clone(),
+                body: profile.clone(),
+            })
+            .await
+        {
+            Ok(repaired) => repaired
+                .get("profile")
+                .map(|profile| {
+                    Json(json!({"identity": identity_projection(profile), "created": false}))
+                        .into_response()
+                })
+                .unwrap_or_else(|| {
+                    public_error(
+                        StatusCode::BAD_GATEWAY,
+                        "Issuer identity repair returned an invalid response.",
+                    )
+                }),
+            Err(error) => error.into_response(),
+        };
+    }
+    let key_reference = managed_key_reference(&scope.organization_id, &input);
     let body = json!({
         "name": input.issuer_did,
         "issuer_did": input.issuer_did,
-        "signing_service_id": "managed-openbao-transit",
-        "signing_key_reference": managed_key_reference(&scope.organization_id, &input),
         "key_purpose": input.key_purpose,
         "credential_format": input.credential_format.to_ascii_uppercase(),
         "algorithm": canonical_algorithm(&input.algorithm),
@@ -575,10 +598,13 @@ async fn create_public_issuer_identity(
         "status": "active"
     });
     match compatibility
-        .create_profile(&ProfileWriteRequest {
-            organization_id: scope.organization_id,
-            body,
-        })
+        .create_provider_neutral_profile(
+            &ProfileWriteRequest {
+                organization_id: scope.organization_id,
+                body,
+            },
+            &key_reference,
+        )
         .await
     {
         Ok(created) => {
@@ -598,12 +624,70 @@ async fn create_public_issuer_identity(
     }
 }
 
+async fn rebind_public_issuer_identity(
+    State(state): State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    Json(input): Json<IssuerIdentityRequest>,
+) -> Response {
+    if let Err(error) = validate_identity_scope(&scope.organization_id, &input) {
+        return error.into_response();
+    }
+    if let Err(error) = validate_identity_operation_fields(&input, false, false) {
+        return error.into_response();
+    }
+    if !local_managed_did(state.public_domain.as_deref(), &input.issuer_did) {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Signing-provider changes require a local path-scoped did:web issuer.",
+        );
+    }
+    let profile = match one_matching_profile(&state, &scope.organization_id, &input).await {
+        Ok(profile) => profile,
+        Err(error) => return error.into_response(),
+    };
+    let Some(profile_id) = profile.get("id").and_then(Value::as_str) else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is malformed.",
+        );
+    };
+    let Some(compatibility) = state.compatibility.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity service is unavailable.",
+        );
+    };
+    let key_reference = managed_key_reference(&scope.organization_id, &input);
+    match compatibility
+        .rebind_profile_to_default(&scope.organization_id, profile_id, &key_reference)
+        .await
+    {
+        Ok(result) => {
+            let Some(profile) = result.get("profile") else {
+                return public_error(
+                    StatusCode::BAD_GATEWAY,
+                    "Issuer identity rebinding returned an invalid response.",
+                );
+            };
+            Json(json!({
+                "identity": identity_projection(profile),
+                "changed": result.get("changed").and_then(Value::as_bool).unwrap_or(false)
+            }))
+            .into_response()
+        }
+        Err(error) => error.into_response(),
+    }
+}
+
 async fn store_public_issuer_certificate(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
     Json(input): Json<IssuerIdentityRequest>,
 ) -> Response {
     if let Err(error) = validate_identity_scope(&scope.organization_id, &input) {
+        return error.into_response();
+    }
+    if let Err(error) = validate_identity_operation_fields(&input, false, true) {
         return error.into_response();
     }
     let profile = match one_matching_profile(&state, &scope.organization_id, &input).await {
@@ -646,6 +730,9 @@ async fn delete_public_issuer_identity(
     Json(input): Json<IssuerIdentityRequest>,
 ) -> Response {
     if let Err(error) = validate_identity_scope(&scope.organization_id, &input) {
+        return error.into_response();
+    }
+    if let Err(error) = validate_identity_operation_fields(&input, false, false) {
         return error.into_response();
     }
     let profile = match one_matching_profile(&state, &scope.organization_id, &input).await {
@@ -693,6 +780,13 @@ fn public_config_document(state: &AppState, registry: Value) -> Value {
 }
 
 fn identity_selector(input: &IssuerIdentityRequest) -> FindProfilesRequest {
+    identity_selector_with_publication(input, true)
+}
+
+fn identity_selector_with_publication(
+    input: &IssuerIdentityRequest,
+    require_public_identity: bool,
+) -> FindProfilesRequest {
     FindProfilesRequest {
         active_only: true,
         issuer_did: Some(input.issuer_did.trim().to_owned()),
@@ -701,7 +795,7 @@ fn identity_selector(input: &IssuerIdentityRequest) -> FindProfilesRequest {
         algorithm: Some(canonical_algorithm(&input.algorithm)),
         require_signing_service: true,
         require_signing_key_reference: true,
-        require_public_identity: true,
+        require_public_identity,
         ..FindProfilesRequest::default()
     }
 }
@@ -792,6 +886,26 @@ fn local_managed_did(public_domain: Option<&str>, issuer_did: &str) -> bool {
         .map(str::trim)
         .filter(|domain| !domain.is_empty())
         .is_some_and(|domain| issuer_did.starts_with(&format!("did:web:{domain}:orgs:")))
+}
+
+fn validate_identity_operation_fields(
+    input: &IssuerIdentityRequest,
+    allow_attestation_policy: bool,
+    allow_certificate: bool,
+) -> Result<(), PublicSigningError> {
+    if !allow_attestation_policy && input.key_attestation_policy.is_some() {
+        return Err(public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "key_attestation_policy is not valid for this issuer identity operation.",
+        ));
+    }
+    if !allow_certificate && (input.cert_pem.is_some() || input.cert_chain_pem.is_some()) {
+        return Err(public_failure(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Certificate fields are not valid for this issuer identity operation.",
+        ));
+    }
+    Ok(())
 }
 
 fn managed_key_reference(organization_id: &str, input: &IssuerIdentityRequest) -> String {
@@ -1769,6 +1883,12 @@ async fn openapi() -> Json<serde_json::Value> {
         "paths": {
             "/health": {"get": {"summary": "Health Check", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys": {"get": {"summary": "List Signing Keys", "responses": {"200": {"description": "Provider-neutral signing-key inventory"}}}},
+            "/v1/signing-keys/issuer-identities": {
+                "get": {"summary": "List Public Issuer Identities", "responses": {"200": {"description": "DID-first issuer identity inventory without custody coordinates"}}},
+                "post": {"summary": "Create Public Issuer Identity", "responses": {"200": {"description": "Provider-neutral issuer identity provisioning"}}},
+                "patch": {"summary": "Move Issuer Identity to Default Signing Service", "responses": {"200": {"description": "Replacement public key is published before active custody changes"}}},
+                "delete": {"summary": "Retire Public Issuer Identity", "responses": {"200": {"description": "Issuer identity retired"}}}
+            },
             "/v1/signing-keys/service-status": {"get": {"summary": "Signing Keys Service Extraction Status", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/purposes": {"get": {"summary": "List Available Key Purposes", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/service-capabilities": {"get": {"summary": "List Provider Capability Metadata", "responses": {"200": {"description": "Successful Response"}}}}
@@ -1857,6 +1977,25 @@ mod public_contract_tests {
         ));
         assert!(validate_identity_scope("org-a", &identity("vc_jwt_issuer", "ES256")).is_ok());
         assert!(validate_identity_scope("org-b", &identity("vc_jwt_issuer", "ES256")).is_err());
+    }
+
+    #[test]
+    fn public_identity_requests_reject_private_custody_selectors() {
+        for private in [
+            "issuer_profile_id",
+            "signing_service_id",
+            "signing_key_reference",
+        ] {
+            let mut request = json!({
+                "organization_id": "org-a",
+                "issuer_did": "did:web:beta.example:orgs:acme",
+                "key_purpose": "vc_jwt_issuer",
+                "credential_format": "SD_JWT_VC",
+                "algorithm": "ES256"
+            });
+            request[private] = json!("must-not-cross");
+            assert!(serde_json::from_value::<IssuerIdentityRequest>(request).is_err());
+        }
     }
 
     #[test]

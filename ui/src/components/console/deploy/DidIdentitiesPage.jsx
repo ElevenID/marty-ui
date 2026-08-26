@@ -27,6 +27,7 @@ import AddIcon from '@mui/icons-material/Add';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 
 import signingKeysApi from '../../../services/signingKeysApi';
 import { useConsole } from '../../../contexts/ConsoleContext';
@@ -56,6 +57,7 @@ export default function DidIdentitiesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [retiring, setRetiring] = useState(null);
+  const [rebinding, setRebinding] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
   const load = useCallback(async () => {
@@ -125,6 +127,38 @@ export default function DidIdentitiesPage() {
         || requestError?.response?.detail
         || requestError?.message
         || 'Issuer identity could not be retired.',
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const rebindIdentity = async () => {
+    if (!rebinding || !activeOrgId) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      const result = await signingKeysApi.rebindIssuerIdentity({
+        organization_id: activeOrgId,
+        issuer_did: rebinding.issuer_did,
+        key_purpose: rebinding.key_purpose,
+        credential_format: rebinding.credential_format,
+        algorithm: rebinding.algorithm,
+      });
+      showNotification?.(
+        result?.changed
+          ? 'Issuer identity moved to the default signing service.'
+          : 'Issuer identity already uses the default signing service.',
+        'success',
+      );
+      setRebinding(null);
+      await load();
+    } catch (requestError) {
+      setError(
+        requestError?.response?.error?.message
+        || requestError?.response?.detail
+        || requestError?.message
+        || 'Issuer identity could not be moved to the default signing service.',
       );
     } finally {
       setSubmitting(false);
@@ -207,6 +241,11 @@ export default function DidIdentitiesPage() {
                 <TableCell>{identity.algorithm}</TableCell>
                 <TableCell><Chip size="small" color="success" label={identity.status} /></TableCell>
                 <TableCell align="right">
+                  <Tooltip title="Move to default signing service">
+                    <IconButton onClick={() => setRebinding(identity)} aria-label="Move identity to default signing service">
+                      <SwapHorizIcon />
+                    </IconButton>
+                  </Tooltip>
                   <Tooltip title="Retire identity">
                     <IconButton color="error" onClick={() => setRetiring(identity)} aria-label="Retire identity">
                       <DeleteOutlineIcon />
@@ -233,6 +272,24 @@ export default function DidIdentitiesPage() {
           <Button onClick={() => setRetiring(null)} disabled={submitting}>Cancel</Button>
           <Button color="error" variant="contained" onClick={retireIdentity} disabled={submitting}>
             {submitting ? <CircularProgress size={20} /> : 'Retire identity'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={Boolean(rebinding)} onClose={() => !submitting && setRebinding(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>Move issuer identity to the default signer?</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Marty will validate the compatible default signing service and publish its public key to this DID before changing active custody. Existing verification methods remain published so credentials already issued by this DID stay verifiable.
+          </Typography>
+          {rebinding && (
+            <Typography fontFamily="monospace" sx={{ mt: 2, overflowWrap: 'anywhere' }}>{rebinding.issuer_did}</Typography>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRebinding(null)} disabled={submitting}>Cancel</Button>
+          <Button variant="contained" onClick={rebindIdentity} disabled={submitting}>
+            {submitting ? <CircularProgress size={20} /> : 'Move identity'}
           </Button>
         </DialogActions>
       </Dialog>
