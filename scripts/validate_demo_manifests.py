@@ -57,10 +57,7 @@ HISTORICAL_2026_07_SCENARIOS = {
 PORTFOLIO_PATH = Path(__file__).resolve().parents[1] / "deploy-config" / "catalog" / "demo-portfolio-v3.json"
 PORTFOLIO = json.loads(PORTFOLIO_PATH.read_text(encoding="utf-8"))
 PORTFOLIO_SCENARIOS = {scenario["slug"] for scenario in PORTFOLIO["scenarios"]}
-PRESERVED_LEGACY_SCENARIOS = {
-    "first-party-browser-wallet",
-    "independent-wallet-interoperability",
-}
+PRESERVED_LEGACY_SCENARIOS = set(PORTFOLIO["preserved_legacy_scenarios"])
 SCENARIO_PUBLICATION_CHECKS = {
     "accessibility", "captions", "evidence", "links", "playback", "privacy", "thumbnail", "transcript",
 }

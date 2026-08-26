@@ -1,6 +1,7 @@
 {
   "schema_version": 3,
   "fresh_recording_required": true,
+  "preserved_legacy_scenarios": ["first-party-browser-wallet", "independent-wallet-interoperability"],
   "scenarios": [
     { "demo_id": "D-01", "slug": "passport-pre-boarding-clearance", "happy_path": ["passport_validation", "pre_boarding_credential_issuance", "rapid_gate_verification"], "failure_paths": ["untrusted_or_invalid_passport_denied"] },
     { "demo_id": "D-02", "slug": "stable-issuer-identity-pluggable-kms", "happy_path": ["create_issuer_profile", "issue_with_provider_a", "switch_signing_provider", "verify_same_did_identity"], "failure_paths": ["unpublished_signing_key_denied"] },

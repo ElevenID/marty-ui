@@ -86,20 +86,18 @@ PRESENTATION = {
     ),
 }
 
-LEGACY = [
-    (
-        "first-party-browser-wallet",
+LEGACY_PRESENTATION = {
+    "first-party-browser-wallet": (
         "First-Party Browser Wallet",
         "Preserved historical first-party wallet demonstration; fresh MIP 0.5 evidence remains separate.",
         "FIRST_PARTY_CONTROL",
     ),
-    (
-        "independent-wallet-interoperability",
+    "independent-wallet-interoperability": (
         "Independent Wallet Interoperability",
         "Preserved independent-wallet qualification surface for final-protocol interoperability.",
         "INDEPENDENT_WALLET",
     ),
-]
+}
 
 
 def label(value: str) -> str:
@@ -235,7 +233,10 @@ def legacy_scenario(
 def build_manifest() -> dict[str, object]:
     contract = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
     scenarios = [draft_scenario(item) for item in contract["scenarios"]]
-    scenarios.extend(legacy_scenario(*item) for item in LEGACY)
+    scenarios.extend(
+        legacy_scenario(slug, *LEGACY_PRESENTATION[slug])
+        for slug in contract["preserved_legacy_scenarios"]
+    )
     return {
         "schema_version": 2,
         "stack_version": VERSION,
