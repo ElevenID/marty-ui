@@ -1309,8 +1309,15 @@ async fn renew_csca_certificate(
     let now = chrono::Utc::now();
     let mut document = load_csca_lifecycle(&state, &organization_id, now).await?;
     let replacement_id = request.replacement_certificate_id.clone();
+    let reuse_key = request.reuse_key;
     let view = document
-        .renew(&certificate_id, &replacement_id, request.into_import(), now)
+        .renew(
+            &certificate_id,
+            &replacement_id,
+            request.into_import(),
+            reuse_key,
+            now,
+        )
         .map_err(csca_lifecycle_error)?;
     save_csca_lifecycle(&state, &document).await?;
     Ok(Json(view))

@@ -66,7 +66,8 @@ async fn csca_signing_surface_matches_the_language_neutral_contract() {
                 "replacement_certificate_id": "csca-b",
                 "cert_pem": "not-a-certificate",
                 "key_reference": "hsm://csca/b",
-                "expected_public_jwk": {}
+                "expected_public_jwk": {},
+                "reuse_key": false
             }),
             path if path.ends_with("/revoke") => {
                 serde_json::json!({"reason": "test"})

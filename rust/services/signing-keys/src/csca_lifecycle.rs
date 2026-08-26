@@ -63,6 +63,7 @@ impl CscaCertificateStatus {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ImportCscaCertificateRequest {
     pub cert_pem: String,
     #[serde(default)]
@@ -74,12 +75,14 @@ pub struct ImportCscaCertificateRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RevokeCscaCertificateRequest {
     #[serde(default)]
     pub reason: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RenewCscaCertificateRequest {
     pub replacement_certificate_id: String,
     pub cert_pem: String,
@@ -87,6 +90,12 @@ pub struct RenewCscaCertificateRequest {
     pub cert_chain_pem: String,
     pub key_reference: String,
     pub expected_public_jwk: Value,
+    /// Require the replacement certificate to use the existing managed key.
+    ///
+    /// The key reference and certificate public key must both match. Omitting
+    /// this field retains the safer rotation-compatible default (`false`).
+    #[serde(default)]
+    pub reuse_key: bool,
     #[serde(default)]
     pub metadata: Value,
 }
@@ -104,8 +113,9 @@ impl RenewCscaCertificateRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExpiringCscaCertificatesRequest {
-    #[serde(default)]
+    #[serde(default, alias = "threshold_days")]
     pub days_threshold: i64,
 }
 
@@ -188,9 +198,9 @@ pub struct CscaCertificateView {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ListCscaCertificatesQuery {
-    #[serde(default)]
+    #[serde(default, alias = "status_filter")]
     pub status: Option<CscaCertificateStatus>,
-    #[serde(default)]
+    #[serde(default, alias = "subject_filter")]
     pub subject: Option<String>,
 }
 
@@ -312,13 +322,21 @@ impl CscaLifecycleDocument {
         certificate_id: &str,
         replacement_id: &str,
         request: ImportCscaCertificateRequest,
+        reuse_key: bool,
         now: DateTime<Utc>,
     ) -> Result<CscaCertificateView, CscaLifecycleError> {
         validate_identifier("replacement_certificate_id", replacement_id)?;
         if certificate_id == replacement_id || self.certificates.contains_key(replacement_id) {
             return Err(CscaLifecycleError::Conflict(replacement_id.to_string()));
         }
-        self.record(certificate_id)?;
+        let prior = self.record(certificate_id)?;
+        let prior_key_reference = prior.key_reference.clone();
+        let prior_public_jwk = prior.public_jwk.clone();
+        let prior_certificate_der = load_certificate_pem(&prior.cert_pem).map_err(|error| {
+            CscaLifecycleError::Corrupt(format!(
+                "certificate '{certificate_id}' is invalid: {error}"
+            ))
+        })?;
         let replacement = build_record(
             replacement_id,
             request,
@@ -326,6 +344,39 @@ impl CscaLifecycleDocument {
             Some(certificate_id.to_string()),
         )?;
         let view = replacement.view_at(now)?;
+        if view.status != CscaCertificateStatus::Valid {
+            return Err(CscaLifecycleError::Invalid(
+                "replacement CSCA certificate must be currently valid".to_string(),
+            ));
+        }
+        let replacement_certificate_der =
+            load_certificate_pem(&replacement.cert_pem).map_err(|error| {
+                CscaLifecycleError::Invalid(format!("invalid replacement cert_pem: {error}"))
+            })?;
+        if replacement_certificate_der == prior_certificate_der {
+            return Err(CscaLifecycleError::Invalid(
+                "replacement CSCA certificate must differ from the existing certificate"
+                    .to_string(),
+            ));
+        }
+        if replacement.subject != prior.subject {
+            return Err(CscaLifecycleError::Invalid(
+                "replacement CSCA certificate must preserve the existing subject".to_string(),
+            ));
+        }
+        let same_public_key =
+            crate::documents::same_public_jwk(&replacement.public_jwk, &prior_public_jwk);
+        if reuse_key && (replacement.key_reference != prior_key_reference || !same_public_key) {
+            return Err(CscaLifecycleError::Invalid(
+                "reuse_key requires the existing key_reference and certificate public key"
+                    .to_string(),
+            ));
+        }
+        if !reuse_key && same_public_key {
+            return Err(CscaLifecycleError::Invalid(
+                "reuse_key=false requires a newly rotated certificate public key".to_string(),
+            ));
+        }
         self.prepare_outbox("certificate.renewed", replacement_id)?;
         let prior = self.record_mut(certificate_id)?;
         prior.revoked_at = Some(timestamp(now));
@@ -341,6 +392,7 @@ impl CscaLifecycleDocument {
                 "previous_id": certificate_id,
                 "certificate_id": replacement_id,
                 "subject": view.certificate.subject,
+                "reused_key": reuse_key,
             }),
             now,
         )?;
