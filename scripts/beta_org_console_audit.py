@@ -2260,7 +2260,7 @@ def main() -> int:
     parser.add_argument(
         "--base-url",
         default=None,
-        help="Beta base URL to audit. Defaults to BASE_URL from env or https://beta.elevenidllc.com.",
+        help="Beta base URL to audit. Defaults to BETA_ORIGIN/BASE_URL or https://beta.elevenidllc.com.",
     )
     parser.add_argument(
         "--headed",
@@ -2290,7 +2290,13 @@ def main() -> int:
     args = parser.parse_args()
 
     env = load_env_file(ENV_FILE)
-    base_url = args.base_url or os.environ.get("BASE_URL") or env.get("BASE_URL") or "https://beta.elevenidllc.com"
+    base_url = (
+        args.base_url
+        or os.environ.get("BETA_ORIGIN")
+        or os.environ.get("BASE_URL")
+        or env.get("BASE_URL")
+        or "https://beta.elevenidllc.com"
+    )
     if "beta.elevenidllc.com" not in base_url:
         base_url = "https://beta.elevenidllc.com"
 

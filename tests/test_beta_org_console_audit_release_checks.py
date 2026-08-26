@@ -216,6 +216,11 @@ def test_external_recorder_artifact_dir_is_supported(monkeypatch, tmp_path: Path
     assert audit.resolve_artifact_dir("ignored-run-id") == artifact_dir.resolve()
     assert audit.report_artifact_path(artifact_dir / "report.json", artifact_dir) == "report.json"
 
+    source = (Path(__file__).resolve().parents[1] / "scripts" / "beta_org_console_audit.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'os.environ.get("BETA_ORIGIN")' in source
+
 
 @pytest.mark.parametrize(
     "override_status, expected_label",
