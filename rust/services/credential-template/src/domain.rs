@@ -108,11 +108,18 @@ impl IssuanceProtocol {
             .to_ascii_uppercase();
         match normalized.as_str() {
             "OID4VCI"
+            | "OPENID4VCI"
             | "OID4VCI_PRE_AUTH"
             | "OID4VCI_PRE_AUTHORIZED"
             | "OID4VCI_PREAUTHORIZED"
+            | "OPENID4VCI_PRE_AUTH"
+            | "OPENID4VCI_PRE_AUTHORIZED"
+            | "OPENID4VCI_PREAUTHORIZED"
             | "OID4VCI_PRE_AUTH_CODE" => Ok(Self::Oid4vciPreAuth),
-            "OID4VCI_AUTH_CODE" | "OID4VCI_AUTHORIZATION_CODE" => Ok(Self::Oid4vciAuthCode),
+            "OID4VCI_AUTH_CODE"
+            | "OID4VCI_AUTHORIZATION_CODE"
+            | "OPENID4VCI_AUTH_CODE"
+            | "OPENID4VCI_AUTHORIZATION_CODE" => Ok(Self::Oid4vciAuthCode),
             _ => Err(CredentialTemplateError::InvalidIssuanceProtocol(normalized)),
         }
     }
