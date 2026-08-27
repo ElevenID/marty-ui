@@ -16,6 +16,7 @@ const PUBLIC_FIELDS: &[&str] = &[
     "vct",
     "doctype",
     "credential_payload_format",
+    "issuance_protocol",
     "application_template_id",
     "trust_profile_id",
     "revocation_profile_id",
@@ -48,6 +49,7 @@ const CREATE_FIELDS: &[&str] = &[
     "zk_predicate_claims",
     "schema_uri",
     "credential_payload_format",
+    "issuance_protocol",
 ];
 
 pub fn canonicalize_create(body: &[u8]) -> Result<Value, CredentialTemplateContractError> {

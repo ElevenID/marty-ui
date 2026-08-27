@@ -7,6 +7,8 @@ const {
   cleanupApplicationCredential,
   compactObject,
   ensureActiveResource,
+  requireJson,
+  safeErrorDetail,
 } = require('./beta-demo-resource-helpers');
 
 function fakePage(responses) {
@@ -35,6 +37,36 @@ test('compactObject removes only undefined values', () => {
     count: 0,
     text: '',
   });
+});
+
+test('requireJson reports bounded validation detail without leaking secret fields', async () => {
+  const page = fakePage([{
+    ok: false,
+    status: 422,
+    body: {
+      error: 'invalid_request',
+      detail: [{ field: 'credential_payload_format', message: 'unsupported format' }],
+      access_token: 'must-not-leak',
+    },
+  }]);
+
+  await assert.rejects(
+    () => requireJson(page, '/v1/resources', {}, 'Create resource'),
+    (error) => {
+      assert.match(error.message, /HTTP 422/);
+      assert.match(error.message, /credential_payload_format/);
+      assert.match(error.message, /unsupported format/);
+      assert.doesNotMatch(error.message, /must-not-leak/);
+      assert.match(error.message, /\[REDACTED\]/);
+      return true;
+    },
+  );
+});
+
+test('safeErrorDetail bounds untrusted response strings', () => {
+  const detail = safeErrorDetail({ message: `bad ${'x'.repeat(2000)}` });
+  assert.ok(detail.length <= 1020);
+  assert.doesNotMatch(detail, /[\r\n\t]/);
 });
 
 test('ensureActiveResource creates, validates, activates, and reloads one organization resource', async () => {
