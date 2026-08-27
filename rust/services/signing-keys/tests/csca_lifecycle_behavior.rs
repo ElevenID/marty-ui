@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use marty_crypto::cert_builder::{CertProfile, CertificateBuilderConfig, DistinguishedName};
-use marty_crypto::certificate::der_to_pem;
+use marty_crypto::certificate::{der_to_pem, get_certificate_info, load_certificate_pem};
 use marty_crypto::jwk::certificate_pem_to_jwk;
 use marty_crypto::keygen::KeyType;
 use marty_signing_keys::csca_lifecycle::{
@@ -87,6 +87,13 @@ fn request_from_der(
     }
 }
 
+fn certificate_not_before(request: &ImportCscaCertificateRequest) -> chrono::DateTime<Utc> {
+    let der = load_certificate_pem(&request.cert_pem).unwrap();
+    chrono::DateTime::parse_from_rfc3339(&get_certificate_info(&der).unwrap().not_before)
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
 #[test]
 fn creation_algorithms_match_the_language_neutral_contract() {
     let contract: Value = serde_json::from_str(include_str!(
@@ -102,11 +109,10 @@ fn creation_algorithms_match_the_language_neutral_contract() {
 
 #[test]
 fn lifecycle_preserves_lookup_filter_expiry_and_managed_custody_behavior() {
-    let now = Utc::now();
+    let request = csca_request("DEU", "German CSCA");
+    let now = certificate_not_before(&request);
     let mut document = CscaLifecycleDocument::empty("org-a", now);
-    let imported = document
-        .import("csca-deu-1", csca_request("DEU", "German CSCA"), now)
-        .unwrap();
+    let imported = document.import("csca-deu-1", request, now).unwrap();
 
     assert_eq!(imported.status, CscaCertificateStatus::Valid);
     assert!(imported.certificate.subject.contains("German CSCA"));
@@ -168,6 +174,10 @@ fn lifecycle_preserves_lookup_filter_expiry_and_managed_custody_behavior() {
         .unwrap()
         .with_timezone(&Utc);
     assert_eq!(
+        document.get("csca-deu-1", not_before).unwrap().status,
+        CscaCertificateStatus::Valid
+    );
+    assert_eq!(
         document
             .get("csca-deu-1", not_before - Duration::seconds(1))
             .unwrap()
@@ -182,11 +192,10 @@ fn lifecycle_preserves_lookup_filter_expiry_and_managed_custody_behavior() {
 
 #[test]
 fn revocation_is_idempotent_and_renewal_records_both_sides_of_lineage() {
-    let now = Utc::now();
+    let request = csca_request("DEU", "German CSCA 1");
+    let now = certificate_not_before(&request);
     let mut document = CscaLifecycleDocument::empty("org-a", now);
-    document
-        .import("csca-deu-1", csca_request("DEU", "German CSCA 1"), now)
-        .unwrap();
+    document.import("csca-deu-1", request, now).unwrap();
 
     let first = document
         .revoke("csca-deu-1", "key compromise", now + Duration::seconds(1))
@@ -247,9 +256,9 @@ fn revocation_is_idempotent_and_renewal_records_both_sides_of_lineage() {
 
 #[test]
 fn renewal_key_reuse_is_explicit_verified_and_atomic() {
-    let now = Utc::now();
     let (original, private_key_pem) =
         csca_request_with_reusable_key("DEU", "German CSCA 1", "hsm://csca/deu");
+    let now = certificate_not_before(&original);
     let mut document = CscaLifecycleDocument::empty("org-a", now);
     document
         .import("csca-deu-1", original.clone(), now)
@@ -281,9 +290,10 @@ fn renewal_key_reuse_is_explicit_verified_and_atomic() {
 
     let (original, private_key_pem) =
         csca_request_with_reusable_key("USA", "US CSCA 1", "hsm://csca/usa");
-    let mut rejected = CscaLifecycleDocument::empty("org-b", now);
+    let usa_now = certificate_not_before(&original);
+    let mut rejected = CscaLifecycleDocument::empty("org-b", usa_now);
     rejected
-        .import("csca-usa-1", original.clone(), now)
+        .import("csca-usa-1", original.clone(), usa_now)
         .unwrap();
     let revision = rejected.revision;
 
@@ -295,7 +305,7 @@ fn renewal_key_reuse_is_explicit_verified_and_atomic() {
             "csca-usa-2",
             wrong_reference,
             true,
-            now + Duration::seconds(1),
+            usa_now + Duration::seconds(1),
         ),
         Err(CscaLifecycleError::Invalid(_))
     ));
@@ -307,7 +317,7 @@ fn renewal_key_reuse_is_explicit_verified_and_atomic() {
             "csca-usa-unrequested-reuse",
             unrequested_reuse,
             false,
-            now + Duration::seconds(1),
+            usa_now + Duration::seconds(1),
         ),
         Err(CscaLifecycleError::Invalid(_))
     ));
@@ -320,7 +330,7 @@ fn renewal_key_reuse_is_explicit_verified_and_atomic() {
             "csca-usa-3",
             different_key,
             true,
-            now + Duration::seconds(1),
+            usa_now + Duration::seconds(1),
         ),
         Err(CscaLifecycleError::Invalid(_))
     ));
@@ -330,7 +340,7 @@ fn renewal_key_reuse_is_explicit_verified_and_atomic() {
             "csca-usa-copy",
             original,
             true,
-            now + Duration::seconds(1),
+            usa_now + Duration::seconds(1),
         ),
         Err(CscaLifecycleError::Invalid(_))
     ));
@@ -341,14 +351,14 @@ fn renewal_key_reuse_is_explicit_verified_and_atomic() {
             "csca-usa-expired",
             expired,
             false,
-            now + Duration::days(40),
+            usa_now + Duration::days(40),
         ),
         Err(CscaLifecycleError::Invalid(_))
     ));
     assert_eq!(rejected.revision, revision);
-    assert!(rejected.get("csca-usa-2", now).is_err());
+    assert!(rejected.get("csca-usa-2", usa_now).is_err());
     assert_eq!(
-        rejected.get("csca-usa-1", now).unwrap().status,
+        rejected.get("csca-usa-1", usa_now).unwrap().status,
         CscaCertificateStatus::Valid
     );
 }

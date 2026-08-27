@@ -341,7 +341,7 @@ fn clean_string(value: Option<&Value>) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-fn public_format(value: &str) -> Option<String> {
+pub(crate) fn public_format(value: &str) -> Option<String> {
     let value = value.trim().to_ascii_lowercase();
     if value.is_empty() {
         return None;
