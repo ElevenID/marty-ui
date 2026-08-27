@@ -52,6 +52,12 @@ def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() 
     assert "component_revisions = $componentRevisions" in script
     assert "Services runtime marker component revision set does not match" in script
     assert "bind_deployed_demo_manifest.py" in script
+    assert '"--image-digests-file", $imageDigestsPath' in script
+    assert '"image-digests.json"' in script
+    assert "function Write-Utf8Text" in script
+    assert "[System.Text.UTF8Encoding]::new($false)" in script
+    assert 'Write-Utf8Text -Path $imageDigestsPath' in script
+    assert '"local-deployment-manifest.json") `' in script
     assert 'deployed_demo_manifest = "deployed-demo-manifest.json"' in script
     assert "deployed_demo_manifest_sha256 = Get-FileSha256" in script
     assert '"NGINX_CONFIG=nginx.spa.conf"' in script

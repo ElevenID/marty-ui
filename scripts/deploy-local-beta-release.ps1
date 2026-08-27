@@ -186,6 +186,11 @@ function Get-FileSha256([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Write-Utf8Text([string]$Path, [string]$Content) {
+    $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8WithoutBom)
+}
+
 function Wait-ForServiceHealth {
     param([string[]]$Services, [int]$TimeoutSeconds = 420, [switch]$Ui)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -717,6 +722,8 @@ $runtimeImageDigests["ui-prod"] = $uiImageId
 $env:ELEVENID_STACK_VERSION = $stackVersion
 $env:ELEVENID_COMPONENT_REVISIONS_JSON = $componentRevisions | ConvertTo-Json -Compress
 $env:ELEVENID_IMAGE_DIGESTS_JSON = $runtimeImageDigests | ConvertTo-Json -Compress
+$imageDigestsPath = Join-Path $script:ArtifactDir "image-digests.json"
+Write-Utf8Text -Path $imageDigestsPath -Content ($env:ELEVENID_IMAGE_DIGESTS_JSON + "`n")
 
 Write-Step "Enter maintenance window and apply live migration"
 $canvasLtiIssuerDid = $null
@@ -868,7 +875,7 @@ Invoke-Checked -FilePath python -Arguments @(
     (Join-Path $script:RepoRoot "scripts\bind_deployed_demo_manifest.py"),
     "--template", (Join-Path $script:RepoRoot "ui\public\demos\manifests\${stackVersion}.json"),
     "--source-manifest", $sourceManifestPath,
-    "--image-digests-json", $env:ELEVENID_IMAGE_DIGESTS_JSON,
+    "--image-digests-file", $imageDigestsPath,
     "--output", $deployedDemoManifestPath
 )
 
@@ -904,7 +911,10 @@ $deploymentManifest = [ordered]@{
     }
     deployed_at = (Get-Date).ToUniversalTime().ToString("o")
 }
-$deploymentManifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $script:ArtifactDir "local-deployment-manifest.json") -Encoding utf8
+$deploymentManifestJson = $deploymentManifest | ConvertTo-Json -Depth 8
+Write-Utf8Text `
+    -Path (Join-Path $script:ArtifactDir "local-deployment-manifest.json") `
+    -Content ($deploymentManifestJson + "`n")
 
 Write-Step "Local beta deployment complete"
 Write-Host "Release: $releaseVersion"
