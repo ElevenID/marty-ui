@@ -42,6 +42,12 @@ fn internal_contract() -> Value {
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }
 
+fn privacy_posture_contract() -> Value {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../contracts/credential-template-privacy-posture-behavior.json");
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
 #[derive(Default)]
 struct Repository {
     templates: Mutex<BTreeMap<String, CredentialTemplate>>,
@@ -395,6 +401,15 @@ async fn create_get_update_activate_and_delete_expose_only_public_behavior() {
     assert_eq!(created["status"], "DRAFT");
     assert_eq!(created["credential_payload_format"], "SD_JWT_VC");
     assert_eq!(created["claims"][0]["type"], "STRING");
+    assert_eq!(
+        created["privacy_posture"],
+        json!({
+            "mode":"selective_disclosure",
+            "default_disclose_all":false,
+            "prefer_predicates":false,
+            "sd_alg":"sha-256"
+        })
+    );
     assert!(created.get("issuer_algorithm").is_none());
     assert!(created.get("supported_formats").is_none());
     assert!(created.get("wallet_configs").is_none());
@@ -445,6 +460,65 @@ async fn create_get_update_activate_and_delete_expose_only_public_behavior() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn public_privacy_posture_is_case_tolerant_and_round_trip_safe() {
+    let contract = privacy_posture_contract();
+    assert_eq!(contract["schema_version"], 1);
+    let app = router();
+    let mut last_public_posture = Value::Null;
+
+    for (index, case) in contract["valid_inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let mut body = create_body();
+        body["name"] = json!(format!("Privacy posture {index}"));
+        body["privacy_posture"] = case["input"].clone();
+        let response = app
+            .clone()
+            .oneshot(request("POST", "/v1/credential-templates", body, true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let created = json_body(response).await;
+        assert_eq!(created["privacy_posture"], case["expected"]);
+        last_public_posture = created["privacy_posture"].clone();
+    }
+
+    let mut clone = create_body();
+    clone["name"] = json!("Round-tripped minimal posture");
+    clone["privacy_posture"] = last_public_posture.clone();
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/v1/credential-templates", clone, true))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(response).await["privacy_posture"],
+        last_public_posture
+    );
+
+    for (index, invalid) in contract["invalid_inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
+        let mut body = create_body();
+        body["name"] = json!(format!("Invalid privacy posture {index}"));
+        body["privacy_posture"] = invalid.clone();
+        let response = app
+            .clone()
+            .oneshot(request("POST", "/v1/credential-templates", body, true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
 }
 
 #[tokio::test]
