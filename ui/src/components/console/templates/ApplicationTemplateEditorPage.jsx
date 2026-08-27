@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   Alert, Box, Button, Checkbox, CircularProgress, Container, FormControl,
@@ -19,6 +19,7 @@ import {
   updateApplicationTemplate,
 } from '../../../services/applicationTemplatesApi';
 import ApplicationEvidenceEditor from './ApplicationEvidenceEditor';
+import { formatFieldOptions, parseFieldOptions } from './applicationFieldOptions';
 
 const EMPTY = {
   name: '', description: '', credential_template_id: '', form_fields: [],
@@ -54,6 +55,36 @@ function claimField(claim) {
     maximum: claim.maximum,
     claim_mapping: fieldId,
   };
+}
+
+function FieldOptionsEditor({ options, onChange }) {
+  const formattedOptions = formatFieldOptions(options);
+  const [draft, setDraft] = useState(formattedOptions);
+  const dirty = useRef(false);
+
+  useEffect(() => setDraft(formattedOptions), [formattedOptions]);
+
+  const commit = () => {
+    if (!dirty.current) return;
+    const parsed = parseFieldOptions(draft);
+    setDraft(formatFieldOptions(parsed));
+    dirty.current = false;
+    onChange(parsed);
+  };
+
+  return (
+    <TextField
+      label="Options"
+      helperText="Comma-separated values or Label=VALUE"
+      value={draft}
+      onChange={(event) => {
+        dirty.current = true;
+        setDraft(event.target.value);
+      }}
+      onBlur={commit}
+      sx={{ flex: 1 }}
+    />
+  );
 }
 
 export default function ApplicationTemplateEditorPage() {
@@ -234,7 +265,7 @@ export default function ApplicationTemplateEditorPage() {
                     <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
                       <TextField label="Claim mapping" value={field.claim_mapping || ''} onChange={(event) => updateField(index, { claim_mapping: event.target.value || null })} sx={{ flex: 1 }} />
                       <TextField label="Validation pattern" value={field.validation_pattern || ''} onChange={(event) => updateField(index, { validation_pattern: event.target.value || null })} sx={{ flex: 1 }} />
-                      {field.field_type === 'SELECT' && <TextField label="Options" helperText="Comma-separated" value={(field.options || []).join(', ')} onChange={(event) => updateField(index, { options: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} sx={{ flex: 1 }} />}
+                      {field.field_type === 'SELECT' && <FieldOptionsEditor options={field.options} onChange={(options) => updateField(index, { options })} />}
                       {['INTEGER', 'NUMBER'].includes(field.field_type) && <TextField type="number" label="Minimum" value={field.minimum ?? ''} onChange={(event) => updateField(index, { minimum: event.target.value === '' ? null : Number(event.target.value) })} sx={{ width: { sm: 120 } }} />}
                       {['INTEGER', 'NUMBER'].includes(field.field_type) && <TextField type="number" label="Maximum" value={field.maximum ?? ''} onChange={(event) => updateField(index, { maximum: event.target.value === '' ? null : Number(event.target.value) })} sx={{ width: { sm: 120 } }} />}
                     </Stack>
