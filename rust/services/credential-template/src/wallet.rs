@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::{CredentialTemplate, MergeStrategy, WalletConfig, WalletRegistryEntry};
+use crate::{
+    CredentialTemplate, IssuanceProtocol, MergeStrategy, WalletConfig, WalletRegistryEntry,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DerivedWalletProfile {
@@ -77,15 +79,7 @@ pub fn normalize_issuance_protocol(value: Option<&str>) -> String {
         .unwrap_or("OID4VCI_PRE_AUTH")
         .trim()
         .to_ascii_uppercase();
-    match normalized.as_str() {
-        "OID4VCI"
-        | "OID4VCI_PRE_AUTH"
-        | "OID4VCI_PRE_AUTHORIZED"
-        | "OID4VCI_PREAUTHORIZED"
-        | "OID4VCI_PRE_AUTH_CODE" => "OID4VCI_PRE_AUTH".to_owned(),
-        "OID4VCI_AUTHORIZATION_CODE" => "OID4VCI_AUTH_CODE".to_owned(),
-        _ => normalized,
-    }
+    IssuanceProtocol::parse(Some(&normalized)).map_or(normalized, |protocol| protocol.wire().into())
 }
 
 #[must_use]

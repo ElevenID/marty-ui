@@ -360,7 +360,8 @@ fn create_body() -> Value {
         "compliance_profile_id":"compliance-1",
         "trust_profile_id":"trust-1",
         "revocation_profile_id":"revocation-1",
-        "credential_payload_format":"w3c_vcdm_v2_sd_jwt"
+        "credential_payload_format":"w3c_vcdm_v2_sd_jwt",
+        "issuance_protocol":"openid4vci_pre_authorized"
     })
 }
 
