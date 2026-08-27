@@ -19,9 +19,31 @@ async function browserJson(page, pathName, options = {}) {
   }, { requestPath: pathName, requestOptions: options });
 }
 
+function safeErrorDetail(body) {
+  const blocked = /(?:password|secret|token|authorization|cookie|credential)/i;
+  const sanitize = (value, key = '') => {
+    if (blocked.test(key)) return '[REDACTED]';
+    if (Array.isArray(value)) return value.slice(0, 10).map((item) => sanitize(item));
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value)
+          .slice(0, 20)
+          .map(([name, item]) => [name, sanitize(item, name)]),
+      );
+    }
+    if (typeof value === 'string') return value.replace(/[\r\n\t]+/g, ' ').slice(0, 500);
+    return value;
+  };
+  if (body === null || body === undefined) return '';
+  const serialized = JSON.stringify(sanitize(body));
+  return serialized ? `: ${serialized.slice(0, 1000)}` : '';
+}
+
 async function requireJson(page, pathName, options = {}, label = pathName) {
   const result = await browserJson(page, pathName, options);
-  if (!result.ok) throw new Error(`${label} failed (HTTP ${result.status})`);
+  if (!result.ok) {
+    throw new Error(`${label} failed (HTTP ${result.status})${safeErrorDetail(result.body)}`);
+  }
   return result.body;
 }
 
@@ -148,4 +170,5 @@ module.exports = {
   findCurrentCredential,
   listResources,
   requireJson,
+  safeErrorDetail,
 };

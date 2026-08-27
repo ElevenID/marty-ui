@@ -220,6 +220,7 @@ function requireConfigurationBinding(configuration) {
   const credentialClearance = credential.claims?.find(({ name }) => name === 'clearance_status');
   if (credential.credential_type !== 'PreBoardingClearanceCredential'
       || credential.vct !== `${BETA_ORIGIN}/credentials/pre-boarding-clearance`
+      || credential.issuance_protocol !== 'OID4VCI_PRE_AUTH'
       || !exactArray(credential.claims?.map(({ name }) => name), expectedClaims)
       || credentialEvidence?.pattern !== PASSPORT_EVIDENCE_SHA256.source
       || !exactArray(credentialClearance?.enum_values, ['CLEARED'])) {

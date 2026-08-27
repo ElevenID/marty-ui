@@ -25,6 +25,7 @@ function configuration() {
     id: 'credential-1',
     status: 'ACTIVE',
     ...clearanceCredentialPayload(source),
+    issuance_protocol: 'OID4VCI_PRE_AUTH',
     trust_profile_id: 'trust-1',
     compliance_profile_id: 'compliance-1',
   };
@@ -51,6 +52,7 @@ function configuration() {
 test('D-01 configuration binds one exact credential across application, flow, and policy', () => {
   const bound = requireConfigurationBinding(configuration());
   assert.equal(bound.credential.credential_type, 'PreBoardingClearanceCredential');
+  assert.equal(bound.credential.issuance_protocol, 'OID4VCI_PRE_AUTH');
   assert.deepEqual(bound.credential.claims.map(({ name }) => name), [
     'traveler_id',
     'flight_number',
@@ -95,6 +97,10 @@ test('D-01 configuration rejects evidence, resource, policy, and trigger drift',
   const wrongCredential = configuration();
   wrongCredential.policy.credential_requirements[0].credential_template_id = 'credential-2';
   assert.throws(() => requireConfigurationBinding(wrongCredential), /rapid-gate contract/);
+
+  const wrongIssuanceProtocol = configuration();
+  wrongIssuanceProtocol.credential.issuance_protocol = 'OID4VCI_AUTH_CODE';
+  assert.throws(() => requireConfigurationBinding(wrongIssuanceProtocol), /pre-boarding contract/);
 
   const excessiveDisclosure = configuration();
   excessiveDisclosure.policy.credential_requirements[0].requested_claims.push({
