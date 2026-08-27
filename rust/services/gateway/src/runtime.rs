@@ -4742,7 +4742,7 @@ mod tests {
                         "id": "template-1", "organization_id": "org-1", "name": "employee",
                         "description": null, "status": "draft", "credential_type": "EmployeeCredential",
                         "compliance_profile_id": "profile-1", "vct": "EmployeeCredential", "doctype": null,
-                        "claims": [{"name":"birth_date","claim_type":"date","display_name":"Date of birth","mdoc_namespace":"org.iso.18013.5.1","mdoc_element_identifier":"birth_date","derivable":true}],
+                        "claims": [{"name":"birth_date","claim_type":"date","display_name":"Date of birth","mdoc_namespace":"org.iso.18013.5.1","mdoc_element_identifier":"birth_date","derivable":true,"selectively_disclosable":false,"pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$","enum_values":[],"min_value":1,"max_value":2}],
                         "validity_rules": {}, "issuer_did": "did:web:issuer.example",
                         "credential_payload_format": "w3c_vcdm_v2_di", "privacy_posture": null,
                         "created_at": "2026-08-01T00:00:00Z", "updated_at": null,
@@ -6249,7 +6249,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn credential_template_claims_are_canonicalized_and_privacy_projected() {
+    async fn credential_template_claims_are_canonicalized_and_losslessly_projected() {
         let response = runtime_router().oneshot(
             Request::builder().method("PATCH")
                 .uri("/v1/credential-templates/template%2D1?organization_id=org-1")
@@ -6266,7 +6266,13 @@ mod tests {
         assert_eq!(body["claims"][0]["type"], "DATE");
         assert_eq!(body["claims"][0]["namespace"], "org.iso.18013.5.1");
         assert!(body.get("issuer_profile_id").is_none());
-        assert!(body["claims"][0].get("derivable").is_none());
+        assert_eq!(body["claims"][0]["derivable"], true);
+        assert_eq!(body["claims"][0]["selectively_disclosable"], false);
+        assert_eq!(body["claims"][0]["pattern"], "^[0-9]{4}-[0-9]{2}-[0-9]{2}$");
+        assert_eq!(body["claims"][0]["enum_values"], json!([]));
+        assert_eq!(body["claims"][0]["min_value"], 1);
+        assert_eq!(body["claims"][0]["max_value"], 2);
+        assert_eq!(body["claims"][0]["mdoc_element_identifier"], "birth_date");
 
         let create = runtime_router()
             .oneshot(

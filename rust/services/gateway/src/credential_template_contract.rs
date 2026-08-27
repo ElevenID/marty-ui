@@ -171,6 +171,13 @@ pub fn internal_claims(value: &Value) -> Result<Value, CredentialTemplateContrac
         if let Some(icon) = display.get("icon").filter(|value| value.is_string()) {
             claim.insert("display_icon".into(), icon.clone());
         }
+        if !claim.contains_key("claim_type") {
+            if let Some(kind) = claim.remove("type").filter(|value| value.is_string()) {
+                claim.insert("claim_type".into(), kind);
+            }
+        } else {
+            claim.remove("type");
+        }
         if claim
             .get("derived_from")
             .is_some_and(|value| !value.is_null())
@@ -268,16 +275,6 @@ fn public_claim(value: &Value) -> Result<Value, CredentialTemplateContractError>
     }
     if !display.is_empty() {
         claim.insert("display".into(), Value::Object(display));
-    }
-    for field in [
-        "derivable",
-        "pattern",
-        "enum_values",
-        "min_value",
-        "max_value",
-        "mdoc_element_identifier",
-    ] {
-        claim.remove(field);
     }
     if !claim.contains_key("namespace") {
         if let Some(namespace) = claim.remove("mdoc_namespace").filter(Value::is_string) {

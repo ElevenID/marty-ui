@@ -201,8 +201,8 @@ struct CreateTemplateRequest {
     doctype: Option<String>,
     #[serde(default)]
     claims: Vec<ClaimRequest>,
-    #[serde(default = "default_privacy_posture")]
-    privacy_posture: String,
+    #[serde(default)]
+    privacy_posture: PrivacyPostureInput,
     #[serde(default)]
     selective_disclosure_fields: Vec<String>,
     #[serde(default)]
@@ -230,7 +230,7 @@ struct UpdateTemplateRequest {
     name: Option<String>,
     description: Option<String>,
     claims: Option<Vec<ClaimRequest>>,
-    privacy_posture: Option<String>,
+    privacy_posture: Option<PrivacyPostureInput>,
     selective_disclosure_fields: Option<Vec<String>>,
     zk_predicate_claims: Option<Vec<String>>,
     derived_attributes: Option<Vec<DerivedAttributeRequest>>,
@@ -243,6 +243,32 @@ struct UpdateTemplateRequest {
     issuer_did: Option<String>,
     credential_payload_format: Option<String>,
     issuance_protocol: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum PrivacyPostureInput {
+    Mode(String),
+    Policy(PrivacyPosturePolicyInput),
+}
+
+impl Default for PrivacyPostureInput {
+    fn default() -> Self {
+        Self::Mode("selective_disclosure".to_owned())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivacyPosturePolicyInput {
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    default_disclose_all: bool,
+    #[serde(default)]
+    prefer_predicates: bool,
+    #[serde(default)]
+    sd_alg: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -446,7 +472,7 @@ async fn create_template(
             vct: input.vct,
             doctype: input.doctype,
             claims,
-            privacy_posture: parse_privacy(&input.privacy_posture)?,
+            privacy_posture: parse_privacy(input.privacy_posture)?,
             selective_disclosure_fields: input.selective_disclosure_fields,
             zk_predicate_claims: input.zk_predicate_claims,
             derived_attributes: input
@@ -536,11 +562,7 @@ async fn update_template(
                     .collect::<Result<Vec<_>, _>>()
             })
             .transpose()?,
-        privacy_posture: input
-            .privacy_posture
-            .as_deref()
-            .map(parse_privacy)
-            .transpose()?,
+        privacy_posture: input.privacy_posture.map(parse_privacy).transpose()?,
         selective_disclosure_fields: input.selective_disclosure_fields,
         zk_predicate_claims: input.zk_predicate_claims,
         derived_attributes: input
@@ -1249,6 +1271,7 @@ fn template_response(template: &CredentialTemplate) -> Result<Value, CredentialT
         "vct":non_empty(&template.vct),
         "doctype":template.doctype.as_deref().and_then(non_empty),
         "credential_payload_format":payload_format.canonical(),
+        "issuance_protocol":template.issuance_protocol,
         "application_template_id":template.application_template_id,
         "trust_profile_id":template.trust_profile_id,
         "revocation_profile_id":template.revocation_profile_id,
@@ -1256,6 +1279,7 @@ fn template_response(template: &CredentialTemplate) -> Result<Value, CredentialT
         "claims":claims,
         "validity_rules":validity,
         "privacy_posture":{
+            "mode":template.privacy_posture.as_str(),
             "default_disclose_all":template.privacy_posture == PrivacyPosture::Standard,
             "prefer_predicates":!template.zk_predicate_claims.is_empty() || template.privacy_posture == PrivacyPosture::ZeroKnowledge,
             "sd_alg":"sha-256"
@@ -1278,20 +1302,36 @@ fn public_claim(claim: &ClaimDefinition) -> Value {
         json!(public_claim_type(claim.claim_type)),
     );
     value.insert("required".to_owned(), json!(claim.required));
+    value.insert(
+        "selectively_disclosable".to_owned(),
+        json!(claim.selectively_disclosable),
+    );
     if let Some(description) = claim.description.as_deref().and_then(non_empty) {
         value.insert("description".to_owned(), json!(description));
     }
-    if claim.selectively_disclosable {
-        value.insert("selectively_disclosable".to_owned(), json!(true));
+    if claim.derivable {
+        value.insert("derivable".to_owned(), json!(true));
+    }
+    if let Some(pattern) = claim.pattern.as_deref() {
+        value.insert("pattern".to_owned(), json!(pattern));
+    }
+    if let Some(enum_values) = &claim.enum_values {
+        value.insert("enum_values".to_owned(), json!(enum_values));
+    }
+    if let Some(min_value) = claim.min_value {
+        value.insert("min_value".to_owned(), json!(min_value));
+    }
+    if let Some(max_value) = claim.max_value {
+        value.insert("max_value".to_owned(), json!(max_value));
     }
     if let Some(namespace) = claim.mdoc_namespace.as_deref().and_then(non_empty) {
         value.insert("namespace".to_owned(), json!(namespace));
     }
-    if claim.derivable || claim.derived_from.is_some() {
-        value.insert(
-            "derived_from".to_owned(),
-            json!(claim.derived_from.as_deref().unwrap_or(&claim.name)),
-        );
+    if let Some(identifier) = claim.mdoc_element_identifier.as_deref().and_then(non_empty) {
+        value.insert("mdoc_element_identifier".to_owned(), json!(identifier));
+    }
+    if let Some(source) = claim.derived_from.as_deref().and_then(non_empty) {
+        value.insert("derived_from".to_owned(), json!(source));
     }
     if !claim.display_name.is_empty() || claim.display_icon.is_some() {
         let mut display = Map::new();
@@ -1346,8 +1386,38 @@ fn parse_formats(values: &[String]) -> Result<Vec<CredentialFormat>, CredentialT
         .collect()
 }
 
-fn parse_privacy(value: &str) -> Result<PrivacyPosture, CredentialTemplateHttpError> {
-    PrivacyPosture::parse(value).map_err(domain_error)
+fn parse_privacy(
+    value: PrivacyPostureInput,
+) -> Result<PrivacyPosture, CredentialTemplateHttpError> {
+    match value {
+        PrivacyPostureInput::Mode(value) => parse_privacy_mode(&value),
+        PrivacyPostureInput::Policy(value) => {
+            if value
+                .sd_alg
+                .as_deref()
+                .is_some_and(|algorithm| !algorithm.eq_ignore_ascii_case("sha-256"))
+            {
+                return Err(domain_error(CredentialTemplateError::InvalidConfiguration(
+                    "privacy_posture.sd_alg must be sha-256".to_owned(),
+                )));
+            }
+            if let Some(mode) = value.mode.as_deref() {
+                return parse_privacy_mode(mode);
+            }
+            match (value.default_disclose_all, value.prefer_predicates) {
+                (true, true) => Err(domain_error(CredentialTemplateError::InvalidConfiguration(
+                    "privacy_posture cannot disclose all claims and prefer predicates".to_owned(),
+                ))),
+                (true, false) => Ok(PrivacyPosture::Standard),
+                (false, true) => Ok(PrivacyPosture::ZeroKnowledge),
+                (false, false) => Ok(PrivacyPosture::SelectiveDisclosure),
+            }
+        }
+    }
+}
+
+fn parse_privacy_mode(value: &str) -> Result<PrivacyPosture, CredentialTemplateHttpError> {
+    PrivacyPosture::parse(&value.trim().to_ascii_lowercase()).map_err(domain_error)
 }
 
 fn application_error(error: CredentialTemplateApplicationError) -> CredentialTemplateHttpError {
@@ -1456,10 +1526,6 @@ fn default_true() -> bool {
 
 fn default_claim_type() -> String {
     "string".to_owned()
-}
-
-fn default_privacy_posture() -> String {
-    "selective_disclosure".to_owned()
 }
 
 fn default_supported_formats() -> Vec<String> {
