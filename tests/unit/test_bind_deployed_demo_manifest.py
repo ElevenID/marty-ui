@@ -101,3 +101,36 @@ def test_cli_fails_cleanly_when_bound_manifest_validation_fails(
     assert main() == 1
     assert not output_path.exists()
     assert "Demo deployment binding failed" in capsys.readouterr().out
+
+
+def test_cli_reads_image_digests_from_utf8_bom_file(tmp_path, monkeypatch) -> None:
+    template_path = tmp_path / "template.json"
+    source_path = tmp_path / "source.json"
+    image_digests_path = tmp_path / "image-digests.json"
+    output_path = tmp_path / "bound.json"
+    template_path.write_text(json.dumps(build_manifest()), encoding="utf-8")
+    source_path.write_text(json.dumps(source_manifest()), encoding="utf-8")
+    image_digests_path.write_text(
+        json.dumps({"gateway": f"sha256:{'1' * 64}"}),
+        encoding="utf-8-sig",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "bind_deployed_demo_manifest.py",
+            "--template",
+            str(template_path),
+            "--source-manifest",
+            str(source_path),
+            "--image-digests-file",
+            str(image_digests_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    assert main() == 0
+    assert json.loads(output_path.read_text(encoding="utf-8"))["binding_state"] == (
+        "DEPLOYED_PENDING_EVIDENCE"
+    )

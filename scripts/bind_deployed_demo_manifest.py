@@ -102,7 +102,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--template", type=Path, required=True)
     parser.add_argument("--source-manifest", type=Path, required=True)
-    parser.add_argument("--image-digests-json", required=True)
+    image_digests = parser.add_mutually_exclusive_group(required=True)
+    image_digests.add_argument("--image-digests-json")
+    image_digests.add_argument("--image-digests-file", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     return parser.parse_args()
 
@@ -117,7 +119,12 @@ def main() -> int:
         )
         template = json.loads(args.template.read_text(encoding="utf-8"))
         source_manifest = json.loads(args.source_manifest.read_text(encoding="utf-8"))
-        image_digests = json.loads(args.image_digests_json)
+        image_digests_json = (
+            args.image_digests_file.read_text(encoding="utf-8-sig")
+            if args.image_digests_file is not None
+            else args.image_digests_json
+        )
+        image_digests = json.loads(image_digests_json)
         _require(isinstance(template, dict), "Demo manifest template must be an object")
         _require(isinstance(source_manifest, dict), "Source manifest must be an object")
         _require(isinstance(image_digests, dict), "Image digests must be an object")
