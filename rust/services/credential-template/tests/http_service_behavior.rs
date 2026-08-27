@@ -339,7 +339,24 @@ fn create_body() -> Value {
         "name":"Employee Badge",
         "credential_type":"EmployeeBadge",
         "vct":"https://issuer.example/EmployeeBadge",
-        "claims":[{"name":"family_name","display_name":"Family Name"}],
+        "claims":[
+            {
+                "name":"family_name",
+                "display_name":"Family Name",
+                "selectively_disclosable":false,
+                "pattern":"^[A-Z][a-z]+$",
+                "enum_values":["Lee", "Smith"],
+                "mdoc_namespace":"org.example.employee",
+                "mdoc_element_identifier":"familyName"
+            },
+            {
+                "name":"age",
+                "display_name":"Age",
+                "claim_type":"INTEGER",
+                "min_value":16,
+                "max_value":120
+            }
+        ],
         "compliance_profile_id":"compliance-1",
         "trust_profile_id":"trust-1",
         "revocation_profile_id":"revocation-1",
@@ -400,7 +417,17 @@ async fn create_get_update_activate_and_delete_expose_only_public_behavior() {
     let template_id = created["id"].as_str().unwrap();
     assert_eq!(created["status"], "DRAFT");
     assert_eq!(created["credential_payload_format"], "SD_JWT_VC");
+    assert_eq!(created["issuance_protocol"], "OID4VCI_PRE_AUTH");
     assert_eq!(created["claims"][0]["type"], "STRING");
+    assert_eq!(created["claims"][0]["selectively_disclosable"], false);
+    assert_eq!(created["claims"][0]["pattern"], "^[A-Z][a-z]+$");
+    assert_eq!(created["claims"][0]["enum_values"], json!(["Lee", "Smith"]));
+    assert_eq!(
+        created["claims"][0]["mdoc_element_identifier"],
+        "familyName"
+    );
+    assert_eq!(created["claims"][1]["min_value"], 16.0);
+    assert_eq!(created["claims"][1]["max_value"], 120.0);
     assert_eq!(
         created["privacy_posture"],
         json!({

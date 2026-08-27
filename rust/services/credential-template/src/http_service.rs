@@ -1271,6 +1271,7 @@ fn template_response(template: &CredentialTemplate) -> Result<Value, CredentialT
         "vct":non_empty(&template.vct),
         "doctype":template.doctype.as_deref().and_then(non_empty),
         "credential_payload_format":payload_format.canonical(),
+        "issuance_protocol":template.issuance_protocol,
         "application_template_id":template.application_template_id,
         "trust_profile_id":template.trust_profile_id,
         "revocation_profile_id":template.revocation_profile_id,
@@ -1301,20 +1302,36 @@ fn public_claim(claim: &ClaimDefinition) -> Value {
         json!(public_claim_type(claim.claim_type)),
     );
     value.insert("required".to_owned(), json!(claim.required));
+    value.insert(
+        "selectively_disclosable".to_owned(),
+        json!(claim.selectively_disclosable),
+    );
     if let Some(description) = claim.description.as_deref().and_then(non_empty) {
         value.insert("description".to_owned(), json!(description));
     }
-    if claim.selectively_disclosable {
-        value.insert("selectively_disclosable".to_owned(), json!(true));
+    if claim.derivable {
+        value.insert("derivable".to_owned(), json!(true));
+    }
+    if let Some(pattern) = claim.pattern.as_deref() {
+        value.insert("pattern".to_owned(), json!(pattern));
+    }
+    if let Some(enum_values) = &claim.enum_values {
+        value.insert("enum_values".to_owned(), json!(enum_values));
+    }
+    if let Some(min_value) = claim.min_value {
+        value.insert("min_value".to_owned(), json!(min_value));
+    }
+    if let Some(max_value) = claim.max_value {
+        value.insert("max_value".to_owned(), json!(max_value));
     }
     if let Some(namespace) = claim.mdoc_namespace.as_deref().and_then(non_empty) {
         value.insert("namespace".to_owned(), json!(namespace));
     }
-    if claim.derivable || claim.derived_from.is_some() {
-        value.insert(
-            "derived_from".to_owned(),
-            json!(claim.derived_from.as_deref().unwrap_or(&claim.name)),
-        );
+    if let Some(identifier) = claim.mdoc_element_identifier.as_deref().and_then(non_empty) {
+        value.insert("mdoc_element_identifier".to_owned(), json!(identifier));
+    }
+    if let Some(source) = claim.derived_from.as_deref().and_then(non_empty) {
+        value.insert("derived_from".to_owned(), json!(source));
     }
     if !claim.display_name.is_empty() || claim.display_icon.is_some() {
         let mut display = Map::new();
