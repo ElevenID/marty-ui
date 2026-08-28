@@ -8,6 +8,7 @@ const {
   employeeCredentialPayload,
   employeeFlowPayload,
   employeePolicyPayload,
+  employeeTrustProfilePayload,
   requireConfigurationBinding,
 } = require('./audit-beta-employee-access');
 
@@ -21,13 +22,24 @@ const source = {
 };
 
 test('D-04 configuration uses one exact employee credential across application, flow, and policy', () => {
-  const credentialPayload = employeeCredentialPayload(source);
+  const credentialPayload = employeeCredentialPayload(
+    source,
+    'did:web:beta.example:orgs:target',
+    'target-revocation-1',
+    'target-trust-1',
+  );
   assert.equal(credentialPayload.credential_type, 'EmployeeAccessCredential');
   assert.deepEqual(
     credentialPayload.claims.map(({ name }) => name),
     ['employee_id', 'given_name', 'family_name', 'department', 'access_level', 'employment_status'],
   );
-  assert.equal(credentialPayload.revocation_profile_id, 'revocation-1');
+  assert.equal(credentialPayload.issuer_did, 'did:web:beta.example:orgs:target');
+  assert.equal(credentialPayload.revocation_profile_id, 'target-revocation-1');
+  assert.equal(credentialPayload.trust_profile_id, 'target-trust-1');
+  assert.deepEqual(
+    employeeTrustProfilePayload('did:web:beta.example:orgs:target').allowed_issuers,
+    ['did:web:beta.example:orgs:target'],
+  );
 
   const application = { id: 'application-template-1', status: 'ACTIVE', ...employeeApplicationTemplatePayload('credential-1') };
   const credential = {
