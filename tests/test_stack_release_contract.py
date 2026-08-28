@@ -87,6 +87,24 @@ def test_ci_and_stack_lock_pin_the_same_marty_common_release() -> None:
     assert "marty_common-0.2.4" not in workflow_text
 
 
+def test_ci_and_stack_lock_pin_the_same_npm_releases() -> None:
+    workflow = yaml.safe_load(_text(".github/workflows/ci.yml"))
+    lock = json.loads(_text("release/stack-lock.json"))
+    components = {component["name"]: component for component in lock["components"]}
+
+    for component_name, env_prefix in (
+        ("marty-api-core", "MARTY_API_CORE"),
+        ("marty-blog", "MARTY_BLOG"),
+    ):
+        artifact = next(
+            item
+            for item in components[component_name]["artifacts"]
+            if item["type"] == "npm"
+        )
+        assert workflow["env"][f"{env_prefix}_URI"] == artifact["uri"]
+        assert workflow["env"][f"{env_prefix}_DIGEST"] == artifact["digest"]
+
+
 def test_cli_and_api_core_use_the_same_monorepo_release() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
@@ -96,6 +114,41 @@ def test_cli_and_api_core_use_the_same_monorepo_release() -> None:
     assert api_core["repository"] == cli["repository"] == "ElevenID/marty-cli"
     assert api_core["version"] == cli["version"]
     assert api_core["commit"] == cli["commit"]
+
+
+def test_stack_artifacts_use_immutable_sha256_digests() -> None:
+    lock = json.loads(_text("release/stack-lock.json"))
+
+    for component in lock["components"]:
+        for artifact in component["artifacts"]:
+            assert re.fullmatch(
+                r"sha256:[0-9a-f]{64}", artifact["digest"]
+            ), f"{component['name']} has an invalid artifact digest"
+
+
+def test_ui_package_locks_match_stack_npm_artifacts() -> None:
+    lock = json.loads(_text("release/stack-lock.json"))
+    components = {component["name"]: component for component in lock["components"]}
+    package = json.loads(_text("ui/package.json"))
+    package_lock = json.loads(_text("ui/package-lock.json"))
+    bun_lock = _text("ui/bun.lock")
+
+    for component_name, package_name in (
+        ("marty-api-core", "@elevenid/marty-api-core"),
+        ("marty-blog", "@elevenid/marty-blog"),
+    ):
+        component = components[component_name]
+        artifact = next(
+            item for item in component["artifacts"] if item["type"] == "npm"
+        )
+        uri = artifact["uri"]
+
+        assert package["dependencies"][package_name] == uri
+        locked_package = package_lock["packages"][f"node_modules/{package_name}"]
+        assert locked_package["version"] == component["version"]
+        assert locked_package["resolved"] == uri
+        assert f'"{package_name}": "{uri}"' in bun_lock
+        assert f'"{package_name}": ["{package_name}@{uri}"' in bun_lock
 
 
 def test_stack_release_publishes_signed_evidence() -> None:
@@ -276,10 +329,10 @@ def test_revocation_deletion_release_uses_the_rust_candidate_overlay() -> None:
         for component in lock["components"]
         if component["name"] == "marty-credentials-issuance"
     )
-    assert issuance["version"] == "0.1.70"
-    assert issuance["commit"] == "923ef6d45807e5eca887dc94bb66444f04190e63"
+    assert issuance["version"] == "0.1.71"
+    assert issuance["commit"] == "94f19ad369e7e41883f2aa3d77656ce561bb6534"
     assert issuance["artifacts"][0]["digest"] == (
-        "sha256:a16103b0937235c6f8637245d7afb38a78a8eda448d3067ff5779559c98fd238"
+        "sha256:3b396ef763f99179a4d6123cc30b8fabd2afaadb200a3d4e6cf1317489a61c5c"
     )
 
 
@@ -417,8 +470,8 @@ def test_python_migration_image_installs_every_required_native_backend() -> None
         "marty-verification-python",
         "marty-iso18013-python",
     ):
-        assert components[name]["version"] == "0.1.60"
-        assert components[name]["commit"] == "dce4fb99016dfcb3801fbfb9dcab9e8b0f74bd4f"
+        assert components[name]["version"] == "0.1.61"
+        assert components[name]["commit"] == "a3adbbdca93251e4db7933c5c77fe5e8c3f4266c"
 
 
 def test_release_images_reject_commerce_markers() -> None:
