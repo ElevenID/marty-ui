@@ -23,6 +23,7 @@ const {
   credentialInventoryEvidence,
   verificationResultEvidence,
 } = require('./beta-credential-contract');
+const { selectOrganization } = require('./beta-demo-resource-helpers');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
@@ -68,27 +69,10 @@ async function login(page, email, password) {
 }
 
 async function selectOrg(page) {
-  const selection = await page.evaluate(async (organizationId) => {
-    const membershipsResponse = await fetch('/v1/organizations/mine', { credentials: 'include' });
-    const memberships = await membershipsResponse.json().catch(() => []);
-    const eligible = memberships.find((item) => item.id === organizationId && item.membership?.has_org_console_access);
-    return {
-      ok: Boolean(eligible),
-      membershipsStatus: membershipsResponse.status,
-      targetName: eligible?.display_name || eligible?.name || null,
-    };
-  }, ORG_ID);
-  if (!selection.ok) return selection;
-  const orgButton = page.getByRole('button', { name: /Marty Identity Platform|Audit Production Flow|Select Organization/i }).first();
-  await orgButton.click({ timeout: 15_000 });
-  const search = page.getByPlaceholder('Search organizations');
-  await search.fill(selection.targetName);
-  const target = page.getByRole('menuitem').filter({ hasText: selection.targetName }).first();
-  await target.click({ timeout: 15_000 });
-  await page.waitForTimeout(5_000);
-  selection.activeOrgId = await page.evaluate(() => localStorage.getItem('activeOrgId'));
-  selection.ok = selection.activeOrgId === ORG_ID;
-  return selection;
+  return selectOrganization(page, {
+    organizationId: ORG_ID,
+    consoleOrigin: BETA_ORIGIN,
+  });
 }
 
 async function receiveInTestWallet(walletPage, offerUri, expectedVct, expectedConfigurationId = null) {

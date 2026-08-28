@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('@playwright/test');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
+const { selectOrganization } = require('./beta-demo-resource-helpers');
 const {
   VIDEO_SIZE,
   createArtifactDir,
@@ -74,30 +75,14 @@ async function login(page, email, password) {
 }
 
 async function selectOrg(page) {
-  const selection = await page.evaluate(async (organizationId) => {
-    const response = await fetch('/v1/organizations/mine', { credentials: 'include' });
-    const memberships = await response.json().catch(() => []);
-    const target = memberships.find((item) => (
-      item.id === organizationId && item.membership?.has_org_console_access
-    ));
-    return {
-      ok: Boolean(target),
-      name: target?.display_name || target?.name || null,
-    };
-  }, ORG_ID);
-  if (!selection.ok) return selection;
-
-  await page.evaluate((organizationId) => {
-    localStorage.setItem('activeOrgId', organizationId);
-  }, ORG_ID);
-  await page.goto(`${BETA_ORIGIN}/console/org`, {
-    waitUntil: 'domcontentloaded',
-    timeout: 60_000,
+  const selection = await selectOrganization(page, {
+    organizationId: ORG_ID,
+    consoleOrigin: BETA_ORIGIN,
   });
-  await waitFor(() => page.evaluate((organizationId) => (
-    localStorage.getItem('activeOrgId') === organizationId
-  ), ORG_ID));
-  return { ...selection, activeOrgId: ORG_ID };
+  return {
+    ...selection,
+    name: selection.targetName,
+  };
 }
 
 async function ensureActiveRevocationProfile(page, stamp) {
