@@ -357,6 +357,42 @@ async function cleanupApplicationCredential(page, {
   return result;
 }
 
+async function withdrawConflictingApplications(applicantPage, adminPage, {
+  organizationId,
+  credentialTemplateId,
+  reason,
+}) {
+  const collection = await requireJson(
+    applicantPage,
+    '/v1/me/applications?limit=500',
+    {},
+    'Load applicant applications before release qualification',
+  );
+  if (!Array.isArray(collection?.items)) {
+    throw new Error('Applicant application lookup returned a malformed collection');
+  }
+  const terminalStatuses = new Set(['REJECTED', 'WITHDRAWN', 'SUSPENDED']);
+  const conflicts = collection.items.filter((application) => (
+    application?.organization_id === organizationId
+    && application?.credential_template_id === credentialTemplateId
+    && !terminalStatuses.has(String(application?.status || '').toUpperCase())
+  ));
+  const withdrawn = [];
+  for (const application of conflicts) {
+    if (typeof application.id !== 'string' || application.id.length === 0) {
+      throw new Error('Conflicting applicant application is missing an id');
+    }
+    await requireJson(
+      adminPage,
+      `/v1/organizations/${encodeURIComponent(organizationId)}/applicants/${encodeURIComponent(application.id)}/withdraw`,
+      { method: 'POST', body: JSON.stringify({ reason }) },
+      'Withdraw conflicting applicant application',
+    );
+    withdrawn.push({ id: application.id, previousStatus: application.status || null });
+  }
+  return withdrawn;
+}
+
 module.exports = {
   DEFAULT_CREDENTIAL_RANKING_STRATEGY,
   browserJson,
@@ -373,4 +409,5 @@ module.exports = {
   resolveActiveIssuerDid,
   safeErrorDetail,
   selectOrganization,
+  withdrawConflictingApplications,
 };

@@ -107,6 +107,28 @@ fn repeated_issued_reconciliation_is_a_no_op() {
 }
 
 #[test]
+fn terminal_applications_are_not_reactivated_by_late_issuance_reconciliation() {
+    let now = Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap();
+    for status in [
+        LifecycleStatus::Rejected,
+        LifecycleStatus::Withdrawn,
+        LifecycleStatus::Suspended,
+    ] {
+        let (mut application, mut applicant) = state();
+        application.status = status;
+        let application_snapshot = application.clone();
+        let applicant_snapshot = applicant.clone();
+
+        assert!(
+            !reconcile_transaction(&mut application, &mut applicant, "issued", Some(now), now,)
+                .unwrap()
+        );
+        assert_eq!(application, application_snapshot);
+        assert_eq!(applicant, applicant_snapshot);
+    }
+}
+
+#[test]
 fn consumed_offer_requires_a_fresh_claim_attempt() {
     let now = Utc.with_ymd_and_hms(2026, 8, 21, 12, 0, 0).unwrap();
     let (mut application, mut applicant) = state();

@@ -32,6 +32,7 @@ const {
   requestedClaim,
   requireJson,
   resolveActiveIssuerDid,
+  withdrawConflictingApplications,
 } = require('./beta-demo-resource-helpers');
 const {
   PASSPORT_EVIDENCE_SHA256,
@@ -564,6 +565,11 @@ async function main() {
       email: applicantEmail,
       givenName: process.env.TEST_APPLICANT_FIRST_NAME || 'Jamie',
       familyName: process.env.TEST_APPLICANT_LAST_NAME || 'Lee',
+    });
+    report.preflightCleanup = await withdrawConflictingApplications(applicantPage, page, {
+      organizationId: ORG_ID,
+      credentialTemplateId: configuration.credential.id,
+      reason: 'D-01 interrupted release qualification cleanup',
     });
     const application = await createAndSubmitApplication(
       applicantPage,
