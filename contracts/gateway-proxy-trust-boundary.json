@@ -19,7 +19,7 @@
     {"method": "GET", "path": "/v1/issued-credentials/mine", "service": "applicant", "gateway_owned": false, "upstream_path": "/v1/issued-credentials/mine"},
     {"method": "GET", "path": "/v1/organizations/org-1/applicants", "service": "applicant", "gateway_owned": false, "upstream_path": "/v1/organizations/org-1/applicants"},
     {"method": "GET", "path": "/v1/organizations/org-1/revocation-profiles/profile-1/status-lists/bitstring/revocation", "service": "revocation-profiles", "gateway_owned": false, "upstream_path": "/v1/organizations/org-1/revocation-profiles/profile-1/status-lists/bitstring/revocation"},
-    {"method": "GET", "path": "/v1/organizations/org-1/applicants/app-1/evidence-summary", "service": "issuance", "gateway_owned": false, "upstream_path": "/internal/applications/app-1/evidence-summary"},
+    {"method": "GET", "path": "/v1/organizations/org-1/applicants/app-1/evidence-summary", "service": "gateway", "gateway_owned": true, "upstream_path": "/v1/organizations/org-1/applicants/app-1/evidence-summary"},
     {"method": "GET", "path": "/v1/organizations/org-1/applicants/app-1/evidence-facts", "service": "issuance", "gateway_owned": false, "upstream_path": "/internal/applications/app-1/evidence-facts"},
     {"method": "POST", "path": "/v1/organizations/org-1/applicants/app-1/evidence/api-checks/check-1/run", "service": "issuance", "gateway_owned": false, "upstream_path": "/internal/applications/app-1/evidence/api-checks/check-1/run"},
     {"method": "GET", "path": "/v1/organizations/org-1/lifecycle", "service": "gateway", "gateway_owned": true, "upstream_path": "/v1/organizations/org-1/lifecycle"},

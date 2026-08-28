@@ -550,9 +550,14 @@ static ORGANIZATION_APPLICANT: LazyLock<Regex> = LazyLock::new(|| {
 
 static APPLICANT_ISSUANCE_ADAPTER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"^/v1/organizations/[^/]+/applicants/[^/]+/(?:evidence-summary|evidence-facts|evidence/api-checks/[^/]+/run)$",
+        r"^/v1/organizations/[^/]+/applicants/[^/]+/(?:evidence-facts|evidence/api-checks/[^/]+/run)$",
     )
     .expect("static applicant issuance adapter regex")
+});
+
+static APPLICANT_EVIDENCE_SUMMARY_COMPOSITION: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^/v1/organizations/[^/]+/applicants/[^/]+/evidence-summary$")
+        .expect("static applicant evidence summary composition regex")
 });
 
 static ORGANIZATION_COMPOSITION: LazyLock<Regex> = LazyLock::new(|| {
@@ -619,6 +624,7 @@ fn gateway_owned(path: &str) -> bool {
         || path.starts_with("/orgs/")
         || path.starts_with("/v1/vc-api")
         || path == "/v1/notifications/events/push"
+        || APPLICANT_EVIDENCE_SUMMARY_COMPOSITION.is_match(path)
         || retired_canvas_state_route(path)
         || ORGANIZATION_COMPOSITION.is_match(path)
 }
@@ -636,10 +642,6 @@ fn upstream_rewrite(method: HttpMethod, declared_path: &str) -> Option<String> {
         (HttpMethod::Get, "/v1/issuance/{issuance_id}/revocation-status") => {
             "/v1/issuance/transactions/{issuance_id}/revocation-status"
         }
-        (
-            HttpMethod::Get,
-            "/v1/organizations/{organization_id}/applicants/{application_id}/evidence-summary",
-        ) => "/internal/applications/{application_id}/evidence-summary",
         (
             HttpMethod::Get,
             "/v1/organizations/{organization_id}/applicants/{application_id}/evidence-facts",

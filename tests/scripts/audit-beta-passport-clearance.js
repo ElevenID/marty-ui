@@ -7,6 +7,7 @@ const path = require('node:path');
 const { chromium } = require('@playwright/test');
 
 const {
+  ensureActiveRevocationProfile,
   login,
   receiveCredential,
   selectOrg,
@@ -24,13 +25,18 @@ const {
   compactObject,
   ensureActiveResource,
   ensureApplicantProfile,
+  ensureGovernedIssuer,
   findCurrentCredential,
+  governedIssuerTrustProfilePayload,
+  listResources,
   requestedClaim,
   requireJson,
+  resolveActiveIssuerDid,
 } = require('./beta-demo-resource-helpers');
 const {
   PASSPORT_EVIDENCE_SHA256,
   passportClearanceBehaviorAssertions,
+  subjectClaimsHash,
   validEvidenceDigest,
 } = require('./beta-passport-clearance-contract');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
@@ -54,6 +60,7 @@ const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 const RESOURCE_NAMES = Object.freeze({
+  trust: 'D-01 Pre-Boarding Issuer Trust',
   credential: 'D-01 Pre-Boarding Clearance Credential',
   application: 'D-01 Passport Pre-Boarding Clearance',
   policy: 'D-01 Rapid Gate Clearance',
@@ -88,7 +95,12 @@ function clearanceClaims() {
   }));
 }
 
-function clearanceCredentialPayload(source) {
+function clearanceCredentialPayload(
+  source,
+  issuerDid = source.issuer_did,
+  revocationProfileId = source.revocation_profile_id,
+  trustProfileId = source.trust_profile_id,
+) {
   const claims = clearanceClaims();
   return compactObject({
     organization_id: ORG_ID,
@@ -106,12 +118,21 @@ function clearanceCredentialPayload(source) {
     validity_rules: source.validity_rules,
     supported_formats: source.supported_formats || ['SD_JWT_VC'],
     application_template_id: null,
-    trust_profile_id: source.trust_profile_id || null,
-    revocation_profile_id: source.revocation_profile_id,
+    trust_profile_id: trustProfileId || null,
+    revocation_profile_id: revocationProfileId,
     compliance_profile_id: source.compliance_profile_id,
-    issuer_did: source.issuer_did,
+    issuer_did: issuerDid,
     credential_payload_format: 'w3c_vcdm_v2_sd_jwt',
     issuance_protocol: 'openid4vci_pre_authorized',
+  });
+}
+
+function clearanceTrustProfilePayload(issuerDid) {
+  return governedIssuerTrustProfilePayload({
+    organizationId: ORG_ID,
+    name: RESOURCE_NAMES.trust,
+    description: 'Trust only the organization-owned issuer used by the D-01 clearance credential.',
+    issuerDid,
   });
 }
 
@@ -281,22 +302,84 @@ function requireConfigurationBinding(configuration) {
   return configuration;
 }
 
-async function ensureConfiguration(page) {
+async function activeOwnedDependency(page, collectionPath, resourceId, label) {
+  if (!resourceId) throw new Error(`${label} binding is missing`);
+  const resource = await requireJson(
+    page,
+    `${collectionPath}/${encodeURIComponent(resourceId)}`,
+    {},
+    `Load ${label}`,
+  );
+  if (resource.organization_id !== ORG_ID
+      || String(resource.status || '').toUpperCase() !== 'ACTIVE') {
+    throw new Error(`${label} must be active and owned by the demo organization`);
+  }
+  return resource;
+}
+
+async function ensureConfiguration(page, stamp) {
   const source = await requireJson(
     page,
     `/v1/credential-templates/${encodeURIComponent(SOURCE_TEMPLATE_ID)}`,
     {},
     'Load D-01 source Credential Template',
   );
-  if (!source.issuer_did || !source.compliance_profile_id || !source.revocation_profile_id) {
-    throw new Error('D-01 source Credential Template lacks issuer, compliance, or revocation binding');
+  if (!source.compliance_profile_id) {
+    throw new Error('D-01 source Credential Template lacks a compliance binding');
   }
+  const issuerDid = await resolveActiveIssuerDid(page, { organizationId: ORG_ID });
+  const existingCredentials = (await listResources(
+    page,
+    '/v1/credential-templates',
+    ORG_ID,
+  )).filter(({ name }) => name === RESOURCE_NAMES.credential);
+  if (existingCredentials.length > 1) {
+    throw new Error(`Multiple resources named '${RESOURCE_NAMES.credential}' exist`);
+  }
+  const existingCredential = existingCredentials[0] || null;
+  const trustProfile = existingCredential
+    ? await activeOwnedDependency(
+      page,
+      '/v1/trust-profiles',
+      existingCredential.trust_profile_id,
+      'D-01 Trust Profile',
+    )
+    : await ensureActiveResource(page, {
+      organizationId: ORG_ID,
+      collectionPath: '/v1/trust-profiles',
+      name: RESOURCE_NAMES.trust,
+      payload: clearanceTrustProfilePayload(issuerDid),
+      idempotencyKey: 'demo-d01-pre-boarding-trust-v1',
+    });
+  const revocationProfile = existingCredential
+    ? await activeOwnedDependency(
+      page,
+      '/v1/revocation-profiles',
+      existingCredential.revocation_profile_id,
+      'D-01 Revocation Profile',
+    )
+    : await ensureActiveRevocationProfile(page, stamp);
+  if (!revocationProfile?.id || revocationProfile.ok === false) {
+    throw new Error(`D-01 target revocation profile unavailable: ${revocationProfile?.error || 'unknown error'}`);
+  }
+  await ensureGovernedIssuer(page, {
+    organizationId: ORG_ID,
+    trustProfileId: trustProfile.id,
+    issuerDid,
+    displayName: 'D-01 Pre-Boarding Credential Issuer',
+    idempotencyKey: 'demo-d01-pre-boarding-governed-issuer-v1',
+  });
   const credential = await ensureActiveResource(page, {
     organizationId: ORG_ID,
     collectionPath: '/v1/credential-templates',
     name: RESOURCE_NAMES.credential,
-    payload: clearanceCredentialPayload(source),
-    idempotencyKey: 'demo-d01-pre-boarding-credential-v1',
+    payload: clearanceCredentialPayload(
+      source,
+      issuerDid,
+      revocationProfile.id,
+      trustProfile.id,
+    ),
+    idempotencyKey: 'demo-d01-pre-boarding-credential-v2',
   });
   const application = await ensureActiveResource(page, {
     organizationId: ORG_ID,
@@ -321,6 +404,15 @@ async function ensureConfiguration(page) {
     idempotencyKey: 'demo-d01-pre-boarding-issuance-flow-v1',
     validate: true,
   });
+  if (credential.issuer_did !== issuerDid) {
+    throw new Error('D-01 Credential Template is not bound to the active organization issuer DID');
+  }
+  if (credential.revocation_profile_id !== revocationProfile.id) {
+    throw new Error('D-01 Credential Template is not bound to the active organization revocation profile');
+  }
+  if (credential.trust_profile_id !== trustProfile.id) {
+    throw new Error('D-01 Credential Template is not bound to the target issuer Trust Profile');
+  }
   return requireConfigurationBinding({ credential, application, policy, flow });
 }
 
@@ -456,7 +548,7 @@ async function main() {
     await login(page, adminEmail, adminPassword);
     report.orgSelection = await selectOrg(page);
     if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
-    const configuration = await ensureConfiguration(page);
+    const configuration = await ensureConfiguration(page, stamp);
     report.configuration = {
       credentialTemplateId: configuration.credential.id,
       applicationTemplateId: configuration.application.id,
@@ -510,10 +602,13 @@ async function main() {
     if (!offerUri) throw new Error('Pre-boarding issuance returned no credential offer');
 
     const walletReceipt = await receiveCredential(walletPage, offerUri, configuration.credential.vct);
-    const walletInventory = await walletPage.locator('#credentials').innerText();
     report.issuance.walletReceived = walletReceipt.ok;
-    report.issuance.walletEvidenceBound = walletInventory.includes(evidenceDigest);
-    report.issuance.passportEvidenceSha256 = report.issuance.walletEvidenceBound ? evidenceDigest : null;
+    const walletCredential = await walletPage.evaluate(async (expectedVct) => {
+      const response = await fetch('/api/credentials');
+      const credentials = await response.json().catch(() => []);
+      if (!response.ok || !Array.isArray(credentials)) return null;
+      return credentials.find(({ vct }) => vct === expectedVct) || null;
+    }, configuration.credential.vct);
     const credential = await findCurrentCredential(page, {
       organizationId: ORG_ID,
       credentialTemplateId: configuration.credential.id,
@@ -523,6 +618,21 @@ async function main() {
     if (!credential?.id) throw new Error('Issued pre-boarding credential was not discoverable');
     credentialId = credential.id;
     report.issuance.credentialId = credentialId;
+    report.issuance.walletEvidenceClaimPresent = Boolean(
+      walletCredential?.claim_names?.includes('passport_evidence_sha256'),
+    );
+    report.issuance.subjectClaimsHash = credential.subject_claims_hash || null;
+    report.issuance.expectedSubjectClaimsHash = subjectClaimsHash(application.formData);
+    report.issuance.subjectClaimsHashMatches = (
+      report.issuance.subjectClaimsHash === report.issuance.expectedSubjectClaimsHash
+    );
+    report.issuance.walletEvidenceBound = (
+      report.issuance.walletEvidenceClaimPresent
+      && report.issuance.subjectClaimsHashMatches
+    );
+    report.issuance.passportEvidenceSha256 = report.issuance.walletEvidenceBound
+      ? evidenceDigest
+      : null;
     await showClearanceStep(page, 'Clearance credential received', 'The holder wallet accepted the credential and exposes the same passport evidence digest in its signed claims.');
 
     const verification = await verify(page, walletPage, 'D-01 rapid pre-boarding gate', {
@@ -590,5 +700,6 @@ module.exports = {
   clearanceCredentialPayload,
   clearanceFlowPayload,
   clearancePolicyPayload,
+  clearanceTrustProfilePayload,
   requireConfigurationBinding,
 };

@@ -820,6 +820,10 @@ async fn proxy_handler(
     if organization_composition_route(request.uri().path()).is_some() {
         return organization_composition_handler(state, request).await;
     }
+    if request.method() == "GET" && applicant_evidence_summary_route(request.uri().path()).is_some()
+    {
+        return applicant_evidence_summary_handler(state, request).await;
+    }
     if route_ownership(request.uri().path()).gateway_owned {
         return error_response(
             501,
@@ -1197,6 +1201,179 @@ fn organization_composition_route(path: &str) -> Option<(&str, OrganizationCompo
         _ => return None,
     };
     Some((org_id, route))
+}
+
+fn applicant_evidence_summary_route(path: &str) -> Option<(&str, &str)> {
+    let segments = path.trim_matches('/').split('/').collect::<Vec<_>>();
+    match segments.as_slice() {
+        ["v1", "organizations", organization_id, "applicants", application_id, "evidence-summary"]
+            if !organization_id.is_empty() && !application_id.is_empty() =>
+        {
+            Some((organization_id, application_id))
+        }
+        _ => None,
+    }
+}
+
+fn applicant_evidence_fact(value: &Value) -> Value {
+    let field = |name: &str| value.get(name).cloned().unwrap_or(Value::Null);
+    let observed_at = value
+        .get("captured_at")
+        .filter(|item| !item.is_null())
+        .cloned()
+        .unwrap_or_else(|| field("created_at"));
+    json!({
+        "id": field("id"),
+        "organization_id": field("organization_id"),
+        "application_id": field("application_id"),
+        "subject_id": field("submitted_by"),
+        "provider": field("source"),
+        "fact_type": field("evidence_type"),
+        "scope": {
+            "evidence_requirement_id": field("evidence_requirement_id")
+        },
+        "assertion": {
+            "filename": field("filename"),
+            "media_type": field("media_type"),
+            "size_bytes": field("size_bytes"),
+            "sha256": field("sha256")
+        },
+        "verification": {
+            "status": field("status"),
+            "method": "sha-256"
+        },
+        "source": {
+            "kind": field("source"),
+            "content_url": field("content_url")
+        },
+        "requirement_id": field("evidence_requirement_id"),
+        "logical_key": field("id"),
+        "source_revision": field("updated_at"),
+        "payload_hash": field("sha256"),
+        "observed_at": observed_at,
+        "effective_at": field("captured_at"),
+        "superseded_fact_id": Value::Null,
+        "created_at": field("created_at")
+    })
+}
+
+fn applicant_evidence_identity_matches(
+    value: &Value,
+    organization_id: &str,
+    application_id: &str,
+) -> bool {
+    value.get("organization_id").and_then(Value::as_str) == Some(organization_id)
+        && value.get("application_id").and_then(Value::as_str) == Some(application_id)
+}
+
+async fn applicant_evidence_summary_handler(
+    state: Arc<GatewayRuntimeState>,
+    request: Request,
+) -> Response {
+    let Some((organization_id, application_id)) =
+        applicant_evidence_summary_route(request.uri().path())
+    else {
+        return detail_response(404, "Application evidence summary route not found");
+    };
+    let organization_id = organization_id.to_owned();
+    let application_id = application_id.to_owned();
+    let identity = request
+        .extensions()
+        .get::<TrustedIdentityContext>()
+        .cloned()
+        .unwrap_or_default();
+    if identity.organization_id.as_deref() != Some(organization_id.as_str()) {
+        return detail_response(403, "Request is not authorized for this organization");
+    }
+    let headers = request_headers(request.headers());
+    let issuance_path = format!("/internal/applications/{application_id}/evidence-summary");
+    match composition_proxy_json(
+        &state,
+        &identity,
+        "issuance",
+        HttpMethod::Get,
+        &issuance_path,
+        BTreeMap::new(),
+        None,
+        headers.clone(),
+    )
+    .await
+    {
+        Ok(summary)
+            if applicant_evidence_identity_matches(&summary, &organization_id, &application_id) =>
+        {
+            return (StatusCode::OK, Json(summary)).into_response();
+        }
+        Ok(_) => {
+            return detail_response(
+                502,
+                "Issuance service returned a cross-tenant evidence summary",
+            );
+        }
+        Err(response) if response.status() != StatusCode::NOT_FOUND => return response,
+        Err(_) => {}
+    }
+
+    let application_path =
+        format!("/v1/organizations/{organization_id}/applicants/{application_id}");
+    let application = match composition_proxy_json(
+        &state,
+        &identity,
+        "applicant",
+        HttpMethod::Get,
+        &application_path,
+        BTreeMap::new(),
+        None,
+        headers.clone(),
+    )
+    .await
+    {
+        Ok(application) => application,
+        Err(response) => return response,
+    };
+    if application.get("organization_id").and_then(Value::as_str) != Some(organization_id.as_str())
+    {
+        return detail_response(502, "Applicant service returned a cross-tenant application");
+    }
+    let evidence_path = format!("{application_path}/evidence");
+    let evidence = match composition_proxy_json(
+        &state,
+        &identity,
+        "applicant",
+        HttpMethod::Get,
+        &evidence_path,
+        BTreeMap::new(),
+        None,
+        headers,
+    )
+    .await
+    {
+        Ok(Value::Array(evidence)) => evidence,
+        Ok(_) => return detail_response(502, "Applicant evidence response is malformed"),
+        Err(response) => return response,
+    };
+    if evidence
+        .iter()
+        .any(|item| !applicant_evidence_identity_matches(item, &organization_id, &application_id))
+    {
+        return detail_response(502, "Applicant service returned cross-tenant evidence");
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "application_id": application_id,
+            "organization_id": organization_id,
+            "status": application.get("status").cloned().unwrap_or(Value::Null),
+            "evidence_facts": evidence.iter().map(applicant_evidence_fact).collect::<Vec<_>>(),
+            "policy_decision": Value::Null,
+            "policy_source": Value::Null,
+            "policy_set_id": Value::Null,
+            "issuance_transaction_id": Value::Null,
+            "canvas": Value::Null,
+            "available_api_checks": []
+        })),
+    )
+        .into_response()
 }
 
 async fn organization_composition_handler(
@@ -4458,6 +4635,17 @@ mod tests {
                 assert_eq!(instance.service_name, "issuance");
                 assert_eq!(request.header("x-api-key"), None);
             }
+            if request.path == "/internal/applications/app-1/evidence-summary" {
+                assert_eq!(instance.service_name, "issuance");
+                assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+                return Ok(GatewayResponse {
+                    status_code: 404,
+                    headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
+                    body: Some(br#"{"detail":"Application not found"}"#.to_vec()),
+                    response_time_ms: None,
+                    upstream_service: None,
+                });
+            }
             if request.path == "/v1/organizations/11111111-1111-1111-1111-111111111111/roles" {
                 assert_eq!(instance.service_name, "organizations");
                 assert_eq!(
@@ -4941,6 +5129,37 @@ mod tests {
                         {"status":"OFFERED"}
                     ]}))
                     .expect("applicant list")
+                }
+                "/v1/organizations/org-1/applicants/app-1" => {
+                    assert_eq!(instance.service_name, "applicant");
+                    serde_json::to_vec(&json!({
+                        "id": "app-1",
+                        "organization_id": "org-1",
+                        "status": "APPROVED"
+                    }))
+                    .expect("applicant")
+                }
+                "/v1/organizations/org-1/applicants/app-1/evidence" => {
+                    assert_eq!(instance.service_name, "applicant");
+                    serde_json::to_vec(&json!([{
+                        "id": "evidence-1",
+                        "organization_id": "org-1",
+                        "application_id": "app-1",
+                        "submitted_by": "subject-1",
+                        "source": "upload",
+                        "evidence_type": "passport",
+                        "evidence_requirement_id": "requirement-1",
+                        "filename": "passport.pdf",
+                        "media_type": "application/pdf",
+                        "size_bytes": 42,
+                        "sha256": "0123456789abcdef",
+                        "status": "VERIFIED",
+                        "content_url": "/v1/evidence/evidence-1/content",
+                        "captured_at": "2026-08-28T12:00:00Z",
+                        "created_at": "2026-08-28T12:00:00Z",
+                        "updated_at": "2026-08-28T12:01:00Z"
+                    }]))
+                    .expect("applicant evidence")
                 }
                 "/v1/organizations/org%2D1/lifecycle"
                 | "/internal/v1/organizations/org%2D1/lifecycle" => {
@@ -5550,6 +5769,22 @@ mod tests {
             .await
             .expect("response");
         assert_eq!(evidence.status(), StatusCode::OK);
+        let evidence: Value = serde_json::from_slice(
+            &to_bytes(evidence.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                .await
+                .expect("evidence summary body"),
+        )
+        .expect("evidence summary JSON");
+        assert_eq!(evidence["application_id"], "app-1");
+        assert_eq!(evidence["organization_id"], "org-1");
+        assert_eq!(evidence["status"], "APPROVED");
+        assert_eq!(evidence["evidence_facts"][0]["id"], "evidence-1");
+        assert_eq!(
+            evidence["evidence_facts"][0]["assertion"]["sha256"],
+            "0123456789abcdef"
+        );
+        assert!(evidence["policy_decision"].is_null());
+        assert_eq!(evidence["available_api_checks"], json!([]));
 
         let lifecycle = runtime_router()
             .oneshot(
@@ -6915,5 +7150,74 @@ mod tests {
             .expect("profile write JSON");
             assert!(body.get(expected).is_some());
         }
+    }
+
+    #[test]
+    fn applicant_evidence_summary_route_is_exact() {
+        assert_eq!(
+            applicant_evidence_summary_route(
+                "/v1/organizations/org-1/applicants/app-1/evidence-summary"
+            ),
+            Some(("org-1", "app-1"))
+        );
+        assert_eq!(
+            applicant_evidence_summary_route(
+                "/v1/organizations/org-1/applicants/app-1/evidence-facts"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn applicant_evidence_projects_to_reviewer_safe_fact() {
+        let projected = applicant_evidence_fact(&json!({
+            "id": "evidence-1",
+            "organization_id": "org-1",
+            "application_id": "app-1",
+            "evidence_requirement_id": "passport",
+            "evidence_type": "EMRTD",
+            "source": "applicant_upload",
+            "media_type": "application/octet-stream",
+            "filename": "passport.bin",
+            "size_bytes": 42,
+            "sha256": "abc123",
+            "status": "ACTIVE",
+            "submitted_by": "applicant-1",
+            "captured_at": "2026-08-28T09:00:00Z",
+            "content_url": "/v1/evidence/evidence-1/content",
+            "created_at": "2026-08-28T09:01:00Z",
+            "updated_at": "2026-08-28T09:02:00Z"
+        }));
+        assert_eq!(projected["provider"], "applicant_upload");
+        assert_eq!(projected["fact_type"], "EMRTD");
+        assert_eq!(projected["assertion"]["sha256"], "abc123");
+        assert_eq!(projected["verification"]["method"], "sha-256");
+        assert_eq!(projected["observed_at"], "2026-08-28T09:00:00Z");
+    }
+
+    #[test]
+    fn applicant_evidence_identity_is_exact_and_fail_closed() {
+        let evidence = json!({
+            "organization_id": "org-1",
+            "application_id": "app-1"
+        });
+        assert!(applicant_evidence_identity_matches(
+            &evidence, "org-1", "app-1"
+        ));
+        assert!(!applicant_evidence_identity_matches(
+            &evidence,
+            "org-other",
+            "app-1"
+        ));
+        assert!(!applicant_evidence_identity_matches(
+            &evidence,
+            "org-1",
+            "app-other"
+        ));
+        assert!(!applicant_evidence_identity_matches(
+            &json!({"organization_id":"org-1"}),
+            "org-1",
+            "app-1"
+        ));
     }
 }

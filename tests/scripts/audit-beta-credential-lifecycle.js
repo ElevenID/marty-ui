@@ -735,6 +735,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  ensureActiveRevocationProfile,
   findCredentialRow,
   findIssuedCredential,
   getCredentialStatus,

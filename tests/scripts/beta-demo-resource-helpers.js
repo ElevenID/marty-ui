@@ -32,6 +32,25 @@ function compactObject(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 }
 
+function governedIssuerTrustProfilePayload({
+  organizationId,
+  name,
+  description,
+  issuerDid,
+}) {
+  return {
+    organization_id: organizationId,
+    name,
+    description,
+    profile_type: 'CUSTOM',
+    trust_sources: [],
+    allowed_algorithms: ['ES256'],
+    supported_formats: ['SD_JWT_VC'],
+    allowed_issuers: [issuerDid],
+    denied_issuers: [],
+  };
+}
+
 async function browserJson(page, pathName, options = {}) {
   return page.evaluate(async ({ requestPath, requestOptions }) => {
     const response = await fetch(requestPath, {
@@ -128,6 +147,108 @@ async function listResources(page, pathName, organizationId) {
   );
   if (!Array.isArray(body)) throw new Error(`${pathName} returned a malformed collection`);
   return body;
+}
+
+async function resolveActiveIssuerDid(page, {
+  organizationId,
+  credentialFormat = 'SD_JWT_VC',
+  algorithm = null,
+  keyPurpose = 'vc_jwt_issuer',
+}) {
+  const response = await requireJson(
+    page,
+    `/v1/signing-keys/issuer-identities?organization_id=${encodeURIComponent(organizationId)}`,
+    {},
+    'Load active issuer identities',
+  );
+  if (!Array.isArray(response?.identities)) {
+    throw new Error('Issuer identity lookup returned a malformed collection');
+  }
+  const matches = response.identities.filter((identity) => (
+    String(identity.status || '').toLowerCase() === 'active'
+    && identity.key_purpose === keyPurpose
+    && identity.credential_format === credentialFormat
+    && (!algorithm || identity.algorithm === algorithm)
+    && typeof identity.issuer_did === 'string'
+    && identity.issuer_did.length > 0
+  ));
+  const issuerDids = [...new Set(matches.map(({ issuer_did: issuerDid }) => issuerDid))];
+  if (issuerDids.length !== 1) {
+    throw new Error(
+      `Expected exactly one active ${keyPurpose} issuer DID for ${credentialFormat}; found ${issuerDids.length}`,
+    );
+  }
+  return issuerDids[0];
+}
+
+function publicVerificationKeys(issuer) {
+  const keys = issuer?.metadata?.verification_keys;
+  if (!Array.isArray(keys)) return [];
+  const privateFields = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'];
+  return keys.filter((key) => (
+    key && typeof key === 'object'
+    && typeof key.kty === 'string'
+    && key.kty.length > 0
+    && privateFields.every((field) => !(field in key))
+  ));
+}
+
+async function ensureGovernedIssuer(page, {
+  organizationId,
+  trustProfileId,
+  issuerDid,
+  displayName,
+  idempotencyKey,
+}) {
+  const matches = (await listResources(page, '/v1/issuer-entities', organizationId))
+    .filter((issuer) => issuer.issuer_id === issuerDid);
+  if (matches.length > 1) throw new Error(`Multiple governed issuer entities exist for ${issuerDid}`);
+  let issuer = matches[0] || null;
+  let created = false;
+  if (!issuer) {
+    issuer = await requireJson(page, '/v1/issuer-entities', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+      body: JSON.stringify({
+        organization_id: organizationId,
+        issuer_id: issuerDid,
+        issuer_type: 'ORGANIZATION',
+        display_name: displayName,
+        compliance_status: 'COMPLIANT',
+        metadata: {},
+      }),
+    }, `Create governed issuer ${displayName}`);
+    created = true;
+  }
+  if (!issuer?.id || publicVerificationKeys(issuer).length === 0) {
+    throw new Error(`Governed issuer ${displayName} has no pinned public verification key`);
+  }
+
+  const relationshipPath = `/v1/trust-profiles/${encodeURIComponent(trustProfileId)}/issuers`;
+  const relationships = await requireJson(page, relationshipPath, {}, 'Load trusted issuers');
+  if (!Array.isArray(relationships)) throw new Error('Trusted issuer lookup returned a malformed collection');
+  const matchingRelationships = relationships.filter((relationship) => relationship.issuer_id === issuer.id);
+  if (matchingRelationships.length > 1) {
+    throw new Error(`Multiple Trust Profile relationships exist for ${issuerDid}`);
+  }
+  let relationship = matchingRelationships[0] || null;
+  if (!relationship) {
+    relationship = await requireJson(page, relationshipPath, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': `${idempotencyKey}-relationship` },
+      body: JSON.stringify({
+        issuer_id: issuer.id,
+        trust_level: 100,
+        relationship_status: 'TRUSTED',
+        cascade_revocation_policy: 'NOTIFY_ONLY',
+        metadata: {},
+      }),
+    }, `Trust governed issuer ${displayName}`);
+  }
+  if (relationship.issuer_id !== issuer.id || relationship.relationship_status !== 'TRUSTED') {
+    throw new Error(`Governed issuer ${displayName} relationship is not trusted`);
+  }
+  return { issuer, relationship, created };
 }
 
 async function ensureActiveResource(page, {
@@ -241,10 +362,13 @@ module.exports = {
   compactObject,
   ensureActiveResource,
   ensureApplicantProfile,
+  ensureGovernedIssuer,
   findCurrentCredential,
+  governedIssuerTrustProfilePayload,
   listResources,
   requestedClaim,
   requireJson,
+  resolveActiveIssuerDid,
   safeErrorDetail,
   selectOrganization,
 };

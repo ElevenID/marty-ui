@@ -7,6 +7,7 @@ const path = require('node:path');
 const { chromium } = require('@playwright/test');
 
 const {
+  ensureActiveRevocationProfile,
   findCredentialRow,
   getCredentialStatus,
   login,
@@ -27,9 +28,12 @@ const {
   compactObject,
   ensureActiveResource,
   ensureApplicantProfile,
+  ensureGovernedIssuer,
   findCurrentCredential,
+  governedIssuerTrustProfilePayload,
   requestedClaim,
   requireJson,
+  resolveActiveIssuerDid,
 } = require('./beta-demo-resource-helpers');
 const { employeeAccessBehaviorAssertions } = require('./beta-employee-access-contract');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
@@ -53,6 +57,7 @@ const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 const RESOURCE_NAMES = Object.freeze({
+  trust: 'D-04 Employee Issuer Trust',
   credential: 'D-04 Employee Access Credential',
   application: 'D-04 Employee Onboarding',
   policy: 'D-04 Active Employee Access',
@@ -86,7 +91,12 @@ function employeeClaims() {
   }));
 }
 
-function employeeCredentialPayload(source) {
+function employeeCredentialPayload(
+  source,
+  issuerDid = source.issuer_did,
+  revocationProfileId = source.revocation_profile_id,
+  trustProfileId = source.trust_profile_id,
+) {
   const claims = employeeClaims();
   return compactObject({
     organization_id: ORG_ID,
@@ -104,12 +114,21 @@ function employeeCredentialPayload(source) {
     validity_rules: source.validity_rules,
     supported_formats: source.supported_formats || ['SD_JWT_VC'],
     application_template_id: null,
-    trust_profile_id: source.trust_profile_id || null,
-    revocation_profile_id: source.revocation_profile_id,
+    trust_profile_id: trustProfileId || null,
+    revocation_profile_id: revocationProfileId,
     compliance_profile_id: source.compliance_profile_id,
-    issuer_did: source.issuer_did,
+    issuer_did: issuerDid,
     credential_payload_format: 'w3c_vcdm_v2_sd_jwt',
     issuance_protocol: 'openid4vci_pre_authorized',
+  });
+}
+
+function employeeTrustProfilePayload(issuerDid) {
+  return governedIssuerTrustProfilePayload({
+    organizationId: ORG_ID,
+    name: RESOURCE_NAMES.trust,
+    description: 'Trust only the organization-owned issuer used by the D-04 employee credential.',
+    issuerDid,
   });
 }
 
@@ -253,22 +272,46 @@ function requireConfigurationBinding(configuration) {
   return configuration;
 }
 
-async function ensureConfiguration(page) {
+async function ensureConfiguration(page, stamp) {
   const source = await requireJson(
     page,
     `/v1/credential-templates/${encodeURIComponent(SOURCE_TEMPLATE_ID)}`,
     {},
     'Load D-04 source Credential Template',
   );
-  if (!source.issuer_did || !source.compliance_profile_id || !source.revocation_profile_id) {
-    throw new Error('D-04 source Credential Template lacks issuer, compliance, or revocation binding');
+  if (!source.compliance_profile_id) {
+    throw new Error('D-04 source Credential Template lacks a compliance binding');
+  }
+  const issuerDid = await resolveActiveIssuerDid(page, { organizationId: ORG_ID });
+  const trustProfile = await ensureActiveResource(page, {
+    organizationId: ORG_ID,
+    collectionPath: '/v1/trust-profiles',
+    name: RESOURCE_NAMES.trust,
+    payload: employeeTrustProfilePayload(issuerDid),
+    idempotencyKey: 'demo-d04-employee-trust-v1',
+  });
+  await ensureGovernedIssuer(page, {
+    organizationId: ORG_ID,
+    trustProfileId: trustProfile.id,
+    issuerDid,
+    displayName: 'D-04 Employee Credential Issuer',
+    idempotencyKey: 'demo-d04-employee-governed-issuer-v1',
+  });
+  const revocationProfile = await ensureActiveRevocationProfile(page, stamp);
+  if (!revocationProfile.ok || !revocationProfile.id) {
+    throw new Error(`D-04 target revocation profile unavailable: ${revocationProfile.error || 'unknown error'}`);
   }
   const credential = await ensureActiveResource(page, {
     organizationId: ORG_ID,
     collectionPath: '/v1/credential-templates',
     name: RESOURCE_NAMES.credential,
-    payload: employeeCredentialPayload(source),
-    idempotencyKey: 'demo-d04-employee-credential-v1',
+    payload: employeeCredentialPayload(
+      source,
+      issuerDid,
+      revocationProfile.id,
+      trustProfile.id,
+    ),
+    idempotencyKey: 'demo-d04-employee-credential-v3',
   });
   const application = await ensureActiveResource(page, {
     organizationId: ORG_ID,
@@ -293,6 +336,15 @@ async function ensureConfiguration(page) {
     idempotencyKey: 'demo-d04-employee-issuance-flow-v1',
     validate: true,
   });
+  if (credential.issuer_did !== issuerDid) {
+    throw new Error('D-04 Credential Template is not bound to the active organization issuer DID');
+  }
+  if (credential.revocation_profile_id !== revocationProfile.id) {
+    throw new Error('D-04 Credential Template is not bound to the active organization revocation profile');
+  }
+  if (credential.trust_profile_id !== trustProfile.id) {
+    throw new Error('D-04 Credential Template is not bound to the target issuer Trust Profile');
+  }
   return requireConfigurationBinding({ credential, application, policy, flow });
 }
 
@@ -411,7 +463,7 @@ async function main() {
     await login(page, adminEmail, adminPassword);
     report.orgSelection = await selectOrg(page);
     if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
-    const configuration = await ensureConfiguration(page);
+    const configuration = await ensureConfiguration(page, stamp);
     report.configuration = {
       credentialTemplateId: configuration.credential.id,
       applicationTemplateId: configuration.application.id,
@@ -567,5 +619,6 @@ module.exports = {
   employeeCredentialPayload,
   employeeFlowPayload,
   employeePolicyPayload,
+  employeeTrustProfilePayload,
   requireConfigurationBinding,
 };

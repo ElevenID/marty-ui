@@ -8,8 +8,11 @@ const {
   cleanupApplicationCredential,
   compactObject,
   ensureActiveResource,
+  ensureGovernedIssuer,
+  governedIssuerTrustProfilePayload,
   requestedClaim,
   requireJson,
+  resolveActiveIssuerDid,
   safeErrorDetail,
   selectOrganization,
 } = require('./beta-demo-resource-helpers');
@@ -169,6 +172,150 @@ test('ensureActiveResource fails closed for duplicate or inactive resources', as
     payload: {},
     idempotencyKey: 'd01-resource-v1',
   }), /is not active/);
+});
+
+test('governedIssuerTrustProfilePayload binds one exact SD-JWT issuer', () => {
+  assert.deepEqual(governedIssuerTrustProfilePayload({
+    organizationId: 'org-1',
+    name: 'Demo trust',
+    description: 'Exact issuer trust',
+    issuerDid: 'did:web:issuer.example',
+  }), {
+    organization_id: 'org-1',
+    name: 'Demo trust',
+    description: 'Exact issuer trust',
+    profile_type: 'CUSTOM',
+    trust_sources: [],
+    allowed_algorithms: ['ES256'],
+    supported_formats: ['SD_JWT_VC'],
+    allowed_issuers: ['did:web:issuer.example'],
+    denied_issuers: [],
+  });
+});
+
+test('resolveActiveIssuerDid selects one organization-owned issuance identity', async () => {
+  const page = fakePage([{
+    ok: true,
+    status: 200,
+    body: {
+      identities: [
+        {
+          issuer_did: 'did:web:beta.example:orgs:audit',
+          key_purpose: 'vc_jwt_issuer',
+          credential_format: 'SD_JWT_VC',
+          algorithm: 'ES256',
+          status: 'active',
+        },
+        {
+          issuer_did: 'did:web:beta.example:orgs:audit',
+          key_purpose: 'oid4vp_request_signing',
+          credential_format: 'SD_JWT_VC',
+          algorithm: 'ES256',
+          status: 'active',
+        },
+      ],
+    },
+  }]);
+
+  assert.equal(await resolveActiveIssuerDid(page, { organizationId: 'org/a' }), (
+    'did:web:beta.example:orgs:audit'
+  ));
+  assert.deepEqual(page.requests, [{
+    requestPath: '/v1/signing-keys/issuer-identities?organization_id=org%2Fa',
+    requestOptions: {},
+  }]);
+});
+
+test('resolveActiveIssuerDid fails closed for missing or ambiguous identities', async () => {
+  const missing = fakePage([{ ok: true, status: 200, body: { identities: [] } }]);
+  await assert.rejects(
+    () => resolveActiveIssuerDid(missing, { organizationId: 'org-1' }),
+    /found 0/,
+  );
+
+  const ambiguous = fakePage([{
+    ok: true,
+    status: 200,
+    body: {
+      identities: ['one', 'two'].map((suffix) => ({
+        issuer_did: `did:web:beta.example:orgs:${suffix}`,
+        key_purpose: 'vc_jwt_issuer',
+        credential_format: 'SD_JWT_VC',
+        algorithm: 'ES256',
+        status: 'active',
+      })),
+    },
+  }]);
+  await assert.rejects(
+    () => resolveActiveIssuerDid(ambiguous, { organizationId: 'org-1' }),
+    /found 2/,
+  );
+});
+
+test('ensureGovernedIssuer pins one public DID key and creates one trusted relationship', async () => {
+  const issuer = {
+    id: 'issuer-1',
+    issuer_id: 'did:web:beta.example:orgs:audit',
+    metadata: {
+      verification_keys: [{
+        kty: 'EC', crv: 'P-256', x: 'public-x', y: 'public-y', kid: 'did:web:beta.example:orgs:audit#key-1',
+      }],
+    },
+  };
+  const page = fakePage([
+    { ok: true, status: 200, body: [] },
+    { ok: true, status: 201, body: issuer },
+    { ok: true, status: 200, body: [] },
+    {
+      ok: true,
+      status: 201,
+      body: { issuer_id: 'issuer-1', relationship_status: 'TRUSTED' },
+    },
+  ]);
+
+  const result = await ensureGovernedIssuer(page, {
+    organizationId: 'org/a',
+    trustProfileId: 'trust/1',
+    issuerDid: issuer.issuer_id,
+    displayName: 'Demo issuer',
+    idempotencyKey: 'demo-governed-issuer-v1',
+  });
+
+  assert.equal(result.created, true);
+  assert.equal(result.issuer.id, 'issuer-1');
+  assert.deepEqual(page.requests.map(({ requestPath }) => requestPath), [
+    '/v1/issuer-entities?organization_id=org%2Fa',
+    '/v1/issuer-entities',
+    '/v1/trust-profiles/trust%2F1/issuers',
+    '/v1/trust-profiles/trust%2F1/issuers',
+  ]);
+  assert.equal(
+    JSON.parse(page.requests[1].requestOptions.body).issuer_id,
+    'did:web:beta.example:orgs:audit',
+  );
+  assert.equal(
+    JSON.parse(page.requests[3].requestOptions.body).relationship_status,
+    'TRUSTED',
+  );
+});
+
+test('ensureGovernedIssuer fails closed without a pinned public key', async () => {
+  const page = fakePage([{
+    ok: true,
+    status: 200,
+    body: [{
+      id: 'issuer-1',
+      issuer_id: 'did:web:beta.example:orgs:audit',
+      metadata: { verification_keys: [{ kty: 'EC', d: 'private' }] },
+    }],
+  }]);
+  await assert.rejects(() => ensureGovernedIssuer(page, {
+    organizationId: 'org-1',
+    trustProfileId: 'trust-1',
+    issuerDid: 'did:web:beta.example:orgs:audit',
+    displayName: 'Demo issuer',
+    idempotencyKey: 'demo-governed-issuer-v1',
+  }), /no pinned public verification key/);
 });
 
 test('cleanupApplicationCredential revokes and withdraws only named transaction records', async () => {

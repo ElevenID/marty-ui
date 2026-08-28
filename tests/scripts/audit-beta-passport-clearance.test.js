@@ -8,6 +8,7 @@ const {
   clearanceCredentialPayload,
   clearanceFlowPayload,
   clearancePolicyPayload,
+  clearanceTrustProfilePayload,
   requireConfigurationBinding,
 } = require('./audit-beta-passport-clearance');
 
@@ -67,6 +68,20 @@ test('D-01 configuration binds one exact credential across application, flow, an
     trigger_type: 'WEBHOOK',
     config: { event_type: 'APPLICATION_APPROVED' },
   });
+});
+
+test('D-01 fresh configuration uses target-owned issuer, trust, and revocation bindings', () => {
+  const issuerDid = 'did:web:beta.example:orgs:target';
+  const credential = clearanceCredentialPayload(
+    source,
+    issuerDid,
+    'target-revocation-1',
+    'target-trust-1',
+  );
+  assert.equal(credential.issuer_did, issuerDid);
+  assert.equal(credential.revocation_profile_id, 'target-revocation-1');
+  assert.equal(credential.trust_profile_id, 'target-trust-1');
+  assert.deepEqual(clearanceTrustProfilePayload(issuerDid).allowed_issuers, [issuerDid]);
 });
 
 test('D-01 application requires exact SHA-256 evidence and gate discloses only clearance', () => {
