@@ -15,6 +15,7 @@ const {
   resolveActiveIssuerDid,
   safeErrorDetail,
   selectOrganization,
+  withdrawConflictingApplications,
 } = require('./beta-demo-resource-helpers');
 
 test('requestedClaim emits the strict public presentation-policy DTO', () => {
@@ -348,6 +349,50 @@ test('cleanupApplicationCredential revokes and withdraws only named transaction 
       },
     },
   ]);
+});
+
+test('withdrawConflictingApplications retires only active matching application transactions', async () => {
+  const applicantPage = fakePage([{
+    ok: true,
+    status: 200,
+    body: {
+      items: [
+        { id: 'active/1', organization_id: 'org/1', credential_template_id: 'credential/1', status: 'APPROVED' },
+        { id: 'withdrawn/1', organization_id: 'org/1', credential_template_id: 'credential/1', status: 'WITHDRAWN' },
+        { id: 'other-template', organization_id: 'org/1', credential_template_id: 'credential/2', status: 'SUBMITTED' },
+        { id: 'other-org', organization_id: 'org/2', credential_template_id: 'credential/1', status: 'DRAFT' },
+      ],
+    },
+  }]);
+  const adminPage = fakePage([{ ok: true, status: 200, body: { status: 'WITHDRAWN' } }]);
+
+  const result = await withdrawConflictingApplications(applicantPage, adminPage, {
+    organizationId: 'org/1',
+    credentialTemplateId: 'credential/1',
+    reason: 'interrupted qualification cleanup',
+  });
+
+  assert.deepEqual(result, [{ id: 'active/1', previousStatus: 'APPROVED' }]);
+  assert.deepEqual(applicantPage.requests, [{
+    requestPath: '/v1/me/applications?limit=500',
+    requestOptions: {},
+  }]);
+  assert.deepEqual(adminPage.requests, [{
+    requestPath: '/v1/organizations/org%2F1/applicants/active%2F1/withdraw',
+    requestOptions: {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'interrupted qualification cleanup' }),
+    },
+  }]);
+});
+
+test('withdrawConflictingApplications fails closed on malformed collections', async () => {
+  const applicantPage = fakePage([{ ok: true, status: 200, body: [] }]);
+  await assert.rejects(() => withdrawConflictingApplications(applicantPage, fakePage([]), {
+    organizationId: 'org-1',
+    credentialTemplateId: 'credential-1',
+    reason: 'cleanup',
+  }), /malformed collection/);
 });
 
 test('selectOrganization persists org mode before navigating and waits for UI restoration', async () => {

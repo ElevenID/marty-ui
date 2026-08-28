@@ -174,6 +174,12 @@ pub fn reconcile_transaction(
     issued_at: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
 ) -> Result<bool, IssuanceError> {
+    if matches!(
+        application.status,
+        LifecycleStatus::Rejected | LifecycleStatus::Withdrawn | LifecycleStatus::Suspended
+    ) {
+        return Ok(false);
+    }
     let normalized = status.to_ascii_lowercase();
     let mut changed = false;
     match normalized.as_str() {
