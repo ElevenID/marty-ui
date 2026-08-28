@@ -1156,6 +1156,128 @@ function parseCredentialOfferUri(uri) {
   };
 }
 
+function pinnedHttpsUrl(value, expectedOrigin, code, summary) {
+  let url;
+  try {
+    url = new URL(String(value || ''));
+  } catch {
+    fail(code, summary);
+  }
+  requireCondition(
+    url.protocol === 'https:'
+      && url.origin === expectedOrigin
+      && !url.username
+      && !url.password
+      && !url.search
+      && !url.hash,
+    code,
+    summary,
+  );
+  return url;
+}
+
+async function resolveOid4vciEndpoints(metadata, issuerUrl, expectedOrigin, fetchImpl = fetchWithTimeout) {
+  const declaredIssuer = pinnedHttpsUrl(
+    metadata?.credential_issuer,
+    expectedOrigin,
+    'credential_metadata_issuer_unpinned',
+    'OID4VCI metadata returned an invalid or untrusted credential issuer.',
+  );
+  requireCondition(
+    declaredIssuer.href.replace(/\/$/, '') === issuerUrl.href.replace(/\/$/, ''),
+    'credential_metadata_issuer_mismatch',
+    'OID4VCI metadata did not describe the credential issuer in the offer.',
+  );
+  const credentialEndpoint = pinnedHttpsUrl(
+    metadata?.credential_endpoint,
+    expectedOrigin,
+    'credential_endpoint_unpinned',
+    'OID4VCI metadata returned an invalid or untrusted credential endpoint.',
+  );
+
+  let tokenEndpointValue = metadata?.token_endpoint;
+  if (!tokenEndpointValue) {
+    const authorizationServers = safeList(metadata?.authorization_servers);
+    requireCondition(
+      authorizationServers.length === 1,
+      'authorization_server_ambiguous',
+      'OID4VCI metadata must identify exactly one authorization server when it omits token_endpoint.',
+    );
+    const authorizationServer = pinnedHttpsUrl(
+      authorizationServers[0],
+      expectedOrigin,
+      'authorization_server_unpinned',
+      'OID4VCI metadata returned an invalid or untrusted authorization server.',
+    );
+    const authorizationPath = authorizationServer.pathname === '/'
+      ? ''
+      : authorizationServer.pathname.replace(/\/$/, '');
+    const authorizationMetadataUrl = `${authorizationServer.origin}/.well-known/oauth-authorization-server${authorizationPath}`;
+    const authorizationResponse = await fetchImpl(authorizationMetadataUrl, {
+      headers: { Accept: 'application/json' },
+    });
+    const authorizationMetadata = await responseJson(
+      authorizationResponse,
+      'authorization_metadata_failed',
+      'OAuth authorization server metadata request failed',
+    );
+    const discoveredIssuer = pinnedHttpsUrl(
+      authorizationMetadata?.issuer,
+      expectedOrigin,
+      'authorization_server_issuer_unpinned',
+      'OAuth authorization server metadata returned an invalid or untrusted issuer.',
+    );
+    requireCondition(
+      discoveredIssuer.href.replace(/\/$/, '') === authorizationServer.href.replace(/\/$/, ''),
+      'authorization_server_issuer_mismatch',
+      'OAuth authorization server metadata did not describe the selected authorization server.',
+    );
+    tokenEndpointValue = authorizationMetadata?.token_endpoint;
+  }
+
+  const tokenEndpoint = pinnedHttpsUrl(
+    tokenEndpointValue,
+    expectedOrigin,
+    'token_endpoint_unpinned',
+    'OID4VCI metadata returned an invalid or untrusted token endpoint.',
+  );
+  const nonceEndpoint = metadata?.nonce_endpoint
+    ? pinnedHttpsUrl(
+      metadata.nonce_endpoint,
+      expectedOrigin,
+      'nonce_endpoint_unpinned',
+      'OID4VCI metadata returned an invalid or untrusted nonce endpoint.',
+    )
+    : null;
+  return { tokenEndpoint, credentialEndpoint, nonceEndpoint };
+}
+
+async function resolveProofNonce(token, nonceEndpoint, fetchImpl = fetchWithTimeout) {
+  const tokenNonce = String(token?.c_nonce || token?.nonce || '').trim();
+  if (tokenNonce) return tokenNonce;
+  requireCondition(
+    nonceEndpoint,
+    'credential_nonce_endpoint_missing',
+    'OID4VCI metadata omitted the nonce endpoint required by the token response.',
+  );
+  const nonceResponse = await fetchImpl(nonceEndpoint, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+  });
+  const nonce = await responseJson(
+    nonceResponse,
+    'credential_nonce_failed',
+    'OID4VCI proof nonce request failed',
+  );
+  const proofNonce = String(nonce?.c_nonce || nonce?.nonce || '').trim();
+  requireCondition(
+    proofNonce,
+    'credential_nonce_response_incomplete',
+    'OID4VCI nonce response omitted the proof nonce.',
+  );
+  return proofNonce;
+}
+
 function base64urlJson(value) {
   return Buffer.from(JSON.stringify(value)).toString('base64url');
 }
@@ -1234,14 +1356,20 @@ function verifyCompactJws(compact, publicJwk) {
 
 async function receiveAndVerifyCredential(offerUri, expectedTemplate, expectedIssuerOrigin = DEFAULT_MARTY_ORIGIN) {
   const offer = parseCredentialOfferUri(offerUri);
-  const issuerUrl = new URL(offer.issuer);
-  requireCondition(issuerUrl.protocol === 'https:' && issuerUrl.origin === expectedIssuerOrigin, 'credential_issuer_unpinned', 'The OID4VCI issuer is outside the reviewed beta origin.');
+  const issuerUrl = pinnedHttpsUrl(
+    offer.issuer,
+    expectedIssuerOrigin,
+    'credential_issuer_unpinned',
+    'The OID4VCI issuer is outside the reviewed beta origin.',
+  );
   const metadataUrl = `${issuerUrl.origin}/.well-known/openid-credential-issuer${issuerUrl.pathname}`;
   const metadataResponse = await fetchWithTimeout(metadataUrl, { headers: { Accept: 'application/json' } });
   const metadata = await responseJson(metadataResponse, 'credential_metadata_failed', 'OID4VCI issuer metadata request failed');
-  const tokenEndpoint = new URL(String(metadata.token_endpoint || ''));
-  const credentialEndpoint = new URL(String(metadata.credential_endpoint || ''));
-  requireCondition(tokenEndpoint.origin === issuerUrl.origin && credentialEndpoint.origin === issuerUrl.origin, 'credential_endpoint_unpinned', 'OID4VCI metadata returned an endpoint outside the issuer origin.');
+  const { tokenEndpoint, credentialEndpoint, nonceEndpoint } = await resolveOid4vciEndpoints(
+    metadata,
+    issuerUrl,
+    expectedIssuerOrigin,
+  );
 
   const tokenResponse = await fetchWithTimeout(tokenEndpoint, {
     method: 'POST',
@@ -1252,11 +1380,12 @@ async function receiveAndVerifyCredential(offerUri, expectedTemplate, expectedIs
     }).toString(),
   });
   const token = await responseJson(tokenResponse, 'credential_token_exchange_failed', 'OID4VCI token exchange failed');
-  requireCondition(token?.access_token && (token?.c_nonce || token?.nonce), 'credential_token_response_incomplete', 'OID4VCI token response omitted proof binding fields.');
+  requireCondition(token?.access_token, 'credential_token_response_incomplete', 'OID4VCI token response omitted its access token.');
+  const proofNonce = await resolveProofNonce(token, nonceEndpoint);
 
   const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
   const holderJwk = publicHolderJwk(publicKey);
-  const proof = createHolderProof(privateKey, holderJwk, offer.issuer, token.c_nonce || token.nonce);
+  const proof = createHolderProof(privateKey, holderJwk, offer.issuer, proofNonce);
   const credentialResponse = await fetchWithTimeout(credentialEndpoint, {
     method: 'POST',
     headers: {
@@ -1755,6 +1884,8 @@ module.exports = {
   extractDeveloperKeyRecord,
   parseCredentialOfferUri,
   receiveAndVerifyCredential,
+  resolveOid4vciEndpoints,
+  resolveProofNonce,
   requireComposeExecutionBoundary,
   requireSecretFile,
   responseJson,

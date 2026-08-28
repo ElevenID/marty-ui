@@ -13,6 +13,8 @@ const {
   didWebResolutionUrl,
   extractDeveloperKeyRecord,
   parseCredentialOfferUri,
+  resolveOid4vciEndpoints,
+  resolveProofNonce,
   responseJson,
   sanitizeEvidence,
   validateAuthoritativeEvidenceHeads,
@@ -203,6 +205,108 @@ test('inline OID4VCI offers and did:web resolution remain deterministic', () => 
   });
   assert.equal(didWebResolutionUrl('did:web:issuer.example:issuers:badge'), 'https://issuer.example/issuers/badge/did.json');
   assert.equal(didWebResolutionUrl('did:web:localhost%3A8443'), 'https://localhost:8443/.well-known/did.json');
+});
+
+test('OID4VCI endpoints preserve legacy inline token metadata', async () => {
+  const issuerUrl = new URL('https://beta.elevenidllc.com/org/org-1');
+  const endpoints = await resolveOid4vciEndpoints({
+    credential_issuer: issuerUrl.href,
+    token_endpoint: 'https://beta.elevenidllc.com/v1/issuance/token',
+    credential_endpoint: 'https://beta.elevenidllc.com/v1/issuance/credential',
+  }, issuerUrl, issuerUrl.origin, async () => {
+    assert.fail('inline token metadata must not trigger authorization-server discovery');
+  });
+
+  assert.equal(endpoints.tokenEndpoint.href, 'https://beta.elevenidllc.com/v1/issuance/token');
+  assert.equal(endpoints.credentialEndpoint.href, 'https://beta.elevenidllc.com/v1/issuance/credential');
+});
+
+test('OID4VCI endpoints follow final-spec authorization server metadata', async () => {
+  const issuerUrl = new URL('https://beta.elevenidllc.com/org/org-1');
+  const requested = [];
+  const endpoints = await resolveOid4vciEndpoints({
+    credential_issuer: issuerUrl.href,
+    authorization_servers: [issuerUrl.href],
+    credential_endpoint: 'https://beta.elevenidllc.com/v1/issuance/credential',
+    nonce_endpoint: 'https://beta.elevenidllc.com/v1/issuance/nonce',
+  }, issuerUrl, issuerUrl.origin, async (url) => {
+    requested.push(url);
+    return {
+      status: 200,
+      json: async () => ({
+        issuer: issuerUrl.href,
+        token_endpoint: 'https://beta.elevenidllc.com/v1/issuance/token',
+      }),
+    };
+  });
+
+  assert.deepEqual(requested, [
+    'https://beta.elevenidllc.com/.well-known/oauth-authorization-server/org/org-1',
+  ]);
+  assert.equal(endpoints.tokenEndpoint.href, 'https://beta.elevenidllc.com/v1/issuance/token');
+  assert.equal(endpoints.credentialEndpoint.href, 'https://beta.elevenidllc.com/v1/issuance/credential');
+  assert.equal(endpoints.nonceEndpoint.href, 'https://beta.elevenidllc.com/v1/issuance/nonce');
+});
+
+test('OID4VCI proof nonce supports legacy token fields and the final nonce endpoint', async () => {
+  assert.equal(
+    await resolveProofNonce({ access_token: 'token', c_nonce: 'legacy-nonce' }, null, async () => {
+      assert.fail('legacy token nonce must not trigger nonce endpoint discovery');
+    }),
+    'legacy-nonce',
+  );
+
+  const requested = [];
+  const nonceEndpoint = new URL('https://beta.elevenidllc.com/v1/issuance/nonce');
+  assert.equal(
+    await resolveProofNonce({ access_token: 'token' }, nonceEndpoint, async (url, options) => {
+      requested.push({ url: url.href, method: options.method, authorization: options.headers.Authorization });
+      return { status: 200, json: async () => ({ c_nonce: 'final-nonce' }) };
+    }),
+    'final-nonce',
+  );
+  assert.deepEqual(requested, [{
+    url: nonceEndpoint.href,
+    method: 'POST',
+    authorization: undefined,
+  }]);
+});
+
+test('OID4VCI endpoint discovery fails closed on ambiguous or unpinned authorization servers', async () => {
+  const issuerUrl = new URL('https://beta.elevenidllc.com/org/org-1');
+  await assert.rejects(
+    resolveOid4vciEndpoints({
+      credential_issuer: issuerUrl.href,
+      authorization_servers: [issuerUrl.href, 'https://beta.elevenidllc.com/org/org-2'],
+      credential_endpoint: 'https://beta.elevenidllc.com/v1/issuance/credential',
+    }, issuerUrl, issuerUrl.origin),
+    (error) => error instanceof ContractFailure && error.code === 'authorization_server_ambiguous',
+  );
+  await assert.rejects(
+    resolveOid4vciEndpoints({
+      credential_issuer: issuerUrl.href,
+      authorization_servers: ['https://attacker.example/org/org-1'],
+      credential_endpoint: 'https://beta.elevenidllc.com/v1/issuance/credential',
+    }, issuerUrl, issuerUrl.origin),
+    (error) => error instanceof ContractFailure && error.code === 'authorization_server_unpinned',
+  );
+  await assert.rejects(
+    resolveOid4vciEndpoints({
+      credential_issuer: 'https://beta.elevenidllc.com/org/another-org',
+      token_endpoint: 'https://beta.elevenidllc.com/v1/issuance/token',
+      credential_endpoint: 'https://beta.elevenidllc.com/v1/issuance/credential',
+    }, issuerUrl, issuerUrl.origin),
+    (error) => error instanceof ContractFailure && error.code === 'credential_metadata_issuer_mismatch',
+  );
+  await assert.rejects(
+    resolveOid4vciEndpoints({
+      credential_issuer: issuerUrl.href,
+      token_endpoint: 'https://beta.elevenidllc.com/v1/issuance/token',
+      credential_endpoint: 'https://beta.elevenidllc.com/v1/issuance/credential',
+      nonce_endpoint: 'https://attacker.example/nonce',
+    }, issuerUrl, issuerUrl.origin),
+    (error) => error instanceof ContractFailure && error.code === 'nonce_endpoint_unpinned',
+  );
 });
 
 test('holder proof is ES256 verifiable and binds issuer and subject to did:jwk', () => {
