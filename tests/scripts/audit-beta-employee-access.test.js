@@ -49,6 +49,17 @@ test('D-04 configuration uses one exact employee credential across application, 
     config: { event_type: 'APPLICATION_APPROVED' },
   });
   assert.equal(policy.credential_requirements[0].credential_template_id, 'credential-1');
+  assert.deepEqual(policy.credential_requirements[0].requested_claims, [{
+    claim_name: 'employee_id',
+    display_name: 'Employee ID',
+    description: 'The employee identifier used for the access decision.',
+    required: true,
+    selective_disclosure: true,
+    accept_derived: false,
+    predicate_spec: null,
+    constraints: [],
+  }]);
+  assert.equal(policy.credential_ranking_strategy, 'FRESHEST_FIRST');
   assert.equal(requireConfigurationBinding({ credential, application, policy, flow }).flow.id, 'flow-1');
 });
 
@@ -116,4 +127,27 @@ test('D-04 configuration rejects semantic and approval-trigger drift', () => {
     policy,
     flow: { ...flow, trigger: { trigger_type: 'WEBHOOK', config: { event_type: 'OTHER' } } },
   }), /approval event contract/);
+  assert.throws(() => requireConfigurationBinding({
+    credential,
+    application,
+    policy: { ...policy, credential_ranking_strategy: 'first_match' },
+    flow,
+  }), /employee access contract/);
+  assert.throws(() => requireConfigurationBinding({
+    credential,
+    application,
+    policy: {
+      ...policy,
+      credential_requirements: [{
+        ...policy.credential_requirements[0],
+        requested_claims: [{
+          claim_name: 'employee_id',
+          credential_type: null,
+          value_constraint: null,
+          predicate_spec: null,
+        }],
+      }],
+    },
+    flow,
+  }), /employee access contract/);
 });

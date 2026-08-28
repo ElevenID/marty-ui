@@ -80,11 +80,22 @@ test('D-01 application requires exact SHA-256 evidence and gate discloses only c
     bound.policy.credential_requirements[0].requested_claims,
     [{
       claim_name: 'clearance_status',
-      credential_type: null,
-      value_constraint: 'CLEARED',
+      display_name: 'Clearance status',
+      description: 'A current pre-boarding clearance decision.',
+      required: true,
+      selective_disclosure: true,
+      accept_derived: false,
       predicate_spec: null,
+      constraints: [{
+        claim_name: 'clearance_status',
+        constraint_type: 'equals',
+        value: 'CLEARED',
+        description: null,
+      }],
     }],
   );
+  assert.equal(bound.policy.display_metadata.purpose, 'authorization');
+  assert.equal(bound.policy.credential_ranking_strategy, 'FRESHEST_FIRST');
 });
 
 test('D-01 configuration rejects evidence, resource, policy, and trigger drift', () => {
@@ -105,9 +116,17 @@ test('D-01 configuration rejects evidence, resource, policy, and trigger drift',
   const excessiveDisclosure = configuration();
   excessiveDisclosure.policy.credential_requirements[0].requested_claims.push({
     claim_name: 'passport_evidence_sha256',
-    value_constraint: null,
+    constraints: [],
   });
   assert.throws(() => requireConfigurationBinding(excessiveDisclosure), /rapid-gate contract/);
+
+  const legacyPolicy = configuration();
+  legacyPolicy.policy.credential_ranking_strategy = 'first_match';
+  assert.throws(() => requireConfigurationBinding(legacyPolicy), /rapid-gate contract/);
+
+  const unsupportedPurpose = configuration();
+  unsupportedPurpose.policy.display_metadata.purpose = 'travel_clearance';
+  assert.throws(() => requireConfigurationBinding(unsupportedPurpose), /rapid-gate contract/);
 
   const weakCredentialEvidence = configuration();
   weakCredentialEvidence.credential.claims.find((claim) => (

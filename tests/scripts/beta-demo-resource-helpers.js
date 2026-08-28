@@ -1,5 +1,33 @@
 'use strict';
 
+const DEFAULT_CREDENTIAL_RANKING_STRATEGY = 'FRESHEST_FIRST';
+
+function requestedClaim(claimName, {
+  displayName = '',
+  description = null,
+  required = true,
+  selectiveDisclosure = true,
+  acceptDerived = true,
+  predicateSpec = null,
+  equals,
+} = {}) {
+  return {
+    claim_name: claimName,
+    display_name: displayName,
+    description,
+    required,
+    selective_disclosure: selectiveDisclosure,
+    accept_derived: acceptDerived,
+    predicate_spec: predicateSpec,
+    constraints: equals === undefined ? [] : [{
+      claim_name: claimName,
+      constraint_type: 'equals',
+      value: equals,
+      description: null,
+    }],
+  };
+}
+
 function compactObject(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 }
@@ -207,6 +235,7 @@ async function cleanupApplicationCredential(page, {
 }
 
 module.exports = {
+  DEFAULT_CREDENTIAL_RANKING_STRATEGY,
   browserJson,
   cleanupApplicationCredential,
   compactObject,
@@ -214,6 +243,7 @@ module.exports = {
   ensureApplicantProfile,
   findCurrentCredential,
   listResources,
+  requestedClaim,
   requireJson,
   safeErrorDetail,
   selectOrganization,

@@ -18,12 +18,14 @@ const {
   DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
 } = require('./beta-credential-contract');
 const {
+  DEFAULT_CREDENTIAL_RANKING_STRATEGY,
   browserJson,
   cleanupApplicationCredential,
   compactObject,
   ensureActiveResource,
   ensureApplicantProfile,
   findCurrentCredential,
+  requestedClaim,
   requireJson,
 } = require('./beta-demo-resource-helpers');
 const {
@@ -150,6 +152,12 @@ function clearancePolicyPayload(credentialTemplate) {
     value_constraint: 'CLEARED',
     predicate_spec: null,
   };
+  const clearanceRequestedClaim = requestedClaim('clearance_status', {
+    displayName: 'Clearance status',
+    description: 'A current pre-boarding clearance decision.',
+    acceptDerived: false,
+    equals: 'CLEARED',
+  });
   return {
     organization_id: ORG_ID,
     name: RESOURCE_NAMES.policy,
@@ -158,7 +166,7 @@ function clearancePolicyPayload(credentialTemplate) {
     display_metadata: {
       title: 'Pre-boarding clearance',
       description: 'Present a current pre-boarding clearance credential.',
-      purpose: 'travel_clearance',
+      purpose: 'authorization',
       purpose_description: 'Confirm that passport validation and pre-boarding review completed.',
       verifier_name: 'ElevenID LLC',
       verifier_logo_url: null,
@@ -171,7 +179,7 @@ function clearancePolicyPayload(credentialTemplate) {
     holder_binding: { required: false },
     freshness: null,
     issuer_constraints: null,
-    credential_ranking_strategy: 'first_match',
+    credential_ranking_strategy: DEFAULT_CREDENTIAL_RANKING_STRATEGY,
     credential_ranking_weights: null,
     credential_requirements: [{
       credential_template_id: credentialTemplate.id,
@@ -179,7 +187,7 @@ function clearancePolicyPayload(credentialTemplate) {
       description: 'Current pre-boarding clearance credential',
       required: true,
       credential_payload_format: 'w3c_vcdm_v2_sd_jwt',
-      requested_claims: [clearanceClaim],
+      requested_claims: [clearanceRequestedClaim],
       trust_profile_id: credentialTemplate.trust_profile_id || null,
       max_age_seconds: null,
       require_fresh_issuance: false,
@@ -242,13 +250,22 @@ function requireConfigurationBinding(configuration) {
   }
   const requirement = policy.credential_requirements?.[0];
   const requested = requirement?.requested_claims?.[0];
+  const requestedConstraint = requested?.constraints?.[0];
   const required = policy.required_claims?.[0];
   if (!exactArray(policy.accepted_credential_types, ['PreBoardingClearanceCredential'])
+      || policy.display_metadata?.purpose !== 'authorization'
+      || policy.credential_ranking_strategy !== DEFAULT_CREDENTIAL_RANKING_STRATEGY
       || policy.credential_requirements?.length !== 1
       || requirement?.credential_template_id !== credential.id
       || requirement?.requested_claims?.length !== 1
       || requested?.claim_name !== 'clearance_status'
-      || requested?.value_constraint !== 'CLEARED'
+      || requested?.required !== true
+      || requested?.selective_disclosure !== true
+      || requested?.accept_derived !== false
+      || requested?.constraints?.length !== 1
+      || requestedConstraint?.claim_name !== 'clearance_status'
+      || requestedConstraint?.constraint_type !== 'equals'
+      || requestedConstraint?.value !== 'CLEARED'
       || policy.required_claims?.length !== 1
       || required?.claim_name !== 'clearance_status'
       || required?.value_constraint !== 'CLEARED') {
