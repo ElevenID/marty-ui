@@ -570,14 +570,17 @@ export default function ApplicationReviewPage() {
   const claims = application
     ? (() => {
         const meta = application.metadata || {};
+        const formData = application.form_data || application.formData || {};
+        const submitted = { ...meta, ...formData };
 
         if (credentialTemplate?.claims?.length > 0) {
-          // Template-driven: use display_name labels, look up values from metadata
-          // then fall back to top-level applicant_* fields.
+          // Rust applicant responses expose submitted values as form_data. Keep
+          // metadata as a compatibility fallback for records created before the
+          // service cutover, then fall back to top-level applicant_* fields.
           return credentialTemplate.claims.map(c => {
             const value =
-              meta[c.name] !== undefined
-                ? meta[c.name]
+              submitted[c.name] !== undefined
+                ? submitted[c.name]
                 : application[c.name] !== undefined
                   ? application[c.name]
                   : application[`applicant_${c.name}`] !== undefined
@@ -597,7 +600,7 @@ export default function ApplicationReviewPage() {
           { label: 'Family Name', value: application.applicant_family_name, source: 'manual' },
           { label: 'Email', value: application.applicant_email, source: 'manual' },
           { label: 'Phone', value: application.applicant_phone, source: 'manual' },
-          ...Object.entries(meta)
+          ...Object.entries(submitted)
             .filter(([k]) => !_INTERNAL_CLAIM_KEYS.includes(k))
             .filter(([, v]) => v !== null && v !== undefined && typeof v !== 'object')
             .map(([k, v]) => ({ label: k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), value: String(v), source: 'manual' })),

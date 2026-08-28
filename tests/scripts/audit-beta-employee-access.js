@@ -21,12 +21,14 @@ const {
   DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID,
 } = require('./beta-credential-contract');
 const {
+  DEFAULT_CREDENTIAL_RANKING_STRATEGY,
   browserJson,
   cleanupApplicationCredential,
   compactObject,
   ensureActiveResource,
   ensureApplicantProfile,
   findCurrentCredential,
+  requestedClaim,
   requireJson,
 } = require('./beta-demo-resource-helpers');
 const { employeeAccessBehaviorAssertions } = require('./beta-employee-access-contract');
@@ -162,7 +164,7 @@ function employeePolicyPayload(credentialTemplate) {
     holder_binding: { required: false },
     freshness: null,
     issuer_constraints: null,
-    credential_ranking_strategy: 'first_match',
+    credential_ranking_strategy: DEFAULT_CREDENTIAL_RANKING_STRATEGY,
     credential_ranking_weights: null,
     credential_requirements: [{
       credential_template_id: credentialTemplate.id,
@@ -170,12 +172,11 @@ function employeePolicyPayload(credentialTemplate) {
       description: 'Current employee access credential',
       required: true,
       credential_payload_format: 'w3c_vcdm_v2_sd_jwt',
-      requested_claims: [{
-        claim_name: 'employee_id',
-        credential_type: null,
-        value_constraint: null,
-        predicate_spec: null,
-      }],
+      requested_claims: [requestedClaim('employee_id', {
+        displayName: 'Employee ID',
+        description: 'The employee identifier used for the access decision.',
+        acceptDerived: false,
+      })],
       trust_profile_id: credentialTemplate.trust_profile_id || null,
       max_age_seconds: null,
       require_fresh_issuance: false,
@@ -223,6 +224,7 @@ function requireConfigurationBinding(configuration) {
     throw new Error('D-04 issuance Flow is not bound to the exact employee Credential Template');
   }
   const requirement = configuration.policy.credential_requirements?.[0];
+  const requested = requirement?.requested_claims?.[0];
   if (requirement?.credential_template_id !== configuration.credential.id) {
     throw new Error('D-04 Presentation Policy is bound to the wrong Credential Template');
   }
@@ -233,8 +235,14 @@ function requireConfigurationBinding(configuration) {
     throw new Error('D-04 Application Template has drifted from the employee claim contract');
   }
   if (!exactArray(configuration.policy.accepted_credential_types, ['EmployeeAccessCredential'])
+      || configuration.policy.credential_ranking_strategy !== DEFAULT_CREDENTIAL_RANKING_STRATEGY
       || configuration.policy.credential_requirements?.length !== 1
-      || !exactArray(requirement?.requested_claims?.map(({ claim_name: name }) => name), ['employee_id'])) {
+      || requirement?.requested_claims?.length !== 1
+      || requested?.claim_name !== 'employee_id'
+      || requested?.required !== true
+      || requested?.selective_disclosure !== true
+      || requested?.accept_derived !== false
+      || requested?.constraints?.length !== 0) {
     throw new Error('D-04 Presentation Policy has drifted from the employee access contract');
   }
   if (configuration.flow.approval_strategy !== 'AUTO'

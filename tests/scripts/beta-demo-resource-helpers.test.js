@@ -4,13 +4,37 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  DEFAULT_CREDENTIAL_RANKING_STRATEGY,
   cleanupApplicationCredential,
   compactObject,
   ensureActiveResource,
+  requestedClaim,
   requireJson,
   safeErrorDetail,
   selectOrganization,
 } = require('./beta-demo-resource-helpers');
+
+test('requestedClaim emits the strict public presentation-policy DTO', () => {
+  assert.equal(DEFAULT_CREDENTIAL_RANKING_STRATEGY, 'FRESHEST_FIRST');
+  assert.deepEqual(requestedClaim('clearance_status', {
+    displayName: 'Clearance status',
+    equals: 'CLEARED',
+  }), {
+    claim_name: 'clearance_status',
+    display_name: 'Clearance status',
+    description: null,
+    required: true,
+    selective_disclosure: true,
+    accept_derived: true,
+    predicate_spec: null,
+    constraints: [{
+      claim_name: 'clearance_status',
+      constraint_type: 'equals',
+      value: 'CLEARED',
+      description: null,
+    }],
+  });
+});
 
 function fakePage(responses) {
   const requests = [];

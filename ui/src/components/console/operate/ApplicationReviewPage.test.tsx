@@ -123,4 +123,37 @@ describe('ApplicationReviewPage evidence policy controls', () => {
     expect(mockGetOrganizationApplication).not.toHaveBeenCalledWith('org-auth-default', 'app-1');
     expect(await screen.findByText(/policy permitted approval/i)).toBeInTheDocument();
   });
+
+  it('renders Rust applicant form_data through credential-template claim labels', async () => {
+    mockGetOrganizationApplication.mockResolvedValue({
+      id: 'app-1',
+      applicant_id: 'applicant-1',
+      applicant_email: 'ada@example.test',
+      organization_id: 'org-1',
+      credential_template_id: 'passport-credential',
+      credential_display_name: 'Pre-Boarding Clearance',
+      status: 'submitted',
+      submitted_at: '2026-08-28T07:00:00Z',
+      form_data: {
+        traveler_id: 'TRAVELER-D01-EXACT',
+        clearance_status: 'CLEARED',
+      },
+      metadata: {
+        traveler_id: 'stale-legacy-value',
+      },
+    });
+    mockListCredentialTemplates.mockResolvedValue([{
+      id: 'passport-credential',
+      claims: [
+        { name: 'traveler_id', display_name: 'Traveler ID' },
+        { name: 'clearance_status', display_name: 'Clearance status' },
+      ],
+    }]);
+
+    renderPage();
+
+    expect(await screen.findByText('TRAVELER-D01-EXACT')).toBeInTheDocument();
+    expect(screen.getByText('CLEARED')).toBeInTheDocument();
+    expect(screen.queryByText('stale-legacy-value')).not.toBeInTheDocument();
+  });
 });
