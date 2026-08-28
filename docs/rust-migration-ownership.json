@@ -613,6 +613,27 @@
       "legacy": []
     },
     {
+      "id": "issuance-service",
+      "phase": 9,
+      "status": "cutover-in-progress",
+      "canonical": {
+        "repository": "ElevenID/marty-ui",
+        "paths": ["rust/services/issuance"],
+        "binding_paths": [
+          "contracts/issuance-runtime-surface.json",
+          "contracts/issuance-native-coverage.json"
+        ]
+      },
+      "legacy": [
+        {
+          "repository": "ElevenID/marty-credentials",
+          "paths": ["services/issuance"],
+          "language": "python",
+          "disposition": "parity-oracle-delete-only-after-complete-http-grpc-worker-migration-and-beta-gates"
+        }
+      ]
+    },
+    {
       "id": "deployment-profile-service",
       "phase": 9,
       "status": "native-active",
@@ -671,6 +692,10 @@
       {
         "capability_id": "verification-service",
         "forbidden_globs": ["services/verification/**/*.py"]
+      },
+      {
+        "capability_id": "issuance-service",
+        "forbidden_globs": ["services/issuance/**/*.py"]
       },
       {
         "capability_id": "deployment-profile-service",
