@@ -262,6 +262,9 @@ jobs:
         env:
           BASE_URL: ${{ env.BETA_ORIGIN }}
           REQUIRE_LIVE_DEMO_BINDING: "1"
+          EXPECTED_RELEASE_VERSION: ${{ env.RELEASE_VERSION }}
+          EXPECTED_BETA_SOURCE_ID: ${{ env.BETA_SOURCE_ID }}
+          EXPECTED_MARTY_UI_REVISION: ${{ env.MARTY_UI_RELEASE_SHA }}
         run: npm run test:demo-platform
 
       - name: Install beta gate Python dependencies and browser

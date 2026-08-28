@@ -54,6 +54,15 @@ truthfully leaving recording timestamps and evidence hashes empty. Recorders use
 that artifact; only a later evidence-finalization step may claim completed
 recordings or publication readiness. This avoids embedding an image's own final
 digest inside that same immutable image.
+
+Run the public demo acceptance gate with `REQUIRE_LIVE_DEMO_BINDING=1` and
+`DEPLOYED_DEMO_MANIFEST_PATH` set to that artifact. The gate requires the
+public manifest to remain an unbound `PENDING_DEPLOYMENT` template, then
+compares every component revision and image digest in the separately stored
+post-deployment artifact with the live Rust release marker. The protected
+lifecycle workflow instead supplies its already validated release version,
+beta source ID, and Marty UI revision as independent dispatch inputs.
+
 Retain the last known-good beta images, release manifest, SBOMs, signature
 bundles, checksums, lifecycle report, and wallet attestation until a newer
 aggregate release completes the same gates.
