@@ -1,4 +1,8 @@
 const { test, expect } = require('@playwright/test');
+const {
+  assertLiveDeployment,
+  referenceFromEnvironment,
+} = require('../../scripts/demo-deployment-binding');
 
 const viewports = [
   { name: 'mobile-320', width: 320, height: 700 },
@@ -194,7 +198,7 @@ test('public video waits for consent and uses the privacy-enhanced player', asyn
   }
 });
 
-test('latest available demo manifest is bound to the exact live deployment', async ({ request }) => {
+test('latest demo release is bound to the exact live deployment evidence', async ({ request }) => {
   test.skip(process.env.REQUIRE_LIVE_DEMO_BINDING !== '1', 'Live release binding is required only for deployed acceptance.');
   const index = await loadDemoIndex(request);
   const indexedRelease = index.releases.find(({ stack_version }) => stack_version === index.latest_available_stack_version);
@@ -203,19 +207,5 @@ test('latest available demo manifest is bound to the exact live deployment', asy
   const releaseResponse = await request.get('/.well-known/marty-release', { headers: { 'Cache-Control': 'no-cache' } });
   expect(releaseResponse.ok()).toBe(true);
   const deployed = await releaseResponse.json();
-
-  expect(deployed.stack_version).toBe(manifest.stack_version);
-  expect(deployed.mip_version).toBe(manifest.mip_version);
-  expect(deployed.deployment_release_marker).toBe(manifest.deployment_release_marker);
-  expect(deployed.marty_ui_sha).toBe(manifest.release_evidence.source_marker);
-  expect(Object.keys(deployed.component_revisions).sort()).toEqual(
-    manifest.component_revisions.map(({ component }) => component).sort(),
-  );
-  for (const { component, revision } of manifest.component_revisions) {
-    expect(deployed.component_revisions[component]).toBe(revision);
-  }
-  expect(Object.keys(deployed.image_digests).sort()).toEqual(manifest.image_digests.map(({ component }) => component).sort());
-  for (const { component, digest } of manifest.image_digests) {
-    expect(deployed.image_digests[component]).toBe(digest);
-  }
+  assertLiveDeployment(manifest, deployed, referenceFromEnvironment());
 });

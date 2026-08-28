@@ -63,6 +63,9 @@ def test_beta_lifecycle_dispatches_exact_release_to_demo_recorder() -> None:
 
     assert "Require release-bound public demos on beta" in workflow
     assert 'REQUIRE_LIVE_DEMO_BINDING: "1"' in workflow
+    assert "EXPECTED_RELEASE_VERSION: ${{ env.RELEASE_VERSION }}" in workflow
+    assert "EXPECTED_BETA_SOURCE_ID: ${{ env.BETA_SOURCE_ID }}" in workflow
+    assert "EXPECTED_MARTY_UI_REVISION: ${{ env.MARTY_UI_RELEASE_SHA }}" in workflow
     assert "DEMO_RECORDER_DISPATCH_TOKEN" in workflow
     assert "repos/ElevenID/marty-demo-recorder/dispatches" in workflow
     assert "marty-ui-beta-deployed" in workflow
