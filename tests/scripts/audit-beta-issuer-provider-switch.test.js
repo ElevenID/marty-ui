@@ -10,6 +10,9 @@ const {
   transitService,
   writableConfig,
 } = require('./audit-beta-issuer-provider-switch');
+const {
+  validateElevenIdLoginTheme,
+} = require('./audit-beta-credential-lifecycle');
 
 function fakePage(responses) {
   const requests = [];
@@ -47,6 +50,31 @@ test('provider-switch configuration is lossless and never persists the managed p
   assert.deepEqual(payload.key_reference_purposes, original.key_reference_purposes);
   assert.equal(replacement.auth_mode, 'service_token');
   assert.equal(replacement.endpoint, 'http://openbao:8200');
+});
+
+test('release recordings fail closed unless the ElevenID Keycloak theme rendered', () => {
+  assert.deepEqual(validateElevenIdLoginTheme({
+    stylesheet: '/resources/revision/login/11id/css/marty.css',
+    appBar: true,
+    brand: 'ElevenID LLC',
+  }), {
+    stylesheet: '/resources/revision/login/11id/css/marty.css',
+    appBar: true,
+    brand: 'ElevenID LLC',
+    ok: true,
+  });
+  assert.throws(
+    () => validateElevenIdLoginTheme({ stylesheet: null, appBar: false, brand: null }),
+    /did not load the ElevenID login theme stylesheet/,
+  );
+  assert.throws(
+    () => validateElevenIdLoginTheme({
+      stylesheet: '/resources/revision/login/11id/css/marty.css',
+      appBar: false,
+      brand: null,
+    }),
+    /did not render the ElevenID login theme shell/,
+  );
 });
 
 test('public rebind request contains only the complete DID tuple', () => {

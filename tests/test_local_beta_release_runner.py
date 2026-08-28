@@ -106,6 +106,55 @@ def test_beta_runner_reconciles_infrastructure_writer_configuration() -> None:
     assert script.index(step) < script.index('Write-Step "Recreate application containers')
 
 
+def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
+    deploy = text("scripts/deploy-local-beta-release.ps1")
+    beta_compose_paths = (
+        "docker-compose.base.yml",
+        "docker-compose.profile.canvas-real.yml",
+        "docker-compose.profile.waltid.yml",
+        "docker-compose.profile.tunnel.yml",
+    )
+
+    for compose_path in beta_compose_paths:
+        compose = text(compose_path)
+        assert "${MARTY_RUNTIME_CONFIG_ROOT:-.}" in compose
+        assert not any(line.lstrip().startswith("- ./") for line in compose.splitlines())
+
+    assert "function Initialize-DurableRuntimeConfig" in deploy
+    assert "rev-parse --path-format=absolute --git-common-dir" in deploy
+    assert '"tests\\artifacts\\runtime-config"' in deploy
+    assert "marty_ui_revision = $SourceRevision" in deploy
+    assert '"runtime-config-manifest.json"' in deploy
+    assert "$env:MARTY_RUNTIME_CONFIG_ROOT = $script:RuntimeConfigRoot" in deploy
+    assert "runtime_config_manifest_sha256 = Get-FileSha256" in deploy
+    assert deploy.index('"--verify-manifest", $sourceManifestPath') < deploy.index(
+        "Initialize-DurableRuntimeConfig -SourceRevision $sourceId"
+    )
+
+    for required_source in (
+        "config/keycloak",
+        "config/envoy/envoy.yaml",
+        "docker/openbao-init.sh",
+        "docker/canvas-localhost-bridge/server.py",
+        "docker/waltid/wallet-api/config",
+        "nginx-tunnel.conf.template",
+    ):
+        assert f'"{required_source}"' in deploy
+
+
+def test_keycloak_custom_theme_is_source_pinned_and_mounted_read_only() -> None:
+    compose = text("docker-compose.base.yml")
+    realm = text("config/keycloak/11id-realm.json")
+
+    assert '"loginTheme": "11id"' in realm
+    assert (
+        "${MARTY_RUNTIME_CONFIG_ROOT:-.}/config/keycloak/themes:"
+        "/opt/keycloak/themes:ro"
+    ) in compose
+    assert (ROOT / "config/keycloak/themes/11id/login/theme.properties").is_file()
+    assert (ROOT / "config/keycloak/themes/11id/login/resources/css/marty.css").is_file()
+
+
 def test_beta_runner_reconciles_ephemeral_openbao_before_live_migrations() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 

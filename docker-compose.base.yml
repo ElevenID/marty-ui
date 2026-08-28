@@ -32,7 +32,7 @@ services:
       MARTY_DB_PASSWORD: ${MARTY_DB_PASSWORD:-marty_dev_password}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./docker/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres && pg_isready -U keycloak -d keycloak && pg_isready -U marty -d marty"]
       interval: 5s
@@ -104,8 +104,8 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - ./config/keycloak:/opt/keycloak/data/import:ro
-      - ./config/keycloak/themes:/opt/keycloak/themes:ro
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/config/keycloak:/opt/keycloak/data/import:ro
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/config/keycloak/themes:/opt/keycloak/themes:ro
     healthcheck:
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /realms/${KEYCLOAK_REALM:-11id}/.well-known/openid-configuration HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '200 OK'"]
       interval: 10s
@@ -159,7 +159,7 @@ services:
       KEYCLOAK_SMTP_SSL: ${KEYCLOAK_SMTP_SSL:-false}
       KEYCLOAK_SMTP_STARTTLS: ${KEYCLOAK_SMTP_STARTTLS:-false}
     volumes:
-      - ./scripts/setup-keycloak.sh:/scripts/setup-keycloak.sh:ro
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/scripts/setup-keycloak.sh:/scripts/setup-keycloak.sh:ro
     depends_on:
       keycloak:
         condition: service_healthy
@@ -221,7 +221,7 @@ services:
       openbao:
         condition: service_healthy
     volumes:
-      - ./docker/openbao-init.sh:/scripts/openbao-init.sh:ro
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro
     restart: "no"
     networks:
       - marty-network
@@ -1118,8 +1118,8 @@ services:
       dockerfile: Dockerfile
     image: marty-envoy:latest
     volumes:
-      - ./config/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
-      - ./config/envoy/proto_descriptor.pb:/etc/envoy/proto_descriptor.pb:ro
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/config/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/config/envoy/proto_descriptor.pb:/etc/envoy/proto_descriptor.pb:ro
     ports:
       - "127.0.0.1:${ENVOY_HOST_PORT:-9000}:9000"    # gRPC / gRPC-web unified endpoint
       - "127.0.0.1:${ENVOY_ADMIN_HOST_PORT:-9901}:9901"    # Envoy admin

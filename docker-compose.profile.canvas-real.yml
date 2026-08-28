@@ -36,7 +36,7 @@ services:
       issuance:
         condition: service_started
     volumes:
-      - ./docker/canvas-localhost-bridge/server.py:/bridge/server.py:ro
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/canvas-localhost-bridge/server.py:/bridge/server.py:ro
     command:
       - python
       - /bridge/server.py
@@ -56,9 +56,9 @@ services:
     volumes:
       - canvas_real_data:/var/lib/postgresql
       - canvas_real_files:/var/canvas/files
-      - ./config/canvas/production-local.rb:/usr/src/app/config/environments/production-local.rb:ro
-      - ./config/canvas/dynamic_settings.local.yml:/usr/src/app/config/dynamic_settings.yml:ro
-      - ./config/canvas/session_store.local.yml:/usr/src/app/config/session_store.yml:ro
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/config/canvas/production-local.rb:/usr/src/app/config/environments/production-local.rb:ro
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/config/canvas/dynamic_settings.local.yml:/usr/src/app/config/dynamic_settings.yml:ro
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/config/canvas/session_store.local.yml:/usr/src/app/config/session_store.yml:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent --show-error --output /dev/null http://127.0.0.1:3000/login || exit 1"]
