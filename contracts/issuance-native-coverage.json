@@ -1,0 +1,35 @@
+{
+  "schema": "marty.issuance-native-coverage/v1",
+  "upstream": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-runtime-surface.json",
+    "commit": "578e86ef43166be79add2d812e92ef650535edaa",
+    "sha256": "2ebc803454da1df3fd38c585ebeeaf540d13bbe41be7b70093f0394df6de66e3"
+  },
+  "native_http": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "operation": "health_check",
+      "response": {
+        "status_code": 200,
+        "body": {"status": "healthy", "service": "issuance-service"}
+      }
+    }
+  ],
+  "platform_additive_http": [
+    {"method": "GET", "path": "/ready", "owner": "mmf-runtime"},
+    {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
+  ],
+  "remaining": {
+    "http": 130,
+    "grpc": 12,
+    "runtime_modes": ["api", "canvas-sync-worker"],
+    "literal_environment_variables": 88,
+    "dynamic_configuration_lookups": 20,
+    "migration_revisions": 44,
+    "migration_heads": 1
+  },
+  "native_environment_variables": ["ISSUANCE_SERVICE_PORT"],
+  "deployment": "candidate-only"
+}
