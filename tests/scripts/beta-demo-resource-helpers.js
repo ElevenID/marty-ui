@@ -47,6 +47,51 @@ async function requireJson(page, pathName, options = {}, label = pathName) {
   return result.body;
 }
 
+async function selectOrganization(page, { organizationId, consoleOrigin }) {
+  const membershipsResult = await browserJson(page, '/v1/organizations/mine');
+  if (!membershipsResult.ok) {
+    throw new Error(
+      `Organization membership lookup failed (HTTP ${membershipsResult.status})`
+      + safeErrorDetail(membershipsResult.body),
+    );
+  }
+  if (!Array.isArray(membershipsResult.body)) {
+    throw new Error('Organization membership lookup returned a malformed collection');
+  }
+  const target = membershipsResult.body.find((membership) => (
+    membership.id === organizationId && membership.membership?.has_org_console_access
+  ));
+  if (!target) {
+    return {
+      ok: false,
+      membershipsStatus: membershipsResult.status,
+      targetName: null,
+      activeOrgId: null,
+    };
+  }
+
+  await requireJson(page, '/v1/me/preferences', {
+    method: 'PUT',
+    body: JSON.stringify({
+      last_view_mode: 'org_admin',
+      last_active_org_id: organizationId,
+    }),
+  }, 'Persist demo organization selection');
+  await page.goto(`${consoleOrigin}/console/org`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 60_000,
+  });
+  await page.waitForFunction((expectedOrganizationId) => (
+    localStorage.getItem('activeOrgId') === expectedOrganizationId
+  ), organizationId, { timeout: 60_000 });
+  return {
+    ok: true,
+    membershipsStatus: membershipsResult.status,
+    targetName: target.display_name || target.name || null,
+    activeOrgId: organizationId,
+  };
+}
+
 async function listResources(page, pathName, organizationId) {
   const separator = pathName.includes('?') ? '&' : '?';
   const body = await requireJson(
@@ -171,4 +216,5 @@ module.exports = {
   listResources,
   requireJson,
   safeErrorDetail,
+  selectOrganization,
 };

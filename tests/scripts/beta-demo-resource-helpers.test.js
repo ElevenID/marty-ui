@@ -9,6 +9,7 @@ const {
   ensureActiveResource,
   requireJson,
   safeErrorDetail,
+  selectOrganization,
 } = require('./beta-demo-resource-helpers');
 
 function fakePage(responses) {
@@ -175,4 +176,80 @@ test('cleanupApplicationCredential revokes and withdraws only named transaction 
       },
     },
   ]);
+});
+
+test('selectOrganization persists org mode before navigating and waits for UI restoration', async () => {
+  const page = fakePage([
+    {
+      ok: true,
+      status: 200,
+      body: [{
+        id: 'org/1',
+        display_name: 'Release Audit',
+        membership: { has_org_console_access: true },
+      }],
+    },
+    {
+      ok: true,
+      status: 200,
+      body: { last_view_mode: 'org_admin', last_active_org_id: 'org/1' },
+    },
+  ]);
+  page.gotoCalls = [];
+  page.waitCalls = [];
+  page.goto = async (...args) => page.gotoCalls.push(args);
+  page.waitForFunction = async (...args) => page.waitCalls.push(args);
+
+  const selection = await selectOrganization(page, {
+    organizationId: 'org/1',
+    consoleOrigin: 'https://beta.example.test',
+  });
+
+  assert.deepEqual(selection, {
+    ok: true,
+    membershipsStatus: 200,
+    targetName: 'Release Audit',
+    activeOrgId: 'org/1',
+  });
+  assert.deepEqual(page.requests, [
+    { requestPath: '/v1/organizations/mine', requestOptions: {} },
+    {
+      requestPath: '/v1/me/preferences',
+      requestOptions: {
+        method: 'PUT',
+        body: JSON.stringify({
+          last_view_mode: 'org_admin',
+          last_active_org_id: 'org/1',
+        }),
+      },
+    },
+  ]);
+  assert.deepEqual(page.gotoCalls, [[
+    'https://beta.example.test/console/org',
+    { waitUntil: 'domcontentloaded', timeout: 60_000 },
+  ]]);
+  assert.equal(page.waitCalls.length, 1);
+  assert.equal(page.waitCalls[0][1], 'org/1');
+  assert.deepEqual(page.waitCalls[0][2], { timeout: 60_000 });
+});
+
+test('selectOrganization fails closed without an eligible organization membership', async () => {
+  const page = fakePage([{
+    ok: true,
+    status: 200,
+    body: [{ id: 'org/1', membership: { has_org_console_access: false } }],
+  }]);
+
+  const selection = await selectOrganization(page, {
+    organizationId: 'org/1',
+    consoleOrigin: 'https://beta.example.test',
+  });
+
+  assert.deepEqual(selection, {
+    ok: false,
+    membershipsStatus: 200,
+    targetName: null,
+    activeOrgId: null,
+  });
+  assert.equal(page.requests.length, 1);
 });
