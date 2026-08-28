@@ -5,13 +5,13 @@
     {
       "name": "marty-api-core",
       "repository": "ElevenID/marty-cli",
-      "version": "0.2.6",
-      "commit": "37b7ce6f65be512177ef6c0f9f825c69b2d3c0fa",
+      "version": "0.2.7",
+      "commit": "fbc83676444654a063d8463b830c834ef29eb1fe",
       "artifacts": [{
         "type": "npm",
-        "uri": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.6/elevenid-marty-api-core-0.2.6.tgz",
-        "digest": "sha256:67907513779245536234a905c6bbbdec340f2d73a8ef02b7aad2a652ca2eafa9",
-        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.6/marty-api-core-sbom.cdx.json",
+        "uri": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.7/elevenid-marty-api-core-0.2.7.tgz",
+        "digest": "sha256:c4ee1a9d325ae54d44465862eaaaf8172de08338e59381220b901ec0e1ac6682",
+        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.7/marty-api-core-sbom.cdx.json",
         "provenance": "https://github.com/ElevenID/marty-cli/attestations"
       }]
     },
@@ -96,13 +96,13 @@
     {
       "name": "marty-cli",
       "repository": "ElevenID/marty-cli",
-      "version": "0.2.6",
-      "commit": "37b7ce6f65be512177ef6c0f9f825c69b2d3c0fa",
+      "version": "0.2.7",
+      "commit": "fbc83676444654a063d8463b830c834ef29eb1fe",
       "artifacts": [{
         "type": "npm",
-        "uri": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.6/elevenid-marty-cli-0.2.6.tgz",
-        "digest": "sha256:e9c5c2dc4272d3ee9d3f0c58d97785fab8b263ef7b6dd93fed1b35fd491c7158",
-        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.6/marty-cli-sbom.cdx.json",
+        "uri": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.7/elevenid-marty-cli-0.2.7.tgz",
+        "digest": "sha256:5457bb84a1dbf7985d62db817253000fb312b9a7db2fd32f52690b9a49a6dadc",
+        "sbom": "https://github.com/ElevenID/marty-cli/releases/download/v0.2.7/marty-cli-sbom.cdx.json",
         "provenance": "https://github.com/ElevenID/marty-cli/attestations"
       }]
     },
