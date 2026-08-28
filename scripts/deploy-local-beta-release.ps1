@@ -191,6 +191,96 @@ function Write-Utf8Text([string]$Path, [string]$Content) {
     [System.IO.File]::WriteAllText($Path, $Content, $utf8WithoutBom)
 }
 
+function Initialize-DurableRuntimeConfig([string]$SourceRevision) {
+    $commonGitDirOutput = & git -C $script:RepoRoot rev-parse --path-format=absolute --git-common-dir
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not resolve the primary marty-ui checkout for durable beta runtime configuration"
+    }
+    $commonGitDir = [IO.Path]::GetFullPath([string]($commonGitDirOutput | Select-Object -Last 1))
+    $primaryCheckoutRoot = Split-Path -Parent $commonGitDir
+    $durableArtifactRoot = Join-Path $primaryCheckoutRoot "tests\artifacts\runtime-config"
+    New-Item -ItemType Directory -Path $durableArtifactRoot -Force | Out-Null
+    $durableArtifactRoot = (Resolve-Path -LiteralPath $durableArtifactRoot).Path
+
+    $runtimeConfigRoot = Join-Path $durableArtifactRoot $SourceRevision
+    $stagingRoot = Join-Path $durableArtifactRoot ("{0}.staging.{1}" -f $SourceRevision, [Guid]::NewGuid().ToString("N"))
+    $allowedPrefix = $durableArtifactRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    foreach ($candidate in @($runtimeConfigRoot, $stagingRoot)) {
+        $absoluteCandidate = [IO.Path]::GetFullPath($candidate)
+        if (-not $absoluteCandidate.StartsWith($allowedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Durable runtime configuration must stay under $durableArtifactRoot"
+        }
+    }
+
+    $runtimeSources = @(
+        "docker/init-databases.sh",
+        "config/keycloak",
+        "scripts/setup-keycloak.sh",
+        "docker/openbao-init.sh",
+        "config/envoy/envoy.yaml",
+        "config/envoy/proto_descriptor.pb",
+        "docker/canvas-localhost-bridge/server.py",
+        "config/canvas/production-local.rb",
+        "config/canvas/dynamic_settings.local.yml",
+        "config/canvas/session_store.local.yml",
+        "docker/waltid/wallet-api/config",
+        "docker/waltid/nginx.conf",
+        "nginx-tunnel.conf.template",
+        "scripts/nginx-entrypoint.sh"
+    )
+
+    New-Item -ItemType Directory -Path $stagingRoot | Out-Null
+    try {
+        foreach ($relativePath in $runtimeSources) {
+            $sourcePath = Join-Path $script:RepoRoot $relativePath
+            if (-not (Test-Path -LiteralPath $sourcePath)) {
+                throw "Required beta runtime configuration is missing: $relativePath"
+            }
+            $destinationPath = Join-Path $stagingRoot $relativePath
+            New-Item -ItemType Directory -Path (Split-Path -Parent $destinationPath) -Force | Out-Null
+            Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Recurse -Force
+        }
+
+        $stagingPrefix = $stagingRoot.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+        $runtimeFiles = @(Get-ChildItem -LiteralPath $stagingRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
+            [ordered]@{
+                path = $_.FullName.Substring($stagingPrefix.Length).Replace("\", "/")
+                size = $_.Length
+                sha256 = Get-FileSha256 $_.FullName
+            }
+        })
+        $runtimeConfigManifest = [ordered]@{
+            schema_version = 1
+            marty_ui_revision = $SourceRevision
+            files = $runtimeFiles
+        }
+        $stagedManifestPath = Join-Path $stagingRoot "runtime-config-manifest.json"
+        Write-Utf8Text -Path $stagedManifestPath -Content (($runtimeConfigManifest | ConvertTo-Json -Depth 5) + "`n")
+
+        if (Test-Path -LiteralPath $runtimeConfigRoot -PathType Container) {
+            $existingManifestPath = Join-Path $runtimeConfigRoot "runtime-config-manifest.json"
+            if (-not (Test-Path -LiteralPath $existingManifestPath -PathType Leaf) -or
+                (Get-FileSha256 $existingManifestPath) -ne (Get-FileSha256 $stagedManifestPath)) {
+                throw "Durable runtime configuration conflicts with content-addressed revision $SourceRevision"
+            }
+            Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+        }
+        else {
+            Move-Item -LiteralPath $stagingRoot -Destination $runtimeConfigRoot
+        }
+    }
+    catch {
+        if (Test-Path -LiteralPath $stagingRoot) {
+            Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+        }
+        throw
+    }
+
+    $script:RuntimeConfigRoot = (Resolve-Path -LiteralPath $runtimeConfigRoot).Path
+    $script:RuntimeConfigManifestPath = Join-Path $script:RuntimeConfigRoot "runtime-config-manifest.json"
+    $env:MARTY_RUNTIME_CONFIG_ROOT = $script:RuntimeConfigRoot
+}
+
 function Wait-ForServiceHealth {
     param([string[]]$Services, [int]$TimeoutSeconds = 420, [switch]$Ui)
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -527,6 +617,10 @@ Invoke-Checked -FilePath python -Arguments @(
     "--workspace", $script:WorkspaceRoot,
     "--verify-manifest", $sourceManifestPath
 )
+
+Write-Step "Stage durable source-pinned beta runtime configuration"
+Initialize-DurableRuntimeConfig -SourceRevision $sourceId
+Write-Host "Runtime configuration: $script:RuntimeConfigRoot"
 
 Write-Step "Preflight running beta topology"
 Invoke-Checked -FilePath docker -Arguments @("info", "--format", "{{.ServerVersion}}")
@@ -912,6 +1006,8 @@ $deploymentManifest = [ordered]@{
     release_ready = $false
     backup_manifest = "backup-manifest.json"
     source_manifest = "source-manifest.json"
+    runtime_config_root = $script:RuntimeConfigRoot
+    runtime_config_manifest_sha256 = Get-FileSha256 $script:RuntimeConfigManifestPath
     component_revisions = $componentRevisions
     deployed_demo_manifest = "deployed-demo-manifest.json"
     deployed_demo_manifest_sha256 = Get-FileSha256 $deployedDemoManifestPath
