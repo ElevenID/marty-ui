@@ -51,8 +51,13 @@ def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() 
     assert "ELEVENID_COMPONENT_REVISIONS_JSON" in script
     assert "component_revisions = $componentRevisions" in script
     assert "Stack lock component commit is invalid" in script
-    assert '$martyIssuance.Commit -ne [string]$componentRevisions["marty-credentials"]' in script
-    assert "Source manifest marty-credentials revision must match the immutable issuance image commit" in script
+    assert "$componentRevisions.Contains($SourceRepository)" in script
+    assert "Stack lock $Name commit must match source manifest repository $SourceRepository" in script
+    assert 'Get-StackArtifact "marty-core-python" "python" "marty-core"' in script
+    assert 'Get-StackArtifact "marty-api-core" "npm" "marty-cli"' in script
+    assert 'Get-StackArtifact "marty-blog" "npm" "marty-blog"' in script
+    assert 'Get-StackArtifact "marty-credentials-issuance" "oci" "marty-credentials"' in script
+    assert script.index('$stackLock = Get-Content') < script.index('if ($PlanOnly)')
     assert "Services runtime marker component revision set does not match" in script
     assert "bind_deployed_demo_manifest.py" in script
     assert '"--image-digests-file", $imageDigestsPath' in script
