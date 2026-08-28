@@ -431,6 +431,40 @@ if ($sourceId -notmatch '^[0-9a-f]{40}$') {
     throw "Local source ID must be 40 lowercase hexadecimal characters"
 }
 
+$stackLock = Get-Content -LiteralPath (Join-Path $script:RepoRoot "release\stack-lock.json") -Raw | ConvertFrom-Json
+function Get-StackArtifact([string]$Name, [string]$Type, [string]$SourceRepository) {
+    $component = @($stackLock.components | Where-Object name -eq $Name)
+    if ($component.Count -ne 1) { throw "Stack lock must contain exactly one $Name component" }
+    if ([string]$component[0].commit -notmatch '^[0-9a-f]{40}$') {
+        throw "Stack lock component commit is invalid: $Name"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SourceRepository)) {
+        if (-not $componentRevisions.Contains($SourceRepository)) {
+            throw "Source manifest does not contain the stack component repository: $SourceRepository"
+        }
+        if ([string]$component[0].commit -ne [string]$componentRevisions[$SourceRepository]) {
+            throw "Stack lock $Name commit must match source manifest repository $SourceRepository"
+        }
+    }
+    $artifact = @($component[0].artifacts | Where-Object type -eq $Type)
+    if ($artifact.Count -ne 1 -or $artifact[0].digest -notmatch '^sha256:[0-9a-f]{64}$' -or -not $artifact[0].uri) {
+        throw "Stack lock artifact is incomplete: $Name/$Type"
+    }
+    return [pscustomobject]@{
+        Version = [string]$component[0].version
+        Commit = [string]$component[0].commit
+        Uri = [string]$artifact[0].uri
+        Digest = [string]$artifact[0].digest
+    }
+}
+$martyCommon = Get-StackArtifact "marty-common" "python"
+$martyRs = Get-StackArtifact "marty-core-python" "python" "marty-core"
+$martyVerification = Get-StackArtifact "marty-verification-python" "python" "marty-core"
+$martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python" "marty-core"
+$martyApiCore = Get-StackArtifact "marty-api-core" "npm" "marty-cli"
+$martyBlog = Get-StackArtifact "marty-blog" "npm" "marty-blog"
+$martyIssuance = Get-StackArtifact "marty-credentials-issuance" "oci" "marty-credentials"
+
 $backupDir = Join-Path $script:ArtifactDir "backup"
 $preflightBackupDir = Join-Path $script:ArtifactDir "preflight-backup"
 $logsDir = Join-Path $script:ArtifactDir "logs"
@@ -496,34 +530,6 @@ Invoke-Checked -FilePath python -Arguments @(
 
 Write-Step "Preflight running beta topology"
 Invoke-Checked -FilePath docker -Arguments @("info", "--format", "{{.ServerVersion}}")
-$stackLock = Get-Content -LiteralPath (Join-Path $script:RepoRoot "release\stack-lock.json") -Raw | ConvertFrom-Json
-function Get-StackArtifact([string]$Name, [string]$Type) {
-    $component = @($stackLock.components | Where-Object name -eq $Name)
-    if ($component.Count -ne 1) { throw "Stack lock must contain exactly one $Name component" }
-    if ([string]$component[0].commit -notmatch '^[0-9a-f]{40}$') {
-        throw "Stack lock component commit is invalid: $Name"
-    }
-    $artifact = @($component[0].artifacts | Where-Object type -eq $Type)
-    if ($artifact.Count -ne 1 -or $artifact[0].digest -notmatch '^sha256:[0-9a-f]{64}$' -or -not $artifact[0].uri) {
-        throw "Stack lock artifact is incomplete: $Name/$Type"
-    }
-    return [pscustomobject]@{
-        Version = [string]$component[0].version
-        Commit = [string]$component[0].commit
-        Uri = [string]$artifact[0].uri
-        Digest = [string]$artifact[0].digest
-    }
-}
-$martyCommon = Get-StackArtifact "marty-common" "python"
-$martyRs = Get-StackArtifact "marty-core-python" "python"
-$martyVerification = Get-StackArtifact "marty-verification-python" "python"
-$martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python"
-$martyApiCore = Get-StackArtifact "marty-api-core" "npm"
-$martyBlog = Get-StackArtifact "marty-blog" "npm"
-$martyIssuance = Get-StackArtifact "marty-credentials-issuance" "oci"
-if ($martyIssuance.Commit -ne [string]$componentRevisions["marty-credentials"]) {
-    throw "Source manifest marty-credentials revision must match the immutable issuance image commit"
-}
 $env:MARTY_COMMON_URI = $martyCommon.Uri
 $env:MARTY_COMMON_DIGEST = $martyCommon.Digest
 $env:MARTY_RS_URI = $martyRs.Uri
