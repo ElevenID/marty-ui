@@ -323,6 +323,80 @@ async fn approval_requires_lock_and_uses_persisted_issuer_scope() {
 }
 
 #[tokio::test]
+async fn prior_credential_status_does_not_block_a_new_application_review() {
+    let (service, _, _, _, _) = service();
+    let prior = draft(&service).await;
+    {
+        let mut store = service.store().write().await;
+        store
+            .applications
+            .iter_mut()
+            .find(|application| application.id == prior.id)
+            .unwrap()
+            .status = LifecycleStatus::Withdrawn;
+        store
+            .applicants
+            .iter_mut()
+            .find(|applicant| applicant.id == prior.applicant_id)
+            .unwrap()
+            .status = LifecycleStatus::Credentialed;
+    }
+
+    let application = draft(&service).await;
+    service
+        .submit(&application.id, application.created_at)
+        .await
+        .unwrap();
+    let pending = service
+        .request_information(
+            &application.id,
+            vec!["updated evidence".into()],
+            "Supply current evidence".into(),
+            None,
+            application.created_at,
+        )
+        .await
+        .unwrap();
+    assert_eq!(pending.status, LifecycleStatus::PendingInformation);
+    service
+        .submit(&application.id, application.created_at)
+        .await
+        .unwrap();
+    service
+        .acquire_lock(
+            &application.id,
+            "reviewer-1",
+            "Reviewer",
+            application.created_at,
+        )
+        .await
+        .unwrap();
+    let approved = service
+        .review(
+            &application.id,
+            "reviewer-1",
+            true,
+            None,
+            None,
+            application.created_at,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(approved.status, LifecycleStatus::Approved);
+    assert_eq!(
+        service
+            .store()
+            .read()
+            .await
+            .applicant(&application.applicant_id)
+            .unwrap()
+            .status,
+        LifecycleStatus::Credentialed
+    );
+}
+
+#[tokio::test]
 async fn uncertain_flow_retry_reuses_attempt_and_complete_claim_snapshot() {
     let (service, flow, _, _, persistence) = service();
     let application = draft(&service).await;

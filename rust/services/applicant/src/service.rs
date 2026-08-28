@@ -1058,7 +1058,7 @@ impl ApplicantService {
             .iter_mut()
             .find(|item| item.id == applicant_id)
         {
-            applicant.set_status(target, now)?;
+            advance_applicant_projection(applicant, target, now)?;
         }
         store.applications[index] = application.clone();
         self.persistence.persist(&store)?;
@@ -1129,7 +1129,7 @@ impl ApplicantService {
             .iter_mut()
             .find(|item| item.id == application.applicant_id)
         {
-            applicant.set_status(LifecycleStatus::PendingInformation, now)?;
+            advance_applicant_projection(applicant, LifecycleStatus::PendingInformation, now)?;
         }
         store.applications[index] = application.clone();
         self.persistence.persist(&store)?;
@@ -1284,6 +1284,20 @@ fn application_index(store: &StoreDocument, id: &str) -> Result<usize, ServiceEr
         .iter()
         .position(|item| item.id == id)
         .ok_or(ServiceError::ApplicationNotFound)
+}
+
+fn advance_applicant_projection(
+    applicant: &mut Applicant,
+    target: LifecycleStatus,
+    now: DateTime<Utc>,
+) -> Result<(), ApplicantError> {
+    // Applicant status is a compatibility projection across all of a person's
+    // applications. A terminal status from an earlier application must not
+    // block a valid transition on a newer, independently tracked application.
+    if applicant.status == target || applicant.status.transition(target).is_ok() {
+        applicant.set_status(target, now)?;
+    }
+    Ok(())
 }
 
 fn reference_number(now: DateTime<Utc>) -> String {
