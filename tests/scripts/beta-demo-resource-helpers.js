@@ -232,6 +232,7 @@ async function ensureGovernedIssuer(page, {
     throw new Error(`Multiple Trust Profile relationships exist for ${issuerDid}`);
   }
   let relationship = matchingRelationships[0] || null;
+  let relationshipCreated = false;
   if (!relationship) {
     relationship = await requireJson(page, relationshipPath, {
       method: 'POST',
@@ -244,11 +245,12 @@ async function ensureGovernedIssuer(page, {
         metadata: {},
       }),
     }, `Trust governed issuer ${displayName}`);
+    relationshipCreated = true;
   }
   if (relationship.issuer_id !== issuer.id || relationship.relationship_status !== 'TRUSTED') {
     throw new Error(`Governed issuer ${displayName} relationship is not trusted`);
   }
-  return { issuer, relationship, created };
+  return { issuer, relationship, created, relationshipCreated };
 }
 
 async function ensureActiveResource(page, {

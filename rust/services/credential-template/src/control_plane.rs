@@ -1,6 +1,7 @@
 use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
 use tonic::{
@@ -341,8 +342,17 @@ impl CredentialTemplateControlPlane for NativeCredentialTemplateControlPlane {
                 "credential templates require an active Trust Profile".into(),
             ));
         }
-        let trusted = trust_profile_issuer_identifiers(&profile);
-        if !trusted.is_empty() && issuer_candidates(issuer_did).is_disjoint(&trusted) {
+        let candidates = issuer_candidates(issuer_did);
+        let mut denied = BTreeSet::new();
+        collect_identifiers(profile.get("denied_issuers"), false, &mut denied);
+        if !denied.is_disjoint(&candidates) {
+            return Err(ControlPlaneError::TrustProfileRejected(
+                "selected issuer DID is explicitly denied by the Trust Profile".into(),
+            ));
+        }
+        if trust_profile_issuer_identifiers(&profile, Utc::now())
+            .is_some_and(|trusted| candidates.is_disjoint(&trusted))
+        {
             return Err(ControlPlaneError::TrustProfileRejected(
                 "selected Trust Profile does not trust the selected issuer DID".into(),
             ));
@@ -430,11 +440,80 @@ fn key_purpose(credential_format: &str) -> &'static str {
     }
 }
 
-fn trust_profile_issuer_identifiers(profile: &Value) -> BTreeSet<String> {
+fn trust_profile_issuer_identifiers(
+    profile: &Value,
+    now: DateTime<Utc>,
+) -> Option<BTreeSet<String>> {
+    if let Some(relationships) = profile.get("issuer_relationships") {
+        let Some(relationships) = relationships.as_array() else {
+            return Some(BTreeSet::new());
+        };
+        if !relationships.is_empty() {
+            return Some(
+                relationships
+                    .iter()
+                    .filter_map(Value::as_object)
+                    .filter(|relationship| current_trusted_relationship(relationship, now))
+                    .filter_map(|relationship| {
+                        relationship.get("issuer_id").and_then(Value::as_str)
+                    })
+                    .flat_map(issuer_candidates)
+                    .collect(),
+            );
+        }
+    }
     let mut identifiers = BTreeSet::new();
     collect_identifiers(profile.get("allowed_issuers"), false, &mut identifiers);
     collect_identifiers(profile.get("trust_sources"), true, &mut identifiers);
-    identifiers
+    (!identifiers.is_empty()).then_some(identifiers)
+}
+
+fn current_trusted_relationship(
+    relationship: &serde_json::Map<String, Value>,
+    now: DateTime<Utc>,
+) -> bool {
+    if !relationship
+        .get("relationship_status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| status.eq_ignore_ascii_case("TRUSTED"))
+    {
+        return false;
+    }
+    if !relationship
+        .get("compliance_status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| {
+            status.eq_ignore_ascii_case("ACCREDITED") || status.eq_ignore_ascii_case("COMPLIANT")
+        })
+    {
+        return false;
+    }
+    if relationship
+        .get("revoked_at")
+        .is_some_and(|value| !value.is_null())
+    {
+        return false;
+    }
+    let Some(valid_from) = relationship
+        .get("valid_from")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+    else {
+        return false;
+    };
+    if now < valid_from {
+        return false;
+    }
+    relationship
+        .get("valid_until")
+        .filter(|value| !value.is_null())
+        .is_none_or(|value| {
+            value
+                .as_str()
+                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                .is_some_and(|valid_until| now < valid_until.with_timezone(&Utc))
+        })
 }
 
 fn collect_identifiers(
@@ -543,20 +622,73 @@ mod tests {
     }
 
     #[test]
-    fn trust_identifiers_normalize_verification_methods_and_ignore_disabled_sources() {
+    fn legacy_trust_identifiers_normalize_methods_and_ignore_disabled_sources() {
         let fixture = fixture();
-        let identifiers = trust_profile_issuer_identifiers(&fixture["trust_profile"]);
+        let now = DateTime::parse_from_rfc3339(fixture["decision_at"].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&Utc);
+        let identifiers =
+            trust_profile_issuer_identifiers(&fixture["legacy_trust_profile"], now).unwrap();
+        for expected in fixture["legacy_expected_trusted_identifiers"]
+            .as_array()
+            .unwrap()
+        {
+            assert!(identifiers.contains(expected.as_str().unwrap()));
+        }
+        for forbidden in fixture["legacy_forbidden_trusted_identifiers"]
+            .as_array()
+            .unwrap()
+        {
+            assert!(!identifiers.contains(forbidden.as_str().unwrap()));
+        }
+        let mut internal_profile = fixture["legacy_trust_profile"].clone();
+        internal_profile["issuer_relationships"] = json!([]);
+        assert_eq!(
+            trust_profile_issuer_identifiers(&internal_profile, now),
+            Some(identifiers)
+        );
+    }
+
+    #[test]
+    fn normalized_relationships_are_authoritative_and_fail_closed_on_lifecycle_state() {
+        let fixture = fixture();
+        let now = DateTime::parse_from_rfc3339(fixture["decision_at"].as_str().unwrap())
+            .unwrap()
+            .with_timezone(&Utc);
+        let identifiers = trust_profile_issuer_identifiers(&fixture["trust_profile"], now).unwrap();
         for expected in fixture["expected_trusted_identifiers"].as_array().unwrap() {
             assert!(identifiers.contains(expected.as_str().unwrap()));
         }
         for forbidden in fixture["forbidden_trusted_identifiers"].as_array().unwrap() {
             assert!(!identifiers.contains(forbidden.as_str().unwrap()));
         }
+        assert!(
+            trust_profile_issuer_identifiers(&json!({"issuer_relationships": {}}), now)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn key_purposes_follow_credential_format() {
+        let fixture = fixture();
         for case in fixture["key_purpose_cases"].as_array().unwrap() {
             assert_eq!(
                 key_purpose(case["credential_format"].as_str().unwrap()),
                 case["expected"].as_str().unwrap()
             );
         }
+    }
+
+    #[test]
+    fn explicit_denials_normalize_verification_methods() {
+        let mut denied = BTreeSet::new();
+        collect_identifiers(
+            Some(&json!(["did:web:denied.example#key-1"])),
+            false,
+            &mut denied,
+        );
+        assert!(denied.contains("did:web:denied.example#key-1"));
+        assert!(denied.contains("did:web:denied.example"));
     }
 }
