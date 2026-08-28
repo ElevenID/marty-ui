@@ -32,6 +32,10 @@ const {
   finalizeVideo,
   showStep,
 } = require('./demo-recording');
+const {
+  ensureGovernedIssuer,
+  safeErrorDetail,
+} = require('./beta-demo-resource-helpers');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
@@ -174,7 +178,7 @@ function transitService(id, name, keyReference) {
 }
 
 async function createTemplateVersion(page, issuerDid, stamp) {
-  return page.evaluate(async ({ issuer, sourceTemplateId, versionStamp }) => {
+  const result = await page.evaluate(async ({ issuer, sourceTemplateId, versionStamp }) => {
     const sourceResponse = await fetch(
       `/v1/credential-templates/${encodeURIComponent(sourceTemplateId)}`,
       { credentials: 'include' },
@@ -202,7 +206,13 @@ async function createTemplateVersion(page, issuerDid, stamp) {
     });
     const patched = await patchResponse.json().catch(() => null);
     if (!patchResponse.ok) {
-      return { ok: false, status: patchResponse.status, error: patched?.detail || 'Template update failed' };
+      return {
+        ok: false,
+        status: patchResponse.status,
+        templateId: version.id,
+        error: 'Template update failed',
+        errorBody: patched,
+      };
     }
     const activateResponse = await fetch(
       `/v1/credential-templates/${encodeURIComponent(version.id)}/activate`,
@@ -212,14 +222,35 @@ async function createTemplateVersion(page, issuerDid, stamp) {
     return {
       ok: activateResponse.ok,
       status: activateResponse.status,
+      templateId: version.id,
       template: activateResponse.ok ? activated : null,
-      error: activateResponse.ok ? null : activated?.detail || 'Template activation failed',
+      errorBody: activateResponse.ok ? null : activated,
     };
   }, {
     issuer: issuerDid,
     sourceTemplateId: SOURCE_TEMPLATE_ID,
     versionStamp: stamp,
   });
+  return {
+    ...result,
+    error: result.ok
+      ? null
+      : `${result.error || 'Template activation failed'}${safeErrorDetail(result.errorBody)}`,
+    errorBody: undefined,
+  };
+}
+
+function governedIssuerRequest(sourceTemplate, issuerDid, stamp) {
+  if (!sourceTemplate?.trust_profile_id) {
+    throw new Error('D-02 source Credential Template lacks a Trust Profile binding');
+  }
+  return {
+    organizationId: ORG_ID,
+    trustProfileId: sourceTemplate.trust_profile_id,
+    issuerDid,
+    displayName: `D-02 Provider Switch Issuer ${stamp}`,
+    idempotencyKey: `d02-governed-issuer-${stamp}`,
+  };
 }
 
 function credentialEvidence(issued) {
@@ -305,51 +336,74 @@ async function directRebind(page, issuerDid) {
   return { ok: response.ok, status: response.status };
 }
 
-async function cleanup(page, templateId, issuerDids) {
-  return page.evaluate(async ({ organizationId, id, identities }) => {
-    const results = { deprecatedTemplate: false, revokedCredentials: 0, retiredIdentities: 0 };
-    if (id) {
-      const list = await fetch(
-        `/v1/issued-credentials?organization_id=${encodeURIComponent(organizationId)}`,
-        { credentials: 'include' },
+async function cleanup(page, templateId, issuerDids, governance = null) {
+  const results = {
+    retiredTemplate: !templateId,
+    templateRetirement: templateId ? null : 'not-created',
+    revokedCredentials: 0,
+    removedGovernanceRelationships: 0,
+    removedGovernedIssuers: 0,
+    retiredIdentities: 0,
+  };
+  if (templateId) {
+    const list = await browserJson(
+      page,
+      `/v1/issued-credentials?organization_id=${encodeURIComponent(ORG_ID)}`,
+    );
+    const credentials = Array.isArray(list.body) ? list.body : [];
+    for (const credential of credentials) {
+      if (credential.credential_template_id !== templateId
+        || String(credential.status).toUpperCase() !== 'ACTIVE') continue;
+      const revoked = await browserJson(
+        page,
+        `/v1/issued-credentials/${encodeURIComponent(credential.id)}/revoke`,
+        { method: 'POST', body: JSON.stringify({ reason: 'D-02 release qualification cleanup' }) },
       );
-      const credentials = await list.json().catch(() => []);
-      for (const credential of Array.isArray(credentials) ? credentials : []) {
-        if (credential.credential_template_id !== id || String(credential.status).toUpperCase() !== 'ACTIVE') continue;
-        const revoked = await fetch(`/v1/issued-credentials/${encodeURIComponent(credential.id)}/revoke`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ reason: 'D-02 release qualification cleanup' }),
-        });
-        if (revoked.ok) results.revokedCredentials += 1;
-      }
-      const deprecated = await fetch(`/v1/credential-templates/${encodeURIComponent(id)}/deprecate`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      results.deprecatedTemplate = deprecated.ok;
+      if (revoked.ok) results.revokedCredentials += 1;
     }
-    for (const issuerDid of identities) {
-      const response = await fetch(
-        `/v1/signing-keys/issuer-identities?organization_id=${encodeURIComponent(organizationId)}`,
-        {
-          method: 'DELETE',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            organization_id: organizationId,
-            issuer_did: issuerDid,
-            key_purpose: 'vc_jwt_issuer',
-            credential_format: 'SD_JWT_VC',
-            algorithm: 'ES256',
-          }),
-        },
+    const current = await browserJson(
+      page,
+      `/v1/credential-templates/${encodeURIComponent(templateId)}`,
+    );
+    const status = String(current.body?.status || '').toUpperCase();
+    const retirement = status === 'DRAFT'
+      ? await browserJson(page, `/v1/credential-templates/${encodeURIComponent(templateId)}`, {
+        method: 'DELETE',
+      })
+      : await browserJson(
+        page,
+        `/v1/credential-templates/${encodeURIComponent(templateId)}/deprecate`,
+        { method: 'POST' },
       );
-      if (response.ok) results.retiredIdentities += 1;
-    }
-    return results;
-  }, { organizationId: ORG_ID, id: templateId, identities: issuerDids });
+    results.retiredTemplate = retirement.ok;
+    results.templateRetirement = status === 'DRAFT' ? 'deleted' : 'deprecated';
+  }
+  if (governance?.relationshipCreated && governance.relationship?.id) {
+    const removed = await browserJson(
+      page,
+      `/v1/trust-profiles/${encodeURIComponent(governance.trustProfileId)}`
+        + `/issuers/${encodeURIComponent(governance.relationship.id)}`,
+      { method: 'DELETE' },
+    );
+    if (removed.ok) results.removedGovernanceRelationships += 1;
+  }
+  if (governance?.created && governance.issuer?.id) {
+    const removed = await browserJson(
+      page,
+      `/v1/issuer-entities/${encodeURIComponent(governance.issuer.id)}`,
+      { method: 'DELETE' },
+    );
+    if (removed.ok) results.removedGovernedIssuers += 1;
+  }
+  for (const issuerDid of issuerDids) {
+    const response = await browserJson(
+      page,
+      `/v1/signing-keys/issuer-identities?organization_id=${encodeURIComponent(ORG_ID)}`,
+      { method: 'DELETE', body: JSON.stringify(identityRequest(issuerDid)) },
+    );
+    if (response.ok) results.retiredIdentities += 1;
+  }
+  return results;
 }
 
 async function main() {
@@ -407,6 +461,10 @@ async function main() {
     if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
     originalConfig = await loadSigningConfig(page);
 
+    let templateId = null;
+    let governance = null;
+    let qualificationError = null;
+    const createdIdentityDids = [];
     try {
       const managedConfig = await saveSigningConfig(page, writableConfig(originalConfig, {
         defaultServiceId: MANAGED_SERVICE_ID,
@@ -419,10 +477,38 @@ async function main() {
 
       report.identityCreation = await createIdentity(page, issuerDid, `d02-identity-${stamp}`);
       if (!report.identityCreation.ok) throw new Error(`Issuer identity creation failed (HTTP ${report.identityCreation.status})`);
-      const seedIdentity = await createIdentity(page, seedDid, `d02-seed-${stamp}`);
-      if (!seedIdentity.ok) throw new Error(`Provider-B seed identity creation failed (HTTP ${seedIdentity.status})`);
+      if (report.identityCreation.created) createdIdentityDids.push(issuerDid);
+      report.seedIdentityCreation = await createIdentity(page, seedDid, `d02-seed-${stamp}`);
+      if (!report.seedIdentityCreation.ok) {
+        throw new Error(`Provider-B seed identity creation failed (HTTP ${report.seedIdentityCreation.status})`);
+      }
+      if (report.seedIdentityCreation.created) createdIdentityDids.push(seedDid);
+
+      const sourceTemplate = await browserJson(
+        page,
+        `/v1/credential-templates/${encodeURIComponent(SOURCE_TEMPLATE_ID)}`,
+      );
+      if (!sourceTemplate.ok || !sourceTemplate.body?.id) {
+        throw new Error(
+          `D-02 source Credential Template unavailable (HTTP ${sourceTemplate.status})`
+          + safeErrorDetail(sourceTemplate.body),
+        );
+      }
+      const governanceRequest = governedIssuerRequest(sourceTemplate.body, issuerDid, stamp);
+      governance = {
+        ...(await ensureGovernedIssuer(page, governanceRequest)),
+        trustProfileId: governanceRequest.trustProfileId,
+      };
+      report.governance = {
+        issuerEntityId: governance.issuer.id,
+        relationshipId: governance.relationship.id,
+        trustProfileId: governance.trustProfileId,
+        created: governance.created,
+        relationshipCreated: governance.relationshipCreated,
+      };
 
       report.template = await createTemplateVersion(page, issuerDid, stamp);
+      templateId = report.template.templateId || null;
       if (!report.template.ok || !report.template.template?.id) {
         throw new Error(`D-02 template setup failed: ${report.template.error}`);
       }
@@ -491,23 +577,37 @@ async function main() {
       await showProviderStep(page, 'Unpublished replacement denied', 'An unavailable replacement key cannot cut over custody; issuance continues on the last published provider-B method.');
 
       report.behaviorAssertions = providerSwitchBehaviorAssertions(report);
-      report.cleanup = await cleanup(page, template.id, [issuerDid, seedDid]);
+    } catch (error) {
+      qualificationError = error;
+      report.error = redact(error.stack || error.message || String(error));
     } finally {
+      try {
+        report.cleanup = await cleanup(page, templateId, createdIdentityDids, governance);
+      } catch (error) {
+        report.cleanupError = redact(error.stack || error.message || String(error));
+      }
       if (originalConfig) {
-        const restored = await saveSigningConfig(page, writableConfig(originalConfig));
-        report.configRestored = {
-          ok: restored.default_service_id === originalConfig.default_service_id
-            && JSON.stringify(restored.format_defaults || {}) === JSON.stringify(originalConfig.format_defaults || {})
-            && JSON.stringify(restored.type_defaults || {}) === JSON.stringify(originalConfig.type_defaults || {}),
-          defaultServiceId: restored.default_service_id,
-        };
+        try {
+          const restored = await saveSigningConfig(page, writableConfig(originalConfig));
+          report.configRestored = {
+            ok: restored.default_service_id === originalConfig.default_service_id
+              && JSON.stringify(restored.format_defaults || {}) === JSON.stringify(originalConfig.format_defaults || {})
+              && JSON.stringify(restored.type_defaults || {}) === JSON.stringify(originalConfig.type_defaults || {}),
+            defaultServiceId: restored.default_service_id,
+          };
+        } catch (error) {
+          report.configRestoreError = redact(error.stack || error.message || String(error));
+        }
       }
     }
 
     report.releaseReady = Boolean(
-      Object.values(report.behaviorAssertions || {}).every((passed) => passed === true)
-      && report.cleanup?.deprecatedTemplate
+      !qualificationError
+      && Object.values(report.behaviorAssertions || {}).every((passed) => passed === true)
+      && report.cleanup?.retiredTemplate
       && report.cleanup?.revokedCredentials >= 3
+      && report.cleanup?.removedGovernanceRelationships === 1
+      && report.cleanup?.removedGovernedIssuers === 1
       && report.cleanup?.retiredIdentities === 2
       && report.configRestored?.ok
       && report.pageErrors.length === 0
@@ -539,7 +639,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  cleanup,
   credentialEvidence,
+  governedIssuerRequest,
   identityRequest,
   transitService,
   writableConfig,

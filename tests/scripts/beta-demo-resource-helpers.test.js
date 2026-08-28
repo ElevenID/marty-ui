@@ -282,6 +282,7 @@ test('ensureGovernedIssuer pins one public DID key and creates one trusted relat
   });
 
   assert.equal(result.created, true);
+  assert.equal(result.relationshipCreated, true);
   assert.equal(result.issuer.id, 'issuer-1');
   assert.deepEqual(page.requests.map(({ requestPath }) => requestPath), [
     '/v1/issuer-entities?organization_id=org%2Fa',
