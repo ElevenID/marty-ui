@@ -456,7 +456,7 @@ async function main() {
       }
     });
 
-    await login(page, email, password);
+    report.loginTheme = await login(page, email, password);
     report.orgSelection = await selectOrg(page);
     if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
     originalConfig = await loadSigningConfig(page);
@@ -610,6 +610,7 @@ async function main() {
       && report.cleanup?.removedGovernedIssuers === 1
       && report.cleanup?.retiredIdentities === 2
       && report.configRestored?.ok
+      && report.loginTheme?.ok
       && report.pageErrors.length === 0
       && report.unexpectedResponses.length === 0
     );

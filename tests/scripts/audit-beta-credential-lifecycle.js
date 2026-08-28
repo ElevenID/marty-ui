@@ -54,11 +54,37 @@ async function waitFor(fn, timeoutMs = 60_000, intervalMs = 1_000) {
   throw new Error(`Timed out waiting for condition; last=${JSON.stringify(last)}`);
 }
 
+function validateElevenIdLoginTheme(evidence) {
+  if (!evidence?.stylesheet?.includes('/login/11id/css/marty.css')) {
+    throw new Error('Keycloak did not load the ElevenID login theme stylesheet');
+  }
+  if (!evidence.appBar || evidence.brand !== 'ElevenID LLC') {
+    throw new Error('Keycloak did not render the ElevenID login theme shell');
+  }
+  return { ...evidence, ok: true };
+}
+
+async function inspectElevenIdLoginTheme(page) {
+  const evidence = await page.evaluate(() => {
+    const appBar = document.querySelector('.elevenid-appbar');
+    const stylesheet = Array.from(document.querySelectorAll('link[rel~="stylesheet"]'))
+      .map((element) => element.href)
+      .find((href) => href.includes('/login/11id/css/marty.css'));
+    return {
+      stylesheet: stylesheet ? new URL(stylesheet).pathname : null,
+      appBar: Boolean(appBar),
+      brand: document.querySelector('.elevenid-brand')?.textContent?.trim() || null,
+    };
+  });
+  return validateElevenIdLoginTheme(evidence);
+}
+
 async function login(page, email, password) {
   await page.goto(`${BETA_ORIGIN}/v1/auth/login?redirect_uri=${encodeURIComponent('/console/org')}`, {
     waitUntil: 'domcontentloaded',
     timeout: 60_000,
   });
+  const loginTheme = await inspectElevenIdLoginTheme(page);
   await page.locator('#username, input[name="username"], input[type="email"]').first().fill(email);
   await page.locator('#password, input[name="password"], input[type="password"]').first().fill(password);
   await Promise.all([
@@ -72,6 +98,7 @@ async function login(page, email, password) {
     const body = await response.json().catch(() => null);
     return response.ok && body?.authenticated;
   }));
+  return loginTheme;
 }
 
 async function selectOrg(page) {
@@ -740,10 +767,12 @@ module.exports = {
   findIssuedCredential,
   getCredentialStatus,
   issueCredential,
+  inspectElevenIdLoginTheme,
   login,
   performLifecycleAction,
   receiveCredential,
   selectOrg,
   verify,
+  validateElevenIdLoginTheme,
   waitFor,
 };
