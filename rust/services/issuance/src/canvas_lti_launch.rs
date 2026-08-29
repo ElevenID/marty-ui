@@ -717,6 +717,13 @@ impl CanvasLtiExperienceService {
         self.launch_prepared(platform, submission).await
     }
 
+    pub async fn prepare_platform(
+        &self,
+        platform_id: &str,
+    ) -> Result<CanvasLtiPlatform, CanvasLtiLaunchServiceError> {
+        self.launch_service.prepare_platform(platform_id).await
+    }
+
     pub(crate) async fn launch_prepared(
         &self,
         platform: CanvasLtiPlatform,

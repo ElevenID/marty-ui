@@ -183,6 +183,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             "issue_credential",
             "initiate_canvas_lti_login_route",
             "initiate_canvas_lti_experience_login_route",
+            "launch_canvas_lti_experience_route",
             "verify_canvas_lti_launch_route",
         }
     )
@@ -214,16 +215,22 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         if operation in {
             "initiate_canvas_lti_login_route",
             "initiate_canvas_lti_experience_login_route",
+            "launch_canvas_lti_experience_route",
             "verify_canvas_lti_launch_route",
         }:
             expected_case = {
                 "initiate_canvas_lti_login_route": "login",
                 "initiate_canvas_lti_experience_login_route": "experience-login",
+                "launch_canvas_lti_experience_route": "experience",
                 "verify_canvas_lti_launch_route": "launch",
             }[operation]
             expected_authentication = (
                 "public-lti-form-post"
-                if operation == "verify_canvas_lti_launch_route"
+                if operation
+                in {
+                    "launch_canvas_lti_experience_route",
+                    "verify_canvas_lti_launch_route",
+                }
                 else "public-lti-login"
             )
             assert coverage_entry["method"] == "POST"
@@ -272,10 +279,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 110,
+        "http": 109,
         "grpc": 12,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 67,
+        "literal_environment_variables": 64,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 44,
         "migration_heads": 1,
@@ -285,6 +292,8 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS",
         "CANVAS_ALLOW_PRIVATE_BASE_URLS",
         "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+        "CANVAS_LTI_EXPERIENCE_BASE_URL",
+        "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS",
         "CANVAS_LTI_JWKS_TTL_MINUTES",
         "CANVAS_LTI_STATE_TTL_MINUTES",
         "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
@@ -303,6 +312,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "SIGNING_KEYS_INTERNAL_URL",
         "TOKEN_RATE_LIMIT",
         "TOKEN_RATE_WINDOW",
+        "UI_BASE_URL",
     ]
 
 

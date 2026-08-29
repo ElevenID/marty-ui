@@ -30,6 +30,8 @@ pub struct IssuanceServiceConfig {
     pub canvas_readiness_max_age: Duration,
     pub canvas_lti_state_ttl: Duration,
     pub canvas_lti_jwks_ttl: Duration,
+    pub canvas_lti_experience_base_url: String,
+    pub canvas_lti_experience_code_ttl: Duration,
     pub canvas_self_managed_origins: Vec<String>,
     pub canvas_private_origin_allowlist: Vec<String>,
     pub canvas_allow_private_base_urls: bool,
@@ -75,6 +77,14 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             )
             .field("canvas_lti_state_ttl", &self.canvas_lti_state_ttl)
             .field("canvas_lti_jwks_ttl", &self.canvas_lti_jwks_ttl)
+            .field(
+                "canvas_lti_experience_base_url",
+                &self.canvas_lti_experience_base_url,
+            )
+            .field(
+                "canvas_lti_experience_code_ttl",
+                &self.canvas_lti_experience_code_ttl,
+            )
             .field(
                 "canvas_self_managed_origin_count",
                 &self.canvas_self_managed_origins.len(),
@@ -219,6 +229,15 @@ impl IssuanceServiceConfig {
             positive_seconds(&values, "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS", 900)?;
         let canvas_lti_state_ttl = positive_minutes(&values, "CANVAS_LTI_STATE_TTL_MINUTES", 10)?;
         let canvas_lti_jwks_ttl = positive_minutes(&values, "CANVAS_LTI_JWKS_TTL_MINUTES", 1440)?;
+        let canvas_lti_experience_base_url = ["CANVAS_LTI_EXPERIENCE_BASE_URL", "UI_BASE_URL"]
+            .into_iter()
+            .find_map(|name| values.get(name).filter(|value| !value.trim().is_empty()))
+            .map_or_else(
+                || Ok(issuer_base_url.clone()),
+                |value| validate_http_base_url(value, "Canvas LTI experience base URL"),
+            )?;
+        let canvas_lti_experience_code_ttl =
+            positive_seconds(&values, "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS", 60)?;
         let canvas_self_managed_origins =
             comma_separated_values(&values, "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST");
         let canvas_private_origin_allowlist =
@@ -247,6 +266,8 @@ impl IssuanceServiceConfig {
             canvas_readiness_max_age,
             canvas_lti_state_ttl,
             canvas_lti_jwks_ttl,
+            canvas_lti_experience_base_url,
+            canvas_lti_experience_code_ttl,
             canvas_self_managed_origins,
             canvas_private_origin_allowlist,
             canvas_allow_private_base_urls,
@@ -358,10 +379,10 @@ fn positive_seconds(
             .with_detail("cause", error.to_string())
         })
     })?;
-    if seconds == 0 {
+    if seconds == 0 || seconds > i64::MAX as u64 {
         return Err(MmfError::new(
             ErrorCode::Configuration,
-            format!("{name} must be a positive integer"),
+            format!("{name} must be a positive integer within range"),
         ));
     }
     Ok(Duration::from_secs(seconds))
@@ -422,11 +443,15 @@ where
 }
 
 fn validate_issuer_base_url(value: &str) -> Result<String, MmfError> {
+    validate_http_base_url(value, "ISSUER_BASE_URL")
+}
+
+fn validate_http_base_url(value: &str, name: &str) -> Result<String, MmfError> {
     let normalized = value.trim_end_matches('/');
     let parsed = url::Url::parse(normalized).map_err(|error| {
         MmfError::new(
             ErrorCode::Configuration,
-            "ISSUER_BASE_URL must be a valid HTTP(S) URL",
+            format!("{name} must be a valid HTTP(S) URL"),
         )
         .with_detail("cause", error.to_string())
     })?;
@@ -439,7 +464,7 @@ fn validate_issuer_base_url(value: &str) -> Result<String, MmfError> {
     {
         return Err(MmfError::new(
             ErrorCode::Configuration,
-            "ISSUER_BASE_URL must be a credential-free HTTP(S) URL without query or fragment",
+            format!("{name} must be a credential-free HTTP(S) URL without query or fragment"),
         ));
     }
     Ok(normalized.to_owned())
@@ -558,6 +583,14 @@ mod tests {
             config.canvas_lti_jwks_ttl,
             std::time::Duration::from_secs(86_400)
         );
+        assert_eq!(
+            config.canvas_lti_experience_base_url,
+            "https://beta.elevenidllc.com"
+        );
+        assert_eq!(
+            config.canvas_lti_experience_code_ttl,
+            std::time::Duration::from_secs(60)
+        );
         assert!(config.canvas_self_managed_origins.is_empty());
         assert!(config.canvas_private_origin_allowlist.is_empty());
         assert!(!config.canvas_allow_private_base_urls);
@@ -601,6 +634,8 @@ mod tests {
             ("TOKEN_RATE_WINDOW", "45"),
             ("CANVAS_LTI_STATE_TTL_MINUTES", "12"),
             ("CANVAS_LTI_JWKS_TTL_MINUTES", "30"),
+            ("CANVAS_LTI_EXPERIENCE_BASE_URL", "https://ui.example/"),
+            ("CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS", "90"),
             ("CANVAS_ALLOW_PRIVATE_BASE_URLS", "true"),
             ("CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS", "yes"),
             (
@@ -649,6 +684,11 @@ mod tests {
             config.canvas_lti_jwks_ttl,
             std::time::Duration::from_secs(1_800)
         );
+        assert_eq!(config.canvas_lti_experience_base_url, "https://ui.example");
+        assert_eq!(
+            config.canvas_lti_experience_code_ttl,
+            std::time::Duration::from_secs(90)
+        );
         assert_eq!(
             config.canvas_self_managed_origins,
             ["https://canvas.one.example", "https://canvas.two.example"]
@@ -688,19 +728,52 @@ mod tests {
         for name in [
             "CANVAS_LTI_STATE_TTL_MINUTES",
             "CANVAS_LTI_JWKS_TTL_MINUTES",
+            "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS",
         ] {
-            for value in [
-                "0",
-                "-1",
-                "later",
-                "153722867280912931",
-                "18446744073709551615",
-            ] {
+            let invalid_values = if name.ends_with("_MINUTES") {
+                &[
+                    "0",
+                    "-1",
+                    "later",
+                    "153722867280912931",
+                    "18446744073709551615",
+                ][..]
+            } else {
+                &["0", "-1", "later", "18446744073709551615"][..]
+            };
+            for value in invalid_values {
                 let error = IssuanceServiceConfig::from_values(values(&[(name, value)]))
                     .expect_err("invalid Canvas LTI TTL");
                 assert_eq!(error.code, ErrorCode::Configuration);
             }
         }
+    }
+
+    #[test]
+    fn canvas_lti_experience_base_url_preserves_the_python_fallback_order() {
+        let ui_fallback = IssuanceServiceConfig::from_values(values(&[
+            ("ISSUER_BASE_URL", "https://issuer.example"),
+            ("UI_BASE_URL", "https://ui.example/"),
+        ]))
+        .expect("UI fallback");
+        assert_eq!(
+            ui_fallback.canvas_lti_experience_base_url,
+            "https://ui.example"
+        );
+
+        let explicit = IssuanceServiceConfig::from_values(values(&[
+            ("ISSUER_BASE_URL", "https://issuer.example"),
+            ("UI_BASE_URL", "https://ui.example"),
+            (
+                "CANVAS_LTI_EXPERIENCE_BASE_URL",
+                "https://experience.example/",
+            ),
+        ]))
+        .expect("explicit experience URL");
+        assert_eq!(
+            explicit.canvas_lti_experience_base_url,
+            "https://experience.example"
+        );
     }
 
     #[test]
@@ -724,6 +797,23 @@ mod tests {
             let error =
                 IssuanceServiceConfig::from_values(values(&[("ISSUER_BASE_URL", issuer_base_url)]))
                     .expect_err("invalid issuer URL");
+            assert_eq!(error.code, ErrorCode::Configuration);
+        }
+    }
+
+    #[test]
+    fn invalid_canvas_lti_experience_urls_fail_closed() {
+        for value in [
+            "ftp://experience.example",
+            "https://user:password@experience.example",
+            "https://experience.example?tenant=a",
+            "not-a-url",
+        ] {
+            let error = IssuanceServiceConfig::from_values(values(&[(
+                "CANVAS_LTI_EXPERIENCE_BASE_URL",
+                value,
+            )]))
+            .expect_err("invalid experience URL");
             assert_eq!(error.code, ErrorCode::Configuration);
         }
     }
