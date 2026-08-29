@@ -803,7 +803,13 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             let expected_operation = match behavior_case {
                 "login" => "initiate_canvas_lti_login_route",
                 "experience-login" => "initiate_canvas_lti_experience_login_route",
+                "launch" => "verify_canvas_lti_launch_route",
                 _ => return Err(invalid("unknown native Canvas LTI behavior case")),
+            };
+            let expected_authentication = if behavior_case == "launch" {
+                "public-lti-form-post"
+            } else {
+                "public-lti-login"
             };
             require(
                 operation.operation == expected_operation
@@ -816,10 +822,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                                 route["method"] == operation.method
                                     && route["path"] == operation.path
                                     && route["operation"] == operation.operation
-                                    && route["authentication"] == "public-lti-login"
+                                    && route["authentication"] == expected_authentication
                             })
                         }),
-                "native Canvas LTI login operation diverges from its behavior contract",
+                "native Canvas LTI operation diverges from its behavior contract",
             )?;
         } else {
             return Err(invalid("native issuance behavior case is missing"));
@@ -844,8 +850,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "native tenant issuance behavior coverage is incomplete",
     )?;
     require(
-        native_canvas_lti_cases == BTreeSet::from(["experience-login", "login"]),
-        "native Canvas LTI login behavior coverage is incomplete",
+        native_canvas_lti_cases == BTreeSet::from(["experience-login", "launch", "login"]),
+        "native Canvas LTI behavior coverage is incomplete",
     )?;
     let frozen_transaction_read_cases = transaction_reads
         .cases
@@ -906,11 +912,15 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         coverage.native_environment_variables
             == [
                 "CORS_ALLOWED_ORIGINS",
+                "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS",
+                "CANVAS_ALLOW_PRIVATE_BASE_URLS",
                 "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+                "CANVAS_LTI_JWKS_TTL_MINUTES",
                 "CANVAS_LTI_STATE_TTL_MINUTES",
                 "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
                 "CANVAS_PILOT_ORGANIZATION_IDS",
                 "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+                "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
                 "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
                 "DATABASE_URL",
                 "GRPC_SERVICE_TOKEN",
@@ -924,7 +934,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "TOKEN_RATE_LIMIT",
                 "TOKEN_RATE_WINDOW",
             ]
-            && coverage.remaining.literal_environment_variables + 18 == environment_count
+            && coverage.remaining.literal_environment_variables + 22 == environment_count
             && coverage.remaining.dynamic_configuration_lookups == dynamic_count
             && coverage.remaining.migration_revisions == migration_count
             && coverage.remaining.migration_heads == migration_heads,
@@ -1017,8 +1027,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 20);
-        assert_eq!(summary.remaining_http, 111);
+        assert_eq!(summary.native_http, 21);
+        assert_eq!(summary.remaining_http, 110);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }

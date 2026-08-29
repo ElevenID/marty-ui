@@ -29,7 +29,11 @@ pub struct IssuanceServiceConfig {
     pub canvas_evidence_max_age: Duration,
     pub canvas_readiness_max_age: Duration,
     pub canvas_lti_state_ttl: Duration,
+    pub canvas_lti_jwks_ttl: Duration,
     pub canvas_self_managed_origins: Vec<String>,
+    pub canvas_private_origin_allowlist: Vec<String>,
+    pub canvas_allow_private_base_urls: bool,
+    pub canvas_allow_http_localhost_base_urls: bool,
     pub dependency_timeout: Duration,
     pub token_rate_limit: usize,
     pub token_rate_window: Duration,
@@ -70,9 +74,22 @@ impl std::fmt::Debug for IssuanceServiceConfig {
                 &self.canvas_pilot_organizations,
             )
             .field("canvas_lti_state_ttl", &self.canvas_lti_state_ttl)
+            .field("canvas_lti_jwks_ttl", &self.canvas_lti_jwks_ttl)
             .field(
                 "canvas_self_managed_origin_count",
                 &self.canvas_self_managed_origins.len(),
+            )
+            .field(
+                "canvas_private_origin_allowlist_count",
+                &self.canvas_private_origin_allowlist.len(),
+            )
+            .field(
+                "canvas_allow_private_base_urls",
+                &self.canvas_allow_private_base_urls,
+            )
+            .field(
+                "canvas_allow_http_localhost_base_urls",
+                &self.canvas_allow_http_localhost_base_urls,
             )
             .field("dependency_timeout", &self.dependency_timeout)
             .field("token_rate_limit", &self.token_rate_limit)
@@ -201,8 +218,15 @@ impl IssuanceServiceConfig {
         let canvas_readiness_max_age =
             positive_seconds(&values, "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS", 900)?;
         let canvas_lti_state_ttl = positive_minutes(&values, "CANVAS_LTI_STATE_TTL_MINUTES", 10)?;
+        let canvas_lti_jwks_ttl = positive_minutes(&values, "CANVAS_LTI_JWKS_TTL_MINUTES", 1440)?;
         let canvas_self_managed_origins =
             comma_separated_values(&values, "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST");
+        let canvas_private_origin_allowlist =
+            comma_separated_values(&values, "CANVAS_PRIVATE_ORIGIN_ALLOWLIST");
+        let canvas_allow_private_base_urls =
+            environment_flag(&values, "CANVAS_ALLOW_PRIVATE_BASE_URLS");
+        let canvas_allow_http_localhost_base_urls =
+            environment_flag(&values, "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS");
         Ok(Self {
             http_addr,
             release_version: settings.build.release_version,
@@ -222,7 +246,11 @@ impl IssuanceServiceConfig {
             canvas_evidence_max_age,
             canvas_readiness_max_age,
             canvas_lti_state_ttl,
+            canvas_lti_jwks_ttl,
             canvas_self_managed_origins,
+            canvas_private_origin_allowlist,
+            canvas_allow_private_base_urls,
+            canvas_allow_http_localhost_base_urls,
             dependency_timeout: Duration::from_secs(10),
             token_rate_limit: settings.rate_limit.requests,
             token_rate_window: Duration::from_secs(settings.rate_limit.window_seconds),
@@ -526,7 +554,14 @@ mod tests {
             config.canvas_lti_state_ttl,
             std::time::Duration::from_secs(600)
         );
+        assert_eq!(
+            config.canvas_lti_jwks_ttl,
+            std::time::Duration::from_secs(86_400)
+        );
         assert!(config.canvas_self_managed_origins.is_empty());
+        assert!(config.canvas_private_origin_allowlist.is_empty());
+        assert!(!config.canvas_allow_private_base_urls);
+        assert!(!config.canvas_allow_http_localhost_base_urls);
     }
 
     #[test]
@@ -565,6 +600,13 @@ mod tests {
             ("TOKEN_RATE_LIMIT", "12"),
             ("TOKEN_RATE_WINDOW", "45"),
             ("CANVAS_LTI_STATE_TTL_MINUTES", "12"),
+            ("CANVAS_LTI_JWKS_TTL_MINUTES", "30"),
+            ("CANVAS_ALLOW_PRIVATE_BASE_URLS", "true"),
+            ("CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS", "yes"),
+            (
+                "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
+                " https://10.0.0.4,https://canvas.internal.example ,,",
+            ),
             (
                 "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
                 " https://canvas.one.example,https://canvas.two.example ,,",
@@ -604,9 +646,19 @@ mod tests {
             std::time::Duration::from_secs(720)
         );
         assert_eq!(
+            config.canvas_lti_jwks_ttl,
+            std::time::Duration::from_secs(1_800)
+        );
+        assert_eq!(
             config.canvas_self_managed_origins,
             ["https://canvas.one.example", "https://canvas.two.example"]
         );
+        assert_eq!(
+            config.canvas_private_origin_allowlist,
+            ["https://10.0.0.4", "https://canvas.internal.example"]
+        );
+        assert!(config.canvas_allow_private_base_urls);
+        assert!(config.canvas_allow_http_localhost_base_urls);
         let diagnostic = format!("{config:?}");
         assert!(!diagnostic.contains("preferred-key"));
         assert!(!diagnostic.contains("fallback-key"));
@@ -632,20 +684,22 @@ mod tests {
     }
 
     #[test]
-    fn invalid_canvas_lti_state_ttl_fails_closed() {
-        for value in [
-            "0",
-            "-1",
-            "later",
-            "153722867280912931",
-            "18446744073709551615",
+    fn invalid_canvas_lti_ttls_fail_closed() {
+        for name in [
+            "CANVAS_LTI_STATE_TTL_MINUTES",
+            "CANVAS_LTI_JWKS_TTL_MINUTES",
         ] {
-            let error = IssuanceServiceConfig::from_values(values(&[(
-                "CANVAS_LTI_STATE_TTL_MINUTES",
-                value,
-            )]))
-            .expect_err("invalid Canvas LTI state TTL");
-            assert_eq!(error.code, ErrorCode::Configuration);
+            for value in [
+                "0",
+                "-1",
+                "later",
+                "153722867280912931",
+                "18446744073709551615",
+            ] {
+                let error = IssuanceServiceConfig::from_values(values(&[(name, value)]))
+                    .expect_err("invalid Canvas LTI TTL");
+                assert_eq!(error.code, ErrorCode::Configuration);
+            }
         }
     }
 

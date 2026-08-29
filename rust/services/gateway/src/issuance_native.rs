@@ -99,6 +99,10 @@ mod tests {
                 HttpMethod::Post,
                 "/v1/integrations/canvas/lti/platforms/platform-1/experience-login",
             ),
+            (
+                HttpMethod::Post,
+                "/v1/integrations/canvas/lti/platforms/platform-1/launch",
+            ),
         ] {
             assert!(is_native_http(method, path), "{method:?} {path}");
         }
@@ -108,10 +112,6 @@ mod tests {
             (HttpMethod::Post, "/v1/issuance/deferred-credential"),
             (HttpMethod::Get, "/.well-known/jwks.json"),
             (HttpMethod::Get, "/v1/issued-credentials/credential-1"),
-            (
-                HttpMethod::Post,
-                "/v1/integrations/canvas/lti/platforms/platform-1/launch",
-            ),
             (
                 HttpMethod::Post,
                 "/v1/integrations/canvas/lti/platforms/platform-1/experience",

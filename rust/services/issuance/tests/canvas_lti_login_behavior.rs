@@ -405,6 +405,23 @@ async fn malformed_json_and_persisted_metadata_drift_fail_closed() {
     }
     assert!(states.lock().expect("states").is_empty());
 
+    let (unsupported_app, unsupported_states) = app(Some(ready_platform()), true, pilot());
+    let response = unsupported_app
+        .oneshot(
+            Request::post("/v1/integrations/canvas/lti/platforms/platform-123/login")
+                .header(header::CONTENT_TYPE, "text/plain")
+                .body(Body::from("login_hint=must-not-be-parsed"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(response).await,
+        json!({"detail": "Canvas LTI login requires login_hint"})
+    );
+    assert!(unsupported_states.lock().expect("states").is_empty());
+
     let response = malformed_app
         .oneshot(
             Request::post("/v1/integrations/canvas/lti/platforms/platform-123/login")

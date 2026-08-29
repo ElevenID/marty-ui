@@ -180,6 +180,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             "issue_credential",
             "initiate_canvas_lti_login_route",
             "initiate_canvas_lti_experience_login_route",
+            "verify_canvas_lti_launch_route",
         }
     )
     for operation, coverage_entry in native.items():
@@ -210,18 +211,25 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         if operation in {
             "initiate_canvas_lti_login_route",
             "initiate_canvas_lti_experience_login_route",
+            "verify_canvas_lti_launch_route",
         }:
             expected_case = {
                 "initiate_canvas_lti_login_route": "login",
                 "initiate_canvas_lti_experience_login_route": "experience-login",
+                "verify_canvas_lti_launch_route": "launch",
             }[operation]
+            expected_authentication = (
+                "public-lti-form-post"
+                if operation == "verify_canvas_lti_launch_route"
+                else "public-lti-login"
+            )
             assert coverage_entry["method"] == "POST"
             assert coverage_entry["canvas_lti_behavior_case"] == expected_case
             assert any(
                 route["method"] == coverage_entry["method"]
                 and route["path"] == coverage_entry["path"]
                 and route["operation"] == operation
-                and route["authentication"] == "public-lti-login"
+                and route["authentication"] == expected_authentication
                 for route in canvas_lti["scope"]["routes"]
             )
             continue
@@ -261,21 +269,25 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 111,
+        "http": 110,
         "grpc": 12,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 71,
+        "literal_environment_variables": 67,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 44,
         "migration_heads": 1,
     }
     assert coverage["native_environment_variables"] == [
         "CORS_ALLOWED_ORIGINS",
+        "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS",
+        "CANVAS_ALLOW_PRIVATE_BASE_URLS",
         "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+        "CANVAS_LTI_JWKS_TTL_MINUTES",
         "CANVAS_LTI_STATE_TTL_MINUTES",
         "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
         "CANVAS_PILOT_ORGANIZATION_IDS",
         "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+        "CANVAS_PRIVATE_ORIGIN_ALLOWLIST",
         "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
         "DATABASE_URL",
         "GRPC_SERVICE_TOKEN",
@@ -314,6 +326,10 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "issuance-native:" in beta
     assert "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005" in beta
     assert "CANVAS_LTI_STATE_TTL_MINUTES:" in beta
+    assert "CANVAS_LTI_JWKS_TTL_MINUTES:" in beta
+    assert "CANVAS_ALLOW_PRIVATE_BASE_URLS:" in beta
+    assert "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:" in beta
+    assert "CANVAS_PRIVATE_ORIGIN_ALLOWLIST:" in beta
     assert "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST:" in beta
     assert "issuance-native:" not in production
     assert "MARTY_ISSUANCE_IMAGE" in compose
