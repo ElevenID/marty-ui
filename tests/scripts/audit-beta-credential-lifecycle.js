@@ -12,6 +12,7 @@ const {
   finalizeVideo,
   maskProtocolField,
   showStep,
+  showVerificationResult,
 } = require('./demo-recording');
 const {
   DEFAULT_BETA_ORGANIZATION_ID,
@@ -35,6 +36,7 @@ const VERIFIER_DID = process.env.BETA_AUDIT_VERIFIER_DID || '';
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
+const PRESENTATION_TEST_ID = 'LIFECYCLE-PRES-01';
 
 async function showLifecycleStep(page, title, detail) {
   return showStep(page, title, detail, {
@@ -555,6 +557,7 @@ async function main() {
     createdAt: new Date().toISOString(),
     organizationId: ORG_ID,
     policyId: POLICY_ID,
+    presentationTestId: PRESENTATION_TEST_ID,
     sourceTemplateId: SOURCE_TEMPLATE_ID,
     artifactDir,
     pageErrors: [],
@@ -696,20 +699,35 @@ async function main() {
 
     report.suspend = await performLifecycleAction(page, row, 'suspend', 'Automated lifecycle suspension audit');
     report.suspend.current = await getCredentialStatus(page, credential.id);
-    report.suspend.verification = await verify(page, walletPage, 'Suspended credential audit');
-    await showLifecycleStep(page, 'Suspension denies verification', 'The status-aware verifier rejects the suspended credential while preserving its lifecycle history.');
+    report.suspend.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: suspended trial`);
+    await showLifecycleStep(page, 'Suspension denies verification', 'The status-aware verifier returns the credential\'s suspended-state denial reason.');
+    await showVerificationResult(page, report.suspend.verification.result, {
+      enabled: RECORD_VIDEO,
+      actor: 'Marty status-aware verifier',
+      testId: PRESENTATION_TEST_ID,
+    });
     await page.screenshot({ path: path.join(artifactDir, '02-suspended-credential.png'), fullPage: true });
 
     report.reinstate = await performLifecycleAction(page, row, 'reinstate', 'Automated lifecycle reinstatement audit');
     report.reinstate.current = await getCredentialStatus(page, credential.id);
-    report.reinstate.verification = await verify(page, walletPage, 'Reinstated credential audit');
-    await showLifecycleStep(page, 'Reinstatement restores verification', 'The same canonical presentation succeeds again after the issuer reinstates the credential.');
+    report.reinstate.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: reinstated trial`);
+    await showLifecycleStep(page, 'Reinstatement restores verification', 'The same credential fixture passes again after the issuer reinstates it.');
+    await showVerificationResult(page, report.reinstate.verification.result, {
+      enabled: RECORD_VIDEO,
+      actor: 'Marty status-aware verifier',
+      testId: PRESENTATION_TEST_ID,
+    });
     await page.screenshot({ path: path.join(artifactDir, '03-reinstated-credential.png'), fullPage: true });
 
     report.revoke = await performLifecycleAction(page, row, 'revoke', 'Automated lifecycle revocation audit');
     report.revoke.current = await getCredentialStatus(page, credential.id);
-    report.revoke.verification = await verify(page, walletPage, 'Revoked credential audit');
-    await showLifecycleStep(page, 'Revocation is final', 'The verifier denies the revoked credential and the issuer inventory retains a privacy-safe status history.');
+    report.revoke.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: revoked trial`);
+    await showLifecycleStep(page, 'Revocation is final', 'The verifier denies the revoked credential and the issuer inventory retains its final lifecycle state.');
+    await showVerificationResult(page, report.revoke.verification.result, {
+      enabled: RECORD_VIDEO,
+      actor: 'Marty status-aware verifier',
+      testId: PRESENTATION_TEST_ID,
+    });
     await page.screenshot({ path: path.join(artifactDir, '04-revoked-credential.png'), fullPage: true });
 
     report.crossOrg = await page.evaluate(async () => {
