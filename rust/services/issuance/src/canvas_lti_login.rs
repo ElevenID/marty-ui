@@ -402,7 +402,7 @@ fn json_string(object: &serde_json::Map<String, Value>, name: &str) -> Option<St
     object.get(name).and_then(Value::as_str).map(str::to_owned)
 }
 
-fn random_token() -> String {
+pub(crate) fn random_token() -> String {
     let mut bytes = [0_u8; 32];
     rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)

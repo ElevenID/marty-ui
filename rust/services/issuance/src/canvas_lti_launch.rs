@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -13,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 
-use crate::canvas_lti_login::{CanvasLtiLoginError, CanvasLtiLoginService, CanvasLtiPlatform};
+use crate::canvas_lti_login::{
+    random_token, CanvasLtiLoginError, CanvasLtiLoginService, CanvasLtiPlatform,
+};
 
 const CUSTOM_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/custom";
 const RESOURCE_LINK_CLAIM: &str = "https://purl.imsglobal.org/spec/lti/claim/resource_link";
@@ -165,10 +168,15 @@ pub enum CanvasLtiLaunchPlanError {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CanvasLtiStoredLaunchState {
+    pub id: String,
     pub platform_id: String,
+    pub organization_id: String,
+    pub canvas_account_id: String,
     pub state: String,
     pub nonce: String,
+    pub redirect_uri: String,
     pub status: String,
+    pub metadata: Value,
     pub expired: bool,
 }
 
@@ -553,6 +561,296 @@ impl CanvasLtiLaunchService {
                     && !binding.archived
             })
             .ok_or(CanvasLtiLaunchPlanError::RepositoryUnavailable)
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
+pub struct CanvasLtiExperienceCodeSeed {
+    pub id: String,
+    pub state: String,
+    pub nonce: String,
+}
+
+impl std::fmt::Debug for CanvasLtiExperienceCodeSeed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiExperienceCodeSeed")
+            .field("id", &self.id)
+            .field("state", &"[REDACTED]")
+            .field("nonce", &"[REDACTED]")
+            .finish()
+    }
+}
+
+pub trait CanvasLtiExperienceCodeGenerator: Send + Sync {
+    fn generate(&self) -> CanvasLtiExperienceCodeSeed;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SecureCanvasLtiExperienceCodeGenerator;
+
+impl CanvasLtiExperienceCodeGenerator for SecureCanvasLtiExperienceCodeGenerator {
+    fn generate(&self) -> CanvasLtiExperienceCodeSeed {
+        CanvasLtiExperienceCodeSeed {
+            id: uuid::Uuid::new_v4().to_string(),
+            state: random_token(),
+            nonce: random_token(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasLtiExperienceHandoff {
+    pub mip_primitives: Value,
+    pub code_metadata: Value,
+    pub consumed_state_metadata: Value,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct CanvasLtiExperienceHandoffRequest {
+    pub organization_id: String,
+    pub platform_id: String,
+    pub canvas_account_id: String,
+    pub code: CanvasLtiExperienceCodeSeed,
+    pub redirect_uri: String,
+    pub expires_at: DateTime<Utc>,
+    pub code_metadata: Value,
+    pub consumed_state: CanvasLtiStoredLaunchState,
+    pub consumed_state_metadata: Value,
+}
+
+impl std::fmt::Debug for CanvasLtiExperienceHandoffRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiExperienceHandoffRequest")
+            .field("organization_id", &self.organization_id)
+            .field("platform_id", &self.platform_id)
+            .field("canvas_account_id", &self.canvas_account_id)
+            .field("code", &self.code)
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+pub trait CanvasLtiExperienceHandoffRepository: Send + Sync {
+    /// Persist the one-time code and attach its pointer to the consumed launch
+    /// state in one transaction before any redirect is returned.
+    async fn persist_experience_handoff(
+        &self,
+        request: &CanvasLtiExperienceHandoffRequest,
+    ) -> Result<(), CanvasLtiLaunchPlanError>;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasLtiExperienceResult {
+    pub location: String,
+    pub launch: CanvasLtiLaunchResult,
+    pub code_id: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Clone)]
+pub struct CanvasLtiExperienceService {
+    launch_service: CanvasLtiLaunchService,
+    repository: Arc<dyn CanvasLtiExperienceHandoffRepository>,
+    generator: Arc<dyn CanvasLtiExperienceCodeGenerator>,
+    clock: Arc<dyn CanvasLtiClock>,
+    code_ttl: chrono::Duration,
+    experience_base_url: String,
+}
+
+impl std::fmt::Debug for CanvasLtiExperienceService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiExperienceService")
+            .field("code_ttl", &self.code_ttl)
+            .field("experience_base_url", &self.experience_base_url)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CanvasLtiExperienceService {
+    pub fn new(
+        launch_service: CanvasLtiLaunchService,
+        repository: Arc<dyn CanvasLtiExperienceHandoffRepository>,
+        generator: Arc<dyn CanvasLtiExperienceCodeGenerator>,
+        clock: Arc<dyn CanvasLtiClock>,
+        code_ttl: Duration,
+        experience_base_url: &str,
+    ) -> Result<Self, CanvasLtiLaunchPlanError> {
+        let experience_base_url = experience_base_url.trim_end_matches('/').to_owned();
+        let parsed = url::Url::parse(&experience_base_url).map_err(|_| {
+            CanvasLtiLaunchPlanError::Invalid("Canvas LTI experience base URL is invalid")
+        })?;
+        if code_ttl.is_zero()
+            || !matches!(parsed.scheme(), "http" | "https")
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.query().is_some()
+            || parsed.fragment().is_some()
+        {
+            return Err(CanvasLtiLaunchPlanError::Invalid(
+                "Canvas LTI experience configuration is invalid",
+            ));
+        }
+        let code_ttl = chrono::Duration::from_std(code_ttl).map_err(|_| {
+            CanvasLtiLaunchPlanError::Invalid("Canvas LTI experience code TTL is invalid")
+        })?;
+        Ok(Self {
+            launch_service,
+            repository,
+            generator,
+            clock,
+            code_ttl,
+            experience_base_url,
+        })
+    }
+
+    pub async fn launch(
+        &self,
+        platform_id: &str,
+        submission: CanvasLtiLaunchSubmission,
+    ) -> Result<CanvasLtiExperienceResult, CanvasLtiLaunchServiceError> {
+        let platform = self.launch_service.prepare_platform(platform_id).await?;
+        self.launch_prepared(platform, submission).await
+    }
+
+    pub(crate) async fn launch_prepared(
+        &self,
+        platform: CanvasLtiPlatform,
+        submission: CanvasLtiLaunchSubmission,
+    ) -> Result<CanvasLtiExperienceResult, CanvasLtiLaunchServiceError> {
+        let launch = self
+            .launch_service
+            .launch_prepared(platform, submission)
+            .await?;
+        let code = self.generator.generate();
+        let now = self.clock.now();
+        let expires_at =
+            now.checked_add_signed(self.code_ttl)
+                .ok_or(CanvasLtiLaunchPlanError::Invalid(
+                    "Canvas LTI experience code TTL is invalid",
+                ))?;
+        let encoded_code: String =
+            url::form_urlencoded::byte_serialize(code.state.as_bytes()).collect();
+        let location = format!(
+            "{}/canvas/lti/experience?code={encoded_code}",
+            self.experience_base_url
+        );
+        let handoff = canvas_lti_experience_handoff(
+            &launch.platform,
+            &launch.consumed_state,
+            &launch.response,
+            &location,
+            &code.id,
+            expires_at,
+        );
+        self.repository
+            .persist_experience_handoff(&CanvasLtiExperienceHandoffRequest {
+                organization_id: launch.platform.organization_id.clone(),
+                platform_id: launch.platform.id.clone(),
+                canvas_account_id: launch.platform.canvas_account_id.clone(),
+                code: code.clone(),
+                redirect_uri: launch.consumed_state.redirect_uri.clone(),
+                expires_at,
+                code_metadata: handoff.code_metadata,
+                consumed_state: launch.consumed_state.clone(),
+                consumed_state_metadata: handoff.consumed_state_metadata,
+            })
+            .await?;
+        Ok(CanvasLtiExperienceResult {
+            location,
+            launch,
+            code_id: code.id,
+            expires_at,
+        })
+    }
+}
+
+#[must_use]
+pub fn canvas_lti_experience_handoff(
+    platform: &CanvasLtiPlatform,
+    consumed_state: &CanvasLtiStoredLaunchState,
+    verified_launch: &CanvasLtiVerifiedLaunchResponse,
+    launch_url: &str,
+    experience_code_id: &str,
+    experience_code_expires_at: DateTime<Utc>,
+) -> CanvasLtiExperienceHandoff {
+    let canvas_context = verified_launch
+        .context
+        .as_ref()
+        .filter(|value| value.is_object())
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    let attributes = serde_json::json!({
+        "issuer": verified_launch.issuer,
+        "deployment_id": verified_launch.deployment_id,
+        "canvas_context_id": canvas_context.get("id"),
+        "roles": verified_launch.roles,
+        "lti_capabilities": verified_launch.lti_capabilities,
+    });
+    let mip_primitives = serde_json::json!({
+        "organization_id": platform.organization_id,
+        "platform_id": platform.id,
+        "provider_account_id": platform.canvas_account_id,
+        "state": consumed_state.state,
+        "subject_id": verified_launch.subject,
+        "launch_url": launch_url,
+        "source": {
+            "provider": "canvas",
+            "provider_account_id": platform.canvas_account_id,
+            "provider_event_id": consumed_state.state,
+            "event_type": "canvas.lti_launch",
+            "subject_id": verified_launch.subject,
+            "signature_scheme": "OIDC_ID_TOKEN",
+            "payload_hash": Value::Null,
+            "attributes": attributes,
+        },
+        "context": {
+            "canvas_platform_id": verified_launch.canvas_platform_id,
+            "canvas_account_id": platform.canvas_account_id,
+            "canvas_context": canvas_context,
+            "learner_identity": verified_launch.learner_identity,
+            "roles": verified_launch.roles,
+            "lti_capabilities": verified_launch.lti_capabilities,
+            "canvas_program_binding_id": verified_launch.canvas_program_binding_id,
+            "application_template_id": verified_launch.application_template_id,
+            "credential_template_id": verified_launch.credential_template_id,
+            "delivery_mode": verified_launch.delivery_mode,
+            "deployment_profile_id": verified_launch.deployment_profile_id,
+            "feature_flags": verified_launch.feature_flags,
+            "evidence_requirements": verified_launch.evidence_requirements,
+        },
+        "action": "applications:read",
+        "resource_type": "Application",
+        "protocol": "ELEVENID_EXPERIENCE",
+    });
+    let code_metadata = serde_json::json!({
+        "kind": "canvas_lti_experience_code",
+        "launch_state": consumed_state.state,
+        "verified_launch": verified_launch,
+        "mip_primitives": mip_primitives,
+        "launch_url": launch_url,
+    });
+    let mut consumed_state_metadata = consumed_state
+        .metadata
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    consumed_state_metadata.insert(
+        "experience_code_id".to_owned(),
+        Value::String(experience_code_id.to_owned()),
+    );
+    consumed_state_metadata.insert(
+        "experience_code_expires_at".to_owned(),
+        Value::String(experience_code_expires_at.to_rfc3339()),
+    );
+    CanvasLtiExperienceHandoff {
+        mip_primitives,
+        code_metadata,
+        consumed_state_metadata: Value::Object(consumed_state_metadata),
     }
 }
 
