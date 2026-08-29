@@ -781,7 +781,7 @@ async function main() {
     let row = await findCredentialRow(page, credential.id);
     await showLifecycleStep(page, 'Active credential issued', 'The issuer inventory shows the newly issued credential and its available lifecycle controls.');
     await page.screenshot({ path: path.join(artifactDir, '01-active-credential.png'), fullPage: true });
-    if (RECORD_VIDEO) await page.waitForTimeout(3_000);
+    if (RECORD_VIDEO) await page.waitForTimeout(5_100);
 
     report.renewalOffer = await renewCredential(page, row);
     if (!report.renewalOffer.ok || !report.renewalOffer.offerUri) {
