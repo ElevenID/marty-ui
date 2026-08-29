@@ -231,11 +231,13 @@ pub enum CredentialBuilderKind {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CredentialBuildRequest {
+    pub organization_id: String,
     pub kind: CredentialBuilderKind,
     pub response_format: String,
     pub remote_credential_format: String,
     pub credential_id: String,
     pub credential_type: String,
+    pub achievement_id: Option<String>,
     pub subject_did: Option<String>,
     pub holder_jwk: Option<Value>,
     pub claims: Map<String, Value>,
@@ -635,6 +637,7 @@ impl CredentialIssuanceService {
             transaction.selective_disclosure_claims.clone()
         };
         let build_request = CredentialBuildRequest {
+            organization_id: transaction.organization_id.clone(),
             kind: policy.kind,
             response_format: policy.response_format.clone(),
             remote_credential_format: policy.remote_format,
@@ -644,6 +647,8 @@ impl CredentialIssuanceService {
                 policy.kind,
                 &self.issuer_base_url,
             ),
+            achievement_id: is_open_badge_type(transaction.credential_type.as_deref())
+                .then(|| signing_vct(transaction, &self.issuer_base_url)),
             subject_did: if policy.kind == CredentialBuilderKind::Mdoc {
                 None
             } else {
@@ -983,6 +988,36 @@ fn signing_credential_type(
                 format!("{issuer_base_url}/credentials/{credential_type}")
             }
         })
+}
+
+fn signing_vct(transaction: &CredentialTransaction, issuer_base_url: &str) -> String {
+    let credential_type = transaction
+        .credential_type
+        .as_deref()
+        .unwrap_or("VerifiableCredential");
+    transaction
+        .claims
+        .get("_vct")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            if credential_type.starts_with("http") {
+                credential_type.to_owned()
+            } else {
+                format!("{issuer_base_url}/credentials/{credential_type}")
+            }
+        })
+}
+
+fn is_open_badge_type(value: Option<&str>) -> bool {
+    matches!(
+        value
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "open_badge" | "open_badge_v3" | "openbadgecredential"
+    )
 }
 
 fn apply_issuer_context(transaction: &mut CredentialTransaction, issuer: &IssuerContext) {
