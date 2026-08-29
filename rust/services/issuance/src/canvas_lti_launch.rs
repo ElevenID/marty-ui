@@ -170,6 +170,212 @@ pub trait CanvasLtiLaunchContextRepository: Send + Sync {
     ) -> Result<Vec<CanvasLtiProgramBinding>, CanvasLtiLaunchPlanError>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CanvasLtiIdentityStatus {
+    SubjectVerified,
+    Linked,
+    Quarantined,
+}
+
+impl CanvasLtiIdentityStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SubjectVerified => "subject_verified",
+            Self::Linked => "linked",
+            Self::Quarantined => "quarantined",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CanvasLtiIdentityRecord {
+    pub id: String,
+    pub organization_id: String,
+    pub platform_id: String,
+    pub deployment_id: String,
+    pub lti_subject: String,
+    pub canvas_user_id: Option<String>,
+    pub status: CanvasLtiIdentityStatus,
+    pub conflict_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CanvasLtiIdentityRequest {
+    pub organization_id: String,
+    pub platform_id: String,
+    pub deployment_id: String,
+    pub lti_subject: String,
+    pub canvas_user_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CanvasLtiIdentityPlan {
+    pub identity: CanvasLtiIdentityRecord,
+    pub quarantine_existing: Option<CanvasLtiIdentityRecord>,
+}
+
+#[async_trait]
+pub trait CanvasLtiIdentityRepository: Send + Sync {
+    async fn reconcile_verified_identity(
+        &self,
+        request: &CanvasLtiIdentityRequest,
+    ) -> Result<CanvasLtiIdentityRecord, CanvasLtiLaunchPlanError>;
+}
+
+#[derive(Clone)]
+pub struct CanvasLtiIdentityService {
+    repository: Arc<dyn CanvasLtiIdentityRepository>,
+}
+
+impl std::fmt::Debug for CanvasLtiIdentityService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiIdentityService")
+            .finish_non_exhaustive()
+    }
+}
+
+impl CanvasLtiIdentityService {
+    #[must_use]
+    pub fn new(repository: Arc<dyn CanvasLtiIdentityRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn record_verified_launch(
+        &self,
+        platform: &CanvasLtiPlatform,
+        verified: &VerifiedLtiLaunch,
+    ) -> Result<String, CanvasLtiLaunchPlanError> {
+        let request = identity_request(platform, verified)?;
+        let has_numeric_id = request.canvas_user_id.is_some();
+        let identity = self
+            .repository
+            .reconcile_verified_identity(&request)
+            .await?;
+        Ok(if has_numeric_id {
+            identity.status.as_str().to_owned()
+        } else {
+            "numeric_id_unavailable".to_owned()
+        })
+    }
+}
+
+pub fn identity_request(
+    platform: &CanvasLtiPlatform,
+    verified: &VerifiedLtiLaunch,
+) -> Result<CanvasLtiIdentityRequest, CanvasLtiLaunchPlanError> {
+    let organization_id = platform.organization_id.trim();
+    let platform_id = platform.id.trim();
+    let deployment_id = verified.deployment_id.trim();
+    let lti_subject = verified.subject.trim();
+    if organization_id.is_empty()
+        || platform_id.is_empty()
+        || deployment_id.is_empty()
+        || lti_subject.is_empty()
+    {
+        return Err(CanvasLtiLaunchPlanError::Invalid(
+            "Canvas LTI verified identity is incomplete",
+        ));
+    }
+    let canvas_user_id = claim_object(&verified.raw_claims, CUSTOM_CLAIM, "custom")
+        .and_then(|custom| custom.get("canvas_user_id"))
+        .map(scalar_string)
+        .and_then(|value| non_empty(Some(value)));
+    Ok(CanvasLtiIdentityRequest {
+        organization_id: organization_id.to_owned(),
+        platform_id: platform_id.to_owned(),
+        deployment_id: deployment_id.to_owned(),
+        lti_subject: lti_subject.to_owned(),
+        canvas_user_id,
+    })
+}
+
+#[must_use]
+pub fn plan_verified_identity(
+    request: &CanvasLtiIdentityRequest,
+    existing_subject: Option<&CanvasLtiIdentityRecord>,
+    existing_numeric: Option<&CanvasLtiIdentityRecord>,
+    new_id: &str,
+) -> CanvasLtiIdentityPlan {
+    let mut identity = existing_subject
+        .cloned()
+        .unwrap_or_else(|| CanvasLtiIdentityRecord {
+            id: new_id.to_owned(),
+            organization_id: request.organization_id.clone(),
+            platform_id: request.platform_id.clone(),
+            deployment_id: request.deployment_id.clone(),
+            lti_subject: request.lti_subject.clone(),
+            canvas_user_id: None,
+            status: CanvasLtiIdentityStatus::SubjectVerified,
+            conflict_reason: None,
+        });
+    let Some(canvas_user_id) = request.canvas_user_id.as_ref() else {
+        return CanvasLtiIdentityPlan {
+            identity,
+            quarantine_existing: None,
+        };
+    };
+
+    let mut reasons = Vec::new();
+    if existing_subject.is_some_and(|record| record.status == CanvasLtiIdentityStatus::Quarantined)
+    {
+        if let Some(reason) = existing_subject.and_then(|record| record.conflict_reason.as_deref())
+        {
+            for reason in reason
+                .split(';')
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+            {
+                if !reasons.contains(&reason) {
+                    reasons.push(reason);
+                }
+            }
+        }
+    }
+    if existing_subject
+        .and_then(|record| record.canvas_user_id.as_deref())
+        .is_some_and(|existing| existing != canvas_user_id)
+    {
+        let reason = "LTI subject was previously linked to another Canvas user";
+        if !reasons.contains(&reason) {
+            reasons.push(reason);
+        }
+    }
+    if existing_numeric.is_some_and(|record| record.lti_subject != request.lti_subject) {
+        let reason = "Canvas user was previously linked to another LTI subject";
+        if !reasons.contains(&reason) {
+            reasons.push(reason);
+        }
+    }
+    identity.canvas_user_id = Some(canvas_user_id.clone());
+    if reasons.is_empty() {
+        identity.status = CanvasLtiIdentityStatus::Linked;
+        identity.conflict_reason = None;
+        return CanvasLtiIdentityPlan {
+            identity,
+            quarantine_existing: None,
+        };
+    }
+
+    let reason = reasons.join("; ");
+    identity.status = CanvasLtiIdentityStatus::Quarantined;
+    identity.conflict_reason = Some(reason.clone());
+    let quarantine_existing = existing_numeric
+        .filter(|record| record.id != identity.id)
+        .cloned()
+        .map(|mut record| {
+            record.status = CanvasLtiIdentityStatus::Quarantined;
+            record.conflict_reason = Some(reason);
+            record
+        });
+    CanvasLtiIdentityPlan {
+        identity,
+        quarantine_existing,
+    }
+}
+
 #[derive(Clone)]
 pub struct CanvasLtiLaunchStateService {
     repository: Arc<dyn CanvasLtiLaunchStateRepository>,

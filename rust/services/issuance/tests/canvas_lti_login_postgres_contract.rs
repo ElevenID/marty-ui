@@ -2,12 +2,13 @@ use std::{sync::Arc, time::Duration};
 
 use marty_issuance_service::{
     canvas_lti_launch::{
-        CanvasLtiLaunchContextRepository, CanvasLtiLaunchStateRepository,
+        CanvasLtiIdentityService, CanvasLtiLaunchContextRepository, CanvasLtiLaunchStateRepository,
         CanvasLtiLaunchStateService,
     },
     canvas_lti_login::{CanvasLtiLaunchState, CanvasLtiLoginRepository},
     canvas_lti_postgres::PostgresCanvasLtiLoginRepository,
 };
+use marty_oid4vci::lti::VerifiedLtiLaunch;
 use serde_json::json;
 use sqlx::{postgres::PgPoolOptions, Row};
 use uuid::Uuid;
@@ -16,6 +17,29 @@ fn database_url() -> Option<String> {
     std::env::var("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL")
         .ok()
         .filter(|value| !value.trim().is_empty())
+}
+
+fn verified_identity(subject: &str, canvas_user_id: Option<&str>) -> VerifiedLtiLaunch {
+    VerifiedLtiLaunch {
+        issuer: "https://canvas.instructure.com".to_owned(),
+        subject: subject.to_owned(),
+        audience: vec!["client-123".to_owned()],
+        deployment_id: "deployment-123".to_owned(),
+        nonce: Some("nonce-123".to_owned()),
+        issued_at: None,
+        expires_at: None,
+        message_type: None,
+        lti_version: None,
+        target_link_uri: None,
+        context: None,
+        roles: Vec::new(),
+        learner_identity: json!({}),
+        raw_claims: json!({
+            "https://purl.imsglobal.org/spec/lti/claim/custom": canvas_user_id
+                .map(|value| json!({"canvas_user_id": value}))
+                .unwrap_or_else(|| json!({}))
+        }),
+    }
 }
 
 #[tokio::test]
@@ -34,6 +58,10 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
         .await
         .unwrap();
     sqlx::query("DROP TABLE IF EXISTS issuance_service.canvas_lti_launch_states")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE IF EXISTS issuance_service.canvas_learner_identities")
         .execute(&pool)
         .await
         .unwrap();
@@ -106,6 +134,34 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
     .await
     .unwrap();
     sqlx::query(
+        "CREATE TABLE issuance_service.canvas_learner_identities (
+            id text PRIMARY KEY,
+            organization_id text NOT NULL,
+            platform_id text NOT NULL REFERENCES issuance_service.canvas_platforms(id) ON DELETE CASCADE,
+            deployment_id text NOT NULL,
+            lti_subject text NOT NULL,
+            canvas_user_id text NULL,
+            sis_user_id text NULL,
+            status varchar(32) NOT NULL DEFAULT 'linked',
+            conflict_reason text NULL,
+            verified_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            UNIQUE (platform_id, deployment_id, lti_subject)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE UNIQUE INDEX ux_canvas_learner_identity_numeric_link
+         ON issuance_service.canvas_learner_identities(platform_id, deployment_id, canvas_user_id)
+         WHERE status = 'linked' AND canvas_user_id IS NOT NULL",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
         "INSERT INTO issuance_service.canvas_platforms (
             id, organization_id, canvas_account_id, canvas_base_url, lti_client_id,
             lti_deployment_id, lti_trust_profile, lti_issuer, lti_jwks_url,
@@ -133,6 +189,104 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
     assert_eq!(platform.lti_trust_profile, "hosted_global");
     assert!(platform.enabled);
     assert!(repository.get_platform("missing").await.unwrap().is_none());
+
+    let identity_service = CanvasLtiIdentityService::new(Arc::new(repository.clone()));
+    assert_eq!(
+        identity_service
+            .record_verified_launch(&platform, &verified_identity("opaque-a", None))
+            .await
+            .unwrap(),
+        "numeric_id_unavailable"
+    );
+    let subject_id: String = sqlx::query_scalar(
+        "SELECT id FROM issuance_service.canvas_learner_identities
+         WHERE platform_id = 'platform-123' AND lti_subject = 'opaque-a'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            identity_service
+                .record_verified_launch(&platform, &verified_identity("opaque-a", Some("99")),)
+                .await
+                .unwrap(),
+            "linked"
+        );
+    }
+    let enriched_id: String = sqlx::query_scalar(
+        "SELECT id FROM issuance_service.canvas_learner_identities
+         WHERE platform_id = 'platform-123' AND lti_subject = 'opaque-a'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(subject_id, enriched_id);
+    assert_eq!(
+        identity_service
+            .record_verified_launch(&platform, &verified_identity("opaque-b", Some("99")),)
+            .await
+            .unwrap(),
+        "quarantined"
+    );
+    let quarantined: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issuance_service.canvas_learner_identities
+         WHERE canvas_user_id = '99' AND status = 'quarantined'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(quarantined, 2);
+    for subject in ["opaque-b", "opaque-c"] {
+        assert_eq!(
+            identity_service
+                .record_verified_launch(&platform, &verified_identity(subject, Some("99")),)
+                .await
+                .unwrap(),
+            "quarantined"
+        );
+    }
+    let sticky_quarantined: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issuance_service.canvas_learner_identities
+         WHERE canvas_user_id = '99' AND status = 'quarantined'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(sticky_quarantined, 3);
+
+    let first = identity_service.clone();
+    let second = identity_service.clone();
+    let first_platform = platform.clone();
+    let second_platform = platform.clone();
+    let (first_result, second_result) = tokio::join!(
+        async move {
+            first
+                .record_verified_launch(
+                    &first_platform,
+                    &verified_identity("opaque-c", Some("100")),
+                )
+                .await
+        },
+        async move {
+            second
+                .record_verified_launch(
+                    &second_platform,
+                    &verified_identity("opaque-d", Some("100")),
+                )
+                .await
+        }
+    );
+    assert!(first_result.is_ok());
+    assert!(second_result.is_ok());
+    let concurrent_quarantined: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM issuance_service.canvas_learner_identities
+         WHERE canvas_user_id = '100' AND status = 'quarantined'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(concurrent_quarantined, 2);
 
     sqlx::query(
         "INSERT INTO issuance_service.canvas_program_bindings (
@@ -248,6 +402,10 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
         .is_some());
 
     sqlx::query("DROP TABLE issuance_service.canvas_lti_launch_states")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE issuance_service.canvas_learner_identities")
         .execute(&pool)
         .await
         .unwrap();
