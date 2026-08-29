@@ -253,8 +253,9 @@ pub struct CanvasLtiAgsPinRequest {
     pub line_item_url: String,
 }
 
+#[async_trait]
 pub trait CanvasLtiAgsServiceUrlValidator: Send + Sync {
-    fn validate(&self, service_url: &str) -> Result<String, String>;
+    async fn validate(&self, service_url: &str) -> Result<String, String>;
 }
 
 #[async_trait]
@@ -304,6 +305,7 @@ impl CanvasLtiAgsPinService {
         request.line_item_url = self
             .url_validator
             .validate(&request.line_item_url)
+            .await
             .map_err(CanvasLtiLaunchPlanError::AgsLineItem)?;
         self.repository
             .pin_verified_line_item(binding, &request)
