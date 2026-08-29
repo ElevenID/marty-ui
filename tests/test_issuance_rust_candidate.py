@@ -30,6 +30,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     token_exchange = json.loads(token_exchange_bytes)
     proof_nonce_bytes = (ROOT / "contracts/issuance-proof-nonce.json").read_bytes()
     proof_nonce = json.loads(proof_nonce_bytes)
+    canvas_lti_bytes = (
+        ROOT / "contracts/issuance-canvas-lti-foundation.json"
+    ).read_bytes()
+    canvas_lti = json.loads(canvas_lti_bytes)
     assert surface["schema"] == "marty.issuance-runtime-surface/v1"
     assert surface["http"]["route_count"] == len(surface["http"]["routes"]) == 131
     assert surface["grpc"]["method_count"] == len(surface["grpc"]["methods"]) == 12
@@ -128,6 +132,16 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "plaintext_retained": False,
         "single_use": True,
     }
+    assert (
+        hashlib.sha256(canvas_lti_bytes.replace(b"\r\n", b"\n")).hexdigest()
+        == coverage["canvas_lti_behavior_contract"]["sha256"]
+    )
+    assert (
+        coverage["canvas_lti_behavior_contract"]["commit"]
+        == "f6adbd2887611f5d0b162633dbbe34694cdf8dfc"
+    )
+    assert canvas_lti["schema"] == "marty.issuance-canvas-lti-foundation/v1"
+    assert len(canvas_lti["scope"]["routes"]) == 12
     native = {
         operation["operation"]: operation for operation in coverage["native_http"]
     }
@@ -147,7 +161,13 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         set(discovery_cases)
         | set(tenant_cases)
         | set(transaction_cases)
-        | {"exchange_token", "nonce_endpoint", "issue_credential"}
+        | {
+            "exchange_token",
+            "nonce_endpoint",
+            "issue_credential",
+            "initiate_canvas_lti_login_route",
+            "initiate_canvas_lti_experience_login_route",
+        }
     )
     for operation, coverage_entry in native.items():
         if operation == "exchange_token":
@@ -173,6 +193,24 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 "operation": "issue_credential",
                 "credential_behavior_contract": True,
             }
+            continue
+        if operation in {
+            "initiate_canvas_lti_login_route",
+            "initiate_canvas_lti_experience_login_route",
+        }:
+            expected_case = {
+                "initiate_canvas_lti_login_route": "login",
+                "initiate_canvas_lti_experience_login_route": "experience-login",
+            }[operation]
+            assert coverage_entry["method"] == "POST"
+            assert coverage_entry["canvas_lti_behavior_case"] == expected_case
+            assert any(
+                route["method"] == coverage_entry["method"]
+                and route["path"] == coverage_entry["path"]
+                and route["operation"] == operation
+                and route["authentication"] == "public-lti-login"
+                for route in canvas_lti["scope"]["routes"]
+            )
             continue
         if operation in tenant_cases:
             assert coverage_entry["tenant_behavior_case"] == operation
@@ -210,10 +248,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 113,
+        "http": 111,
         "grpc": 12,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 73,
+        "literal_environment_variables": 71,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 44,
         "migration_heads": 1,
@@ -221,9 +259,11 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     assert coverage["native_environment_variables"] == [
         "CORS_ALLOWED_ORIGINS",
         "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+        "CANVAS_LTI_STATE_TTL_MINUTES",
         "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
         "CANVAS_PILOT_ORGANIZATION_IDS",
         "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+        "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST",
         "DATABASE_URL",
         "GRPC_SERVICE_TOKEN",
         "ISSUANCE_SERVICE_PORT",
@@ -260,5 +300,7 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "marty-issuance-service" in entrypoint
     assert "issuance-native:" in beta
     assert "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005" in beta
+    assert "CANVAS_LTI_STATE_TTL_MINUTES:" in beta
+    assert "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST:" in beta
     assert "issuance-native:" not in production
     assert "MARTY_ISSUANCE_IMAGE" in compose

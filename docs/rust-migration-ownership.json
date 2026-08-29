@@ -624,7 +624,12 @@
           "contracts/issuance-native-coverage.json",
           "contracts/issuance-static-discovery.json",
           "contracts/issuance-tenant-discovery.json",
-          "contracts/issuance-offer-transaction-reads.json"
+          "contracts/issuance-offer-transaction-reads.json",
+          "contracts/issuance-token-exchange.json",
+          "contracts/issuance-proof-nonce.json",
+          "contracts/issuance-credential-admission.json",
+          "contracts/issuance-credential-signing.json",
+          "contracts/issuance-canvas-lti-foundation.json"
         ]
       },
       "legacy": [
