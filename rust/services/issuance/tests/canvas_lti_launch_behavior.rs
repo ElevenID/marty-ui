@@ -1102,6 +1102,36 @@ async fn experience_http_persistence_failure_never_exposes_a_redirect() {
 }
 
 #[tokio::test]
+async fn experience_http_does_not_interpret_unsupported_media_as_lti_form() {
+    let repository = Arc::new(OrchestrationRepository::default());
+    let platform = orchestration_platform();
+    *repository.platform.lock().unwrap() = Some(platform.clone());
+    let response = orchestration_experience_app(orchestration_experience_service(
+        repository.clone(),
+        platform,
+    ))
+    .oneshot(
+        Request::post("/v1/integrations/canvas/lti/platforms/platform-1/experience")
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from(
+                "id_token=header.payload.signature&state=state-1",
+            ))
+            .unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&to_bytes(response.into_body(), 64 * 1024).await.unwrap())
+            .unwrap(),
+        json!({"detail": "Canvas LTI launch requires id_token"})
+    );
+    assert!(!repository.calls().contains(&"load-state"));
+    assert!(repository.handoff_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn jwt_failure_keeps_state_consumed_without_identity_or_capability_writes() {
     let repository = Arc::new(OrchestrationRepository::default());
     let mut platform = orchestration_platform();
