@@ -15,7 +15,8 @@ use marty_issuance_service::{
         CanvasLtiBootstrapApplicationGenerator, CanvasLtiBootstrapApplicationSeed,
         CanvasLtiBootstrapPlan, CanvasLtiBootstrapPlanError, CanvasLtiBootstrapRepository,
         CanvasLtiBootstrapRepositoryError, CanvasLtiBootstrapRequest, CanvasLtiBootstrapService,
-        CanvasLtiBootstrapSyncEnqueuer, CanvasLtiBootstrapSyncError, CanvasLtiBootstrapTemplate,
+        CanvasLtiBootstrapServiceError, CanvasLtiBootstrapSyncEnqueuer,
+        CanvasLtiBootstrapSyncError, CanvasLtiBootstrapTemplate,
     },
     canvas_lti_experience::{
         canvas_lti_experience_session_context, CanvasLtiExperienceSessionService,
@@ -215,6 +216,76 @@ impl CanvasLtiBootstrapApplicationGenerator for CountingGenerator {
         assert!(!anonymous_identifier_required);
         self.0.fetch_add(1, Ordering::SeqCst);
         seed("application-1")(false)
+    }
+}
+
+struct TemplateValidationRepository {
+    template: Option<CanvasLtiBootstrapTemplate>,
+    calls: Mutex<Vec<&'static str>>,
+}
+
+#[async_trait]
+impl CanvasLtiBootstrapRepository for TemplateValidationRepository {
+    async fn bound_feature_enabled(
+        &self,
+        _organization_id: &str,
+        _binding_id: &str,
+        _flag: &str,
+    ) -> Result<Option<bool>, CanvasLtiBootstrapRepositoryError> {
+        Ok(Some(true))
+    }
+
+    async fn get_template(
+        &self,
+        _template_id: &str,
+    ) -> Result<Option<CanvasLtiBootstrapTemplate>, CanvasLtiBootstrapRepositoryError> {
+        self.calls.lock().unwrap().push("get_template");
+        Ok(self.template.clone())
+    }
+
+    async fn list_applications(
+        &self,
+        _organization_id: &str,
+        _template_id: &str,
+    ) -> Result<Vec<CanvasLtiBootstrapApplication>, CanvasLtiBootstrapRepositoryError> {
+        self.calls.lock().unwrap().push("list_applications");
+        Err(CanvasLtiBootstrapRepositoryError::Unavailable)
+    }
+
+    async fn persist_plan(
+        &self,
+        _context: &marty_issuance_service::canvas_lti_experience::CanvasLtiExperienceSessionContext,
+        _plan: &CanvasLtiBootstrapPlan,
+    ) -> Result<(), CanvasLtiBootstrapRepositoryError> {
+        unreachable!("invalid templates must not be persisted")
+    }
+
+    async fn get_application(
+        &self,
+        _application_id: &str,
+    ) -> Result<Option<CanvasLtiBootstrapApplication>, CanvasLtiBootstrapRepositoryError> {
+        unreachable!("invalid templates must not load applications")
+    }
+}
+
+struct NeverMaterializer;
+
+#[async_trait]
+impl CanvasLtiAwardCandidateMaterializer for NeverMaterializer {
+    async fn materialize(
+        &self,
+        _context: &marty_issuance_service::canvas_lti_experience::CanvasLtiExperienceSessionContext,
+        _application: &CanvasLtiBootstrapApplication,
+    ) -> Result<(), CanvasLtiBootstrapRepositoryError> {
+        unreachable!("invalid templates must not materialize candidates")
+    }
+}
+
+struct NeverGenerator;
+
+impl CanvasLtiBootstrapApplicationGenerator for NeverGenerator {
+    fn generate(&self, _anonymous_identifier_required: bool) -> CanvasLtiBootstrapApplicationSeed {
+        unreachable!("invalid templates must not generate applications")
     }
 }
 
@@ -634,4 +705,60 @@ async fn bootstrap_service_reloads_materialized_status_and_ignores_sync_outage()
         repository.persisted_created.lock().unwrap().as_slice(),
         [true, false]
     );
+}
+
+#[tokio::test]
+async fn bootstrap_service_validates_template_before_listing_applications() {
+    let cases = [
+        (
+            None,
+            CanvasLtiBootstrapPlanError::ApplicationTemplateNotFound,
+        ),
+        (
+            Some(CanvasLtiBootstrapTemplate {
+                id: "different-application-template".to_owned(),
+                organization_id: "org-1".to_owned(),
+            }),
+            CanvasLtiBootstrapPlanError::ApplicationTemplateNotFound,
+        ),
+        (
+            Some(CanvasLtiBootstrapTemplate {
+                id: "application-template-1".to_owned(),
+                organization_id: "org-2".to_owned(),
+            }),
+            CanvasLtiBootstrapPlanError::CrossOrganizationTemplate,
+        ),
+    ];
+
+    for (template, expected) in cases {
+        let session_repository = Arc::new(SessionRepository {
+            record: Mutex::new(Some(bootstrap_context().launch_state)),
+        });
+        let repository = Arc::new(TemplateValidationRepository {
+            template,
+            calls: Mutex::new(Vec::new()),
+        });
+        let service = CanvasLtiBootstrapService::new(
+            CanvasLtiExperienceSessionService::new(session_repository),
+            repository.clone(),
+            Arc::new(NeverMaterializer),
+            Arc::new(FailingSync(AtomicUsize::new(0))),
+            Arc::new(NeverGenerator),
+            Arc::new(FixedClock),
+            true,
+            BTreeSet::from(["org-1".to_owned()]),
+        );
+
+        assert_eq!(
+            service
+                .bootstrap("bootstrap-session-token", &request())
+                .await
+                .unwrap_err(),
+            CanvasLtiBootstrapServiceError::Plan(expected)
+        );
+        assert_eq!(
+            repository.calls.lock().unwrap().as_slice(),
+            ["get_template"]
+        );
+    }
 }

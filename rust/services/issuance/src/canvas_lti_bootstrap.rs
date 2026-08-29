@@ -328,6 +328,7 @@ impl CanvasLtiBootstrapService {
             .get_template(template_id)
             .await
             .map_err(repository_error)?;
+        let template = validate_canvas_lti_bootstrap_template(&context, template.as_ref())?;
         let existing = self
             .repository
             .list_applications(&context.launch_state.organization_id, template_id)
@@ -338,7 +339,7 @@ impl CanvasLtiBootstrapService {
             request,
             true,
             bound_feature_enabled,
-            template.as_ref(),
+            Some(template),
             &existing,
             |anonymous_identifier_required| {
                 self.application_generator
@@ -414,18 +415,7 @@ where
     if !portable_pilot_enabled {
         return Err(CanvasLtiBootstrapPlanError::PilotDisabled);
     }
-    let application_template_id = context
-        .application_template_id
-        .as_deref()
-        .filter(|value| !value.is_empty())
-        .ok_or(CanvasLtiBootstrapPlanError::MissingApplicationTemplate)?;
-    let template = template.ok_or(CanvasLtiBootstrapPlanError::ApplicationTemplateNotFound)?;
-    if template.id != application_template_id {
-        return Err(CanvasLtiBootstrapPlanError::ApplicationTemplateNotFound);
-    }
-    if template.organization_id != context.launch_state.organization_id {
-        return Err(CanvasLtiBootstrapPlanError::CrossOrganizationTemplate);
-    }
+    let template = validate_canvas_lti_bootstrap_template(context, template)?;
 
     let mut applications = existing_applications.to_vec();
     applications.sort_by_key(|application| std::cmp::Reverse(application.created_at));
@@ -465,6 +455,25 @@ where
         enqueue_canvas_sync: true,
         response,
     })
+}
+
+fn validate_canvas_lti_bootstrap_template<'a>(
+    context: &CanvasLtiExperienceSessionContext,
+    template: Option<&'a CanvasLtiBootstrapTemplate>,
+) -> Result<&'a CanvasLtiBootstrapTemplate, CanvasLtiBootstrapPlanError> {
+    let application_template_id = context
+        .application_template_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or(CanvasLtiBootstrapPlanError::MissingApplicationTemplate)?;
+    let template = template.ok_or(CanvasLtiBootstrapPlanError::ApplicationTemplateNotFound)?;
+    if template.id != application_template_id {
+        return Err(CanvasLtiBootstrapPlanError::ApplicationTemplateNotFound);
+    }
+    if template.organization_id != context.launch_state.organization_id {
+        return Err(CanvasLtiBootstrapPlanError::CrossOrganizationTemplate);
+    }
+    Ok(template)
 }
 
 fn create_application(
