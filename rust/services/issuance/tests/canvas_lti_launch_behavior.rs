@@ -4,14 +4,16 @@ use std::{
 };
 
 use async_trait::async_trait;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use marty_issuance_service::{
     canvas_lti_launch::{
         feature_enabled, launch_scope, plan_verified_identity, private_launch_response,
         public_launch_response, scope_matches, select_binding, CanvasLtiIdentityRecord,
         CanvasLtiIdentityRepository, CanvasLtiIdentityRequest, CanvasLtiIdentityService,
-        CanvasLtiIdentityStatus, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
-        CanvasLtiLaunchStateService, CanvasLtiLaunchSubmission, CanvasLtiProgramBinding,
-        CanvasLtiStoredLaunchState,
+        CanvasLtiIdentityStatus, CanvasLtiJwksRefreshService, CanvasLtiJwksRefresher,
+        CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService,
+        CanvasLtiLaunchSubmission, CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
     },
     canvas_lti_login::CanvasLtiPlatform,
 };
@@ -60,6 +62,27 @@ impl CanvasLtiLaunchStateRepository for StateRepository {
 #[derive(Default)]
 struct IdentityRepository {
     identities: Mutex<Vec<CanvasLtiIdentityRecord>>,
+}
+
+struct JwksRefresher {
+    calls: Mutex<usize>,
+    refreshed: CanvasLtiPlatform,
+    fails: bool,
+}
+
+#[async_trait]
+impl CanvasLtiJwksRefresher for JwksRefresher {
+    async fn refresh_platform_jwks(
+        &self,
+        _platform: &CanvasLtiPlatform,
+    ) -> Result<CanvasLtiPlatform, CanvasLtiLaunchPlanError> {
+        *self.calls.lock().unwrap() += 1;
+        if self.fails {
+            Err(CanvasLtiLaunchPlanError::RepositoryUnavailable)
+        } else {
+            Ok(self.refreshed.clone())
+        }
+    }
 }
 
 #[async_trait]
@@ -127,6 +150,41 @@ fn contract() -> Value {
         "../../../../contracts/issuance-canvas-lti-foundation.json"
     ))
     .expect("valid Canvas LTI contract")
+}
+
+fn lti_jwk(kid: &str, verifying_key: &VerifyingKey) -> Value {
+    json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "kid": kid,
+        "alg": "EdDSA",
+        "use": "sig",
+        "x": URL_SAFE_NO_PAD.encode(verifying_key.as_bytes()),
+    })
+}
+
+fn lti_token(kid: &str, key_byte: u8) -> (String, Value) {
+    let signing_key = SigningKey::from_bytes(&[key_byte; 32]);
+    let claims = json!({
+        "iss": "https://canvas.instructure.com",
+        "sub": "opaque-subject",
+        "aud": ["client-1"],
+        "exp": 4102444800u64,
+        "iat": 1700000000u64,
+        "nonce": "nonce-1",
+        "https://purl.imsglobal.org/spec/lti/claim/deployment_id": "deployment-1",
+        "https://purl.imsglobal.org/spec/lti/claim/roles": ["Learner"],
+    });
+    let header = json!({"alg": "EdDSA", "typ": "JWT", "kid": kid});
+    let header = URL_SAFE_NO_PAD.encode(header.to_string().as_bytes());
+    let claims = URL_SAFE_NO_PAD.encode(claims.to_string().as_bytes());
+    let signing_input = format!("{header}.{claims}");
+    let signature = signing_key.sign(signing_input.as_bytes());
+    let token = format!(
+        "{signing_input}.{}",
+        URL_SAFE_NO_PAD.encode(signature.to_bytes())
+    );
+    (token, lti_jwk(kid, &signing_key.verifying_key()))
 }
 
 fn platform_from(value: &Value) -> CanvasLtiPlatform {
@@ -244,6 +302,70 @@ fn launch_submission_replays_required_and_non_string_json_semantics() {
         .unwrap(),
         ("token".to_owned(), "state-1".to_owned())
     );
+}
+
+#[tokio::test]
+async fn jwks_refresh_replays_bounded_fail_closed_contract() {
+    let contract = contract();
+    let policy = &contract["launch"]["jwt"]["jwks_refresh_policy"];
+    assert_eq!(policy["maximum_refreshes"], 1);
+    assert_eq!(policy["maximum_verification_attempts"], 2);
+
+    for case in policy["cases"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let mut platform = platform_from(&json!({
+            "id": "platform-1",
+            "organization_id": "org-1",
+            "canvas_account_id": "account-1"
+        }));
+        if !case["canvas_base_url"].as_bool().unwrap() {
+            platform.canvas_base_url = None;
+        }
+
+        let kid = "new-kid";
+        let (token, new_jwk) = lti_token(kid, 7);
+        platform.lti_jwks_json = Some(json!({"keys": [{"kid": "old-kid"}]}));
+        if case["first_verification"] == "invalid_signature" {
+            let (_, wrong_jwk) = lti_token(kid, 9);
+            platform.lti_jwks_json = Some(json!({"keys": [wrong_jwk]}));
+        }
+
+        let mut refreshed = platform.clone();
+        refreshed.lti_jwks_json = if case["second_verification"] == "unknown_kid" {
+            Some(json!({"keys": [{"kid": "still-old-kid"}]}))
+        } else {
+            Some(json!({"keys": [new_jwk]}))
+        };
+        let refresher = Arc::new(JwksRefresher {
+            calls: Mutex::new(0),
+            refreshed,
+            fails: case["refresh"] == "fails",
+        });
+        let service = CanvasLtiJwksRefreshService::new(refresher.clone());
+        let result = service
+            .verify_with_refresh(&platform, &token, "nonce-1")
+            .await;
+
+        if case["status_code"] == 200 {
+            let (actual_platform, verified) = result.unwrap();
+            assert_eq!(verified.subject, "opaque-subject", "{name}");
+            assert_eq!(
+                actual_platform.lti_jwks_json,
+                refresher.refreshed.lti_jwks_json
+            );
+        } else {
+            let error = result.unwrap_err().to_string();
+            assert!(
+                error.starts_with(case["detail_prefix"].as_str().unwrap()),
+                "{name}: {error}"
+            );
+        }
+        assert_eq!(
+            *refresher.calls.lock().unwrap(),
+            case["refresh_attempts"].as_u64().unwrap() as usize,
+            "{name}"
+        );
+    }
 }
 
 #[test]
