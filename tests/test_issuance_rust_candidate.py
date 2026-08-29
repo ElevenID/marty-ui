@@ -187,6 +187,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             "initiate_canvas_lti_login_route",
             "initiate_canvas_lti_experience_login_route",
             "launch_canvas_lti_experience_route",
+            "exchange_canvas_lti_experience_code_route",
             "verify_canvas_lti_launch_route",
         }
     )
@@ -219,23 +220,25 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             "initiate_canvas_lti_login_route",
             "initiate_canvas_lti_experience_login_route",
             "launch_canvas_lti_experience_route",
+            "exchange_canvas_lti_experience_code_route",
             "verify_canvas_lti_launch_route",
         }:
             expected_case = {
                 "initiate_canvas_lti_login_route": "login",
                 "initiate_canvas_lti_experience_login_route": "experience-login",
                 "launch_canvas_lti_experience_route": "experience",
+                "exchange_canvas_lti_experience_code_route": "experience-exchange",
                 "verify_canvas_lti_launch_route": "launch",
             }[operation]
-            expected_authentication = (
-                "public-lti-form-post"
-                if operation
-                in {
-                    "launch_canvas_lti_experience_route",
-                    "verify_canvas_lti_launch_route",
-                }
-                else "public-lti-login"
-            )
+            if operation == "exchange_canvas_lti_experience_code_route":
+                expected_authentication = "public-one-time-code"
+            elif operation in {
+                "launch_canvas_lti_experience_route",
+                "verify_canvas_lti_launch_route",
+            }:
+                expected_authentication = "public-lti-form-post"
+            else:
+                expected_authentication = "public-lti-login"
             assert coverage_entry["method"] == "POST"
             assert coverage_entry["canvas_lti_behavior_case"] == expected_case
             assert any(
@@ -282,10 +285,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 109,
+        "http": 108,
         "grpc": 12,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 64,
+        "literal_environment_variables": 63,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 44,
         "migration_heads": 1,
@@ -297,6 +300,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
         "CANVAS_LTI_EXPERIENCE_BASE_URL",
         "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS",
+        "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES",
         "CANVAS_LTI_JWKS_TTL_MINUTES",
         "CANVAS_LTI_STATE_TTL_MINUTES",
         "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
@@ -343,9 +347,11 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005" in beta
     assert "CANVAS_LTI_STATE_TTL_MINUTES:" in beta
     assert "CANVAS_LTI_JWKS_TTL_MINUTES:" in beta
+    assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" in beta
     assert "CANVAS_ALLOW_PRIVATE_BASE_URLS:" in beta
     assert "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:" in beta
     assert "CANVAS_PRIVATE_ORIGIN_ALLOWLIST:" in beta
     assert "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST:" in beta
     assert "issuance-native:" not in production
+    assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" not in production
     assert "MARTY_ISSUANCE_IMAGE" in compose

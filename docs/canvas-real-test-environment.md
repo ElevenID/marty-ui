@@ -76,6 +76,7 @@ Minimum env vars for Canvas platform/binding seeding:
 - `CANVAS_APPLICATION_TEMPLATE_ID` (default: Interoperable Credentials Foundations Application when `CANVAS_OPEN_BADGE_SCENARIO_ENABLED=true`; otherwise Verified Member Badge application template)
 - `CANVAS_CONNECTOR_BASE_URL` (historical env name; used as the Canvas platform base URL, default: `http://localhost:8088` for the local real-Canvas profile)
 - `CANVAS_LTI_EXPERIENCE_BASE_URL` (default: `UI_BASE_URL`, then `ISSUER_BASE_URL`)
+- `CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES` (default: `30`)
 - `CANVAS_LTI_CLIENT_ID` (default: `canvas-real-client-id`; used as the local developer key label before the platform is synced to Canvas's real launch `client_id`)
 - `CANVAS_LTI_DEPLOYMENT_ID` (default: `canvas-real-deployment-id`; fallback only until the platform is synced to the tool's real `deployment_id`)
 

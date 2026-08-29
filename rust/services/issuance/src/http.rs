@@ -18,6 +18,7 @@ use mmf_runtime::{system_router_with_options, RuntimeState, SystemRouteOptions};
 use serde_json::{json, Map, Value};
 
 use crate::{
+    canvas_lti_experience::{CanvasLtiExperienceExchangeError, CanvasLtiExperienceExchangeService},
     canvas_lti_launch::{
         public_launch_response, CanvasLtiExperienceService, CanvasLtiLaunchPlanError,
         CanvasLtiLaunchService, CanvasLtiLaunchServiceError, CanvasLtiLaunchSubmission,
@@ -48,6 +49,7 @@ struct IssuanceState {
     canvas_lti_login: Option<CanvasLtiLoginService>,
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
     canvas_lti_experience: Option<CanvasLtiExperienceService>,
+    canvas_lti_experience_exchange: Option<CanvasLtiExperienceExchangeService>,
 }
 
 pub struct IssuanceServices {
@@ -65,6 +67,7 @@ pub struct CanvasLtiServices {
     login: CanvasLtiLoginService,
     launch: CanvasLtiLaunchService,
     experience: CanvasLtiExperienceService,
+    experience_exchange: CanvasLtiExperienceExchangeService,
 }
 
 impl CanvasLtiServices {
@@ -73,11 +76,13 @@ impl CanvasLtiServices {
         login: CanvasLtiLoginService,
         launch: CanvasLtiLaunchService,
         experience: CanvasLtiExperienceService,
+        experience_exchange: CanvasLtiExperienceExchangeService,
     ) -> Self {
         Self {
             login,
             launch,
             experience,
+            experience_exchange,
         }
     }
 }
@@ -115,6 +120,7 @@ struct OptionalServices {
     canvas_lti_login: Option<CanvasLtiLoginService>,
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
     canvas_lti_experience: Option<CanvasLtiExperienceService>,
+    canvas_lti_experience_exchange: Option<CanvasLtiExperienceExchangeService>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
 
@@ -185,6 +191,7 @@ pub fn router_with_all_services(
             canvas_lti_login: Some(services.canvas_lti.login),
             canvas_lti_launch: Some(services.canvas_lti.launch),
             canvas_lti_experience: Some(services.canvas_lti.experience),
+            canvas_lti_experience_exchange: Some(services.canvas_lti.experience_exchange),
             token_rate_limiter: Some(services.token_rate_limiter),
         },
     )
@@ -314,6 +321,23 @@ pub fn router_with_canvas_lti_experience(
     )
 }
 
+pub fn router_with_canvas_lti_experience_exchange(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    canvas_lti_experience_exchange: CanvasLtiExperienceExchangeService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_lti_experience_exchange: Some(canvas_lti_experience_exchange),
+            ..OptionalServices::default()
+        },
+    )
+}
+
 fn router_with_optional_services(
     runtime: RuntimeState,
     discovery: StaticDiscoveryDocuments,
@@ -411,6 +435,12 @@ fn router_with_optional_services(
             post(launch_canvas_lti_experience),
         );
     }
+    if services.canvas_lti_experience_exchange.is_some() {
+        api = api.route(
+            "/v1/integrations/canvas/lti/experience-sessions/exchange",
+            post(exchange_canvas_lti_experience_code),
+        );
+    }
     let api = api.merge(oauth).with_state(IssuanceState {
         documents: discovery,
         tenant: services.tenant,
@@ -421,6 +451,7 @@ fn router_with_optional_services(
         canvas_lti_login: services.canvas_lti_login,
         canvas_lti_launch: services.canvas_lti_launch,
         canvas_lti_experience: services.canvas_lti_experience,
+        canvas_lti_experience_exchange: services.canvas_lti_experience_exchange,
     });
     system
         .merge(api)
@@ -471,6 +502,32 @@ async fn launch_canvas_lti_experience(
     Ok((StatusCode::SEE_OTHER, [(http_header::LOCATION, location)]).into_response())
 }
 
+async fn exchange_canvas_lti_experience_code(
+    State(state): State<IssuanceState>,
+    request: Request,
+) -> Result<Response, CanvasLtiExperienceExchangeHttpError> {
+    let code = parse_canvas_lti_experience_exchange(request).await?;
+    let result = state
+        .canvas_lti_experience_exchange
+        .as_ref()
+        .ok_or(CanvasLtiExperienceExchangeError::RepositoryUnavailable)?
+        .exchange(&code)
+        .await?;
+    let mut response = Json(json!({
+        "session_token": result.session_token,
+        "expires_at": result.expires_at.to_rfc3339(),
+    }))
+    .into_response();
+    response.headers_mut().insert(
+        http_header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    response
+        .headers_mut()
+        .insert(http_header::PRAGMA, HeaderValue::from_static("no-cache"));
+    Ok(response)
+}
+
 async fn initiate_canvas_lti_experience_login(
     State(state): State<IssuanceState>,
     Path(platform_id): Path<String>,
@@ -514,6 +571,96 @@ async fn parse_canvas_lti_launch_submission(
         .await
         .map_err(CanvasLtiLaunchPlanError::Invalid)?;
     Ok(CanvasLtiLaunchSubmission::from_json_object(&object))
+}
+
+async fn parse_canvas_lti_experience_exchange(
+    request: Request,
+) -> Result<String, CanvasLtiExperienceExchangeHttpError> {
+    const MAX_EXCHANGE_BODY_BYTES: usize = 64 * 1024;
+    let is_json = request
+        .headers()
+        .get(http_header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|value| {
+            let media_type = value.trim().to_ascii_lowercase();
+            media_type == "application/json"
+                || (media_type.starts_with("application/") && media_type.ends_with("+json"))
+        });
+    if !is_json {
+        return Err(CanvasLtiExperienceExchangeHttpError::UnsupportedMediaType);
+    }
+    let bytes = to_bytes(request.into_body(), MAX_EXCHANGE_BODY_BYTES)
+        .await
+        .map_err(|_| CanvasLtiExperienceExchangeHttpError::BodyTooLarge)?;
+    let input: Value = serde_json::from_slice(&bytes)
+        .map_err(|_| CanvasLtiExperienceExchangeHttpError::InvalidJson)?;
+    let Some(object) = input.as_object() else {
+        return Err(CanvasLtiExperienceExchangeHttpError::Validation(vec![
+            json!({
+                "type": "model_attributes_type",
+                "loc": ["body"],
+                "msg": "Input should be a valid dictionary or object to extract fields from",
+                "input": input,
+            }),
+        ]));
+    };
+    let mut errors = Vec::new();
+    let code = match object.get("code") {
+        None => {
+            errors.push(json!({
+                "type": "missing",
+                "loc": ["body", "code"],
+                "msg": "Field required",
+                "input": object,
+            }));
+            None
+        }
+        Some(Value::String(code)) => {
+            let length = code.chars().count();
+            if length < 32 {
+                errors.push(json!({
+                    "type": "string_too_short",
+                    "loc": ["body", "code"],
+                    "msg": "String should have at least 32 characters",
+                    "input": code,
+                    "ctx": {"min_length": 32},
+                }));
+            } else if length > 256 {
+                errors.push(json!({
+                    "type": "string_too_long",
+                    "loc": ["body", "code"],
+                    "msg": "String should have at most 256 characters",
+                    "input": code,
+                    "ctx": {"max_length": 256},
+                }));
+            }
+            Some(code.clone())
+        }
+        Some(value) => {
+            errors.push(json!({
+                "type": "string_type",
+                "loc": ["body", "code"],
+                "msg": "Input should be a valid string",
+                "input": value,
+            }));
+            None
+        }
+    };
+    for (name, value) in object.iter().filter(|(name, _)| name.as_str() != "code") {
+        errors.push(json!({
+            "type": "extra_forbidden",
+            "loc": ["body", name],
+            "msg": "Extra inputs are not permitted",
+            "input": value,
+        }));
+    }
+    if !errors.is_empty() {
+        return Err(CanvasLtiExperienceExchangeHttpError::Validation(errors));
+    }
+    code.ok_or(CanvasLtiExperienceExchangeHttpError::Service(
+        CanvasLtiExperienceExchangeError::InvalidConfiguration,
+    ))
 }
 
 async fn parse_canvas_lti_payload(request: Request) -> Result<Map<String, Value>, &'static str> {
@@ -870,6 +1017,66 @@ struct CredentialIssuanceHttpError(CredentialIssuanceError);
 struct CanvasLtiLoginHttpError(CanvasLtiLoginError);
 
 struct CanvasLtiLaunchHttpError(CanvasLtiLaunchServiceError);
+
+enum CanvasLtiExperienceExchangeHttpError {
+    Service(CanvasLtiExperienceExchangeError),
+    Validation(Vec<Value>),
+    InvalidJson,
+    UnsupportedMediaType,
+    BodyTooLarge,
+}
+
+impl From<CanvasLtiExperienceExchangeError> for CanvasLtiExperienceExchangeHttpError {
+    fn from(value: CanvasLtiExperienceExchangeError) -> Self {
+        Self::Service(value)
+    }
+}
+
+impl IntoResponse for CanvasLtiExperienceExchangeHttpError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Service(CanvasLtiExperienceExchangeError::InvalidCode) => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "detail": "Canvas LTI experience code has expired, is invalid, or was already used"
+                })),
+            )
+                .into_response(),
+            Self::Service(
+                CanvasLtiExperienceExchangeError::RepositoryUnavailable
+                | CanvasLtiExperienceExchangeError::InvalidConfiguration,
+            ) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response(),
+            Self::Validation(errors) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"detail": errors})),
+            )
+                .into_response(),
+            Self::InvalidJson => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({
+                    "detail": [{
+                        "type": "json_invalid",
+                        "loc": ["body", 0],
+                        "msg": "JSON decode error",
+                        "input": {},
+                        "ctx": {"error": "Invalid JSON"},
+                    }]
+                })),
+            )
+                .into_response(),
+            Self::UnsupportedMediaType => (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                Json(json!({"detail": "Content-Type must be application/json"})),
+            )
+                .into_response(),
+            Self::BodyTooLarge => (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(json!({"detail": "Canvas LTI exchange body exceeds the size limit"})),
+            )
+                .into_response(),
+        }
+    }
+}
 
 impl From<CanvasLtiLoginError> for CanvasLtiLoginHttpError {
     fn from(value: CanvasLtiLoginError) -> Self {

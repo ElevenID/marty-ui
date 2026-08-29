@@ -32,6 +32,7 @@ pub struct IssuanceServiceConfig {
     pub canvas_lti_jwks_ttl: Duration,
     pub canvas_lti_experience_base_url: String,
     pub canvas_lti_experience_code_ttl: Duration,
+    pub canvas_lti_experience_session_ttl: Duration,
     pub canvas_self_managed_origins: Vec<String>,
     pub canvas_private_origin_allowlist: Vec<String>,
     pub canvas_allow_private_base_urls: bool,
@@ -84,6 +85,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "canvas_lti_experience_code_ttl",
                 &self.canvas_lti_experience_code_ttl,
+            )
+            .field(
+                "canvas_lti_experience_session_ttl",
+                &self.canvas_lti_experience_session_ttl,
             )
             .field(
                 "canvas_self_managed_origin_count",
@@ -238,6 +243,8 @@ impl IssuanceServiceConfig {
             )?;
         let canvas_lti_experience_code_ttl =
             positive_seconds(&values, "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS", 60)?;
+        let canvas_lti_experience_session_ttl =
+            positive_minutes(&values, "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES", 30)?;
         let canvas_self_managed_origins =
             comma_separated_values(&values, "CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST");
         let canvas_private_origin_allowlist =
@@ -268,6 +275,7 @@ impl IssuanceServiceConfig {
             canvas_lti_jwks_ttl,
             canvas_lti_experience_base_url,
             canvas_lti_experience_code_ttl,
+            canvas_lti_experience_session_ttl,
             canvas_self_managed_origins,
             canvas_private_origin_allowlist,
             canvas_allow_private_base_urls,
@@ -591,6 +599,10 @@ mod tests {
             config.canvas_lti_experience_code_ttl,
             std::time::Duration::from_secs(60)
         );
+        assert_eq!(
+            config.canvas_lti_experience_session_ttl,
+            std::time::Duration::from_secs(1_800)
+        );
         assert!(config.canvas_self_managed_origins.is_empty());
         assert!(config.canvas_private_origin_allowlist.is_empty());
         assert!(!config.canvas_allow_private_base_urls);
@@ -636,6 +648,7 @@ mod tests {
             ("CANVAS_LTI_JWKS_TTL_MINUTES", "30"),
             ("CANVAS_LTI_EXPERIENCE_BASE_URL", "https://ui.example/"),
             ("CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS", "90"),
+            ("CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES", "45"),
             ("CANVAS_ALLOW_PRIVATE_BASE_URLS", "true"),
             ("CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS", "yes"),
             (
@@ -690,6 +703,10 @@ mod tests {
             std::time::Duration::from_secs(90)
         );
         assert_eq!(
+            config.canvas_lti_experience_session_ttl,
+            std::time::Duration::from_secs(2_700)
+        );
+        assert_eq!(
             config.canvas_self_managed_origins,
             ["https://canvas.one.example", "https://canvas.two.example"]
         );
@@ -729,6 +746,7 @@ mod tests {
             "CANVAS_LTI_STATE_TTL_MINUTES",
             "CANVAS_LTI_JWKS_TTL_MINUTES",
             "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS",
+            "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES",
         ] {
             let invalid_values = if name.ends_with("_MINUTES") {
                 &[
