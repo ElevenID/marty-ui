@@ -123,10 +123,13 @@ async function installUiCandidateRoute(context, candidate) {
   });
 }
 
-async function showLifecycleStep(page, title, detail) {
+async function showLifecycleStep(page, title, detail, stage) {
+  if (!/^\d of \d$/.test(String(stage || ''))) {
+    throw new TypeError('Lifecycle recording stage must use the form "1 of 5"');
+  }
   return showStep(page, title, detail, {
     enabled: RECORD_VIDEO,
-    eyebrow: 'Credential lifecycle and status-aware verification',
+    eyebrow: `Credential lifecycle | Stage ${stage}`,
   });
 }
 
@@ -779,7 +782,7 @@ async function main() {
       timeout: 60_000,
     });
     let row = await findCredentialRow(page, credential.id);
-    await showLifecycleStep(page, 'Active credential issued', 'The issuer inventory shows the newly issued credential and its available lifecycle controls.');
+    await showLifecycleStep(page, 'Active credential issued', 'The issuer inventory shows the newly issued credential and its available lifecycle controls.', '1 of 5');
     await page.screenshot({ path: path.join(artifactDir, '01-active-credential.png'), fullPage: true });
     if (RECORD_VIDEO) await page.waitForTimeout(5_100);
 
@@ -812,7 +815,7 @@ async function main() {
     await page.getByPlaceholder('Search issued credentials...').fill('');
     await page.getByRole('button', { name: /^refresh$/i }).click();
     row = await findCredentialRow(page, credential.id);
-    await showLifecycleStep(page, 'Credential renewed', 'The replacement credential is active and linked to its superseded predecessor.');
+    await showLifecycleStep(page, 'Credential renewed', 'The replacement credential is active and linked to its superseded predecessor.', '2 of 5');
     await page.screenshot({ path: path.join(artifactDir, '02-renewed-credential.png'), fullPage: true });
 
     const statusListUris = (credential.status_list_entries || [])
@@ -835,7 +838,7 @@ async function main() {
     report.suspend.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: suspended trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
     });
-    await showLifecycleStep(page, 'Suspension denies verification', 'The status-aware verifier returns the credential\'s suspended-state denial reason.');
+    await showLifecycleStep(page, 'Suspension denies verification', 'The status-aware verifier returns the credential\'s suspended-state denial reason.', '3 of 5');
     await showVerificationResult(page, report.suspend.verification.result, {
       enabled: RECORD_VIDEO,
       actor: 'Marty status-aware verifier',
@@ -850,7 +853,7 @@ async function main() {
     report.reinstate.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: reinstated trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
     });
-    await showLifecycleStep(page, 'Reinstatement restores verification', 'The same credential fixture passes again after the issuer reinstates it.');
+    await showLifecycleStep(page, 'Reinstatement restores verification', 'The same credential fixture passes again after the issuer reinstates it.', '4 of 5');
     await showVerificationResult(page, report.reinstate.verification.result, {
       enabled: RECORD_VIDEO,
       actor: 'Marty status-aware verifier',
@@ -865,7 +868,7 @@ async function main() {
     report.revoke.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: revoked trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
     });
-    await showLifecycleStep(page, 'Revoked credential is denied', 'In this test scenario, the verifier denies the revoked credential and the issuer inventory retains the revoked state.');
+    await showLifecycleStep(page, 'Revoked credential is denied', 'In this test scenario, the verifier denies the revoked credential and the issuer inventory retains the revoked state.', '5 of 5');
     await showVerificationResult(page, report.revoke.verification.result, {
       enabled: RECORD_VIDEO,
       actor: 'Marty status-aware verifier',
