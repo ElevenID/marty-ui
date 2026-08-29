@@ -1,8 +1,8 @@
 use chrono::{TimeZone, Utc};
 use marty_issuance_service::{
     canvas_lti_bootstrap::{
-        plan_canvas_lti_experience_bootstrap, CanvasLtiBootstrapPlanError,
-        CanvasLtiBootstrapRequest, CanvasLtiBootstrapTemplate,
+        plan_canvas_lti_experience_bootstrap, CanvasLtiBootstrapApplicationAction,
+        CanvasLtiBootstrapPlanError, CanvasLtiBootstrapRequest, CanvasLtiBootstrapTemplate,
     },
     canvas_lti_experience::canvas_lti_experience_session_context,
     canvas_lti_launch::CanvasLtiStoredLaunchState,
@@ -86,6 +86,10 @@ fn bootstrap_create_replays_identity_context_attachment_and_public_response() {
 
     assert!(plan.created);
     assert_eq!(
+        plan.application_action,
+        CanvasLtiBootstrapApplicationAction::Create
+    );
+    assert_eq!(
         plan.application.applicant_identifier,
         vector["expected_applicant_identifier"]
     );
@@ -165,6 +169,10 @@ fn bootstrap_resume_preserves_original_join_and_bounds_launch_history() {
     .unwrap();
 
     assert!(!resumed.created);
+    assert_eq!(
+        resumed.application_action,
+        CanvasLtiBootstrapApplicationAction::Resume
+    );
     assert_eq!(resumed.application.id, "application-1");
     assert_eq!(
         resumed.application.integration_context["canvas"]["lti_state"],
@@ -198,6 +206,10 @@ fn bootstrap_resume_preserves_original_join_and_bounds_launch_history() {
     )
     .unwrap();
     assert!(!exact.created);
+    assert_eq!(
+        exact.application_action,
+        CanvasLtiBootstrapApplicationAction::Replay
+    );
     assert_eq!(exact.application.status, "rejected");
 }
 
@@ -236,6 +248,10 @@ fn bootstrap_terminal_applications_on_other_launches_are_not_resumed() {
         .unwrap();
 
         assert!(plan.created, "{terminal_status} application was resumed");
+        assert_eq!(
+            plan.application_action,
+            CanvasLtiBootstrapApplicationAction::Create
+        );
         assert_eq!(plan.application.id, "application-2");
         assert!(plan.bootstrap_event_metadata.is_some());
     }
@@ -274,6 +290,10 @@ fn bootstrap_subject_resume_requires_the_same_program_binding() {
     .unwrap();
 
     assert!(plan.created);
+    assert_eq!(
+        plan.application_action,
+        CanvasLtiBootstrapApplicationAction::Create
+    );
     assert_eq!(plan.application.id, "application-2");
 }
 

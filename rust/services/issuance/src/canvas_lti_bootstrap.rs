@@ -35,6 +35,13 @@ pub struct CanvasLtiBootstrapTemplate {
     pub organization_id: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanvasLtiBootstrapApplicationAction {
+    Create,
+    Resume,
+    Replay,
+}
+
 #[derive(Clone, PartialEq)]
 pub struct CanvasLtiBootstrapApplication {
     pub id: String,
@@ -82,6 +89,7 @@ pub struct CanvasLtiBootstrapResponse {
 #[derive(Clone, PartialEq)]
 pub struct CanvasLtiBootstrapPlan {
     pub application: CanvasLtiBootstrapApplication,
+    pub application_action: CanvasLtiBootstrapApplicationAction,
     pub created: bool,
     pub session_metadata: Value,
     pub bootstrap_event_metadata: Option<Value>,
@@ -95,6 +103,7 @@ impl fmt::Debug for CanvasLtiBootstrapPlan {
         formatter
             .debug_struct("CanvasLtiBootstrapPlan")
             .field("application", &self.application)
+            .field("application_action", &self.application_action)
             .field("created", &self.created)
             .field("session_metadata", &REDACTED)
             .field("bootstrap_event_metadata", &REDACTED)
@@ -158,7 +167,7 @@ pub fn plan_canvas_lti_experience_bootstrap(
     let mut applications = existing_applications.to_vec();
     applications.sort_by_key(|application| std::cmp::Reverse(application.created_at));
     let subject = lti_subject(&context.verified_launch);
-    let mut created = false;
+    let mut application_action = CanvasLtiBootstrapApplicationAction::Replay;
     let mut event_metadata = None;
     let application = if let Some(application) = applications.iter().find(|application| {
         canvas_application_context(application)
@@ -171,9 +180,10 @@ pub fn plan_canvas_lti_experience_bootstrap(
         !matches!(application.status.as_str(), "rejected" | "withdrawn")
             && application_matches_subject(application, context, subject.as_deref())
     }) {
+        application_action = CanvasLtiBootstrapApplicationAction::Resume;
         resume_subject_application(application, context, now)
     } else {
-        created = true;
+        application_action = CanvasLtiBootstrapApplicationAction::Create;
         let application = create_application(
             context,
             request,
@@ -185,10 +195,12 @@ pub fn plan_canvas_lti_experience_bootstrap(
         event_metadata = Some(bootstrap_event_metadata(context, &application, subject));
         application
     };
+    let created = application_action == CanvasLtiBootstrapApplicationAction::Create;
     let session_metadata = attach_application_to_session(context, &application.id, created, now)?;
     let response = bootstrap_response(context, &application, created);
     Ok(CanvasLtiBootstrapPlan {
         application,
+        application_action,
         created,
         session_metadata,
         bootstrap_event_metadata: event_metadata,
