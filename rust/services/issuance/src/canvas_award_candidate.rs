@@ -123,6 +123,14 @@ impl fmt::Debug for CanvasAwardCandidateMaterializationPlan {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct CanvasAwardCandidateSelection {
+    pub candidate: CanvasAwardCandidate,
+    pub lti_subject: Option<String>,
+    pub canvas_user_id: Option<String>,
+    pub learner_identity_id: Option<String>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn plan_canvas_award_candidate_materialization<F>(
     context: &CanvasLtiExperienceSessionContext,
@@ -133,11 +141,30 @@ pub fn plan_canvas_award_candidate_materialization<F>(
     observations: &[CanvasCandidateObservation],
     now: DateTime<Utc>,
     evidence_max_age: Duration,
-    mut next_fact_id: F,
+    next_fact_id: F,
 ) -> Option<CanvasAwardCandidateMaterializationPlan>
 where
     F: FnMut() -> String,
 {
+    let selection = select_canvas_award_candidate(context, application, candidates, identities)?;
+    plan_selected_canvas_award_candidate_materialization(
+        context,
+        application,
+        binding,
+        &selection,
+        observations,
+        now,
+        evidence_max_age,
+        next_fact_id,
+    )
+}
+
+pub fn select_canvas_award_candidate(
+    context: &CanvasLtiExperienceSessionContext,
+    application: &CanvasLtiBootstrapApplication,
+    candidates: &[CanvasAwardCandidate],
+    identities: CanvasIdentityJoin<'_>,
+) -> Option<CanvasAwardCandidateSelection> {
     let binding_id = context.canvas_program_binding_id.as_deref()?;
     let subject = lti_subject(&context.verified_launch);
     let canvas_user_id = signed_canvas_identifier(&context.verified_launch, "canvas_user_id");
@@ -155,6 +182,38 @@ where
                 linked_identity,
             )
     })?;
+    let materialized_canvas_user_id = canvas_user_id.or_else(|| candidate.canvas_user_id.clone());
+    let materialized_learner_identity_id = if materialized_canvas_user_id.is_some() {
+        linked_identity
+            .map(|identity| identity.id.clone())
+            .or_else(|| candidate.learner_identity_id.clone())
+    } else {
+        candidate.learner_identity_id.clone()
+    };
+    Some(CanvasAwardCandidateSelection {
+        candidate: candidate.clone(),
+        lti_subject: subject.or_else(|| candidate.lti_subject.clone()),
+        canvas_user_id: materialized_canvas_user_id,
+        learner_identity_id: materialized_learner_identity_id,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn plan_selected_canvas_award_candidate_materialization<F>(
+    context: &CanvasLtiExperienceSessionContext,
+    application: &CanvasLtiBootstrapApplication,
+    binding: &Map<String, Value>,
+    selection: &CanvasAwardCandidateSelection,
+    observations: &[CanvasCandidateObservation],
+    now: DateTime<Utc>,
+    evidence_max_age: Duration,
+    mut next_fact_id: F,
+) -> Option<CanvasAwardCandidateMaterializationPlan>
+where
+    F: FnMut() -> String,
+{
+    let binding_id = context.canvas_program_binding_id.as_deref()?;
+    let candidate = &selection.candidate;
     if !is_fresh(candidate.observed_at, now, evidence_max_age) {
         return None;
     }
@@ -181,7 +240,8 @@ where
     if current_observations.is_empty() {
         return None;
     }
-    let subject_id = subject
+    let subject_id = selection
+        .lti_subject
         .as_deref()
         .or(candidate.lti_subject.as_deref())
         .or(candidate.canvas_user_id.as_deref())
@@ -215,19 +275,11 @@ where
         "candidate_materialized_at".to_owned(),
         Value::String(now.to_rfc3339_opts(SecondsFormat::AutoSi, false)),
     );
-    let materialized_canvas_user_id = canvas_user_id.or_else(|| candidate.canvas_user_id.clone());
-    let materialized_learner_identity_id = if materialized_canvas_user_id.is_some() {
-        linked_identity
-            .map(|identity| identity.id.clone())
-            .or_else(|| candidate.learner_identity_id.clone())
-    } else {
-        candidate.learner_identity_id.clone()
-    };
     Some(CanvasAwardCandidateMaterializationPlan {
         candidate_id: candidate.id.clone(),
-        lti_subject: subject.or_else(|| candidate.lti_subject.clone()),
-        canvas_user_id: materialized_canvas_user_id,
-        learner_identity_id: materialized_learner_identity_id,
+        lti_subject: selection.lti_subject.clone(),
+        canvas_user_id: selection.canvas_user_id.clone(),
+        learner_identity_id: selection.learner_identity_id.clone(),
         facts,
         application_canvas_patch,
         materialized_at: now,
