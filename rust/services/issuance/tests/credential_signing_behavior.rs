@@ -300,6 +300,7 @@ impl IssuerContextResolver for SigningHarness {
             verification_method_id: Some("did:web:issuer.example#contract-key".to_owned()),
             public_jwk: Some(json!({"kty": "OKP", "crv": "Ed25519", "x": "issuer-x"})),
             certificate_chain: vec![],
+            raw_context: json!({}),
         })
     }
 }

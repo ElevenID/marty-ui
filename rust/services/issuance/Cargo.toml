@@ -25,6 +25,7 @@ mmf-core.workspace = true
 mmf-runtime.workspace = true
 mmf-security.workspace = true
 marty-oid4vci.workspace = true
+marty-verification.workspace = true
 p256.workspace = true
 rand.workspace = true
 reqwest.workspace = true

@@ -188,7 +188,7 @@ pub struct IssuedCredential {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct IssuerContext {
     pub issuer_profile_id: String,
     pub issuer_did: String,
@@ -197,6 +197,22 @@ pub struct IssuerContext {
     pub verification_method_id: Option<String>,
     pub public_jwk: Option<Value>,
     pub certificate_chain: Vec<String>,
+    pub raw_context: Value,
+}
+
+impl std::fmt::Debug for IssuerContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IssuerContext")
+            .field("issuer_profile_id", &self.issuer_profile_id)
+            .field("issuer_did", &self.issuer_did)
+            .field("signing_service_id", &self.signing_service_id)
+            .field("algorithm", &self.algorithm)
+            .field("verification_method_id", &self.verification_method_id)
+            .field("has_public_jwk", &self.public_jwk.is_some())
+            .field("certificate_chain_len", &self.certificate_chain.len())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

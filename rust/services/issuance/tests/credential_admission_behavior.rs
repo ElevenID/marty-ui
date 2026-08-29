@@ -256,6 +256,7 @@ impl IssuerContextResolver for ContractIssuer {
             verification_method_id: None,
             public_jwk: None,
             certificate_chain: vec![],
+            raw_context: json!({}),
         })
     }
 }
