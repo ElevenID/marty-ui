@@ -497,7 +497,6 @@ async function findCredentialRow(page, credentialId) {
     throw new Error('Credential row lookup requires a presentation-safe exact record ID');
   }
   const search = page.getByPlaceholder('Search issued credentials...');
-  await search.fill(credentialId);
   const row = page.locator(`tbody tr[data-credential-record-id="${credentialId}"]`);
   await row.waitFor({ state: 'visible', timeout: 30_000 });
   const friendlyReference = await row.locator('td').first().locator('.MuiTypography-caption').innerText();
@@ -805,19 +804,20 @@ async function main() {
       renewedFromCredentialId: credential.renewed_from_credential_id || null,
       sourceStatus: sourceAfterRenewal.lifecycleStatus,
     };
-    const detailDialog = page.getByRole('dialog', { name: /issued credential details/i });
-    if (await detailDialog.isVisible().catch(() => false)) {
-      await detailDialog.getByRole('button', { name: /^close$/i }).click();
-      await detailDialog.waitFor({ state: 'hidden', timeout: 30_000 });
-    }
-    await page.getByRole('button', { name: /^refresh$/i }).click();
-    row = await findCredentialRow(page, credential.id);
     const pendingRenewalNotice = page.getByRole('alert').filter({
       hasText: /renewal offer generated.*replacement issuance is pending wallet claim/i,
     });
     if (await pendingRenewalNotice.isVisible().catch(() => false)) {
       await pendingRenewalNotice.getByRole('button', { name: /^close$/i }).click();
     }
+    const detailDialog = page.getByRole('dialog', { name: /issued credential details/i });
+    if (await detailDialog.isVisible().catch(() => false)) {
+      await detailDialog.getByRole('button', { name: /^close$/i }).click();
+      await detailDialog.waitFor({ state: 'hidden', timeout: 30_000 });
+    }
+    await page.getByPlaceholder('Search issued credentials...').fill('');
+    await page.getByRole('button', { name: /^refresh$/i }).click();
+    row = await findCredentialRow(page, credential.id);
     await showLifecycleStep(page, 'Credential renewed', 'The replacement credential is active and linked to its superseded predecessor.');
     await page.screenshot({ path: path.join(artifactDir, '02-renewed-credential.png'), fullPage: true });
 

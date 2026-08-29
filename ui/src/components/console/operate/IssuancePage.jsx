@@ -526,8 +526,8 @@ function IssuancePage() {
                   <Typography variant="body2" gutterBottom>
                     The holder must claim this offer before Marty records a replacement credential and predecessor relationship.
                   </Typography>
-                  <Typography variant="body2" sx={{ wordBreak: 'break-word' }}>
-                    {latestOffer.offer_url}
+                  <Typography variant="body2">
+                    The offer link is ready for secure delivery. Use Copy offer link or Open offer when needed.
                   </Typography>
                   {latestOffer.expires_at && (
                     <Typography variant="caption" display="block" sx={{ mt: 1 }}>

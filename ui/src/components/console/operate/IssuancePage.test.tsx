@@ -173,7 +173,8 @@ describe('IssuancePage', () => {
     });
 
     expect(screen.getByText(/renewal offer ready.*replacement not issued yet/i)).toBeInTheDocument();
-    expect(screen.getByText('openid-credential-offer://offer/test')).toBeInTheDocument();
+    expect(screen.getByText(/offer link is ready for secure delivery/i)).toBeInTheDocument();
+    expect(screen.queryByText('openid-credential-offer://offer/test')).not.toBeInTheDocument();
   });
 
   it('generates a row renewal without remounting or losing the filtered inventory', async () => {
