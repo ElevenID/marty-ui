@@ -469,6 +469,29 @@ async function findIssuedCredential(page, templateId) {
   }, { organizationId: ORG_ID, templateId }));
 }
 
+function selectRenewedCredential(records, templateId, sourceCredentialId) {
+  if (!Array.isArray(records)) return null;
+  const matches = records.filter((record) => (
+    record.credential_template_id === templateId
+    && record.renewed_from_credential_id === sourceCredentialId
+  ));
+  if (matches.length > 1) throw new Error('Renewal produced multiple successor credentials');
+  return matches[0] || null;
+}
+
+async function findRenewedCredential(page, templateId, sourceCredentialId) {
+  return waitFor(async () => {
+    const records = await page.evaluate(async ({ organizationId }) => {
+      const response = await fetch(
+        `/v1/issued-credentials?organization_id=${encodeURIComponent(organizationId)}`,
+        { credentials: 'include' },
+      );
+      return response.ok ? response.json().catch(() => []) : [];
+    }, { organizationId: ORG_ID });
+    return selectRenewedCredential(records, templateId, sourceCredentialId);
+  });
+}
+
 async function findCredentialRow(page, credentialId) {
   const search = page.getByPlaceholder('Search issued credentials...');
   await search.fill(credentialId);
@@ -768,7 +791,7 @@ async function main() {
       report.issuance.expectedVct,
     );
     delete report.renewalOffer.offerUri;
-    credential = await findIssuedCredential(page, report.templateId);
+    credential = await findRenewedCredential(page, report.templateId, sourceCredentialId);
     const sourceAfterRenewal = await getCredentialStatus(page, sourceCredentialId);
     report.renewal = {
       ok: report.renewalWalletReceipt.ok
@@ -782,6 +805,7 @@ async function main() {
     const detailDialog = page.getByRole('dialog', { name: /issued credential details/i });
     if (await detailDialog.isVisible().catch(() => false)) {
       await detailDialog.getByRole('button', { name: /^close$/i }).click();
+      await detailDialog.waitFor({ state: 'hidden', timeout: 30_000 });
     }
     await page.getByRole('button', { name: /^refresh$/i }).click();
     row = await findCredentialRow(page, credential.id);
@@ -911,6 +935,7 @@ module.exports = {
   receiveCredential,
   resolveUiCandidateDist,
   resolveVerificationIssuerDid,
+  selectRenewedCredential,
   selectOrg,
   verify,
   validateElevenIdLoginTheme,
