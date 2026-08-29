@@ -623,7 +623,8 @@
           "contracts/issuance-runtime-surface.json",
           "contracts/issuance-native-coverage.json",
           "contracts/issuance-static-discovery.json",
-          "contracts/issuance-tenant-discovery.json"
+          "contracts/issuance-tenant-discovery.json",
+          "contracts/issuance-offer-transaction-reads.json"
         ]
       },
       "legacy": [

@@ -16,9 +16,11 @@ test = false
 [dependencies]
 axum.workspace = true
 async-trait.workspace = true
+chrono.workspace = true
 mmf-config.workspace = true
 mmf-core.workspace = true
 mmf-runtime.workspace = true
+mmf-security.workspace = true
 marty-oid4vci.workspace = true
 reqwest.workspace = true
 serde.workspace = true

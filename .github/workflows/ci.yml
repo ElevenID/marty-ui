@@ -418,6 +418,18 @@ jobs:
             exit 1
           fi
           presentation_policy_relative="${presentation_policy_executable#"$PWD/"}"
+          issuance_transaction_executable="$(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.target.name == "issuance_transaction_postgres_contract")
+            | select(.package_id | contains("marty-issuance-service"))
+            | select(.executable != null)
+            | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          if [[ -z "$issuance_transaction_executable" || ! -x "$issuance_transaction_executable" ]]; then
+            echo "Unable to locate the compiled Issuance transaction PostgreSQL contract executable." >&2
+            exit 1
+          fi
+          issuance_transaction_relative="${issuance_transaction_executable#"$PWD/"}"
           trust_profile_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "migration_contract")
@@ -476,6 +488,7 @@ jobs:
             "$credential_template_relative" \
             target/debug/credential-template-migration-contract \
             "$presentation_policy_relative" \
+            "$issuance_transaction_relative" \
             "$trust_profile_relative" \
             target/debug/organization-migration-contract \
             target/debug/organization-application-postgres-contract \
@@ -544,6 +557,7 @@ jobs:
       MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME: marty_revocation_test
       CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
       PRESENTATION_POLICY_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
+      ISSUANCE_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
       ORGANIZATION_POSTGRES_TEST_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
       TEST_POSTGRES_URL: postgresql://marty:marty-test@127.0.0.1:5432/marty_revocation_test
     steps:
@@ -598,6 +612,12 @@ jobs:
           for contract in "${service_postgres_contracts[@]}"; do
             "$contract" --test-threads=1
           done
+          mapfile -t issuance_transaction_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'issuance_transaction_postgres_contract-*' -perm -u+x)
+          if (( ${#issuance_transaction_contracts[@]} != 1 )); then
+            printf 'Expected one Issuance transaction PostgreSQL contract executable, found %s.\n' "${#issuance_transaction_contracts[@]}" >&2
+            exit 1
+          fi
+          "${issuance_transaction_contracts[0]}" --test-threads=1
           test -x target/debug/credential-template-migration-contract
           target/debug/credential-template-migration-contract --test-threads=1
           mapfile -t trust_profile_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'migration_contract-*' -perm -u+x)

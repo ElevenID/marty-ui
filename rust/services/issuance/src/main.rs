@@ -1,9 +1,11 @@
 use std::{error::Error, sync::Arc};
 
 use marty_issuance_service::{
-    http::router_with_tenant_discovery, signing_policy::HttpProofPolicyResolver,
+    http::router_with_services, signing_policy::HttpProofPolicyResolver,
     tenant_discovery::TenantDiscoveryService, tenant_postgres::PostgresTenantDiscoveryRepository,
-    transport::TransportPolicy, validate_embedded_contract, IssuanceRuntime, IssuanceServiceConfig,
+    transaction_postgres::PostgresTransactionReadRepository,
+    transaction_reads::TransactionReadService, transport::TransportPolicy,
+    validate_embedded_contract, IssuanceRuntime, IssuanceServiceConfig,
 };
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use tokio::net::TcpListener;
@@ -34,17 +36,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .connect_lazy(&config.database_url)?;
     let tenant_discovery = TenantDiscoveryService::new(
         discovery.clone(),
-        Arc::new(PostgresTenantDiscoveryRepository::new(pool)),
+        Arc::new(PostgresTenantDiscoveryRepository::new(pool.clone())),
         Arc::new(HttpProofPolicyResolver::new(
             config.signing_keys_internal_url.clone(),
             config.signing_keys_internal_api_key.as_deref(),
             config.dependency_timeout,
         )?),
     );
+    let transaction_reads = TransactionReadService::new(
+        Arc::new(PostgresTransactionReadRepository::new(pool)),
+        config.issuance_api_key.as_deref(),
+        &config.issuer_base_url,
+    );
     let listener = TcpListener::bind(config.http_addr).await?;
     runtime.mark_listener_healthy()?;
     let transport = TransportPolicy::new(config.cors_allowed_origins.clone());
-    let app = router_with_tenant_discovery(runtime.state(), discovery, transport, tenant_discovery);
+    let app = router_with_services(
+        runtime.state(),
+        discovery,
+        transport,
+        tenant_discovery,
+        transaction_reads,
+    );
     runtime.activate()?;
     info!(
         address = %config.http_addr,

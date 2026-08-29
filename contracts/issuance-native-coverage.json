@@ -18,6 +18,12 @@
     "commit": "d853a14efb5cce2894aea138e2e784735499a7fc",
     "sha256": "6166e9f839e2e2a5dcabc6a3c6a0f7d47292eb312170a4659d693cf3eb787708"
   },
+  "transaction_read_behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-offer-transaction-reads.json",
+    "commit": "4d628a185cf82b84a400c6ea495865786c9f4588",
+    "sha256": "8d5bf9acac4925c3443f51c79e976889ca9051ab90a6bb8ad9e5aaf9b49bce26"
+  },
   "native_http": [
     {
       "method": "GET",
@@ -81,6 +87,36 @@
       "path": "/.well-known/openid-credential-issuer/org/{org_id}/apple-wallet",
       "operation": "get_org_issuer_metadata_apple_wallet",
       "tenant_behavior_case": "get_org_issuer_metadata_apple_wallet"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/issuance/offers/{tx_id}",
+      "operation": "get_credential_offer",
+      "transaction_read_behavior_case": "get_credential_offer"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/issuance/transactions",
+      "operation": "list_transactions",
+      "transaction_read_behavior_case": "list_transactions"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/issuance/transactions/{tx_id}",
+      "operation": "get_transaction",
+      "transaction_read_behavior_case": "get_transaction"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/issuance/transactions/{tx_id}/revocation-status",
+      "operation": "get_transaction_revocation_status",
+      "transaction_read_behavior_case": "get_transaction_revocation_status"
+    },
+    {
+      "method": "GET",
+      "path": "/internal/v1/resource-owners/issuance-transactions/{transaction_id}",
+      "operation": "get_issuance_transaction_owner",
+      "transaction_read_behavior_case": "get_issuance_transaction_owner"
     }
   ],
   "platform_additive_http": [
@@ -88,7 +124,7 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 121,
+    "http": 116,
     "grpc": 12,
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 81,

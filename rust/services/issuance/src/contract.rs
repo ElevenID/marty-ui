@@ -11,6 +11,8 @@ const STATIC_DISCOVERY: &[u8] =
     include_bytes!("../../../../contracts/issuance-static-discovery.json");
 const TENANT_DISCOVERY: &[u8] =
     include_bytes!("../../../../contracts/issuance-tenant-discovery.json");
+const TRANSACTION_READS: &[u8] =
+    include_bytes!("../../../../contracts/issuance-offer-transaction-reads.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageSummary {
@@ -25,6 +27,7 @@ struct Coverage {
     upstream: Upstream,
     behavior_contract: Upstream,
     tenant_behavior_contract: Upstream,
+    transaction_read_behavior_contract: Upstream,
     native_http: Vec<HttpOperation>,
     platform_additive_http: Vec<PlatformOperation>,
     remaining: Remaining,
@@ -51,6 +54,8 @@ struct HttpOperation {
     behavior_case: Option<String>,
     #[serde(default)]
     tenant_behavior_case: Option<String>,
+    #[serde(default)]
+    transaction_read_behavior_case: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -96,6 +101,32 @@ struct TenantDiscoveryVariant {
 }
 
 #[derive(Deserialize)]
+struct TransactionReadContract {
+    schema: String,
+    inputs: Value,
+    cases: Vec<TransactionReadCase>,
+    edge_cases: Vec<TransactionReadOutcome>,
+    failures: Vec<TransactionReadOutcome>,
+}
+
+#[derive(Deserialize)]
+struct TransactionReadOutcome {
+    status_code: u16,
+    body: Value,
+    repository_calls: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+struct TransactionReadCase {
+    operation: String,
+    method: String,
+    path: String,
+    status_code: u16,
+    body: Value,
+    repository_calls: Vec<Value>,
+}
+
+#[derive(Deserialize)]
 struct PlatformOperation {
     method: String,
     path: String,
@@ -122,6 +153,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid static discovery contract", error))?;
     let tenant_discovery: TenantDiscoveryContract = serde_json::from_slice(TENANT_DISCOVERY)
         .map_err(|error| contract_error("invalid tenant discovery contract", error))?;
+    let transaction_reads: TransactionReadContract = serde_json::from_slice(TRANSACTION_READS)
+        .map_err(|error| contract_error("invalid transaction read contract", error))?;
     require(
         surface["schema"] == "marty.issuance-runtime-surface/v1",
         "unexpected issuance surface schema",
@@ -170,6 +203,29 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "unexpected tenant discovery behavior contract",
     )?;
     require(
+        transaction_reads.schema == "marty.issuance-offer-transaction-reads/v1"
+            && transaction_reads.inputs["organization_id"] == "org-a"
+            && transaction_reads.cases.len() == 5
+            && transaction_reads.edge_cases.len() == 8
+            && transaction_reads.failures.len() == 7
+            && transaction_reads.cases.iter().all(|case| {
+                case.method == "GET"
+                    && case.status_code == 200
+                    && !case.repository_calls.is_empty()
+                    && (case.body.is_object() || case.body.is_array())
+            })
+            && transaction_reads
+                .edge_cases
+                .iter()
+                .chain(&transaction_reads.failures)
+                .all(|outcome| {
+                    (200..600).contains(&outcome.status_code)
+                        && (outcome.body.is_object() || outcome.body.is_array())
+                        && outcome.repository_calls.iter().all(Value::is_object)
+                }),
+        "unexpected transaction read behavior contract",
+    )?;
+    require(
         coverage.behavior_contract.repository == "ElevenID/marty-credentials"
             && coverage.behavior_contract.path == "contracts/issuance-static-discovery.json"
             && coverage.behavior_contract.commit.len() == 40
@@ -190,6 +246,18 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 .chars()
                 .all(|character| character.is_ascii_hexdigit()),
         "invalid tenant discovery provenance",
+    )?;
+    require(
+        coverage.transaction_read_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.transaction_read_behavior_contract.path
+                == "contracts/issuance-offer-transaction-reads.json"
+            && coverage.transaction_read_behavior_contract.commit.len() == 40
+            && coverage
+                .transaction_read_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid transaction read provenance",
     )?;
     require(
         coverage.schema == "marty.issuance-native-coverage/v1",
@@ -224,6 +292,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         actual_tenant_discovery == coverage.tenant_behavior_contract.sha256,
         "tenant discovery hash does not match provenance",
     )?;
+    let canonical_transaction_reads = canonical_lf(TRANSACTION_READS);
+    let actual_transaction_reads = format!("{:x}", Sha256::digest(&canonical_transaction_reads));
+    require(
+        actual_transaction_reads == coverage.transaction_read_behavior_contract.sha256,
+        "transaction read hash does not match provenance",
+    )?;
 
     let routes = surface["http"]["routes"]
         .as_array()
@@ -249,6 +323,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native = BTreeSet::new();
     let mut native_behavior_cases = BTreeSet::new();
     let mut native_tenant_behavior_cases = BTreeSet::new();
+    let mut native_transaction_read_cases = BTreeSet::new();
     for operation in &coverage.native_http {
         require(
             native.insert((operation.method.as_str(), operation.path.as_str())),
@@ -281,6 +356,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             require(
                 operation.response.is_none()
                     && operation.tenant_behavior_case.is_none()
+                    && operation.transaction_read_behavior_case.is_none()
                     && behavior_case == operation.operation
                     && native_behavior_cases.insert(behavior_case)
                     && discovery.cases.iter().any(|case| {
@@ -300,6 +376,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         } else if let Some(behavior_case) = operation.tenant_behavior_case.as_deref() {
             require(
                 operation.response.is_none()
+                    && operation.transaction_read_behavior_case.is_none()
                     && behavior_case == operation.operation
                     && native_tenant_behavior_cases.insert(behavior_case)
                     && tenant_discovery.variants.iter().any(|variant| {
@@ -309,6 +386,36 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                             && variant.credential_configurations_supported.is_object()
                     }),
                 "native issuance operation diverges from its tenant behavior case",
+            )?;
+        } else if let Some(behavior_case) = operation.transaction_read_behavior_case.as_deref() {
+            require(
+                operation.response.is_none()
+                    && operation.behavior_case.is_none()
+                    && operation.tenant_behavior_case.is_none()
+                    && native_transaction_read_cases.insert(behavior_case)
+                    && transaction_reads.cases.iter().any(|case| {
+                        let expected_path = match behavior_case {
+                            "get_credential_offer" => "/v1/issuance/offers/tx-pending",
+                            "list_transactions" => {
+                                "/v1/issuance/transactions?organization_id=org-a"
+                            }
+                            "get_transaction" => "/v1/issuance/transactions/tx-revoked",
+                            "get_transaction_revocation_status" => {
+                                "/v1/issuance/transactions/tx-revoked/revocation-status"
+                            }
+                            "get_issuance_transaction_owner" => {
+                                "/internal/v1/resource-owners/issuance-transactions/tx-pending"
+                            }
+                            _ => return false,
+                        };
+                        case.operation == behavior_case
+                            && case.method == operation.method
+                            && case.path == expected_path
+                            && case.status_code == 200
+                            && !case.repository_calls.is_empty()
+                            && (case.body.is_object() || case.body.is_array())
+                    }),
+                "native issuance operation diverges from its transaction read case",
             )?;
         } else {
             return Err(invalid("native issuance behavior case is missing"));
@@ -331,6 +438,15 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         native_tenant_behavior_cases == frozen_tenant_behavior_cases,
         "native tenant issuance behavior coverage is incomplete",
+    )?;
+    let frozen_transaction_read_cases = transaction_reads
+        .cases
+        .iter()
+        .map(|case| case.operation.as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_transaction_read_cases == frozen_transaction_read_cases,
+        "native transaction read behavior coverage is incomplete",
     )?;
     for operation in &coverage.platform_additive_http {
         require(
@@ -454,8 +570,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 10);
-        assert_eq!(summary.remaining_http, 121);
+        assert_eq!(summary.native_http, 15);
+        assert_eq!(summary.remaining_http, 116);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }
