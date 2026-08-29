@@ -427,7 +427,18 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             && canvas_lti["login"]["success"]["state_ttl_minutes"] == 10
             && canvas_lti["login"]["failures"]
                 .as_array()
-                .is_some_and(|failures| failures.len() == 5),
+                .is_some_and(|failures| failures.len() == 5)
+            && canvas_lti["launch"]["submission"]["accepted_content_types"]
+                .as_array()
+                .is_some_and(|content_types| content_types.len() == 2)
+            && canvas_lti["launch"]["submission"]["failures"]
+                .as_array()
+                .is_some_and(|failures| failures.len() == 6)
+            && canvas_lti["launch"]["private_response_fields"]
+                .as_array()
+                .is_some_and(|fields| fields.len() == 12)
+            && canvas_lti["launch"]["public_response_vector"]["expected"]["verified"].as_bool()
+                == Some(true),
         "unexpected Canvas LTI behavior contract",
     )?;
     require(
@@ -999,7 +1010,7 @@ mod tests {
         );
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(CANVAS_LTI))),
-            "66e0bda60f841a16be701e04edf5a133baf08f58a9c4ada639a11945841e1893"
+            "dd8527269b1868e844d6e49ac2ddf229c58e13b950f9ce9a74f3432f44bbd374"
         );
     }
 

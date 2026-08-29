@@ -1,6 +1,10 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use marty_issuance_service::{
+    canvas_lti_launch::{
+        CanvasLtiLaunchContextRepository, CanvasLtiLaunchStateRepository,
+        CanvasLtiLaunchStateService,
+    },
     canvas_lti_login::{CanvasLtiLaunchState, CanvasLtiLoginRepository},
     canvas_lti_postgres::PostgresCanvasLtiLoginRepository,
 };
@@ -33,6 +37,10 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
         .execute(&pool)
         .await
         .unwrap();
+    sqlx::query("DROP TABLE IF EXISTS issuance_service.canvas_program_bindings")
+        .execute(&pool)
+        .await
+        .unwrap();
     sqlx::query("DROP TABLE IF EXISTS issuance_service.canvas_platforms")
         .execute(&pool)
         .await
@@ -51,6 +59,25 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
             lti_jwks_json jsonb NULL,
             lti_openid_configuration jsonb NULL,
             enabled boolean NOT NULL DEFAULT false
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TABLE issuance_service.canvas_program_bindings (
+            id text PRIMARY KEY,
+            organization_id text NOT NULL,
+            platform_id text NOT NULL REFERENCES issuance_service.canvas_platforms(id) ON DELETE CASCADE,
+            application_template_id text NOT NULL,
+            credential_template_id text NOT NULL,
+            delivery_mode text NULL,
+            deployment_profile_id text NULL,
+            feature_flags jsonb NOT NULL DEFAULT '{}'::jsonb,
+            evidence_requirements jsonb NOT NULL DEFAULT '[]'::jsonb,
+            canvas_scope jsonb NOT NULL DEFAULT '{}'::jsonb,
+            enabled boolean NOT NULL DEFAULT false,
+            created_at timestamptz NOT NULL DEFAULT clock_timestamp()
         )",
     )
     .execute(&pool)
@@ -107,6 +134,41 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
     assert!(platform.enabled);
     assert!(repository.get_platform("missing").await.unwrap().is_none());
 
+    sqlx::query(
+        "INSERT INTO issuance_service.canvas_program_bindings (
+            id, organization_id, platform_id, application_template_id,
+            credential_template_id, delivery_mode, deployment_profile_id,
+            feature_flags, evidence_requirements, canvas_scope, enabled, created_at
+        ) VALUES
+            ('binding-first', 'org-123', 'platform-123', 'app-first', 'credential-first',
+             'wallet_only', NULL, '{\"enable_canvas_lti\":true}'::jsonb,
+             '[{\"fact_type\":\"canvas.course_completion\"}]'::jsonb,
+             '{\"course_id\":\"course-101\"}'::jsonb, true, clock_timestamp() - interval '1 minute'),
+            ('binding-second', 'org-123', 'platform-123', 'app-second', 'credential-second',
+             'wallet_and_canvas', 'profile-1', '{}'::jsonb, '[]'::jsonb, '{}'::jsonb,
+             false, clock_timestamp())",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let bindings = repository
+        .list_program_bindings("org-123", "platform-123")
+        .await
+        .unwrap();
+    assert_eq!(bindings.len(), 2);
+    assert_eq!(bindings[0].id, "binding-first");
+    assert_eq!(bindings[0].canvas_scope, json!({"course_id": "course-101"}));
+    assert_eq!(
+        bindings[0].evidence_requirements,
+        vec![json!({"fact_type": "canvas.course_completion"})]
+    );
+    assert!(bindings[0].enabled);
+    assert_eq!(
+        bindings[1].deployment_profile_id.as_deref(),
+        Some("profile-1")
+    );
+    assert!(!bindings[1].enabled);
+
     let state = format!("state-{}", Uuid::new_v4());
     let nonce = format!("nonce-{}", Uuid::new_v4());
     let launch_state = CanvasLtiLaunchState {
@@ -155,7 +217,41 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
         launch_state.metadata
     );
 
+    let stored = repository
+        .get_launch_state(&state)
+        .await
+        .unwrap()
+        .expect("stored state");
+    assert_eq!(stored.platform_id, "platform-123");
+    assert_eq!(stored.nonce, nonce);
+    assert!(!stored.expired);
+
+    let service = CanvasLtiLaunchStateService::new(Arc::new(repository));
+    let first = service.clone();
+    let second = service;
+    let (first, second) = tokio::join!(
+        first.claim("platform-123", &state),
+        second.claim("platform-123", &state)
+    );
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    let consumed = sqlx::query(
+        "SELECT status, consumed_at FROM issuance_service.canvas_lti_launch_states WHERE state = $1",
+    )
+    .bind(&state)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(consumed.try_get::<String, _>("status").unwrap(), "consumed");
+    assert!(consumed
+        .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("consumed_at")
+        .unwrap()
+        .is_some());
+
     sqlx::query("DROP TABLE issuance_service.canvas_lti_launch_states")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP TABLE issuance_service.canvas_program_bindings")
         .execute(&pool)
         .await
         .unwrap();

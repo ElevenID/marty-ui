@@ -3,6 +3,10 @@ use serde_json::Value;
 use sqlx::{PgPool, Row};
 use tracing::error;
 
+use crate::canvas_lti_launch::{
+    CanvasLtiLaunchContextRepository, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
+    CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
+};
 use crate::canvas_lti_login::{
     CanvasLtiLaunchState, CanvasLtiLoginError, CanvasLtiLoginRepository, CanvasLtiPlatform,
 };
@@ -26,6 +30,25 @@ const SAVE_LAUNCH_STATE: &str = "WITH database_clock AS (
         database_clock.now + ($12::double precision * interval '1 second'),
         NULL
     FROM database_clock";
+
+const GET_LAUNCH_STATE: &str = "SELECT platform_id, state, nonce, status,
+        expires_at <= clock_timestamp() AS expired
+    FROM issuance_service.canvas_lti_launch_states
+    WHERE state = $1";
+
+const CONSUME_LAUNCH_STATE: &str = "UPDATE issuance_service.canvas_lti_launch_states
+    SET status = 'consumed', consumed_at = clock_timestamp()
+    WHERE state = $1
+      AND status = 'pending'
+      AND expires_at > clock_timestamp()
+    RETURNING platform_id, state, nonce, status, false AS expired";
+
+const LIST_PROGRAM_BINDINGS: &str = "SELECT id, organization_id, platform_id,
+        application_template_id, credential_template_id, delivery_mode,
+        deployment_profile_id, feature_flags, evidence_requirements, canvas_scope, enabled
+    FROM issuance_service.canvas_program_bindings
+    WHERE organization_id = $1 AND platform_id = $2
+    ORDER BY created_at";
 
 #[derive(Clone)]
 pub struct PostgresCanvasLtiLoginRepository {
@@ -112,7 +135,114 @@ impl CanvasLtiLoginRepository for PostgresCanvasLtiLoginRepository {
     }
 }
 
+#[async_trait]
+impl CanvasLtiLaunchStateRepository for PostgresCanvasLtiLoginRepository {
+    async fn get_launch_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<CanvasLtiStoredLaunchState>, CanvasLtiLaunchPlanError> {
+        let row = sqlx::query(GET_LAUNCH_STATE)
+            .bind(state)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(launch_repository_error)?;
+        row.map(stored_launch_state).transpose()
+    }
+
+    async fn consume_launch_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<CanvasLtiStoredLaunchState>, CanvasLtiLaunchPlanError> {
+        let row = sqlx::query(CONSUME_LAUNCH_STATE)
+            .bind(state)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(launch_repository_error)?;
+        row.map(stored_launch_state).transpose()
+    }
+}
+
+#[async_trait]
+impl CanvasLtiLaunchContextRepository for PostgresCanvasLtiLoginRepository {
+    async fn list_program_bindings(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+    ) -> Result<Vec<CanvasLtiProgramBinding>, CanvasLtiLaunchPlanError> {
+        sqlx::query(LIST_PROGRAM_BINDINGS)
+            .bind(organization_id)
+            .bind(platform_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(launch_repository_error)?
+            .into_iter()
+            .map(program_binding)
+            .collect()
+    }
+}
+
+fn program_binding(
+    row: sqlx::postgres::PgRow,
+) -> Result<CanvasLtiProgramBinding, CanvasLtiLaunchPlanError> {
+    let evidence_requirements: Value = row
+        .try_get("evidence_requirements")
+        .map_err(launch_repository_error)?;
+    let evidence_requirements = evidence_requirements
+        .as_array()
+        .cloned()
+        .ok_or(CanvasLtiLaunchPlanError::RepositoryUnavailable)?;
+    Ok(CanvasLtiProgramBinding {
+        id: row.try_get("id").map_err(launch_repository_error)?,
+        organization_id: row
+            .try_get("organization_id")
+            .map_err(launch_repository_error)?,
+        platform_id: row
+            .try_get("platform_id")
+            .map_err(launch_repository_error)?,
+        application_template_id: row
+            .try_get("application_template_id")
+            .map_err(launch_repository_error)?,
+        credential_template_id: row
+            .try_get("credential_template_id")
+            .map_err(launch_repository_error)?,
+        delivery_mode: row
+            .try_get::<Option<String>, _>("delivery_mode")
+            .map_err(launch_repository_error)?
+            .unwrap_or_else(|| "wallet_only".to_owned()),
+        deployment_profile_id: row
+            .try_get("deployment_profile_id")
+            .map_err(launch_repository_error)?,
+        feature_flags: row
+            .try_get("feature_flags")
+            .map_err(launch_repository_error)?,
+        evidence_requirements,
+        canvas_scope: row
+            .try_get("canvas_scope")
+            .map_err(launch_repository_error)?,
+        enabled: row.try_get("enabled").map_err(launch_repository_error)?,
+    })
+}
+
+fn stored_launch_state(
+    row: sqlx::postgres::PgRow,
+) -> Result<CanvasLtiStoredLaunchState, CanvasLtiLaunchPlanError> {
+    Ok(CanvasLtiStoredLaunchState {
+        platform_id: row
+            .try_get("platform_id")
+            .map_err(launch_repository_error)?,
+        state: row.try_get("state").map_err(launch_repository_error)?,
+        nonce: row.try_get("nonce").map_err(launch_repository_error)?,
+        status: row.try_get("status").map_err(launch_repository_error)?,
+        expired: row.try_get("expired").map_err(launch_repository_error)?,
+    })
+}
+
 fn repository_error(cause: sqlx::Error) -> CanvasLtiLoginError {
     error!(%cause, "Canvas LTI login repository query failed");
     CanvasLtiLoginError::RepositoryUnavailable
+}
+
+fn launch_repository_error(cause: sqlx::Error) -> CanvasLtiLaunchPlanError {
+    error!(%cause, "Canvas LTI launch-state repository query failed");
+    CanvasLtiLaunchPlanError::RepositoryUnavailable
 }
