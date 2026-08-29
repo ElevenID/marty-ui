@@ -138,10 +138,19 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert (
         coverage["canvas_lti_behavior_contract"]["commit"]
-        == "f5128204eef834a81b1585391779aa9e5a4a9797"
+        == "77bb0a18ea26fa0a88345550d402864b65ecb1ab"
     )
     assert canvas_lti["schema"] == "marty.issuance-canvas-lti-foundation/v1"
     assert len(canvas_lti["scope"]["routes"]) == 12
+    capability_policy = canvas_lti["launch"]["capability_snapshot_persistence"]
+    assert capability_policy["authority"] == "verified-signed-launch-claims"
+    assert capability_policy["authorization_index"] == "verified_binding_launches"
+    assert capability_policy["carry_prior_requires"] == [
+        "same-binding",
+        "same-course",
+        "same-config",
+    ]
+    assert len(capability_policy["cases"]) == 6
     native = {
         operation["operation"]: operation for operation in coverage["native_http"]
     }

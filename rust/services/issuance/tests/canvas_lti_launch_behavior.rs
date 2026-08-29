@@ -8,14 +8,15 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use marty_issuance_service::{
     canvas_lti_launch::{
-        feature_enabled, launch_scope, plan_ags_line_item_pin, plan_verified_identity,
-        private_launch_response, public_launch_response, scope_matches, select_binding,
-        select_binding_with_staff_fallback, CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest,
-        CanvasLtiAgsPinService, CanvasLtiAgsServiceUrlValidator, CanvasLtiIdentityRecord,
-        CanvasLtiIdentityRepository, CanvasLtiIdentityRequest, CanvasLtiIdentityService,
-        CanvasLtiIdentityStatus, CanvasLtiJwksRefreshService, CanvasLtiJwksRefresher,
-        CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService,
-        CanvasLtiLaunchSubmission, CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
+        feature_enabled, launch_scope, merge_verified_lti_binding_capabilities,
+        plan_ags_line_item_pin, plan_verified_identity, private_launch_response,
+        public_launch_response, scope_matches, select_binding, select_binding_with_staff_fallback,
+        CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiAgsPinService,
+        CanvasLtiAgsServiceUrlValidator, CanvasLtiIdentityRecord, CanvasLtiIdentityRepository,
+        CanvasLtiIdentityRequest, CanvasLtiIdentityService, CanvasLtiIdentityStatus,
+        CanvasLtiJwksRefreshService, CanvasLtiJwksRefresher, CanvasLtiLaunchPlanError,
+        CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService, CanvasLtiLaunchSubmission,
+        CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
     },
     canvas_lti_login::CanvasLtiPlatform,
     canvas_lti_postgres::MartyCanvasLtiAgsServiceUrlValidator,
@@ -567,6 +568,64 @@ async fn ags_line_item_planner_replays_the_python_oracle_contract() {
         policy["changed_binding_policy"]["config_version_increment"],
         1
     );
+}
+
+#[test]
+fn capability_snapshot_planner_replays_the_python_oracle_contract() {
+    let contract = contract();
+    let policy = &contract["launch"]["capability_snapshot_persistence"];
+    assert_eq!(policy["authority"], "verified-signed-launch-claims");
+    assert_eq!(policy["authorization_index"], "verified_binding_launches");
+    assert_eq!(
+        policy["ags_pin_version_exception"],
+        "one-version-behind-only-when-line-item-changed"
+    );
+    assert_eq!(
+        policy["verified_ags_line_items"],
+        "sorted-deduplicated-union"
+    );
+
+    for case in policy["cases"].as_array().unwrap() {
+        let mut snapshot = json!({"diagnostic_from_last_launch": "replace-me"});
+        let mut prior = case["prior"].clone();
+        if let Some(prior_object) = prior.as_object_mut() {
+            let snapshot_key = prior_object
+                .remove("snapshot_key")
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap();
+            snapshot["verified_binding_launches"] = json!({snapshot_key: prior});
+        }
+        let binding_id = case["binding_id"].as_str().unwrap();
+        let actual = merge_verified_lti_binding_capabilities(
+            &snapshot,
+            &case["launch_capabilities"],
+            binding_id,
+            case["binding_config_version"].as_i64().unwrap(),
+            case["signed_course_id"].as_str().unwrap(),
+            case["line_item_configuration_changed"].as_bool().unwrap(),
+            "2026-08-29T12:00:00+00:00",
+        );
+        assert_eq!(
+            actual["verified_binding_launches"][binding_id],
+            case["expected_binding_capabilities"],
+            "{}",
+            case["name"].as_str().unwrap()
+        );
+        for (key, value) in case["launch_capabilities"].as_object().unwrap() {
+            assert_eq!(&actual[key], value, "{}", case["name"].as_str().unwrap());
+        }
+        assert_eq!(actual["verified_binding_id"], binding_id);
+        assert_eq!(
+            actual["verified_binding_config_version"],
+            case["binding_config_version"]
+        );
+        assert_eq!(actual["verified_course_id"], case["signed_course_id"]);
+        assert_eq!(actual["verified_at"], "2026-08-29T12:00:00+00:00");
+        if case["preserve_other_binding"].as_bool() == Some(true) {
+            let snapshot_key = case["prior"]["snapshot_key"].as_str().unwrap();
+            assert_eq!(actual["verified_binding_launches"][snapshot_key], prior);
+        }
+    }
 }
 
 #[tokio::test]

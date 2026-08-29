@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use marty_oid4vci::{
@@ -310,6 +313,136 @@ impl CanvasLtiAgsPinService {
         self.repository
             .pin_verified_line_item(binding, &request)
             .await
+    }
+}
+
+/// Merge capabilities from one verified launch into the binding-indexed
+/// authorization snapshot without allowing launch order or configuration drift
+/// to erase or carry capabilities across trust scopes.
+#[must_use]
+pub fn merge_verified_lti_binding_capabilities(
+    capability_snapshot: &Value,
+    launch_capabilities: &Value,
+    binding_id: &str,
+    binding_config_version: i64,
+    signed_course_id: &str,
+    line_item_configuration_changed: bool,
+    verified_at: &str,
+) -> Value {
+    let mut launches = capability_snapshot
+        .get("verified_binding_launches")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let prior = launches
+        .get(binding_id)
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let prior_version = prior
+        .get("verified_binding_config_version")
+        .and_then(python_int)
+        .unwrap_or(-1);
+    let prior_course_id = prior
+        .get("verified_course_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    let can_carry_prior = prior.get("verified_binding_id").and_then(Value::as_str)
+        == Some(binding_id)
+        && prior_course_id == signed_course_id
+        && (prior_version == binding_config_version
+            || (line_item_configuration_changed && prior_version == binding_config_version - 1));
+    let mut binding_capabilities = if can_carry_prior { prior } else { Map::new() };
+    let current = launch_capabilities.as_object().cloned().unwrap_or_default();
+    // Navigation launches can omit AGS while resource launches can omit NRPS.
+    // Preserve verified positive claims for the same binding/course/config.
+    for (key, value) in &current {
+        if positive_capability(value) || !binding_capabilities.contains_key(key) {
+            binding_capabilities.insert(key.clone(), value.clone());
+        }
+    }
+    let mut verified_line_items = binding_capabilities
+        .get("verified_ags_line_items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    if let Some(current_line_item) = current
+        .get("ags_lineitem_url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        verified_line_items.insert(current_line_item.to_owned());
+    }
+    binding_capabilities.insert(
+        "verified_binding_id".to_owned(),
+        Value::String(binding_id.to_owned()),
+    );
+    binding_capabilities.insert(
+        "verified_binding_config_version".to_owned(),
+        Value::Number(binding_config_version.into()),
+    );
+    binding_capabilities.insert(
+        "verified_course_id".to_owned(),
+        Value::String(signed_course_id.to_owned()),
+    );
+    binding_capabilities.insert(
+        "verified_at".to_owned(),
+        Value::String(verified_at.to_owned()),
+    );
+    binding_capabilities.insert(
+        "verified_ags_line_items".to_owned(),
+        Value::Array(verified_line_items.into_iter().map(Value::String).collect()),
+    );
+    launches.insert(binding_id.to_owned(), Value::Object(binding_capabilities));
+
+    // Keep last-launch fields for diagnostics and backward-compatible display;
+    // authorization decisions consume the binding-indexed snapshot.
+    let mut snapshot = current;
+    snapshot.insert(
+        "verified_binding_id".to_owned(),
+        Value::String(binding_id.to_owned()),
+    );
+    snapshot.insert(
+        "verified_binding_config_version".to_owned(),
+        Value::Number(binding_config_version.into()),
+    );
+    snapshot.insert(
+        "verified_course_id".to_owned(),
+        Value::String(signed_course_id.to_owned()),
+    );
+    snapshot.insert(
+        "verified_at".to_owned(),
+        Value::String(verified_at.to_owned()),
+    );
+    snapshot.insert(
+        "verified_binding_launches".to_owned(),
+        Value::Object(launches),
+    );
+    Value::Object(snapshot)
+}
+
+fn positive_capability(value: &Value) -> bool {
+    !matches!(value, Value::Null | Value::Bool(false))
+        && !matches!(value, Value::String(value) if value.is_empty())
+        && !matches!(value, Value::Array(value) if value.is_empty())
+}
+
+fn python_int(value: &Value) -> Option<i64> {
+    match value {
+        Value::Bool(value) => Some(i64::from(*value)),
+        Value::Number(value) => value
+            .as_i64()
+            .or_else(|| value.as_u64().and_then(|value| i64::try_from(value).ok()))
+            .or_else(|| value.as_f64().map(|value| value.trunc() as i64)),
+        Value::String(value) => value.trim().parse().ok(),
+        _ => None,
     }
 }
 
