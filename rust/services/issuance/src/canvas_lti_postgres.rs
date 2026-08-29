@@ -9,10 +9,16 @@ use serde_json::Value;
 use sqlx::{PgPool, Row};
 use tracing::error;
 
+use crate::canvas_lti_experience::{
+    canvas_lti_experience_exchange_metadata, generate_valid_session,
+    CanvasLtiExperienceExchangeError, CanvasLtiExperienceExchangePersistence,
+    CanvasLtiExperienceExchangeRecord, CanvasLtiExperienceExchangeRepository,
+    CanvasLtiExperienceSessionGenerator,
+};
 use crate::canvas_lti_launch::{
     merge_verified_lti_binding_capabilities, plan_ags_line_item_pin, plan_verified_identity,
     CanvasLtiAgsPinRepository, CanvasLtiAgsPinRequest, CanvasLtiAgsServiceUrlValidator,
-    CanvasLtiCapabilitySnapshotRepository, CanvasLtiCapabilitySnapshotRequest,
+    CanvasLtiCapabilitySnapshotRepository, CanvasLtiCapabilitySnapshotRequest, CanvasLtiClock,
     CanvasLtiExperienceHandoffRepository, CanvasLtiExperienceHandoffRequest,
     CanvasLtiIdentityRecord, CanvasLtiIdentityRepository, CanvasLtiIdentityRequest,
     CanvasLtiIdentityStatus, CanvasLtiJwksRefresher, CanvasLtiLaunchContextRepository,
@@ -68,6 +74,17 @@ const ATTACH_EXPERIENCE_CODE: &str = "UPDATE issuance_service.canvas_lti_launch_
     SET metadata = $6
     WHERE id = $1 AND state = $2 AND platform_id = $3 AND organization_id = $4
       AND canvas_account_id = $5 AND status = 'consumed'";
+
+const INSERT_EXPERIENCE_SESSION: &str = "INSERT INTO issuance_service.canvas_lti_launch_states (
+        id, platform_id, organization_id, canvas_account_id, state, nonce, login_hint,
+        target_link_uri, lti_message_hint, redirect_uri, status, metadata,
+        created_at, expires_at, consumed_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL, $7, 'session', $8,
+        $9, $10, $9)";
+
+const REDACT_SPENT_EXPERIENCE_CODE: &str = "UPDATE issuance_service.canvas_lti_launch_states
+    SET metadata = $3
+    WHERE id = $1 AND state = $2 AND status = 'consumed'";
 
 const LIST_PROGRAM_BINDINGS: &str = "SELECT id, organization_id, platform_id,
         application_template_id, credential_template_id, delivery_mode,
@@ -441,6 +458,90 @@ impl CanvasLtiExperienceHandoffRepository for PostgresCanvasLtiLoginRepository {
             return Err(CanvasLtiLaunchPlanError::RepositoryUnavailable);
         }
         transaction.commit().await.map_err(launch_repository_error)
+    }
+}
+
+#[async_trait]
+impl CanvasLtiExperienceExchangeRepository for PostgresCanvasLtiLoginRepository {
+    async fn exchange_experience_code(
+        &self,
+        request: &CanvasLtiExperienceExchangePersistence,
+        generator: &dyn CanvasLtiExperienceSessionGenerator,
+        clock: &dyn CanvasLtiClock,
+    ) -> Result<CanvasLtiExperienceExchangeRecord, CanvasLtiExperienceExchangeError> {
+        let ttl = chrono::Duration::from_std(request.session_ttl)
+            .map_err(|_| CanvasLtiExperienceExchangeError::InvalidConfiguration)?;
+        if request.code.trim().is_empty() || request.session_ttl.is_zero() {
+            return Err(CanvasLtiExperienceExchangeError::InvalidConfiguration);
+        }
+        let mut transaction = self.pool.begin().await.map_err(exchange_repository_error)?;
+        let consumed = sqlx::query(CONSUME_LAUNCH_STATE)
+            .bind(&request.code)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(exchange_repository_error)?;
+        let Some(consumed) = consumed else {
+            return Err(CanvasLtiExperienceExchangeError::InvalidCode);
+        };
+        let consumed = stored_launch_state(consumed).map_err(exchange_plan_error)?;
+        if consumed.metadata.get("kind").and_then(Value::as_str)
+            != Some("canvas_lti_experience_code")
+        {
+            // Preserve the frozen Python boundary: an unrecognized pending
+            // state is consumed before its experience-code kind fails.
+            transaction
+                .commit()
+                .await
+                .map_err(exchange_repository_error)?;
+            return Err(CanvasLtiExperienceExchangeError::InvalidCode);
+        }
+        let session = generate_valid_session(generator)?;
+        let created_at = clock.now();
+        let expires_at = created_at
+            .checked_add_signed(ttl)
+            .ok_or(CanvasLtiExperienceExchangeError::InvalidConfiguration)?;
+        let (session_metadata, spent_code_metadata) = canvas_lti_experience_exchange_metadata(
+            &consumed.metadata,
+            &consumed.id,
+            &session.id,
+            created_at,
+        );
+        sqlx::query(INSERT_EXPERIENCE_SESSION)
+            .bind(&session.id)
+            .bind(&consumed.platform_id)
+            .bind(&consumed.organization_id)
+            .bind(&consumed.canvas_account_id)
+            .bind(&session.state_digest)
+            .bind(&session.nonce)
+            .bind(&consumed.redirect_uri)
+            .bind(&session_metadata)
+            .bind(created_at)
+            .bind(expires_at)
+            .execute(&mut *transaction)
+            .await
+            .map_err(exchange_repository_error)?;
+        let redacted = sqlx::query(REDACT_SPENT_EXPERIENCE_CODE)
+            .bind(&consumed.id)
+            .bind(&consumed.state)
+            .bind(&spent_code_metadata)
+            .execute(&mut *transaction)
+            .await
+            .map_err(exchange_repository_error)?;
+        if redacted.rows_affected() != 1 {
+            return Err(CanvasLtiExperienceExchangeError::RepositoryUnavailable);
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(exchange_repository_error)?;
+        Ok(CanvasLtiExperienceExchangeRecord {
+            experience_code_id: consumed.id,
+            session,
+            created_at,
+            expires_at,
+            session_metadata,
+            spent_code_metadata,
+        })
     }
 }
 
@@ -862,4 +963,14 @@ fn repository_error(cause: sqlx::Error) -> CanvasLtiLoginError {
 fn launch_repository_error(cause: sqlx::Error) -> CanvasLtiLaunchPlanError {
     error!(%cause, "Canvas LTI launch-state repository query failed");
     CanvasLtiLaunchPlanError::RepositoryUnavailable
+}
+
+fn exchange_repository_error(cause: sqlx::Error) -> CanvasLtiExperienceExchangeError {
+    error!(%cause, "Canvas LTI experience exchange repository query failed");
+    CanvasLtiExperienceExchangeError::RepositoryUnavailable
+}
+
+fn exchange_plan_error(cause: CanvasLtiLaunchPlanError) -> CanvasLtiExperienceExchangeError {
+    error!(%cause, "Canvas LTI experience exchange record was invalid");
+    CanvasLtiExperienceExchangeError::RepositoryUnavailable
 }

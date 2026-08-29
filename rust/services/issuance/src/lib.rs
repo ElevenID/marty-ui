@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod canvas_issuance_guard;
+pub mod canvas_lti_experience;
 pub mod canvas_lti_launch;
 pub mod canvas_lti_login;
 pub mod canvas_lti_postgres;
