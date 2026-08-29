@@ -622,7 +622,8 @@
         "binding_paths": [
           "contracts/issuance-runtime-surface.json",
           "contracts/issuance-native-coverage.json",
-          "contracts/issuance-static-discovery.json"
+          "contracts/issuance-static-discovery.json",
+          "contracts/issuance-tenant-discovery.json"
         ]
       },
       "legacy": [

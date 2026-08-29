@@ -9,6 +9,8 @@ const SURFACE: &[u8] = include_bytes!("../../../../contracts/issuance-runtime-su
 const COVERAGE: &str = include_str!("../../../../contracts/issuance-native-coverage.json");
 const STATIC_DISCOVERY: &[u8] =
     include_bytes!("../../../../contracts/issuance-static-discovery.json");
+const TENANT_DISCOVERY: &[u8] =
+    include_bytes!("../../../../contracts/issuance-tenant-discovery.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageSummary {
@@ -22,6 +24,7 @@ struct Coverage {
     schema: String,
     upstream: Upstream,
     behavior_contract: Upstream,
+    tenant_behavior_contract: Upstream,
     native_http: Vec<HttpOperation>,
     platform_additive_http: Vec<PlatformOperation>,
     remaining: Remaining,
@@ -46,6 +49,8 @@ struct HttpOperation {
     response: Option<ExpectedResponse>,
     #[serde(default)]
     behavior_case: Option<String>,
+    #[serde(default)]
+    tenant_behavior_case: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -74,6 +79,23 @@ struct DiscoveryCase {
 }
 
 #[derive(Deserialize)]
+struct TenantDiscoveryContract {
+    schema: String,
+    inputs: Value,
+    failure: Value,
+    variants: Vec<TenantDiscoveryVariant>,
+}
+
+#[derive(Deserialize)]
+struct TenantDiscoveryVariant {
+    operation: String,
+    path: String,
+    issuer_suffix: String,
+    expected_resolver_calls: Vec<Value>,
+    credential_configurations_supported: Value,
+}
+
+#[derive(Deserialize)]
 struct PlatformOperation {
     method: String,
     path: String,
@@ -98,6 +120,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid native coverage", error))?;
     let discovery: DiscoveryContract = serde_json::from_slice(STATIC_DISCOVERY)
         .map_err(|error| contract_error("invalid static discovery contract", error))?;
+    let tenant_discovery: TenantDiscoveryContract = serde_json::from_slice(TENANT_DISCOVERY)
+        .map_err(|error| contract_error("invalid tenant discovery contract", error))?;
     require(
         surface["schema"] == "marty.issuance-runtime-surface/v1",
         "unexpected issuance surface schema",
@@ -127,6 +151,25 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "unexpected static discovery behavior contract",
     )?;
     require(
+        tenant_discovery.schema == "marty.issuance-tenant-discovery/v1"
+            && tenant_discovery.inputs["organization_id"] == "org-a"
+            && tenant_discovery.variants.len() == 3
+            && tenant_discovery.failure["resolver_unavailable"]["status_code"] == 503
+            && tenant_discovery.failure["resolver_unavailable"]["body"]
+                == serde_json::json!({
+                    "detail": "Issuer proof policy is temporarily unavailable"
+                })
+            && tenant_discovery.variants.iter().all(|variant| {
+                !variant.expected_resolver_calls.is_empty()
+                    && variant.credential_configurations_supported.is_object()
+                    && variant
+                        .path
+                        .starts_with("/.well-known/openid-credential-issuer/org/org-a")
+                    && variant.path.ends_with(&variant.issuer_suffix)
+            }),
+        "unexpected tenant discovery behavior contract",
+    )?;
+    require(
         coverage.behavior_contract.repository == "ElevenID/marty-credentials"
             && coverage.behavior_contract.path == "contracts/issuance-static-discovery.json"
             && coverage.behavior_contract.commit.len() == 40
@@ -136,6 +179,17 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 .chars()
                 .all(|character| character.is_ascii_hexdigit()),
         "invalid static discovery provenance",
+    )?;
+    require(
+        coverage.tenant_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.tenant_behavior_contract.path == "contracts/issuance-tenant-discovery.json"
+            && coverage.tenant_behavior_contract.commit.len() == 40
+            && coverage
+                .tenant_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid tenant discovery provenance",
     )?;
     require(
         coverage.schema == "marty.issuance-native-coverage/v1",
@@ -164,6 +218,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         actual_discovery_hash == coverage.behavior_contract.sha256,
         "static discovery hash does not match provenance",
     )?;
+    let canonical_tenant_discovery = canonical_lf(TENANT_DISCOVERY);
+    let actual_tenant_discovery = format!("{:x}", Sha256::digest(&canonical_tenant_discovery));
+    require(
+        actual_tenant_discovery == coverage.tenant_behavior_contract.sha256,
+        "tenant discovery hash does not match provenance",
+    )?;
 
     let routes = surface["http"]["routes"]
         .as_array()
@@ -188,6 +248,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
 
     let mut native = BTreeSet::new();
     let mut native_behavior_cases = BTreeSet::new();
+    let mut native_tenant_behavior_cases = BTreeSet::new();
     for operation in &coverage.native_http {
         require(
             native.insert((operation.method.as_str(), operation.path.as_str())),
@@ -216,13 +277,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                         }),
                 "native issuance health response diverges from the legacy contract",
             )?;
-        } else {
-            let behavior_case = operation
-                .behavior_case
-                .as_deref()
-                .ok_or_else(|| invalid("native issuance behavior case is missing"))?;
+        } else if let Some(behavior_case) = operation.behavior_case.as_deref() {
             require(
                 operation.response.is_none()
+                    && operation.tenant_behavior_case.is_none()
                     && behavior_case == operation.operation
                     && native_behavior_cases.insert(behavior_case)
                     && discovery.cases.iter().any(|case| {
@@ -239,6 +297,21 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     }),
                 "native issuance operation diverges from its behavior case",
             )?;
+        } else if let Some(behavior_case) = operation.tenant_behavior_case.as_deref() {
+            require(
+                operation.response.is_none()
+                    && behavior_case == operation.operation
+                    && native_tenant_behavior_cases.insert(behavior_case)
+                    && tenant_discovery.variants.iter().any(|variant| {
+                        let expected_case_path = operation.path.replace("{org_id}", "org-a");
+                        variant.operation == behavior_case
+                            && variant.path == expected_case_path
+                            && variant.credential_configurations_supported.is_object()
+                    }),
+                "native issuance operation diverges from its tenant behavior case",
+            )?;
+        } else {
+            return Err(invalid("native issuance behavior case is missing"));
         }
     }
     let frozen_behavior_cases = discovery
@@ -249,6 +322,15 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         native_behavior_cases == frozen_behavior_cases,
         "native issuance behavior coverage is incomplete",
+    )?;
+    let frozen_tenant_behavior_cases = tenant_discovery
+        .variants
+        .iter()
+        .map(|variant| variant.operation.as_str())
+        .collect::<BTreeSet<_>>();
+    require(
+        native_tenant_behavior_cases == frozen_tenant_behavior_cases,
+        "native tenant issuance behavior coverage is incomplete",
     )?;
     for operation in &coverage.platform_additive_http {
         require(
@@ -288,11 +370,15 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         coverage.native_environment_variables
             == [
                 "CORS_ALLOWED_ORIGINS",
+                "DATABASE_URL",
                 "ISSUANCE_SERVICE_PORT",
+                "ISSUANCE_API_KEY",
                 "ISSUER_BASE_URL",
                 "ISSUER_DISPLAY_NAME",
+                "SIGNING_KEYS_INTERNAL_API_KEY",
+                "SIGNING_KEYS_INTERNAL_URL",
             ]
-            && coverage.remaining.literal_environment_variables + 4 == environment_count
+            && coverage.remaining.literal_environment_variables + 8 == environment_count
             && coverage.remaining.dynamic_configuration_lookups == dynamic_count
             && coverage.remaining.migration_revisions == migration_count
             && coverage.remaining.migration_heads == migration_heads,
@@ -368,8 +454,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 7);
-        assert_eq!(summary.remaining_http, 124);
+        assert_eq!(summary.native_http, 10);
+        assert_eq!(summary.remaining_http, 121);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }

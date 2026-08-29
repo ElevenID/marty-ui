@@ -20,14 +20,19 @@ The floor currently contains:
 - 44 Alembic revisions with one head; and
 - every literal and dynamic configuration lookup site.
 
-The native candidate now owns seven frozen HTTP operations: the exact legacy
+The native candidate now owns ten frozen HTTP operations: the exact legacy
 `GET /health` representation, global issuer metadata, SD-JWT type metadata,
-and the global plus three organization-scoped OAuth discovery variants. The
-six deterministic discovery responses replay the Python oracle contract in
+the global plus three organization-scoped OAuth discovery variants, and all
+three tenant-backed credential-issuer metadata variants. The six deterministic
+discovery responses replay the Python oracle contract in
 [`issuance-static-discovery.json`](../../contracts/issuance-static-discovery.json)
-through typed `marty-oid4vci` Final-spec documents. The three organization
-issuer-metadata variants remain explicitly unclaimed because they require
-tenant credential formats, display data, and key-attestation policy.
+through typed `marty-oid4vci` Final-spec documents. Tenant discovery replays
+[`issuance-tenant-discovery.json`](../../contracts/issuance-tenant-discovery.json)
+through a pure two-phase Rust planner, an organization-scoped Postgres
+projection, and a fail-closed signing-policy adapter. It preserves format
+filtering, claims and display metadata, DID-selected proof policy, and Google
+and Apple wallet variants without moving database or HTTP I/O into the core
+protocol crate.
 The same contract binds legacy request-ID propagation/generation and allowed
 and denied CORS behavior so route ownership includes transport semantics, not
 only JSON bodies.
@@ -43,9 +48,9 @@ Python issuance image.
    framework behavior.
 2. Land this native host, contract mirror, provenance, configuration adapter,
    lifecycle, and executable smoke gate without deployment wiring.
-3. Finish tenant-backed issuer discovery, then port offer/transaction reads
-   using canonical `marty-oid4vci` types and MMF transport/configuration
-   primitives. The deterministic discovery subset is complete in Rust.
+3. Port offer/transaction reads using canonical `marty-oid4vci` types and MMF
+   transport/configuration primitives. All issuer discovery is complete in
+   Rust.
 4. Port token exchange and credential issuance, reusing `marty-core` for
    cryptography and credential formats and preserving idempotency/race gates.
 5. Port revocation/status lifecycle, physical-document paths, Canvas/LTI
