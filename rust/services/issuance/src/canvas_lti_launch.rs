@@ -1,7 +1,10 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
-use marty_oid4vci::lti::{verify_lti_launch_jwt, VerifiedLtiLaunch};
+use marty_oid4vci::{
+    lti::{verify_lti_launch_jwt, VerifiedLtiLaunch},
+    Oid4vciError,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -15,6 +18,7 @@ const DEEP_LINKING_CLAIM: &str =
     "https://purl.imsglobal.org/spec/lti-dl/claim/deep_linking_settings";
 const AGS_ENDPOINT_CLAIM: &str = "https://purl.imsglobal.org/spec/lti-ags/claim/endpoint";
 const NRPS_CLAIM: &str = "https://purl.imsglobal.org/spec/lti-nrps/claim/namesroleservice";
+const UNKNOWN_LTI_KID_MARKER: &str = "No JWKS entry found for LTI kid";
 
 const FEATURE_FLAGS: [&str; 8] = [
     "enable_background_awards",
@@ -127,6 +131,8 @@ pub enum CanvasLtiLaunchPlanError {
     Invalid(&'static str),
     #[error("Canvas LTI launch verification failed: {0}")]
     Verification(String),
+    #[error("Canvas LTI launch verification failed after JWKS refresh: {0}")]
+    VerificationAfterJwksRefresh(String),
     #[error("Canvas LTI launch did not match an enabled Canvas program binding")]
     BindingNotFound,
     #[error("Canvas LTI is disabled for this deployment profile")]
@@ -168,6 +174,66 @@ pub trait CanvasLtiLaunchContextRepository: Send + Sync {
         organization_id: &str,
         platform_id: &str,
     ) -> Result<Vec<CanvasLtiProgramBinding>, CanvasLtiLaunchPlanError>;
+}
+
+#[async_trait]
+pub trait CanvasLtiJwksRefresher: Send + Sync {
+    /// Refresh, validate, and persist the platform metadata before returning it.
+    async fn refresh_platform_jwks(
+        &self,
+        platform: &CanvasLtiPlatform,
+    ) -> Result<CanvasLtiPlatform, CanvasLtiLaunchPlanError>;
+}
+
+#[derive(Clone)]
+pub struct CanvasLtiJwksRefreshService {
+    refresher: Arc<dyn CanvasLtiJwksRefresher>,
+}
+
+impl std::fmt::Debug for CanvasLtiJwksRefreshService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiJwksRefreshService")
+            .finish_non_exhaustive()
+    }
+}
+
+impl CanvasLtiJwksRefreshService {
+    #[must_use]
+    pub fn new(refresher: Arc<dyn CanvasLtiJwksRefresher>) -> Self {
+        Self { refresher }
+    }
+
+    pub async fn verify_with_refresh(
+        &self,
+        platform: &CanvasLtiPlatform,
+        id_token: &str,
+        expected_nonce: &str,
+    ) -> Result<(CanvasLtiPlatform, VerifiedLtiLaunch), CanvasLtiLaunchPlanError> {
+        match verify_launch_classified(platform, id_token, expected_nonce) {
+            Ok(verified) => Ok((platform.clone(), verified)),
+            Err(LaunchVerificationFailure::Rejected(message)) => {
+                Err(CanvasLtiLaunchPlanError::Verification(message))
+            }
+            Err(LaunchVerificationFailure::UnknownKid(message)) if !has_canvas_origin(platform) => {
+                Err(CanvasLtiLaunchPlanError::Verification(message))
+            }
+            Err(LaunchVerificationFailure::UnknownKid(_)) => {
+                let refreshed = self
+                    .refresher
+                    .refresh_platform_jwks(platform)
+                    .await
+                    .map_err(|error| {
+                        CanvasLtiLaunchPlanError::VerificationAfterJwksRefresh(error.to_string())
+                    })?;
+                verify_launch_classified(&refreshed, id_token, expected_nonce)
+                    .map(|verified| (refreshed, verified))
+                    .map_err(|error| {
+                        CanvasLtiLaunchPlanError::VerificationAfterJwksRefresh(error.into_message())
+                    })
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -422,11 +488,34 @@ pub fn verify_launch(
     id_token: &str,
     expected_nonce: &str,
 ) -> Result<VerifiedLtiLaunch, CanvasLtiLaunchPlanError> {
+    verify_launch_classified(platform, id_token, expected_nonce)
+        .map_err(|error| CanvasLtiLaunchPlanError::Verification(error.into_message()))
+}
+
+#[derive(Debug)]
+enum LaunchVerificationFailure {
+    UnknownKid(String),
+    Rejected(String),
+}
+
+impl LaunchVerificationFailure {
+    fn into_message(self) -> String {
+        match self {
+            Self::UnknownKid(message) | Self::Rejected(message) => message,
+        }
+    }
+}
+
+fn verify_launch_classified(
+    platform: &CanvasLtiPlatform,
+    id_token: &str,
+    expected_nonce: &str,
+) -> Result<VerifiedLtiLaunch, LaunchVerificationFailure> {
     let issuer = platform.lti_issuer.as_deref().unwrap_or_default();
     let client_id = platform.lti_client_id.as_deref().unwrap_or_default();
     let deployment_id = platform.lti_deployment_id.as_deref().unwrap_or_default();
     let jwks = serde_json::to_string(platform.lti_jwks_json.as_ref().unwrap_or(&Value::Null))
-        .map_err(|error| CanvasLtiLaunchPlanError::Verification(error.to_string()))?;
+        .map_err(|error| LaunchVerificationFailure::Rejected(error.to_string()))?;
     verify_lti_launch_jwt(
         id_token,
         issuer,
@@ -436,7 +525,19 @@ pub fn verify_launch(
         Some(expected_nonce),
         120,
     )
-    .map_err(|error| CanvasLtiLaunchPlanError::Verification(error.to_string()))
+    .map_err(|error| match error {
+        Oid4vciError::InvalidRequest(message) if message.starts_with(UNKNOWN_LTI_KID_MARKER) => {
+            LaunchVerificationFailure::UnknownKid(Oid4vciError::InvalidRequest(message).to_string())
+        }
+        other => LaunchVerificationFailure::Rejected(other.to_string()),
+    })
+}
+
+fn has_canvas_origin(platform: &CanvasLtiPlatform) -> bool {
+    platform
+        .canvas_base_url
+        .as_deref()
+        .is_some_and(|origin| !origin.trim().is_empty())
 }
 
 pub fn select_binding<'a>(

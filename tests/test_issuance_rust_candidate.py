@@ -138,7 +138,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert (
         coverage["canvas_lti_behavior_contract"]["commit"]
-        == "8216fe47a5111b18c663f72754793ce04266b8ec"
+        == "a70219292032e137cb2ac796c71be0d90050ac04"
     )
     assert canvas_lti["schema"] == "marty.issuance-canvas-lti-foundation/v1"
     assert len(canvas_lti["scope"]["routes"]) == 12
