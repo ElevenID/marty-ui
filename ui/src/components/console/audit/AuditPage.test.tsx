@@ -153,6 +153,22 @@ describe('AuditPage', () => {
     })
   })
 
+  it('loads a credential-scoped audit search from the URL', async () => {
+    renderWithRouter(<AuditPage />, {
+      initialEntries: ['/console/org/audit?search=credential-2'],
+    })
+
+    await waitFor(() => {
+      expect(mockListAuditEvents).toHaveBeenCalledWith('org-active', {
+        limit: 25,
+        offset: 0,
+        search: 'credential-2',
+      })
+    })
+
+    expect(screen.getByDisplayValue('credential-2')).toBeInTheDocument()
+  })
+
   it('exports audit events and opens the download URL', async () => {
     const { user } = renderWithRouter(<AuditPage />, {
       initialEntries: ['/console/org/audit'],

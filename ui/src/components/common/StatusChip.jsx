@@ -13,6 +13,7 @@ import PendingIcon from '@mui/icons-material/Pending';
 import DraftsIcon from '@mui/icons-material/Drafts';
 import BlockIcon from '@mui/icons-material/Block';
 import SendIcon from '@mui/icons-material/Send';
+import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutlined';
 
 /**
  * Status configurations for different resource types
@@ -45,6 +46,7 @@ const getStatusConfigs = (t) => ({
   // Credential statuses
   credentialed: { label: t('status.credentialed', 'Credential Issued'), color: 'success', icon: CheckCircleIcon },
   issued: { label: t('status.issued'), color: 'success', icon: CheckCircleIcon },
+  suspended: { label: t('status.suspended', 'Suspended'), color: 'warning', icon: PauseCircleOutlineIcon },
   revoked: { label: t('status.revoked'), color: 'error', icon: BlockIcon },
   expired: { label: t('status.expired'), color: 'warning', icon: WarningIcon },
   
@@ -69,7 +71,9 @@ function StatusChip({
   variant,
 }) {
   const { t } = useTranslation('common');
-  const config = getStatusConfigs(t)[status] || getStatusConfigs(t).unknown;
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+  const statusConfigs = getStatusConfigs(t);
+  const config = statusConfigs[normalizedStatus] || statusConfigs.unknown;
   const { label, color, icon: IconComponent } = config;
 
   return (

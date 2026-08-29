@@ -30,6 +30,7 @@ import {
   generateWalletPairingQR,
   fetchWalletPairingStatus,
 } from './vendorApi';
+import { formatOfficialReference } from '../../utils/officialReferences';
 
 // Mock the api service
 vi.mock('../../services/api', () => ({
@@ -155,6 +156,34 @@ describe('vendorApi', () => {
     get.mockResolvedValue([]);
     await fetchIssuedCredentials({ organizationId: 'org-1', page: 1, perPage: 10, searchQuery: 'jane' });
     expect(get).toHaveBeenCalledWith(expect.stringContaining('/v1/issued-credentials?organization_id=org-1'));
+  });
+
+  it('preserves friendly holder labels and lifecycle relationship fields', async () => {
+    get.mockResolvedValue([{
+      id: 'credential-2',
+      credential_type: 'membership',
+      subject_display_name: 'Demo Employee 01',
+      subject_email: 'demo.employee.01@example.test',
+      status: 'ACTIVE',
+      flow_execution_id: 'flow-1',
+      renewed_from_credential_id: 'credential-1',
+    }]);
+
+    const result = await fetchIssuedCredentials({
+      organizationId: 'org-1',
+      page: 1,
+      perPage: 10,
+      searchQuery: formatOfficialReference('credential-2', 'credential'),
+    });
+
+    expect(result.credentials[0]).toMatchObject({
+      holder_label: 'Demo Employee 01',
+      credential_reference: formatOfficialReference('credential-2', 'credential'),
+      holder_reference: formatOfficialReference('demo.employee.01@example.test', 'account'),
+      lifecycle_case_reference: formatOfficialReference('flow-1', 'flow'),
+      flow_execution_id: 'flow-1',
+      renewed_from_credential_id: 'credential-1',
+    });
   });
 
   it('revokeCredential calls POST', async () => {

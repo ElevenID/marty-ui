@@ -7,6 +7,7 @@
  */
 
 import { get, post, put, del } from '../../services/api';
+import { pickOfficialReference } from '../../utils/officialReferences';
 
 const API_URL = import.meta.env.VITE_API_URL || '';
 
@@ -129,7 +130,27 @@ export async function fetchIssuedCredentials({ organizationId, page, perPage, se
     .map((record) => ({
       ...record,
       type: record.credential_display_name || record.credential_type || 'Credential',
+      holder_label: record.holder_display_name
+        || record.subject_display_name
+        || record.holder_name
+        || record.subject_name
+        || record.holder_email
+        || record.subject_email
+        || '',
       holder_email: record.holder_email || record.subject_email || record.subject_id || 'Unknown holder',
+      credential_reference: pickOfficialReference({
+        rawId: record.credential_id || record.id,
+        kind: 'credential',
+      }),
+      holder_reference: pickOfficialReference({
+        rawId: record.subject_id || record.holder_id || record.subject_email || record.holder_email,
+        kind: 'account',
+      }),
+      lifecycle_case_reference: pickOfficialReference({
+        rawId: record.flow_execution_id,
+        kind: 'flow',
+        fallback: '',
+      }),
       issued_date: record.issued_date || record.issued_at,
       expiry_date: record.expiry_date || record.valid_until,
       application_id: record.application_id || null,
@@ -144,9 +165,13 @@ export async function fetchIssuedCredentials({ organizationId, page, perPage, se
       record.credential_type,
       record.type,
       record.holder_email,
+      record.holder_label,
       record.subject_id,
       record.application_id,
       record.issuer_did,
+      record.credential_reference,
+      record.holder_reference,
+      record.lifecycle_case_reference,
     ].some((value) => String(value || '').toLowerCase().includes(query)))
     : normalized;
 

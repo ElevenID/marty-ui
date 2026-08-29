@@ -255,8 +255,12 @@ export function NotificationProvider({ children, config = {} }) {
     };
     
     setNotifications((prev) => {
-      // Limit the number of notifications
-      const updated = [...prev, newNotification];
+      // A replace key models one current transient result (for example a
+      // credential lifecycle state) without erasing unrelated notifications.
+      const retained = newNotification.replaceKey
+        ? prev.filter((item) => item.replaceKey !== newNotification.replaceKey)
+        : prev;
+      const updated = [...retained, newNotification];
       if (updated.length > mergedConfig.maxNotifications) {
         return updated.slice(-mergedConfig.maxNotifications);
       }

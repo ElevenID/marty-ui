@@ -42,7 +42,7 @@ import BookmarkIcon from '@mui/icons-material/Bookmark';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
-import { Link } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 
 import { ResourcePage } from '../../common';
@@ -59,6 +59,8 @@ import { formatOfficialReference, formatStructuredIdentifiers } from '../../../u
 
 function AuditPage() {
   const { t } = useTranslation('console');
+  const [searchParams] = useSearchParams();
+  const urlSearchQuery = searchParams.get('search') || '';
   
   const getBreadcrumbs = () => [
     { label: t('audit.breadcrumbs.console'), path: '/console' },
@@ -103,7 +105,7 @@ function AuditPage() {
   const [exporting, setExporting] = useState(false);
   
   // Filters
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState(() => urlSearchQuery);
   const [category, setCategory] = useState('all');
   const [severity, setSeverity] = useState('all');
   const [actor, setActor] = useState('');
@@ -113,6 +115,11 @@ function AuditPage() {
   const [endDate, setEndDate] = useState(null);
 
   const { showNotification } = useNotifications();
+
+  useEffect(() => {
+    setSearchQuery(urlSearchQuery);
+    setPage(0);
+  }, [urlSearchQuery]);
 
   useEffect(() => {
     loadEvents();

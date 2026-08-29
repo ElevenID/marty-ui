@@ -13,7 +13,6 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
-  IconButton,
   InputAdornment,
   LinearProgress,
   Paper,
@@ -25,7 +24,6 @@ import {
   TableHead,
   TableRow,
   TextField,
-  Tooltip,
   Typography,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
@@ -35,6 +33,7 @@ import AutorenewIcon from '@mui/icons-material/Autorenew';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import BlockIcon from '@mui/icons-material/Block';
+import HistoryIcon from '@mui/icons-material/History';
 import PauseCircleOutlineIcon from '@mui/icons-material/PauseCircleOutlined';
 import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutlined';
 import { useNavigate, useParams } from 'react-router';
@@ -70,31 +69,37 @@ const LIFECYCLE_ACTIONS = {
   suspend: {
     label: 'Suspend credential',
     confirmLabel: 'Suspend',
-    successMessage: 'Credential suspended',
+    notificationMessage: 'Lifecycle state: Suspended. Verification policies may now deny this credential.',
     description: 'The credential will fail policies that require an active, non-suspended credential.',
   },
   reinstate: {
     label: 'Reinstate credential',
     confirmLabel: 'Reinstate',
-    successMessage: 'Credential reinstated',
+    notificationMessage: 'Lifecycle state: Active. Verification may allow this credential again.',
     description: 'The credential will become active again. Revoked credentials cannot be reinstated.',
   },
   revoke: {
     label: 'Revoke credential',
     confirmLabel: 'Revoke',
-    successMessage: 'Credential revoked',
+    notificationMessage: 'Lifecycle state: Revoked. Verification policies must deny this credential.',
     description: 'Revocation is permanent. The holder will no longer be able to use this credential.',
   },
 };
 
 const normalizeStatus = (status) => String(status || '').trim().toUpperCase();
 
+const formatDateTime = (value) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+};
+
 function IssuancePage() {
   const { t } = useTranslation('console');
   const navigate = useNavigate();
   const { credentialId } = useParams();
   const { activeOrgId: organizationId } = useConsole();
-  const { showError, showSuccess } = useNotifications();
+  const { showError, showInfo, showSuccess } = useNotifications();
   const [searchQuery, setSearchQuery] = useState('');
   const [renewingCredentialId, setRenewingCredentialId] = useState(null);
   const [latestOffer, setLatestOffer] = useState(null);
@@ -102,6 +107,8 @@ function IssuancePage() {
   const [lifecycleTarget, setLifecycleTarget] = useState(null);
   const [lifecycleReason, setLifecycleReason] = useState('');
   const [lifecycleSubmitting, setLifecycleSubmitting] = useState(false);
+  const [focusedCredentialId, setFocusedCredentialId] = useState(null);
+  const [detailCredentialId, setDetailCredentialId] = useState(null);
 
   const {
     data: issuedCredentialsData,
@@ -124,7 +131,10 @@ function IssuancePage() {
     return Array.isArray(result) ? result : [];
   }, [organizationId]);
 
-  const issuedCredentials = issuedCredentialsData?.credentials || [];
+  const issuedCredentials = useMemo(
+    () => issuedCredentialsData?.credentials || [],
+    [issuedCredentialsData],
+  );
   const getCredentialReference = (credential) => pickOfficialReference({
     rawId: credential?.credential_id || credential?.id,
     kind: 'credential',
@@ -138,6 +148,44 @@ function IssuancePage() {
     rawId: templateId,
     kind: 'template',
   });
+  const getLifecycleCaseReference = (credential) => pickOfficialReference({
+    rawId: credential?.flow_execution_id,
+    kind: 'flow',
+    fallback: 'Not linked',
+  });
+  const getHolderLabel = (credential) => {
+    const displayLabel = String(credential?.holder_label || '').trim();
+    if (displayLabel && !displayLabel.startsWith('did:') && displayLabel.length <= 80) {
+      return displayLabel;
+    }
+    const holderEmail = String(credential?.holder_email || '').trim();
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(holderEmail)) return holderEmail;
+    const subjectId = credential?.subject_id || credential?.holder_id || holderEmail;
+    if (!subjectId) return 'Unknown holder';
+    return `Lifecycle holder • ${pickOfficialReference({ rawId: subjectId, kind: 'account' })}`;
+  };
+  const getHolderSecondaryLabel = (credential) => {
+    const primary = getHolderLabel(credential);
+    const candidate = String(credential?.holder_email || '').trim();
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate);
+    return isEmail && candidate !== primary ? candidate : null;
+  };
+  const getLifecycleRelationship = (credential) => {
+    const relationships = [];
+    if (credential?.renewed_from_credential_id) {
+      relationships.push(`Renewed from ${pickOfficialReference({
+        rawId: credential.renewed_from_credential_id,
+        kind: 'credential',
+      })}`);
+    }
+    if (credential?.renewed_to_credential_id) {
+      relationships.push(`Superseded by ${pickOfficialReference({
+        rawId: credential.renewed_to_credential_id,
+        kind: 'credential',
+      })}`);
+    }
+    return relationships.join(' • ') || 'Original issuance';
+  };
   const templateNameById = useMemo(() => {
     const map = new Map();
     const templates = Array.isArray(credentialTemplatesData) ? credentialTemplatesData : [];
@@ -149,22 +197,45 @@ function IssuancePage() {
   }, [credentialTemplatesData]);
 
   const selectedCredential = useMemo(() => {
-    if (!credentialId) return null;
+    const selectedId = credentialId || detailCredentialId;
+    if (!selectedId) return null;
     return issuedCredentials.find((credential) => (
-      credential.id === credentialId || credential.credential_id === credentialId
+      credential.id === selectedId || credential.credential_id === selectedId
     )) || null;
-  }, [credentialId, issuedCredentials]);
+  }, [credentialId, detailCredentialId, issuedCredentials]);
+
+  const spotlightCredential = useMemo(() => {
+    if (selectedCredential) return selectedCredential;
+    const focused = issuedCredentials.find((credential) => (
+      (credential.id || credential.credential_id) === focusedCredentialId
+    ));
+    if (focused) return focused;
+    return issuedCredentials.length === 1 ? issuedCredentials[0] : null;
+  }, [focusedCredentialId, issuedCredentials, selectedCredential]);
+
+  const getVerificationExpectation = (credential) => {
+    const status = normalizeStatus(credential?.status);
+    if (status === 'ACTIVE') return 'Eligible for policies that require an active credential';
+    if (status === 'SUSPENDED') return 'Expected denial by policies that require an active credential';
+    if (status === 'REVOKED') return 'Expected denial by policies that reject revoked credentials';
+    return 'Verify the current lifecycle state before relying on this credential';
+  };
 
   useEffect(() => {
     setLatestOffer(null);
-  }, [credentialId]);
+  }, [credentialId, detailCredentialId]);
 
   const handleOpenDetails = (credential) => {
-    navigate(`/console/org/operate/issuance/${encodeURIComponent(credential.id)}`);
+    const selectedId = credential.id || credential.credential_id;
+    setFocusedCredentialId(selectedId);
+    navigate(`/console/org/operate/issuance/${encodeURIComponent(selectedId)}`);
   };
 
   const handleCloseDetails = () => {
-    navigate('/console/org/operate/issuance');
+    setFocusedCredentialId(null);
+    setDetailCredentialId(null);
+    setLatestOffer(null);
+    if (credentialId) navigate('/console/org/operate/issuance');
   };
 
   const handleCopyOffer = async () => {
@@ -174,12 +245,12 @@ function IssuancePage() {
   };
 
   const handleRenew = async (credential) => {
+    setFocusedCredentialId(credential.id || credential.credential_id);
+    setDetailCredentialId(credential.id || credential.credential_id);
     setRenewingCredentialId(credential.id);
     try {
       const offer = await renewCredential({ credentialId: credential.id });
       setLatestOffer({ ...offer, offer_url: offer.credential_offer_uri });
-      navigate(`/console/org/operate/issuance/${encodeURIComponent(credential.id)}`);
-      showSuccess('Renewal offer generated successfully');
     } catch (err) {
       showError(err?.message || 'Failed to generate a renewal offer');
     } finally {
@@ -188,6 +259,7 @@ function IssuancePage() {
   };
 
   const openLifecycleDialog = (action, credential) => {
+    setFocusedCredentialId(credential.id || credential.credential_id);
     setLifecycleAction(action);
     setLifecycleTarget(credential);
     setLifecycleReason('');
@@ -215,7 +287,10 @@ function IssuancePage() {
     setLifecycleSubmitting(true);
     try {
       await actions[lifecycleAction]({ credentialId, reason });
-      showSuccess(config.successMessage);
+      showInfo(config.notificationMessage, {
+        title: 'Lifecycle updated',
+        replaceKey: 'credential-lifecycle',
+      });
       setLifecycleAction(null);
       setLifecycleTarget(null);
       setLifecycleReason('');
@@ -230,7 +305,7 @@ function IssuancePage() {
   const title = t('operate.issuance.title', 'Issued Credentials');
   const description = t(
     'operate.issuance.description',
-    'Inspect issued credentials and generate a fresh wallet offer when a holder needs to claim or re-claim one.',
+    'Inspect issued credentials, follow renewal relationships, and control suspension, reinstatement, and revocation.',
   );
 
   return (
@@ -270,13 +345,64 @@ function IssuancePage() {
                   <SearchIcon color="action" />
                 </InputAdornment>
               ),
-            }
+            },
+            htmlInput: {
+              'aria-label': 'Search issued credentials',
+            },
           }}
         />
       </Box>
-      {loading ? (
-        <LinearProgress />
-      ) : issuedCredentials.length === 0 ? (
+      {loading && (
+        <LinearProgress aria-label="Refreshing issued credentials" sx={{ mb: issuedCredentials.length > 0 ? 1 : 0 }} />
+      )}
+      {spotlightCredential && (
+        <Paper
+          variant="outlined"
+          role="region"
+          aria-label="Selected credential summary"
+          data-testid="selected-credential-summary"
+          sx={{ p: 2.5, mb: 2.5, borderColor: 'primary.main', borderWidth: 2 }}
+        >
+          <Stack spacing={2}>
+            <Box>
+              <Typography variant="overline" color="primary.main" fontWeight={700}>
+                Selected credential
+              </Typography>
+              <Typography variant="h5" fontWeight={700}>
+                {spotlightCredential.credential_template_id
+                  ? templateNameById.get(spotlightCredential.credential_template_id)
+                    || spotlightCredential.type
+                    || spotlightCredential.credential_type
+                  : spotlightCredential.type || spotlightCredential.credential_type}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'monospace', mt: 0.5 }}>
+                {getCredentialReference(spotlightCredential)}
+              </Typography>
+            </Box>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', md: '0.8fr 1.2fr 2fr' },
+                gap: 2,
+              }}
+            >
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary">Lifecycle state</Typography>
+                <StatusChip status={spotlightCredential.status} showIcon />
+              </Box>
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary">Relationship</Typography>
+                <Typography fontWeight={600}>{getLifecycleRelationship(spotlightCredential)}</Typography>
+              </Box>
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary">Verification policy cue</Typography>
+                <Typography fontWeight={600}>{getVerificationExpectation(spotlightCredential)}</Typography>
+              </Box>
+            </Box>
+          </Stack>
+        </Paper>
+      )}
+      {!loading && issuedCredentials.length === 0 ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
           <Typography variant="h6" gutterBottom>
             No issued credentials yet
@@ -285,117 +411,141 @@ function IssuancePage() {
             Issued credentials will appear here once applications complete the wallet claim flow.
           </Typography>
         </Paper>
-      ) : (
+      ) : issuedCredentials.length > 0 ? (
         <TableContainer component={Paper}>
-          <Table>
+          <Table aria-label="Issued credentials" sx={{ tableLayout: 'fixed' }}>
+            <colgroup>
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '30%' }} />
+            </colgroup>
             <TableHead>
               <TableRow>
-                <TableCell>Credential Reference</TableCell>
-                <TableCell>Type</TableCell>
-                <TableCell>Credential Template</TableCell>
+                <TableCell>Credential</TableCell>
                 <TableCell>Holder</TableCell>
-                <TableCell>Issued</TableCell>
-                <TableCell>Expires</TableCell>
-                <TableCell>Status</TableCell>
+                <TableCell>Lifecycle case</TableCell>
+                <TableCell>Relationship</TableCell>
+                <TableCell>Lifecycle state</TableCell>
                 <TableCell align="right">Actions</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {issuedCredentials.map((credential) => (
-                <TableRow key={credential.id} hover>
+                <TableRow
+                  key={credential.id || credential.credential_id}
+                  data-credential-record-id={credential.id || credential.credential_id}
+                  hover
+                  selected={(credential.id || credential.credential_id) === (credentialId || detailCredentialId || focusedCredentialId)}
+                  aria-selected={(credential.id || credential.credential_id) === (credentialId || detailCredentialId || focusedCredentialId)}
+                >
                   <TableCell>
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: 12 }}>
-                      {getCredentialReference(credential)}
+                    <Stack spacing={0.25}>
+                      <Typography variant="body2" fontWeight={600}>
+                        {credential.credential_template_id
+                          ? templateNameById.get(credential.credential_template_id)
+                            || credential.type
+                            || credential.credential_type
+                          : credential.type || credential.credential_type}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                        {getCredentialReference(credential)}
+                      </Typography>
+                      {credential.credential_template_id && (
+                        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                          Template {getTemplateReference(credential.credential_template_id)}
+                        </Typography>
+                      )}
+                      <Typography variant="caption" color="text.secondary">
+                        Issued {formatDateTime(credential.issued_date)} • Expires {formatDateTime(credential.expiry_date)}
+                      </Typography>
+                    </Stack>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" fontWeight={600}>{getHolderLabel(credential)}</Typography>
+                    {getHolderSecondaryLabel(credential) && (
+                      <Typography variant="caption" color="text.secondary">
+                        {getHolderSecondaryLabel(credential)}
+                      </Typography>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                      {getLifecycleCaseReference(credential)}
                     </Typography>
                   </TableCell>
-                  <TableCell>{credential.type || credential.credential_type}</TableCell>
                   <TableCell>
-                    {credential.credential_template_id ? (
-                      <Stack spacing={0.25}>
-                        <Typography variant="body2">
-                          {templateNameById.get(credential.credential_template_id) || credential.credential_template_id}
-                        </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                          {getTemplateReference(credential.credential_template_id)}
-                        </Typography>
-                      </Stack>
-                    ) : '—'}
+                    <Typography variant="body2">{getLifecycleRelationship(credential)}</Typography>
                   </TableCell>
-                  <TableCell>{credential.holder_email || credential.subject_id}</TableCell>
-                  <TableCell>{credential.issued_date ? new Date(credential.issued_date).toLocaleString() : '—'}</TableCell>
-                  <TableCell>{credential.expiry_date ? new Date(credential.expiry_date).toLocaleString() : '—'}</TableCell>
                   <TableCell>
-                    <StatusChip status={credential.status} />
+                    <StatusChip status={credential.status} showIcon />
                   </TableCell>
                   <TableCell align="right">
-                    <Tooltip title="View credential details">
-                      <IconButton
+                    <Stack direction="row" spacing={0.75} justifyContent="flex-end" flexWrap="wrap" useFlexGap>
+                      <Button
                         size="small"
+                        startIcon={<VisibilityIcon />}
                         aria-label={`View credential details for ${getCredentialReference(credential)}`}
                         onClick={() => handleOpenDetails(credential)}
                       >
-                        <VisibilityIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                    {credential.renewable && (
-                      <Tooltip title={credential.can_renew ? 'Renew credential' : `Renewal available ${credential.renewal_eligible_at ? new Date(credential.renewal_eligible_at).toLocaleString() : 'later'}`}>
-                        <span>
-                          <IconButton
-                            size="small"
-                            color="primary"
-                            aria-label={`Renew credential ${getCredentialReference(credential)}`}
-                            disabled={!credential.can_renew || renewingCredentialId === credential.id}
-                            onClick={() => handleRenew(credential)}
-                          >
-                            <AutorenewIcon fontSize="small" />
-                          </IconButton>
-                        </span>
-                      </Tooltip>
-                    )}
-                    {normalizeStatus(credential.status) === 'ACTIVE' && (
-                      <Tooltip title="Suspend credential">
-                        <IconButton
+                        Details
+                      </Button>
+                      {credential.renewable && (
+                        <Button
                           size="small"
+                          startIcon={<AutorenewIcon />}
+                          aria-label={`Renew credential ${getCredentialReference(credential)}`}
+                          disabled={!credential.can_renew || renewingCredentialId === credential.id}
+                          onClick={() => handleRenew(credential)}
+                          title={credential.can_renew ? undefined : `Renewal available ${credential.renewal_eligible_at ? new Date(credential.renewal_eligible_at).toLocaleString() : 'later'}`}
+                        >
+                          Renew
+                        </Button>
+                      )}
+                      {normalizeStatus(credential.status) === 'ACTIVE' && (
+                        <Button
+                          size="small"
+                          startIcon={<PauseCircleOutlineIcon />}
                           aria-label={`Suspend credential ${getCredentialReference(credential)}`}
                           onClick={() => openLifecycleDialog('suspend', credential)}
                         >
-                          <PauseCircleOutlineIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                    {normalizeStatus(credential.status) === 'SUSPENDED' && (
-                      <Tooltip title="Reinstate credential">
-                        <IconButton
+                          Suspend
+                        </Button>
+                      )}
+                      {normalizeStatus(credential.status) === 'SUSPENDED' && (
+                        <Button
                           size="small"
                           color="success"
+                          startIcon={<PlayCircleOutlineIcon />}
                           aria-label={`Reinstate credential ${getCredentialReference(credential)}`}
                           onClick={() => openLifecycleDialog('reinstate', credential)}
                         >
-                          <PlayCircleOutlineIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                    {['ACTIVE', 'SUSPENDED'].includes(normalizeStatus(credential.status)) && (
-                      <Tooltip title="Revoke credential">
-                        <IconButton
+                          Reinstate
+                        </Button>
+                      )}
+                      {['ACTIVE', 'SUSPENDED'].includes(normalizeStatus(credential.status)) && (
+                        <Button
                           size="small"
                           color="error"
+                          startIcon={<BlockIcon />}
                           aria-label={`Revoke credential ${getCredentialReference(credential)}`}
                           onClick={() => openLifecycleDialog('revoke', credential)}
                         >
-                          <BlockIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
+                          Revoke
+                        </Button>
+                      )}
+                    </Stack>
                   </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </TableContainer>
-      )}
+      ) : null}
       <Dialog
-        open={Boolean(credentialId && selectedCredential && !lifecycleAction)}
+        open={Boolean(selectedCredential && !lifecycleAction)}
         onClose={handleCloseDetails}
         maxWidth="sm"
         fullWidth
@@ -414,11 +564,21 @@ function IssuancePage() {
               </Box>
               <Box>
                 <Typography variant="subtitle2" color="text.secondary">Holder</Typography>
-                <Typography>{selectedCredential.holder_email || selectedCredential.subject_id || '—'}</Typography>
+                <Typography>{getHolderLabel(selectedCredential)}</Typography>
               </Box>
               <Box>
-                <Typography variant="subtitle2" color="text.secondary">Status</Typography>
-                <StatusChip status={selectedCredential.status} />
+                <Typography variant="subtitle2" color="text.secondary">Lifecycle state</Typography>
+                <StatusChip status={selectedCredential.status} showIcon />
+              </Box>
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary">Lifecycle case</Typography>
+                <Typography sx={{ fontFamily: 'monospace' }}>
+                  {getLifecycleCaseReference(selectedCredential)}
+                </Typography>
+              </Box>
+              <Box>
+                <Typography variant="subtitle2" color="text.secondary">Credential relationship</Typography>
+                <Typography>{getLifecycleRelationship(selectedCredential)}</Typography>
               </Box>
               <Box>
                 <Typography variant="subtitle2" color="text.secondary">Application Reference</Typography>
@@ -446,10 +606,15 @@ function IssuancePage() {
               </Box>
 
               {latestOffer?.offer_url && (
-                <Alert severity="success">
-                  <Typography variant="subtitle2" gutterBottom>Fresh wallet offer ready</Typography>
-                  <Typography variant="body2" sx={{ wordBreak: 'break-word' }}>
-                    {latestOffer.offer_url}
+                <Alert severity="info">
+                  <Typography variant="subtitle2" gutterBottom>
+                    Renewal offer ready — replacement not issued yet
+                  </Typography>
+                  <Typography variant="body2" gutterBottom>
+                    The holder must claim this offer before Marty records a replacement credential and predecessor relationship.
+                  </Typography>
+                  <Typography variant="body2">
+                    The offer link is ready for secure delivery. Use Copy offer link or Open offer when needed.
                   </Typography>
                   {latestOffer.expires_at && (
                     <Typography variant="caption" display="block" sx={{ mt: 1 }}>
@@ -462,6 +627,16 @@ function IssuancePage() {
           )}
         </DialogContent>
         <DialogActions>
+          {selectedCredential && (
+            <Button
+              startIcon={<HistoryIcon />}
+              onClick={() => navigate(
+                `/console/org/audit?search=${encodeURIComponent(selectedCredential.id || selectedCredential.credential_id)}`,
+              )}
+            >
+              View lifecycle audit
+            </Button>
+          )}
           {latestOffer?.offer_url && (
             <>
               <Button

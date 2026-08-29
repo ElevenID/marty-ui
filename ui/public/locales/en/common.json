@@ -131,6 +131,7 @@
     "completed": "Completed",
     "failed": "Failed",
     "issued": "Issued",
+    "suspended": "Suspended",
     "offerGenerated": "Invite Sent",
     "revoked": "Revoked",
     "expired": "Expired",

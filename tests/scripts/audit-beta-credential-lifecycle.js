@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const { chromium } = require('@playwright/test');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
 const { selectOrganization } = require('./beta-demo-resource-helpers');
@@ -12,6 +13,7 @@ const {
   finalizeVideo,
   maskProtocolField,
   showStep,
+  showVerificationResult,
 } = require('./demo-recording');
 const {
   DEFAULT_BETA_ORGANIZATION_ID,
@@ -35,12 +37,108 @@ const VERIFIER_DID = process.env.BETA_AUDIT_VERIFIER_DID || '';
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
+const PRESENTATION_TEST_ID = 'LIFECYCLE-PRES-01';
 
-async function showLifecycleStep(page, title, detail) {
+function resolveUiCandidateDist(
+  root = ROOT,
+  configured = process.env.MARTY_UI_CANDIDATE_DIST,
+  dependencies = {},
+) {
+  const value = String(configured || '').trim();
+  if (!value) return null;
+  const expected = fs.realpathSync(path.join(root, 'ui', 'dist'));
+  const candidate = fs.realpathSync(path.resolve(value));
+  if (candidate !== expected) {
+    throw new Error('MARTY_UI_CANDIDATE_DIST must resolve to this worktree\'s ui/dist directory');
+  }
+  for (const relative of ['index.html', path.join('console', 'index.html'), 'assets']) {
+    if (!fs.existsSync(path.join(candidate, relative))) {
+      throw new Error(`Local UI candidate is incomplete: missing ${relative}`);
+    }
+  }
+  const sourceState = dependencies.sourceState || (() => {
+    const revision = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' });
+    const status = spawnSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' });
+    return {
+      revision: revision.status === 0 ? revision.stdout.trim() : '',
+      clean: status.status === 0 && !status.stdout.trim(),
+    };
+  });
+  const state = sourceState();
+  if (!/^[0-9a-f]{40}$/.test(state.revision)) {
+    throw new Error('Local UI candidate source revision could not be resolved');
+  }
+  if (!state.clean) {
+    throw new Error('Local UI candidate requires a clean committed worktree');
+  }
+  return {
+    absolute: candidate,
+    relative: 'ui/dist',
+    sourceRevision: state.revision,
+  };
+}
+
+function candidateUiFileForRequest(candidate, pathname, resourceType) {
+  if (!candidate || ['/v1/', '/api/', '/auth/'].some((prefix) => pathname.startsWith(prefix))) return null;
+  const relative = resourceType === 'document' && (pathname === '/console' || pathname.startsWith('/console/'))
+    ? path.join('console', 'index.html')
+    : decodeURIComponent(pathname).replace(/^[/\\]+/, '');
+  const resolved = path.resolve(candidate.absolute, relative || 'index.html');
+  const relation = path.relative(candidate.absolute, resolved);
+  if (!relation || (!relation.startsWith('..') && !path.isAbsolute(relation))) {
+    return fs.existsSync(resolved) && fs.statSync(resolved).isFile() ? resolved : null;
+  }
+  return null;
+}
+
+function contentTypeFor(candidatePath) {
+  const extension = path.extname(candidatePath).toLowerCase();
+  return {
+    '.css': 'text/css; charset=utf-8',
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.svg': 'image/svg+xml',
+    '.wasm': 'application/wasm',
+  }[extension] || 'application/octet-stream';
+}
+
+async function installUiCandidateRoute(context, candidate) {
+  if (!candidate) return;
+  await context.route(`${BETA_ORIGIN}/**`, async (route) => {
+    const request = route.request();
+    if (request.method() !== 'GET') return route.continue();
+    const candidatePath = candidateUiFileForRequest(
+      candidate,
+      new URL(request.url()).pathname,
+      request.resourceType(),
+    );
+    if (!candidatePath) return route.continue();
+    return route.fulfill({
+      status: 200,
+      contentType: contentTypeFor(candidatePath),
+      headers: { 'cache-control': 'no-store' },
+      body: fs.readFileSync(candidatePath),
+    });
+  });
+}
+
+async function showLifecycleStep(page, title, detail, stage) {
+  if (!/^\d of \d$/.test(String(stage || ''))) {
+    throw new TypeError('Lifecycle recording stage must use the form "1 of 5"');
+  }
   return showStep(page, title, detail, {
     enabled: RECORD_VIDEO,
-    eyebrow: 'Credential lifecycle and status-aware verification',
+    eyebrow: `Credential lifecycle | Stage ${stage}`,
   });
+}
+
+function resolveVerificationIssuerDid(override, credential) {
+  const issuerDid = String(override || credential?.issuer_did || '').trim();
+  if (!/^did:[a-z0-9]+:\S+$/i.test(issuerDid)) {
+    throw new Error('Verification issuer DID is absent from both the governed override and issued credential record');
+  }
+  return issuerDid;
 }
 
 async function waitFor(fn, timeoutMs = 60_000, intervalMs = 1_000) {
@@ -159,8 +257,8 @@ async function ensureActiveRevocationProfile(page, stamp) {
   };
 }
 
-async function ensureLifecycleTemplate(page, revocationProfileId, stamp) {
-  return page.evaluate(async ({ organizationId, sourceTemplateId, profileId, versionStamp }) => {
+async function ensureLifecycleTemplate(page, revocationProfileId) {
+  return page.evaluate(async ({ organizationId, sourceTemplateId, profileId }) => {
     const listResponse = await fetch(
       `/v1/credential-templates?organization_id=${encodeURIComponent(organizationId)}`,
       { credentials: 'include' },
@@ -172,9 +270,11 @@ async function ensureLifecycleTemplate(page, revocationProfileId, stamp) {
     if (!listResponse.ok || !source) {
       return { ok: false, status: listResponse.status, error: 'Source Credential Template unavailable' };
     }
+    const lifecycleTemplateName = `Lifecycle ${source.name}`;
     const existing = templates.find((template) => (
       template.id !== sourceTemplateId
       && template.vct === source.vct
+      && template.name === lifecycleTemplateName
       && template.revocation_profile_id === profileId
       && String(template.status || '').toUpperCase() === 'ACTIVE'
       && template.validity_rules?.renewable === true
@@ -196,7 +296,7 @@ async function ensureLifecycleTemplate(page, revocationProfileId, stamp) {
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: `Lifecycle ${source.name} ${versionStamp}`,
+        name: lifecycleTemplateName,
         revocation_profile_id: profileId,
         validity_rules: {
           default_validity_days: 1,
@@ -231,7 +331,6 @@ async function ensureLifecycleTemplate(page, revocationProfileId, stamp) {
     organizationId: ORG_ID,
     sourceTemplateId: SOURCE_TEMPLATE_ID,
     profileId: revocationProfileId,
-    versionStamp: stamp,
   });
 }
 
@@ -373,10 +472,38 @@ async function findIssuedCredential(page, templateId) {
   }, { organizationId: ORG_ID, templateId }));
 }
 
+function selectRenewedCredential(records, templateId, sourceCredentialId) {
+  if (!Array.isArray(records)) return null;
+  const matches = records.filter((record) => (
+    record.credential_template_id === templateId
+    && record.renewed_from_credential_id === sourceCredentialId
+  ));
+  if (matches.length > 1) throw new Error('Renewal produced multiple successor credentials');
+  return matches[0] || null;
+}
+
+async function findRenewedCredential(page, templateId, sourceCredentialId) {
+  return waitFor(async () => {
+    const records = await page.evaluate(async ({ organizationId }) => {
+      const response = await fetch(
+        `/v1/issued-credentials?organization_id=${encodeURIComponent(organizationId)}`,
+        { credentials: 'include' },
+      );
+      return response.ok ? response.json().catch(() => []) : [];
+    }, { organizationId: ORG_ID });
+    return selectRenewedCredential(records, templateId, sourceCredentialId);
+  });
+}
+
 async function findCredentialRow(page, credentialId) {
+  if (!/^[A-Za-z0-9:._-]+$/.test(credentialId)) {
+    throw new Error('Credential row lookup requires a presentation-safe exact record ID');
+  }
   const search = page.getByPlaceholder('Search issued credentials...');
-  await search.fill(credentialId);
-  const row = page.locator('tbody tr').first();
+  const row = page.locator(`tbody tr[data-credential-record-id="${credentialId}"]`);
+  await row.waitFor({ state: 'visible', timeout: 30_000 });
+  const friendlyReference = await row.locator('td').first().locator('.MuiTypography-caption').innerText();
+  await search.fill(friendlyReference.trim());
   await row.waitFor({ state: 'visible', timeout: 30_000 });
   return row;
 }
@@ -548,6 +675,7 @@ async function main() {
   const email = process.env.TEST_VENDOR_EMAIL || process.env.TEST_ADMIN_EMAIL;
   const password = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
   if (!email || !password) throw new Error('Missing beta operator credentials');
+  const uiCandidate = resolveUiCandidateDist();
 
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
   const artifactDir = createArtifactDir(ROOT, `beta-credential-lifecycle-${stamp}`);
@@ -555,6 +683,16 @@ async function main() {
     createdAt: new Date().toISOString(),
     organizationId: ORG_ID,
     policyId: POLICY_ID,
+    presentationTestId: PRESENTATION_TEST_ID,
+    uiCandidate: uiCandidate ? {
+      mode: 'LOCAL_DIST_ENGINEERING_ONLY',
+      sourceRevision: uiCandidate.sourceRevision,
+      path: uiCandidate.relative,
+      qualifiesAsDeployedEvidence: false,
+    } : {
+      mode: 'DEPLOYED_BETA',
+      qualifiesAsDeployedEvidence: true,
+    },
     sourceTemplateId: SOURCE_TEMPLATE_ID,
     artifactDir,
     pageErrors: [],
@@ -573,6 +711,7 @@ async function main() {
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
+    await installUiCandidateRoute(context, uiCandidate);
     const page = await context.newPage();
     const walletPage = await context.newPage();
     const applicationVideo = page.video();
@@ -608,11 +747,7 @@ async function main() {
     if (!report.revocationProfile.ok) {
       throw new Error(`Revocation Profile setup failed: ${report.revocationProfile.error}`);
     }
-    report.credentialTemplate = await ensureLifecycleTemplate(
-      page,
-      report.revocationProfile.id,
-      stamp,
-    );
+    report.credentialTemplate = await ensureLifecycleTemplate(page, report.revocationProfile.id);
     if (!report.credentialTemplate.ok) {
       throw new Error(`Credential Template setup failed: ${report.credentialTemplate.error}`);
     }
@@ -647,8 +782,9 @@ async function main() {
       timeout: 60_000,
     });
     let row = await findCredentialRow(page, credential.id);
-    await showLifecycleStep(page, 'Active credential issued', 'The issuer inventory shows the newly issued credential and its available lifecycle controls.');
+    await showLifecycleStep(page, 'Active credential issued', 'The issuer inventory shows the newly issued credential and its available lifecycle controls.', '1 of 5');
     await page.screenshot({ path: path.join(artifactDir, '01-active-credential.png'), fullPage: true });
+    if (RECORD_VIDEO) await page.waitForTimeout(5_100);
 
     report.renewalOffer = await renewCredential(page, row);
     if (!report.renewalOffer.ok || !report.renewalOffer.offerUri) {
@@ -660,7 +796,7 @@ async function main() {
       report.issuance.expectedVct,
     );
     delete report.renewalOffer.offerUri;
-    credential = await findIssuedCredential(page, report.templateId);
+    credential = await findRenewedCredential(page, report.templateId, sourceCredentialId);
     const sourceAfterRenewal = await getCredentialStatus(page, sourceCredentialId);
     report.renewal = {
       ok: report.renewalWalletReceipt.ok
@@ -671,12 +807,15 @@ async function main() {
       renewedFromCredentialId: credential.renewed_from_credential_id || null,
       sourceStatus: sourceAfterRenewal.lifecycleStatus,
     };
-    await page.goto(`${BETA_ORIGIN}/console/org/operate/issuance`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60_000,
-    });
+    const detailDialog = page.getByRole('dialog', { name: /issued credential details/i });
+    if (await detailDialog.isVisible().catch(() => false)) {
+      await detailDialog.getByRole('button', { name: /^close$/i }).click();
+      await detailDialog.waitFor({ state: 'hidden', timeout: 30_000 });
+    }
+    await page.getByPlaceholder('Search issued credentials...').fill('');
+    await page.getByRole('button', { name: /^refresh$/i }).click();
     row = await findCredentialRow(page, credential.id);
-    await showLifecycleStep(page, 'Credential renewed', 'The replacement credential is active and linked to its superseded predecessor.');
+    await showLifecycleStep(page, 'Credential renewed', 'The replacement credential is active and linked to its superseded predecessor.', '2 of 5');
     await page.screenshot({ path: path.join(artifactDir, '02-renewed-credential.png'), fullPage: true });
 
     const statusListUris = (credential.status_list_entries || [])
@@ -696,20 +835,47 @@ async function main() {
 
     report.suspend = await performLifecycleAction(page, row, 'suspend', 'Automated lifecycle suspension audit');
     report.suspend.current = await getCredentialStatus(page, credential.id);
-    report.suspend.verification = await verify(page, walletPage, 'Suspended credential audit');
-    await showLifecycleStep(page, 'Suspension denies verification', 'The status-aware verifier rejects the suspended credential while preserving its lifecycle history.');
+    report.suspend.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: suspended trial`, {
+      issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
+    });
+    await showLifecycleStep(page, 'Suspension denies verification', 'The status-aware verifier returns the credential\'s suspended-state denial reason.', '3 of 5');
+    await showVerificationResult(page, report.suspend.verification.result, {
+      enabled: RECORD_VIDEO,
+      actor: 'Marty status-aware verifier',
+      testId: PRESENTATION_TEST_ID,
+      evaluatedState: 'SUSPENDED',
+      comparison: 'Active -> suspended',
+    });
     await page.screenshot({ path: path.join(artifactDir, '02-suspended-credential.png'), fullPage: true });
 
     report.reinstate = await performLifecycleAction(page, row, 'reinstate', 'Automated lifecycle reinstatement audit');
     report.reinstate.current = await getCredentialStatus(page, credential.id);
-    report.reinstate.verification = await verify(page, walletPage, 'Reinstated credential audit');
-    await showLifecycleStep(page, 'Reinstatement restores verification', 'The same canonical presentation succeeds again after the issuer reinstates the credential.');
+    report.reinstate.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: reinstated trial`, {
+      issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
+    });
+    await showLifecycleStep(page, 'Reinstatement restores verification', 'The same credential fixture passes again after the issuer reinstates it.', '4 of 5');
+    await showVerificationResult(page, report.reinstate.verification.result, {
+      enabled: RECORD_VIDEO,
+      actor: 'Marty status-aware verifier',
+      testId: PRESENTATION_TEST_ID,
+      evaluatedState: 'ACTIVE',
+      comparison: 'Denied while suspended -> allowed after reinstatement',
+    });
     await page.screenshot({ path: path.join(artifactDir, '03-reinstated-credential.png'), fullPage: true });
 
     report.revoke = await performLifecycleAction(page, row, 'revoke', 'Automated lifecycle revocation audit');
     report.revoke.current = await getCredentialStatus(page, credential.id);
-    report.revoke.verification = await verify(page, walletPage, 'Revoked credential audit');
-    await showLifecycleStep(page, 'Revocation is final', 'The verifier denies the revoked credential and the issuer inventory retains a privacy-safe status history.');
+    report.revoke.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: revoked trial`, {
+      issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
+    });
+    await showLifecycleStep(page, 'Revoked credential is denied', 'In this test scenario, the verifier denies the revoked credential and the issuer inventory retains the revoked state.', '5 of 5');
+    await showVerificationResult(page, report.revoke.verification.result, {
+      enabled: RECORD_VIDEO,
+      actor: 'Marty status-aware verifier',
+      testId: PRESENTATION_TEST_ID,
+      evaluatedState: 'REVOKED',
+      comparison: 'Active -> revoked in this test scenario',
+    });
     await page.screenshot({ path: path.join(artifactDir, '04-revoked-credential.png'), fullPage: true });
 
     report.crossOrg = await page.evaluate(async () => {
@@ -727,7 +893,7 @@ async function main() {
     ));
 
     report.behaviorAssertions = credentialLifecycleBehaviorAssertions(report);
-    report.releaseReady = Boolean(
+    report.engineeringReady = Boolean(
       report.permissions.status === 200
       && report.permissions.hasLifecyclePermission
       && report.draftCleanup.ok
@@ -738,6 +904,7 @@ async function main() {
       && report.pageErrors.length === 0
       && report.unexpectedResponses.length === 0
     );
+    report.releaseReady = Boolean(report.engineeringReady && !uiCandidate);
     report.finishedAt = new Date().toISOString();
     await context.close();
     if (RECORD_VIDEO) {
@@ -748,7 +915,7 @@ async function main() {
     }
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
-    if (!report.releaseReady) process.exitCode = 1;
+    if (uiCandidate ? !report.engineeringReady : !report.releaseReady) process.exitCode = 1;
   } finally {
     await browser.close();
   }
@@ -762,6 +929,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  candidateUiFileForRequest,
   ensureActiveRevocationProfile,
   findCredentialRow,
   findIssuedCredential,
@@ -771,6 +939,9 @@ module.exports = {
   login,
   performLifecycleAction,
   receiveCredential,
+  resolveUiCandidateDist,
+  resolveVerificationIssuerDid,
+  selectRenewedCredential,
   selectOrg,
   verify,
   validateElevenIdLoginTheme,

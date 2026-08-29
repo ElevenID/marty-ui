@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { VIDEO_SIZE, createArtifactDir } = require('./demo-recording');
+const { VIDEO_SIZE, buildVerificationDisplay, createArtifactDir } = require('./demo-recording');
 
 test('release recording uses the governed 16:9 capture size', () => {
   assert.deepEqual(VIDEO_SIZE, { width: 1920, height: 1080 });
@@ -36,4 +36,44 @@ test('artifact directory falls back to the timestamped audit location', () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('verification display preserves the machine decision and a stable presentation test id', () => {
+  assert.deepEqual(
+    buildVerificationDisplay(
+      { decision: 'deny', decisionReason: 'Credential is suspended' },
+      {
+        actor: 'Marty status-aware verifier',
+        testId: 'lifecycle-pres-01',
+        evaluatedState: 'suspended',
+        comparison: 'Active -> suspended',
+      },
+    ),
+    {
+      actor: 'Marty status-aware verifier',
+      testId: 'LIFECYCLE-PRES-01',
+      decision: 'DENIED',
+      reason: 'Credential is suspended',
+      evaluatedState: 'SUSPENDED',
+      comparison: 'Active -> suspended',
+    },
+  );
+});
+
+test('verification display fails closed without a governed identity', () => {
+  assert.throws(
+    () => buildVerificationDisplay({ decision: 'allow' }, { actor: '', testId: 'test-01' }),
+    /actor is required/,
+  );
+  assert.throws(
+    () => buildVerificationDisplay({ decision: 'allow' }, { actor: 'Verifier', testId: 'unsafe id' }),
+    /stable presentation-safe identifier/,
+  );
+  assert.throws(
+    () => buildVerificationDisplay(
+      { decision: 'allow' },
+      { actor: 'Verifier', testId: 'test-01', evaluatedState: 'not safe!' },
+    ),
+    /evaluatedState/,
+  );
 });
