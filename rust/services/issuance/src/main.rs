@@ -3,7 +3,9 @@ use std::{error::Error, sync::Arc};
 use marty_issuance_service::{
     client_auth::RegisteredClientAuthenticator,
     dpop::MartyDpopProofVerifier,
-    http::router_with_all_services,
+    ephemeral_postgres::PostgresProofNonceRepository,
+    http::{router_with_all_services, IssuanceServices},
+    proof_nonce::{ProofNonceService, SecureProofNonceGenerator},
     signing_policy::HttpProofPolicyResolver,
     tenant_discovery::TenantDiscoveryService,
     tenant_postgres::PostgresTenantDiscoveryRepository,
@@ -56,13 +58,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.issuance_api_key.as_deref(),
         &config.issuer_base_url,
     );
-    let token_repository = Arc::new(PostgresTokenExchangeRepository::new(pool));
+    let token_repository = Arc::new(PostgresTokenExchangeRepository::new(
+        pool.clone(),
+        config
+            .token_hmac_key
+            .as_deref()
+            .expect("from_env requires TOKEN_HMAC_KEY"),
+    ));
     let token_exchange = TokenExchangeService::new(
         token_repository.clone(),
         Arc::new(RegisteredClientAuthenticator::new(token_repository)),
         Arc::new(MartyDpopProofVerifier),
         Arc::new(MartyTokenGenerator),
         &config.issuer_base_url,
+    );
+    let proof_nonce = ProofNonceService::new(
+        Arc::new(PostgresProofNonceRepository::new(pool)),
+        Arc::new(SecureProofNonceGenerator),
     );
     let listener = TcpListener::bind(config.http_addr).await?;
     runtime.mark_listener_healthy()?;
@@ -71,10 +83,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         runtime.state(),
         discovery,
         transport,
-        tenant_discovery,
-        transaction_reads,
-        token_exchange,
-        TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
+        IssuanceServices::new(
+            tenant_discovery,
+            transaction_reads,
+            token_exchange,
+            proof_nonce,
+            TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
+        ),
     );
     runtime.activate()?;
     info!(

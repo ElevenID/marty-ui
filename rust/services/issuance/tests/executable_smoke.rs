@@ -39,6 +39,10 @@ async fn executable_serves_health_readiness_and_version() {
         command
             .env("MARTY_ISSUANCE__SERVER__HOST", "127.0.0.1")
             .env("MARTY_ISSUANCE__SERVER__PORT", port.to_string())
+            .env(
+                "TOKEN_HMAC_KEY",
+                format!("executable-smoke-{}", uuid::Uuid::new_v4()),
+            )
             .env("MARTY_RELEASE_VERSION", "9.8.7")
             .env("MARTY_UI_SHA", "smoke-revision")
             .env("ISSUER_BASE_URL", "https://issuer.example")

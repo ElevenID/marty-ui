@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use hmac::{Hmac, Mac};
 use marty_issuance_service::{
     client_auth::RegisteredClientRepository,
     token_exchange::TokenExchangeRepository,
@@ -6,6 +7,7 @@ use marty_issuance_service::{
     transaction_postgres::PostgresTransactionReadRepository,
     transaction_reads::{TransactionReadError, TransactionReadRepository, TransactionStatus},
 };
+use sha2::Sha256;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
 
@@ -147,7 +149,8 @@ async fn transaction_projection_round_trips_and_enforces_tenant_lists_when_confi
     .execute(&pool)
     .await
     .expect("token fixture status must reset");
-    let token_repository = PostgresTokenExchangeRepository::new(pool.clone());
+    let token_repository =
+        PostgresTokenExchangeRepository::new(pool.clone(), "postgres-contract-token-hmac-key");
     let token_transaction = token_repository
         .transaction_by_pre_authorized_code("pre-auth-tx-a")
         .await
@@ -174,6 +177,14 @@ async fn transaction_projection_round_trips_and_enforces_tenant_lists_when_confi
     let stored_hash: String = stored.try_get("access_token").unwrap();
     assert_ne!(stored_hash, "clear-token-first");
     assert_ne!(stored_hash, "clear-token-second");
+    let claimed_token = if first_claim {
+        "clear-token-first"
+    } else {
+        "clear-token-second"
+    };
+    let mut expected = Hmac::<Sha256>::new_from_slice(b"postgres-contract-token-hmac-key").unwrap();
+    expected.update(claimed_token.as_bytes());
+    assert_eq!(stored_hash, hex::encode(expected.finalize().into_bytes()));
     assert_eq!(stored.try_get::<String, _>("status").unwrap(), "authorized");
     assert!(stored
         .try_get::<Option<String>, _>("c_nonce")

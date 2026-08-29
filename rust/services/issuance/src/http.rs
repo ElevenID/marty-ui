@@ -17,6 +17,7 @@ use mmf_runtime::{system_router_with_options, RuntimeState, SystemRouteOptions};
 use serde_json::{json, Value};
 
 use crate::{
+    proof_nonce::{ProofNonceError, ProofNonceService},
     tenant_discovery::{TenantDiscoveryError, TenantDiscoveryService},
     token_exchange::{TokenExchangeError, TokenExchangeRequest, TokenExchangeService},
     token_rate_limit::TokenRateLimiter,
@@ -33,6 +34,43 @@ struct IssuanceState {
     tenant: Option<TenantDiscoveryService>,
     transactions: Option<TransactionReadService>,
     token_exchange: Option<TokenExchangeService>,
+    proof_nonce: Option<ProofNonceService>,
+}
+
+pub struct IssuanceServices {
+    tenant: TenantDiscoveryService,
+    transactions: TransactionReadService,
+    token_exchange: TokenExchangeService,
+    proof_nonce: ProofNonceService,
+    token_rate_limiter: TokenRateLimiter,
+}
+
+impl IssuanceServices {
+    #[must_use]
+    pub fn new(
+        tenant: TenantDiscoveryService,
+        transactions: TransactionReadService,
+        token_exchange: TokenExchangeService,
+        proof_nonce: ProofNonceService,
+        token_rate_limiter: TokenRateLimiter,
+    ) -> Self {
+        Self {
+            tenant,
+            transactions,
+            token_exchange,
+            proof_nonce,
+            token_rate_limiter,
+        }
+    }
+}
+
+#[derive(Default)]
+struct OptionalServices {
+    tenant: Option<TenantDiscoveryService>,
+    transactions: Option<TransactionReadService>,
+    token_exchange: Option<TokenExchangeService>,
+    proof_nonce: Option<ProofNonceService>,
+    token_rate_limiter: Option<TokenRateLimiter>,
 }
 
 fn legacy_health(_report: &HealthReport) -> Value {
@@ -44,7 +82,7 @@ pub fn router(
     discovery: StaticDiscoveryDocuments,
     transport: TransportPolicy,
 ) -> Router {
-    router_with_optional_services(runtime, discovery, transport, None, None, None, None)
+    router_with_optional_services(runtime, discovery, transport, OptionalServices::default())
 }
 
 pub fn router_with_tenant_discovery(
@@ -57,10 +95,10 @@ pub fn router_with_tenant_discovery(
         runtime,
         discovery,
         transport,
-        Some(tenant),
-        None,
-        None,
-        None,
+        OptionalServices {
+            tenant: Some(tenant),
+            ..OptionalServices::default()
+        },
     )
 }
 
@@ -75,10 +113,11 @@ pub fn router_with_services(
         runtime,
         discovery,
         transport,
-        Some(tenant),
-        Some(transactions),
-        None,
-        None,
+        OptionalServices {
+            tenant: Some(tenant),
+            transactions: Some(transactions),
+            ..OptionalServices::default()
+        },
     )
 }
 
@@ -86,19 +125,19 @@ pub fn router_with_all_services(
     runtime: RuntimeState,
     discovery: StaticDiscoveryDocuments,
     transport: TransportPolicy,
-    tenant: TenantDiscoveryService,
-    transactions: TransactionReadService,
-    token_exchange: TokenExchangeService,
-    token_rate_limiter: TokenRateLimiter,
+    services: IssuanceServices,
 ) -> Router {
     router_with_optional_services(
         runtime,
         discovery,
         transport,
-        Some(tenant),
-        Some(transactions),
-        Some(token_exchange),
-        Some(token_rate_limiter),
+        OptionalServices {
+            tenant: Some(services.tenant),
+            transactions: Some(services.transactions),
+            token_exchange: Some(services.token_exchange),
+            proof_nonce: Some(services.proof_nonce),
+            token_rate_limiter: Some(services.token_rate_limiter),
+        },
     )
 }
 
@@ -112,10 +151,11 @@ pub fn router_with_token_exchange(
         runtime,
         discovery,
         transport,
-        None,
-        None,
-        Some(token_exchange),
-        Some(TokenRateLimiter::legacy_defaults()),
+        OptionalServices {
+            token_exchange: Some(token_exchange),
+            token_rate_limiter: Some(TokenRateLimiter::legacy_defaults()),
+            ..OptionalServices::default()
+        },
     )
 }
 
@@ -130,10 +170,30 @@ pub fn router_with_token_exchange_and_rate_limit(
         runtime,
         discovery,
         transport,
-        None,
-        None,
-        Some(token_exchange),
-        Some(token_rate_limiter),
+        OptionalServices {
+            token_exchange: Some(token_exchange),
+            token_rate_limiter: Some(token_rate_limiter),
+            ..OptionalServices::default()
+        },
+    )
+}
+
+pub fn router_with_proof_nonce_and_rate_limit(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    proof_nonce: ProofNonceService,
+    token_rate_limiter: TokenRateLimiter,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            proof_nonce: Some(proof_nonce),
+            token_rate_limiter: Some(token_rate_limiter),
+            ..OptionalServices::default()
+        },
     )
 }
 
@@ -141,19 +201,17 @@ fn router_with_optional_services(
     runtime: RuntimeState,
     discovery: StaticDiscoveryDocuments,
     transport: TransportPolicy,
-    tenant: Option<TenantDiscoveryService>,
-    transactions: Option<TransactionReadService>,
-    token_exchange: Option<TokenExchangeService>,
-    token_rate_limiter: Option<TokenRateLimiter>,
+    services: OptionalServices,
 ) -> Router {
     let system = system_router_with_options(
         runtime,
         SystemRouteOptions::default().with_health_projector(legacy_health),
     );
-    let token = Router::new()
+    let oauth = Router::new()
         .route("/v1/issuance/token", post(exchange_token))
+        .route("/v1/issuance/nonce", post(issue_proof_nonce))
         .route_layer(middleware::from_fn_with_state(
-            token_rate_limiter.clone(),
+            services.token_rate_limiter.clone(),
             token_rate_limit_middleware,
         ));
     let discovery = Router::new()
@@ -210,12 +268,13 @@ fn router_with_optional_services(
             "/internal/v1/resource-owners/issuance-transactions/{transaction_id}",
             get(transaction_owner),
         )
-        .merge(token)
+        .merge(oauth)
         .with_state(IssuanceState {
             documents: discovery,
-            tenant,
-            transactions,
-            token_exchange,
+            tenant: services.tenant,
+            transactions: services.transactions,
+            token_exchange: services.token_exchange,
+            proof_nonce: services.proof_nonce,
         });
     system
         .merge(discovery)
@@ -336,6 +395,23 @@ async fn exchange_token(
         .await
         .map(Json)
         .map_err(Into::into)
+}
+
+async fn issue_proof_nonce(
+    State(state): State<IssuanceState>,
+) -> Result<Response, ProofNonceHttpError> {
+    let response = state
+        .proof_nonce
+        .as_ref()
+        .ok_or(ProofNonceError::RepositoryUnavailable)?
+        .issue()
+        .await?;
+    let mut response = Json(response).into_response();
+    response.headers_mut().insert(
+        http_header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
 }
 
 async fn token_rate_limit_middleware(
@@ -495,6 +571,26 @@ impl From<TenantDiscoveryError> for TenantDiscoveryHttpError {
 }
 
 struct TokenExchangeHttpError(TokenExchangeError);
+
+struct ProofNonceHttpError(ProofNonceError);
+
+impl From<ProofNonceError> for ProofNonceHttpError {
+    fn from(value: ProofNonceError) -> Self {
+        Self(value)
+    }
+}
+
+impl IntoResponse for ProofNonceHttpError {
+    fn into_response(self) -> Response {
+        match self.0 {
+            ProofNonceError::RepositoryUnavailable => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"detail": "Proof nonce storage is unavailable"})),
+            )
+                .into_response(),
+        }
+    }
+}
 
 impl From<TokenExchangeError> for TokenExchangeHttpError {
     fn from(value: TokenExchangeError) -> Self {

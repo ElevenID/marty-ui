@@ -30,6 +30,12 @@
     "commit": "5c470988b597b8e26b93395e169f78b0edd6787f",
     "sha256": "5ce88bb290e5e3381a3c0eedc4c098edac2012f7e34e2113d7f1cd8f5c6d6493"
   },
+  "proof_nonce_behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-proof-nonce.json",
+    "commit": "b1f8845dabc4e64d93dc0336acba032a5b1255ff",
+    "sha256": "e1d5b9ef03489aca9e47d7939608311000cc245a0b0bb07f28ebcb309d6ac7d3"
+  },
   "native_http": [
     {
       "method": "GET",
@@ -129,6 +135,12 @@
       "path": "/v1/issuance/token",
       "operation": "exchange_token",
       "token_exchange_behavior_case": "exchange_token"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issuance/nonce",
+      "operation": "nonce_endpoint",
+      "proof_nonce_behavior_case": "nonce_endpoint"
     }
   ],
   "platform_additive_http": [
@@ -136,7 +148,7 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 115,
+    "http": 114,
     "grpc": 12,
     "runtime_modes": ["api", "canvas-sync-worker"],
     "literal_environment_variables": 79,

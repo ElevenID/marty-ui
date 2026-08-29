@@ -20,7 +20,7 @@ The floor currently contains:
 - 44 Alembic revisions with one head; and
 - every literal and dynamic configuration lookup site.
 
-The native candidate now owns sixteen frozen HTTP operations: the exact legacy
+The native candidate now owns seventeen frozen HTTP operations: the exact legacy
 `GET /health` representation, global issuer metadata, SD-JWT type metadata,
 the global plus three organization-scoped OAuth discovery variants, and all
 three tenant-backed credential-issuer metadata variants. The six deterministic
@@ -49,6 +49,12 @@ OAuth failures, registered tenant client authentication, DPoP key binding,
 single-use atomic claims, one-way token persistence, and the configurable
 per-client sliding-window guard. Real ES256 verification and disposable
 PostgreSQL race gates complement the language-neutral response oracle.
+The OID4VCI proof-nonce endpoint replays
+[`issuance-proof-nonce.json`](../../contracts/issuance-proof-nonce.json) with
+32 bytes of cryptographic entropy, no-store caching, shared OAuth rate
+limiting, five-minute database-clock expiry, SHA-256 digest-only persistence,
+and atomic single use. Its reusable capability repository is also the nonce
+consumer required by credential issuance.
 The same contract binds legacy request-ID propagation/generation and allowed
 and denied CORS behavior so route ownership includes transport semantics, not
 only JSON bodies.
@@ -69,7 +75,7 @@ Python issuance image.
    read-only offer/transaction operations are complete in Rust.
 4. Port token exchange and credential issuance, reusing `marty-core` for
    cryptography and credential formats and preserving idempotency/race gates.
-   Token exchange is complete; credential and nonce issuance remain.
+   Token exchange and nonce issuance are complete; credential issuance remains.
 5. Port revocation/status lifecycle, physical-document paths, Canvas/LTI
    orchestration, all 12 gRPC methods, and the Canvas worker.
 6. Replay the frozen positive, negative, concurrency, database, protocol, and
