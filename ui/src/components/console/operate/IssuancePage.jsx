@@ -150,6 +150,12 @@ function IssuancePage() {
     if (!subjectId) return 'Unknown holder';
     return `Lifecycle holder • ${pickOfficialReference({ rawId: subjectId, kind: 'account' })}`;
   };
+  const getHolderSecondaryLabel = (credential) => {
+    const primary = getHolderLabel(credential);
+    const candidate = String(credential?.holder_email || '').trim();
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate);
+    return isEmail && candidate !== primary ? candidate : null;
+  };
   const getLifecycleRelationship = (credential) => {
     if (credential?.renewed_from_credential_id) {
       return `Renewed from ${pickOfficialReference({
@@ -322,7 +328,15 @@ function IssuancePage() {
         </Paper>
       ) : (
         <TableContainer component={Paper}>
-          <Table>
+          <Table sx={{ tableLayout: 'fixed' }}>
+            <colgroup>
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '13%' }} />
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '30%' }} />
+            </colgroup>
             <TableHead>
               <TableRow>
                 <TableCell>Credential</TableCell>
@@ -357,8 +371,10 @@ function IssuancePage() {
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" fontWeight={600}>{getHolderLabel(credential)}</Typography>
-                    {credential.holder_email && credential.holder_email !== getHolderLabel(credential) && (
-                      <Typography variant="caption" color="text.secondary">{credential.holder_email}</Typography>
+                    {getHolderSecondaryLabel(credential) && (
+                      <Typography variant="caption" color="text.secondary">
+                        {getHolderSecondaryLabel(credential)}
+                      </Typography>
                     )}
                   </TableCell>
                   <TableCell>

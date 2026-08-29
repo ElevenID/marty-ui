@@ -254,8 +254,8 @@ async function ensureActiveRevocationProfile(page, stamp) {
   };
 }
 
-async function ensureLifecycleTemplate(page, revocationProfileId, stamp) {
-  return page.evaluate(async ({ organizationId, sourceTemplateId, profileId, versionStamp }) => {
+async function ensureLifecycleTemplate(page, revocationProfileId) {
+  return page.evaluate(async ({ organizationId, sourceTemplateId, profileId }) => {
     const listResponse = await fetch(
       `/v1/credential-templates?organization_id=${encodeURIComponent(organizationId)}`,
       { credentials: 'include' },
@@ -267,9 +267,11 @@ async function ensureLifecycleTemplate(page, revocationProfileId, stamp) {
     if (!listResponse.ok || !source) {
       return { ok: false, status: listResponse.status, error: 'Source Credential Template unavailable' };
     }
+    const lifecycleTemplateName = `Lifecycle ${source.name}`;
     const existing = templates.find((template) => (
       template.id !== sourceTemplateId
       && template.vct === source.vct
+      && template.name === lifecycleTemplateName
       && template.revocation_profile_id === profileId
       && String(template.status || '').toUpperCase() === 'ACTIVE'
       && template.validity_rules?.renewable === true
@@ -291,7 +293,7 @@ async function ensureLifecycleTemplate(page, revocationProfileId, stamp) {
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        name: `Lifecycle ${source.name} ${versionStamp}`,
+        name: lifecycleTemplateName,
         revocation_profile_id: profileId,
         validity_rules: {
           default_validity_days: 1,
@@ -326,7 +328,6 @@ async function ensureLifecycleTemplate(page, revocationProfileId, stamp) {
     organizationId: ORG_ID,
     sourceTemplateId: SOURCE_TEMPLATE_ID,
     profileId: revocationProfileId,
-    versionStamp: stamp,
   });
 }
 
@@ -472,6 +473,9 @@ async function findCredentialRow(page, credentialId) {
   const search = page.getByPlaceholder('Search issued credentials...');
   await search.fill(credentialId);
   const row = page.locator('tbody tr').first();
+  await row.waitFor({ state: 'visible', timeout: 30_000 });
+  const friendlyReference = await row.locator('td').first().locator('.MuiTypography-caption').innerText();
+  await search.fill(friendlyReference.trim());
   await row.waitFor({ state: 'visible', timeout: 30_000 });
   return row;
 }
@@ -715,11 +719,7 @@ async function main() {
     if (!report.revocationProfile.ok) {
       throw new Error(`Revocation Profile setup failed: ${report.revocationProfile.error}`);
     }
-    report.credentialTemplate = await ensureLifecycleTemplate(
-      page,
-      report.revocationProfile.id,
-      stamp,
-    );
+    report.credentialTemplate = await ensureLifecycleTemplate(page, report.revocationProfile.id);
     if (!report.credentialTemplate.ok) {
       throw new Error(`Credential Template setup failed: ${report.credentialTemplate.error}`);
     }

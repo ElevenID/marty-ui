@@ -187,6 +187,7 @@ describe('IssuancePage', () => {
           credential_id: 'cred-open-badge-1',
           credential_type: 'open_badge',
           subject_id: 'did:key:zDemoLifecycleHolder',
+          holder_email: 'did:key:zDemoLifecycleHolder',
           status: 'SUSPENDED',
         },
       ],
@@ -203,6 +204,7 @@ describe('IssuancePage', () => {
 
     expect(await screen.findByRole('button', { name: /reinstate credential/i })).toBeInTheDocument();
     expect(screen.getByText(`Lifecycle holder • ${formatOfficialReference('did:key:zDemoLifecycleHolder', 'account')}`)).toBeInTheDocument();
+    expect(screen.queryByText('did:key:zDemoLifecycleHolder')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /suspend credential/i })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /reinstate credential/i }));
     await user.type(screen.getByRole('textbox', { name: /reason/i }), 'Review complete');

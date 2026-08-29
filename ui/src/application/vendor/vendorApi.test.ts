@@ -30,6 +30,7 @@ import {
   generateWalletPairingQR,
   fetchWalletPairingStatus,
 } from './vendorApi';
+import { formatOfficialReference } from '../../utils/officialReferences';
 
 // Mock the api service
 vi.mock('../../services/api', () => ({
@@ -172,11 +173,14 @@ describe('vendorApi', () => {
       organizationId: 'org-1',
       page: 1,
       perPage: 10,
-      searchQuery: 'demo employee',
+      searchQuery: formatOfficialReference('credential-2', 'credential'),
     });
 
     expect(result.credentials[0]).toMatchObject({
       holder_label: 'Demo Employee 01',
+      credential_reference: formatOfficialReference('credential-2', 'credential'),
+      holder_reference: formatOfficialReference('demo.employee.01@example.test', 'account'),
+      lifecycle_case_reference: formatOfficialReference('flow-1', 'flow'),
       flow_execution_id: 'flow-1',
       renewed_from_credential_id: 'credential-1',
     });
