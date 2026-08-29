@@ -9,6 +9,7 @@ const test = require('node:test');
 const {
   candidateUiFileForRequest,
   resolveUiCandidateDist,
+  resolveVerificationIssuerDid,
 } = require('./audit-beta-credential-lifecycle');
 
 test('local UI candidate is exact, committed, and never intercepts API routes', () => {
@@ -47,4 +48,16 @@ test('local UI candidate is exact, committed, and never intercepts API routes', 
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('verification issuer identity is bound to the issued credential unless explicitly overridden', () => {
+  assert.equal(
+    resolveVerificationIssuerDid('', { issuer_did: 'did:web:beta.elevenidllc.com:orgs:demo' }),
+    'did:web:beta.elevenidllc.com:orgs:demo',
+  );
+  assert.equal(
+    resolveVerificationIssuerDid('did:web:reviewed.example', { issuer_did: 'did:web:ignored.example' }),
+    'did:web:reviewed.example',
+  );
+  assert.throws(() => resolveVerificationIssuerDid('', {}), /absent/);
 });

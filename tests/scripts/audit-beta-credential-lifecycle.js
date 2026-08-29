@@ -130,6 +130,14 @@ async function showLifecycleStep(page, title, detail) {
   });
 }
 
+function resolveVerificationIssuerDid(override, credential) {
+  const issuerDid = String(override || credential?.issuer_did || '').trim();
+  if (!/^did:[a-z0-9]+:\S+$/i.test(issuerDid)) {
+    throw new Error('Verification issuer DID is absent from both the governed override and issued credential record');
+  }
+  return issuerDid;
+}
+
 async function waitFor(fn, timeoutMs = 60_000, intervalMs = 1_000) {
   const deadline = Date.now() + timeoutMs;
   let last;
@@ -795,7 +803,9 @@ async function main() {
 
     report.suspend = await performLifecycleAction(page, row, 'suspend', 'Automated lifecycle suspension audit');
     report.suspend.current = await getCredentialStatus(page, credential.id);
-    report.suspend.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: suspended trial`);
+    report.suspend.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: suspended trial`, {
+      issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
+    });
     await showLifecycleStep(page, 'Suspension denies verification', 'The status-aware verifier returns the credential\'s suspended-state denial reason.');
     await showVerificationResult(page, report.suspend.verification.result, {
       enabled: RECORD_VIDEO,
@@ -806,7 +816,9 @@ async function main() {
 
     report.reinstate = await performLifecycleAction(page, row, 'reinstate', 'Automated lifecycle reinstatement audit');
     report.reinstate.current = await getCredentialStatus(page, credential.id);
-    report.reinstate.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: reinstated trial`);
+    report.reinstate.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: reinstated trial`, {
+      issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
+    });
     await showLifecycleStep(page, 'Reinstatement restores verification', 'The same credential fixture passes again after the issuer reinstates it.');
     await showVerificationResult(page, report.reinstate.verification.result, {
       enabled: RECORD_VIDEO,
@@ -817,7 +829,9 @@ async function main() {
 
     report.revoke = await performLifecycleAction(page, row, 'revoke', 'Automated lifecycle revocation audit');
     report.revoke.current = await getCredentialStatus(page, credential.id);
-    report.revoke.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: revoked trial`);
+    report.revoke.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: revoked trial`, {
+      issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
+    });
     await showLifecycleStep(page, 'Revocation is final', 'The verifier denies the revoked credential and the issuer inventory retains its final lifecycle state.');
     await showVerificationResult(page, report.revoke.verification.result, {
       enabled: RECORD_VIDEO,
@@ -888,6 +902,7 @@ module.exports = {
   performLifecycleAction,
   receiveCredential,
   resolveUiCandidateDist,
+  resolveVerificationIssuerDid,
   selectOrg,
   verify,
   validateElevenIdLoginTheme,
