@@ -22,6 +22,8 @@ pub struct IssuanceServiceConfig {
     pub signing_keys_internal_url: url::Url,
     pub signing_keys_internal_api_key: Option<String>,
     pub dependency_timeout: Duration,
+    pub token_rate_limit: usize,
+    pub token_rate_window: Duration,
 }
 
 impl std::fmt::Debug for IssuanceServiceConfig {
@@ -45,6 +47,8 @@ impl std::fmt::Debug for IssuanceServiceConfig {
                 &self.signing_keys_internal_api_key.is_some(),
             )
             .field("dependency_timeout", &self.dependency_timeout)
+            .field("token_rate_limit", &self.token_rate_limit)
+            .field("token_rate_window", &self.token_rate_window)
             .finish()
     }
 }
@@ -55,6 +59,7 @@ struct Settings {
     build: BuildSettings,
     discovery: DiscoverySettings,
     dependencies: DependencySettings,
+    rate_limit: RateLimitSettings,
 }
 
 #[derive(Deserialize)]
@@ -80,6 +85,12 @@ struct DiscoverySettings {
 struct DependencySettings {
     database_url: String,
     signing_keys_internal_url: String,
+}
+
+#[derive(Deserialize)]
+struct RateLimitSettings {
+    requests: usize,
+    window_seconds: u64,
 }
 
 impl IssuanceServiceConfig {
@@ -110,6 +121,10 @@ impl IssuanceServiceConfig {
                 "dependencies": {
                     "database_url": "postgresql://marty:marty_dev@postgres:5432/marty_credentials",
                     "signing_keys_internal_url": "http://gateway:8000/internal/signing-keys"
+                },
+                "rate_limit": {
+                    "requests": 30,
+                    "window_seconds": 60
                 }
             }),
         };
@@ -146,6 +161,8 @@ impl IssuanceServiceConfig {
             signing_keys_internal_url,
             signing_keys_internal_api_key,
             dependency_timeout: Duration::from_secs(10),
+            token_rate_limit: settings.rate_limit.requests,
+            token_rate_window: Duration::from_secs(settings.rate_limit.window_seconds),
         })
     }
 }
@@ -196,12 +213,43 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
             json!(signing_keys_internal_url),
         );
     }
+    let mut rate_limit = Map::new();
+    if let Some(requests) = values.get("TOKEN_RATE_LIMIT") {
+        rate_limit.insert(
+            "requests".to_owned(),
+            json!(parse_legacy_number::<usize>("TOKEN_RATE_LIMIT", requests)?),
+        );
+    }
+    if let Some(window_seconds) = values.get("TOKEN_RATE_WINDOW") {
+        rate_limit.insert(
+            "window_seconds".to_owned(),
+            json!(parse_legacy_number::<u64>(
+                "TOKEN_RATE_WINDOW",
+                window_seconds
+            )?),
+        );
+    }
     Ok(json!({
         "server": server,
         "build": build,
         "discovery": discovery,
-        "dependencies": dependencies
+        "dependencies": dependencies,
+        "rate_limit": rate_limit
     }))
+}
+
+fn parse_legacy_number<T>(name: &str, value: &str) -> Result<T, MmfError>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    value.parse::<T>().map_err(|error| {
+        MmfError::new(
+            ErrorCode::Configuration,
+            format!("{name} must be a non-negative integer"),
+        )
+        .with_detail("cause", error.to_string())
+    })
 }
 
 fn validate_issuer_base_url(value: &str) -> Result<String, MmfError> {
@@ -330,6 +378,8 @@ mod tests {
         );
         assert!(config.signing_keys_internal_api_key.is_none());
         assert!(config.issuance_api_key.is_none());
+        assert_eq!(config.token_rate_limit, 30);
+        assert_eq!(config.token_rate_window, std::time::Duration::from_secs(60));
     }
 
     #[test]
@@ -364,6 +414,8 @@ mod tests {
             ),
             ("ISSUANCE_API_KEY", "fallback-key"),
             ("SIGNING_KEYS_INTERNAL_API_KEY", "preferred-key"),
+            ("TOKEN_RATE_LIMIT", "12"),
+            ("TOKEN_RATE_WINDOW", "45"),
         ]))
         .expect("configuration");
         assert_eq!(config.http_addr.to_string(), "127.0.0.1:8010");
@@ -388,6 +440,8 @@ mod tests {
             Some("preferred-key")
         );
         assert_eq!(config.issuance_api_key.as_deref(), Some("fallback-key"));
+        assert_eq!(config.token_rate_limit, 12);
+        assert_eq!(config.token_rate_window, std::time::Duration::from_secs(45));
         let diagnostic = format!("{config:?}");
         assert!(!diagnostic.contains("preferred-key"));
         assert!(!diagnostic.contains("fallback-key"));
@@ -400,6 +454,15 @@ mod tests {
             IssuanceServiceConfig::from_values(values(&[("ISSUANCE_SERVICE_PORT", "not-a-port")]))
                 .expect_err("invalid port");
         assert_eq!(error.code, ErrorCode::Configuration);
+    }
+
+    #[test]
+    fn invalid_legacy_rate_limit_fails_closed() {
+        for (name, value) in [("TOKEN_RATE_LIMIT", "-1"), ("TOKEN_RATE_WINDOW", "later")] {
+            let error = IssuanceServiceConfig::from_values(values(&[(name, value)]))
+                .expect_err("invalid rate limit");
+            assert_eq!(error.code, ErrorCode::Configuration);
+        }
     }
 
     #[test]

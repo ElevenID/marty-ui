@@ -16,12 +16,15 @@ test = false
 [dependencies]
 axum.workspace = true
 async-trait.workspace = true
+base64.workspace = true
 chrono.workspace = true
+hex.workspace = true
 mmf-config.workspace = true
 mmf-core.workspace = true
 mmf-runtime.workspace = true
 mmf-security.workspace = true
 marty-oid4vci.workspace = true
+p256.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -35,6 +38,9 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+jsonwebtoken.workspace = true
+rand08 = { package = "rand", version = "0.8" }
+rsa = "0.9"
 tower.workspace = true
 
 [lints.rust]

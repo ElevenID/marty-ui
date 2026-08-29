@@ -1,10 +1,18 @@
 use std::{error::Error, sync::Arc};
 
 use marty_issuance_service::{
-    http::router_with_services, signing_policy::HttpProofPolicyResolver,
-    tenant_discovery::TenantDiscoveryService, tenant_postgres::PostgresTenantDiscoveryRepository,
+    client_auth::RegisteredClientAuthenticator,
+    dpop::MartyDpopProofVerifier,
+    http::router_with_all_services,
+    signing_policy::HttpProofPolicyResolver,
+    tenant_discovery::TenantDiscoveryService,
+    tenant_postgres::PostgresTenantDiscoveryRepository,
+    token_exchange::{MartyTokenGenerator, TokenExchangeService},
+    token_postgres::PostgresTokenExchangeRepository,
+    token_rate_limit::TokenRateLimiter,
     transaction_postgres::PostgresTransactionReadRepository,
-    transaction_reads::TransactionReadService, transport::TransportPolicy,
+    transaction_reads::TransactionReadService,
+    transport::TransportPolicy,
     validate_embedded_contract, IssuanceRuntime, IssuanceServiceConfig,
 };
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
@@ -44,19 +52,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )?),
     );
     let transaction_reads = TransactionReadService::new(
-        Arc::new(PostgresTransactionReadRepository::new(pool)),
+        Arc::new(PostgresTransactionReadRepository::new(pool.clone())),
         config.issuance_api_key.as_deref(),
+        &config.issuer_base_url,
+    );
+    let token_repository = Arc::new(PostgresTokenExchangeRepository::new(pool));
+    let token_exchange = TokenExchangeService::new(
+        token_repository.clone(),
+        Arc::new(RegisteredClientAuthenticator::new(token_repository)),
+        Arc::new(MartyDpopProofVerifier),
+        Arc::new(MartyTokenGenerator),
         &config.issuer_base_url,
     );
     let listener = TcpListener::bind(config.http_addr).await?;
     runtime.mark_listener_healthy()?;
     let transport = TransportPolicy::new(config.cors_allowed_origins.clone());
-    let app = router_with_services(
+    let app = router_with_all_services(
         runtime.state(),
         discovery,
         transport,
         tenant_discovery,
         transaction_reads,
+        token_exchange,
+        TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
     );
     runtime.activate()?;
     info!(
@@ -66,9 +84,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "native Rust issuance candidate active"
     );
 
-    let result = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await;
+    let result = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await;
     runtime.drain()?;
     runtime.stop()?;
     result.map_err(Into::into)

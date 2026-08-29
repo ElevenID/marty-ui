@@ -20,7 +20,7 @@ The floor currently contains:
 - 44 Alembic revisions with one head; and
 - every literal and dynamic configuration lookup site.
 
-The native candidate now owns fifteen frozen HTTP operations: the exact legacy
+The native candidate now owns sixteen frozen HTTP operations: the exact legacy
 `GET /health` representation, global issuer metadata, SD-JWT type metadata,
 the global plus three organization-scoped OAuth discovery variants, and all
 three tenant-backed credential-issuer metadata variants. The six deterministic
@@ -41,6 +41,14 @@ resources, expiration, repeated and missing query validation, Python timestamp
 shapes, and the distinct list-summary and detail projections. A disposable
 PostgreSQL contract exercises the production projection, tenant-bound list,
 nullable lifecycle fields, and fail-closed persisted status decoding.
+The OID4VCI token endpoint replays
+[`issuance-token-exchange.json`](../../contracts/issuance-token-exchange.json)
+through a typed Rust state machine and the canonical `marty-oid4vci` engine.
+It preserves authorization-code and pre-authorized-code flows, PKCE, exact
+OAuth failures, registered tenant client authentication, DPoP key binding,
+single-use atomic claims, one-way token persistence, and the configurable
+per-client sliding-window guard. Real ES256 verification and disposable
+PostgreSQL race gates complement the language-neutral response oracle.
 The same contract binds legacy request-ID propagation/generation and allowed
 and denied CORS behavior so route ownership includes transport semantics, not
 only JSON bodies.
@@ -61,6 +69,7 @@ Python issuance image.
    read-only offer/transaction operations are complete in Rust.
 4. Port token exchange and credential issuance, reusing `marty-core` for
    cryptography and credential formats and preserving idempotency/race gates.
+   Token exchange is complete; credential and nonce issuance remain.
 5. Port revocation/status lifecycle, physical-document paths, Canvas/LTI
    orchestration, all 12 gRPC methods, and the Canvas worker.
 6. Replay the frozen positive, negative, concurrency, database, protocol, and

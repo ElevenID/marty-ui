@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mmf_core::{ErrorCode, MmfError};
 use serde::Deserialize;
@@ -13,6 +13,7 @@ const TENANT_DISCOVERY: &[u8] =
     include_bytes!("../../../../contracts/issuance-tenant-discovery.json");
 const TRANSACTION_READS: &[u8] =
     include_bytes!("../../../../contracts/issuance-offer-transaction-reads.json");
+const TOKEN_EXCHANGE: &[u8] = include_bytes!("../../../../contracts/issuance-token-exchange.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageSummary {
@@ -28,6 +29,7 @@ struct Coverage {
     behavior_contract: Upstream,
     tenant_behavior_contract: Upstream,
     transaction_read_behavior_contract: Upstream,
+    token_exchange_behavior_contract: Upstream,
     native_http: Vec<HttpOperation>,
     platform_additive_http: Vec<PlatformOperation>,
     remaining: Remaining,
@@ -56,6 +58,8 @@ struct HttpOperation {
     tenant_behavior_case: Option<String>,
     #[serde(default)]
     transaction_read_behavior_case: Option<String>,
+    #[serde(default)]
+    token_exchange_behavior_case: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -127,6 +131,42 @@ struct TransactionReadCase {
 }
 
 #[derive(Deserialize)]
+struct TokenExchangeContract {
+    schema: String,
+    inputs: Value,
+    rate_limit: TokenRateLimit,
+    dependency_failures: Vec<TokenDependencyFailure>,
+    cases: Vec<TokenExchangeOutcome>,
+    failures: Vec<TokenExchangeOutcome>,
+}
+
+#[derive(Deserialize)]
+struct TokenDependencyFailure {
+    status_code: u16,
+    content_type: String,
+    body: Value,
+    repository_calls: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+struct TokenRateLimit {
+    requests: usize,
+    window_seconds: u64,
+    request: Value,
+    allowed_status_code: u16,
+    status_code: u16,
+    headers: BTreeMap<String, String>,
+    body: Value,
+}
+
+#[derive(Deserialize)]
+struct TokenExchangeOutcome {
+    status_code: u16,
+    body: Value,
+    repository_calls: Vec<Value>,
+}
+
+#[derive(Deserialize)]
 struct PlatformOperation {
     method: String,
     path: String,
@@ -155,6 +195,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid tenant discovery contract", error))?;
     let transaction_reads: TransactionReadContract = serde_json::from_slice(TRANSACTION_READS)
         .map_err(|error| contract_error("invalid transaction read contract", error))?;
+    let token_exchange: TokenExchangeContract = serde_json::from_slice(TOKEN_EXCHANGE)
+        .map_err(|error| contract_error("invalid token exchange contract", error))?;
     require(
         surface["schema"] == "marty.issuance-runtime-surface/v1",
         "unexpected issuance surface schema",
@@ -226,6 +268,37 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "unexpected transaction read behavior contract",
     )?;
     require(
+        token_exchange.schema == "marty.issuance-token-exchange/v1"
+            && token_exchange.inputs["path"] == "/v1/issuance/token"
+            && token_exchange.rate_limit.requests == 2
+            && token_exchange.rate_limit.window_seconds == 17
+            && token_exchange.rate_limit.request["form"]["grant_type"] == "unsupported"
+            && token_exchange.rate_limit.allowed_status_code == 400
+            && token_exchange.rate_limit.status_code == 429
+            && token_exchange.rate_limit.headers.get("Retry-After") == Some(&"17".to_owned())
+            && token_exchange.rate_limit.body
+                == serde_json::json!({"detail": "Rate limit exceeded"})
+            && token_exchange.dependency_failures.len() == 1
+            && token_exchange.dependency_failures.iter().all(|failure| {
+                failure.status_code == 500
+                    && failure.content_type == "text/plain"
+                    && failure.body == "Internal Server Error"
+                    && !failure.repository_calls.is_empty()
+            })
+            && token_exchange.cases.len() == 4
+            && token_exchange.failures.len() == 17
+            && token_exchange
+                .cases
+                .iter()
+                .chain(&token_exchange.failures)
+                .all(|outcome| {
+                    (200..600).contains(&outcome.status_code)
+                        && outcome.body.is_object()
+                        && outcome.repository_calls.iter().all(Value::is_object)
+                }),
+        "unexpected token exchange behavior contract",
+    )?;
+    require(
         coverage.behavior_contract.repository == "ElevenID/marty-credentials"
             && coverage.behavior_contract.path == "contracts/issuance-static-discovery.json"
             && coverage.behavior_contract.commit.len() == 40
@@ -258,6 +331,18 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 .chars()
                 .all(|character| character.is_ascii_hexdigit()),
         "invalid transaction read provenance",
+    )?;
+    require(
+        coverage.token_exchange_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.token_exchange_behavior_contract.path
+                == "contracts/issuance-token-exchange.json"
+            && coverage.token_exchange_behavior_contract.commit.len() == 40
+            && coverage
+                .token_exchange_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid token exchange provenance",
     )?;
     require(
         coverage.schema == "marty.issuance-native-coverage/v1",
@@ -298,6 +383,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         actual_transaction_reads == coverage.transaction_read_behavior_contract.sha256,
         "transaction read hash does not match provenance",
     )?;
+    let canonical_token_exchange = canonical_lf(TOKEN_EXCHANGE);
+    let actual_token_exchange = format!("{:x}", Sha256::digest(&canonical_token_exchange));
+    require(
+        actual_token_exchange == coverage.token_exchange_behavior_contract.sha256,
+        "token exchange hash does not match provenance",
+    )?;
 
     let routes = surface["http"]["routes"]
         .as_array()
@@ -324,6 +415,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_behavior_cases = BTreeSet::new();
     let mut native_tenant_behavior_cases = BTreeSet::new();
     let mut native_transaction_read_cases = BTreeSet::new();
+    let mut native_token_exchange_cases = BTreeSet::new();
     for operation in &coverage.native_http {
         require(
             native.insert((operation.method.as_str(), operation.path.as_str())),
@@ -357,6 +449,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 operation.response.is_none()
                     && operation.tenant_behavior_case.is_none()
                     && operation.transaction_read_behavior_case.is_none()
+                    && operation.token_exchange_behavior_case.is_none()
                     && behavior_case == operation.operation
                     && native_behavior_cases.insert(behavior_case)
                     && discovery.cases.iter().any(|case| {
@@ -377,6 +470,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
             require(
                 operation.response.is_none()
                     && operation.transaction_read_behavior_case.is_none()
+                    && operation.token_exchange_behavior_case.is_none()
                     && behavior_case == operation.operation
                     && native_tenant_behavior_cases.insert(behavior_case)
                     && tenant_discovery.variants.iter().any(|variant| {
@@ -392,6 +486,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 operation.response.is_none()
                     && operation.behavior_case.is_none()
                     && operation.tenant_behavior_case.is_none()
+                    && operation.token_exchange_behavior_case.is_none()
                     && native_transaction_read_cases.insert(behavior_case)
                     && transaction_reads.cases.iter().any(|case| {
                         let expected_path = match behavior_case {
@@ -416,6 +511,21 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                             && (case.body.is_object() || case.body.is_array())
                     }),
                 "native issuance operation diverges from its transaction read case",
+            )?;
+        } else if let Some(behavior_case) = operation.token_exchange_behavior_case.as_deref() {
+            require(
+                operation.response.is_none()
+                    && operation.behavior_case.is_none()
+                    && operation.tenant_behavior_case.is_none()
+                    && operation.transaction_read_behavior_case.is_none()
+                    && behavior_case == "exchange_token"
+                    && operation.operation == behavior_case
+                    && operation.method == "POST"
+                    && operation.path == "/v1/issuance/token"
+                    && native_token_exchange_cases.insert(behavior_case)
+                    && token_exchange.cases.len() == 4
+                    && token_exchange.failures.len() == 17,
+                "native issuance operation diverges from its token exchange contract",
             )?;
         } else {
             return Err(invalid("native issuance behavior case is missing"));
@@ -447,6 +557,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     require(
         native_transaction_read_cases == frozen_transaction_read_cases,
         "native transaction read behavior coverage is incomplete",
+    )?;
+    require(
+        native_token_exchange_cases == BTreeSet::from(["exchange_token"]),
+        "native token exchange behavior coverage is incomplete",
     )?;
     for operation in &coverage.platform_additive_http {
         require(
@@ -493,8 +607,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "ISSUER_DISPLAY_NAME",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
                 "SIGNING_KEYS_INTERNAL_URL",
+                "TOKEN_RATE_LIMIT",
+                "TOKEN_RATE_WINDOW",
             ]
-            && coverage.remaining.literal_environment_variables + 8 == environment_count
+            && coverage.remaining.literal_environment_variables + 10 == environment_count
             && coverage.remaining.dynamic_configuration_lookups == dynamic_count
             && coverage.remaining.migration_revisions == migration_count
             && coverage.remaining.migration_heads == migration_heads,
@@ -570,8 +686,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 15);
-        assert_eq!(summary.remaining_http, 116);
+        assert_eq!(summary.native_http, 16);
+        assert_eq!(summary.remaining_http, 115);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }
