@@ -35,7 +35,7 @@ use marty_issuance_service::{
         CanvasLtiPlatform,
     },
     canvas_lti_postgres::MartyCanvasLtiAgsServiceUrlValidator,
-    http::router_with_canvas_lti_launch,
+    http::{router_with_canvas_lti_experience, router_with_canvas_lti_launch},
     transport::TransportPolicy,
     IssuanceRuntime, IssuanceServiceConfig,
 };
@@ -749,6 +749,35 @@ fn orchestration_service(
     )
 }
 
+fn orchestration_experience_service(
+    repository: Arc<OrchestrationRepository>,
+    refreshed: CanvasLtiPlatform,
+) -> CanvasLtiExperienceService {
+    CanvasLtiExperienceService::new(
+        orchestration_service(repository.clone(), refreshed),
+        repository,
+        Arc::new(FixedExperienceCodeGenerator),
+        Arc::new(FixedClock(
+            Utc.with_ymd_and_hms(2026, 8, 29, 12, 0, 0).unwrap(),
+        )),
+        Duration::from_secs(60),
+        "https://ui.example.test/",
+    )
+    .unwrap()
+}
+
+fn orchestration_experience_app(service: CanvasLtiExperienceService) -> axum::Router {
+    let config = IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+        .expect("configuration");
+    let runtime = IssuanceRuntime::new(&config).expect("runtime");
+    router_with_canvas_lti_experience(
+        runtime.state(),
+        StaticDiscoveryDocuments::new("https://issuer.example.test", "Issuer"),
+        TransportPolicy::new(vec!["https://canvas.example.test".to_owned()]),
+        service,
+    )
+}
+
 #[tokio::test]
 async fn launch_orchestration_replays_order_and_atomic_persistence_contract() {
     let policy = &contract()["launch"]["orchestration"];
@@ -876,17 +905,7 @@ async fn experience_handoff_persists_after_launch_and_before_redirect() {
         .lock()
         .unwrap()
         .push(orchestration_binding(&platform));
-    let experience = CanvasLtiExperienceService::new(
-        orchestration_service(repository.clone(), platform),
-        repository.clone(),
-        Arc::new(FixedExperienceCodeGenerator),
-        Arc::new(FixedClock(
-            Utc.with_ymd_and_hms(2026, 8, 29, 12, 0, 0).unwrap(),
-        )),
-        Duration::from_secs(60),
-        "https://ui.example.test/",
-    )
-    .unwrap();
+    let experience = orchestration_experience_service(repository.clone(), platform);
 
     let result = experience
         .launch(
@@ -973,17 +992,7 @@ async fn experience_handoff_failure_never_returns_a_redirect() {
         .lock()
         .unwrap()
         .push(orchestration_binding(&platform));
-    let experience = CanvasLtiExperienceService::new(
-        orchestration_service(repository.clone(), platform),
-        repository.clone(),
-        Arc::new(FixedExperienceCodeGenerator),
-        Arc::new(FixedClock(
-            Utc.with_ymd_and_hms(2026, 8, 29, 12, 0, 0).unwrap(),
-        )),
-        Duration::from_secs(60),
-        "https://ui.example.test",
-    )
-    .unwrap();
+    let experience = orchestration_experience_service(repository.clone(), platform);
 
     assert!(experience
         .launch(
@@ -996,6 +1005,100 @@ async fn experience_handoff_failure_never_returns_a_redirect() {
         .await
         .is_err());
     assert!(repository.handoff_requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn experience_http_redirects_only_after_the_atomic_handoff() {
+    let repository = Arc::new(OrchestrationRepository::default());
+    let mut platform = orchestration_platform();
+    let (token, jwk) = orchestration_token("current-key", 37);
+    platform.lti_jwks_json = Some(json!({"keys": [jwk]}));
+    *repository.platform.lock().unwrap() = Some(platform.clone());
+    repository
+        .states
+        .lock()
+        .unwrap()
+        .insert("state-1".to_owned(), pending_state("platform-1", "state-1"));
+    repository
+        .bindings
+        .lock()
+        .unwrap()
+        .push(orchestration_binding(&platform));
+    let app = orchestration_experience_app(orchestration_experience_service(
+        repository.clone(),
+        platform,
+    ));
+    let body = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("id_token", "discarded")
+        .append_pair("id_token", &token)
+        .append_pair("state", "discarded")
+        .append_pair("state", "state-1")
+        .finish();
+
+    let response = app
+        .oneshot(
+            Request::post("/v1/integrations/canvas/lti/platforms/platform-1/experience")
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers().get(header::LOCATION).unwrap(),
+        "https://ui.example.test/canvas/lti/experience?code=experience-code-1"
+    );
+    assert_eq!(
+        repository.calls().last(),
+        Some(&"persist-experience-handoff")
+    );
+    assert!(to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn experience_http_persistence_failure_never_exposes_a_redirect() {
+    let repository = Arc::new(OrchestrationRepository::default());
+    let mut platform = orchestration_platform();
+    let (token, jwk) = orchestration_token("current-key", 38);
+    platform.lti_jwks_json = Some(json!({"keys": [jwk]}));
+    *repository.platform.lock().unwrap() = Some(platform.clone());
+    *repository.fail_handoff.lock().unwrap() = true;
+    repository
+        .states
+        .lock()
+        .unwrap()
+        .insert("state-1".to_owned(), pending_state("platform-1", "state-1"));
+    repository
+        .bindings
+        .lock()
+        .unwrap()
+        .push(orchestration_binding(&platform));
+    let app = orchestration_experience_app(orchestration_experience_service(repository, platform));
+
+    let response = app
+        .oneshot(
+            Request::post("/v1/integrations/canvas/lti/platforms/platform-1/experience")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"id_token": token, "state": "state-1"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(response.headers().get(header::LOCATION).is_none());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&to_bytes(response.into_body(), 64 * 1024).await.unwrap())
+            .unwrap(),
+        json!({"detail": "Canvas LTI launch is temporarily unavailable"})
+    );
 }
 
 #[tokio::test]

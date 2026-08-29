@@ -2,7 +2,10 @@ use std::{error::Error, sync::Arc};
 
 use marty_issuance_service::{
     canvas_issuance_guard::CanvasGuardConfig,
-    canvas_lti_launch::{CanvasLtiLaunchPorts, CanvasLtiLaunchService, SystemCanvasLtiClock},
+    canvas_lti_launch::{
+        CanvasLtiExperienceService, CanvasLtiLaunchPorts, CanvasLtiLaunchService,
+        SecureCanvasLtiExperienceCodeGenerator, SystemCanvasLtiClock,
+    },
     canvas_lti_login::CanvasLtiLoginService,
     canvas_lti_postgres::{
         CanvasLtiJwksRefreshConfig, MartyCanvasLtiAgsServiceUrlValidator,
@@ -99,6 +102,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.canvas_lti_state_ttl,
         config.canvas_self_managed_origins.clone(),
     )?;
+    let canvas_lti_clock = Arc::new(SystemCanvasLtiClock);
     let canvas_lti_launch = CanvasLtiLaunchService::new(
         canvas_lti_login.clone(),
         CanvasLtiLaunchPorts {
@@ -119,10 +123,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             ags_url_validator: Arc::new(MartyCanvasLtiAgsServiceUrlValidator::new(
                 config.canvas_private_origin_allowlist.clone(),
             )),
-            capability_repository: canvas_lti_repository,
-            clock: Arc::new(SystemCanvasLtiClock),
+            capability_repository: canvas_lti_repository.clone(),
+            clock: canvas_lti_clock.clone(),
         },
     );
+    let canvas_lti_experience = CanvasLtiExperienceService::new(
+        canvas_lti_launch.clone(),
+        canvas_lti_repository,
+        Arc::new(SecureCanvasLtiExperienceCodeGenerator),
+        canvas_lti_clock,
+        config.canvas_lti_experience_code_ttl,
+        &config.canvas_lti_experience_base_url,
+    )?;
     let credential = CredentialIssuanceService::new(
         CredentialPorts {
             repository: Arc::new(PostgresCredentialRepository::new(
@@ -171,7 +183,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             token_exchange,
             proof_nonce,
             credential,
-            CanvasLtiServices::new(canvas_lti_login, canvas_lti_launch),
+            CanvasLtiServices::new(canvas_lti_login, canvas_lti_launch, canvas_lti_experience),
             TokenRateLimiter::new(config.token_rate_limit, config.token_rate_window),
         ),
     );

@@ -19,8 +19,8 @@ use serde_json::{json, Map, Value};
 
 use crate::{
     canvas_lti_launch::{
-        public_launch_response, CanvasLtiLaunchPlanError, CanvasLtiLaunchService,
-        CanvasLtiLaunchServiceError, CanvasLtiLaunchSubmission,
+        public_launch_response, CanvasLtiExperienceService, CanvasLtiLaunchPlanError,
+        CanvasLtiLaunchService, CanvasLtiLaunchServiceError, CanvasLtiLaunchSubmission,
     },
     canvas_lti_login::{
         CanvasLtiLoginError, CanvasLtiLoginMode, CanvasLtiLoginService, CanvasLtiLoginSubmission,
@@ -47,6 +47,7 @@ struct IssuanceState {
     credential: Option<CredentialIssuanceService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
+    canvas_lti_experience: Option<CanvasLtiExperienceService>,
 }
 
 pub struct IssuanceServices {
@@ -63,12 +64,21 @@ pub struct IssuanceServices {
 pub struct CanvasLtiServices {
     login: CanvasLtiLoginService,
     launch: CanvasLtiLaunchService,
+    experience: CanvasLtiExperienceService,
 }
 
 impl CanvasLtiServices {
     #[must_use]
-    pub fn new(login: CanvasLtiLoginService, launch: CanvasLtiLaunchService) -> Self {
-        Self { login, launch }
+    pub fn new(
+        login: CanvasLtiLoginService,
+        launch: CanvasLtiLaunchService,
+        experience: CanvasLtiExperienceService,
+    ) -> Self {
+        Self {
+            login,
+            launch,
+            experience,
+        }
     }
 }
 
@@ -104,6 +114,7 @@ struct OptionalServices {
     credential: Option<CredentialIssuanceService>,
     canvas_lti_login: Option<CanvasLtiLoginService>,
     canvas_lti_launch: Option<CanvasLtiLaunchService>,
+    canvas_lti_experience: Option<CanvasLtiExperienceService>,
     token_rate_limiter: Option<TokenRateLimiter>,
 }
 
@@ -173,6 +184,7 @@ pub fn router_with_all_services(
             credential: Some(services.credential),
             canvas_lti_login: Some(services.canvas_lti.login),
             canvas_lti_launch: Some(services.canvas_lti.launch),
+            canvas_lti_experience: Some(services.canvas_lti.experience),
             token_rate_limiter: Some(services.token_rate_limiter),
         },
     )
@@ -285,6 +297,23 @@ pub fn router_with_canvas_lti_launch(
     )
 }
 
+pub fn router_with_canvas_lti_experience(
+    runtime: RuntimeState,
+    discovery: StaticDiscoveryDocuments,
+    transport: TransportPolicy,
+    canvas_lti_experience: CanvasLtiExperienceService,
+) -> Router {
+    router_with_optional_services(
+        runtime,
+        discovery,
+        transport,
+        OptionalServices {
+            canvas_lti_experience: Some(canvas_lti_experience),
+            ..OptionalServices::default()
+        },
+    )
+}
+
 fn router_with_optional_services(
     runtime: RuntimeState,
     discovery: StaticDiscoveryDocuments,
@@ -376,6 +405,12 @@ fn router_with_optional_services(
             post(verify_canvas_lti_launch),
         );
     }
+    if services.canvas_lti_experience.is_some() {
+        api = api.route(
+            "/v1/integrations/canvas/lti/platforms/{platform_id}/experience",
+            post(launch_canvas_lti_experience),
+        );
+    }
     let api = api.merge(oauth).with_state(IssuanceState {
         documents: discovery,
         tenant: services.tenant,
@@ -385,6 +420,7 @@ fn router_with_optional_services(
         credential: services.credential,
         canvas_lti_login: services.canvas_lti_login,
         canvas_lti_launch: services.canvas_lti_launch,
+        canvas_lti_experience: services.canvas_lti_experience,
     });
     system
         .merge(api)
@@ -414,6 +450,25 @@ async fn verify_canvas_lti_launch(
     let submission = parse_canvas_lti_launch_submission(request).await?;
     let result = service.launch_prepared(platform, submission).await?;
     Ok(Json(public_launch_response(&result.response)).into_response())
+}
+
+async fn launch_canvas_lti_experience(
+    State(state): State<IssuanceState>,
+    Path(platform_id): Path<String>,
+    request: Request,
+) -> Result<Response, CanvasLtiLaunchHttpError> {
+    let service = state
+        .canvas_lti_experience
+        .as_ref()
+        .ok_or(CanvasLtiLaunchPlanError::RepositoryUnavailable)?;
+    // Preserve the shared Python boundary: platform authorization and trust
+    // validation happen before request-body parsing for both callback routes.
+    let platform = service.prepare_platform(&platform_id).await?;
+    let submission = parse_canvas_lti_launch_submission(request).await?;
+    let result = service.launch_prepared(platform, submission).await?;
+    let location = HeaderValue::from_str(&result.location)
+        .map_err(|_| CanvasLtiLaunchPlanError::RepositoryUnavailable)?;
+    Ok((StatusCode::SEE_OTHER, [(http_header::LOCATION, location)]).into_response())
 }
 
 async fn initiate_canvas_lti_experience_login(

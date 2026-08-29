@@ -802,11 +802,12 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         } else if let Some(behavior_case) = operation.canvas_lti_behavior_case.as_deref() {
             let expected_operation = match behavior_case {
                 "login" => "initiate_canvas_lti_login_route",
+                "experience" => "launch_canvas_lti_experience_route",
                 "experience-login" => "initiate_canvas_lti_experience_login_route",
                 "launch" => "verify_canvas_lti_launch_route",
                 _ => return Err(invalid("unknown native Canvas LTI behavior case")),
             };
-            let expected_authentication = if behavior_case == "launch" {
+            let expected_authentication = if matches!(behavior_case, "launch" | "experience") {
                 "public-lti-form-post"
             } else {
                 "public-lti-login"
@@ -850,7 +851,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "native tenant issuance behavior coverage is incomplete",
     )?;
     require(
-        native_canvas_lti_cases == BTreeSet::from(["experience-login", "launch", "login"]),
+        native_canvas_lti_cases
+            == BTreeSet::from(["experience", "experience-login", "launch", "login"]),
         "native Canvas LTI behavior coverage is incomplete",
     )?;
     let frozen_transaction_read_cases = transaction_reads
@@ -915,6 +917,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS",
                 "CANVAS_ALLOW_PRIVATE_BASE_URLS",
                 "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+                "CANVAS_LTI_EXPERIENCE_BASE_URL",
+                "CANVAS_LTI_EXPERIENCE_CODE_TTL_SECONDS",
                 "CANVAS_LTI_JWKS_TTL_MINUTES",
                 "CANVAS_LTI_STATE_TTL_MINUTES",
                 "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
@@ -933,8 +937,9 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "SIGNING_KEYS_INTERNAL_URL",
                 "TOKEN_RATE_LIMIT",
                 "TOKEN_RATE_WINDOW",
+                "UI_BASE_URL",
             ]
-            && coverage.remaining.literal_environment_variables + 22 == environment_count
+            && coverage.remaining.literal_environment_variables + 25 == environment_count
             && coverage.remaining.dynamic_configuration_lookups == dynamic_count
             && coverage.remaining.migration_revisions == migration_count
             && coverage.remaining.migration_heads == migration_heads,
@@ -1027,8 +1032,8 @@ mod tests {
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 21);
-        assert_eq!(summary.remaining_http, 110);
+        assert_eq!(summary.native_http, 22);
+        assert_eq!(summary.remaining_http, 109);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }
