@@ -752,6 +752,10 @@ impl IntoResponse for CredentialIssuanceHttpError {
             | Error::LifecycleUnavailable(detail) => {
                 (StatusCode::SERVICE_UNAVAILABLE, json!({"detail": detail}))
             }
+            Error::RevocationProfileRequired => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                json!({"detail": "The Credential Template has no Revocation Profile."}),
+            ),
             Error::BuilderChangedCredentialId
             | Error::InvalidStoredDataIntegrityCredential
             | Error::RepositoryUnavailable => (

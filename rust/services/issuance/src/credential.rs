@@ -1105,6 +1105,8 @@ pub enum CredentialIssuanceError {
     SigningUnavailable(String),
     #[error("credential lifecycle dependency is unavailable: {0}")]
     LifecycleUnavailable(String),
+    #[error("the credential template has no revocation profile")]
+    RevocationProfileRequired,
     #[error("credential repository is unavailable")]
     RepositoryUnavailable,
 }

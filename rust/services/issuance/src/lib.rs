@@ -12,6 +12,7 @@ pub mod contract;
 pub mod credential;
 pub mod credential_builder;
 pub mod credential_issuer;
+pub mod credential_lifecycle;
 pub mod credential_postgres;
 pub mod dpop;
 pub mod ephemeral_postgres;
