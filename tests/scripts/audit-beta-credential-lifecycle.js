@@ -133,6 +133,17 @@ async function showLifecycleStep(page, title, detail, stage) {
   });
 }
 
+async function dismissLifecycleUpdatedNotification(page) {
+  const alert = page.getByRole('alert')
+    .filter({ hasText: 'Lifecycle updated' })
+    .last();
+  const closeButton = alert.getByRole('button', { name: /^close$/i });
+  if (!await closeButton.isVisible().catch(() => false)) return false;
+  await closeButton.click();
+  await alert.waitFor({ state: 'hidden', timeout: 5_000 });
+  return true;
+}
+
 function resolveVerificationIssuerDid(override, credential) {
   const issuerDid = String(override || credential?.issuer_did || '').trim();
   if (!/^did:[a-z0-9]+:\S+$/i.test(issuerDid)) {
@@ -840,6 +851,7 @@ async function main() {
 
     report.suspend = await performLifecycleAction(page, row, 'suspend', 'Automated lifecycle suspension audit');
     report.suspend.current = await getCredentialStatus(page, credential.id);
+    if (RECORD_VIDEO) await dismissLifecycleUpdatedNotification(page);
     report.suspend.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: suspended trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
     });
@@ -855,6 +867,7 @@ async function main() {
 
     report.reinstate = await performLifecycleAction(page, row, 'reinstate', 'Automated lifecycle reinstatement audit');
     report.reinstate.current = await getCredentialStatus(page, credential.id);
+    if (RECORD_VIDEO) await dismissLifecycleUpdatedNotification(page);
     report.reinstate.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: reinstated trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
     });
@@ -870,6 +883,7 @@ async function main() {
 
     report.revoke = await performLifecycleAction(page, row, 'revoke', 'Automated lifecycle revocation audit');
     report.revoke.current = await getCredentialStatus(page, credential.id);
+    if (RECORD_VIDEO) await dismissLifecycleUpdatedNotification(page);
     report.revoke.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: revoked trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
     });
@@ -935,6 +949,7 @@ if (require.main === module) {
 
 module.exports = {
   candidateUiFileForRequest,
+  dismissLifecycleUpdatedNotification,
   ensureActiveRevocationProfile,
   findCredentialRow,
   findIssuedCredential,
