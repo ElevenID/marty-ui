@@ -127,6 +127,15 @@ pub trait CanvasLtiLaunchStateRepository: Send + Sync {
     ) -> Result<Option<CanvasLtiStoredLaunchState>, CanvasLtiLaunchPlanError>;
 }
 
+#[async_trait]
+pub trait CanvasLtiLaunchContextRepository: Send + Sync {
+    async fn list_program_bindings(
+        &self,
+        organization_id: &str,
+        platform_id: &str,
+    ) -> Result<Vec<CanvasLtiProgramBinding>, CanvasLtiLaunchPlanError>;
+}
+
 #[derive(Clone)]
 pub struct CanvasLtiLaunchStateService {
     repository: Arc<dyn CanvasLtiLaunchStateRepository>,
