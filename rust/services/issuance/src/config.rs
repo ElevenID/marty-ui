@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     net::{IpAddr, SocketAddr},
     time::Duration,
 };
@@ -22,6 +22,12 @@ pub struct IssuanceServiceConfig {
     pub issuance_api_key: Option<String>,
     pub signing_keys_internal_url: url::Url,
     pub signing_keys_internal_api_key: Option<String>,
+    pub revocation_profile_service_url: url::Url,
+    pub internal_service_token: Option<String>,
+    pub canvas_portable_enabled: bool,
+    pub canvas_pilot_organizations: BTreeSet<String>,
+    pub canvas_evidence_max_age: Duration,
+    pub canvas_readiness_max_age: Duration,
     pub dependency_timeout: Duration,
     pub token_rate_limit: usize,
     pub token_rate_window: Duration,
@@ -47,6 +53,19 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "signing_keys_internal_api_key_configured",
                 &self.signing_keys_internal_api_key.is_some(),
+            )
+            .field(
+                "revocation_profile_service_url",
+                &self.revocation_profile_service_url,
+            )
+            .field(
+                "internal_service_token_configured",
+                &self.internal_service_token.is_some(),
+            )
+            .field("canvas_portable_enabled", &self.canvas_portable_enabled)
+            .field(
+                "canvas_pilot_organizations",
+                &self.canvas_pilot_organizations,
             )
             .field("dependency_timeout", &self.dependency_timeout)
             .field("token_rate_limit", &self.token_rate_limit)
@@ -87,6 +106,7 @@ struct DiscoverySettings {
 struct DependencySettings {
     database_url: String,
     signing_keys_internal_url: String,
+    revocation_profile_service_url: String,
 }
 
 #[derive(Deserialize)]
@@ -129,7 +149,8 @@ impl IssuanceServiceConfig {
                 },
                 "dependencies": {
                     "database_url": "postgresql://marty:marty_dev@postgres:5432/marty_credentials",
-                    "signing_keys_internal_url": "http://gateway:8000/internal/signing-keys"
+                    "signing_keys_internal_url": "http://gateway:8000/internal/signing-keys",
+                    "revocation_profile_service_url": "http://revocation-profile:8013"
                 },
                 "rate_limit": {
                     "requests": 30,
@@ -155,10 +176,30 @@ impl IssuanceServiceConfig {
         let database_url = validate_database_url(&settings.dependencies.database_url)?;
         let signing_keys_internal_url =
             validate_internal_url(&settings.dependencies.signing_keys_internal_url)?;
+        let revocation_profile_service_url =
+            validate_internal_url(&settings.dependencies.revocation_profile_service_url)?;
         let issuance_api_key = secret_value(&values, "ISSUANCE_API_KEY")?;
         let token_hmac_key = secret_value(&values, "TOKEN_HMAC_KEY")?;
         let signing_keys_internal_api_key = secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?
             .or_else(|| issuance_api_key.clone());
+        let internal_service_token = secret_value(&values, "GRPC_SERVICE_TOKEN")?;
+        let canvas_portable_enabled =
+            environment_flag(&values, "CANVAS_PORTABLE_INTEGRATION_ENABLED");
+        let canvas_pilot_organizations = values
+            .get("CANVAS_PILOT_ORGANIZATION_IDS")
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let canvas_evidence_max_age =
+            positive_seconds(&values, "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS", 900)?;
+        let canvas_readiness_max_age =
+            positive_seconds(&values, "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS", 900)?;
         Ok(Self {
             http_addr,
             release_version: settings.build.release_version,
@@ -171,6 +212,12 @@ impl IssuanceServiceConfig {
             issuance_api_key,
             signing_keys_internal_url,
             signing_keys_internal_api_key,
+            revocation_profile_service_url,
+            internal_service_token,
+            canvas_portable_enabled,
+            canvas_pilot_organizations,
+            canvas_evidence_max_age,
+            canvas_readiness_max_age,
             dependency_timeout: Duration::from_secs(10),
             token_rate_limit: settings.rate_limit.requests,
             token_rate_window: Duration::from_secs(settings.rate_limit.window_seconds),
@@ -224,6 +271,12 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
             json!(signing_keys_internal_url),
         );
     }
+    if let Some(revocation_profile_service_url) = values.get("REVOCATION_PROFILE_SERVICE_URL") {
+        dependencies.insert(
+            "revocation_profile_service_url".to_owned(),
+            json!(revocation_profile_service_url),
+        );
+    }
     let mut rate_limit = Map::new();
     if let Some(requests) = values.get("TOKEN_RATE_LIMIT") {
         rate_limit.insert(
@@ -247,6 +300,38 @@ fn legacy_environment(values: &BTreeMap<String, String>) -> Result<Value, MmfErr
         "dependencies": dependencies,
         "rate_limit": rate_limit
     }))
+}
+
+fn environment_flag(values: &BTreeMap<String, String>, name: &str) -> bool {
+    values.get(name).is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn positive_seconds(
+    values: &BTreeMap<String, String>,
+    name: &str,
+    default: u64,
+) -> Result<Duration, MmfError> {
+    let seconds = values.get(name).map_or(Ok(default), |value| {
+        value.parse::<u64>().map_err(|error| {
+            MmfError::new(
+                ErrorCode::Configuration,
+                format!("{name} must be a positive integer"),
+            )
+            .with_detail("cause", error.to_string())
+        })
+    })?;
+    if seconds == 0 {
+        return Err(MmfError::new(
+            ErrorCode::Configuration,
+            format!("{name} must be a positive integer"),
+        ));
+    }
+    Ok(Duration::from_secs(seconds))
 }
 
 fn parse_legacy_number<T>(name: &str, value: &str) -> Result<T, MmfError>

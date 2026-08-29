@@ -15,6 +15,10 @@ const TRANSACTION_READS: &[u8] =
     include_bytes!("../../../../contracts/issuance-offer-transaction-reads.json");
 const TOKEN_EXCHANGE: &[u8] = include_bytes!("../../../../contracts/issuance-token-exchange.json");
 const PROOF_NONCE: &[u8] = include_bytes!("../../../../contracts/issuance-proof-nonce.json");
+const CREDENTIAL_ADMISSION: &[u8] =
+    include_bytes!("../../../../contracts/issuance-credential-admission.json");
+const CREDENTIAL_SIGNING: &[u8] =
+    include_bytes!("../../../../contracts/issuance-credential-signing.json");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CoverageSummary {
@@ -32,6 +36,8 @@ struct Coverage {
     transaction_read_behavior_contract: Upstream,
     token_exchange_behavior_contract: Upstream,
     proof_nonce_behavior_contract: Upstream,
+    credential_admission_behavior_contract: Upstream,
+    credential_signing_behavior_contract: Upstream,
     native_http: Vec<HttpOperation>,
     platform_additive_http: Vec<PlatformOperation>,
     remaining: Remaining,
@@ -64,6 +70,8 @@ struct HttpOperation {
     token_exchange_behavior_case: Option<String>,
     #[serde(default)]
     proof_nonce_behavior_case: Option<String>,
+    #[serde(default)]
+    credential_behavior_contract: bool,
 }
 
 #[derive(Deserialize)]
@@ -214,6 +222,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         .map_err(|error| contract_error("invalid token exchange contract", error))?;
     let proof_nonce: ProofNonceContract = serde_json::from_slice(PROOF_NONCE)
         .map_err(|error| contract_error("invalid proof nonce contract", error))?;
+    let credential_admission: Value = serde_json::from_slice(CREDENTIAL_ADMISSION)
+        .map_err(|error| contract_error("invalid credential admission contract", error))?;
+    let credential_signing: Value = serde_json::from_slice(CREDENTIAL_SIGNING)
+        .map_err(|error| contract_error("invalid credential signing contract", error))?;
     require(
         surface["schema"] == "marty.issuance-runtime-surface/v1",
         "unexpected issuance surface schema",
@@ -378,6 +390,26 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "unexpected proof nonce behavior contract",
     )?;
     require(
+        credential_admission["schema"] == "marty.issuance-credential-admission/v1"
+            && credential_admission["cases"]
+                .as_array()
+                .is_some_and(|cases| cases.len() == 21)
+            && credential_admission["inputs"]["path"] == "/v1/issuance/credential",
+        "unexpected credential admission behavior contract",
+    )?;
+    require(
+        credential_signing["schema"] == "marty.issuance-credential-signing/v1"
+            && credential_signing["formats"]
+                .as_array()
+                .is_some_and(|formats| formats.len() == 4)
+            && credential_signing["critical_order"]
+                .as_array()
+                .is_some_and(|events| events.len() == 9)
+            && credential_signing["authorization_code_only"]["transaction_id"]
+                == "dca62a6b-abc0-590d-906b-2582303615e5",
+        "unexpected credential signing behavior contract",
+    )?;
+    require(
         coverage.behavior_contract.repository == "ElevenID/marty-credentials"
             && coverage.behavior_contract.path == "contracts/issuance-static-discovery.json"
             && coverage.behavior_contract.commit.len() == 40
@@ -435,6 +467,30 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "invalid proof nonce provenance",
     )?;
     require(
+        coverage.credential_admission_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.credential_admission_behavior_contract.path
+                == "contracts/issuance-credential-admission.json"
+            && coverage.credential_admission_behavior_contract.commit.len() == 40
+            && coverage
+                .credential_admission_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid credential admission provenance",
+    )?;
+    require(
+        coverage.credential_signing_behavior_contract.repository == "ElevenID/marty-credentials"
+            && coverage.credential_signing_behavior_contract.path
+                == "contracts/issuance-credential-signing.json"
+            && coverage.credential_signing_behavior_contract.commit.len() == 40
+            && coverage
+                .credential_signing_behavior_contract
+                .commit
+                .chars()
+                .all(|character| character.is_ascii_hexdigit()),
+        "invalid credential signing provenance",
+    )?;
+    require(
         coverage.schema == "marty.issuance-native-coverage/v1",
         "unexpected issuance coverage schema",
     )?;
@@ -485,6 +541,19 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         actual_proof_nonce == coverage.proof_nonce_behavior_contract.sha256,
         "proof nonce hash does not match provenance",
     )?;
+    let canonical_credential_admission = canonical_lf(CREDENTIAL_ADMISSION);
+    let actual_credential_admission =
+        format!("{:x}", Sha256::digest(&canonical_credential_admission));
+    require(
+        actual_credential_admission == coverage.credential_admission_behavior_contract.sha256,
+        "credential admission hash does not match provenance",
+    )?;
+    let canonical_credential_signing = canonical_lf(CREDENTIAL_SIGNING);
+    let actual_credential_signing = format!("{:x}", Sha256::digest(&canonical_credential_signing));
+    require(
+        actual_credential_signing == coverage.credential_signing_behavior_contract.sha256,
+        "credential signing hash does not match provenance",
+    )?;
 
     let routes = surface["http"]["routes"]
         .as_array()
@@ -513,6 +582,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
     let mut native_transaction_read_cases = BTreeSet::new();
     let mut native_token_exchange_cases = BTreeSet::new();
     let mut native_proof_nonce_cases = BTreeSet::new();
+    let mut native_credential_contract = false;
     for operation in &coverage.native_http {
         require(
             native.insert((operation.method.as_str(), operation.path.as_str())),
@@ -645,6 +715,27 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     && proof_nonce.failures.len() == 2,
                 "native issuance operation diverges from its proof nonce contract",
             )?;
+        } else if operation.credential_behavior_contract {
+            require(
+                !native_credential_contract
+                    && operation.response.is_none()
+                    && operation.behavior_case.is_none()
+                    && operation.tenant_behavior_case.is_none()
+                    && operation.transaction_read_behavior_case.is_none()
+                    && operation.token_exchange_behavior_case.is_none()
+                    && operation.proof_nonce_behavior_case.is_none()
+                    && operation.operation == "issue_credential"
+                    && operation.method == "POST"
+                    && operation.path == "/v1/issuance/credential"
+                    && credential_admission["cases"]
+                        .as_array()
+                        .is_some_and(|cases| cases.len() >= 20)
+                    && credential_signing["formats"]
+                        .as_array()
+                        .is_some_and(|formats| formats.len() == 4),
+                "native credential endpoint diverges from its admission or signing contract",
+            )?;
+            native_credential_contract = true;
         } else {
             return Err(invalid("native issuance behavior case is missing"));
         }
@@ -684,6 +775,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         native_proof_nonce_cases == BTreeSet::from(["nonce_endpoint"]),
         "native proof nonce behavior coverage is incomplete",
     )?;
+    require(
+        native_credential_contract,
+        "native credential endpoint behavior coverage is incomplete",
+    )?;
     for operation in &coverage.platform_additive_http {
         require(
             operation.owner == "mmf-runtime",
@@ -722,17 +817,23 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         coverage.native_environment_variables
             == [
                 "CORS_ALLOWED_ORIGINS",
+                "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+                "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
+                "CANVAS_PILOT_ORGANIZATION_IDS",
+                "CANVAS_PORTABLE_INTEGRATION_ENABLED",
                 "DATABASE_URL",
+                "GRPC_SERVICE_TOKEN",
                 "ISSUANCE_SERVICE_PORT",
                 "ISSUANCE_API_KEY",
                 "ISSUER_BASE_URL",
                 "ISSUER_DISPLAY_NAME",
+                "REVOCATION_PROFILE_SERVICE_URL",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
                 "SIGNING_KEYS_INTERNAL_URL",
                 "TOKEN_RATE_LIMIT",
                 "TOKEN_RATE_WINDOW",
             ]
-            && coverage.remaining.literal_environment_variables + 10 == environment_count
+            && coverage.remaining.literal_environment_variables + 16 == environment_count
             && coverage.remaining.dynamic_configuration_lookups == dynamic_count
             && coverage.remaining.migration_revisions == migration_count
             && coverage.remaining.migration_heads == migration_heads,
@@ -756,8 +857,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "issuance runtime mode coverage is incomplete",
     )?;
     require(
-        coverage.deployment == "candidate-only",
-        "incomplete issuance host must remain candidate-only",
+        coverage.deployment == "beta-path-split",
+        "incomplete issuance host must remain beta-path-split",
     )?;
 
     Ok(CoverageSummary {
@@ -798,18 +899,30 @@ fn contract_error(message: &'static str, error: serde_json::Error) -> MmfError {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_lf, validate_embedded_contract};
+    use sha2::{Digest, Sha256};
+
+    use super::{
+        canonical_lf, validate_embedded_contract, CREDENTIAL_ADMISSION, CREDENTIAL_SIGNING,
+    };
 
     #[test]
     fn provenance_hash_is_independent_of_checkout_line_endings() {
         assert_eq!(canonical_lf(b"first\r\nsecond\n"), b"first\nsecond\n");
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_ADMISSION))),
+            "8acbdaab9db036a65d32c377debb69e4415bacf61d417b5fa2b43dc6f5388c1b"
+        );
+        assert_eq!(
+            format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_SIGNING))),
+            "efa4fd2857dd6e2a41d6c0fa1e4909b5614075a5d01b5dcf9694a6d4d7229d52"
+        );
     }
 
     #[test]
     fn embedded_surface_and_native_coverage_are_consistent() {
         let summary = validate_embedded_contract().expect("contract");
-        assert_eq!(summary.native_http, 17);
-        assert_eq!(summary.remaining_http, 114);
+        assert_eq!(summary.native_http, 18);
+        assert_eq!(summary.remaining_http, 113);
         assert_eq!(summary.remaining_grpc, 12);
     }
 }

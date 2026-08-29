@@ -25,6 +25,7 @@ mmf-core.workspace = true
 mmf-runtime.workspace = true
 mmf-security.workspace = true
 marty-oid4vci.workspace = true
+marty-verification.workspace = true
 p256.workspace = true
 rand.workspace = true
 reqwest.workspace = true
@@ -40,6 +41,7 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+ed25519-dalek.workspace = true
 jsonwebtoken.workspace = true
 rand08 = { package = "rand", version = "0.8" }
 rsa = "0.9"

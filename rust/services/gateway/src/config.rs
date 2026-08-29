@@ -133,7 +133,7 @@ impl GatewayConfig {
             "development" | "dev" | "local" | "test"
         );
         let port = parse(values, "GATEWAY_PORT", 8000_u16)?;
-        let service_urls = SERVICE_URLS
+        let mut service_urls = SERVICE_URLS
             .iter()
             .map(|(service, variable, default)| {
                 (
@@ -142,6 +142,9 @@ impl GatewayConfig {
                 )
             })
             .collect::<BTreeMap<_, _>>();
+        let issuance_native_url = value(values, "ISSUANCE_NATIVE_SERVICE_URL")
+            .unwrap_or_else(|| service_urls["issuance"].clone());
+        service_urls.insert("issuance-native".into(), issuance_native_url);
         validate_service_urls(&service_urls)?;
 
         let grpc_service_token = secret(values, "GRPC_SERVICE_TOKEN")?;
@@ -469,8 +472,29 @@ mod tests {
         assert_eq!(config.address.port(), 8000);
         assert_eq!(config.rate_limit_rpm, 120);
         assert_eq!(config.public_domain, "localhost:8000");
+        assert_eq!(
+            config.service_urls["issuance-native"],
+            config.service_urls["issuance"]
+        );
         assert!(config.redis_url.is_none());
         assert!(config.release_identity.component_revisions.is_empty());
+    }
+
+    #[test]
+    fn native_issuance_upstream_can_be_enabled_without_replacing_legacy() {
+        let values = BTreeMap::from([
+            ("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into()),
+            (
+                "ISSUANCE_NATIVE_SERVICE_URL".into(),
+                "http://issuance-native:8005".into(),
+            ),
+        ]);
+        let config = GatewayConfig::from_values(&values).expect("split upstream config");
+        assert_eq!(config.service_urls["issuance"], "http://issuance:8005");
+        assert_eq!(
+            config.service_urls["issuance-native"],
+            "http://issuance-native:8005"
+        );
     }
 
     #[test]

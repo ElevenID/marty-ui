@@ -36,6 +36,18 @@
     "commit": "b1f8845dabc4e64d93dc0336acba032a5b1255ff",
     "sha256": "e1d5b9ef03489aca9e47d7939608311000cc245a0b0bb07f28ebcb309d6ac7d3"
   },
+  "credential_admission_behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-credential-admission.json",
+    "commit": "11485868cf7d58770b1fb8deea0f5715b992a3c5",
+    "sha256": "8acbdaab9db036a65d32c377debb69e4415bacf61d417b5fa2b43dc6f5388c1b"
+  },
+  "credential_signing_behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-credential-signing.json",
+    "commit": "11485868cf7d58770b1fb8deea0f5715b992a3c5",
+    "sha256": "efa4fd2857dd6e2a41d6c0fa1e4909b5614075a5d01b5dcf9694a6d4d7229d52"
+  },
   "native_http": [
     {
       "method": "GET",
@@ -141,6 +153,12 @@
       "path": "/v1/issuance/nonce",
       "operation": "nonce_endpoint",
       "proof_nonce_behavior_case": "nonce_endpoint"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/issuance/credential",
+      "operation": "issue_credential",
+      "credential_behavior_contract": true
     }
   ],
   "platform_additive_http": [
@@ -148,25 +166,31 @@
     {"method": "GET", "path": "/version", "owner": "mmf-runtime"}
   ],
   "remaining": {
-    "http": 114,
+    "http": 113,
     "grpc": 12,
     "runtime_modes": ["api", "canvas-sync-worker"],
-    "literal_environment_variables": 79,
+    "literal_environment_variables": 73,
     "dynamic_configuration_lookups": 20,
     "migration_revisions": 44,
     "migration_heads": 1
   },
   "native_environment_variables": [
     "CORS_ALLOWED_ORIGINS",
+    "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+    "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
+    "CANVAS_PILOT_ORGANIZATION_IDS",
+    "CANVAS_PORTABLE_INTEGRATION_ENABLED",
     "DATABASE_URL",
+    "GRPC_SERVICE_TOKEN",
     "ISSUANCE_SERVICE_PORT",
     "ISSUANCE_API_KEY",
     "ISSUER_BASE_URL",
     "ISSUER_DISPLAY_NAME",
+    "REVOCATION_PROFILE_SERVICE_URL",
     "SIGNING_KEYS_INTERNAL_API_KEY",
     "SIGNING_KEYS_INTERNAL_URL",
     "TOKEN_RATE_LIMIT",
     "TOKEN_RATE_WINDOW"
   ],
-  "deployment": "candidate-only"
+  "deployment": "beta-path-split"
 }

@@ -6,9 +6,15 @@
 
 #![forbid(unsafe_code)]
 
+pub mod canvas_issuance_guard;
 pub mod client_auth;
 pub mod config;
 pub mod contract;
+pub mod credential;
+pub mod credential_builder;
+pub mod credential_issuer;
+pub mod credential_lifecycle;
+pub mod credential_postgres;
 pub mod dpop;
 pub mod ephemeral_postgres;
 pub mod http;

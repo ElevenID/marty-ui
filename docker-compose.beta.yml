@@ -34,7 +34,12 @@ services:
       GRPC_INSECURE_ALLOWED: "true"
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:?ISSUANCE_API_KEY must be set for beta}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      GATEWAY_REQUIRED_READY_SERVICES: auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379
+    depends_on:
+      issuance-native:
+        condition: service_healthy
 
   auth:
     environment:
@@ -164,6 +169,52 @@ services:
   issuance:
     environment:
       <<: *beta-grpc-service-auth
+
+  # Only operations enumerated by contracts/issuance-native-coverage.json are
+  # sent here. The Python issuance service remains the fail-closed fallback for
+  # every unmigrated HTTP route and all gRPC methods.
+  issuance-native:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: issuance-native
+    environment:
+      <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      ISSUANCE_SERVICE_PORT: "8005"
+      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:?MARTY_DB_PASSWORD must be set for beta}@postgres:5432/marty
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
+      CORS_ALLOWED_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS must be set for beta}
+      TOKEN_HMAC_KEY: ${TOKEN_HMAC_KEY:?TOKEN_HMAC_KEY must be set for beta}
+      ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:?ISSUANCE_API_KEY must be set for beta}
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
+      REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
+      CANVAS_PORTABLE_INTEGRATION_ENABLED: ${CANVAS_PORTABLE_INTEGRATION_ENABLED:-false}
+      CANVAS_PILOT_ORGANIZATION_IDS: ${CANVAS_PILOT_ORGANIZATION_IDS:-}
+      CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS: ${CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS:-900}
+      CANVAS_BINDING_READINESS_MAX_AGE_SECONDS: ${CANVAS_BINDING_READINESS_MAX_AGE_SECONDS:-900}
+      MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
+      MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
+      RUST_LOG: ${ISSUANCE_NATIVE_RUST_LOG:-info}
+    depends_on:
+      issuance-migrations:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      signing-keys:
+        condition: service_healthy
+      revocation-profile:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8005/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - marty-network
+    restart: unless-stopped
 
   canvas-sync-worker:
     environment:

@@ -147,7 +147,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         set(discovery_cases)
         | set(tenant_cases)
         | set(transaction_cases)
-        | {"exchange_token", "nonce_endpoint"}
+        | {"exchange_token", "nonce_endpoint", "issue_credential"}
     )
     for operation, coverage_entry in native.items():
         if operation == "exchange_token":
@@ -164,6 +164,14 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
                 "path": proof_nonce["inputs"]["path"],
                 "operation": "nonce_endpoint",
                 "proof_nonce_behavior_case": "nonce_endpoint",
+            }
+            continue
+        if operation == "issue_credential":
+            assert coverage_entry == {
+                "method": "POST",
+                "path": "/v1/issuance/credential",
+                "operation": "issue_credential",
+                "credential_behavior_contract": True,
             }
             continue
         if operation in tenant_cases:
@@ -202,21 +210,27 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         )
         assert discovery_cases[operation]["path"] == expected_case_path
     assert coverage["remaining"] == {
-        "http": 114,
+        "http": 113,
         "grpc": 12,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 79,
+        "literal_environment_variables": 73,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 44,
         "migration_heads": 1,
     }
     assert coverage["native_environment_variables"] == [
         "CORS_ALLOWED_ORIGINS",
+        "CANVAS_BINDING_READINESS_MAX_AGE_SECONDS",
+        "CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS",
+        "CANVAS_PILOT_ORGANIZATION_IDS",
+        "CANVAS_PORTABLE_INTEGRATION_ENABLED",
         "DATABASE_URL",
+        "GRPC_SERVICE_TOKEN",
         "ISSUANCE_SERVICE_PORT",
         "ISSUANCE_API_KEY",
         "ISSUER_BASE_URL",
         "ISSUER_DISPLAY_NAME",
+        "REVOCATION_PROFILE_SERVICE_URL",
         "SIGNING_KEYS_INTERNAL_API_KEY",
         "SIGNING_KEYS_INTERNAL_URL",
         "TOKEN_RATE_LIMIT",
@@ -224,7 +238,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     ]
 
 
-def test_candidate_is_owned_but_cannot_replace_the_python_runtime() -> None:
+def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     ownership = json.loads(text("docs/rust-migration-ownership.json"))
     capability = next(
         value
@@ -239,7 +253,12 @@ def test_candidate_is_owned_but_cannot_replace_the_python_runtime() -> None:
     dockerfile = text("services/Dockerfile")
     entrypoint = text("services/entrypoint.sh")
     compose = text("docker-compose.base.yml")
+    beta = text("docker-compose.beta.yml")
+    production = text("docker-compose.selfhost.prod.yml")
     assert '"services/issuance"' in workspace
-    assert "marty-issuance-service" not in dockerfile
-    assert "marty-issuance-service" not in entrypoint
+    assert "marty-issuance-service" in dockerfile
+    assert "marty-issuance-service" in entrypoint
+    assert "issuance-native:" in beta
+    assert "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005" in beta
+    assert "issuance-native:" not in production
     assert "MARTY_ISSUANCE_IMAGE" in compose

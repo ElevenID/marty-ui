@@ -54,7 +54,7 @@ use crate::{
     discovery::{self, ReleaseIdentity},
     flow_contract,
     issuance_create::IssuanceCreate,
-    issuance_lifecycle_contract,
+    issuance_lifecycle_contract, issuance_native,
     middleware::{
         authenticate, AuthenticationInput, AuthenticationOutcome, AuthenticationSource,
         GatewayHttpPolicies, GatewayIdentity, GatewayIdentityProvider, GatewayRateLimiter,
@@ -3390,9 +3390,10 @@ async fn well_known_proxy_handler(
     state: Arc<GatewayRuntimeState>,
     plan: discovery::WellKnownProxyPlan,
 ) -> Response {
+    let service = issuance_native::upstream_service(HttpMethod::Get, &plan.upstream_path);
     let mut request = GatewayRequest::new(
         HttpMethod::Get,
-        format!("/__gateway/issuance{}", plan.upstream_path),
+        format!("/__gateway/{service}{}", plan.upstream_path),
         now_ms(),
     );
     request
@@ -4612,14 +4613,15 @@ mod tests {
                 }
             }
             if request.path == "/v1/issuance/token" {
-                assert_eq!(instance.service_name, "issuance");
+                assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
                 assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
             }
-            if matches!(
-                request.path.as_str(),
-                "/v1/issuance/transactions" | "/v1/issued-credentials/credential-1"
-            ) {
-                assert_eq!(instance.service_name, "issuance");
+            if request.path == "/v1/issuance/transactions" {
+                assert_eq!(instance.service_name, issuance_native::NATIVE_SERVICE);
+                assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
+            }
+            if request.path == "/v1/issued-credentials/credential-1" {
+                assert_eq!(instance.service_name, issuance_native::LEGACY_SERVICE);
                 assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
             }
             if request.path == "/v1/issuance/didcomm/deliver" {
@@ -5449,6 +5451,7 @@ mod tests {
                 "http://deployment-profiles:8000".into(),
             ),
             ("issuance".into(), "http://issuance:8000".into()),
+            ("issuance-native".into(), "http://issuance:8000".into()),
             ("organizations".into(), "http://organizations:8000".into()),
             (
                 "presentation-policies".into(),

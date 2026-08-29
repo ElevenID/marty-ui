@@ -11,6 +11,8 @@ use regex::Regex;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+use crate::issuance_native;
+
 pub const EXPECTED_ROUTE_COUNT: usize = 435;
 
 #[derive(Debug, Deserialize)]
@@ -99,6 +101,15 @@ impl GatewayContract {
         let mut table = RouteTable::default();
         for (index, declared) in self.routes.iter().enumerate() {
             let owner = route_ownership(&declared.path);
+            let rewrite_path = upstream_rewrite(declared.method, &declared.path);
+            let upstream_service = if owner.service == issuance_native::LEGACY_SERVICE {
+                issuance_native::upstream_service(
+                    declared.method,
+                    rewrite_path.as_deref().unwrap_or(&declared.path),
+                )
+            } else {
+                owner.service
+            };
             table.add(RouteConfig {
                 name: format!("{}:{index}:{}", method_name(declared.method), declared.path),
                 pattern: declared.path.clone(),
@@ -107,11 +118,11 @@ impl GatewayContract {
                 } else {
                     RouteMatchType::Exact
                 },
-                upstream_service: owner.service.into(),
+                upstream_service: upstream_service.into(),
                 methods: BTreeSet::from([declared.method]),
                 host: None,
                 required_headers: BTreeMap::new(),
-                rewrite_path: upstream_rewrite(declared.method, &declared.path),
+                rewrite_path,
                 timeout_ms: 30_000,
                 retries: 2,
                 auth_required: owner.requires_authentication,
@@ -151,6 +162,22 @@ impl GatewayContract {
             auth_required: false,
             authentication_type: AuthenticationType::None,
             priority: 20_000,
+            tags: BTreeSet::from(["gateway-internal".into()]),
+        })?;
+        table.add(RouteConfig {
+            name: "internal:issuance-native:public-discovery".into(),
+            pattern: "/__gateway/issuance-native/{path:path}".into(),
+            match_type: RouteMatchType::Template,
+            upstream_service: issuance_native::NATIVE_SERVICE.into(),
+            methods: BTreeSet::from([HttpMethod::Get]),
+            host: None,
+            required_headers: BTreeMap::new(),
+            rewrite_path: Some("/{path}".into()),
+            timeout_ms: 10_000,
+            retries: 1,
+            auth_required: false,
+            authentication_type: AuthenticationType::None,
+            priority: 100,
             tags: BTreeSet::from(["gateway-internal".into()]),
         })?;
         table.add(RouteConfig {
@@ -846,7 +873,7 @@ mod tests {
             438
         );
         let proxy = contract.proxy_route_table().expect("proxy");
-        assert_eq!(proxy.routes().len(), 449);
+        assert_eq!(proxy.routes().len(), 450);
         assert_eq!(
             route_for(
                 &proxy,
@@ -865,6 +892,38 @@ mod tests {
                 .upstream_service,
             "organizations"
         );
+        for (method, path) in [
+            (HttpMethod::Post, "/v1/issuance/credential"),
+            (HttpMethod::Post, "/v1/issuance/token"),
+            (HttpMethod::Post, "/v1/issuance/nonce"),
+            (HttpMethod::Get, "/v1/issuance/offers/tx-1"),
+            (HttpMethod::Get, "/v1/issuance"),
+            (HttpMethod::Get, "/v1/issuance/tx-1"),
+        ] {
+            assert_eq!(
+                route_for(&proxy, method, path)
+                    .expect("native issuance route")
+                    .route
+                    .upstream_service,
+                issuance_native::NATIVE_SERVICE,
+                "{method:?} {path}"
+            );
+        }
+        for (method, path) in [
+            (HttpMethod::Post, "/v1/issuance/notification"),
+            (HttpMethod::Post, "/v1/issuance/deferred-credential"),
+            (HttpMethod::Post, "/v1/issuance/par"),
+            (HttpMethod::Get, "/v1/issued-credentials/credential-1"),
+        ] {
+            assert_eq!(
+                route_for(&proxy, method, path)
+                    .expect("legacy issuance route")
+                    .route
+                    .upstream_service,
+                issuance_native::LEGACY_SERVICE,
+                "{method:?} {path}"
+            );
+        }
     }
 
     #[test]

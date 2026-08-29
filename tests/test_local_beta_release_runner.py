@@ -395,7 +395,7 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
     assert "GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set" in beta
     assert "GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production" in base
     assert "PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set for beta" in beta
-    assert beta.count("<<: *beta-grpc-service-auth") == 17
+    assert beta.count("<<: *beta-grpc-service-auth") == 18
     assert "-TunnelEnvFile" in deploy and "-GeneratedEnvFile" in deploy
     assert 'mip_version -ne "0.5.0"' in deploy
     assert 'mip_version = "0.5.0"' in deploy
@@ -405,6 +405,7 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
     assert "${MARTY_NETWORK_NAME:-marty-infra-network}" in base
     assert '$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.uri)@$($martyIssuance.digest)"' in restore
     assert 'com.docker.compose.service=docs' in restore
+    assert 'Find-ServiceContainer "issuance-native"' in restore
 
     deployed = deploy.split("$script:ApplicationServices = @(", 1)[1].split(")", 1)[0]
     restored = restore.split("$applicationServices = @(", 1)[1].split(")", 1)[0]
@@ -512,6 +513,16 @@ def test_beta_runner_preserves_the_pinned_external_issuance_image_role() -> None
     assert 'Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)' in script
     assert '$imageRef = if ($service -in @("issuance", "canvas-sync-worker"))' in script
     assert '"elevenid-local/issuance:${releaseVersion}"' not in script
+
+
+def test_beta_runner_proves_the_split_native_issuance_runtime() -> None:
+    script = text("scripts/deploy-local-beta-release.ps1")
+
+    assert 'Get-ComposeContainerId -Service "issuance-native"' in script
+    assert "Native issuance runtime marker does not match local release provenance" in script
+    assert '"$BetaOrigin/.well-known/openid-credential-issuer"' in script
+    assert '"$BetaOrigin/v1/issuance/nonce"' in script
+    assert "Native issuance nonce probe violated the frozen response contract" in script
 
 
 def test_beta_compose_requires_credential_login_issuer_identity() -> None:
