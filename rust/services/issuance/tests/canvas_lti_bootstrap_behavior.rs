@@ -202,6 +202,125 @@ fn bootstrap_resume_preserves_original_join_and_bounds_launch_history() {
 }
 
 #[test]
+fn bootstrap_terminal_applications_on_other_launches_are_not_resumed() {
+    let original = plan_canvas_lti_experience_bootstrap(
+        &bootstrap_context(),
+        &request(),
+        true,
+        Some(true),
+        Some(&template()),
+        &[],
+        "application-1",
+        "deadbeef",
+        now(),
+    )
+    .unwrap()
+    .application;
+    let mut next_context = bootstrap_context();
+    next_context.state = "different-launch-state".to_owned();
+
+    for terminal_status in ["rejected", "withdrawn"] {
+        let mut terminal = original.clone();
+        terminal.status = terminal_status.to_owned();
+        let plan = plan_canvas_lti_experience_bootstrap(
+            &next_context,
+            &request(),
+            true,
+            Some(true),
+            Some(&template()),
+            &[terminal],
+            "application-2",
+            "feedface",
+            now() + chrono::Duration::minutes(1),
+        )
+        .unwrap();
+
+        assert!(plan.created, "{terminal_status} application was resumed");
+        assert_eq!(plan.application.id, "application-2");
+        assert!(plan.bootstrap_event_metadata.is_some());
+    }
+}
+
+#[test]
+fn bootstrap_subject_resume_requires_the_same_program_binding() {
+    let original = plan_canvas_lti_experience_bootstrap(
+        &bootstrap_context(),
+        &request(),
+        true,
+        Some(true),
+        Some(&template()),
+        &[],
+        "application-1",
+        "deadbeef",
+        now(),
+    )
+    .unwrap()
+    .application;
+    let mut different_binding = bootstrap_context();
+    different_binding.state = "different-launch-state".to_owned();
+    different_binding.canvas_program_binding_id = Some("different-binding".to_owned());
+
+    let plan = plan_canvas_lti_experience_bootstrap(
+        &different_binding,
+        &request(),
+        true,
+        Some(true),
+        Some(&template()),
+        &[original],
+        "application-2",
+        "feedface",
+        now() + chrono::Duration::minutes(1),
+    )
+    .unwrap();
+
+    assert!(plan.created);
+    assert_eq!(plan.application.id, "application-2");
+}
+
+#[test]
+fn bootstrap_debug_output_redacts_private_applicant_and_session_data() {
+    let request_secret = "request-secret@example.test";
+    let identifier_secret = "private-applicant-identifier";
+    let session_secret = "private-session-secret";
+    let mut private_request = request();
+    private_request.applicant_identifier = Some(identifier_secret.to_owned());
+    private_request
+        .applicant_data
+        .insert("email".to_owned(), json!(request_secret));
+    let request_debug = format!("{private_request:?}");
+    assert!(request_debug.contains("[REDACTED]"));
+    assert!(!request_debug.contains(request_secret));
+    assert!(!request_debug.contains(identifier_secret));
+
+    let mut context = bootstrap_context();
+    context.launch_state.metadata["private_debug_sentinel"] = json!(session_secret);
+    let plan = plan_canvas_lti_experience_bootstrap(
+        &context,
+        &private_request,
+        true,
+        Some(true),
+        Some(&template()),
+        &[],
+        "application-safe-id",
+        "deadbeef",
+        now(),
+    )
+    .unwrap();
+    let application_debug = format!("{:?}", plan.application);
+    assert!(application_debug.contains("application-safe-id"));
+    assert!(application_debug.contains("[REDACTED]"));
+    assert!(!application_debug.contains(request_secret));
+    assert!(!application_debug.contains(identifier_secret));
+
+    let plan_debug = format!("{plan:?}");
+    assert!(plan_debug.contains("application-safe-id"));
+    assert!(plan_debug.contains("[REDACTED]"));
+    assert!(!plan_debug.contains(request_secret));
+    assert!(!plan_debug.contains(identifier_secret));
+    assert!(!plan_debug.contains(session_secret));
+}
+
+#[test]
 fn bootstrap_gates_and_template_failures_preserve_order_and_exact_errors() {
     let context = bootstrap_context();
     let cases = [
@@ -221,6 +340,15 @@ fn bootstrap_gates_and_template_failures_preserve_order_and_exact_errors() {
             true,
             Some(true),
             None,
+            CanvasLtiBootstrapPlanError::ApplicationTemplateNotFound,
+        ),
+        (
+            true,
+            Some(true),
+            Some(CanvasLtiBootstrapTemplate {
+                id: "different-application-template".to_owned(),
+                organization_id: "org-1".to_owned(),
+            }),
             CanvasLtiBootstrapPlanError::ApplicationTemplateNotFound,
         ),
         (
@@ -268,4 +396,20 @@ fn bootstrap_gates_and_template_failures_preserve_order_and_exact_errors() {
         .unwrap_err(),
         CanvasLtiBootstrapPlanError::MissingApplicationTemplate
     );
+
+    let mut unbound = context;
+    unbound.canvas_program_binding_id = None;
+    let plan = plan_canvas_lti_experience_bootstrap(
+        &unbound,
+        &request(),
+        true,
+        Some(false),
+        Some(&template()),
+        &[],
+        "application-1",
+        "deadbeef",
+        now(),
+    )
+    .unwrap();
+    assert!(plan.created);
 }

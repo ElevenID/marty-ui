@@ -1,3 +1,5 @@
+use std::fmt;
+
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -9,11 +11,22 @@ use crate::canvas_lti_experience::{
 };
 
 const PROTECTED_CALLER_FIELDS: [&str; 3] = ["canvas_subject", "canvas_course_id", "canvas_user_id"];
+const REDACTED: &str = "[REDACTED]";
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 pub struct CanvasLtiBootstrapRequest {
     pub applicant_identifier: Option<String>,
     pub applicant_data: Map<String, Value>,
+}
+
+impl fmt::Debug for CanvasLtiBootstrapRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiBootstrapRequest")
+            .field("applicant_identifier", &REDACTED)
+            .field("applicant_data", &REDACTED)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -22,7 +35,7 @@ pub struct CanvasLtiBootstrapTemplate {
     pub organization_id: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CanvasLtiBootstrapApplication {
     pub id: String,
     pub organization_id: String,
@@ -33,6 +46,23 @@ pub struct CanvasLtiBootstrapApplication {
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl fmt::Debug for CanvasLtiBootstrapApplication {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiBootstrapApplication")
+            .field("id", &self.id)
+            .field("organization_id", &self.organization_id)
+            .field("application_template_id", &self.application_template_id)
+            .field("applicant_identifier", &REDACTED)
+            .field("form_data", &REDACTED)
+            .field("integration_context", &REDACTED)
+            .field("status", &self.status)
+            .field("created_at", &self.created_at)
+            .field("updated_at", &self.updated_at)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -49,7 +79,7 @@ pub struct CanvasLtiBootstrapResponse {
     pub canvas_context: Value,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct CanvasLtiBootstrapPlan {
     pub application: CanvasLtiBootstrapApplication,
     pub created: bool,
@@ -58,6 +88,24 @@ pub struct CanvasLtiBootstrapPlan {
     pub materialize_award_candidate: bool,
     pub enqueue_canvas_sync: bool,
     pub response: CanvasLtiBootstrapResponse,
+}
+
+impl fmt::Debug for CanvasLtiBootstrapPlan {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiBootstrapPlan")
+            .field("application", &self.application)
+            .field("created", &self.created)
+            .field("session_metadata", &REDACTED)
+            .field("bootstrap_event_metadata", &REDACTED)
+            .field(
+                "materialize_award_candidate",
+                &self.materialize_award_candidate,
+            )
+            .field("enqueue_canvas_sync", &self.enqueue_canvas_sync)
+            .field("response", &REDACTED)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
