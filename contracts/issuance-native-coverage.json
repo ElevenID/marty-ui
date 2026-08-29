@@ -36,6 +36,18 @@
     "commit": "b1f8845dabc4e64d93dc0336acba032a5b1255ff",
     "sha256": "e1d5b9ef03489aca9e47d7939608311000cc245a0b0bb07f28ebcb309d6ac7d3"
   },
+  "credential_admission_behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-credential-admission.json",
+    "commit": "11485868cf7d58770b1fb8deea0f5715b992a3c5",
+    "sha256": "8acbdaab9db036a65d32c377debb69e4415bacf61d417b5fa2b43dc6f5388c1b"
+  },
+  "credential_signing_behavior_contract": {
+    "repository": "ElevenID/marty-credentials",
+    "path": "contracts/issuance-credential-signing.json",
+    "commit": "11485868cf7d58770b1fb8deea0f5715b992a3c5",
+    "sha256": "efa4fd2857dd6e2a41d6c0fa1e4909b5614075a5d01b5dcf9694a6d4d7229d52"
+  },
   "native_http": [
     {
       "method": "GET",

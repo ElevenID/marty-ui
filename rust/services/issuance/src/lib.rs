@@ -10,6 +10,7 @@ pub mod client_auth;
 pub mod config;
 pub mod contract;
 pub mod credential;
+pub mod credential_postgres;
 pub mod dpop;
 pub mod ephemeral_postgres;
 pub mod http;
