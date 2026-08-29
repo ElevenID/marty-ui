@@ -119,6 +119,28 @@ describe('IssuancePage', () => {
     expect(screen.queryByText('Active Offers')).not.toBeInTheDocument();
   });
 
+  it('keeps the current inventory visible while a refresh is pending', async () => {
+    let resolveRefresh: ((value: unknown) => void) | undefined;
+    const pendingRefresh = new Promise((resolve) => { resolveRefresh = resolve; });
+    const { user } = renderWithoutRouter(
+      <MemoryRouter initialEntries={['/console/org/operate/issuance']}>
+        <Routes>
+          <Route path="/console/org/operate/issuance" element={<IssuancePage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    const reference = formatOfficialReference('cred-open-badge-1', 'credential');
+    expect(await screen.findByText(reference)).toBeInTheDocument();
+    mockFetchIssuedCredentials.mockReturnValueOnce(pendingRefresh);
+    await user.click(screen.getByRole('button', { name: /^refresh$/i }));
+
+    expect(screen.getByRole('progressbar', { name: /refreshing issued credentials/i })).toBeInTheDocument();
+    expect(screen.getByText(reference)).toBeInTheDocument();
+    resolveRefresh?.({ credentials: [], total: 0 });
+    await waitFor(() => expect(screen.queryByText(reference)).not.toBeInTheDocument());
+  });
+
   it('opens the detail view and creates a renewal offer', async () => {
     const { user } = renderWithoutRouter(
       <MemoryRouter initialEntries={['/console/org/operate/issuance']}>

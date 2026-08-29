@@ -778,10 +778,11 @@ async function main() {
       renewedFromCredentialId: credential.renewed_from_credential_id || null,
       sourceStatus: sourceAfterRenewal.lifecycleStatus,
     };
-    await page.goto(`${BETA_ORIGIN}/console/org/operate/issuance`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60_000,
-    });
+    const detailDialog = page.getByRole('dialog', { name: /issued credential details/i });
+    if (await detailDialog.isVisible().catch(() => false)) {
+      await detailDialog.getByRole('button', { name: /^close$/i }).click();
+    }
+    await page.getByRole('button', { name: /^refresh$/i }).click();
     row = await findCredentialRow(page, credential.id);
     await showLifecycleStep(page, 'Credential renewed', 'The replacement credential is active and linked to its superseded predecessor.');
     await page.screenshot({ path: path.join(artifactDir, '02-renewed-credential.png'), fullPage: true });

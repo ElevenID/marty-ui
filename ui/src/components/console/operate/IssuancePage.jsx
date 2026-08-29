@@ -315,9 +315,10 @@ function IssuancePage() {
           }}
         />
       </Box>
-      {loading ? (
-        <LinearProgress />
-      ) : issuedCredentials.length === 0 ? (
+      {loading && (
+        <LinearProgress aria-label="Refreshing issued credentials" sx={{ mb: issuedCredentials.length > 0 ? 1 : 0 }} />
+      )}
+      {!loading && issuedCredentials.length === 0 ? (
         <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
           <Typography variant="h6" gutterBottom>
             No issued credentials yet
@@ -326,7 +327,7 @@ function IssuancePage() {
             Issued credentials will appear here once applications complete the wallet claim flow.
           </Typography>
         </Paper>
-      ) : (
+      ) : issuedCredentials.length > 0 ? (
         <TableContainer component={Paper}>
           <Table sx={{ tableLayout: 'fixed' }}>
             <colgroup>
@@ -449,7 +450,7 @@ function IssuancePage() {
             </TableBody>
           </Table>
         </TableContainer>
-      )}
+      ) : null}
       <Dialog
         open={Boolean(credentialId && selectedCredential && !lifecycleAction)}
         onClose={handleCloseDetails}
