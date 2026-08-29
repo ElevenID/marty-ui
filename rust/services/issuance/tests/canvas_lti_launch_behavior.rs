@@ -1,12 +1,68 @@
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
+use async_trait::async_trait;
 use marty_issuance_service::{
     canvas_lti_launch::{
         feature_enabled, launch_scope, private_launch_response, public_launch_response,
-        scope_matches, select_binding, CanvasLtiLaunchPlanError, CanvasLtiProgramBinding,
+        scope_matches, select_binding, CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository,
+        CanvasLtiLaunchStateService, CanvasLtiProgramBinding, CanvasLtiStoredLaunchState,
     },
     canvas_lti_login::CanvasLtiPlatform,
 };
 use marty_oid4vci::lti::VerifiedLtiLaunch;
 use serde_json::{json, Value};
+
+#[derive(Default)]
+struct StateRepository {
+    states: Mutex<HashMap<String, CanvasLtiStoredLaunchState>>,
+}
+
+impl StateRepository {
+    fn insert(&self, state: CanvasLtiStoredLaunchState) {
+        self.states
+            .lock()
+            .unwrap()
+            .insert(state.state.clone(), state);
+    }
+}
+
+#[async_trait]
+impl CanvasLtiLaunchStateRepository for StateRepository {
+    async fn get_launch_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<CanvasLtiStoredLaunchState>, CanvasLtiLaunchPlanError> {
+        Ok(self.states.lock().unwrap().get(state).cloned())
+    }
+
+    async fn consume_launch_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<CanvasLtiStoredLaunchState>, CanvasLtiLaunchPlanError> {
+        let mut states = self.states.lock().unwrap();
+        let Some(stored) = states.get_mut(state) else {
+            return Ok(None);
+        };
+        if stored.status != "pending" || stored.expired {
+            return Ok(None);
+        }
+        stored.status = "consumed".to_owned();
+        Ok(Some(stored.clone()))
+    }
+}
+
+fn pending_state(platform_id: &str, state: &str) -> CanvasLtiStoredLaunchState {
+    CanvasLtiStoredLaunchState {
+        platform_id: platform_id.to_owned(),
+        state: state.to_owned(),
+        nonce: "nonce-1".to_owned(),
+        status: "pending".to_owned(),
+        expired: false,
+    }
+}
 
 fn contract() -> Value {
     serde_json::from_str(include_str!(
@@ -193,5 +249,56 @@ fn binding_selection_is_tenant_bound_ordered_and_fail_closed_on_flags() {
     assert!(!feature_enabled(
         &json!({"enable_canvas_evidence": true}),
         "enable_canvas_lti"
+    ));
+}
+
+#[tokio::test]
+async fn launch_state_is_platform_bound_and_consumed_before_verification() {
+    let repository = Arc::new(StateRepository::default());
+    repository.insert(pending_state("platform-1", "state-1"));
+    let service = CanvasLtiLaunchStateService::new(repository);
+
+    assert!(matches!(
+        service.claim("platform-2", "state-1").await,
+        Err(CanvasLtiLaunchPlanError::StateUnknown)
+    ));
+    assert_eq!(
+        service.claim("platform-1", "state-1").await.unwrap().status,
+        "consumed"
+    );
+    assert!(matches!(
+        service.claim("platform-1", "state-1").await,
+        Err(CanvasLtiLaunchPlanError::StateExpired)
+    ));
+}
+
+#[tokio::test]
+async fn launch_state_claim_is_atomic_under_race() {
+    let repository = Arc::new(StateRepository::default());
+    repository.insert(pending_state("platform-1", "state-1"));
+    let service = CanvasLtiLaunchStateService::new(repository);
+    let first = service.clone();
+    let second = service;
+    let (first, second) = tokio::join!(
+        first.claim("platform-1", "state-1"),
+        second.claim("platform-1", "state-1")
+    );
+
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    let loser = if first.is_err() { first } else { second };
+    assert!(matches!(loser, Err(CanvasLtiLaunchPlanError::StateExpired)));
+}
+
+#[tokio::test]
+async fn expired_state_never_reaches_atomic_consume() {
+    let repository = Arc::new(StateRepository::default());
+    let mut expired = pending_state("platform-1", "state-1");
+    expired.expired = true;
+    repository.insert(expired);
+    let service = CanvasLtiLaunchStateService::new(repository);
+
+    assert!(matches!(
+        service.claim("platform-1", "state-1").await,
+        Err(CanvasLtiLaunchPlanError::StateExpired)
     ));
 }

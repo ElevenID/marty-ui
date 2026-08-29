@@ -1,6 +1,7 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use marty_issuance_service::{
+    canvas_lti_launch::{CanvasLtiLaunchStateRepository, CanvasLtiLaunchStateService},
     canvas_lti_login::{CanvasLtiLaunchState, CanvasLtiLoginRepository},
     canvas_lti_postgres::PostgresCanvasLtiLoginRepository,
 };
@@ -154,6 +155,36 @@ async fn canvas_lti_login_uses_the_existing_schema_and_database_clock() {
         row.try_get::<serde_json::Value, _>("metadata").unwrap(),
         launch_state.metadata
     );
+
+    let stored = repository
+        .get_launch_state(&state)
+        .await
+        .unwrap()
+        .expect("stored state");
+    assert_eq!(stored.platform_id, "platform-123");
+    assert_eq!(stored.nonce, nonce);
+    assert!(!stored.expired);
+
+    let service = CanvasLtiLaunchStateService::new(Arc::new(repository));
+    let first = service.clone();
+    let second = service;
+    let (first, second) = tokio::join!(
+        first.claim("platform-123", &state),
+        second.claim("platform-123", &state)
+    );
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    let consumed = sqlx::query(
+        "SELECT status, consumed_at FROM issuance_service.canvas_lti_launch_states WHERE state = $1",
+    )
+    .bind(&state)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(consumed.try_get::<String, _>("status").unwrap(), "consumed");
+    assert!(consumed
+        .try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("consumed_at")
+        .unwrap()
+        .is_some());
 
     sqlx::query("DROP TABLE issuance_service.canvas_lti_launch_states")
         .execute(&pool)

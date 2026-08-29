@@ -3,6 +3,9 @@ use serde_json::Value;
 use sqlx::{PgPool, Row};
 use tracing::error;
 
+use crate::canvas_lti_launch::{
+    CanvasLtiLaunchPlanError, CanvasLtiLaunchStateRepository, CanvasLtiStoredLaunchState,
+};
 use crate::canvas_lti_login::{
     CanvasLtiLaunchState, CanvasLtiLoginError, CanvasLtiLoginRepository, CanvasLtiPlatform,
 };
@@ -26,6 +29,18 @@ const SAVE_LAUNCH_STATE: &str = "WITH database_clock AS (
         database_clock.now + ($12::double precision * interval '1 second'),
         NULL
     FROM database_clock";
+
+const GET_LAUNCH_STATE: &str = "SELECT platform_id, state, nonce, status,
+        expires_at <= clock_timestamp() AS expired
+    FROM issuance_service.canvas_lti_launch_states
+    WHERE state = $1";
+
+const CONSUME_LAUNCH_STATE: &str = "UPDATE issuance_service.canvas_lti_launch_states
+    SET status = 'consumed', consumed_at = clock_timestamp()
+    WHERE state = $1
+      AND status = 'pending'
+      AND expires_at > clock_timestamp()
+    RETURNING platform_id, state, nonce, status, false AS expired";
 
 #[derive(Clone)]
 pub struct PostgresCanvasLtiLoginRepository {
@@ -112,7 +127,53 @@ impl CanvasLtiLoginRepository for PostgresCanvasLtiLoginRepository {
     }
 }
 
+#[async_trait]
+impl CanvasLtiLaunchStateRepository for PostgresCanvasLtiLoginRepository {
+    async fn get_launch_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<CanvasLtiStoredLaunchState>, CanvasLtiLaunchPlanError> {
+        let row = sqlx::query(GET_LAUNCH_STATE)
+            .bind(state)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(launch_repository_error)?;
+        row.map(stored_launch_state).transpose()
+    }
+
+    async fn consume_launch_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<CanvasLtiStoredLaunchState>, CanvasLtiLaunchPlanError> {
+        let row = sqlx::query(CONSUME_LAUNCH_STATE)
+            .bind(state)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(launch_repository_error)?;
+        row.map(stored_launch_state).transpose()
+    }
+}
+
+fn stored_launch_state(
+    row: sqlx::postgres::PgRow,
+) -> Result<CanvasLtiStoredLaunchState, CanvasLtiLaunchPlanError> {
+    Ok(CanvasLtiStoredLaunchState {
+        platform_id: row
+            .try_get("platform_id")
+            .map_err(launch_repository_error)?,
+        state: row.try_get("state").map_err(launch_repository_error)?,
+        nonce: row.try_get("nonce").map_err(launch_repository_error)?,
+        status: row.try_get("status").map_err(launch_repository_error)?,
+        expired: row.try_get("expired").map_err(launch_repository_error)?,
+    })
+}
+
 fn repository_error(cause: sqlx::Error) -> CanvasLtiLoginError {
     error!(%cause, "Canvas LTI login repository query failed");
     CanvasLtiLoginError::RepositoryUnavailable
+}
+
+fn launch_repository_error(cause: sqlx::Error) -> CanvasLtiLaunchPlanError {
+    error!(%cause, "Canvas LTI launch-state repository query failed");
+    CanvasLtiLaunchPlanError::RepositoryUnavailable
 }

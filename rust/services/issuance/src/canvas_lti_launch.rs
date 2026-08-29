@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
+use async_trait::async_trait;
 use marty_oid4vci::lti::{verify_lti_launch_jwt, VerifiedLtiLaunch};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -96,6 +97,75 @@ pub enum CanvasLtiLaunchPlanError {
     BindingNotFound,
     #[error("Canvas LTI is disabled for this deployment profile")]
     FeatureDisabled,
+    #[error("Canvas LTI state is unknown for this platform")]
+    StateUnknown,
+    #[error("Canvas LTI state has expired or already been used")]
+    StateExpired,
+    #[error("Canvas LTI launch repository is unavailable")]
+    RepositoryUnavailable,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CanvasLtiStoredLaunchState {
+    pub platform_id: String,
+    pub state: String,
+    pub nonce: String,
+    pub status: String,
+    pub expired: bool,
+}
+
+#[async_trait]
+pub trait CanvasLtiLaunchStateRepository: Send + Sync {
+    async fn get_launch_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<CanvasLtiStoredLaunchState>, CanvasLtiLaunchPlanError>;
+
+    async fn consume_launch_state(
+        &self,
+        state: &str,
+    ) -> Result<Option<CanvasLtiStoredLaunchState>, CanvasLtiLaunchPlanError>;
+}
+
+#[derive(Clone)]
+pub struct CanvasLtiLaunchStateService {
+    repository: Arc<dyn CanvasLtiLaunchStateRepository>,
+}
+
+impl std::fmt::Debug for CanvasLtiLaunchStateService {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanvasLtiLaunchStateService")
+            .finish_non_exhaustive()
+    }
+}
+
+impl CanvasLtiLaunchStateService {
+    #[must_use]
+    pub fn new(repository: Arc<dyn CanvasLtiLaunchStateRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub async fn claim(
+        &self,
+        platform_id: &str,
+        state: &str,
+    ) -> Result<CanvasLtiStoredLaunchState, CanvasLtiLaunchPlanError> {
+        let launch_state = self
+            .repository
+            .get_launch_state(state)
+            .await?
+            .filter(|launch_state| launch_state.platform_id == platform_id)
+            .ok_or(CanvasLtiLaunchPlanError::StateUnknown)?;
+        if launch_state.status != "pending" || launch_state.expired {
+            return Err(CanvasLtiLaunchPlanError::StateExpired);
+        }
+        self.repository
+            .consume_launch_state(state)
+            .await?
+            .filter(|launch_state| launch_state.platform_id == platform_id)
+            .ok_or(CanvasLtiLaunchPlanError::StateExpired)
+    }
 }
 
 pub fn verify_launch(
